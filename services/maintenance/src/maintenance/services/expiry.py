@@ -65,7 +65,7 @@ class DatasetResult(BaseModel):
     #: Why this dataset was REFUSED, and by which gate (:data:`Gate`, or one of the catalog's answers for the id).
     refused: str | None = None
     refused_by: Gate | CatalogRefusal | None = None
-    #: The id the catalog refused, on one of its refusals: what `compaction.tables.parked` labels.
+    #: The id the catalog refused, on one of its refusals: which `maintenance.tables.parked` counts a refusal of.
     refused_table_id: str | None = None
     #: The table's ``data_storage_version`` as its manifest declares it; ``None`` when the manifest was not read.
     data_storage_version: str | None = None

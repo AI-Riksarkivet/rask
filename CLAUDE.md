@@ -378,7 +378,7 @@ Key facts that aren't obvious from any single file:
   maintenance refuses the table, and pylance 11 and lancedb 0.34 cannot open it, while lancedb 0.40 (the
   pinned one) can (`lance_docs/PROVENANCE.md`). The catalog's `version/create` (a stock client's commit, ADR 0157) and the register door refuse
   such a set (`lakehouse.features.describe_foreign_data_file_versions`), and the maintenance
-  counter `compaction.datasets.mixed_file_versions` pages on one. pylance 13's `update()`,
+  counter `maintenance.datasets.mixed_file_versions` pages on one. pylance 13's `update()`,
   `merge_insert().data_storage_version()` and `compact_files()` also take a `data_storage_version` that
   can stamp the flag: a stock client's such commit is refused at `version/create`, and rask code never passes it.
 - **A workload is the user's, and the platform knows nothing about it.** Whatever a workload's stage graph, model or output format is, it reaches the platform as a client of the catalog's doors: bytes in, a governed table out, lineage emitted.

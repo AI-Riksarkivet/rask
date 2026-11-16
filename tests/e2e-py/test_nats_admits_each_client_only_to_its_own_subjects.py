@@ -96,6 +96,8 @@ from nats_auth_rig import (
     unused_grants,
     violations,
 )
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -103,6 +105,7 @@ from opentelemetry.trace import SpanKind
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse import bus as seam
+from lakehouse import bus_metrics
 from lakehouse.bus import Bus, BusSettings, BusUnavailableError, Follow, bus_session, publish_event
 from lakehouse.bus_delivery import MAX_ENVELOPE_DEPTH, Delivery, Handle, Lane, Verdict
 from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent
@@ -704,6 +707,19 @@ async def _settled_ingest(rig: Client, sequence: int, within: float = 15.0) -> d
         await asyncio.sleep(0.2)
 
 
+def _pulls_failed(reader: InMemoryMetricReader) -> dict[str, int]:
+    """`bus.pulls.failed` as ``reader`` exports it, by consumer."""
+    data = reader.get_metrics_data()
+    return {
+        str((point.attributes or {})["lance.bus.consumer"]): int(point.value)
+        for resource in (data.resource_metrics if data is not None else ())
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        for point in metric.data.data_points
+        if isinstance(point, NumberDataPoint)
+    }
+
+
 async def _a_consumer_not_declared_yet_is_pulled_once_declared(
     bus: Rig, docs: tuple[dict, ...], home: Path, rig: Client, caplog: pytest.LogCaptureFixture
 ) -> tuple[list[str], str]:
@@ -712,11 +728,17 @@ async def _a_consumer_not_declared_yet_is_pulled_once_declared(
     the replica is handed every event the stream held. Returns the findings and what the Job printed."""
     findings: list[str] = []
     lane = _IngestLane()
+    # The seam's count of the asks the bus refused, read as the Collector reads it: what pages while the Job has not run.
+    reader = InMemoryMetricReader()
+    refused_asks = MeterProvider(metric_readers=[reader]).get_meter("lance.bus").create_counter("bus.pulls.failed")
     async with AsyncExitStack() as stack:
+        stack.enter_context(pytest.MonkeyPatch.context()).setattr(bus_metrics, "_pulls_failed", refused_asks)
         replicas = _Replicas(stack, bus, lane)
         await replicas.start("early")
         if not await _until(lambda: any(r.name == seam.__name__ and r.getMessage() == "bus_pull_failed" for r in caplog.records), 20):
             findings.append("a consumer the Job had not declared yet: the replica never said its pull failed")
+        if _pulls_failed(reader).get(INGEST_CONSUMER, 0) < 1:
+            findings.append(f"a consumer the Job had not declared yet: the replica counted no refused ask: {_pulls_failed(reader)}")
         # Nothing marks a line that is not logged again, so the replica is left one more pull at the absent consumer
         # before the Job declares it: the seam pauses that long between a pull the bus refused and the next.
         await asyncio.sleep(seam._PULL_SECONDS + 2)

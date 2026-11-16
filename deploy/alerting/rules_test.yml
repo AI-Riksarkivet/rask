@@ -15,7 +15,7 @@ tests:
   #    empty vector yields empty and the alert silently never fires.
   - interval: 1m
     input_series:
-      - series: "outbox_depth"
+      - series: 'outbox_depth{lance_outbox_lane="lineage"}'
         values: "5+0x14" # 5, held for 15 samples (0..14 min)
     alert_rule_test:
       - eval_time: 12m
@@ -34,11 +34,11 @@ tests:
   #     stuck relay indistinguishable from a settled governance answer.
   - interval: 1m
     input_series:
-      - series: "outbox_depth"
+      - series: 'outbox_depth{lance_outbox_lane="lineage"}'
         values: "6+0x29"
-      - series: "outbox_events_refused_total"
+      - series: 'outbox_events_refused_total{lance_outbox_lane="lineage"}'
         values: "0+6x29" # re-refused every tick, exactly as a deterministic denial behaves
-      - series: "outbox_oldest_age_seconds"
+      - series: 'outbox_oldest_age_seconds{lance_outbox_lane="lineage"}'
         values: "179206+60x29" # aging forever, because nothing will ever move it
     alert_rule_test:
       - eval_time: 25m
@@ -61,9 +61,9 @@ tests:
   #     meant "stuck"; it means "there is work", and work being done is not a fault.
   - interval: 1m
     input_series:
-      - series: "outbox_depth"
+      - series: 'outbox_depth{lance_outbox_lane="lineage"}'
         values: "40+0x14"
-      - series: "outbox_events_drained_total"
+      - series: 'outbox_events_drained_total{lance_outbox_lane="lineage"}'
         values: "0+10x14"
     alert_rule_test:
       - eval_time: 12m
@@ -137,7 +137,7 @@ tests:
   # 2. Outbox healthy (depth 0) → NO alert. A gauge that falls back must not page forever.
   - interval: 1m
     input_series:
-      - series: "outbox_depth"
+      - series: 'outbox_depth{lance_outbox_lane="lineage"}'
         values: "0+0x14"
     alert_rule_test:
       - eval_time: 12m
@@ -330,7 +330,7 @@ tests:
   # M24 a. Oldest staged event ages past 300s and stays → LineageOutboxBacklogAging fires.
   - interval: 1m
     input_series:
-      - series: "outbox_oldest_age_seconds"
+      - series: 'outbox_oldest_age_seconds{lance_outbox_lane="lineage"}'
         values: "400+0x9"
     alert_rule_test:
       - eval_time: 7m
@@ -346,7 +346,7 @@ tests:
   # M24 b. A backlog well under the threshold must NOT page — the gauge falls back on its own.
   - interval: 1m
     input_series:
-      - series: "outbox_oldest_age_seconds"
+      - series: 'outbox_oldest_age_seconds{lance_outbox_lane="lineage"}'
         values: "120+0x9"
     alert_rule_test:
       - eval_time: 7m
@@ -462,7 +462,7 @@ tests:
   # M24 f. A dataset failing on retries 30 minutes apart → MaintenanceDatasetsFailing fires once the hour has held.
   - interval: 1m
     input_series:
-      - series: "compaction_datasets_failed_total"
+      - series: "maintenance_datasets_failed_total"
         values: "0+0x29 1+0x29 2+0x29 3+0x29 4+0x29"
     alert_rule_test:
       - eval_time: 145m
@@ -507,9 +507,9 @@ tests:
   # M24 i. Refusals outrunning half the swept datasets over an hour → MaintenanceRefusalsRising fires.
   - interval: 1m
     input_series:
-      - series: "compaction_datasets_refused_total"
+      - series: "maintenance_datasets_refused_total"
         values: "0+10x74"
-      - series: "compaction_datasets_swept_total"
+      - series: "maintenance_datasets_swept_total"
         values: "0+4x74"
     alert_rule_test:
       - eval_time: 65m
@@ -525,9 +525,9 @@ tests:
   # M24 j. Refusals well under half of swept → silent. The ratio, not the absolute count, is the rule.
   - interval: 1m
     input_series:
-      - series: "compaction_datasets_refused_total"
+      - series: "maintenance_datasets_refused_total"
         values: "0+1x74"
-      - series: "compaction_datasets_swept_total"
+      - series: "maintenance_datasets_swept_total"
         values: "0+20x74"
     alert_rule_test:
       - eval_time: 65m
@@ -538,7 +538,7 @@ tests:
   # on the evaluation that sees the step.
   - interval: 1m
     input_series:
-      - series: "compaction_datasets_mixed_file_versions_total"
+      - series: "maintenance_datasets_mixed_file_versions_total"
         values: "0+0x5 1+0x10"
     alert_rule_test:
       - eval_time: 8m
@@ -554,7 +554,7 @@ tests:
   # The only count is 23 hours old at evaluation, inside one recheck: the 25h window must still hold.
   - interval: 10m
     input_series:
-      - series: "compaction_datasets_mixed_file_versions_total"
+      - series: "maintenance_datasets_mixed_file_versions_total"
         values: "0 1+0x150"
     alert_rule_test:
       - eval_time: 23h10m
@@ -570,7 +570,7 @@ tests:
   # A flat zero is the healthy estate and must stay quiet.
   - interval: 1m
     input_series:
-      - series: "compaction_datasets_mixed_file_versions_total"
+      - series: "maintenance_datasets_mixed_file_versions_total"
         values: "0+0x15"
     alert_rule_test:
       - eval_time: 8m
@@ -646,94 +646,78 @@ tests:
         alertname: CommittedFilesUnrecorded
         exp_alerts: []
 
-  # One table refused on its daily passes. Its series first appears at 1, which increase() cannot see, so the second
-  # refused pass, a day after the first, is the one that counts, and the alert fires an hour after it and holds until
-  # the next refused pass a day later.
+  # One table refused on its daily passes. Every refusal's series exists at 0 from the worker's start, so the first
+  # refused pass is an increase and pages; the next refused pass, a day later, holds the alert through its 25h window.
   - interval: 1h
     input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
-        values: "1+0x23 2+0x23 3+0x5"
+      - series: 'maintenance_tables_parked_total{refused_by="vend_denied"}'
+        values: "0x2 1+0x23 2+0x10"
+      - series: 'maintenance_tables_parked_total{refused_by="table_not_governed"}'
+        values: "0x37"
     alert_rule_test:
-      - eval_time: 23h
+      - eval_time: 2h
         alertname: MaintenanceTableParked
         exp_alerts: []
-      - eval_time: 25h
+      - eval_time: 4h
         alertname: MaintenanceTableParked
         exp_alerts:
           - exp_labels:
               severity: warning
               service: maintenance
-              table_id: "acme$events"
+              refused_by: "vend_denied"
             exp_annotations:
-              summary: "Maintenance of acme$events has been parked on passes a day apart"
-              description: "For a day this table id has been parked, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
-      - eval_time: 47h
+              summary: "Maintenance of a table is parked (vend_denied)"
+              description: "A table's pass was parked in the last day, so its superseded versions are not reclaimed. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
+      - eval_time: 29h
         alertname: MaintenanceTableParked
         exp_alerts:
           - exp_labels:
               severity: warning
               service: maintenance
-              table_id: "acme$events"
+              refused_by: "vend_denied"
             exp_annotations:
-              summary: "Maintenance of acme$events has been parked on passes a day apart"
-              description: "For a day this table id has been parked, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
+              summary: "Maintenance of a table is parked (vend_denied)"
+              description: "A table's pass was parked in the last day, so its superseded versions are not reclaimed. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
 
-  # The SAME table refused 403, then 404 once it is dropped: one table, one clock.
+  # A pod replaced between two refused passes: the new pod's series begins at 0 too, so its first count pages.
   - interval: 1h
     input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
-        values: "1+0x23 2+0x10"
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="table_not_governed"}'
-        values: "_x30 1+0x10"
+      - series: 'maintenance_tables_parked_total{refused_by="vend_denied",pod="a"}'
+        values: "0 1+0x8 _x40"
+      - series: 'maintenance_tables_parked_total{refused_by="vend_denied",pod="b"}'
+        values: "_x30 0x4 1+0x14"
     alert_rule_test:
-      - eval_time: 26h
-        alertname: MaintenanceTableParked
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: maintenance
-              table_id: "acme$events"
-            exp_annotations:
-              summary: "Maintenance of acme$events has been parked on passes a day apart"
-              description: "For a day this table id has been parked, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
-
-  # A pod replaced between two refused passes: the new pod's series first appears at 1, unseen, and its next count
-  # still fires the table.
-  - interval: 1h
-    input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="a"}'
-        values: "1+0x23 2+0x6 _x20"
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="b"}'
-        values: "_x30 1+0x17 2+0x3"
-    alert_rule_test:
-      - eval_time: 50h
-        alertname: MaintenanceTableParked
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: maintenance
-              table_id: "acme$events"
-            exp_annotations:
-              summary: "Maintenance of acme$events has been parked on passes a day apart"
-              description: "For a day this table id has been parked, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
-
-  # One refused pass, then a grant: nothing the rule can see, so nothing fires.
-  - interval: 1h
-    input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="table_not_governed"}'
-        values: "1+0x48"
-    alert_rule_test:
-      - eval_time: 25h
+      - eval_time: 33h
         alertname: MaintenanceTableParked
         exp_alerts: []
+      - eval_time: 37h
+        alertname: MaintenanceTableParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              refused_by: "vend_denied"
+            exp_annotations:
+              summary: "Maintenance of a table is parked (vend_denied)"
+              description: "A table's pass was parked in the last day, so its superseded versions are not reclaimed. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
 
-  # Granted after the second refusal: once a 25h window holds no count, the alert resolves.
+  # One refused pass, then a grant: once a 25h window holds no count, the alert resolves.
   - interval: 1h
     input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
-        values: "1+0x23 2+0x40"
+      - series: 'maintenance_tables_parked_total{refused_by="table_not_governed"}'
+        values: "0x2 1+0x60"
     alert_rule_test:
-      - eval_time: 50h
+      - eval_time: 4h
+        alertname: MaintenanceTableParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              refused_by: "table_not_governed"
+            exp_annotations:
+              summary: "Maintenance of a table is parked (table_not_governed)"
+              description: "A table's pass was parked in the last day, so its superseded versions are not reclaimed. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
+      - eval_time: 30h
         alertname: MaintenanceTableParked
         exp_alerts: []
 
@@ -1057,17 +1041,17 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------------------------------------
-  # The HTTP plane. Series names are the live store's, verified — `http_server_duration_milliseconds_*`,
-  # with the unit suffix the OTLP->Prometheus exporter appends. Labels `service_name` and
-  # `http_status_code` are the FastAPI instrumentor's own.
+  # The HTTP plane, under OpenTelemetry's stable HTTP conventions (`deploy/alerting/rules.yml` § `lance-http`):
+  # `http_server_request_duration_seconds_*`, with the unit suffix the OTLP->Prometheus exporter appends, labelled
+  # `service_name` and `http_response_status_code`. Measured on opentelemetry-instrumentation-fastapi 0.66b2, 2026-11-16.
   # ------------------------------------------------------------------------------------------------
 
   # One service failing 20% of its requests → over the 5% ratio → fires past the 10m `for`.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_count{service_name="catalog",http_status_code="500"}'
+      - series: 'http_server_request_duration_seconds_count{service_name="catalog",http_response_status_code="500"}'
         values: "0+2x20" # 2 errors/min
-      - series: 'http_server_duration_milliseconds_count{service_name="catalog",http_status_code="200"}'
+      - series: 'http_server_request_duration_seconds_count{service_name="catalog",http_response_status_code="200"}'
         values: "0+8x20" # 8 successes/min → 20% error ratio
     alert_rule_test:
       - eval_time: 14m
@@ -1085,9 +1069,9 @@ tests:
   # stops the threshold being tightened into noise.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_count{service_name="catalog",http_status_code="500"}'
+      - series: 'http_server_request_duration_seconds_count{service_name="catalog",http_response_status_code="500"}'
         values: "0+1x20"
-      - series: 'http_server_duration_milliseconds_count{service_name="catalog",http_status_code="200"}'
+      - series: 'http_server_request_duration_seconds_count{service_name="catalog",http_response_status_code="200"}'
         values: "0+99x20"
     alert_rule_test:
       - eval_time: 14m
@@ -1109,26 +1093,26 @@ tests:
               service: fleet
             exp_annotations:
               summary: "No app is reporting HTTP metrics at all"
-              description: "`http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and HttpServerLatencyHigh are both dead and their silence means nothing. Either `opentelemetry-instrument` stopped wiring the FastAPI instrumentor, or the OTLP path to GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#no-app-reports-http-metrics"
+              description: "`http_server_request_duration_seconds_count` does not exist, so HttpServerErrorRatioHigh and HttpServerLatencyHigh are both dead and their silence means nothing. Either `opentelemetry-instrument` stopped wiring the FastAPI instrumentor, or the OTLP path to GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#no-app-reports-http-metrics"
       # ...and the ratio rule is indeed silent here, which is the whole argument for the pair.
       - eval_time: 17m
         alertname: HttpServerErrorRatioHigh
         exp_alerts: []
 
-  # p95 over 15s. Buckets are cumulative and `le` must include `+Inf`: every observation lands above
-  # 15000, so the 95th percentile is in the top bucket.
+  # p95 over 5s, on the instrument's own boundaries (..., 1, 2.5, 5, 7.5, 10 s). Buckets are cumulative and `le`
+  # must include `+Inf`: every observation lands between 5 and 10 s, so the 95th percentile is in that band.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="1000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog",le="1"}'
         values: "0+0x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="15000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog",le="5"}'
         values: "0+0x25"
       # A FINITE bucket above the threshold. With observations only in `+Inf`, histogram_quantile has
       # no upper bound to interpolate against and yields +Inf, which produced no sample at all — the
       # rule looked broken when the FIXTURE was.
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="30000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog",le="10"}'
         values: "0+10x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="+Inf"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog",le="+Inf"}'
         values: "0+10x25"
     alert_rule_test:
       - eval_time: 20m
@@ -1139,19 +1123,19 @@ tests:
               service: fleet
               service_name: catalog
             exp_annotations:
-              summary: "One service's p95 HTTP latency is above 15s"
-              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
+              summary: "One service's p95 HTTP latency is above 5s"
+              description: "Sustained p95 over 5 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
 
   # A fast service must not page — every observation under 1s.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="1000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog",le="1"}'
         values: "0+10x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="15000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog",le="5"}'
         values: "0+10x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="30000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog",le="10"}'
         values: "0+10x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="+Inf"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog",le="+Inf"}'
         values: "0+10x25"
     alert_rule_test:
       - eval_time: 20m
@@ -1162,18 +1146,19 @@ tests:
   # oldest-age describe objects that exist, and publish_failed is gated on having staged.
   - interval: 1m
     input_series:
-      - series: "outbox_stage_failed_total"
+      - series: 'outbox_stage_failed_total{lance_outbox_lane="lineage"}'
         values: "0+1x11"
     alert_rule_test:
       - eval_time: 7m
-        alertname: LineageOutboxStagingFailing
+        alertname: OutboxStagingFailing
         exp_alerts:
           - exp_labels:
               severity: "warning"
-              service: "lineage"
+              service: "lakehouse"
+              lance_outbox_lane: "lineage"
             exp_annotations:
-              summary: "Lineage events are publishing without a durable copy"
-              description: "The outbox stage is failing, so events reach the bus with the crash window OPEN: if the publish then fails the event is gone, and no other outbox signal can see it — depth and oldest-age describe staged objects, and publish_failed only counts a publish that HAD been staged. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+              summary: "lineage events are publishing without a durable copy"
+              description: "The lineage outbox's stage is failing, so events reach the bus with the crash window OPEN: if the publish then fails the event is gone, and no other outbox signal can see it — depth and oldest-age describe staged objects, and publish_failed only counts a publish that HAD been staged. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
   # A catalog emit that fails terminally must page: nothing else in this file sees an event that never
   # reached the outbox at all.
@@ -1235,13 +1220,14 @@ tests:
               summary: "The commit reconciler cannot read a table's version log, the table, or lineage's feed"
               description: "The catalog's commit reconciler could not read a retained version, or its commit time, on a table's ref, so it kept that ref's mark and announces nothing after it until it can; or it could not describe a table it claims, or lineage's feed, so it announced nothing for that table, or nothing at all on that tick. Read the catalog's `commit_reconcile_ref_unreadable`, `commit_reconcile_table_unreadable`, `commit_reconcile_feed_unreadable` and `commit_reconcile_table_failed` logs for the table and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
 
-  # A pod's first find pages too: the counter's first sample is already 1, and `increase` alone reads 0 across it.
+  # A pod's first find pages too. The re-announced counter is labelled by operation, so its first sample is already 1
+  # and `increase` alone reads 0 across it; the unauthored one exists at 0 from the pod's start.
   - interval: 1m
     input_series:
       - series: "catalog_commit_reconcile_reannounced_total"
         values: "_ _ 1 1 1"
       - series: "catalog_commit_reconcile_unauthored_total"
-        values: "_ _ 1 1 1"
+        values: "_ 0 1 1 1"
     alert_rule_test:
       - eval_time: 4m
         alertname: CatalogCommitsReannounced
@@ -1262,11 +1248,11 @@ tests:
               summary: "A table holds versions no catalog door committed"
               description: "The catalog's commit reconciler found committed versions for which the catalog recorded no author, whatever rask.author they carry: a manifest was finalized past every catalog door, by a credential that can write one, or the catalog's own record of a write Lance committed failed (a `commit_author_unrecorded` log names that version). The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
 
-  # One late derived table pages, a pod's first find included: its counter's first sample is already 1.
+  # One late derived table pages, a pod's first find included: its counter exists at 0 from the pod's start.
   - interval: 1m
     input_series:
       - series: "catalog_erasure_late_derived_total"
-        values: "_ _ 1 1 1"
+        values: "_ 0 1 1 1"
     alert_rule_test:
       - eval_time: 4m
         alertname: ErasureDerivedAfterRelease
@@ -1343,11 +1329,11 @@ tests:
   # A healthy stage must NOT page — the counter is flat, not absent, once the series exists.
   - interval: 1m
     input_series:
-      - series: "outbox_stage_failed_total"
+      - series: 'outbox_stage_failed_total{lance_outbox_lane="lineage"}'
         values: "0+0x11"
     alert_rule_test:
       - eval_time: 7m
-        alertname: LineageOutboxStagingFailing
+        alertname: OutboxStagingFailing
         exp_alerts: []
 
   # [[LH-099]] THE DRIFT REPORT REACHED A LOG LINE AND NOTHING ELSE until `maintenance.drift.items`
@@ -1392,20 +1378,19 @@ tests:
         alertname: MaintenanceDriftRising
         exp_alerts: []
 
-  # [[XC-067]] THE LATENCY ALERTS, PROVEN TO FIRE — the half that was missing when `HttpServerLatencyHigh`
-  # shipped. promtool `check rules` said SUCCESS and the live drill said the expression evaluates, and
-  # the rule still could not fire, because its threshold sat above the histogram's top bucket. A
-  # synthetic series that crosses the threshold is what distinguishes "parses" from "fires".
-  #
-  # The buckets here are CUMULATIVE, as a Prometheus histogram is: nothing at or below 15s, everything
-  # between 15s and 30s, so p95 interpolates into that band and lands above the 15,000 threshold.
+  # [[XC-067]] THE LATENCY ALERT FIRES ON THE BUCKETS THE INSTRUMENT HAS. Its boundaries end at 10 s, and
+  # `histogram_quantile` answers the highest finite boundary for a quantile that falls in `+Inf`: with every request
+  # slower than 10 s the p95 reads exactly 10, which a threshold at or above the last boundary never crosses. A
+  # synthetic series on the real boundaries is what distinguishes "parses" from "fires".
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog", le="15000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog", le="5"}'
         values: "0+0x40"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog", le="30000"}'
-        values: "0+10x40"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog", le="+Inf"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog", le="7.5"}'
+        values: "0+0x40"
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog", le="10"}'
+        values: "0+0x40"
+      - series: 'http_server_request_duration_seconds_bucket{service_name="catalog", le="+Inf"}'
         values: "0+10x40"
     alert_rule_test:
       - eval_time: 30m
@@ -1416,18 +1401,18 @@ tests:
               service: fleet
               service_name: catalog
             exp_annotations:
-              summary: "One service's p95 HTTP latency is above 15s"
-              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
+              summary: "One service's p95 HTTP latency is above 5s"
+              description: "Sustained p95 over 5 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
 
   # Maintenance is held to the same rule: its work runs on its queue, never inside a request, so a slow maintenance
   # door is a defect like any other's. Identical series, `service_name="maintenance"`: the rule fires for it.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="15000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="maintenance", le="5"}'
         values: "0+0x40"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="30000"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="maintenance", le="10"}'
         values: "0+10x40"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="+Inf"}'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="maintenance", le="+Inf"}'
         values: "0+10x40"
     alert_rule_test:
       - eval_time: 30m
@@ -1438,8 +1423,8 @@ tests:
               service: fleet
               service_name: maintenance
             exp_annotations:
-              summary: "One service's p95 HTTP latency is above 15s"
-              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
+              summary: "One service's p95 HTTP latency is above 5s"
+              description: "Sustained p95 over 5 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
 
   # LH-050'S TRIPWIRE, both directions. The row is parked on a NUMBER, so the rule that re-reads it has
   # to be proven at the threshold rather than merely valid: a tripwire that cannot trip re-creates the
@@ -1450,9 +1435,9 @@ tests:
   # what makes a single series per route possible at all.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_count{service_name="catalog", http_target="/v1/namespace/{id}/list"}'
+      - series: 'http_server_request_duration_seconds_count{service_name="catalog", http_route="/v1/namespace/{id}/list"}'
         values: "0+60x90"
-      - series: 'http_server_duration_milliseconds_count{service_name="catalog", http_target="/v1/namespace/{id}/table/list"}'
+      - series: 'http_server_request_duration_seconds_count{service_name="catalog", http_route="/v1/namespace/{id}/table/list"}'
         values: "0+60x90"
     alert_rule_test:
       - eval_time: 70m
@@ -1474,47 +1459,45 @@ tests:
   # and the threshold would be decorative.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_count{service_name="catalog", http_target="/v1/namespace/{id}/list"}'
+      - series: 'http_server_request_duration_seconds_count{service_name="catalog", http_route="/v1/namespace/{id}/list"}'
         values: "0+30x90"
       # The sweep's own tag polling, at the rate it was measured running. It is a `/list` route and the
       # rule must not select it: folding machine traffic in is how the wire trips on nobody browsing.
-      - series: 'http_server_duration_milliseconds_count{service_name="catalog", http_target="/v1/table/{id}/tags/list"}'
+      - series: 'http_server_request_duration_seconds_count{service_name="catalog", http_route="/v1/table/{id}/tags/list"}'
         values: "0+120x90"
     alert_rule_test:
       - eval_time: 70m
         alertname: CatalogListingLoadReachedInteractiveFrequency
         exp_alerts: []
 
-  # A root the manifest reclaim keeps failing pages from its second failed tick, while its series is new (the counter's
-  # first sample is already 1) and, past half an hour, through the increase; one tick's failure does not.
+  # A root the manifest reclaim fails on tick after tick (every ten minutes) pages once the failures have stood for
+  # twenty minutes. The counter exists at 0 from the catalog's start, so the first failure is an increase.
   - interval: 1m
     input_series:
-      - series: 'catalog_manifest_reclaim_failed_total{lance_catalog_root="s3://acme-bucket"}'
-        values: "_ _ _ 1+0x9 2+0x9 3+0x9 4+0x9 5+0x9"
+      - series: 'catalog_manifest_reclaim_failed_total'
+        values: "0 0 0 1+0x9 2+0x9 3+0x9 4+0x9 5+0x9"
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 14m
         alertname: CatalogManifestReclaimFailing
         exp_alerts: []
-      - eval_time: 14m
+      - eval_time: 30m
         alertname: CatalogManifestReclaimFailing
         exp_alerts:
           - exp_labels:
               severity: "warning"
               service: "catalog"
-              lance_catalog_root: "s3://acme-bucket"
             exp_annotations:
               summary: "The catalog cannot reclaim a root's namespace index history"
-              description: "The catalog's manifest reclaim tick failed on the root s3://acme-bucket on two ticks within half an hour, so every namespace operation there keeps a version of `__manifest` again and a dropped namespace or table stays readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed"
+              description: "The catalog's manifest reclaim tick has failed on a root on consecutive ticks, so every namespace operation there keeps a version of `__manifest` again and a dropped namespace or table stays readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed"
       - eval_time: 45m
         alertname: CatalogManifestReclaimFailing
         exp_alerts:
           - exp_labels:
               severity: "warning"
               service: "catalog"
-              lance_catalog_root: "s3://acme-bucket"
             exp_annotations:
               summary: "The catalog cannot reclaim a root's namespace index history"
-              description: "The catalog's manifest reclaim tick failed on the root s3://acme-bucket on two ticks within half an hour, so every namespace operation there keeps a version of `__manifest` again and a dropped namespace or table stays readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed"
+              description: "The catalog's manifest reclaim tick has failed on a root on consecutive ticks, so every namespace operation there keeps a version of `__manifest` again and a dropped namespace or table stays readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed"
 
   # A declared object the converge tick keeps failing on pages from its third failed tick, while its series is new and,
   # past fifteen minutes, through the increase; an object that failed once and then converged pages nothing.
@@ -1615,17 +1598,523 @@ tests:
         alertname: LakehouseTimerStopped
         exp_alerts: []
 
-  # One tick's blip on every root (a store that did not answer once) is repaired by the next tick and pages nothing.
+  # One tick's blip on every root (a store that did not answer once) is repaired by the next tick and pages nothing:
+  # the increase stands for fifteen minutes, short of the twenty the rule waits.
   - interval: 1m
     input_series:
-      - series: 'catalog_manifest_reclaim_failed_total{lance_catalog_root="s3://acme-bucket"}'
-        values: "_ _ _ 1+0x56"
-      - series: 'catalog_manifest_reclaim_failed_total{lance_catalog_root="s3://beta-bucket"}'
-        values: "_ _ _ 1+0x56"
+      - series: 'catalog_manifest_reclaim_failed_total'
+        values: "0 0 0 2+0x56"
     alert_rule_test:
       - eval_time: 14m
+        alertname: CatalogManifestReclaimFailing
+        exp_alerts: []
+      - eval_time: 30m
         alertname: CatalogManifestReclaimFailing
         exp_alerts: []
       - eval_time: 45m
         alertname: CatalogManifestReclaimFailing
         exp_alerts: []
+
+  # ==================================================================================================
+  # [[XC-208]] Every failure counter pages on its first count, and each outbox pages under its own lane.
+
+  # A backlog in the CONTROL outbox pages the control lane's rule and not the lineage one: each outbox reports under
+  # its own lane, and the catalog works both.
+  - interval: 1m
+    input_series:
+      - series: 'outbox_depth{lance_outbox_lane="control"}'
+        values: "4+0x20"
+      - series: 'outbox_oldest_age_seconds{lance_outbox_lane="control"}'
+        values: "400+60x20"
+      - series: 'outbox_events_drained_total{lance_outbox_lane="control"}'
+        values: "0+0x20"
+      - series: 'outbox_depth{lance_outbox_lane="lineage"}'
+        values: "0+0x20"
+      - series: 'outbox_events_drained_total{lance_outbox_lane="lineage"}'
+        values: "0+0x20"
+      - series: 'outbox_events_refused_total{lance_outbox_lane="lineage"}'
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ControlOutboxNotDraining
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+            exp_annotations:
+              summary: "Control outbox not draining (depth > 0, nothing republished for 15m)"
+              description: "Control events are staged and the catalog's control relay has republished none for 15m: the bus takes nothing, the keys a staged event is verified against cannot be read, or no bus is named. A pipeline waiting on a control event has not been told. Read the catalog's `control_outbox_republish_failed`, `control_relay_keys_unavailable` and `control_relay_no_publisher` logs. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+      - eval_time: 12m
+        alertname: ControlOutboxBacklogAging
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+            exp_annotations:
+              summary: "Control outbox oldest staged event > 5 min old"
+              description: "The catalog's control relay is lagging; the oldest staged control event exceeds 300s. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+      - eval_time: 12m
+        alertname: LineageOutboxNotDraining
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: LineageOutboxBacklogAging
+        exp_alerts: []
+
+  # A control outbox the relay is republishing from is draining: depth alone pages nothing.
+  - interval: 1m
+    input_series:
+      - series: 'outbox_depth{lance_outbox_lane="control"}'
+        values: "4+0x20"
+      - series: 'outbox_events_drained_total{lance_outbox_lane="control"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ControlOutboxNotDraining
+        exp_alerts: []
+
+  # A lane whose publishes fail for fifteen minutes pages under that lane; the other lane's counters stay at the 0 they
+  # were created at.
+  - interval: 1m
+    input_series:
+      - series: 'outbox_publish_failed_total{lance_outbox_lane="control"}'
+        values: "0 0 1+1x25"
+      - series: 'outbox_publish_failed_total{lance_outbox_lane="lineage"}'
+        values: "0+0x27"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OutboxPublishFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: OutboxPublishFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              lance_outbox_lane: "control"
+            exp_annotations:
+              summary: "control events have failed to publish for 15m and wait in the outbox"
+              description: "Publishes on the control lane have failed for 15m. Each event is staged and its relay delivers it once the bus takes it, so nothing is lost while the outbox is written; every consumer of the lane hears late. Read the publisher's `lineage_publish_failed` or `control_publish_failed` log for the bus's answer and `messaging_client_operation_duration_seconds_count` by `error_type`. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # Delivered events whose staged copies the store will not delete.
+  - interval: 1m
+    input_series:
+      - series: 'outbox_drop_failed_total{lance_outbox_lane="lineage"}'
+        values: "0 0 1+1x25"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OutboxDropFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              lance_outbox_lane: "lineage"
+            exp_annotations:
+              summary: "The store refuses deletes of delivered lineage events"
+              description: "For 15m the object store has refused the delete of staged lineage events that were delivered, so each stays staged and its relay delivers it again on every tick. Nothing is lost; consumers see duplicates, and the outbox grows. Read the `outbox_drop_failed` and `control_outbox_left_staged` logs for the store's error. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # Events a relay fails on tick after tick for half an hour; a tick that strands nothing adds 0 and pages nothing.
+  - interval: 1m
+    input_series:
+      - series: 'outbox_events_stranded_total{lance_outbox_lane="lineage"}'
+        values: "0 0 1+1x45"
+      - series: 'outbox_events_stranded_total{lance_outbox_lane="control"}'
+        values: "0+0x47"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OutboxEventsStranded
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: OutboxEventsStranded
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              lance_outbox_lane: "lineage"
+            exp_annotations:
+              summary: "The lineage relay has left staged events it failed on for 30m"
+              description: "Every tick for 30m the lineage relay failed on staged events and left them for the next: the feed or the catalog did not take them. They are intact and retried. Read the relay's `lineage_outbox_event_stranded` log for the run and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # One staged object a relay discarded pages at once, from a series that was at 0, and clears an hour later.
+  - interval: 1m
+    input_series:
+      - series: 'outbox_events_poison_dropped_total{lance_outbox_lane="control"}'
+        values: "0 0 0 1+0x90"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: OutboxPoisonDropped
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: OutboxPoisonDropped
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              lance_outbox_lane: "control"
+            exp_annotations:
+              summary: "A relay discarded staged control objects it can never deliver"
+              description: "The control relay dropped staged objects in the last hour: a producer staged an event that does not parse, or something other than the catalog wrote under the control outbox. Read the `lineage_outbox_poison_dropped`, `control_outbox_unverifiable` and `control_outbox_undeliverable` logs for the object and its author. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+      - eval_time: 70m
+        alertname: OutboxPoisonDropped
+        exp_alerts: []
+
+  # One control event no outbox holds is lost, and pages at once: maintenance stages none, so its one failed publish
+  # pages; the catalog's failed publish that its outbox holds does not.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_control_emit_failed_total{lance_maintenance_reason="publish",lance_maintenance_staged="false"}'
+        values: "0 0 0 1+0x30"
+      - series: 'catalog_control_emit_failed_total{lance_catalog_reason="unsigned",lance_catalog_staged="false"}'
+        values: "0+0x33"
+      - series: 'catalog_control_emit_failed_total{lance_catalog_reason="publish",lance_catalog_staged="true"}'
+        values: "0 0 0 1+0x30"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ControlEventsLost
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ControlEventsLost
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "lakehouse"
+            exp_annotations:
+              summary: "Control events were not published and no outbox holds them"
+              description: "In the last 15 minutes a service could not publish control events that no outbox holds: it could not sign them (its signing key is unresolved, or the event has no canonical form), or the bus refused them and the service stages none. Each change happened and is audited, and no subscriber is told. Read the `control_emit_withheld_unsigned` and `control_publish_failed` logs for the action and event id, and the service's readiness, which reports its signing key. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
+      - eval_time: 20m
+        alertname: ControlEmitFailing
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ControlEventsLost
+        exp_alerts: []
+
+  # An event the catalog withheld unsigned is lost too.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_control_emit_failed_total{lance_catalog_reason="unsigned",lance_catalog_staged="false"}'
+        values: "0 0 0 1+0x30"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ControlEventsLost
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "lakehouse"
+            exp_annotations:
+              summary: "Control events were not published and no outbox holds them"
+              description: "In the last 15 minutes a service could not publish control events that no outbox holds: it could not sign them (its signing key is unresolved, or the event has no canonical form), or the bus refused them and the service stages none. Each change happened and is audited, and no subscriber is told. Read the `control_emit_withheld_unsigned` and `control_publish_failed` logs for the action and event id, and the service's readiness, which reports its signing key. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
+
+  # Control emits failing at the bus for fifteen minutes, each staged.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_control_emit_failed_total{lance_catalog_reason="publish",lance_catalog_staged="true"}'
+        values: "0 0 1+1x25"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ControlEmitFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+            exp_annotations:
+              summary: "Control events have failed to publish for 15m and wait in the outbox"
+              description: "Control emits have failed at the bus for 15m. Each is staged, and the catalog's control relay delivers it once the bus takes it; subscribers hear late. Read the `control_publish_failed` log for the bus's answer. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+      - eval_time: 20m
+        alertname: ControlEventsLost
+        exp_alerts: []
+
+  # A timer whose work raises on every window it claims: it is not stopped, and its work does not happen. One that turns
+  # every ten minutes pages as one that turns every minute does, and one failed turn between turns that ran pages nothing.
+  - interval: 1m
+    input_series:
+      - series: 'timer_turns_total{timer="lineage-relay",outcome="failed"}'
+        values: "0+1x60"
+      - series: 'timer_turns_total{timer="lineage-relay",outcome="ran"}'
+        values: "0x60"
+      - series: 'timer_turns_total{timer="catalog-manifest-reclaim",outcome="failed"}'
+        values: "0x9 1x9 2x9 3x9 4x9 5x9"
+      - series: 'timer_turns_total{timer="catalog-manifest-reclaim",outcome="ran"}'
+        values: "0x60"
+      - series: 'timer_turns_total{timer="catalog-commit-reconcile",outcome="failed"}'
+        values: "0x9 1x50"
+      - series: 'timer_turns_total{timer="catalog-commit-reconcile",outcome="ran"}'
+        values: "0x19 1+0x9 2+0x9 3+0x9 4+0x9"
+      - series: 'timer_turns_total{timer="catalog-control-relay",outcome="ran"}'
+        values: "0+1x60"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LakehouseTimerFailing
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: LakehouseTimerFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              timer: "lineage-relay"
+            exp_annotations:
+              summary: "The timer lineage-relay has failed on every window it ran for 20m"
+              description: "The work of the timer lineage-relay has raised on each window a replica claimed, with none that returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+      - eval_time: 45m
+        alertname: LakehouseTimerFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              timer: "catalog-manifest-reclaim"
+            exp_annotations:
+              summary: "The timer catalog-manifest-reclaim has failed on every window it ran for 20m"
+              description: "The work of the timer catalog-manifest-reclaim has raised on each window a replica claimed, with none that returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              timer: "lineage-relay"
+            exp_annotations:
+              summary: "The timer lineage-relay has failed on every window it ran for 20m"
+              description: "The work of the timer lineage-relay has raised on each window a replica claimed, with none that returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+      - eval_time: 25m
+        alertname: LakehouseTimerStopped
+        exp_alerts: []
+
+  # A forwarder that cannot reach its graph backend, tick after tick; every tick is counted, a tick that reached it at 0.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_forward_stalled_total'
+        values: "0 0 1+1x45"
+      - series: 'lineage_forward_events_total{lance_lineage_outcome="refused"}'
+        values: "0 0 0 2+0x45"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LineageForwardStalled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: LineageForwardStalled
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lineage"
+            exp_annotations:
+              summary: "Lineage has not reached its graph backend for 30m"
+              description: "Every relay tick for 30 minutes stopped forwarding short of the feed's head: the graph backend is down or refuses the forwarder. The feed and the edge list are complete; the backend's graph falls behind until it answers, and the forwarder resumes from its cursor. Read lineage's `lineage_forward_stalled` log for the backend's answer."
+      - eval_time: 5m
+        alertname: LineageForwardRefused
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lineage"
+            exp_annotations:
+              summary: "The graph backend refused events lineage forwarded"
+              description: "The graph backend answered events lineage forwarded with a refusal no retry changes, so the forwarder passed over them: the backend's graph lacks them, and the feed holds them. Read lineage's `lineage_forward_event_refused` log for the event and the backend's answer."
+
+  # A commit whose author the catalog could not record.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_commit_authors_unrecorded_total'
+        values: "0 0 0 1+0x20"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CatalogCommitAuthorsUnrecorded
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: CatalogCommitAuthorsUnrecorded
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+            exp_annotations:
+              summary: "A commit's author was not recorded"
+              description: "The catalog committed a version and could not write the record of who committed it on its control root, so if that version's announcement is lost the reconciler has no author to announce it under. The `commit_author_unrecorded` ERROR log names the location, the version and the store's error. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+
+  # A consumer the stream Job did not declare: the lane's asks are refused from its start (its series was created at 0)
+  # and it takes nothing. A lane whose asks are answered pages nothing.
+  - interval: 1m
+    input_series:
+      - series: 'bus_pulls_failed_total{lance_bus_consumer="lineage-ingest"}'
+        values: "0+12x20"
+      - series: 'bus_pulls_failed_total{lance_bus_consumer="maintenance-arrival"}'
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BusConsumerUnreachable
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: BusConsumerUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "fleet"
+              lance_bus_consumer: "lineage-ingest"
+            exp_annotations:
+              summary: "lineage-ingest: the bus has refused every ask for 10m — the lane takes nothing"
+              description: "For 10 minutes the bus has refused or dropped the asks for lineage-ingest: the consumer or its stream does not exist as the chart's stream Job declares it (the Job failed, or has not run), the bus does not grant the service the ask, or the bus does not answer. What the lane records has stopped. Read the service's `bus_pull_failed` or `bus_follow_failed` log for the bus's answer, and the stream Job's last run (`kubectl get jobs -l app.kubernetes.io/component=nats-streams`). Runbook: docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end"
+
+  # An event refused as too large to publish. The counter is labelled by topic, so its series is born at the first
+  # refusal, which the rule's second arm reads; a later refusal is an increase.
+  - interval: 1m
+    input_series:
+      - series: 'bus_publish_refused_total{lance_bus_topic="lineage.events.v1",lance_bus_reason="oversize"}'
+        values: "_ _ _ 1+0x80 2+0x20"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BusPublishRefused
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: BusPublishRefused
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "fleet"
+              lance_bus_topic: "lineage.events.v1"
+            exp_annotations:
+              summary: "An event for lineage.events.v1 was refused as too large to publish"
+              description: "A service built an event for lineage.events.v1 larger than the bus's claim-check size, and the publish was refused before anything was sent: no subscriber hears of it. Read the publisher's `lineage_publish_failed` or `control_publish_failed` log, whose error gives the event's size."
+      - eval_time: 75m
+        alertname: BusPublishRefused
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: BusPublishRefused
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "fleet"
+              lance_bus_topic: "lineage.events.v1"
+            exp_annotations:
+              summary: "An event for lineage.events.v1 was refused as too large to publish"
+              description: "A service built an event for lineage.events.v1 larger than the bus's claim-check size, and the publish was refused before anything was sent: no subscriber hears of it. Read the publisher's `lineage_publish_failed` or `control_publish_failed` log, whose error gives the event's size."
+
+  # Blocking calls waiting for a thread for five minutes; a pool with threads to spare pages nothing.
+  - interval: 1m
+    input_series:
+      - series: 'threadpool_waiting{service_name="catalog"}'
+        values: "0 0 3+0x15"
+      - series: 'threadpool_waiting{service_name="lineage"}'
+        values: "0+0x17"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: RequestThreadPoolExhausted
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RequestThreadPoolExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "fleet"
+              service_name: "catalog"
+            exp_annotations:
+              summary: "catalog: blocking calls have waited for a thread for 5m"
+              description: "Every thread of catalog's request thread pool has been held for 5 minutes and calls wait for one (`threadpool_busy` at `threadpool_limit`): a dependency its doors block on (the object store, OpenFGA, the secret store) answers slowly, or the service needs more replicas. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
+
+  # A stream the bus does not answer the sampler about, sample after sample, and a durable it does not answer about:
+  # each pages under its own name, and those it answers about stay at 0.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_queue_unsampled_total{stream="STORE_EVENTS"}'
+        values: "0+4x30"
+      - series: 'maintenance_queue_unsampled_total{stream="MAINTENANCE_TASKS"}'
+        values: "0+0x30"
+      - series: 'maintenance_queue_unsampled_total{consumer="maintenance-store-events"}'
+        values: "0+4x30"
+      - series: 'maintenance_queue_unsampled_total{consumer="maintenance-worker"}'
+        values: "0+0x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MaintenanceQueueUnsampled
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MaintenanceQueueUnsampled
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+              stream: "STORE_EVENTS"
+            exp_annotations:
+              summary: "The bus does not answer about a maintenance stream or consumer (STORE_EVENTS)"
+              description: "For 15 minutes the bus has not answered the worker's sampler about STORE_EVENTS: it does not exist as the chart's stream Job declares it (the Job failed, or has not run), or the bus is down. The queue alerts read gauges this leaves unset. Read the worker's `maintenance_queue_unsampled` WARNING line for the bus's answer, and the stream Job's last run."
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+              consumer: "maintenance-store-events"
+            exp_annotations:
+              summary: "The bus does not answer about a maintenance stream or consumer (maintenance-store-events)"
+              description: "For 15 minutes the bus has not answered the worker's sampler about maintenance-store-events: it does not exist as the chart's stream Job declares it (the Job failed, or has not run), or the bus is down. The queue alerts read gauges this leaves unset. Read the worker's `maintenance_queue_unsampled` WARNING line for the bus's answer, and the stream Job's last run."
+
+  # A table declaring a base nothing sanctions, an expired record the purge refused, and files stranded above a
+  # listing floor: each pages from one count; a dry run's refusals are its own series and page nothing.
+  - interval: 1h
+    input_series:
+      - series: 'maintenance_bases_unrecorded_total'
+        values: "0 0 1+0x40"
+      - series: 'maintenance_trash_purge_refused_total{lance_maintenance_kind="table",lance_maintenance_dry_run="false"}'
+        values: "0 0 2+0x40"
+      - series: 'maintenance_trash_purge_refused_total{lance_maintenance_kind="namespace",lance_maintenance_dry_run="true"}'
+        values: "0 0 5+0x40"
+      - series: 'maintenance_orphans_stranded_total'
+        values: "0 0 7+0x40"
+      - series: 'maintenance_orphans_checks_total{outcome="incomplete"}'
+        values: "0 0 1+0x40"
+      - series: 'maintenance_orphans_checks_total{outcome="clean"}'
+        values: "0+3x42"
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: MaintenanceBasesUnrecorded
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+            exp_annotations:
+              summary: "A table declares a base path nothing sanctions"
+              description: "A table's pass found a manifest declaring a base path that is neither its own root, configured, nor in the catalog's record: a writer committed it past the catalog's judgement. It protects nothing and the table it names is maintained as usual. Read the `maintenance_unrecorded_base` log for the table and the path, and find the writer."
+      - eval_time: 3h
+        alertname: MaintenanceTrashPurgeRefused
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+              lance_maintenance_kind: "table"
+            exp_annotations:
+              summary: "The trash purge refused expired table records"
+              description: "The daily scan's purge left expired table records unreclaimed: the object is still registered, lies outside the maintained estate or under a control prefix, or its grants could not be revoked. Their bytes stay until it clears. Read the `trash_purge_refused` log for each record and its reason."
+      - eval_time: 3h
+        alertname: MaintenanceOrphansStranded
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+            exp_annotations:
+              summary: "A table holds unreferenced files above its listing floor"
+              description: "A table's orphan check found files no version references above the table's listing floor, where Lance's cleanup does not look: their bytes stay until the floor is raised. Read the `maintenance_orphan_check` log for the table and the count."
+      - eval_time: 3h
+        alertname: MaintenanceOrphanChecksFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+              outcome: "incomplete"
+            exp_annotations:
+              summary: "Table orphan checks ended incomplete"
+              description: "Orphan checks ended incomplete in the last day: incomplete, a read of the table's files or versions failed; raised, the check itself failed. Those tables' unreferenced files are not found until a check completes. Read the `maintenance_orphan_check` log for the table and the error."
+      - eval_time: 30h
+        alertname: MaintenanceBasesUnrecorded
+        exp_alerts: []
+      - eval_time: 30h
+        alertname: MaintenanceOrphansStranded
+        exp_alerts: []
+
+  # A dataset's first failure of an error class nothing has counted before: the class's series is born at 1, which the
+  # increase reads as nothing and the rule's second arm as that failure. Retried every fifteen minutes, it holds the hour.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_datasets_failed_total{error_type="OSError"}'
+        values: "_ _ _ 1+0x14 2+0x14 3+0x14 4+0x14 5+0x20"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MaintenanceDatasetsFailing
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: MaintenanceDatasetsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+            exp_annotations:
+              summary: "Table maintenance is failing on one or more datasets"
+              description: "A table's pass could not complete one or more datasets, and retries them every `maintenance.queue.retrySeconds`. Sustained failure means those datasets accumulate superseded versions indefinitely. Break down by error.type; the per-dataset URI is on the trace span and in the maintenance_dataset_outcome log line, deliberately not on the metric (unbounded cardinality)."

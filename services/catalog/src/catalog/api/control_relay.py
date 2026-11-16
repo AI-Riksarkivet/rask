@@ -203,14 +203,9 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
     Blocking object-store IO and the key reads run in the threadpool so a slow prefix never stalls the event loop.
     """
     options = settings.storage_options()
-    depth, oldest_age = await run_in_threadpool(outbox.backlog, settings.control_outbox_uri, options)
-    # ONE instrument for both lanes, on purpose. `deploy/alerting/rules.yml` alerts on
-    # `max(outbox_depth) > 0` and `max(outbox_oldest_age_seconds) > 300` — lane-agnostic by
-    # construction — so observing here makes a stuck CONTROL outbox pageable with no new rule, and the
-    # OTel resource's `service.name` (catalog vs lineage) says which lane is stuck. The alternative,
-    # staying silent to keep the lineage series pure, is exactly the invisible-failure shape this whole
-    # relay exists to remove.
-    outbox_metrics.observe_backlog(depth, oldest_age)
+    # The instruments the lineage outbox reports on, under this lane's own attribute, which the control lane's alerts
+    # select (`deploy/alerting/rules.yml`).
+    depth, oldest_age = await run_in_threadpool(outbox.measured_backlog, "control", settings.control_outbox_uri, options)
     report = ControlRelayReport(depth=depth, oldest_age_seconds=round(oldest_age, 1))
     if not depth:
         return report
@@ -234,7 +229,7 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
     async def retire(key: str) -> None:
         """Drop one staged object this lane can never deliver, so the pass goes on to the events behind it."""
         if await drop_or_leave_staged(key):
-            outbox_metrics.record_poison_dropped()
+            outbox_metrics.record_poison_dropped("control")
             report.poison_dropped += 1
 
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.control_outbox_uri, options, limit=DRAIN_LIMIT)))
@@ -276,13 +271,13 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
             # The bus is still down. Stop the pass rather than grinding the whole backlog against it:
             # every remaining object stays staged and the next tick retries from the oldest.
             log.warning("control_outbox_republish_failed", extra={"key": key, "error": str(exc)})
-            outbox_metrics.record_publish_failed()
+            outbox_metrics.record_publish_failed("control")
             break
         if await drop_or_leave_staged(key):
             report.republished += 1
         else:
-            outbox_metrics.record_drop_failed()
-    outbox_metrics.record_drained(report.republished)
+            outbox_metrics.record_drop_failed("control")
+    outbox_metrics.record_drained("control", report.republished)
     return report
 
 

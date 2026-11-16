@@ -57,6 +57,13 @@ _writes_shed = _meter.create_counter(
 )
 
 
+_writes_in_flight = _meter.create_up_down_counter(
+    "catalog.writes.in_flight",
+    unit="{request}",
+    description="Bulk table write requests reading or holding their bodies now: at the concurrent-write cap, the next is shed.",
+)
+
+
 class WriteConcurrencyLimitMiddleware:
     """Reject a bulk table write with 429 once ``max_concurrent`` are already reading their bodies."""
 
@@ -64,6 +71,9 @@ class WriteConcurrencyLimitMiddleware:
         self._app = app
         self._max = max_concurrent
         self._inflight = 0
+        # At 0 from the app's start: a series born at the first shed write has no 0 before it for a rate to read.
+        _writes_shed.add(0)
+        _writes_in_flight.add(0)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if self._max <= 0 or scope["type"] != "http" or not _is_bulk_write(scope):
@@ -79,6 +89,7 @@ class WriteConcurrencyLimitMiddleware:
                 if self._inflight >= self._max:  # at capacity → shed BEFORE a body byte is read
                     await refusal.refuse()
                 self._inflight += 1  # no await between the check above and here → atomic on the single-threaded loop
+                _writes_in_flight.add(1)
                 seated = True
             return await receive()
 
@@ -87,6 +98,7 @@ class WriteConcurrencyLimitMiddleware:
         finally:
             if seated:
                 self._inflight -= 1
+                _writes_in_flight.add(-1)
 
     async def _shed(self, send: Send) -> None:
         # THROTTLING is the spec code this refusal means, and `Retry-After` tells a client when to try again.

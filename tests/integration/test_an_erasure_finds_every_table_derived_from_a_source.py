@@ -321,7 +321,8 @@ def test_a_table_lineage_records_after_the_release_from_a_run_before_it_is_liste
         ticks = [catalog_tick(catalog_url, commit_reconcile.tick).late_derived for _ in range(2)]
         listed = catalog.get("/management/v1/erasures").json()["obligations"]
 
-    assert (ticks, counted.added) == ([1, 0], [1])
+    # The catalog creates the series at 0 when it starts, so the find is an increase the alert reads.
+    assert (ticks, counted.added) == ([1, 0], [0, 1])
     assert [(o["obligation_id"], o["late_derived"]) for o in listed] == [(source, [uuid_of["lance_catalog$acme-silver$late"]])]
 
 

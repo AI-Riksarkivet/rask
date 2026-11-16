@@ -47,7 +47,9 @@ def catalog_timers(settings: Settings) -> dict[str, CatalogTimer]:
     """Each catalog timer by name."""
     return {
         # The relay measures the control outbox's backlog on each tick, so a replica another ran the window of drops its own.
-        "catalog-control-relay": CatalogTimer(period=settings.control_relay_period_seconds, tick=control_relay.tick, elsewhere=outbox_metrics.forget_backlog),
+        "catalog-control-relay": CatalogTimer(
+            period=settings.control_relay_period_seconds, tick=control_relay.tick, elsewhere=partial(outbox_metrics.forget_backlog, "control")
+        ),
         "catalog-erasure-release": CatalogTimer(period=settings.erasure_release_period_seconds, tick=erasure_release.tick),
         "catalog-commit-reconcile": CatalogTimer(period=settings.commit_reconcile_period_seconds, tick=commit_reconcile.tick),
         "catalog-manifest-reclaim": CatalogTimer(period=settings.manifest_reclaim_period_seconds, tick=manifest_reclaim.tick),
@@ -61,6 +63,9 @@ def start_timers(app: FastAPI, settings: Settings, loops: Supervisor) -> None:
     Called once everything a tick works with is on ``app.state``; the loops are stopped with the process's others,
     before any of it is released.
     """
+    outbox_metrics.create_series("control")
+    commit_reconcile.create_series()
+    manifest_reclaim.create_series()
     timers: dict[str, Timer] = {}
     for name, timer in catalog_timers(settings).items():
         if not timer.period:

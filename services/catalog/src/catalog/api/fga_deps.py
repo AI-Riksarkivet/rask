@@ -584,14 +584,14 @@ async def _require(client: OpenFgaClient, *, user: str, relation: str, obj: str,
         AuditAction.AUTHZ, AuditOutcome.ALLOW if allowed else AuditOutcome.DENY, relation=relation, subject=user, resource=obj
     )  # #41 audit every authz decision
     if not allowed:
-        log.info("access_denied", extra={"sub": user, "relation": relation, "object": obj})
+        log.info("access_denied", extra={"relation": relation, "object": obj})
         raise PermissionDeniedError(f"{relation} required on {label or obj}")
 
 
 def _refuse_absent(*, user: str, relation: str, label: str) -> PermissionDeniedError:
     """The refusal of ``relation`` on a name that holds no object, audited by the name: no tuple can grant it."""
     audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation=relation, subject=user, resource=label, reason="no_such_object")
-    log.info("access_denied", extra={"sub": user, "relation": relation, "object": label})
+    log.info("access_denied", extra={"relation": relation, "object": label})
     return PermissionDeniedError(f"{relation} required on {label}")
 
 
@@ -638,7 +638,7 @@ async def _require_trashed(
     admitted = {obj: record for obj, record in objects.items() if allowed.get(obj, False)}
     resolver.admit_trashed(named.kind, list(named.segments), list(admitted.values()))
     if not admitted:
-        log.info("access_denied", extra={"sub": user, "relation": relation, "object": label})
+        log.info("access_denied", extra={"relation": relation, "object": label})
         raise PermissionDeniedError(f"{relation} required on {label}")
     return next(iter(admitted))
 
@@ -666,7 +666,7 @@ async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[st
     for relation, obj in doors:  # reaching here means every door was probed and every one denied
         audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation=relation, subject=user, resource=obj)
     wanted = " or ".join(f"{relation} on {label or obj}" for relation, obj in doors)
-    log.info("access_denied", extra={"sub": user, "relation": "any_of", "object": wanted})
+    log.info("access_denied", extra={"relation": "any_of", "object": wanted})
     raise PermissionDeniedError(f"one of [{wanted}] required")
 
 
@@ -861,7 +861,7 @@ async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: ob
     if already:
         return
     audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation="can_grant_self", subject=user, resource=obj, grantee=resolved, granted_relation=relation)
-    log.info("self_elevation_refused", extra={"sub": user, "relation": relation, "object": obj, "grantee": resolved})
+    log.info("self_elevation_refused", extra={"relation": relation, "object": obj})
     raise PermissionDeniedError(f"a grant may not raise your own access: you do not hold {relation} on {obj}")
 
 
@@ -1026,7 +1026,7 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Re
             if not granted:
                 denied.append(label)
     if denied:
-        log.info("access_denied", extra={"sub": user, "objects": sorted(denied)})
+        log.info("access_denied", extra={"objects": sorted(denied)})
         raise PermissionDeniedError(f"permission denied on {', '.join(sorted(denied))}")
 
 
@@ -1231,7 +1231,7 @@ async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user:
         reason="unidentified_table",
     )
     if not allowed:
-        log.info("access_denied", extra={"sub": user, "relation": rung.relation, "object": label})
+        log.info("access_denied", extra={"relation": rung.relation, "object": label})
         raise PermissionDeniedError(f"{rung.relation} required on {label}")
 
 
@@ -1651,7 +1651,7 @@ async def _refused_read_as_absent(
     except ServiceUnavailableError:
         return  # the authz layer is down; the 403 the caller already has is the fail-closed answer
     except (OSError, ValueError):
-        log.warning("refused_read_trash_unreadable", extra={"sub": token.subject, "object": fga.canonical_object_id(segments)}, exc_info=True)
+        log.warning("refused_read_trash_unreadable", extra={"object": fga.canonical_object_id(segments)}, exc_info=True)
         return
     ident = fga.canonical_object_id(segments)
     absent = TableNotFoundError if fga_type == "table" else NamespaceNotFoundError
@@ -2937,10 +2937,10 @@ async def require_classifier_to_copy_a_label(
         read = await run_in_threadpool(dataplane.expressions_reading_a_label, dataset, list(expressions))
     except OSError:
         # Labels that cannot be read are not "no labels": the copy is judged as reading one.
-        log.warning("copy_labels_unreadable", extra={"sub": authz.subject}, exc_info=True)
+        log.warning("copy_labels_unreadable", exc_info=True)
         read = ["<labels unreadable>"]
     if read:
-        log.info("copy_of_a_label_asks_can_classify", extra={"sub": authz.subject, "expressions": read})
+        log.info("copy_of_a_label_asks_can_classify", extra={"expressions": read})
         await authz.require("can_classify", fga.table_object(table.resolved.require_uuid()), label=fga.canonical_object_id(table.segments))
 
 

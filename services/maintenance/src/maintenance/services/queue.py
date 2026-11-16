@@ -61,10 +61,12 @@ from maintenance.core.metrics import (
     ArrivalOutcome,
     record_arrival_settled,
     record_consumer_backlog,
+    record_consumer_unsampled,
     record_pass_overran,
     record_schedule_not_queued,
     record_store_event_settled,
     record_stream_depth,
+    record_stream_unsampled,
     record_task_completed,
     record_task_duration,
     record_task_ended,
@@ -1276,23 +1278,27 @@ SAMPLE_SECONDS: Final = 15.0
 
 async def sample_queue(queue: TaskQueue, consumers: Collection[tuple[str, str]] = SAMPLED_CONSUMERS) -> int:
     """Read each sampled stream's depth and the backlog of each of ``consumers`` off the bus into their gauges; how many
-    reads the bus did not answer. A read it did not answer leaves its gauge at its last value, logged, so one stream's
-    outage does not hide what the others say."""
+    reads the bus did not answer. A read it did not answer leaves its gauge at its last value, logged and counted, so one
+    stream's outage does not hide what the others say."""
     unread = 0
     for stream, aged in SAMPLED_STREAMS:
         try:
             state = await queue.stream_state(stream)
         except QueueUnavailableError as exc:
             log.warning("maintenance_queue_unsampled", extra={"stream": stream, "error": str(exc)[:300]})
+            record_stream_unsampled(stream=stream, reads=1)
             unread += 1
             continue
+        record_stream_unsampled(stream=stream, reads=0)
         record_stream_depth(stream=stream, messages=state.messages, oldest_seconds=state.oldest_seconds(datetime.now(UTC)) if aged else None)
     for stream, durable in consumers:
         try:
             backlog = await queue.consumer_state(stream, durable)
         except QueueUnavailableError as exc:
             log.warning("maintenance_queue_unsampled", extra={"consumer": durable, "error": str(exc)[:300]})
+            record_consumer_unsampled(consumer=durable, reads=1)
             unread += 1
             continue
+        record_consumer_unsampled(consumer=durable, reads=0)
         record_consumer_backlog(consumer=durable, waiting=backlog.num_pending, ack_pending=backlog.num_ack_pending, redelivered=backlog.num_redelivered)
     return unread

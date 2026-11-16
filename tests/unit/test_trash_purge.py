@@ -866,7 +866,7 @@ def test_a_dry_run_tick_is_DISTINGUISHABLE_on_the_reclamation_counters(monkeypat
 
     assert seen, "the counters recorded nothing at all"
     assert all("lance.maintenance.dry_run" in attrs for _v, attrs in seen), f"a point carries no dry-run dimension: {seen}"
-    assert all(attrs["lance.maintenance.dry_run"] is True for _v, attrs in seen), seen
+    assert all(attrs["lance.maintenance.dry_run"] == "true" for _v, attrs in seen), seen
     assert any(v == 3 for v, _a in seen), f"the planned count never reached a counter: {seen}"
 
 

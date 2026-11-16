@@ -624,13 +624,13 @@ def _record_dataset_metrics(result: DatasetResult) -> None:
 
 
 def _record_parked(result: DatasetResult) -> None:
-    """Count a parked table under its id, which `MaintenanceTableParked` pages on: the catalog's refusals of the id, and
-    a policy record of it the pass cannot read. Only those: a layout refusal can land on a location that names no table."""
+    """Count a parked table, which `MaintenanceTableParked` pages on: the catalog's refusals of its id, and a policy
+    record of it the pass cannot read. Only those: a layout refusal can land on a location that names no table."""
     if result.refused_table_id is None:
         return
     match result.refused_by:
         case "vend_denied" | "table_not_governed" | "policy_unreadable" as gate:
-            record_table_parked(table_id=result.refused_table_id, refused_by=gate)
+            record_table_parked(refused_by=gate)
         case _:
             return
 

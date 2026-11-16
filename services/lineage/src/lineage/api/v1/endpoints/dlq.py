@@ -199,7 +199,7 @@ async def replay_dlq(
     # A completed ACTION records SUCCESS unconditionally (house vocabulary: ALLOW/DENY belong to authz
     # decisions — mirror access_grant/vend_credentials); the subject is empty in auth-off dev.
     audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.SUCCESS, subject=token.subject if token else "", resource=_audited(event, run_id))
-    log.info("lineage_dlq_replayed", extra={"run_id": run_id, "sub": token.subject if token else None})
+    log.info("lineage_dlq_replayed", extra={"run_id": run_id})
     return DlqReplayResponse(status="replayed", run_id=run_id)
 
 
@@ -254,5 +254,5 @@ async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep
             raise ServiceUnavailableError(f"re-presenting run {run_id} met an outage; {len(left)} delivery(ies) stay kept: {names}")
         raise InvalidInputError(f"run {run_id} is still refused on re-presentation; {len(left)} delivery(ies) stay kept, {len(recovered)} recovered: {names}")
     audit.audit(AuditAction.DLQ_PARKED_REPLAY, AuditOutcome.SUCCESS, subject=subject, resource=f"run:{run_id}")
-    log.info("lineage_parked_replayed", extra={"run_id": run_id, "deliveries": len(kept), "sub": subject or None})
+    log.info("lineage_parked_replayed", extra={"run_id": run_id, "deliveries": len(kept)})
     return DlqReplayResponse(status="recovered", run_id=run_id)

@@ -35,7 +35,7 @@ from lineage.api.relay import start_relay
 from lineage.api.security import authenticate, judge
 from lineage.api.v1.router import api_router
 from lineage.core.config import LineageSettings, get_settings, storage_options
-from lineage.core.metrics import create_signature_refused_series
+from lineage.core.metrics import create_outcome_series, create_signature_refused_series
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
 from lineage.services.signature import store_published_keys
@@ -156,8 +156,10 @@ def _take_deliveries(app: FastAPI, settings: LineageSettings, bus: Bus | None, l
     """Pull lineage's consumer on a loop of ``loops`` for as long as the process runs, where a bus is named. Started once
     the feed and the gate a delivery is handled with are on ``app.state``, and stopped with the other loops, before
     either is released."""
-    # Every reason series of the signature refusal counter at 0, which the doors that verify a bus or staged event share.
+    # Every reason series of the signature refusal counter at 0, which the doors that verify a bus or staged event share,
+    # and every outcome's series of the processed-events counter, which every door counts on.
     create_signature_refused_series()
+    create_outcome_series()
     if bus is None:
         return
     ingest = IngestLane(app, settings)

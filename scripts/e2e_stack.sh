@@ -11,8 +11,9 @@
 # serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167), on the
 # lakehouse and its platform fixtures alone, with no client installed (XC-183).
 #
-# The telemetry chain is off: OpenTelemetry is rask's boundary and the store behind the Collector is the platform's. Maintenance is on, because a commit's pass on the deployed queue is a lakehouse claim
-# (`tests/e2e-py/test_maintenance_e2e.py`).
+# The telemetry chain is on (ADR 0214): rask's Collector exports to the observability fixture's store, where the
+# `observability` suite reads each service's signals. Maintenance is on, because a commit's pass on the deployed queue
+# is a lakehouse claim (`tests/e2e-py/test_maintenance_e2e.py`).
 #
 # Idempotent: safe to re-run against an existing cluster. Env overrides: CLUSTER, RELEASE, KEEP_STACK=1.
 set -euo pipefail
@@ -118,6 +119,17 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # The governed stack's values, shared with scripts/install_from_empty.sh so the two lanes install one shape.
 # shellcheck source=scripts/stack_values.sh
 . "$(dirname "$0")/stack_values.sh"
+# THE TELEMETRY CHAIN IS ON IN THIS LANE (ADR 0214): rask's Collector is rendered, and exports to the observability
+# fixture's store as the dev estate's does (deploy/values-local.yaml names the same endpoint and ingestion headers), so
+# the `observability` suite reads each service's metric, trace and logs where the Collector delivered them. Set after
+# stack_values.sh, whose `observability.enabled=false` the empty-cluster install keeps: a later --set wins.
+HELM_SET+=(
+  --set observability.enabled=true
+  --set-string observability.export.endpoint=http://greptimedb.observability:4000/v1/otlp
+  --set-string observability.export.headers.x-greptime-db-name=public
+  --set-string observability.export.traceHeaders.x-greptime-pipeline-name=greptime_trace_v1
+  --set-string observability.export.auditHeaders.x-greptime-log-table-name=lance_audit
+)
 
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
 # `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this
@@ -162,7 +174,9 @@ build_image() {
       return
     fi
   fi
-  bash scripts/dagger-image.sh --name "$stem" --tag "$img" --out "$IMAGE_DIR/$stem.tar"
+  # A failed build fails the function: it is called on the left of `||`, where errexit does not act, so without the
+  # return the test below would answer for it and the lane would go on to load an archive that was never written.
+  bash scripts/dagger-image.sh --name "$stem" --tag "$img" --out "$IMAGE_DIR/$stem.tar" || return 1
   [ -z "$kept" ] || cp "$IMAGE_DIR/$stem.tar" "$kept"
 }
 ( while read -r img stem; do
@@ -188,7 +202,8 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # Dex, the dev OIDC issuer the lane mints its tokens from, the dev object store and the dev secret store are fixtures too
 # ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
 # seed scripts are rask's), so fixtures.sh does not wait for them.
-"$(dirname "$0")/fixtures.sh" external-secrets nats dex openbao
+# The observability fixture is the store behind rask's Collector (ADR 0214), Ready before any rask pod exports to it.
+"$(dirname "$0")/fixtures.sh" external-secrets nats dex openbao observability
 
 step "3/8 side-load the images"
 wait "$BUILD_PID" || { cat "$IMAGE_DIR/build.log"; echo "!! an image build failed (log above)" >&2; exit 1; }
@@ -227,7 +242,7 @@ STORE_PORT="$(kubectl get svc "$RELEASE-rustfs" -o jsonpath='{.spec.ports[?(@.na
 [ -n "$NODE_IP" ] && [ -n "$STORE_PORT" ] || { echo "!! no node address ($NODE_IP) or store NodePort ($STORE_PORT) to vend" >&2; exit 2; }
 HELM_SET+=(--set-string vending.endpoint="http://$NODE_IP:$STORE_PORT")
 
-step "4/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry OFF, no client)"
+step "4/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry ON, no client)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
 # helm's order is: apply manifests → (--wait) block until every resource is Ready → run post-install hooks.
 # The OpenFGA schema migration WAS a post-install hook, and the OpenFGA server cannot become Ready until its
@@ -348,6 +363,9 @@ forward "$RELEASE-dex" 5556:5556 /tmp/pf-dex.log
 forward "$RELEASE-openfga" 8081:8080 /tmp/pf-fga.log
 # The bus `nats.url` names (stack_values.sh): criterion 4's module reads its streams and publishes on it.
 forward rask-nats 4222:4222 /tmp/pf-nats.log
+# The store behind the Collector, in the fixture's own namespace, which no drill restarts: the `observability` suite
+# reads rask's signals there.
+kubectl -n observability port-forward svc/greptimedb 24000:4000 >>/tmp/pf-greptime.log 2>&1 & PF_PIDS+=($!)
 for i in $(seq 1 40); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:2333/livez 2>/dev/null || true)
   l=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:18000/livez 2>/dev/null || true)
@@ -447,6 +465,7 @@ export LANCE_E2E_CATALOG_URL=http://localhost:2333
 export LANCE_REST_E2E_URL=http://localhost:2333
 export LANCE_E2E_AUTH_SERVER=http://localhost:2333
 export LANCE_E2E_LINEAGE_URL=http://localhost:18000
+export LANCE_E2E_GREPTIME_URL=http://localhost:24000
 # WITH the /dex path prefix — that is what every suite defaults to, and what Dex actually serves the OIDC
 # discovery document under. Exporting the bare host OVERRODE the correct default with a broken one, so the
 # client-direct suite's reachability probe 404'd and it SKIPPED — silently, on every run.
@@ -482,9 +501,8 @@ failed=()
 #   phase1         Phase 1's acceptance, the next session, which reads one drive of the scenario
 #   nats_auth      its own lane (`dagger call nats-auth`): a broker in operator mode, which this stack's bus is not
 #   rustfs_provisioning  its own lane (`dagger call rustfs-provisioning`): it provisions IAM on a throwaway store
-#   observability  the telemetry chain: it reads the platform's store behind the Collector, so a deployed estate runs it
 #   edge           the Gateway's routes, which this stack does not render (stack_values.sh)
-"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not observability and not edge" \
+"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not edge" \
   || failed+=("the lane's suites")
 
 # PHASE 1'S ACCEPTANCE (XC-090), BY ITS MARKER, so a module joins the lane by carrying `phase1`: one drive of the

@@ -15,6 +15,10 @@ again, parked, or, on a followed subject, failed. Each series is created at 0 wh
 1 shows none. How long each handling took is its own histogram, under the messaging conventions' name for it
 (`messaging.process.duration`).
 
+AN ASK THE BUS REFUSED IS COUNTED (`bus.pulls.failed`), under the consumer asked for. A lane binds to a consumer the
+chart's stream Job declares and creates none, so a consumer or a stream the Job did not converge shows only here: the
+lane asks again without end and takes nothing.
+
 NAMED `bus.*`: the instruments say what the lakehouse did, whichever client and broker carry it.
 """
 
@@ -52,6 +56,12 @@ _deliveries = _meter.create_counter(
     description="Deliveries this process took from the bus, by the consumer they came from and how each was settled.",
 )
 
+_pulls_failed = _meter.create_counter(
+    "bus.pulls.failed",
+    unit="{pull}",
+    description="Asks for a consumer's next message, or a followed subject's, that the bus refused or dropped, by consumer.",
+)
+
 _processing = _meter.create_histogram(
     "messaging.process.duration",
     unit="s",
@@ -61,9 +71,17 @@ _processing = _meter.create_histogram(
 
 
 def create_delivery_series(consumer: str, outcomes: Iterable[str]) -> None:
-    """Create ``consumer``'s series of `bus.deliveries` at 0, one per outcome it can settle a delivery with."""
+    """Create ``consumer``'s series of `bus.deliveries` at 0, one per outcome it can settle a delivery with, and its
+    series of `bus.pulls.failed`."""
     for outcome in outcomes:
         _deliveries.add(0, {"lance.bus.consumer": consumer, "lance.bus.outcome": outcome})
+    _pulls_failed.add(0, {"lance.bus.consumer": consumer})
+
+
+def record_pull_failed(consumer: str) -> None:
+    """Count one ask the bus refused or dropped: a consumer or stream it does not hold as the chart declares it, a
+    permission it does not grant, or a bus that did not answer. ``consumer`` as :func:`record_delivery` takes it."""
+    _pulls_failed.add(1, {"lance.bus.consumer": consumer})
 
 
 def record_delivery(consumer: str, outcome: str) -> None:

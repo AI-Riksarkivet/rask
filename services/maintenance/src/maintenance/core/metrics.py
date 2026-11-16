@@ -1,10 +1,8 @@
 """OpenTelemetry domain metrics for the maintenance service (exported OTLP-direct to GreptimeDB).
 
-A table's pass counts under the ``compaction.*`` prefix the alert rules and dashboards query; maintenance compacts
-nothing (ADR 0155), and what they count is its own work: the datasets a pass reached, the versions it reclaimed, the
-datasets it refused or failed. The worker counts its tasks under ``maintenance.tasks.*``, the store events and fired
-schedules it settles, and samples its streams and durable consumers under ``maintenance.queue.*`` (ADR 0198 §2). Only
-the instrumentation scope names the service."""
+A table's pass counts its own work: the datasets it reached, the versions it reclaimed, the datasets it refused or
+failed. The worker counts its tasks under ``maintenance.tasks.*``, the store events and fired schedules it settles, and
+samples its streams and durable consumers under ``maintenance.queue.*`` (ADR 0198 §2)."""
 
 from __future__ import annotations
 
@@ -15,7 +13,7 @@ from opentelemetry import metrics
 from lakehouse.lineage.signing import RefusalReason
 
 
-#: What parks a TABLE ID, and the closed `refused_by` set of `compaction.tables.parked`: the vend door's 403, its 404
+#: What parks a TABLE ID, and the closed `refused_by` set of `maintenance.tables.parked`: the vend door's 403, its 404
 #: naming the table or namespace absent, and a policy record of the table's that cannot be read as one, which may be a
 #: legal hold and so is never read as the defaults.
 type CatalogRefusal = Literal["vend_denied", "table_not_governed", "policy_unreadable"]
@@ -23,17 +21,17 @@ type CatalogRefusal = Literal["vend_denied", "table_not_governed", "policy_unrea
 _meter = metrics.get_meter("lance.maintenance")
 
 _versions_removed = _meter.create_counter(
-    "compaction.versions.removed",
+    "maintenance.versions.removed",
     unit="{version}",
     description="Superseded Lance manifest versions GC'd.",
 )
 #: THE NUMBER THE SWEEP EXISTS TO PRODUCE, and until [[LH-099]] it reached three log sites and no
-#: series — measured on the deployed estate 2026-09-19, `compaction_bytes_reclaimed_total` returned
-#: ZERO series from GreptimeDB while `compaction_runs_total` returned one. Distinct from
+#: series — measured on the deployed estate 2026-09-19 under the names of that day, `compaction_bytes_reclaimed_total`
+#: returned ZERO series from GreptimeDB while `compaction_runs_total` returned one. Distinct from
 #: `maintenance.trash.bytes_reclaimed`, which the PURGE feeds: the two answer different questions (what
 #: superseded versions cost versus what dropped tables cost) and summing them would answer neither.
 _bytes_reclaimed = _meter.create_counter(
-    "compaction.bytes.reclaimed",
+    "maintenance.bytes.reclaimed",
     unit="By",
     description="Bytes freed by GC'ing superseded Lance versions in a table's pass.",
 )
@@ -42,19 +40,18 @@ _bytes_reclaimed = _meter.create_counter(
 #: TREND. The supported-flag set is a whitelist, so a pylance upgrade that adds a legitimate flag shows up
 #: here as a step change in `manifest_flags` — and nowhere else — while the sweep still reports a clean run.
 _refused = _meter.create_counter(
-    "compaction.datasets.refused",
+    "maintenance.datasets.refused",
     unit="{dataset}",
     description="Datasets refused by the maintenance pass, by refused_by gate.",
 )
 
-#: PER TABLE, which `_refused` deliberately is not. A table parked on every tick is one row in
-#: a refusal share measured at 45.3-46.5% of every sweep (2026-09-24), so only its own id can page on it.
-#: `table_id` is bounded by the refused tables and `refused_by` by `CatalogRefusal`. No zero is emitted:
-#: an absent series is the healthy estate, and a zero could name no table.
+#: ITS OWN SERIES, apart from `_refused`: a parked table is one row in a refusal share measured at 45.3-46.5% of every
+#: sweep (2026-09-24), so no rule over that share can page on it. Labelled by `refused_by` alone (`CatalogRefusal`, a
+#: closed set): which table is the pass's log line's to say, and a series per table would grow with the estate.
 _tables_parked = _meter.create_counter(
-    "compaction.tables.parked",
+    "maintenance.tables.parked",
     unit="{dataset}",
-    description="Datasets left untouched for the tick because their table id is parked (the catalog refused it, or its policy cannot be read), by table_id and refused_by.",
+    description="Datasets left untouched for the tick because their table id is parked (the catalog refused it, or its policy cannot be read), by refused_by.",
 )
 
 #: Datasets whose manifest carries reader flag 256 (mixed data file versions). Its own series because
@@ -65,12 +62,12 @@ _tables_parked = _meter.create_counter(
 #: learns a writer planted one. Its own series because nothing was refused: the finding is the table
 #: that declares the base, while the table it names is maintained as usual.
 _unrecorded_bases = _meter.create_counter(
-    "compaction.bases.unrecorded",
+    "maintenance.bases.unrecorded",
     unit="{base}",
     description="Declared base paths the maintenance pre-pass found sanctioned by nothing, counted each tick they are seen.",
 )
 _mixed_file_versions = _meter.create_counter(
-    "compaction.datasets.mixed_file_versions",
+    "maintenance.datasets.mixed_file_versions",
     unit="{dataset}",
     description="Datasets whose data files are at more than one Lance file version (reader flag 256), counted each time the sweep opens one.",
 )
@@ -86,7 +83,7 @@ _overwritten_files = _meter.create_counter(
 #: rows' bytes stay there until a compaction rewrites the fragment, which the compaction gate refuses for such a table.
 #: Reported rather than reclaimed (owner, 2026-10-24), so the count is how an operator sees what they cost.
 _base_fragments_holding_deleted_rows = _meter.create_counter(
-    "compaction.base_fragments.holding_deleted_rows",
+    "maintenance.base_fragments.holding_deleted_rows",
     unit="{fragment}",
     description="Fragments keeping deleted rows' bytes in their table's data directory on a data base, counted each time the sweep expires their table.",
 )
@@ -103,9 +100,9 @@ _base_fragments_holding_deleted_rows = _meter.create_counter(
 #: deliberately NOT a label for the same reason — "which dataset" is a trace/log question, "is anything
 #: failing, and is it getting worse" is the metric question, and only the second one can page.
 _failed = _meter.create_counter(
-    "compaction.datasets.failed",
+    "maintenance.datasets.failed",
     unit="{dataset}",
-    description="Datasets the maintenance pass could not complete, by stable error class. A refusal is NOT a failure — see compaction.datasets.refused.",
+    description="Datasets the maintenance pass could not complete, by stable error class. A refusal is NOT a failure — see maintenance.datasets.refused.",
 )
 
 
@@ -155,7 +152,7 @@ _KINDS = ("table", "namespace")
 
 #: Every dataset a table's pass reached, policy-skips included: the denominator `MaintenanceRefusalsRising` divides by.
 _datasets_swept = _meter.create_counter(
-    "compaction.datasets.swept",
+    "maintenance.datasets.swept",
     unit="{dataset}",
     description="Datasets a table's pass reached, including those its policy skipped.",
 )
@@ -228,7 +225,10 @@ def record_trash_purge(
     `trashPurgeDryRun` on gets a PERMANENT preview — the dry run wins by design — which nothing else in
     the estate would ever reveal.
     """
-    attributes = {"lance.maintenance.dry_run": dry_run}
+    # A string, since the store behind the Collector keeps no boolean attribute as a label: measured on GreptimeDB
+    # v1.1.1 through the e2e-stack lane, 2026-11-16, the boolean form reached it as a series with no such label, so a
+    # preview's points and a real pass's were one series.
+    attributes = {"lance.maintenance.dry_run": "true" if dry_run else "false"}
     planned_by_kind = planned_by_kind or {}
     for kind in _KINDS:
         by_kind = {**attributes, "lance.maintenance.kind": kind}
@@ -240,7 +240,7 @@ def record_trash_purge(
 
 def record_reclaimed(*, versions_removed: int, bytes_removed: int = 0) -> None:
     """Record what expiry reclaimed. Always emit — adding 0 is a valid no-op that still CREATES the counter series, so a
-    dashboard/alert on ``rate(compaction_*_total[5m])`` has data from the first sweep instead of reading "no data"
+    dashboard/alert on the counter's rate has data from the first sweep instead of reading "no data"
     until the first non-zero reclaim (obs audit 2026-07-13).
 
     ``bytes_removed`` is the one an operator asks for: a version count says how much WORK happened, never how much
@@ -269,7 +269,7 @@ def record_refused(datasets: int, refused_by: str | None = None) -> None:
     (`unauthenticated`). `DatasetResult.refused_by`
     already carried the answer and `summarize_refusals` already counted by it — it reached the sweep's
     WARNING and the response body and stopped there, which is the same shape as
-    `compaction.bytes.reclaimed` before [[LH-099]].
+    `maintenance.bytes.reclaimed` before [[LH-099]].
 
     CARDINALITY IS BOUNDED BY CONSTRUCTION: the gates are a closed set named in `DatasetResult`, not a
     message and never the dataset — the same rule `record_failed` states for `error_type`.
@@ -409,6 +409,14 @@ _queue_redelivered = _meter.create_gauge(
     unit="{message}",
     description="Messages a maintenance durable consumer has delivered more than once and not yet settled, by consumer, as the worker last sampled it.",
 )
+#: A sampler's read the bus did not answer, by the stream or the consumer asked about. The worker's streams and durable
+#: consumers are the chart's stream Job's to declare, so one the Job did not converge shows here on every sample, while
+#: its gauges say nothing.
+_queue_unsampled = _meter.create_counter(
+    "maintenance.queue.unsampled",
+    unit="{read}",
+    description="Reads of a maintenance stream's or durable consumer's state the bus did not answer, by stream or consumer.",
+)
 
 
 #: How the hourly audit found each governed bucket's store events (:mod:`maintenance.services.bucket_events`): configured
@@ -431,7 +439,8 @@ def record_store_event_bucket_checked(*, outcome: BucketEventsOutcome) -> None:
 
 def create_task_series(kinds: tuple[str, ...]) -> None:
     """Create each kind's series of the worker's task counters at 0 when it starts, the `unreadable` one of the ended
-    count, every outcome of the store-event count, of the commit-announcement count and of the bucket-events count, and the not-queued count: a series born at 1 has no 0 before it, so
+    count, every outcome of the store-event count, of the commit-announcement count and of the bucket-events count, the
+    not-queued count, each refusal of the parked-table count and each kind of the purge's refused count: a series born at 1 has no 0 before it, so
     `increase()` sees no increase and the first task ended or overrun never pages, and a worker that has completed
     nothing yet would read "no data"."""
     for kind in kinds:
@@ -445,6 +454,10 @@ def create_task_series(kinds: tuple[str, ...]) -> None:
     _schedules_not_queued.add(0)
     for outcome in get_args(BucketEventsOutcome.__value__):
         _store_event_buckets_checked.add(0, {"outcome": outcome})
+    for refused_by in get_args(CatalogRefusal.__value__):
+        _tables_parked.add(0, {"refused_by": refused_by})
+    for kind in _KINDS:
+        _trash_refused.add(0, {"lance.maintenance.dry_run": "false", "lance.maintenance.kind": kind})
 
 
 def record_task_retried(*, kind: str) -> None:
@@ -482,6 +495,17 @@ def record_schedule_not_queued() -> None:
     _schedules_not_queued.add(1)
 
 
+def record_stream_unsampled(*, stream: str, reads: int) -> None:
+    """Count the reads of ``stream``'s state the bus did not answer on one sample. Always emits, including zero, so the
+    series exists from the first sample and a read not answered is an increase."""
+    _queue_unsampled.add(reads, {"stream": stream})
+
+
+def record_consumer_unsampled(*, consumer: str, reads: int) -> None:
+    """Count the reads of ``consumer``'s state the bus did not answer on one sample; zero included, as for a stream."""
+    _queue_unsampled.add(reads, {"consumer": consumer})
+
+
 def record_stream_depth(*, stream: str, messages: int, oldest_seconds: float | None) -> None:
     """Set a stream's sampled depth; ``oldest_seconds`` only for a stream whose age is read (a work queue a backlog ages
     on), None for one that holds messages for their time (the schedules)."""
@@ -512,12 +536,9 @@ def record_pass_overran(*, kind: str) -> None:
     _passes_overran.add(1, {"kind": kind})
 
 
-def record_table_parked(*, table_id: str, refused_by: CatalogRefusal) -> None:
-    """Record that ``table_id`` is parked this tick: the catalog refused it at one door, or its policy cannot be read.
-
-    Keyword-only: both are strings, and a swapped pair would put a door name in the table label.
-    """
-    _tables_parked.add(1, {"table_id": table_id, "refused_by": refused_by})
+def record_table_parked(*, refused_by: CatalogRefusal) -> None:
+    """Record that a table is parked this tick: the catalog refused its id at one door, or its policy cannot be read."""
+    _tables_parked.add(1, {"refused_by": refused_by})
 
 
 def record_mixed_file_versions(datasets: int) -> None:

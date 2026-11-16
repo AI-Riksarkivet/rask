@@ -48,7 +48,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from opentelemetry import metrics
 
-from lakehouse import outbox
+from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus
 from lakehouse.cloud_events import control_envelope
 from lakehouse.control_events import (
@@ -133,15 +133,19 @@ class BusControlEmitter:
             description=(
                 f"{service} control-plane emits that did not reach the bus, by `reason`: `publish` (the bus "
                 "refused or timed out) or `unsigned` (this service's signing key is unresolved, or it cannot sign "
-                "the event at all). The change ITSELF still happened and is audited. Whether anything is "
-                "lost depends on the consumer: a console ring buffer or a tag-polling reader loses only a refresh "
-                "hint, but a pipeline whose next step wakes on a control event (a tag's move, say) "
-                "and does NOT poll loses that hop outright. When an outbox is "
-                "configured a failed publish stays STAGED and its relay delivers it. An `unsigned` event is never "
-                "staged, whatever the configuration, and the service reports itself not ready meanwhile; so a rising "
-                "`unsigned` count, or a rising `publish` count with no outbox, means cascades were silently abandoned."
+                "the event at all), and by `staged`: whether the outbox holds the event for its relay to deliver. "
+                "The change ITSELF still happened and is audited. An event that is not staged is LOST: a console ring "
+                "buffer or a tag-polling reader loses only a refresh hint, but a pipeline whose next step wakes on a "
+                "control event (a tag's move, say) and does NOT poll loses that hop outright. An `unsigned` event is "
+                "never staged, whatever the configuration, and the service reports itself not ready meanwhile. Which "
+                "action is the log line's to say."
             ),
         )
+        # Every series at 0 from the emitter's start: one born at its first failure has no 0 before it, so an alert
+        # reading the counter's increase would miss that failure.
+        for reason, staged in (("publish", True), ("publish", False), ("unsigned", False)):
+            self._emit_failed.add(0, self._undelivered(reason, staged=staged))
+        outbox_metrics.create_series("control")
 
     async def emit(self, event: CatalogControlEvent) -> None:
         """Publish one control event, signed when this service signs, STAGED when an outbox is configured.
@@ -175,12 +179,17 @@ class BusControlEmitter:
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
                 topic=self._topic,
                 timeout_seconds=self._timeout_seconds,
+                lane="control",
             )
         except Exception as exc:
             self._record_undelivered(event, exc, reason="publish", staged=outbox.left_staged(exc))
 
+    def _undelivered(self, reason: _Undelivered, *, staged: bool) -> dict[str, str]:
+        """The attributes an undelivered emit is counted under: why, and whether the outbox holds it."""
+        return {f"lance.{self._service}.reason": reason, f"lance.{self._service}.staged": "true" if staged else "false"}
+
     def _record_undelivered(self, event: CatalogControlEvent, error: Exception, *, reason: _Undelivered, staged: bool) -> None:
-        self._emit_failed.add(1, {f"lance.{self._service}.action": event.action, f"lance.{self._service}.reason": reason})
+        self._emit_failed.add(1, self._undelivered(reason, staged=staged))
         log.warning(
             "control_publish_failed" if reason == "publish" else "control_emit_withheld_unsigned",
             extra={

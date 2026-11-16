@@ -32,6 +32,7 @@ import pytest
 from lineage_lane import Feed, Kept, measured, outcome, started
 
 from lakehouse.bus_delivery import Outcome, Settlement
+from lineage.core import metrics as lineage_metrics
 from lineage.core.config import get_settings
 from lineage.services.provenance import delivery_feed_key
 
@@ -61,6 +62,11 @@ type Counts = Callable[[str], dict[frozenset[tuple[str, str]], int]]
 def counts(monkeypatch: pytest.MonkeyPatch) -> Counts:
     """`lineage.events.processed`, read through a real in-memory reader."""
     return measured(monkeypatch, "_events_processed")
+
+
+def _moved(counted: dict[frozenset[tuple[str, str]], int]) -> dict[frozenset[tuple[str, str]], int]:
+    """The series that counted anything: lineage creates every one at 0 when it starts."""
+    return {series: count for series, count in counted.items() if count}
 
 
 def _parked_on_its_last_delivery(monkeypatch: pytest.MonkeyPatch, feed: Feed, envelope: dict[str, Any] = _ENVELOPE) -> tuple[Settlement, int]:
@@ -105,7 +111,10 @@ def test_a_park_the_feed_does_not_hold_is_kept_logged_as_an_error_and_counted_as
         False,
         "alice",
     )
-    assert counts("lineage.events.processed") == {outcome("retried", "subscriber"): 1, outcome("dead_lettered", "dead_letter"): 1}
+    # Counted on series lineage created at 0 when it started, every outcome at every door, so each is an increase.
+    processed = counts("lineage.events.processed")
+    assert _moved(processed) == {outcome("retried", "subscriber"): 1, outcome("dead_lettered", "dead_letter"): 1}
+    assert set(processed) == {outcome(counted, door) for counted in lineage_metrics.Outcome for door in lineage_metrics.Door}
 
 
 def test_a_park_whose_row_the_feed_holds_keeps_nothing_and_is_counted_apart(
@@ -124,7 +133,7 @@ def test_a_park_whose_row_the_feed_holds_keeps_nothing_and_is_counted_apart(
     assert feed.kept == {}
     [parked] = [record for record in caplog.records if record.message == "lineage_delivery_parked"]
     assert (parked.levelno, getattr(parked, "already_recorded", None), getattr(parked, "author", None)) == (logging.WARNING, True, "alice")
-    assert counts("lineage.events.processed") == {outcome("retried", "subscriber"): 1, outcome("parked_already_recorded", "dead_letter"): 1}
+    assert _moved(counts("lineage.events.processed")) == {outcome("retried", "subscriber"): 1, outcome("parked_already_recorded", "dead_letter"): 1}
 
 
 def test_a_delivery_parked_unhandled_is_kept_whatever_its_payload_names(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,4 +168,4 @@ def test_a_park_the_store_does_not_take_is_asked_for_again(monkeypatch: pytest.M
 
     assert settled == Settlement(outcome=Outcome.AGAIN, delay_seconds=get_settings().delivery_retry_seconds)
     assert feed.kept == {}
-    assert counts("lineage.events.processed") == {outcome("retried", "subscriber"): 1}
+    assert _moved(counts("lineage.events.processed")) == {outcome("retried", "subscriber"): 1}

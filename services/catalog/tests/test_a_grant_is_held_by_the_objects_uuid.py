@@ -13,12 +13,18 @@ Every decision is the real model's, on a store of this test's own ([[LH-235]]); 
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pyarrow as pa
 import pytest
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.audit import AUDIT_LOGGER
+
+
+#: The logger of the catalog's authorization gate (`catalog.api.fga_deps`), named so the catalog is imported by its fixture.
+_GATE_LOGGER = "catalog.api.fga_deps"
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
@@ -48,7 +54,11 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
     return governed_catalog
 
 
-def test_a_reader_keeps_a_renamed_table_and_holds_nothing_on_one_created_again_under_its_name(estate: Any) -> None:  # noqa: ANN401
+def test_a_reader_keeps_a_renamed_table_and_holds_nothing_on_one_created_again_under_its_name(estate: Any, caplog: pytest.LogCaptureFixture) -> None:  # noqa: ANN401
+    """The refusal is recorded twice: who was refused on the audit trail, and what was refused on the catalog's own log,
+    which names no subject."""
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    caplog.set_level(logging.INFO, logger=_GATE_LOGGER)
     held = estate.store.tuples()
 
     _ok(estate, "/v1/table/lance_catalog$db$t/rename", json={"new_table_name": "u"})
@@ -59,6 +69,9 @@ def test_a_reader_keeps_a_renamed_table_and_holds_nothing_on_one_created_again_u
     _create_table(estate, "lance_catalog$db$u")
     refused = estate.client.post("/v1/table/lance_catalog$db$u/describe", json={}, headers=estate.bearer("bob"))
     assert refused.status_code == 403, f"bob reads a table created under the name he was granted: {refused.text}"
+    denied = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__["audit.outcome"] == "deny"]
+    said = [r.__dict__ for r in caplog.records if r.name == _GATE_LOGGER and r.getMessage() == "access_denied"]
+    assert ({r["audit.subject"] for r in denied}, len(said) >= 1, [r for r in said if "dex~bob" in repr(r)]) == ({"dex~bob"}, True, [])
 
 
 def test_every_tuple_a_create_writes_names_the_objects_uuid(estate: Any) -> None:  # noqa: ANN401

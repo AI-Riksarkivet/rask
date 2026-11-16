@@ -76,8 +76,9 @@ def _reclaim(catalog: Catalog) -> ManifestReclaimTick:
 
 
 @pytest.fixture
-def failed_roots(monkeypatch: pytest.MonkeyPatch) -> Callable[[], dict[str, int]]:
-    """The tick's ``catalog.manifest_reclaim.failed`` counter, built by its own module against an in-memory reader."""
+def failed_roots(monkeypatch: pytest.MonkeyPatch) -> Callable[[], list[int]]:
+    """The tick's ``catalog.manifest_reclaim.failed`` counter, built by its own module against an in-memory reader:
+    each exported series' count. Requested before the catalog, so the app starts on the measured counter."""
     from opentelemetry import metrics as otel_metrics
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
@@ -94,8 +95,8 @@ def failed_roots(monkeypatch: pytest.MonkeyPatch) -> Callable[[], dict[str, int]
         spec.loader.exec_module(measured)
     monkeypatch.setattr(tick, "_failed", measured._failed)
 
-    def counts() -> dict[str, int]:
-        found: dict[str, int] = {}
+    def counts() -> list[int]:
+        found: list[int] = []
         data = reader.get_metrics_data()
         for resource in data.resource_metrics if data is not None else ():
             for scope in resource.scope_metrics:
@@ -103,8 +104,7 @@ def failed_roots(monkeypatch: pytest.MonkeyPatch) -> Callable[[], dict[str, int]
                     if metric.name != "catalog.manifest_reclaim.failed":
                         continue
                     # A counter only ever yields `NumberDataPoint`, the member of the reader's point union that has a value.
-                    for point in cast(Sequence[NumberDataPoint], metric.data.data_points):
-                        found[str((point.attributes or {}).get("lance.catalog.root"))] = int(point.value)
+                    found.extend(int(point.value) for point in cast(Sequence[NumberDataPoint], metric.data.data_points))
         return found
 
     return counts
@@ -141,9 +141,9 @@ def test_the_reclaim_keeps_each_roots_history_bounded_and_the_catalog_reads_the_
     assert sorted(listed.json()["namespaces"]) == ["kept", "other"]
 
 
-def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(catalog: Catalog, failed_roots: Callable[[], dict[str, int]], tmp_path: Path) -> None:
+def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(failed_roots: Callable[[], list[int]], catalog: Catalog, tmp_path: Path) -> None:
     """A root whose index Lance cannot open fails alone: the tick still completes, reclaims every other root, and counts
-    the failure under that root, which is what pages once the same root keeps failing."""
+    the failure on a series the catalog created at 0 when it started, so the first failure is an increase."""
     from catalog.services import warehouses
 
     broken = tmp_path / "broken"
@@ -154,13 +154,11 @@ def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(catalog
     for name in ("one", "two"):
         tenant.create_namespace(CreateNamespaceRequest(id=["tenant", name]))
 
+    at_start = failed_roots()
+
     tick = _reclaim(catalog)
 
-    assert (tick.failed, [done.root for done in tick.reclaimed], failed_roots()) == (
-        1,
-        [catalog.estate, catalog.warehouse],
-        {str(broken): 1},
-    )
+    assert (at_start, tick.failed, [done.root for done in tick.reclaimed], failed_roots()) == ([0], 1, [catalog.estate, catalog.warehouse], [1])
 
 
 class _Clock:

@@ -166,6 +166,10 @@ class Timer:
     async def run(self) -> None:
         """Take turn after turn for as long as the process runs."""
         _period.set(self._period, {"timer": self.name})
+        # Every outcome's series at 0 from the loop's start: one born at its first turn has no 0 before it, so an alert
+        # reading the counter's increase would miss a timer's first failed turn.
+        for outcome in Outcome:
+            _turns.add(0, {"timer": self.name, "outcome": outcome.value})
         while True:
             turn = await self.turn()
             await asyncio.sleep(turn.wait)

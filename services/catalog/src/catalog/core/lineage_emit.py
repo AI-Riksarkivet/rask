@@ -43,7 +43,7 @@ from pydantic import BaseModel
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id
 from catalog.core.identifiers import warehouse_of
 from catalog.core.run_context import RunContext
-from lakehouse import outbox
+from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus
 from lakehouse.cloud_events import lineage_envelope
 from lakehouse.context import current_trace_context
@@ -86,6 +86,14 @@ _emit_failed = _meter.create_counter(
     "outbox, so a failure AFTER staging leaves a durable copy the relay can still drain and a failure "
     "at staging does not. The counter cannot tell those apart, which is why any increase is worth a look.",
 )
+
+
+def _create_emit_failed_series() -> None:
+    """Create every transport's series of the failed-emit counter at 0 when an emitter is built: one born at its first
+    failure has no 0 before it, so the alert reading the counter's rate would miss that failure."""
+    for transport in ("derive", "http", "bus"):
+        _emit_failed.add(0, {"lance.catalog.transport": transport})
+
 
 #: Operation markers carried in the OpenLineage ``rask_lance`` run facet. Lineage's ingest authorizer reads them to
 #: pick the relation a write needs and to admit a drop (``lineage.api.fga_deps``), and a notifier renders them, so the
@@ -771,6 +779,7 @@ class HttpLineageEmitter(_BaseLineageEmitter):
         self._url = url
         self._job_namespace = job_namespace
         self._dataset_namespace = dataset_namespace
+        _create_emit_failed_series()
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:
         # Forward the caller's bearer so ingest accepts the event when the lineage service has OIDC on
@@ -816,6 +825,8 @@ class BusEmitter(_BaseLineageEmitter):
         self._dataset_namespace = dataset_namespace
         self._timeout_seconds = timeout_seconds
         self._outbox_uri = outbox_uri
+        outbox_metrics.create_series("lineage")
+        _create_emit_failed_series()
         #: Read at every stage, never held: the key pair in it rotates while the catalog runs ([[XC-082]]).
         self._storage_options = storage_options
         #: THIS CATALOG'S OWN SIGNING KEY ([[LH-064]]). None is a catalog with no store to sign from, which emits
@@ -870,6 +881,7 @@ class BusEmitter(_BaseLineageEmitter):
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
                 topic=self._topic,
                 timeout_seconds=self._timeout_seconds,
+                lane="lineage",
             )
         except (SigningKeyUnavailableError, CanonError) as exc:
             _emit_failed.add(1, {"lance.catalog.transport": "bus"})

@@ -1,17 +1,15 @@
-"""Every refusal the catalog gives for a table id is counted under that id, so one stuck table can page.
+"""Every refusal the catalog gives for a table id is counted on a series of its own, so one stuck table can page.
 
-`compaction.datasets.refused` cannot page on one table: measured 2026-09-24, 45.3-46.5% of every sweep
+`maintenance.datasets.refused` cannot page on one table: measured 2026-09-24, 45.3-46.5% of every sweep
 is refused, most of it someone else's clone, and `MaintenanceRefusalsRising` needs more than half.
 A stamp or a stale id the catalog refuses 403 at the vend door is refused on every tick and never maintained
-again. `compaction.tables.parked` counts each such refusal with `table_id` and a closed `refused_by`
-(`vend_denied`, `table_not_governed`), so `MaintenanceTableParked` can fire on the same table staying refused.
+again. `maintenance.tables.parked` counts each such refusal by a closed `refused_by` (`vend_denied`,
+`table_not_governed`), so `MaintenanceTableParked` can fire on a table refused; the pass's log line names the table.
 
 Only the catalog's answers about the id are counted there. A vend the catalog answers 200 for a location
 that does not cover the dataset is maintenance's own refusal (`governed_elsewhere`): the table it names is
 healthy, and granting it changes nothing. A 401 (`unauthenticated`) is about maintenance's
 own service credential, which every table would report at once.
-
-There is no unlabelled point: an absent series is the healthy estate, and a zero could name no table.
 """
 
 from __future__ import annotations
@@ -27,6 +25,7 @@ import pyarrow as pa
 import pytest
 import respx
 
+from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials, table_pass
 from maintenance.services.expiry import DatasetResult
@@ -74,12 +73,20 @@ def _execute(maintain_one: Callable[..., DatasetResult], uri: str, *, vend: Vend
         return maintain_one(uri, settings, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1), table_id=TABLE_ID)
 
 
-def test_a_vend_refusal_is_counted_under_its_table_and_its_door(
+def test_a_vend_refusal_is_counted_as_a_parked_table_under_its_door(
     *, tmp_path: Path, maintain_one: Callable[..., DatasetResult], parked_added: Recorded, refused_added: Recorded
 ) -> None:
+    metrics.create_task_series(())
+
     _execute(maintain_one=maintain_one, uri=_written(tmp_path, fragments=3), vend=_refused(403, PERMISSION_DENIED))
 
-    assert parked_added == [(1, {"table_id": TABLE_ID, "refused_by": "vend_denied"})], parked_added
+    # On a series the worker created at 0 when it started, every refusal's, so the first parked pass is an increase.
+    assert parked_added == [
+        (0, {"refused_by": "vend_denied"}),
+        (0, {"refused_by": "table_not_governed"}),
+        (0, {"refused_by": "policy_unreadable"}),
+        (1, {"refused_by": "vend_denied"}),
+    ], parked_added
     assert refused_added == [(1, {"refused_by": "vend_denied"})], f"the refusal reached the datasets counter unlabelled or not at all: {refused_added}"
 
 

@@ -19,7 +19,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from unittest.mock import MagicMock, call, create_autospec
 
 import pytest
@@ -35,6 +35,7 @@ from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricR
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
 
 from lakehouse import bus, bus_metrics
+from lakehouse.bus_delivery import Delivery, Lane, Verdict
 from lakehouse.cloud_events import CloudEvent
 from lakehouse.context import continuing
 from lakehouse.supervision import EndProcess, Supervisor
@@ -142,6 +143,8 @@ def measured(monkeypatch: pytest.MonkeyPatch) -> Iterator[Points]:
     meter = provider.get_meter("lance.bus")
     monkeypatch.setattr(bus_metrics, "_refused", meter.create_counter("bus.publish.refused", unit="{event}"))
     monkeypatch.setattr(bus_metrics, "_duration", meter.create_histogram("messaging.client.operation.duration", unit="s"))
+    monkeypatch.setattr(bus_metrics, "_deliveries", meter.create_counter("bus.deliveries", unit="{message}"))
+    monkeypatch.setattr(bus_metrics, "_pulls_failed", meter.create_counter("bus.pulls.failed", unit="{pull}"))
 
     def points(name: str) -> list[tuple[dict[str, object], int]]:
         data = reader.get_metrics_data()
@@ -311,6 +314,45 @@ async def test_each_publish_is_timed_under_its_topic_and_how_it_ended(
     assert measured("messaging.client.operation.duration") == [
         ({"messaging.system": "nats", "messaging.operation.name": "publish", "messaging.destination.name": TOPIC} | ended, 1)
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_lane_whose_asks_the_bus_refuses_counts_each_on_series_it_created_at_zero(
+    connected: tuple[bus.Bus, MagicMock], measured: Points, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane binds to a consumer the chart declares and creates none, so one the bus does not hold shows only as asks
+    it refuses. Each is counted under the consumer, beside its delivery series, all of them created at 0 when the lane
+    starts: an alert reads a counter's increase."""
+    session, client = connected
+    client.is_closed = False
+    asked, answered = asyncio.Event(), asyncio.Event()
+
+    async def refused_once_answered(*_args: object, **_kwargs: object) -> NoReturn:
+        asked.set()
+        await answered.wait()
+        raise NoServersError
+
+    client.subscribe.side_effect = refused_once_answered
+    monkeypatch.setattr(bus, "_PULL_SECONDS", 0.01)
+    lane = Lane(stream="LINEAGE", consumer="lineage-ingest", attempts=3, retry_seconds=0, ack_wait_seconds=30)
+    refused = {"lance.bus.consumer": "lineage-ingest"}
+
+    async def never_handed(_delivery: Delivery) -> Verdict:
+        raise AssertionError("a refused ask handed the lane a delivery")
+
+    async def never_parked(_delivery: Delivery, _reason: str) -> None:
+        raise AssertionError("a refused ask parked a delivery")
+
+    pulling = asyncio.create_task(session.consume(lane, never_handed, park=never_parked))
+    await asyncio.wait_for(asked.wait(), 5)
+    before_an_answer = measured("bus.pulls.failed")
+    answered.set()
+    await _until(lambda: any(count >= 2 for labels, count in measured("bus.pulls.failed") if labels == refused))
+    pulling.cancel()
+    await asyncio.gather(pulling, return_exceptions=True)
+
+    assert before_an_answer == [(refused, 0)]
+    assert sorted((labels["lance.bus.outcome"], count) for labels, count in measured("bus.deliveries")) == [("again", 0), ("parked", 0), ("taken", 0)]
 
 
 @pytest.mark.parametrize(

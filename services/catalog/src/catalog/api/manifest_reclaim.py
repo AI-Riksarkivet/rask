@@ -33,8 +33,16 @@ _failed = _meter.create_counter(
     "catalog.manifest_reclaim.failed",
     unit="{root}",
     description="Roots whose __manifest history a reclaim tick could not reclaim ([[LH-251]]): while one keeps failing,"
-    " every namespace operation on it keeps a version again, and a dropped id stays readable in that history.",
+    " every namespace operation on it keeps a version again, and a dropped id stays readable in that history. Which root"
+    " is the `manifest_reclaim_failed` log line's to say: a root's URI names a tenant's bucket, and a series per root"
+    " grows with the estate.",
 )
+
+
+def create_series() -> None:
+    """Create the failure counter's series at 0 when the catalog starts its timers, so the first failed root is an
+    increase an alert can read: a series born at 1 has no 0 before it."""
+    _failed.add(0)
 
 
 class ManifestReclaimTick(BaseModel):
@@ -56,7 +64,7 @@ async def tick(ctx: Tick) -> ManifestReclaimTick:
         # pylance raises each Lance error as one of these three (`python/src/error.rs` at v13.0.0).
         except (OSError, ValueError, RuntimeError):
             log.warning("manifest_reclaim_failed", extra={"root": root}, exc_info=True)
-            _failed.add(1, {"lance.catalog.root": root})
+            _failed.add(1)
             done_this_tick.failed += 1
             continue
         if done is not None:

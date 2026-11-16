@@ -16,8 +16,11 @@ from typing import Annotated
 
 import pytest
 from fastapi import Body, FastAPI, Request, Response
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from catalog.api import load_shed
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 
 
@@ -84,17 +87,45 @@ def _reading_app(release: asyncio.Event, entered: asyncio.Event) -> ASGIApp:
     return app
 
 
-def test_a_write_over_the_cap_is_shed_with_429_before_its_body_is_read() -> None:
+def _counted(reader: InMemoryMetricReader) -> dict[str, int]:
+    """Each of the middleware's instruments' value, as the reader exports it."""
+    data = reader.get_metrics_data()
+    return {
+        metric.name: int(point.value)
+        for resource in (data.resource_metrics if data is not None else [])
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        for point in metric.data.data_points
+        if isinstance(point, NumberDataPoint)
+    }
+
+
+def test_a_write_over_the_cap_is_shed_with_429_before_its_body_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The seated write and the shed one are counted too, on series that exist at 0 from the middleware's start: the
+    writes in flight are the saturation the cap acts on, and the first shed write is an increase an alert reads."""
+    reader = InMemoryMetricReader()
+    meter = MeterProvider(metric_readers=[reader]).get_meter("lance.catalog")
+    monkeypatch.setattr(load_shed, "_writes_shed", meter.create_counter("catalog.writes.shed"))
+    monkeypatch.setattr(load_shed, "_writes_in_flight", meter.create_up_down_counter("catalog.writes.in_flight"))
+    counted: list[dict[str, int]] = []
+
     async def scenario() -> tuple[tuple[int, int], tuple[int, int]]:
         release, entered = asyncio.Event(), asyncio.Event()
         mw = WriteConcurrencyLimitMiddleware(_reading_app(release, entered), max_concurrent=1)
+        counted.append(_counted(reader))
         seated = asyncio.create_task(_drive(mw, _write("/v1/table/t/insert")))
         await entered.wait()
         shed = await _drive(mw, _write("/v1/table/t/merge_insert"))
+        counted.append(_counted(reader))
         release.set()
         return await seated, shed
 
     assert asyncio.run(scenario()) == ((200, 1), (429, 0))
+    assert [*counted, _counted(reader)] == [
+        {"catalog.writes.shed": 0, "catalog.writes.in_flight": 0},
+        {"catalog.writes.shed": 1, "catalog.writes.in_flight": 1},
+        {"catalog.writes.shed": 1, "catalog.writes.in_flight": 0},
+    ]
 
 
 def test_a_write_not_yet_reading_its_body_holds_no_seat() -> None:

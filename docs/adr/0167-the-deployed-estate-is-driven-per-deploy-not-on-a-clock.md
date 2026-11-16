@@ -1,6 +1,7 @@
 # 0167. The deployed estate is driven per deploy, not on a clock; the e2e lane runs every module it can serve (2026-10-18)
 
-**Status:** accepted. Source: owner, 2026-10-18, two decisions on XC-033 (#208) through the multi-question tool: record
+**Status:** accepted; decision 3 superseded by [ADR 0214](0214-the-e2e-lane-runs-the-telemetry-chain.md) (2026-11-16).
+Source: owner, 2026-10-18, two decisions on XC-033 (#208) through the multi-question tool: record
 the deployed-estate cadence as dropped rather than schedule a host timer, and run the maintenance module on push with
 no telemetry backend in the lane ("OpenTelemetry is fixed, but not Perses or GreptimeDB").
 

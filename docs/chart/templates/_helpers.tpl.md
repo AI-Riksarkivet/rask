@@ -396,6 +396,15 @@ measured 2026-08-23, 0 survivors of 10.
 
 Default metric export interval is 60s — too slow to observe in a demo/test. Push every 5s.
 
+## `- { name: OTEL_SEMCONV_STABILITY_OPT_IN, value: "http" }`
+
+The HTTP instrumentation emits OpenTelemetry's stable HTTP conventions and nothing else: `http.server.request.duration`
+in seconds, labelled `http.route` and `http.response.status_code`, which the alert rules and dashboards read
+(`deploy/alerting/rules.yml` § `lance-http`). Without it the instrumentor emits `http.server.duration` in
+milliseconds under `http.target` and `http.status_code`, which those rules select nothing of (measured on
+opentelemetry-instrumentation-fastapi 0.66b2, 2026-11-16). Read once, when `opentelemetry-instrument` starts the
+process, so it is an environment variable and no setting of the app's.
+
 ## `- { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }`
 
 Don't trace the k8s probe endpoints — they're hit every 10s and bury real request spans (otel

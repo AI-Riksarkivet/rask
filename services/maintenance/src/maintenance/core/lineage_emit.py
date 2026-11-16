@@ -33,7 +33,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final, Protocol, runtime_checkable
 
-from lakehouse import outbox
+from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus
 from lakehouse.cloud_events import lineage_envelope
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
@@ -251,6 +251,7 @@ class BusMaintenanceEmitter:
                 f"this service signs as {signing.identity!r} but stamps {author!r} as its author: a verifier refuses a signer that is not its event's author"
             )
         self._bus = bus
+        outbox_metrics.create_series("lineage")
         #: This service's OWN signing key ([[LH-064]]). None is a service with no store to sign from, which emits
         #: unsigned as it always did. A holder without a key emits nothing at all, never an unsigned event.
         self._signing = signing
@@ -333,6 +334,7 @@ class BusMaintenanceEmitter:
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
                 topic=self._topic,
                 timeout_seconds=self._timeout_seconds,
+                lane="lineage",
             )
         except (SigningKeyUnavailableError, CanonError) as exc:
             log.warning("maintenance_event_withheld_unsigned", extra={"table": table_id, "error": str(exc)})

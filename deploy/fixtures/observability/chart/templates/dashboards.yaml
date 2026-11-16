@@ -25,7 +25,7 @@ data:
               "display": { "name": "Request rate (req/s)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
+                "query": "sum by (service_name) (rate(http_server_request_duration_seconds_count[5m]))",
                 "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
@@ -35,7 +35,7 @@ data:
               "display": { "name": "Error rate (5xx %)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "percent" } } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "100 * sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~\"5..\"}[5m])) / clamp_min(sum by (service_name) (rate(http_server_duration_milliseconds_count[5m])), 0.001)",
+                "query": "100 * sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[5m])) / clamp_min(sum by (service_name) (rate(http_server_request_duration_seconds_count[5m])), 0.001)",
                 "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
@@ -43,9 +43,9 @@ data:
             "kind": "Panel",
             "spec": {
               "display": { "name": "p95 latency (ms)" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "milliseconds" } } } },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "seconds" } } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[5m])))",
+                "query": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket[5m])))",
                 "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
@@ -110,7 +110,7 @@ data:
               "display": { "name": "HTTP request rate (req/s)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
+                "query": "sum by (service_name) (rate(http_server_request_duration_seconds_count[5m]))",
                 "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
@@ -118,9 +118,9 @@ data:
             "kind": "Panel",
             "spec": {
               "display": { "name": "HTTP p95 latency (ms)" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "milliseconds" } } } },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "seconds" } } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[5m])))",
+                "query": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket[5m])))",
                 "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           }
@@ -155,7 +155,7 @@ data:
               "display": { "name": "Active services — request rate (req/s)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
+                "query": "sum by (service_name) (rate(http_server_request_duration_seconds_count[5m]))",
                 "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
@@ -184,7 +184,7 @@ data:
               "display": { "name": "Error rate — 5xx share of requests, by service (the missing E in RED)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~\"5..\"}[5m])) / sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
+                "query": "sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[5m])) / sum by (service_name) (rate(http_server_request_duration_seconds_count[5m]))",
                 "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
@@ -195,11 +195,11 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "max(outbox_depth)", "seriesNameFormat": "depth (events)" } } } },
+                  "query": "max by (lance_outbox_lane) (outbox_depth)", "seriesNameFormat": "{{`{{lance_outbox_lane}}`}} depth (events)" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "max(outbox_oldest_age_seconds)", "seriesNameFormat": "oldest age (s)" } } } },
+                  "query": "max by (lance_outbox_lane) (outbox_oldest_age_seconds)", "seriesNameFormat": "{{`{{lance_outbox_lane}}`}} oldest age (s)" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(rate(outbox_publish_failed_total[5m]))", "seriesNameFormat": "publish failed /s" } } } }
+                  "query": "sum by (lance_outbox_lane) (rate(outbox_publish_failed_total[5m]))", "seriesNameFormat": "{{`{{lance_outbox_lane}}`}} publish failed /s" } } } }
               ]
             }
           },
@@ -259,7 +259,7 @@ data:
       "kind": "Dashboard",
       "metadata": { "name": "maintenance", "project": "rask" },
       "spec": {
-        "display": { "name": "Table maintenance — the passes", "description": "What the worker's tasks did: the tasks it completed and ended, the datasets its passes covered and refused, and the versions and bytes they RECLAIMED. Maintenance compacts nothing (ADR 0155); its counters carry the compaction_* prefix." },
+        "display": { "name": "Table maintenance — the passes", "description": "What the worker's tasks did: the tasks it completed and ended, the datasets its passes covered and refused, and the versions and bytes they RECLAIMED." },
         "duration": "6h",
         "panels": {
           "runs": {
@@ -282,9 +282,9 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(compaction_datasets_swept_total[10m]))", "seriesNameFormat": "passed" } } } },
+                  "query": "sum(increase(maintenance_datasets_swept_total[10m]))", "seriesNameFormat": "passed" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(compaction_datasets_refused_total[10m]))", "seriesNameFormat": "refused" } } } }
+                  "query": "sum(increase(maintenance_datasets_refused_total[10m]))", "seriesNameFormat": "refused" } } } }
               ]
             }
           },
@@ -295,7 +295,7 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(compaction_versions_removed_total[1h]))", "seriesNameFormat": "versions removed" } } } }
+                  "query": "sum(increase(maintenance_versions_removed_total[1h]))", "seriesNameFormat": "versions removed" } } } }
               ]
             }
           },
@@ -305,7 +305,7 @@ data:
               "display": { "name": "Bytes reclaimed per hour" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum(increase(compaction_bytes_reclaimed_total[1h]))", "seriesNameFormat": "bytes reclaimed" } } } } ]
+                "query": "sum(increase(maintenance_bytes_reclaimed_total[1h]))", "seriesNameFormat": "bytes reclaimed" } } } } ]
             }
           }
         },

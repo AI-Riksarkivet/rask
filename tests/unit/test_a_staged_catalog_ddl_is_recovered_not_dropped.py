@@ -339,12 +339,12 @@ def test_bytes_no_parser_accepts_are_poison_and_do_not_wedge_the_create_behind_t
     hostile = _stage_hostile_first(settings, body)
     _arm_gate(monkeypatch, writer=_AUTHOR)
     poison: list[None] = []
-    monkeypatch.setattr(outbox_metrics, "record_poison_dropped", lambda: poison.append(None))
+    monkeypatch.setattr(outbox_metrics, "record_poison_dropped", lambda lane: poison.append(lane))
     repo = _Repo()
 
     outcome = _drain(settings, repo, BusDouble())
 
-    assert (outcome.drained, len(poison)) == (1, 1), f"the hostile object was not handled as poison: {outcome}, poison={len(poison)}"
+    assert (outcome.drained, poison) == (1, ["lineage"]), f"the hostile object was not handled as poison of the lineage outbox: {outcome}, poison={poison}"
     assert [e.dataset.name for e in repo.datasets] == [_TABLE], "the create staged behind the hostile object was not recovered"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is None, "the poison object stays staged to wedge the next tick"
 

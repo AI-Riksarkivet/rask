@@ -31,11 +31,16 @@ groups:
       # critical did not fire at all. The counters are emitted on EVERY tick including zero
       # (`outbox_metrics.record_refused`), so in a running estate the series exists — this covers the
       # first tick after a fresh deploy, and a backend that drops an all-zero counter series.
+      #
+      # EVERY OUTBOX SERIES NAMES ITS LANE (`lance_outbox_lane`: `lineage`, `control`), since one process can work both
+      # outboxes: the lineage rules select theirs, and the control outbox, which the catalog's control relay drains, has
+      # its own two rules below. A depth is reported only by the replica that measured it on the relay's last window, and
+      # not at all by a tick that could not list the outbox, which `LakehouseTimerFailing` says.
       - alert: LineageOutboxNotDraining
         expr: >-
-          max(outbox_depth) > 0
-          and (sum(rate(outbox_events_drained_total[15m])) or vector(0)) == 0
-          and (sum(rate(outbox_events_refused_total[15m])) or vector(0)) == 0
+          max(outbox_depth{lance_outbox_lane="lineage"}) > 0
+          and (sum(rate(outbox_events_drained_total{lance_outbox_lane="lineage"}[15m])) or vector(0)) == 0
+          and (sum(rate(outbox_events_refused_total{lance_outbox_lane="lineage"}[15m])) or vector(0)) == 0
         for: 10m
         labels:
           severity: critical
@@ -51,7 +56,7 @@ groups:
       # for a condition that no retry changes and that has been true for days. Severity is the whole point
       # of splitting this out of the critical above.
       - alert: LineageOutboxEventsRefused
-        expr: sum(rate(outbox_events_refused_total[30m])) > 0
+        expr: sum(rate(outbox_events_refused_total{lance_outbox_lane="lineage"}[30m])) > 0
         for: 30m
         labels:
           severity: warning
@@ -76,8 +81,8 @@ groups:
       # never clear. Aging only means "the relay is lagging" when the relay is supposed to be moving it.
       - alert: LineageOutboxBacklogAging
         expr: >-
-          max(outbox_oldest_age_seconds) > 300
-          and (sum(rate(outbox_events_refused_total[15m])) or vector(0)) == 0
+          max(outbox_oldest_age_seconds{lance_outbox_lane="lineage"}) > 300
+          and (sum(rate(outbox_events_refused_total{lance_outbox_lane="lineage"}[15m])) or vector(0)) == 0
         for: 5m
         labels:
           severity: warning
@@ -89,18 +94,150 @@ groups:
             with it, the store refuses a publisher's deletes of what it delivered.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
-      - alert: LineageOutboxStagingFailing
-        expr: sum(rate(outbox_stage_failed_total[5m])) > 0
+      # Each outbox counter below exists at 0 from the start of what stages into its lane or drains it
+      # (`lakehouse.outbox_metrics.create_series`), so the first count is an increase.
+      - alert: OutboxStagingFailing
+        expr: sum by (lance_outbox_lane) (rate(outbox_stage_failed_total[5m])) > 0
         for: 5m
         labels:
           severity: warning
-          service: lineage
+          service: lakehouse
         annotations:
-          summary: "Lineage events are publishing without a durable copy"
+          summary: "{{ $labels.lance_outbox_lane }} events are publishing without a durable copy"
           description: >-
-            The outbox stage is failing, so events reach the bus with the crash window OPEN: if the publish
-            then fails the event is gone, and no other outbox signal can see it — depth and oldest-age
+            The {{ $labels.lance_outbox_lane }} outbox's stage is failing, so events reach the bus with the crash window
+            OPEN: if the publish then fails the event is gone, and no other outbox signal can see it — depth and oldest-age
             describe staged objects, and publish_failed only counts a publish that HAD been staged.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
+      # A publish that fails after its stage leaves the event staged for its relay, which is the outbox working. Failing
+      # for fifteen minutes is a bus that takes nothing from this lane's publishers.
+      - alert: OutboxPublishFailing
+        expr: sum by (lance_outbox_lane) (rate(outbox_publish_failed_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: lakehouse
+        annotations:
+          summary: "{{ $labels.lance_outbox_lane }} events have failed to publish for 15m and wait in the outbox"
+          description: >-
+            Publishes on the {{ $labels.lance_outbox_lane }} lane have failed for 15m. Each event is staged and its relay
+            delivers it once the bus takes it, so nothing is lost while the outbox is written; every consumer of the lane
+            hears late. Read the publisher's `lineage_publish_failed` or `control_publish_failed` log for the bus's answer
+            and `messaging_client_operation_duration_seconds_count` by `error_type`.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
+      # A published event whose staged copy the store will not delete is delivered again on every relay tick.
+      - alert: OutboxDropFailing
+        expr: sum by (lance_outbox_lane) (rate(outbox_drop_failed_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: lakehouse
+        annotations:
+          summary: "The store refuses deletes of delivered {{ $labels.lance_outbox_lane }} events"
+          description: >-
+            For 15m the object store has refused the delete of staged {{ $labels.lance_outbox_lane }} events that were
+            delivered, so each stays staged and its relay delivers it again on every tick. Nothing is lost; consumers
+            see duplicates, and the outbox grows. Read the `outbox_drop_failed` and `control_outbox_left_staged` logs for
+            the store's error. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
+      # An event a relay tick failed on is left staged and tried again. Stranded on every tick for half an hour is an
+      # event the feed cannot take, or a dependency of the relay that is down.
+      - alert: OutboxEventsStranded
+        expr: sum by (lance_outbox_lane) (rate(outbox_events_stranded_total[15m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: lakehouse
+        annotations:
+          summary: "The {{ $labels.lance_outbox_lane }} relay has left staged events it failed on for 30m"
+          description: >-
+            Every tick for 30m the {{ $labels.lance_outbox_lane }} relay failed on staged events and left them for the
+            next: the feed or the catalog did not take them. They are intact and retried. Read the relay's
+            `lineage_outbox_event_stranded` log for the run and the error.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
+      # A staged object a relay discarded: one no parser reads, or on the control lane one the catalog did not sign.
+      # No `for:`: a discard is final, and its log line is the only copy of what it was.
+      - alert: OutboxPoisonDropped
+        expr: sum by (lance_outbox_lane) (increase(outbox_events_poison_dropped_total[1h])) > 0
+        labels:
+          severity: warning
+          service: lakehouse
+        annotations:
+          summary: "A relay discarded staged {{ $labels.lance_outbox_lane }} objects it can never deliver"
+          description: >-
+            The {{ $labels.lance_outbox_lane }} relay dropped staged objects in the last hour: a producer staged an event
+            that does not parse, or something other than the catalog wrote under the control outbox. Read the
+            `lineage_outbox_poison_dropped`, `control_outbox_unverifiable` and `control_outbox_undeliverable` logs for
+            the object and its author. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
+      # The control outbox, which each service's control emitter stages into and the catalog's control relay drains. A
+      # control event tells a pipeline that waits on it (a tag's move, a drop) to start its next hop.
+      - alert: ControlOutboxNotDraining
+        expr: >-
+          max(outbox_depth{lance_outbox_lane="control"}) > 0
+          and (sum(rate(outbox_events_drained_total{lance_outbox_lane="control"}[15m])) or vector(0)) == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "Control outbox not draining (depth > 0, nothing republished for 15m)"
+          description: >-
+            Control events are staged and the catalog's control relay has republished none for 15m: the bus takes
+            nothing, the keys a staged event is verified against cannot be read, or no bus is named. A pipeline waiting
+            on a control event has not been told. Read the catalog's `control_outbox_republish_failed`,
+            `control_relay_keys_unavailable` and `control_relay_no_publisher` logs.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
+      - alert: ControlOutboxBacklogAging
+        expr: max(outbox_oldest_age_seconds{lance_outbox_lane="control"}) > 300
+        for: 5m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "Control outbox oldest staged event > 5 min old"
+          description: >-
+            The catalog's control relay is lagging; the oldest staged control event exceeds 300s.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
+      # A control emit that did not reach the bus (`<service>_control_emit_failed_total`, by `reason` and by `staged`,
+      # every series at 0 from the emitter's start). One the outbox does not hold is lost, so any pages: an event
+      # withheld unsigned is never staged, and a failed publish is staged only where the service has a control outbox
+      # (maintenance has none). One that is staged waits for the catalog's control relay.
+      - alert: ControlEventsLost
+        expr: >-
+          (sum(increase(catalog_control_emit_failed_total{lance_catalog_staged="false"}[15m])) or vector(0))
+          + (sum(increase(maintenance_control_emit_failed_total{lance_maintenance_staged="false"}[15m])) or vector(0)) > 0
+        labels:
+          severity: critical
+          service: lakehouse
+        annotations:
+          summary: "Control events were not published and no outbox holds them"
+          description: >-
+            In the last 15 minutes a service could not publish control events that no outbox holds: it could not sign
+            them (its signing key is unresolved, or the event has no canonical form), or the bus refused them and the
+            service stages none. Each change happened and is audited, and no subscriber is told. Read the
+            `control_emit_withheld_unsigned` and `control_publish_failed` logs for the action and event id, and the
+            service's readiness, which reports its signing key.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
+
+      - alert: ControlEmitFailing
+        expr: >-
+          (sum(rate(catalog_control_emit_failed_total{lance_catalog_staged="true"}[5m])) or vector(0))
+          + (sum(rate(maintenance_control_emit_failed_total{lance_maintenance_staged="true"}[5m])) or vector(0)) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: lakehouse
+        annotations:
+          summary: "Control events have failed to publish for 15m and wait in the outbox"
+          description: >-
+            Control emits have failed at the bus for 15m. Each is staged, and the catalog's control relay delivers it
+            once the bus takes it; subscribers hear late. Read the `control_publish_failed` log for the bus's answer.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       # A CATALOG WRITE WHOSE PROVENANCE DID NOT GET RECORDED, which nothing else in this file can see.
@@ -112,11 +249,8 @@ groups:
       #
       # `_total` because the OTLP->Prometheus exporter suffixes counters — the identical defect this file
       # records twice already, where a rule naming the bare form matches nothing and can never fire.
-      # Verified against the live store 2026-09-18: `catalog_control_emit_failed_total` is present under
-      # exactly that spelling, and this counter's series is ABSENT because it has never been incremented
-      # (an OTel counter exports nothing until its first `add`). A rule over an absent series is inert
-      # rather than broken — it starts evaluating the moment the first failure creates it, which is the
-      # moment it matters.
+      # Every transport's series exists at 0 from the emitter's start (`catalog.core.lineage_emit.make_emitter`), so
+      # the first failure is an increase the rate reads.
       - alert: CatalogLineageEmitFailing
         expr: sum(rate(catalog_lineage_emit_failed_total[5m])) > 0
         for: 5m
@@ -135,10 +269,12 @@ groups:
       # LH-497: the commit is the outbox. A find is a write whose own announcement was lost between its commit and its
       # staging, which the catalog's commit reconcile has just announced from the version log: the feed now holds it, and a
       # pipeline following `/events` was late to hear of it. Any find pages, as the closes-when of the row asks.
-      # THE SECOND ARM IS A POD'S FIRST FIND. An OTel counter exports nothing until its first add, so its first sample is
-      # already 1 and `increase()` reads 0 across it; a series present now and absent a window ago is that find. Measured
-      # against GreptimeDB 2026-10-25 on the first live re-announcement: the `increase` arm alone returned no point, the
-      # pair fired for the window after it. The two rules below carry the same pair.
+      # THE SECOND ARM IS A POD'S FIRST FIND. This counter is labelled by operation, an open set, so a series is born at
+      # its first find: its first sample is already 1 and `increase()` reads 0 across it; a series present now and absent
+      # a window ago is that find. Measured against GreptimeDB 2026-10-25 on the first live re-announcement: the
+      # `increase` arm alone returned no point, the pair fired for the window after it. The reconciler's unlabelled
+      # counters below exist at 0 from the catalog's start (`catalog.api.commit_reconcile.create_series`), so their rules
+      # read the increase alone.
       - alert: CatalogCommitsReannounced
         expr: (sum(increase(catalog_commit_reconcile_reannounced_total[15m])) > 0) or (sum(catalog_commit_reconcile_reannounced_total unless catalog_commit_reconcile_reannounced_total offset 15m) > 0)
         labels:
@@ -156,7 +292,7 @@ groups:
       # A version of an announced operation the catalog recorded no author for, whatever rask.author it carries, was
       # committed past every catalog door (or its record failed); nothing can announce it on anyone's behalf.
       - alert: CatalogCommitsUnauthored
-        expr: (sum(increase(catalog_commit_reconcile_unauthored_total[15m])) > 0) or (sum(catalog_commit_reconcile_unauthored_total unless catalog_commit_reconcile_unauthored_total offset 15m) > 0)
+        expr: sum(increase(catalog_commit_reconcile_unauthored_total[15m])) > 0
         labels:
           severity: critical
           service: catalog
@@ -172,7 +308,7 @@ groups:
 
       # A ref the reconciler cannot read past keeps its mark, so every lost announcement after that point waits on it.
       - alert: CatalogCommitReconcileBlocked
-        expr: (sum(increase(catalog_commit_reconcile_unreadable_total[30m])) > 0) or (sum(catalog_commit_reconcile_unreadable_total unless catalog_commit_reconcile_unreadable_total offset 30m) > 0)
+        expr: sum(increase(catalog_commit_reconcile_unreadable_total[30m])) > 0
         for: 30m
         labels:
           severity: warning
@@ -189,16 +325,20 @@ groups:
 
       # A root whose __manifest history the catalog cannot reclaim keeps a version per namespace operation again, and keeps
       # every id dropped there readable in that history (LH-251, ADR 0185). One tick's failure is a blip the next tick
-      # repairs; the same root failing on two ticks within half an hour is not.
+      # repairs: the tick runs every ten minutes (`catalog.manifestReclaim.periodSeconds`), so one failure holds the
+      # 15m increase for fifteen minutes and the 20m `for:` outlasts it, while failures on consecutive ticks hold it
+      # throughout. The counter names no root (a root's URI names a tenant's bucket); the log line does. Its series
+      # exists at 0 from the catalog's start.
       - alert: CatalogManifestReclaimFailing
-        expr: (max by (lance_catalog_root) (increase(catalog_manifest_reclaim_failed_total[30m])) >= 2) or (max by (lance_catalog_root) (catalog_manifest_reclaim_failed_total unless catalog_manifest_reclaim_failed_total offset 30m) >= 2)
+        expr: sum(increase(catalog_manifest_reclaim_failed_total[15m])) > 0
+        for: 20m
         labels:
           severity: warning
           service: catalog
         annotations:
           summary: "The catalog cannot reclaim a root's namespace index history"
           description: >-
-            The catalog's manifest reclaim tick failed on the root {{ $labels.lance_catalog_root }} on two ticks within half an hour, so
+            The catalog's manifest reclaim tick has failed on a root on consecutive ticks, so
             every namespace operation there keeps a version of `__manifest` again and a dropped namespace or table stays
             readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed
@@ -246,10 +386,30 @@ groups:
           description: >-
             The timer {{ $labels.timer }} has claimed no window for three of its periods and is not held by a read-only window, or every turn it took in fifteen minutes found its claim unreadable, so its work runs on no replica: each replica's loop reads and claims the timer's record under the control root (`_timers/<timer>.json`), and none has. Read the service's `timer_claim_unread` WARN logs for the error (the object store, or the service's session at it) and `timer_work_failed` for a tick that raises. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped
 
+      # A timer whose work raises on every window it claims: the window is claimed, so `LakehouseTimerStopped` stays
+      # quiet, and what the tick does (a relay's drain, the reconcile, the converge) does not happen. A relay tick that
+      # cannot list its outbox raises and reports no backlog, so this is also what says an outbox is unmeasured. Failed
+      # turns and none that ran, over a window that holds three turns of the slowest timer (ten minutes a turn): one
+      # failed turn between turns that ran pages nothing. Every outcome's series exists at 0 from the loop's start.
+      - alert: LakehouseTimerFailing
+        expr: >-
+          (sum by (timer) (increase(timer_turns_total{outcome="failed"}[30m])) > 0)
+          unless on (timer) (sum by (timer) (increase(timer_turns_total{outcome="ran"}[30m])) > 0)
+        for: 20m
+        labels:
+          severity: warning
+          service: lakehouse
+        annotations:
+          summary: "The timer {{ $labels.timer }} has failed on every window it ran for 20m"
+          description: >-
+            The work of the timer {{ $labels.timer }} has raised on each window a replica claimed, with none that
+            returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped
+
       # A released erasure obligation is final, so a table found derived from its table after the release, written before
       # it, may still hold the subject (ADR 0183 §5). One is enough to page.
       - alert: ErasureDerivedAfterRelease
-        expr: (sum(increase(catalog_erasure_late_derived_total[15m])) > 0) or (sum(catalog_erasure_late_derived_total unless catalog_erasure_late_derived_total offset 15m) > 0)
+        expr: sum(increase(catalog_erasure_late_derived_total[15m])) > 0
         labels:
           severity: critical
           service: catalog
@@ -263,7 +423,7 @@ groups:
 
       # A watch that cannot read what it judges finds no late derived table, tick after tick.
       - alert: ErasureLateDerivedUnwatched
-        expr: (sum(increase(catalog_erasure_late_derived_unwatched_total[30m])) > 0) or (sum(catalog_erasure_late_derived_unwatched_total unless catalog_erasure_late_derived_unwatched_total offset 30m) > 0)
+        expr: sum(increase(catalog_erasure_late_derived_unwatched_total[30m])) > 0
         for: 30m
         labels:
           severity: warning
@@ -275,6 +435,50 @@ groups:
             location claim, so it found no late derived table this half hour. Read the catalog's
             `erasure_late_derived_unread` logs for the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-table-derived-from-an-erased-table-found-after-the-release
+
+      # The forwarder sends each recorded event to the graph backend the estate names (`services.lineage.forward.url`).
+      # A tick that stops short of the feed's head is counted, at 0 too, on every tick a backend is set.
+      - alert: LineageForwardStalled
+        expr: sum(rate(lineage_forward_stalled_total[10m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: lineage
+        annotations:
+          summary: "Lineage has not reached its graph backend for 30m"
+          description: >-
+            Every relay tick for 30 minutes stopped forwarding short of the feed's head: the graph backend is down or
+            refuses the forwarder. The feed and the edge list are complete; the backend's graph falls behind until it
+            answers, and the forwarder resumes from its cursor. Read lineage's `lineage_forward_stalled` log for the
+            backend's answer.
+
+      - alert: LineageForwardRefused
+        expr: sum(increase(lineage_forward_events_total{lance_lineage_outcome="refused"}[1h])) > 0
+        labels:
+          severity: warning
+          service: lineage
+        annotations:
+          summary: "The graph backend refused events lineage forwarded"
+          description: >-
+            The graph backend answered events lineage forwarded with a refusal no retry changes, so the forwarder passed
+            over them: the backend's graph lacks them, and the feed holds them. Read lineage's
+            `lineage_forward_event_refused` log for the event and the backend's answer.
+
+      # A write Lance committed whose author the catalog could not record: the reconciler cannot announce it on anyone's
+      # behalf, and finds it unauthored (`CatalogCommitsUnauthored`) once it is past the grace. The series exists at 0
+      # from the catalog's first commit record.
+      - alert: CatalogCommitAuthorsUnrecorded
+        expr: sum(increase(catalog_commit_authors_unrecorded_total[1h])) > 0
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "A commit's author was not recorded"
+          description: >-
+            The catalog committed a version and could not write the record of who committed it on its control root, so
+            if that version's announcement is lost the reconciler has no author to announce it under. The
+            `commit_author_unrecorded` ERROR log names the location, the version and the store's error.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
 
       - alert: LineageIngestDeadLettering
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="dead_lettered"}[5m])) > 0
@@ -429,10 +633,8 @@ groups:
       # every 27 minutes and three to four orders below the trigger. A threshold nobody re-reads is a row
       # that sits forever, so the wire trips itself instead of waiting to be re-run by hand.
       #
-      # THE ROUTE LABEL IS `http_target`, NOT `http_route`, and it carries the TEMPLATED path
-      # (`/v1/namespace/{id}/list`). A rule written against `http_route` selects nothing on this estate
-      # and can never fire — the same class of defect this file already records for the bare `outbox_*`
-      # counter names.
+      # THE ROUTE LABEL IS `http_route`, and it carries the TEMPLATED path (`/v1/namespace/{id}/list`), under the
+      # stable HTTP conventions the chart opts the services into (the `lance-http` group's note).
       #
       # `/v1/table/{id}/tags/list` IS EXCLUDED THOUGH IT IS A LISTING ROUTE, and the exclusion is
       # measured rather than tidy: at 0.265 req/s it is the maintenance sweep polling tags, not a person
@@ -440,7 +642,7 @@ groups:
       # traffic alone, and the trigger being asked about is INTERACTIVE frequency.
       - alert: CatalogListingLoadReachedInteractiveFrequency
         expr: >-
-          sum(rate(http_server_duration_milliseconds_count{service_name="catalog", http_target=~"/v1/namespace/.*list|/management/v1/warehouses"}[30m])) > 1
+          sum(rate(http_server_request_duration_seconds_count{service_name="catalog", http_route=~"/v1/namespace/.*list|/management/v1/warehouses"}[30m])) > 1
         for: 30m
         labels:
           severity: warning
@@ -474,6 +676,57 @@ groups:
             stopped. A transient error clears in minutes. Read the service's `delivery_handling_failed` log for the
             error and check what it depends on (the catalog, OpenFGA, the secret store). Runbook:
             docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end
+
+      # A lane binds to a consumer the chart's stream Job declares and creates none, and a follower reads a stream the
+      # Job declares. One the Job did not converge, a permission the bus does not grant, or a bus that does not answer
+      # shows as asks the bus refuses (`bus.pulls.failed`, created at 0 when the lane starts): the lane asks again
+      # without end and takes nothing, with no delivery to count.
+      - alert: BusConsumerUnreachable
+        expr: sum by (lance_bus_consumer) (rate(bus_pulls_failed_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: critical
+          service: fleet
+        annotations:
+          summary: "{{ $labels.lance_bus_consumer }}: the bus has refused every ask for 10m — the lane takes nothing"
+          description: >-
+            For 10 minutes the bus has refused or dropped the asks for {{ $labels.lance_bus_consumer }}: the consumer or
+            its stream does not exist as the chart's stream Job declares it (the Job failed, or has not run), the bus
+            does not grant the service the ask, or the bus does not answer. What the lane records has stopped. Read the
+            service's `bus_pull_failed` or `bus_follow_failed` log for the bus's answer, and the stream Job's last run
+            (`kubectl get jobs -l app.kubernetes.io/component=nats-streams`).
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end
+
+      # An event past the claim-check size is refused before anything is sent, so nothing downstream sees it. Labelled
+      # by topic, so a series is born at its first refusal: the second arm reads a series present now and absent an
+      # hour ago as that refusal.
+      - alert: BusPublishRefused
+        expr: (sum by (lance_bus_topic) (increase(bus_publish_refused_total[1h])) > 0) or (sum by (lance_bus_topic) (bus_publish_refused_total unless bus_publish_refused_total offset 1h) > 0)
+        labels:
+          severity: warning
+          service: fleet
+        annotations:
+          summary: "An event for {{ $labels.lance_bus_topic }} was refused as too large to publish"
+          description: >-
+            A service built an event for {{ $labels.lance_bus_topic }} larger than the bus's claim-check size, and the
+            publish was refused before anything was sent: no subscriber hears of it. Read the publisher's
+            `lineage_publish_failed` or `control_publish_failed` log, whose error gives the event's size.
+
+      # Every blocking call a door makes runs on the serving loop's thread pool (`lakehouse.thread_pool`). Calls
+      # waiting for a thread mean every thread is held: requests queue, and latency rises with no error.
+      - alert: RequestThreadPoolExhausted
+        expr: max by (service_name) (threadpool_waiting) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: fleet
+        annotations:
+          summary: "{{ $labels.service_name }}: blocking calls have waited for a thread for 5m"
+          description: >-
+            Every thread of {{ $labels.service_name }}'s request thread pool has been held for 5 minutes and calls wait
+            for one (`threadpool_busy` at `threadpool_limit`): a dependency its doors block on (the object store,
+            OpenFGA, the secret store) answers slowly, or the service needs more replicas.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
 
       # [[LH-574]] The object store under every Lance read and write, as Lance's own client sees it. pylance 13.0.0's
       # `lance.otel` bridge (`lakehouse.lance_metrics`, exported by the catalog and maintenance) counts each request on
@@ -580,9 +833,11 @@ groups:
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       # A failing dataset's pass is retried every `maintenance.queue.retrySeconds` (15 minutes) and counted once each
-      # time, so the 1h window holds four, and a narrower one would drop to 0 between retries and reset the `for:`.
+      # time, so the 1h window holds four, and a narrower one would drop to 0 between retries and reset the `for:`. The
+      # counter is labelled by error class, an open set, so a class's series is born at its first failure, which an
+      # increase reads as nothing: the second arm reads a series present now and absent an hour ago as that failure.
       - alert: MaintenanceDatasetsFailing
-        expr: sum(increase(compaction_datasets_failed_total[1h])) > 0
+        expr: (sum(increase(maintenance_datasets_failed_total[1h])) > 0) or (sum(maintenance_datasets_failed_total unless maintenance_datasets_failed_total offset 1h) > 0)
         for: 1h
         labels:
           severity: warning
@@ -813,7 +1068,7 @@ groups:
       # else in this file would fire. Measured 2026-08-16: 17 refused datasets were exactly the ones
       # that needed compaction, and the estate looked healthy throughout.
       - alert: MaintenanceRefusalsRising
-        expr: sum(increase(compaction_datasets_refused_total[1h])) > sum(increase(compaction_datasets_swept_total[1h])) / 2
+        expr: sum(increase(maintenance_datasets_refused_total[1h])) > sum(increase(maintenance_datasets_swept_total[1h])) / 2
         for: 1h
         labels:
           severity: warning
@@ -831,7 +1086,7 @@ groups:
       # (`maintenance.queue.recheckHours`, a day) or its next commit, so the window spans a recheck; a policy-skipped
       # table is never opened, so it is not counted.
       - alert: LanceMixedDataFileVersions
-        expr: sum(increase(compaction_datasets_mixed_file_versions_total[25h])) > 0
+        expr: sum(increase(maintenance_datasets_mixed_file_versions_total[25h])) > 0
         labels:
           severity: critical
           service: maintenance
@@ -879,27 +1134,98 @@ groups:
             the store's error.
 
       # One table the catalog keeps refusing, or whose policy record cannot be read, which the ratio rule cannot see: an
-      # id that holds no tuples is answered 403 at the vend door on every pass. A refused table is passed again at its recheck (a day) or its next commit, and
-      # a series first appears at 1, which increase() cannot see, so the rule fires at the second refused pass a 25h
-      # window holds: a table refused on passes a day apart. vmalert keeps `for:` in memory, so its own restart restarts
-      # the clock.
+      # id that holds no tuples is answered 403 at the vend door on every pass. Counted by what refused it, a closed
+      # set whose series exist at 0 from a worker's start, so the first parked pass is an increase. A refused table is
+      # passed again at its recheck (a day) or its next commit, so the 25h window holds the alert from one refused pass
+      # to the next. The counter names no table; the pass's log line does.
       - alert: MaintenanceTableParked
-        expr: sum by (table_id) (increase(compaction_tables_parked_total[25h])) > 0
-        for: 1h
+        expr: sum by (refused_by) (increase(maintenance_tables_parked_total[25h])) > 0
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance of {{ $labels.table_id }} has been parked on passes a day apart"
+          summary: "Maintenance of a table is parked ({{ $labels.refused_by }})"
           description: >-
-            For a day this table id has been parked, so its superseded versions are not reclaimed.
-            Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id,
+            A table's pass was parked in the last day, so its superseded versions are not reclaimed.
+            vend_denied is a 403: this identity holds no can_maintain on the id,
             or the id names no table, which is what a stale lineage.dataset_id stamp leaves.
             table_not_governed is a 404. Grant the id, or fix the stamp or the location. The
             maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset.
             policy_unreadable is a maintenance policy record of the table, its namespace or its project that
             cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The
             maintenance_policy_malformed ERROR line names the table and the record's fault.
+
+      # A stream or a durable consumer the worker's sampler asks the bus about and gets no answer for
+      # (`maintenance.queue.unsampled`, at 0 from the first sample): the chart's stream Job declares each, so one it did
+      # not converge is unanswered on every sample, while that stream's gauges stand still or do not exist.
+      - alert: MaintenanceQueueUnsampled
+        expr: (sum by (stream) (increase(maintenance_queue_unsampled_total{stream!=""}[10m])) > 0) or (sum by (consumer) (increase(maintenance_queue_unsampled_total{consumer!=""}[10m])) > 0)
+        for: 15m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "The bus does not answer about a maintenance stream or consumer ({{ $labels.stream }}{{ $labels.consumer }})"
+          description: >-
+            For 15 minutes the bus has not answered the worker's sampler about {{ $labels.stream }}{{ $labels.consumer }}:
+            it does not exist as the chart's stream Job declares it (the Job failed, or has not run), or the bus is
+            down. The queue alerts read gauges this leaves unset. Read the worker's `maintenance_queue_unsampled`
+            WARNING line for the bus's answer, and the stream Job's last run.
+
+      # A declared base path sanctioned by nothing: a writer planted it, and it protects no table. The series exists at
+      # 0 from a table's first pass. The table's pass counts it each time it runs, so the window spans a recheck.
+      - alert: MaintenanceBasesUnrecorded
+        expr: sum(increase(maintenance_bases_unrecorded_total[25h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "A table declares a base path nothing sanctions"
+          description: >-
+            A table's pass found a manifest declaring a base path that is neither its own root, configured, nor in the
+            catalog's record: a writer committed it past the catalog's judgement. It protects nothing and the table it
+            names is maintained as usual. Read the `maintenance_unrecorded_base` log for the table and the path, and
+            find the writer.
+
+      # An expired trash record the purge would not reclaim: still registered, outside the maintained estate, a control
+      # prefix, or a grant it could not revoke. Counted on every scan including zero; a dry run's are its own series.
+      - alert: MaintenanceTrashPurgeRefused
+        expr: sum by (lance_maintenance_kind) (increase(maintenance_trash_purge_refused_total{lance_maintenance_dry_run="false"}[26h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "The trash purge refused expired {{ $labels.lance_maintenance_kind }} records"
+          description: >-
+            The daily scan's purge left expired {{ $labels.lance_maintenance_kind }} records unreclaimed: the object is
+            still registered, lies outside the maintained estate or under a control prefix, or its grants could not be
+            revoked. Their bytes stay until it clears. Read the `trash_purge_refused` log for each record and its reason.
+
+      # Files a table's orphan check found above its listing floor, which Lance's own cleanup cannot list, and checks
+      # that could not finish. Every outcome's series exists at 0 from a worker's start.
+      - alert: MaintenanceOrphansStranded
+        expr: sum(increase(maintenance_orphans_stranded_total[25h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "A table holds unreferenced files above its listing floor"
+          description: >-
+            A table's orphan check found files no version references above the table's listing floor, where Lance's
+            cleanup does not look: their bytes stay until the floor is raised. Read the `maintenance_orphan_check` log
+            for the table and the count.
+
+      - alert: MaintenanceOrphanChecksFailing
+        expr: sum by (outcome) (increase(maintenance_orphans_checks_total{outcome=~"incomplete|raised"}[25h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Table orphan checks ended {{ $labels.outcome }}"
+          description: >-
+            Orphan checks ended {{ $labels.outcome }} in the last day: incomplete, a read of the table's files or
+            versions failed; raised, the check itself failed. Those tables' unreferenced files are not found until a
+            check completes. Read the `maintenance_orphan_check` log for the table and the error.
 
   # ==================================================================================================
   # THE HTTP PLANE — fourteen apps emitted RED metrics and not one rule read them.
@@ -914,10 +1240,12 @@ groups:
   # `POST /v1/table/{id}/describe`. The only rule in `lance-catalog` counts 429s on Arrow-IPC WRITES,
   # which stays at zero throughout. A catalog failing 100% of reads pages nobody.
   #
-  # SERIES NAMES VERIFIED AGAINST THE LIVE STORE, not inferred. It is
-  # `http_server_duration_milliseconds_*` — the OTLP->Prometheus exporter APPENDS the unit, so a rule
-  # naming `_seconds` matches nothing and can never fire. That is the `outbox_oldest_age` defect, and
-  # it is the reason every expression below was replayed against GreptimeDB before being written down.
+  # THE SERIES ARE OPENTELEMETRY'S STABLE HTTP CONVENTIONS', which the chart opts every service into
+  # (`OTEL_SEMCONV_STABILITY_OPT_IN=http`, `lance.otelEnv`): `http.server.request.duration` in seconds, so
+  # `http_server_request_duration_seconds_*` once the OTLP->Prometheus exporter appends the unit, labelled
+  # `http_route` (the templated path) and `http_response_status_code`. Measured on
+  # opentelemetry-instrumentation-fastapi 0.66b2, 2026-11-16: without the opt-in the instrumentor emits
+  # `http.server.duration` in milliseconds under `http.target` and `http.status_code`, and these rules select nothing.
   - name: lance-http
     rules:
 
@@ -926,7 +1254,7 @@ groups:
       # broken it is. `service_name` is the instrumentor's own label (verified live: catalog, gateway,
       # lineage and maintenance all report it).
       - alert: HttpServerErrorRatioHigh
-        expr: sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m])) / sum by (service_name) (rate(http_server_duration_milliseconds_count[5m])) > 0.05
+        expr: sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m])) / sum by (service_name) (rate(http_server_request_duration_seconds_count[5m])) > 0.05
         for: 10m
         labels:
           severity: critical
@@ -943,21 +1271,26 @@ groups:
       # it. Measured over a 10m window on 2026-08-26: lineage 500ms. A latency rule that cries wolf is
       # one people mute, and a muted rule is worse than none.
       #
+      # THE THRESHOLD IS A BUCKET BOUNDARY BELOW THE LAST. The instrument's boundaries end at 10 s (0.005 ... 5, 7.5,
+      # 10), and `histogram_quantile` answers the highest finite boundary for any quantile that falls in the `+Inf`
+      # bucket: no p95 reads above 10, so a threshold at or past it can never be crossed. 5 s is a boundary with two
+      # above it.
+      #
       # `histogram_quantile` over the bucket series is supported by GreptimeDB — verified by running
       # this exact expression against the live store, because promtool accepting it proves nothing
       # about the engine that evaluates it.
       # Maintenance is held to it like any service: its work runs on its work queue (ADR 0198 §2), never inside a
       # request, so its doors (the write-event lane's delivery, the probes) answer as quickly as the rest.
       - alert: HttpServerLatencyHigh
-        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[10m]))) > 15000
+        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket[10m]))) > 5
         for: 15m
         labels:
           severity: warning
           service: fleet
         annotations:
-          summary: "One service's p95 HTTP latency is above 15s"
+          summary: "One service's p95 HTTP latency is above 5s"
           description: >-
-            Sustained p95 over 15 seconds means requests are queueing behind something — a blocking
+            Sustained p95 over 5 seconds means requests are queueing behind something — a blocking
             call on the event loop, an exhausted threadpool, or an upstream that stopped answering.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
 
@@ -966,7 +1299,7 @@ groups:
       # `absent()` in its own rule, never as an operand of a set operator: GreptimeDB refuses the
       # composite form outright (HTTP 500).
       - alert: HttpServerMetricsMissing
-        expr: absent(http_server_duration_milliseconds_count)
+        expr: absent(http_server_request_duration_seconds_count)
         for: 15m
         labels:
           severity: critical
@@ -974,7 +1307,7 @@ groups:
         annotations:
           summary: "No app is reporting HTTP metrics at all"
           description: >-
-            `http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and
+            `http_server_request_duration_seconds_count` does not exist, so HttpServerErrorRatioHigh and
             HttpServerLatencyHigh are both dead and their silence means nothing. Either
             `opentelemetry-instrument` stopped wiring the FastAPI instrumentor, or the OTLP path to
             GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#no-app-reports-http-metrics

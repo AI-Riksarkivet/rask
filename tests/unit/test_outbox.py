@@ -29,7 +29,11 @@ A_COMPLETE = {"eventType": "COMPLETE", "run": {"runId": "r1"}}
 
 def _publish(bus: BusDouble, uri: str) -> None:
     """Publish :data:`A_COMPLETE` on the lineage lane through the outbox at ``uri``."""
-    asyncio.run(outbox.publish_with_outbox(bus, lineage_envelope(A_COMPLETE), outbox_uri=uri, storage_options=StorageOptions(), topic="t", timeout_seconds=5))
+    asyncio.run(
+        outbox.publish_with_outbox(
+            bus, lineage_envelope(A_COMPLETE), outbox_uri=uri, storage_options=StorageOptions(), topic="t", timeout_seconds=5, lane="lineage"
+        )
+    )
 
 
 def test_publish_with_outbox_stages_then_drops_on_ack(tmp_path: Any) -> None:

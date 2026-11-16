@@ -47,8 +47,8 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable, Sequence
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncGenerator, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Final, override
 
 from fastapi import APIRouter, FastAPI
@@ -60,6 +60,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from starlette.middleware import Middleware
 from starlette.types import Receive, Scope, Send
 
+from lakehouse import thread_pool
 from lakehouse.app import setup_logging
 from lakehouse.body_limit import BodySizeLimitMiddleware
 from lakehouse.deadline import RequestDeadlineMiddleware
@@ -126,6 +127,18 @@ def _trace_every_request(app: FastAPI) -> None:
         FastAPIInstrumentor.instrument_app(app)
 
 
+def _watching_its_threads(lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]]) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """``lifespan``, entered once the serving loop's thread pool is reported (`lakehouse.thread_pool`)."""
+
+    @asynccontextmanager
+    async def watching(app: FastAPI) -> AsyncGenerator[None]:
+        thread_pool.watch()
+        async with lifespan(app):
+            yield
+
+    return watching
+
+
 def _mount_docs(app: FastAPI) -> None:
     """Serve ``/docs`` and ``/redoc``, each fetching the schema beside itself."""
 
@@ -189,7 +202,7 @@ def build_lance_service_app(
     app = _UncachedApp(
         title=title,
         version=version,
-        lifespan=lifespan,
+        lifespan=_watching_its_threads(lifespan),
         docs_url=None,
         redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,

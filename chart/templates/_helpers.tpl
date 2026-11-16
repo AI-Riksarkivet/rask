@@ -447,6 +447,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 - { name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED, value: "true" }
 {{/**/}}
 - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }
+- { name: OTEL_SEMCONV_STABILITY_OPT_IN, value: "http" }
 - { name: OTEL_RESOURCE_ATTRIBUTES, value: "{{ include "rask.otelResourceAttrs" $root }}" }
 {{- end -}}
 

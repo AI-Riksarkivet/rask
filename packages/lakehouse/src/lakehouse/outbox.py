@@ -35,6 +35,7 @@ from lakehouse import outbox_metrics
 from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the outbox is a registered publish site
 from lakehouse.cloud_events import CloudEvent
 from lakehouse.objectfs import fs_and_base
+from lakehouse.outbox_metrics import OutboxLane
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
@@ -239,6 +240,25 @@ def backlog(outbox_uri: str, storage_options: StorageOptions) -> tuple[int, floa
     return len(infos), age
 
 
+def measured_backlog(lane: OutboxLane, outbox_uri: str, storage_options: StorageOptions) -> tuple[int, float]:
+    """:func:`backlog` of ``lane``'s outbox, reported as the lane's saturation snapshot (`lakehouse.outbox_metrics`).
+
+    What a relay calls on every tick. A listing the store does not answer reports no backlog from this process until
+    one is measured again: the last reading says nothing about the outbox now, and an empty one read before an outage
+    would report 0 throughout it.
+
+    Raises:
+        Exception: Whatever the listing raised, once the lane's reading is forgotten.
+    """
+    try:
+        depth, oldest_age = backlog(outbox_uri, storage_options)
+    except Exception:
+        outbox_metrics.forget_backlog(lane)
+        raise
+    outbox_metrics.observe_backlog(lane, depth, oldest_age)
+    return depth, oldest_age
+
+
 def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int | None = None) -> Iterator[tuple[str, str]]:
     """Yield ``(key, event_json)`` for staged events under the outbox prefix (the relay's input), OLDEST
     FIRST, at most ``limit`` of them.
@@ -282,6 +302,7 @@ async def publish_with_outbox(
     storage_options: StorageOptions,
     topic: str,
     timeout_seconds: float,
+    lane: OutboxLane,
 ) -> None:
     """Durably publish ANY bus event: stage → publish → drop-on-ack (#4).
 
@@ -311,6 +332,7 @@ async def publish_with_outbox(
         storage_options: What reaches that prefix.
         topic: The lane's topic.
         timeout_seconds: How long the publish may take.
+        lane: Which outbox ``outbox_uri`` is, the attribute its counts carry (`lakehouse.outbox_metrics`).
 
     Raises:
         UnpublishedEventError: The publish did not reach the bus; its ``staged`` says whether the relay holds the event.
@@ -326,11 +348,11 @@ async def publish_with_outbox(
             # publish. Both callers catch and continue, so raising here loses the event outright — whereas
             # an unstaged event that reaches the bus is still delivered. Counted because every other outbox
             # signal describes objects that exist and is blind to this path by construction.
-            outbox_metrics.record_stage_failed()
+            outbox_metrics.record_stage_failed(lane)
             log.warning("outbox_stage_failed", extra={"outbox_uri": outbox_uri, "error": str(exc)})
             staged = False
         else:
-            outbox_metrics.record_staged()
+            outbox_metrics.record_staged(lane)
     try:
         await publish_event(bus, envelope, topic=topic, timeout_seconds=timeout_seconds)
     except Exception as exc:
@@ -338,13 +360,13 @@ async def publish_with_outbox(
         # outage is visible (rising failures + rising depth) instead of silent. Whether it is staged is this call's to say,
         # since a stage that failed above left the relay nothing although an outbox is configured ([[LH-573]]).
         if staged:
-            outbox_metrics.record_publish_failed()
+            outbox_metrics.record_publish_failed(lane)
         raise UnpublishedEventError(exc, staged=staged) from exc
-    outbox_metrics.record_published()
+    outbox_metrics.record_published(lane)
     if not staged:
         return
     try:
         await run_in_threadpool(drop_event, outbox_uri, storage_options, envelope.id)
     except Exception as exc:  # the event is delivered; what is left is a staged copy the relay re-ingests and drops
-        outbox_metrics.record_drop_failed()
+        outbox_metrics.record_drop_failed(lane)
         log.warning("outbox_drop_failed", extra={"outbox_uri": outbox_uri, "key": envelope.id, "error": str(exc)})

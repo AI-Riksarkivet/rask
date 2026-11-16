@@ -9,7 +9,7 @@ unlabelled series could not say which of four things it was — somebody else's 
 
 THE BREAKDOWN ALREADY EXISTED AND STOPPED SHORT OF THE METRIC. `DatasetResult.refused_by` carries it
 and `summarize_refusals` counts by it, into the sweep's one WARNING and the response body — the same
-shape `compaction.bytes.reclaimed` had before it reached a series.
+shape `maintenance.bytes.reclaimed` had before it reached a series.
 
 THE ZERO STAYS UNLABELLED, and that is not an oversight: the caller cannot know which gates exist on a
 tick that refused nothing, and a `refused_by="none"` would put a value in the label set that names no

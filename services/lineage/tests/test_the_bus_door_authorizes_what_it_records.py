@@ -17,6 +17,7 @@ to the store, which never pass through this door.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, cast
 
 import pytest
@@ -26,8 +27,10 @@ from lineage_lane import Feed, governed, started
 from openfga_sdk import OpenFgaClient
 
 from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
+from lineage.api import fga_deps
 from lineage.api.fga_deps import relations_for_operation
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import RunEvent
@@ -61,24 +64,35 @@ def test_a_DATA_write_demands_the_writer_rung() -> None:
     assert relations_for_operation("drop_table") == ("can_write_data",)
 
 
-def test_the_lane_parks_an_unauthorized_delivery_unrecorded(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_lane_parks_an_unauthorized_delivery_unrecorded(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """CONTRACT, and the only tier that can prove it: driven through lineage's own lane with the production wiring, so
     it fails if the lane stops passing the authorizer.
 
     The gate-level tests below take the gate as a function and therefore cannot tell a wired door from an unwired one —
     which is how this defect survived: `enforce_output_authz`'s own source named the asymmetry in a comment, and nothing
     executed against the door. A named person lacking a grant is parked for the estate admin's replay, never recorded.
+
+    Who was refused is on the audit trail, and the gate's own log line of the refusal names no subject: the service's
+    log is not where a person's identity is kept.
     """
     governed(monkeypatch)
     _deny_all(monkeypatch)
     envelope = {"id": "evt-mallory", "data": _event(rask_author={"name": "mallory", "sub": "dex~mallory"}).model_dump(by_alias=True)}
 
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    caplog.set_level(logging.INFO, logger=fga_deps.log.name)
     with started(monkeypatch, Feed(), decider=OpenFgaDecider(cast("OpenFgaClient", object()))) as lineage:
         settled = lineage.deliver(envelope)
 
     assert settled == Settlement(outcome=Outcome.PARKED)
     assert lineage.feed.recorded == [], "an unauthorized delivery reached the feed"
     assert list(lineage.feed.kept) == ["dead_letter:evt-mallory"]
+    refusals = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__["audit.outcome"] == "deny"]
+    assert [(r["audit.action"], r["audit.subject"], r["audit.relation"], r["audit.resource"]) for r in refusals] == [
+        ("authz", "dex~mallory", "can_write_data", f"table:{_PAGES}")
+    ]
+    [said] = [r.__dict__ for r in caplog.records if r.name == fga_deps.log.name and r.getMessage() == "ingest_denied"]
+    assert (said["relation"], said["objects"], "dex~mallory" in repr(said)) == ("can_write_data", [f"table:{_PAGES}"], False)
 
 
 # --------------------------------------------------------------------------- #

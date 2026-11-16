@@ -220,3 +220,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md) | LH-596 | Labels a project defines replace tiers, and the run rule stands alone as `rask.requires_run` (2026-11-15) | accepted |
 | [0212](0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md) | LH-594 | Publication goes, and a table's data contract is checked on every commit (2026-11-16) | accepted |
 | [0213](0213-a-projects-administrators-are-everyone-its-admin-reaches-through-its-roles.md) | LH-597 | A project's administrators are everyone its admin reaches through its roles (2026-11-16) | accepted |
+| [0214](0214-the-e2e-lane-runs-the-telemetry-chain.md) | XC-208 | The e2e lane runs the telemetry chain and reads rask's signals behind the Collector (2026-11-16) | accepted |

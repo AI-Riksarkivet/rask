@@ -347,7 +347,7 @@ def test_a_pass_that_cannot_read_its_tables_policy_as_written_reclaims_nothing(
 ) -> None:
     """The table's own record may be a legal hold, so a pass reads it strictly and never plans on the defaults in its
     place, whatever the policy of its namespace allows. A record that is there and cannot be read as a policy parks the
-    table, counted under its id so `MaintenanceTableParked` pages, and waits for the recheck, since no read changes it
+    table, counted as parked so `MaintenanceTableParked` pages, and waits for the recheck, since no read changes it
     until someone writes it again; a hold whose ``cleanup_enabled`` is the string ``"false"`` is a hold; a read the
     store does not answer decides nothing and is retried."""
     namespace_uuid = str(uuid.uuid4())
@@ -372,7 +372,7 @@ def test_a_pass_that_cannot_read_its_tables_policy_as_written_reclaims_nothing(
         [refused_by] if not store_fails_it else [],
         now + next_pass if next_pass is not None else retried,
     )
-    assert parked == ([{"table_id": TABLE, "refused_by": refused_by}] if refused_by else [])
+    assert parked == ([{"refused_by": refused_by}] if refused_by else [])
 
 
 def test_a_pass_whose_tables_uuid_is_read_once_and_fails_runs_under_no_policy_at_all(

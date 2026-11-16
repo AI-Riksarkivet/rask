@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import suppress
+from functools import partial
 
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
@@ -119,6 +120,7 @@ def start_relay(app: FastAPI, settings: LineageSettings, loops: Supervisor) -> N
     """
     if not settings.relay_period_seconds:
         return
+    outbox_metrics.create_series("lineage")
 
     async def work() -> None:
         await tick(app, settings)
@@ -131,7 +133,7 @@ def start_relay(app: FastAPI, settings: LineageSettings, loops: Supervisor) -> N
         storage_options=lambda: storage_options(settings),
         held=lambda: settings.read_only,
         # The tick measures the outbox's backlog, so a replica another ran the window of drops its own snapshot.
-        elsewhere=outbox_metrics.forget_backlog,
+        elsewhere=partial(outbox_metrics.forget_backlog, "lineage"),
     )
     setattr(app.state, RELAY_TIMER_STATE, timer)
     loops.keep(f"timer-{RELAY_TIMER}", timer.run)
@@ -193,8 +195,7 @@ async def _drain_outbox(
     at most ``outbox_drain_limit`` events per tick, OLDEST FIRST, and publishes the saturation snapshot on EVERY
     tick — including an empty one, so ``outbox.depth`` falls back to 0 instead of going stale and alerting forever.
     """
-    depth, oldest_age = await run_in_threadpool(outbox.backlog, settings.outbox_uri, opts)
-    outbox_metrics.observe_backlog(depth, oldest_age)
+    depth, oldest_age = await run_in_threadpool(outbox.measured_backlog, "lineage", settings.outbox_uri, opts)
     if depth:
         log.info("lineage_outbox_backlog", extra={"depth": depth, "oldest_age_seconds": round(oldest_age, 1)})
 
@@ -218,7 +219,7 @@ async def _drain_outbox(
                 poison_author = author_sub_from_payload(payload)
                 poison_run = str((payload.get("run") or {}).get("runId") or "") or None
             log.warning("lineage_outbox_poison_dropped", extra={"outbox_key": key, "run_id": poison_run, "error": str(exc), "author": poison_author})
-            outbox_metrics.record_poison_dropped()
+            outbox_metrics.record_poison_dropped("lineage")
             # ITS OWN TRY: this handler is outside the per-event `except Exception`, so a delete that raised here
             # would leave the loop and strand every event behind it.
             try:
@@ -276,10 +277,9 @@ async def _drain_outbox(
             log.warning("lineage_outbox_event_stranded", extra={"outbox_key": key, "run_id": event.run_id, "error": str(exc)})
             continue
         drained += 1
-    # Always emit — adding 0 CREATES the series, so a dashboard/alert has data from the first tick.
-    outbox_metrics.record_drained(drained)
-    outbox_metrics.record_stranded(stranded)
-    outbox_metrics.record_refused(refused)
+    outbox_metrics.record_drained("lineage", drained)
+    outbox_metrics.record_stranded("lineage", stranded)
+    outbox_metrics.record_refused("lineage", refused)
     if drained or stranded or refused:
         log.info("lineage_outbox_drained", extra={"drained": drained, "stranded": stranded, "refused": refused})
     return DrainOutcome(drained=drained, stranded=stranded, refused=refused, recorded=recorded)

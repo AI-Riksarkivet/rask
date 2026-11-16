@@ -198,6 +198,18 @@ def refusal_outcome(refusal: PermissionDeniedError) -> Outcome:
             return Outcome.REFUSED
 
 
+def create_outcome_series() -> None:
+    """Create every outcome's series of `lineage.events.processed` at 0, at every door.
+
+    The alerts over this counter read its rate, and a series born at its first event has no 0 before it: the first
+    dead-lettered, refused or unrepairable event would show no increase. Called when lineage starts, for
+    `create_signature_refused_series`' reasons.
+    """
+    for outcome in Outcome:
+        for door in Door:
+            _events_processed.add(0, {"lance.lineage.outcome": outcome.value, "lance.lineage.door": door.value})
+
+
 def record_outcome(outcome: Outcome, *, door: Door) -> None:
     """Increment the processed-events counter for ``outcome`` at ``door``.
 

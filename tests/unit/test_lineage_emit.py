@@ -15,7 +15,10 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
+from catalog.core import lineage_emit
 from catalog.core.commit_ids import commit_run_id
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import (
@@ -409,6 +412,19 @@ def test_the_bus_emitter_publishes_the_event_on_its_topic() -> None:
     assert _facets(sent.event)["rask_author"]["sub"] == "alice"  # the verified catalog author
 
 
+def _emit_failures(reader: InMemoryMetricReader) -> dict[str, int]:
+    """`catalog.lineage_emit.failed` as ``reader`` exports it, by transport."""
+    data = reader.get_metrics_data()
+    return {
+        str((point.attributes or {})["lance.catalog.transport"]): int(point.value)
+        for resource in (data.resource_metrics if data is not None else ())
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        for point in metric.data.data_points
+        if isinstance(point, NumberDataPoint)
+    }
+
+
 @pytest.mark.parametrize(
     ("outbox_at", "storage_options", "staged"),
     [
@@ -418,10 +434,20 @@ def test_the_bus_emitter_publishes_the_event_on_its_topic() -> None:
     ],
 )
 def test_the_bus_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, outbox_at: str, storage_options: Callable[[], StorageOptions] | None, staged: bool
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    outbox_at: str,
+    storage_options: Callable[[], StorageOptions] | None,
+    staged: bool,
 ) -> None:
     """A bus outage at publish never breaks the catalog write, and the line it logs says whether the relay
-    can still deliver the event ([[LH-573]])."""
+    can still deliver the event ([[LH-573]]). The failure is counted on a series the emitter created at 0 when it was
+    built, every transport's, so the first one is an increase the alert reads."""
+    reader = InMemoryMetricReader()
+    monkeypatch.setattr(
+        lineage_emit, "_emit_failed", MeterProvider(metric_readers=[reader]).get_meter("lance.catalog").create_counter("catalog.lineage_emit.failed")
+    )
     (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
     emitter = BusEmitter(
         BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
@@ -433,9 +459,12 @@ def test_the_bus_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_h
         storage_options=storage_options,
     )
 
+    at_start = _emit_failures(reader)
+
     asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author=None, version=2, operation=INSERT))
 
     assert [getattr(record, "staged", None) for record in caplog.records if record.getMessage() == "lineage_publish_failed"] == [staged]
+    assert (at_start, _emit_failures(reader)) == ({"derive": 0, "http": 0, "bus": 0}, {"derive": 0, "http": 0, "bus": 1})
 
 
 # --- #19: lineage on every write (not just create) ---

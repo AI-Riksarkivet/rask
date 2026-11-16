@@ -3,8 +3,8 @@
 [[LH-099]]. `bytes_removed` reaches three places — the per-dataset outcome, the audit line and the sweep
 summary (`sweep.py:699,1010,1159`) — and no instrument. The only bytes series the maintenance service
 exports is `maintenance.trash.bytes_reclaimed`, fed solely by the PURGE, so "how much did the sweep get
-back" has no answer that outlives a log rotation. Measured on the deployed estate 2026-09-19:
-`compaction_bytes_reclaimed_total` returns ZERO series from GreptimeDB while `compaction_runs_total`
+back" has no answer that outlives a log rotation. Measured on the deployed estate 2026-09-19, under the names of that
+day: `compaction_bytes_reclaimed_total` returns ZERO series from GreptimeDB while `compaction_runs_total`
 returns one — the sweep is observable except in the dimension it is for.
 
 It is also [[LH-102]]'s closing condition, which asks for "a recorded reclaimed-bytes figure". A figure

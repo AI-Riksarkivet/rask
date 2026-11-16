@@ -82,7 +82,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.bus_delivery import Delivery, Handle, Lane, Outcome, Park, Settlement, being_cancelled, envelope_of, judged
-from lakehouse.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_refusal
+from lakehouse.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_pull_failed, record_refusal
 from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
 from lakehouse.context import continuing, current_trace_context
 from lakehouse.lifecycle import closed_quietly
@@ -546,6 +546,7 @@ class Bus:
                     await asyncio.sleep(_FOLLOW_EVERY_SECONDS)
                     continue
                 said = _said_once(said, exc, "bus_follow_failed", subject=following.subject)
+                record_pull_failed(following.subject)
                 await asyncio.sleep(_PULL_SECONDS)
                 continue
             said = ""
@@ -680,6 +681,7 @@ class _Pull:
             msg = await pull(self._client, lane.stream, lane.consumer, wait=_PULL_SECONDS)
         except NatsError as exc:
             self._said = _said_once(self._said, exc, "bus_pull_failed", stream=lane.stream, consumer=lane.consumer)
+            record_pull_failed(lane.consumer)
             await asyncio.sleep(_PULL_SECONDS)
             return None
         if msg is not None:

@@ -87,6 +87,15 @@ _unauthored = _meter.create_counter(
     "(ADR 0187): a commit made past every catalog door, which nothing can announce on anyone's behalf.",
 )
 
+
+def create_series() -> None:
+    """Create each unlabelled counter's series at 0 when the catalog starts its timers, so its first count is an
+    increase an alert can read: a series born at 1 has no 0 before it. `catalog.commit_reconcile.reannounced` is counted
+    by operation, an open set, so its alert reads a new series as its first find."""
+    for counter in (_unreadable, _late_derived, _late_derived_unwatched, _unauthored):
+        counter.add(0)
+
+
 #: How much earlier than the oldest commit looked for the feed is read: a row is received after its commit, never
 #: before, but the store's clock and the catalog's may disagree.
 _FEED_SLACK = timedelta(minutes=10)

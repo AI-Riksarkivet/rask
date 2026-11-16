@@ -597,7 +597,7 @@ an ancestor's, cannot be read is refused (gate `unidentified`), never maintained
 cannot find may be a legal hold. Every reader of a setting parses the record's settings strictly where it reads it, through
 `lakehouse.maintenance_policies.PolicySettings` (the door's types and bounds; `"false"` reads false, `"30d"` refuses), since
 a record can reach the store past the typed door: a record that is there and cannot be read as a policy
-(`MalformedPolicyError`) PARKS the table (gate `policy_unreadable`, counted on `compaction.tables.parked`, which
+(`MalformedPolicyError`) PARKS the table (gate `policy_unreadable`, counted on `maintenance.tables.parked`, which
 `MaintenanceTableParked` pages on) until it is written again, and a policy read the store did not answer decides nothing
 and is retried after `retrySeconds`. Any surface showing an effective policy must say
 which record won; an inherited value rendered identically to a set one is how nobody can tell what is
@@ -1318,7 +1318,7 @@ governing their data. The project-scoped surface is the console's project page, 
   maintain-tier vend, which gets delete on the table's own data directories (`vending.VendableBases`), and the probe
   asks for that vend when a stranded file is past the age, so a table overwritten once still reclaims. A deleted row's
   bytes stay in its base fragment behind a deletion vector; the pass reports such fragments
-  (`compaction.base_fragments.holding_deleted_rows`) and the compaction gate keeps refusing the table, since
+  (`maintenance.base_fragments.holding_deleted_rows`) and the compaction gate keeps refusing the table, since
   `CompactionOptions` has no `target_bases` and a rewrite would move the rows into the root (owner, 2026-10-24). The
   trash purge deletes a dropped table's data directories after its root and before the catalog forgets its base record, and
   so does every catalog door that ends a table with its bytes (`lakehouse.data_directories`, one rule for
@@ -1510,7 +1510,7 @@ governing their data. The project-scoped surface is the console's project page, 
   refusing today.
   A table the compaction gate refuses is left off the due list, logged `maintenance_compaction_not_due_refused_layout`
   at DEBUG (`due.compaction_due`). A pass reports each refusal of its own on the dataset's `maintenance_dataset_outcome`
-  line and counts it on `compaction.datasets.refused` by `refused_by` (`table_pass._record_dataset_metrics`) — never
+  line and counts it on `maintenance.datasets.refused` by `refused_by` (`table_pass._record_dataset_metrics`) — never
   inside `error` or `skipped`.
   **The ORPHAN scan stays flags-only, and that is not an oversight.** Its own consequence check cannot
   stand in for the flag: `add_bases` registers a base no `DataFile` resolves through yet, every
@@ -1535,7 +1535,7 @@ governing their data. The project-scoped surface is the console's project page, 
   nothing but the `catalog-manifest-reclaim` timer (`catalog.api.manifest_reclaim`) bounds it: Lance's own
   `cleanup_old_versions(older_than=catalog.manifestReclaim.retainSeconds)` on the catalog's root and every registered
   warehouse's. A root it keeps failing on pages (`CatalogManifestReclaimFailing`, counted on
-  `catalog.manifest_reclaim.failed` by root). Maintenance never touches it: a pass runs on a table a claim names, and `discovery` skips `__` directories. A `dir` connection reloads by
+  `catalog.manifest_reclaim.failed`, whose log line names the root). Maintenance never touches it: a pass runs on a table a claim names, and `discovery` skips `__` directories. A `dir` connection reloads by
   probing only the version after the one it holds (lance v13.0.0 `DatasetConsistencyWrapper::reload`), so a reclaim
   that removed that successor would leave the connection answering `InternalError` for good (measured); that is why
   `NamespaceConnections` builds a connection again once it is a quarter of the retention old. Never run a cleanup on an

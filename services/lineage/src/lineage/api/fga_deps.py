@@ -38,6 +38,7 @@ from lance_namespace import (
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.decider import AccessDecider
 from lakehouse.governed.principal import is_principal
 from lakehouse.lineage.signing import VerifiedSignature
@@ -203,6 +204,14 @@ async def _none_are_governed(decider: AccessDecider, *, objects: list[str]) -> b
     return True
 
 
+def _denied(event: str, *, subject: str, relation: str, resources: Sequence[str]) -> None:
+    """Record one refusal: who was refused on the audit trail, one record per object as the catalog's doors write them,
+    and what was refused on the service's own log, which names no subject (the trace id joins the two)."""
+    for resource in resources:
+        audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation=relation, subject=subject, resource=resource)
+    log.info(event, extra={"relation": relation, "objects": list(resources)})
+
+
 async def _require_relation(relation: str, obj: str | None, label: str, request: Request, settings: LineageSettings, token: Caller | None) -> None:
     """The one fail-closed authz ladder every per-``{name}`` gate shares (audit 2026-07-16: it had
     grown four near-copies). No-op when FGA is off; unwired client → 503; unauthenticated → 401;
@@ -216,7 +225,7 @@ async def _require_relation(relation: str, obj: str | None, label: str, request:
     if token is None:
         raise UnauthenticatedError("authentication required")
     if obj is None or not await decider.check(user=token.subject, relation=relation, obj=obj):
-        log.info("access_denied", extra={"sub": token.subject, "relation": relation, "object": obj or label})
+        _denied("access_denied", subject=token.subject, relation=relation, resources=[obj or label])
         raise PermissionDeniedError(f"{relation} required on {label}")
 
 
@@ -273,7 +282,7 @@ async def _require_estate_rung(relation: str, request: Request, settings: Lineag
         raise UnauthenticatedError("authentication required")
     obj = settings.fga_root_object
     if not await decider.check(user=token.subject, relation=relation, obj=obj):
-        log.info("access_denied", extra={"sub": token.subject, "relation": relation, "object": obj})
+        _denied("access_denied", subject=token.subject, relation=relation, resources=[obj])
         raise PermissionDeniedError(f"{relation} required on {obj}")
 
 
@@ -635,7 +644,7 @@ async def enforce_output_authz(
     if provenance is not None and event.run_id:
         author = await provenance.run_author(event.run_id)
         if author is not None and author != token.subject:
-            log.info("ingest_run_mutation_denied", extra={"sub": token.subject, "run_id": event.run_id, "author": author})
+            _denied("ingest_run_mutation_denied", subject=token.subject, relation="author", resources=[f"run:{event.run_id}"])
             raise ForeignRunError(f"run {event.run_id} was founded by another subject; only its author may extend it")
     attested = _attested(signed_by, settings)
     # WHAT THE EVENT NAMES BY A LOCATION OR A SYMLINK ([[LH-553]]): the catalog attests its own, so they are not re-derived.
@@ -652,12 +661,12 @@ async def enforce_output_authz(
     outputs = Governed(objects=outputs.objects.union(*written.objects.values()), unresolved=unnamed | written.hidden_names)
     if outputs.unresolved:
         reason = f"{' or '.join(relations)} required on outputs: {', '.join(sorted(outputs.unresolved))}"
-        log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": sorted(outputs.unresolved)})
+        _denied("ingest_denied", subject=token.subject, relation="|".join(relations), resources=sorted(outputs.unresolved))
         raise UngovernedOutputError(reason)
     if outputs.objects and not attested:
         denied = await _denied_objects(decider, user=token.subject, relations=relations, objects=sorted(outputs.objects))
         if denied:
-            log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": denied})
+            _denied("ingest_denied", subject=token.subject, relation="|".join(relations), resources=denied)
             reason = f"{' or '.join(relations)} required on outputs: {', '.join(_names_of(event.outputs, denied, written))}"
             if not await _none_are_governed(decider, objects=denied):
                 raise PermissionDeniedError(reason)
@@ -685,7 +694,7 @@ async def enforce_output_authz(
         seen = await decider.batch_check(user=token.subject, relation="can_get_metadata", objects=sorted(read.objects))
         hidden |= set(_names_of(sources, [obj for obj in read.objects if not seen.get(obj)], read_as))
     if hidden:
-        log.info("ingest_input_denied", extra={"sub": token.subject, "relation": "can_get_metadata", "inputs": sorted(hidden)})
+        _denied("ingest_input_denied", subject=token.subject, relation="can_get_metadata", resources=sorted(hidden))
         raise PermissionDeniedError(f"can_get_metadata required on inputs: {', '.join(sorted(hidden))}")
     return written.tables | read_as.tables
 

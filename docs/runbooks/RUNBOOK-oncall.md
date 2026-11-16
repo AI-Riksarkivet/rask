@@ -19,7 +19,9 @@ fixture's) or a user report — not a page.
   fixture in development; the platform's Vault or OpenBao in production), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels, `kubectl logs`, and the domain metrics —
   `lineage_events_processed_total{lance_lineage_outcome}` (incl. `dead_lettered`),
-  `outbox_depth` / `outbox_oldest_age_seconds`, and each bus lane's own: `bus.deliveries` by `lance.bus.consumer` and
+  `outbox_depth` / `outbox_oldest_age_seconds` by `lance_outbox_lane` (`lineage`, `control`), the request thread pool
+  (`threadpool_busy`, `threadpool_limit`, `threadpool_waiting`), the catalog's bulk writes in flight
+  (`catalog_writes_in_flight`), and each bus lane's own: `bus.deliveries` by `lance.bus.consumer` and
   `lance.bus.outcome` (`taken`, `again`, `parked` for a pulled consumer; `taken`, `failed` for the catalog's followed
   control topic), `messaging.process.duration`, and `maintenance.arrivals.settled` by outcome. A consumer's backlog is
   the bus's own reading: `nats consumer info <stream> <consumer>` shows its pending messages (`num_pending`), the
@@ -220,10 +222,13 @@ refused to plan is picked up by its table's next scheduled pass.
 
 ## Outbox not draining
 
-**Symptom.** `outbox_depth` sustained > 0 and `outbox_oldest_age_seconds` climbing (the "alertable pair" panel).
+**Symptom.** `outbox_depth` sustained > 0 and `outbox_oldest_age_seconds` climbing (the "alertable pair" panel), each
+under its lane: `lance_outbox_lane="lineage"` is the lineage outbox, which lineage's relay drains, and `"control"` the
+control outbox, which the catalog's control relay drains.
 
-**Cause.** The lineage outbox stages each event durably before publishing; the relay drains it. A sustained
-non-zero depth means the relay isn't draining — usually the lineage service or NATS is unhealthy.
+**Cause.** An outbox stages each event durably before publishing; its relay drains it. A sustained
+non-zero depth means the relay isn't draining — usually the lineage service or NATS is unhealthy. A relay tick that
+cannot list its outbox reports no depth at all and fails its timer's turn (`LakehouseTimerFailing`).
 
 **Diagnose.** Lineage pod health + logs; NATS health. A healthy relay drives depth back toward 0. `outbox_drop_failed_total`
 rising with the depth means the store refuses a publisher's deletes of events it delivered: nothing is lost, since the
@@ -331,8 +336,8 @@ store; the next turn makes it again.
 
 ## A root's namespace index is not reclaimed
 
-**Symptom.** `CatalogManifestReclaimFailing` (warning) names a root, and the catalog's `manifest_reclaim_failed` WARN logs
-carry the root and the error, from the same root on at least two ticks within half an hour.
+**Symptom.** `CatalogManifestReclaimFailing` (warning) fires, and the catalog's `manifest_reclaim_failed` WARN logs
+carry the root and the error, on consecutive ticks.
 
 **Cause.** Every namespace operation writes a root's `__manifest` again as a new version, and only the catalog's
 `catalog-manifest-reclaim` tick removes the versions older than `catalog.manifestReclaim.retainSeconds` (LH-251,
@@ -438,7 +443,7 @@ answered (`delivery_handling_failed` for a handling that raised or ran past its 
 
 ## No app reports HTTP metrics
 
-**Symptom.** `HttpServerMetricsMissing` (critical): no `http_server_duration_milliseconds_count` series has arrived for
+**Symptom.** `HttpServerMetricsMissing` (critical): no `http_server_request_duration_seconds_count` series has arrived for
 15 minutes, so `HttpServerErrorRatioHigh` and `HttpServerLatencyHigh` cannot fire.
 
 **Cause.** Usually the telemetry path rather than the apps: the OTel Collector (`rask-otel-collector`) is down or cannot
@@ -495,8 +500,9 @@ table is a defect to file with the traceback and the table's version.
 ## A service answers 5xx or slowly
 
 **Symptom.** `HttpServerErrorRatioHigh` (critical: more than 5% of one service's responses are 5xx for 10 minutes),
-or `HttpServerLatencyHigh` (warning: one service's p95 is above 15 s for 15 minutes, maintenance left out; a
-maintenance pass that runs long is `MaintenancePassesOverran`, § Alerts by name).
+or `HttpServerLatencyHigh` (warning: one service's p95 is above 5 s for 15 minutes; a
+maintenance pass that runs long is `MaintenancePassesOverran`, § Alerts by name), or `RequestThreadPoolExhausted`
+(warning: blocking calls have waited for a thread of one service's request pool for 5 minutes).
 
 **Cause.** A dependency of that service is failing or slow: every governed door asks OpenFGA, every data door reads the
 object store, lineage records through the catalog, and a pod whose secret store is sealed cannot finish booting.
@@ -526,8 +532,32 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
   listed signer's key verifies, or nothing a grant could repair) and recorded each in the refusals table before retiring
   it. Not retryable: the outbox door of `lineage_events_processed_total` gives each one's class; check the producer's
   grant or key, or whether the event should have been staged.
-- `LineageOutboxStagingFailing` (warning): the outbox stage fails, so events reach the bus with no durable copy. First
+- `OutboxStagingFailing` (warning): a lane's outbox stage fails, so events reach the bus with no durable copy. First
   check: the producer's log for the stage error, then the object store.
+- `OutboxPublishFailing`, `OutboxDropFailing`, `OutboxEventsStranded` (warnings, by `lance_outbox_lane`): a lane's
+  publishes fail and its events wait staged; the store refuses deletes of delivered events, which are delivered again;
+  the relay fails on staged events tick after tick. First check: the bus, then the store, then the relay's log.
+- `OutboxPoisonDropped` (warning): a relay discarded a staged object it can never deliver. First check: the
+  `lineage_outbox_poison_dropped` or `control_outbox_unverifiable` log for the object and who wrote it.
+- `ControlOutboxNotDraining`, `ControlOutboxBacklogAging` (warnings): the control outbox holds events the catalog's
+  control relay is not republishing. First check: the catalog's `control_outbox_republish_failed` and
+  `control_relay_keys_unavailable` logs, then the bus.
+- `ControlEventsLost` (critical): a service could not publish control events that no outbox holds (it could not sign
+  them, or the bus refused them and it stages none). First check: the service's readiness (its signing key), the bus,
+  and the `control_emit_withheld_unsigned` and `control_publish_failed` logs.
+- `ControlEmitFailing` (warning): control emits have failed at the bus for 15 minutes and wait staged. First check:
+  the bus.
+- `LakehouseTimerFailing` (warning): a timer's work has raised on every window a replica claimed, none returning, for 20 minutes. First check: the
+  service's `timer_work_failed` log.
+- `LineageForwardStalled`, `LineageForwardRefused` (warnings): the forwarder cannot reach the graph backend, or the
+  backend refused events. First check: the backend, then lineage's `lineage_forward_stalled` and
+  `lineage_forward_event_refused` logs.
+- `CatalogCommitAuthorsUnrecorded` (warning): the catalog could not record who committed a version. First check: the
+  `commit_author_unrecorded` log and the control root's store.
+- `BusConsumerUnreachable` (critical): the bus refuses every ask for a consumer or a followed subject, so its lane takes
+  nothing. First check: the chart's stream Job's last run (a consumer or stream it did not converge), then the bus.
+- `BusPublishRefused` (warning): an event was built past the bus's claim-check size and refused unsent. First check: the
+  publisher's `lineage_publish_failed` or `control_publish_failed` log.
 
 **Lineage ingest** (see also [DLQ parking](#dlq-parking--a-delivery-gave-up)):
 
@@ -592,7 +622,13 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
 - `MaintenanceRefusalsRising` (warning): more than half of the tables passed in an hour were refused, usually by a
   manifest flag the supported-flag list does not know after a pylance upgrade. First check: the refusal reasons in
   `maintenance_dataset_outcome`.
-- `MaintenanceTableParked` (warning): maintenance of one table id has been parked on passes a day apart, so its
+- `MaintenanceQueueUnsampled` (warning): the bus does not answer the worker's sampler about a stream or a durable
+  consumer. First check: the chart's stream Job's last run, then the bus.
+- `MaintenanceBasesUnrecorded`, `MaintenanceTrashPurgeRefused`, `MaintenanceOrphansStranded`,
+  `MaintenanceOrphanChecksFailing` (warnings): a table declares a base nothing sanctions; the purge refused expired
+  records; a table holds unreferenced files above its listing floor; orphan checks could not finish. First check: the
+  `maintenance_unrecorded_base`, `trash_purge_refused` and `maintenance_orphan_check` logs.
+- `MaintenanceTableParked` (warning): maintenance of a table has been parked in the last day, so its
   versions are not reclaimed. First check: `refused_by` — `vend_denied` (403: no `can_maintain` on the id, or a stale
   `lineage.dataset_id` stamp), `table_not_governed` (404), or `policy_unreadable` (a maintenance policy record of the
   table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the

@@ -106,7 +106,7 @@ def refused_added(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, dict[str, 
 
 @pytest.fixture
 def parked_added(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, dict[str, Any] | None]]:
-    """Every `(amount, attributes)` the per-table `compaction.tables.parked` counter is asked to add."""
+    """Every `(amount, attributes)` the `maintenance.tables.parked` counter is asked to add."""
     seen: list[tuple[int, dict[str, Any] | None]] = []
     monkeypatch.setattr(metrics._tables_parked, "add", lambda amount, attributes=None, **_: seen.append((amount, attributes)))
     return seen

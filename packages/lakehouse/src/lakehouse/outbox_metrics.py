@@ -15,13 +15,25 @@ The signals, mapped to the four:
   · Latency  — the publish itself is timed where it is made (`lakehouse.bus`: `messaging.client.operation.duration`).
 
 Bounded cardinality (observability.md): NO run_id / dataset / token labels — those are unbounded and belong
-on spans and logs, not metric attributes. These series carry no attributes at all.
+on spans and logs, not metric attributes. Every series carries one attribute, its lane.
+
+EACH OUTBOX IS A LANE OF ITS OWN (`OutboxLane`): the lineage outbox, which the catalog and maintenance stage into and
+lineage's relay drains, and the control outbox, which each service's control emitter stages into and the catalog's
+control relay drains. One process can work both (the catalog stages into each), so the resource's `service.name` cannot
+say which outbox a point is about; the `lance.outbox.lane` attribute does, and an alert about one lane selects it.
 """
 
 from __future__ import annotations
 
+from typing import Final, Literal
+
 from opentelemetry import metrics
 
+
+#: The outboxes the lakehouse keeps, and the closed set of the `lance.outbox.lane` attribute.
+type OutboxLane = Literal["lineage", "control"]
+
+_LANE: Final = "lance.outbox.lane"
 
 _meter = metrics.get_meter("lance.outbox")
 
@@ -105,19 +117,19 @@ _poison_dropped = _meter.create_counter(
 # observation: the publishing services import this module too (for the counters), and import-time gauges made
 # every one of those pods export a constant depth=0/oldest_age=0 forever, diluting any unfiltered
 # aggregation over the one series that carries truth — the relay's (audit 2026-07-15).
-_depth: float = 0.0
-_oldest_age_seconds: float = 0.0
 _gauges_registered = False
-#: Whether this process measured the backlog on the relay's last window: only the replica that ran the tick did.
-_measured = False
+#: Each lane's backlog as this process measured it on the relay's last window, as (depth, oldest age in seconds). A
+#: lane is absent while this process holds no measurement of it: only the replica that ran the tick does, and only
+#: while its last tick could measure.
+_backlogs: dict[OutboxLane, tuple[float, float]] = {}
 
 
 def _observe_depth(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
-    return [metrics.Observation(_depth)] if _measured else []
+    return [metrics.Observation(depth, {_LANE: lane}) for lane, (depth, _age) in _backlogs.items()]
 
 
 def _observe_oldest_age(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
-    return [metrics.Observation(_oldest_age_seconds)] if _measured else []
+    return [metrics.Observation(age, {_LANE: lane}) for lane, (_depth, age) in _backlogs.items()]
 
 
 def _register_gauges() -> None:
@@ -130,8 +142,8 @@ def _register_gauges() -> None:
         callbacks=[_observe_depth],
         unit="{event}",
         description=(
-            "Events currently staged and undrained. THE alert signal: sustained > 0 means the reconcile "
-            "relay is not draining and lineage is accumulating at risk."
+            "Events currently staged and undrained, by lane. THE alert signal: sustained > 0 means the lane's "
+            "relay is not draining and its events are accumulating at risk."
         ),
     )
     _meter.create_observable_gauge(
@@ -139,78 +151,85 @@ def _register_gauges() -> None:
         callbacks=[_observe_oldest_age],
         unit="s",
         description=(
-            "Age of the OLDEST staged event. Bounds how much lineage is at risk and how long the relay has "
+            "Age of the OLDEST staged event, by lane. Bounds how much is at risk and how long the relay has "
             "been failing — depth alone cannot distinguish a brief spike from a stuck relay."
         ),
     )
 
 
-def record_staged() -> None:
-    _staged.add(1)
+def create_series(lane: OutboxLane) -> None:
+    """Create every counter's series of ``lane`` at 0.
+
+    An alert over a counter reads its increase, and a cumulative counter exports nothing for a series before its first
+    add: a series born at 1 has no 0 before it, so the first failure shows no increase and never pages. Called by what
+    stages into a lane or drains it, when it starts.
+    """
+    for counter in (_staged, _published, _publish_failed, _stage_failed, _drop_failed, _drained, _stranded, _refused, _poison_dropped):
+        counter.add(0, {_LANE: lane})
 
 
-def record_published() -> None:
-    _published.add(1)
+def record_staged(lane: OutboxLane) -> None:
+    _staged.add(1, {_LANE: lane})
 
 
-def record_publish_failed() -> None:
-    _publish_failed.add(1)
+def record_published(lane: OutboxLane) -> None:
+    _published.add(1, {_LANE: lane})
 
 
-def record_stage_failed() -> None:
-    _stage_failed.add(1)
+def record_publish_failed(lane: OutboxLane) -> None:
+    _publish_failed.add(1, {_LANE: lane})
 
 
-def record_drop_failed() -> None:
-    _drop_failed.add(1)
+def record_stage_failed(lane: OutboxLane) -> None:
+    _stage_failed.add(1, {_LANE: lane})
 
 
-def record_drained(count: int) -> None:
-    """Always emit — adding 0 is a valid no-op that still CREATES the series, so a dashboard/alert has data
-    from the first sweep instead of reading "no data" until the first non-zero drain (the same lesson the
-    compaction metrics learned in the 2026-07-13 obs audit)."""
-    _drained.add(count)
+def record_drop_failed(lane: OutboxLane) -> None:
+    _drop_failed.add(1, {_LANE: lane})
 
 
-def record_stranded(count: int) -> None:
-    """Always emit, for the same reason as ``record_drained``: a series that only appears once something is
-    already wedged cannot be alerted on before it wedges."""
-    _stranded.add(count)
+def record_drained(lane: OutboxLane, count: int) -> None:
+    """Count what one tick delivered out of ``lane``'s outbox; a tick that delivered nothing adds 0."""
+    _drained.add(count, {_LANE: lane})
 
 
-def record_refused(count: int) -> None:
-    """Always emit, same reason again — and here it matters more, because the alert that guards on this
-    series must be able to read a zero. A rule written as "depth > 0 and no refusals" evaluates to
-    nothing at all if the refused series does not exist yet, which is the silent no-fire this module has
-    already paid for once (see the `_seconds` suffix note in `deploy/alerting/rules.yml`)."""
-    _refused.add(count)
+def record_stranded(lane: OutboxLane, count: int) -> None:
+    """Count what one tick failed on and left staged in ``lane``'s outbox; a tick that stranded nothing adds 0."""
+    _stranded.add(count, {_LANE: lane})
 
 
-def record_poison_dropped() -> None:
-    _poison_dropped.add(1)
+def record_refused(lane: OutboxLane, count: int) -> None:
+    """Count what one tick found refused in ``lane``'s outbox; a tick that refused nothing adds 0.
+
+    The alert that guards on this series must be able to read a zero: a rule written as "depth > 0 and no refusals"
+    evaluates to nothing at all while the refused series does not exist.
+    """
+    _refused.add(count, {_LANE: lane})
 
 
-def observe_backlog(depth: int, oldest_age_seconds: float) -> None:
-    """Publish the saturation snapshot the relay measured this tick.
+def record_poison_dropped(lane: OutboxLane) -> None:
+    _poison_dropped.add(1, {_LANE: lane})
+
+
+def observe_backlog(lane: OutboxLane, depth: int, oldest_age_seconds: float) -> None:
+    """Publish the saturation snapshot ``lane``'s relay measured this tick.
 
     Called on EVERY relay tick — including a tick that finds an EMPTY outbox, which is what makes
     ``depth`` fall back to 0 instead of going stale at its last non-zero reading. A gauge that only reports
     when non-zero would alert forever after a single transient spike.
     """
     _register_gauges()  # first observation = the measuring process; only it exports the series
-    global _depth, _oldest_age_seconds, _measured
-    _depth = float(depth)
-    _oldest_age_seconds = float(oldest_age_seconds)
-    _measured = True
+    _backlogs[lane] = (float(depth), float(oldest_age_seconds))
 
 
-def forget_backlog() -> None:
-    """Report no backlog from this process until it measures one again.
+def forget_backlog(lane: OutboxLane) -> None:
+    """Report no backlog of ``lane`` from this process until it measures one again.
 
     The relay's timer runs each tick on one replica, so the replica that ran the last one holds the truth and every
     other replica's snapshot is from an older window: one that measured a backlog during an outage would report it for
     as long as others won the windows since, over a prefix long drained. A replica that finds the window another's
-    calls this, and the series it exported ends.
+    calls this, and so does a tick that could not measure (the store did not answer the listing): its last reading says
+    nothing about the outbox now, and an empty one read before an outage would report 0 throughout it. The series it
+    exported ends.
     """
-    global _measured
-    _measured = False
+    _backlogs.pop(lane, None)

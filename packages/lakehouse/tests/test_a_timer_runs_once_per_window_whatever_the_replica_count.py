@@ -17,8 +17,10 @@ from typing import Any, NoReturn
 
 import pytest
 from botocore.exceptions import ClientError
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
-from lakehouse import records
+from lakehouse import records, timers
 from lakehouse.storage_options import StorageOptions
 from lakehouse.timers import Outcome, Timer, Turn, claim_key
 
@@ -202,7 +204,11 @@ async def test_a_claim_that_cannot_be_read_runs_nothing_and_is_read_again_within
 
 
 @pytest.mark.asyncio
-async def test_the_loop_takes_turn_after_turn_until_it_is_cancelled(tmp_path: Path) -> None:
+async def test_the_loop_takes_turn_after_turn_until_it_is_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every outcome's series of the turn counter exists from the loop's start, the ones that never happen at 0: an
+    alert reads a counter's increase, and a series born at a timer's first failed turn would show none."""
+    reader = InMemoryMetricReader()
+    monkeypatch.setattr(timers, "_turns", MeterProvider(metric_readers=[reader]).get_meter("lance.timers").create_counter("timer.turns"))
     ran: list[str] = []
     loop = asyncio.create_task(_replica(tmp_path, ran, holder="pod-1", period=0.1).run())
 
@@ -214,3 +220,12 @@ async def test_the_loop_takes_turn_after_turn_until_it_is_cancelled(tmp_path: Pa
 
     assert len(ran) >= 3
     assert loop.cancelled()
+    data = reader.get_metrics_data()
+    assert data is not None
+    turns = {
+        str((point.attributes or {})["outcome"]): int(point.value)
+        for point in data.resource_metrics[0].scope_metrics[0].metrics[0].data.data_points
+        if isinstance(point, NumberDataPoint)
+    }
+    assert {outcome: count for outcome, count in turns.items() if outcome != "ran"} == {"failed": 0, "elsewhere": 0, "held": 0, "unread": 0}
+    assert turns["ran"] >= 3

@@ -2186,6 +2186,8 @@ async def test_the_sampler_reads_each_streams_depth_and_age_and_each_durables_ba
 
 @pytest.mark.asyncio
 async def test_a_stream_the_sampler_cannot_read_keeps_its_gauges_at_their_last_values(fleet: _Fleet, maintenance_metrics: Measured) -> None:
+    """Each read the bus did not answer is counted under what was asked about, on a series the first sample created at
+    0: a stream the Job did not converge pages on that count, where its gauges only stand still."""
     backlog = _Backlog(fleet)
     lane = await backlog.build(with_a_store_event=True)
     assert await sample_queue(lane) == 0
@@ -2206,6 +2208,10 @@ async def test_a_stream_the_sampler_cannot_read_keeps_its_gauges_at_their_last_v
         maintenance_metrics.of("maintenance.queue.ack_pending", consumer="maintenance-store-events"),
     )
     assert (unread, kept) == (2, last)
+    assert (maintenance_metrics.by("maintenance.queue.unsampled", "stream"), maintenance_metrics.by("maintenance.queue.unsampled", "consumer")) == (
+        {TASKS_STREAM: 0, SCHEDULES_STREAM: 0, STORE_EVENTS_STREAM: 1},
+        {"maintenance-worker": 0, "maintenance-due": 0, "maintenance-store-events": 1},
+    )
 
 
 @pytest.mark.asyncio
