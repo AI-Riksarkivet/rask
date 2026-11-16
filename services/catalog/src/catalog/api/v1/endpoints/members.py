@@ -14,7 +14,7 @@ correct as a guard and wrong as the only path.
 Deliberately NOT a generalization of ``access.py``. That surface is keyed on the data-plane rungs and
 should stay that way; this one writes ``admin``/``member`` on exactly one project object.
 
-Three routes: an idempotent grant, a revoke that refuses to remove the last admin, and "revoking what is
+Three routes: an idempotent grant, a revoke that refuses to remove the last administrator, and "revoking what is
 not there is a no-op, not a 404".
 """
 
@@ -110,7 +110,14 @@ async def grant_member(
 
     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
-    on the second call.
+    on the second call. An ``admin`` is granted in one Write with the project's ``admin_revision``
+    (:func:`project_admins.confer`), since it changes who administers the project.
+    \f
+
+    Raises:
+        PermissionDeniedError: The caller may not grant the rung.
+        InvalidInputError: The subject is a role another project owns.
+        ConcurrentModificationError: The project's administration changed under both of an ``admin`` grant's reads.
     """
     obj = f"project:{project_id}"
     await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
@@ -129,7 +136,11 @@ async def grant_member(
     # row in someone's inbox for something that did not happen.
     told = announcing.grant_announcement(tup, action="grant_added", actor=f"user:{token.subject}" if token else None)
     async with announcer.announcing(door="member_grant", target=obj, announcements=[told]) as filing:
-        await fga.write_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        if payload.relation in ADMINISTRATIVE:
+            if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api"):
+                return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
+        else:
+            await fga.write_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         existing = await fga.read_object_tuples(wired, obj)
         audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
         await filing.send(told)
@@ -142,9 +153,10 @@ async def revoke_member(
 ) -> MemberList:
     """Revoke one tenant rung — gated identically to granting it.
 
-    REFUSES the last ``admin``. Removing it leaves a tenant nobody inside can administer, grant on, or
-    delete — recoverable only by estate intervention, which is exactly the state the API exists to
-    avoid. Named rather than discovered later.
+    REFUSES the last administrator: an ``admin`` after whose removal the project's ``admin`` tuples reach no
+    person, directly or through a role (:func:`project_admins.withdraw`). That leaves a tenant nobody inside can
+    administer, grant on, or delete — recoverable only by estate intervention, which is exactly the state the API
+    exists to avoid. Named rather than discovered later.
 
     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
     state already holds.
@@ -168,9 +180,8 @@ async def revoke_member(
     told = announcing.grant_announcement(tup, action="grant_revoked", actor=f"user:{token.subject}" if token else None)
     async with announcer.announcing(door="member_revoke", target=obj, announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
-            revoked, existing = await project_admins.revoke_admin(wired, obj, user, actor=actor, origin="grant_api")
-            if not revoked:
-                return MemberList(members=_direct_grants(existing, obj))
+            if not await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api"):
+                return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
         else:
             await fga.delete_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         audit(AuditAction.PROJECT_MEMBER_REVOKE, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)

@@ -12,7 +12,9 @@ access, as the grant doors refuse it) and a role of another project.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from catalog.schemas import RoleRecord
 from catalog.services import roles, warehouses
+from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
 
 
@@ -76,28 +79,98 @@ def test_a_project_admin_manages_a_role_and_its_grant_reaches_its_assignees(gove
     assert not [t for t in catalog.store.tuples() if f"role:{role['id']}" in (t[0].split("#")[0], t[2])], "a tuple of the deleted role survived"
 
 
-def test_a_role_that_is_its_projects_only_admin_keeps_an_assignee_and_ends_with_its_project(governed_catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """A role holding a project's only direct ``admin`` is the project's administration: emptying or ending it would leave
-    nobody to administer the project, so both are refused 409 (code 14), as the members door refuses the last admin
-    ([[LH-434]]). Changing who is in it asks ``can_grant_admin``, so a security admin cannot make admins through it. The
-    project's delete ends it with every tuple it held."""
+def test_a_role_nested_beneath_an_admin_role_is_filled_and_emptied_as_the_admin_role_is(governed_catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """Who administers a project is everyone its ``admin`` reaches through its roles, however deep ([[LH-597]]).
+
+    ``admins`` holds acme's ``admin`` and reaches alice through ``leads`` and ``oncall``. Filling or emptying any role
+    of that chain asks ``can_grant_admin`` as the admin role itself does, so grace, a security admin, makes and unmakes
+    no admin through it, by filling, emptying or ending a role; and no door (an unassign, a role's delete, an offboarding, the members door) takes the last
+    person the project's ``admin`` reaches, whatever other admin tuples reach nobody. A role nested beneath no admin
+    is still grace's to fill, and the project's delete ends every role and leaves no tuple of its own."""
     catalog = governed_catalog
     root, alice, grace = catalog.bearer("root"), catalog.bearer("alice"), catalog.bearer("grace")
+    members, offboard = "/management/v1/projects/acme/members", "/management/v1/access/principals/dex~alice"
+    catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
+    _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=root), 200)
+    made = {
+        name: _status(catalog.client.post(ROLES, json={"name": name}, headers=root), 201).json()["id"]
+        for name in ("admins", "leads", "oncall", "empty", "staff", "analysts")
+    }
+    assignees = {name: f"{ROLES}/{role_id}/assignees" for name, role_id in made.items()}
+    everyone_in = {name: f"role:{role_id}#assignee" for name, role_id in made.items()}
+    _status(catalog.client.put(assignees["admins"], json={"user": everyone_in["leads"]}, headers=root), 200)
+    _status(catalog.client.put(assignees["leads"], json={"user": everyone_in["oncall"]}, headers=root), 200)
+    _status(catalog.client.put(assignees["oncall"], json={"user": "dex~alice"}, headers=root), 200)
+    for admin in ("admins", "empty"):
+        _status(catalog.client.put(members, json={"user": everyone_in[admin], "relation": "admin"}, headers=root), 200)
+    _status(catalog.client.request("DELETE", members, json={"user": "dex~root", "relation": "admin"}, headers=alice), 200)
+    catalog.store.write((catalog.person("grace"), "security_admin", "project:acme"))
+    before = sorted(catalog.store.tuples())
+
+    for role in ("oncall", "admins"):
+        _status(catalog.client.put(assignees[role], json={"user": "dex~dave"}, headers=grace), 404, TABLE_NOT_FOUND)
+    _status(catalog.client.request("DELETE", assignees["oncall"], json={"user": "dex~alice"}, headers=grace), 404, TABLE_NOT_FOUND)
+    _status(catalog.client.delete(f"{ROLES}/{made['oncall']}", headers=grace), 404, TABLE_NOT_FOUND)
+    _status(catalog.client.request("DELETE", assignees["oncall"], json={"user": "dex~alice"}, headers=alice), 409, CONCURRENT_MODIFICATION)
+    _status(catalog.client.request("DELETE", assignees["admins"], json={"user": everyone_in["leads"]}, headers=alice), 409, CONCURRENT_MODIFICATION)
+    for role in ("oncall", "leads", "admins"):
+        _status(catalog.client.delete(f"{ROLES}/{made[role]}", headers=alice), 409, CONCURRENT_MODIFICATION)
+    _status(catalog.client.delete(offboard, headers=root), 409, CONCURRENT_MODIFICATION)
+    assert sorted(catalog.store.tuples()) == before, "a refused change wrote or removed a tuple"
+
+    _status(catalog.client.put(assignees["staff"], json={"user": everyone_in["analysts"]}, headers=grace), 200)
+    _status(catalog.client.put(assignees["analysts"], json={"user": "dex~dave"}, headers=grace), 200)
+    assert _status(catalog.client.request("DELETE", assignees["analysts"], json={"user": "dex~dave"}, headers=grace), 200).json()["assignees"] == []
+
+    _status(catalog.client.put(members, json={"user": "dex~bob", "relation": "admin"}, headers=alice), 200)
+    _status(catalog.client.request("DELETE", assignees["oncall"], json={"user": "dex~alice"}, headers=catalog.bearer("bob")), 200)
+    _status(
+        catalog.client.request("DELETE", members, json={"user": "dex~bob", "relation": "admin"}, headers=catalog.bearer("bob")), 409, CONCURRENT_MODIFICATION
+    )
+
+    _status(catalog.client.delete("/management/v1/projects/acme", headers=catalog.bearer("bob")), 200)
+    ended = {"project:acme", *(f"role:{role_id}" for role_id in made.values())}
+    assert not [t for t in catalog.store.tuples() if {t[0].split("#")[0], t[2]} & ended], "a tuple of the project or its roles survived it"
+
+
+def test_an_unassignment_and_an_admin_revoke_at_once_leave_the_project_administered(governed_catalog: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """alice administers acme through the role ``admins`` and bob directly. Each removes the other at once, and each
+    judged a project the other still administers: both removals move the project's ``admin_revision`` in their own
+    Write, so the store commits one and the other reads again and is refused, leaving the winner administering it
+    ([[LH-597]])."""
+    catalog = governed_catalog
+    root, members = catalog.bearer("root"), "/management/v1/projects/acme/members"
     catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=root), 200)
     role = _status(catalog.client.post(ROLES, json={"name": "admins"}, headers=root), 201).json()
-    assignees, member = f"{ROLES}/{role['id']}/assignees", f"role:{role['id']}#assignee"
+    assignees = f"{ROLES}/{role['id']}/assignees"
     _status(catalog.client.put(assignees, json={"user": "dex~alice"}, headers=root), 200)
-    _status(catalog.client.put("/management/v1/projects/acme/members", json={"user": member, "relation": "admin"}, headers=root), 200)
-    _status(catalog.client.request("DELETE", "/management/v1/projects/acme/members", json={"user": "dex~root", "relation": "admin"}, headers=alice), 200)
-    catalog.store.write((catalog.person("grace"), "security_admin", "project:acme"))
+    for user in (f"role:{role['id']}#assignee", "dex~bob"):
+        _status(catalog.client.put(members, json={"user": user, "relation": "admin"}, headers=root), 200)
+    _status(catalog.client.request("DELETE", members, json={"user": "dex~root", "relation": "admin"}, headers=catalog.bearer("bob")), 200)
+    commit, judged, meeting = fga.commit_unless_changed, [], asyncio.Barrier(2)
 
-    _status(catalog.client.request("DELETE", assignees, json={"user": "dex~alice"}, headers=alice), 409, CONCURRENT_MODIFICATION)
-    _status(catalog.client.delete(f"{ROLES}/{role['id']}", headers=alice), 409, CONCURRENT_MODIFICATION)
-    _status(catalog.client.put(assignees, json={"user": "dex~dave"}, headers=grace), 404, TABLE_NOT_FOUND)
+    async def commit_once_both_judged(client: Any, **change: Any) -> bool:  # noqa: ANN401 — fga.commit_unless_changed's signature
+        if len(judged) < 2:
+            judged.append(change)
+            await asyncio.wait_for(meeting.wait(), timeout=10)
+        return await commit(client, **change)
 
-    _status(catalog.client.delete("/management/v1/projects/acme", headers=alice), 200)
-    assert not [t for t in catalog.store.tuples() if f"role:{role['id']}" in (t[0].split("#")[0], t[2])], "a tuple of the project's role survived it"
+    monkeypatch.setattr(fga, "commit_unless_changed", commit_once_both_judged)
+    removals = [
+        ("alice", members, {"user": "dex~bob", "relation": "admin"}),
+        ("bob", assignees, {"user": "dex~alice"}),
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        answers = list(pool.map(lambda removal: catalog.client.request("DELETE", removal[1], json=removal[2], headers=catalog.bearer(removal[0])), removals))
+
+    # The loser judges again on what the winner left: alice finds herself the last administrator (409), and bob finds
+    # himself no admin, so the role answers him as a role he may not fill (404).
+    refused = {"alice": (409, CONCURRENT_MODIFICATION), "bob": (404, TABLE_NOT_FOUND)}
+    (winner,) = [caller for (caller, _, _), answer in zip(removals, answers, strict=True) if answer.status_code == 200]
+    (loser,) = {"alice", "bob"} - {winner}
+    assert [(a.status_code, a.json().get("code")) for a in answers if a.status_code != 200] == [refused[loser]], [a.text for a in answers]
+    _status(catalog.client.get(members, headers=catalog.bearer(winner)), 200)
 
 
 def test_a_role_whose_ending_failed_part_way_is_ended_by_calling_its_door_again(governed_catalog: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog

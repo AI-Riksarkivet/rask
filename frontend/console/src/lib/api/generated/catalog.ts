@@ -179,9 +179,9 @@ export interface paths {
          *
          *     A grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door
          *     reads them type by type rather than trusting any one door's list. It never strands an administration: a principal
-         *     holding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything
+         *     who is the last person a project's ``admin`` reaches, directly or through its roles, is refused before anything
          *     is revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the
-         *     store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
+         *     store-arbitrated removal its own door uses, which refuses again should another change strand the project meanwhile;
          *     what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
          *     them, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_git_declares`). Re-running the door
          *     revokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed
@@ -1484,7 +1484,8 @@ export interface paths {
          *
          *     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
          *     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
-         *     on the second call.
+         *     on the second call. An ``admin`` is granted in one Write with the project's ``admin_revision``
+         *     (:func:`project_admins.confer`), since it changes who administers the project.
          */
         put: operations["grant_member_management_v1_projects__project_id__members_put"];
         post?: never;
@@ -1492,9 +1493,10 @@ export interface paths {
          * Revoke Member
          * @description Revoke one tenant rung — gated identically to granting it.
          *
-         *     REFUSES the last ``admin``. Removing it leaves a tenant nobody inside can administer, grant on, or
-         *     delete — recoverable only by estate intervention, which is exactly the state the API exists to
-         *     avoid. Named rather than discovered later.
+         *     REFUSES the last administrator: an ``admin`` after whose removal the project's ``admin`` tuples reach no
+         *     person, directly or through a role (:func:`project_admins.withdraw`). That leaves a tenant nobody inside can
+         *     administer, grant on, or delete — recoverable only by estate intervention, which is exactly the state the API
+         *     exists to avoid. Named rather than discovered later.
          *
          *     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
          *     state already holds.
@@ -1576,9 +1578,10 @@ export interface paths {
         post?: never;
         /**
          * Delete Role
-         * @description End a role, gated on its ``can_delete``: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).
+         * @description End a role, gated on its ``can_delete``, and on the project's ``can_grant_admin`` while the project's ``admin``
+         *     reaches the role: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).
          *
-         *     Refused 409 (code 14) while ending it would leave a project with no direct admin, before anything is revoked. An
+         *     Refused 409 (code 14) while ending it would leave a project whose ``admin`` reaches nobody, before anything is revoked. An
          *     ending that fails part-way leaves the role listed and deletable, so calling the door again finishes it, and what it
          *     took is announced though the ending failed after it ([[LH-576]]).
          */
@@ -1599,7 +1602,10 @@ export interface paths {
         /**
          * Assign Role
          * @description Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on
-         *     the project's ``can_grant_admin`` while the role holds the project's ``admin``. Idempotent.
+         *     the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
+         *
+         *     The assignment is one Write with the project's ``admin_revision`` (:func:`project_admins.confer`), judged on the
+         *     read that found whether ``admin`` reaches the role.
          */
         put: operations["assign_role_management_v1_projects__project_id__roles__role_id__assignees_put"];
         post?: never;
@@ -1607,8 +1613,8 @@ export interface paths {
          * Unassign Role
          * @description Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.
          *
-         *     Refused 409 (code 14) for the last assignee of a role that is its project's only direct admin
-         *     (:func:`role_membership.unassign`, arbitrated by the store as the members door's revoke is).
+         *     Refused 409 (code 14) when the project's ``admin`` would reach nobody without it
+         *     (:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is).
          */
         delete: operations["unassign_role_management_v1_projects__project_id__roles__role_id__assignees_delete"];
         options?: never;

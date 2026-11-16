@@ -2062,6 +2062,17 @@ def _audit_tuples(action: AuditAction, tuples: list[ClientTuple], actor: str, or
         audit(action, AuditOutcome.SUCCESS, subject=actor, resource=t.object, grantee=t.user, relation=t.relation, origin=origin, **extra)
 
 
+async def read_subject_tuples(client: OpenFgaClient, user: str, fga_type: str) -> list[ClientTuple]:
+    """Every direct tuple naming ``user`` on an object of ``fga_type``, page by page; an outage raises, never a short list."""
+    found: list[ClientTuple] = []
+    continuation: str | None = None
+    while True:
+        page, continuation = await read_tuples(client, user=user, obj=f"{fga_type}:", page_size=READ_PAGE_SIZE, continuation_token=continuation)
+        found.extend(page)
+        if not continuation:
+            return found
+
+
 async def write_tuples(
     client: OpenFgaClient,
     tuples: list[ClientTuple],

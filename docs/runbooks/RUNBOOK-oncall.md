@@ -292,8 +292,8 @@ object to the same tick, so the alert names exactly what the estate does not hol
   project (400, 409), its store failed the probe (400) or could not be probed (503), or its id is registered to another
   project (409).
 - `grant:…`: the object it names has no registry record, or OpenFGA did not answer.
-- `revoke:project:<id>#admin`: the admin git stopped declaring is the project's last direct admin, which is never
-  revoked (409). Declare another admin first.
+- `revoke:project:<id>#admin`: without the admin git stopped declaring, the project's `admin` would reach no person (the
+  admin tuples left are roles nobody is in), so it is never revoked (409). Declare another admin first.
 
 **Act.** Correct the values and let the reconciler apply them; the next tick converges. A store or OpenFGA outage clears
 on its own. Never make the declared object at its door instead: a project or warehouse git declares refuses a change

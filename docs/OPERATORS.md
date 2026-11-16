@@ -76,7 +76,7 @@ and mark stay as they are: correct the declaration, or delete the warehouse and 
 records stay, and its doors change it again. A declared grant is recorded under `_declared_grants/` on the control root
 before its tuple is written, and only a recorded tuple is revoked once git stops declaring it; a tuple the store already
 held when the declaration asked for it is not recorded, so a grant made at a door is never taken. A project's declared
-admin is revoked through the members door's own rule, which keeps a project its last direct admin: that revoke is
+admin is revoked through the members door's own rule, which keeps a project its last administrator: that revoke is
 refused, and counted as a failure on each tick, until another admin is granted.
 
 **Reading whether it converged.** Until the operator exists there is no per-object status in Kubernetes; read the

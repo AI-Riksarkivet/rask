@@ -5,28 +5,23 @@ everything granted to a subject asks each type the model lets hold it directly: 
 relation names ``[user]``, a userset (``role:<id>#assignee``) where one names ``[role#assignee]``. The offboarding door
 ends a principal this way ([[LH-233]]), and the role delete door a role ([[LH-557]]).
 
-Ending a subject never leaves a project with no direct admin: not by revoking its own ``admin``, and not by emptying a
-role that is the project's only direct admin, of which the subject is the last assignee.
+Ending a subject never leaves a project whose ``admin`` reaches nobody: not by revoking its own ``admin``, and not by
+emptying any role of a chain the project's ``admin`` reaches its people through ([[LH-597]]).
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from lance_namespace import ConcurrentModificationError
 
-from catalog.services import project_admins, role_membership
-from catalog.services.roles import ASSIGNEE
+from catalog.services import project_admins
 from lakehouse.governed import fga
 
 
 if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
-
-
-#: OpenFGA's largest Read page.
-PAGE_SIZE: Final = 100
 
 
 def _holds_directly(type_definition: dict[str, object], user_type: str, relation: str | None) -> bool:
@@ -52,68 +47,47 @@ async def tuples_naming(client: OpenFgaClient, user: str) -> list[fga.ClientTupl
     subject, _, relation = user.partition("#")
     found: list[fga.ClientTuple] = []
     for fga_type in types_holding(subject.split(":", 1)[0], relation or None):
-        continuation: str | None = None
-        while True:
-            page, continuation = await fga.read_tuples(client, user=user, obj=f"{fga_type}:", page_size=PAGE_SIZE, continuation_token=continuation)
-            found.extend(page)
-            if not continuation:
-                break
+        found.extend(await fga.read_subject_tuples(client, user, fga_type))
     return found
 
 
-def _is_project_admin(t: fga.ClientTuple) -> bool:
-    return t.relation == project_admins.ADMIN and t.object.startswith("project:")
+def _decides_who_administers(t: fga.ClientTuple) -> bool:
+    return project_admins.is_admin(t) or project_admins.is_assignment(t)
 
 
-def _is_role_assignment(t: fga.ClientTuple) -> bool:
-    return t.relation == ASSIGNEE and t.object.startswith("role:")
-
-
-async def _project_stranded_by(client: OpenFgaClient, user: str, t: fga.ClientTuple) -> str | None:
-    """The project that revoking ``t`` from ``user`` would leave with no direct admin, or ``None``."""
-    if _is_project_admin(t):
-        project, admin = t.object, user
-    elif _is_role_assignment(t):
-        project, assigned = await role_membership.role_project(client, t.object)
-        if project is None or assigned != {user}:
-            return None
-        admin = f"{t.object}#{ASSIGNEE}"
-    else:
-        return None
-    return project if project_admins.sole_admin(await fga.read_object_tuples(client, project), project, admin) else None
-
-
-async def refuse_stranding(client: OpenFgaClient, user: str, naming: list[fga.ClientTuple], *, who: str) -> None:
-    """Refuse (409, code 14) ending ``user`` while that would leave a project with no direct admin: ``user`` is its only
-    direct ``admin``, or the last assignee of a role that is. ``naming`` is :func:`tuples_naming`'s answer for ``user``.
+async def refuse_stranding(client: OpenFgaClient, user: str, naming: list[fga.ClientTuple], *, who: str, permit: project_admins.Permit | None = None) -> None:
+    """Refuse (409, code 14) ending ``user`` while that would leave a project whose ``admin`` reaches nobody, judged on
+    every chain of roles ``user`` stands in (:meth:`project_admins.Administration.survives`). ``naming`` is
+    :func:`tuples_naming`'s answer for ``user``. ``permit`` is asked first, with the projects ``user`` administers or
+    passes their ``admin`` on in.
 
     Raises:
         ConcurrentModificationError: Ending ``user`` would strand a project; nothing was revoked.
     """
-    stranded: set[str] = set()
-    for t in naming:
-        if (project := await _project_stranded_by(client, user, t)) is not None:
-            stranded.add(project)
-    if stranded:
-        raise ConcurrentModificationError(
-            f"{who} holds the only direct admin of {', '.join(sorted(stranded))} — grant another admin first; nothing was revoked"
-        )
+    deciding = [t for t in naming if _decides_who_administers(t)]
+    scope = await project_admins.administrations(client, deciding)
+    if permit is not None:
+        await permit(project_admins.touched(scope, deciding))
+    gone = frozenset((user, t.object) for t in deciding)
+    if stranded := sorted(project for project, administration in scope.items() if not administration.survives(gone)):
+        raise ConcurrentModificationError(f"{who} is the last administrator {', '.join(stranded)} reaches — grant another admin first; nothing was revoked")
 
 
-async def revoke_naming(client: OpenFgaClient, user: str, naming: list[fga.ClientTuple], *, actor: str, origin: fga.TupleOrigin) -> list[fga.ClientTuple]:
-    """Revoke every tuple in ``naming``; the tuples removed. A project ``admin`` and a role assignment each go through the
-    store-arbitrated revoke of the door that grants it (:func:`project_admins.revoke_admin`, :func:`role_membership.unassign`)."""
-    admins = [t for t in naming if _is_project_admin(t)]
-    assignments = [t for t in naming if _is_role_assignment(t)]
-    rest = [fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in naming if not (_is_project_admin(t) or _is_role_assignment(t))]
-    removed: list[fga.ClientTuple] = []
-    for t in admins:
-        revoked, _ = await project_admins.revoke_admin(client, t.object, user, actor=actor, origin=origin)
-        if revoked:
-            removed.append(fga.ClientTuple(user=user, relation=t.relation, object=t.object))
-    for t in assignments:
-        if await role_membership.unassign(client, t.object.removeprefix("role:"), user, actor=actor, origin=origin):
-            removed.append(fga.ClientTuple(user=user, relation=t.relation, object=t.object))
+async def revoke_naming(
+    client: OpenFgaClient,
+    user: str,
+    naming: list[fga.ClientTuple],
+    *,
+    actor: str,
+    origin: fga.TupleOrigin,
+    permit: project_admins.Permit | None = None,
+) -> list[fga.ClientTuple]:
+    """Revoke every tuple in ``naming``; the tuples removed. A project ``admin`` and a role assignment go through the
+    store-arbitrated removal every door changing who administers a project takes (:func:`project_admins.withdraw`),
+    which asks ``permit`` on the read it judges."""
+    arbitrated = [fga.ClientTuple(user=user, relation=t.relation, object=t.object) for t in naming if _decides_who_administers(t)]
+    rest = [fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in naming if not _decides_who_administers(t)]
+    removed = await project_admins.withdraw(client, arbitrated, actor=actor, origin=origin, permit=permit)
     if rest:
         removed.extend(await fga.delete_tuples(client, rest, actor=actor, origin=origin))  # noqa: TID251
     return removed

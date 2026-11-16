@@ -663,6 +663,10 @@ async def delete_project(
             async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
                 ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
                 await ending.send(ending_filed, ended, actor=actor, reason="project_deleted")
+        if authz is not None:
+            # A role's ending moves its project's `admin_revision` (`project_admins.withdraw`), bookkeeping no grant
+            # reads and nobody is told of, so the project's tuples are revoked once more after its last role ended.
+            await fga.revoke_object_tuples(authz, obj, actor=token.subject if token is not None else "system:catalog", origin="lifecycle_delete")  # noqa: TID251
         # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
         # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
         # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse

@@ -16,10 +16,12 @@ rules keep a change of who is in a role from raising anyone's access past what i
 
 * No assignment raises the caller's own access: assigning themselves, or a role they are in, is refused 403 unless they
   already hold the role (:func:`fga_deps.refuse_self_elevation`, the grant doors' own separation of duties).
-* While the role holds its project's ``admin``, changing who is in it asks ``can_grant_admin`` on the project, the rung
-  the members door asks to make an admin, so a security admin cannot make admins through a role.
-* A role that is its project's only direct admin keeps an assignee, and is not ended (409, code 14), as the members door
-  keeps a project's last admin ([[LH-434]]).
+* While a project's ``admin`` reaches the role, held by it or by a role it is nested beneath however deep, changing who
+  is in it asks ``can_grant_admin`` on that project, the rung the members door asks to make an admin, so a security
+  admin makes and unmakes no admin through a role ([[LH-597]]). Ending such a role asks it too.
+* No change empties the chain a project's ``admin`` reaches its people through: removing the last person it reaches,
+  or ending a role it reaches them through, is refused 409 (code 14), as the members door keeps a project administered
+  ([[LH-434]]).
 """
 
 from __future__ import annotations
@@ -40,8 +42,8 @@ from catalog.api.security import CurrentToken, current_subject
 from catalog.api.v1.endpoints.members import ProjectId
 from catalog.core.identifiers import require_names
 from catalog.schemas import AssigneeRequest, Role, RoleCreateRequest, RoleDeleted, RoleList, RoleRecord
+from catalog.services import project_admins, role_grants, roles
 from catalog.services import projects as project_registry
-from catalog.services import role_grants, role_membership, roles
 from lakehouse.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -158,9 +160,10 @@ async def get_role(project_id: ProjectId, role_id: uuid.UUID, client: FgaClientD
 async def delete_role(
     project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> RoleDeleted:
-    """End a role, gated on its ``can_delete``: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).
+    """End a role, gated on its ``can_delete``, and on the project's ``can_grant_admin`` while the project's ``admin``
+    reaches the role: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).
 
-    Refused 409 (code 14) while ending it would leave a project with no direct admin, before anything is revoked. An
+    Refused 409 (code 14) while ending it would leave a project whose ``admin`` reaches nobody, before anything is revoked. An
     ending that fails part-way leaves the role listed and deletable, so calling the door again finishes it, and what it
     took is announced though the ending failed after it ([[LH-576]]).
     \f
@@ -173,7 +176,14 @@ async def delete_role(
     actor, announced = current_subject(token), _announced_actor(token)
     ending = await announcing.role_ending(wired, role, actor=announced, reason="role_deleted")
     async with announcer.announcing(door="delete_role", target=roles.role_object(role.id), announcements=ending.announcements()) as filing:
-        removed = await role_grants.end_role(wired, role, control_root=settings.registry_root, storage_options=settings.storage_options(), actor=actor)
+        removed = await role_grants.end_role(
+            wired,
+            role,
+            control_root=settings.registry_root,
+            storage_options=settings.storage_options(),
+            actor=actor,
+            permit=_admin_grant(client=wired, settings=settings, token=token, role=role),
+        )
         audit(AuditAction.ROLE_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=roles.role_object(role.id), project=project_id, removed=len(removed))
         await ending.send(filing, removed, actor=announced, reason="role_deleted")
     return RoleDeleted(role=role, tuples_revoked=len(removed))
@@ -195,16 +205,18 @@ async def _assignee(*, settings: Settings, role: RoleRecord, raw: str) -> str:
     return user
 
 
-async def _require_admin_grant(*, client: OpenFgaClient, settings: Settings, token: Caller | None, role: RoleRecord) -> None:
-    """Ask ``can_grant_admin`` on ``role``'s project while the role holds that project's ``admin``; a refusal answers the
-    missing role's 404, as the role's own gate does."""
-    project = f"project:{role.project}"
-    if not role_membership.holds_admin(await fga.read_object_tuples(client, project), project, roles.assignees_of(role.id)):
-        return
-    try:
-        await fga_deps.require_relation(client, settings, token, relation="can_grant_admin", obj=project)
-    except PermissionDeniedError as exc:
-        raise TableNotFoundError(f"role not found: {role.id}") from exc
+def _admin_grant(*, client: OpenFgaClient, settings: Settings, token: Caller | None, role: RoleRecord) -> project_admins.Permit:
+    """Asks ``can_grant_admin`` on each project whose ``admin`` reaches ``role``; a refusal answers the missing role's
+    404, as the role's own gate does."""
+
+    async def permit(projects: list[str]) -> None:
+        try:
+            for project in projects:
+                await fga_deps.require_relation(client, settings, token, relation="can_grant_admin", obj=project)
+        except PermissionDeniedError as exc:
+            raise TableNotFoundError(f"role not found: {role.id}") from exc
+
+    return permit
 
 
 @router.put("/{project_id}/roles/{role_id}/assignees")
@@ -218,26 +230,29 @@ async def assign_role(
     token: CurrentToken,
 ) -> Role:
     """Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on
-    the project's ``can_grant_admin`` while the role holds the project's ``admin``. Idempotent.
+    the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
+
+    The assignment is one Write with the project's ``admin_revision`` (:func:`project_admins.confer`), judged on the
+    read that found whether ``admin`` reaches the role.
     \f
 
     Raises:
         TableNotFoundError: The role is absent, or its caller may not manage its assignees.
         InvalidInputError: The assignee is the role itself, neither a principal nor a role, or no standing role of the project.
         PermissionDeniedError: The assignment would raise the caller's own access.
+        ConcurrentModificationError: Who administers the project changed under both of the assignment's reads.
     """
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
-    await _require_admin_grant(client=wired, settings=settings, token=token, role=role)
     user = await _assignee(settings=settings, role=role, raw=body.user)
     obj = roles.role_object(role.id)
     if token is not None:
         await fga_deps.refuse_self_elevation(wired, user=token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
     actor = current_subject(token)
-    if user not in await _assignees(wired, role.id):
-        tup = fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
-        told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(token))
-        async with announcer.announcing(door="role_assign", target=obj, announcements=[told]) as filing:
-            await fga.write_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+    tup = fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
+    told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(token))
+    permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
+    async with announcer.announcing(door="role_assign", target=obj, announcements=[told]) as filing:
+        if await project_admins.confer(wired, tup, actor=actor, origin="grant_api", permit=permit):
             audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
             await filing.send(told)
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
@@ -255,22 +270,23 @@ async def unassign_role(
 ) -> Role:
     """Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.
 
-    Refused 409 (code 14) for the last assignee of a role that is its project's only direct admin
-    (:func:`role_membership.unassign`, arbitrated by the store as the members door's revoke is).
+    Refused 409 (code 14) when the project's ``admin`` would reach nobody without it
+    (:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is).
     \f
 
     Raises:
         TableNotFoundError: The role is absent, or its caller may not manage its assignees.
-        ConcurrentModificationError: The removal would leave the project with no direct admin.
+        ConcurrentModificationError: The removal would leave the project nobody administers.
     """
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
-    await _require_admin_grant(client=wired, settings=settings, token=token, role=role)
     user = fga.grantee_object(body.user)
     obj = roles.role_object(role.id)
     actor = current_subject(token)
-    told = announcing.grant_announcement(fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj), action="grant_revoked", actor=_announced_actor(token))
+    tup = fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
+    told = announcing.grant_announcement(tup, action="grant_revoked", actor=_announced_actor(token))
+    permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
     async with announcer.announcing(door="role_unassign", target=obj, announcements=[told]) as filing:
-        if await role_membership.unassign(wired, str(role.id), user, actor=actor, origin="grant_api"):
+        if await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api", permit=permit):
             audit(AuditAction.ROLE_UNASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
             await filing.send(told)
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))

@@ -219,3 +219,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0210](0210-the-console-shows-what-is-there-by-its-path.md) | FE-022 | The console shows what is there, by its path: only working pages, Home from real reads, catalog objects named by path, connect snippets, a Versions tab (2026-11-15) | amended |
 | [0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md) | LH-596 | Labels a project defines replace tiers, and the run rule stands alone as `rask.requires_run` (2026-11-15) | accepted |
 | [0212](0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md) | LH-594 | Publication goes, and a table's data contract is checked on every commit (2026-11-16) | accepted |
+| [0213](0213-a-projects-administrators-are-everyone-its-admin-reaches-through-its-roles.md) | LH-597 | A project's administrators are everyone its admin reaches through its roles (2026-11-16) | accepted |

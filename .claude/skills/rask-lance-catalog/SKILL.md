@@ -306,15 +306,21 @@ holds tuples for it. `POST /management/v1/projects` writes the record AND the `p
 machine identity names the person in `admin` and is never admin itself, LH-433, `fga_deps.project_admin_for`; a
 service account's subject is never a person, `is_person_subject`) in
 one operation (gated on `can_create_project` at the estate root: the estate admin or an operator, ADR 0143), which is what stops existence
-and permission drifting apart. **A project always keeps a direct admin** ([[LH-434]]): the members door
-(`DELETE /management/v1/projects/{id}/members`) refuses the last one 409 code 14, and the store arbitrates the guard.
-An admin revoke deletes the admin tuple and moves `project#admin_revision` (`revision:<n>` to `<n+1>`, a bookkeeping
-relation no permission reads) in ONE Write without ignoring duplicates (`fga.commit_unless_changed`), so of two
-overlapping revokes one commits and the other re-reads and judges again; a refused Write is a 400 on the memory
-datastore and a 409 rollback on a SQL one. Both doors that revoke a project `admin` go through `catalog.services.project_admins.revoke_admin`: the members door
-and the estate admin's offboarding door ([[LH-233]]), `DELETE /management/v1/access/principals/{principal}`, which revokes
+and permission drifting apart. **A project always keeps an administrator** ([[LH-434]], [[LH-597]], ADR 0213): who administers a project is every
+person its `admin` tuples reach, directly or through roles nested to any depth
+(`catalog.services.project_admins.Administration`, read from the project's tuples down, each role once), never a count
+of `admin` tuples, since a role holding `admin` may reach nobody. Every change to a project's `admin` tuples or to who
+is in a role goes through `project_admins.confer` or `project_admins.withdraw`: the members door, the role doors'
+assign and unassign, a role's ending, the offboarding door and the declaration converge. Each judges the administration
+it read and commits in ONE Write that moves `project#admin_revision` (`revision:<n>` to `<n+1>`, a bookkeeping relation
+no permission reads) without ignoring duplicates (`fga.commit_unless_changed`), so of two overlapping changes one
+commits and the other reads again and judges again; a refused Write is a 400 on the memory datastore and a 409 rollback
+on a SQL one. A removal after which the project's `admin` reaches no person is refused 409 code 14. While a project's
+`admin` reaches a role, filling, emptying or ending it asks `can_grant_admin` on that project (a refusal answers the
+role's 404), so a `security_admin` makes and unmakes no admin through a nested role. The estate admin's raw tuple editor writes past both.
+The estate admin's offboarding door ([[LH-233]]), `DELETE /management/v1/access/principals/{principal}`, revokes
 every tuple naming a principal (read type by type), refuses 409 code 14 before revoking anything while the principal is
-any project's only direct admin, refuses 400 code 13 the caller and every principal whose grants git declares (one holding
+the last person any project's `admin` reaches, refuses 400 code 13 the caller and every principal whose grants git declares (one holding
 a rung on the estate root other than a machine role, or a warehouse `maintenance` tuple, which only the catalog's own seed
 and its declaration converge write, and the accounts the catalog's settings name; judged on the tuples, so the catalog names no
 client, XC-183), and revokes a machine role on the estate root (a relation only a user holds directly,
@@ -531,7 +537,7 @@ tables are never declared.
   sha256): a declared tuple the store lacks is recorded BEFORE it is written (`declaration.record_grant`), so a tuple
   never outlives its declaration unrecorded; a declared tuple the store already holds is not recorded, so a grant made at
   a door is never taken. A recorded tuple git no longer asks for is revoked, then its record forgotten. A project
-  `admin` goes through `project_admins.revoke_admin`, which keeps a project its last direct admin: that revoke fails,
+  `admin` goes through `project_admins.withdraw`, which keeps a project its last administrator: that revoke fails,
   and is counted on every tick, until another admin is granted. A grant on an object with no registry record is not
   written (`LookupError`, counted). With FGA off no grant is converged.
 - **The estate's own grants** ([[XC-011]]). The declaration's `estate` section carries `admins` (people:

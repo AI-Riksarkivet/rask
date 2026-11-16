@@ -13045,7 +13045,7 @@
     },
     "/management/v1/access/principals/{principal}": {
       "delete": {
-        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nholding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything\nis revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the\nstore-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;\nwhat was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_git_declares`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed\nbefore the revoke and sent once the deletion is recorded, so a door failing after the record still announces it\n([[LH-576]]). ``revoked`` counts the tuples this call removed.",
+        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nwho is the last person a project's ``admin`` reaches, directly or through its roles, is refused before anything\nis revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the\nstore-arbitrated removal its own door uses, which refuses again should another change strand the project meanwhile;\nwhat was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_git_declares`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed\nbefore the revoke and sent once the deletion is recorded, so a door failing after the record still announces it\n([[LH-576]]). ``revoked`` counts the tuples this call removed.",
         "operationId": "delete_principal_management_v1_access_principals__principal__delete",
         "parameters": [
           {
@@ -17262,7 +17262,7 @@
     },
     "/management/v1/projects/{project_id}/members": {
       "delete": {
-        "description": "Revoke one tenant rung \u2014 gated identically to granting it.\n\nREFUSES the last ``admin``. Removing it leaves a tenant nobody inside can administer, grant on, or\ndelete \u2014 recoverable only by estate intervention, which is exactly the state the API exists to\navoid. Named rather than discovered later.\n\nRevoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that\nstate already holds.",
+        "description": "Revoke one tenant rung \u2014 gated identically to granting it.\n\nREFUSES the last administrator: an ``admin`` after whose removal the project's ``admin`` tuples reach no\nperson, directly or through a role (:func:`project_admins.withdraw`). That leaves a tenant nobody inside can\nadminister, grant on, or delete \u2014 recoverable only by estate intervention, which is exactly the state the API\nexists to avoid. Named rather than discovered later.\n\nRevoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that\nstate already holds.",
         "operationId": "revoke_member_management_v1_projects__project_id__members_delete",
         "parameters": [
           {
@@ -17406,7 +17406,7 @@
         ]
       },
       "put": {
-        "description": "Grant one tenant rung to one subject \u2014 gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).\n\nA role is granted only on its own project: one another project owns is refused 400 (code 13), as every grant door\nrefuses it (:func:`fga_deps.refuse_a_cross_tenant_role_grant`), since that project's security admins decide who is\nin it ([[LH-557]]).\n\nIdempotent: re-granting what someone already holds is a no-op. That is not an optimisation \u2014 an\nOpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400\non the second call.",
+        "description": "Grant one tenant rung to one subject \u2014 gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).\n\nA role is granted only on its own project: one another project owns is refused 400 (code 13), as every grant door\nrefuses it (:func:`fga_deps.refuse_a_cross_tenant_role_grant`), since that project's security admins decide who is\nin it ([[LH-557]]).\n\nIdempotent: re-granting what someone already holds is a no-op. That is not an optimisation \u2014 an\nOpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400\non the second call. An ``admin`` is granted in one Write with the project's ``admin_revision``\n(:func:`project_admins.confer`), since it changes who administers the project.",
         "operationId": "grant_member_management_v1_projects__project_id__members_put",
         "parameters": [
           {
@@ -17707,7 +17707,7 @@
     },
     "/management/v1/projects/{project_id}/roles/{role_id}": {
       "delete": {
-        "description": "End a role, gated on its ``can_delete``: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).\n\nRefused 409 (code 14) while ending it would leave a project with no direct admin, before anything is revoked. An\nending that fails part-way leaves the role listed and deletable, so calling the door again finishes it, and what it\ntook is announced though the ending failed after it ([[LH-576]]).",
+        "description": "End a role, gated on its ``can_delete``, and on the project's ``can_grant_admin`` while the project's ``admin``\nreaches the role: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).\n\nRefused 409 (code 14) while ending it would leave a project whose ``admin`` reaches nobody, before anything is revoked. An\nending that fails part-way leaves the role listed and deletable, so calling the door again finishes it, and what it\ntook is announced though the ending failed after it ([[LH-576]]).",
         "operationId": "delete_role_management_v1_projects__project_id__roles__role_id__delete",
         "parameters": [
           {
@@ -17863,7 +17863,7 @@
     },
     "/management/v1/projects/{project_id}/roles/{role_id}/assignees": {
       "delete": {
-        "description": "Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.\n\nRefused 409 (code 14) for the last assignee of a role that is its project's only direct admin\n(:func:`role_membership.unassign`, arbitrated by the store as the members door's revoke is).",
+        "description": "Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.\n\nRefused 409 (code 14) when the project's ``admin`` would reach nobody without it\n(:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is).",
         "operationId": "unassign_role_management_v1_projects__project_id__roles__role_id__assignees_delete",
         "parameters": [
           {
@@ -17950,7 +17950,7 @@
         ]
       },
       "put": {
-        "description": "Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on\nthe project's ``can_grant_admin`` while the role holds the project's ``admin``. Idempotent.",
+        "description": "Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on\nthe project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.\n\nThe assignment is one Write with the project's ``admin_revision`` (:func:`project_admins.confer`), judged on the\nread that found whether ``admin`` reaches the role.",
         "operationId": "assign_role_management_v1_projects__project_id__roles__role_id__assignees_put",
         "parameters": [
           {

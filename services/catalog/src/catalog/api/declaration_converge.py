@@ -261,7 +261,11 @@ class _Converger:
         await run_in_threadpool(declaration.record_grant, self._root, self._so, grant)
         told = announcing.grant_announcement(grant.client_tuple, action="grant_added", actor=DECLARATION.actor, extra={"reason": "declared"})
         async with self._announcer.announcing(door="declaration_converge", target=grant.object, announcements=[told]) as filing:
-            await fga.write_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
+            if grant.relation == project_admins.ADMIN and grant.object.startswith("project:"):
+                # With the project's revision, as the members door grants it: who administers the project changes.
+                await project_admins.confer(client, grant.client_tuple, actor=DECLARATION.subject, origin="declaration")
+            else:
+                await fga.write_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
             await filing.send(told)
         self.tick.grants_written += 1
 
@@ -269,8 +273,8 @@ class _Converger:
         told = announcing.grant_announcement(grant.client_tuple, action="grant_revoked", actor=DECLARATION.actor, extra={"reason": "undeclared"})
         async with self._announcer.announcing(door="declaration_converge", target=grant.object, announcements=[told]) as filing:
             if grant.relation == project_admins.ADMIN and grant.object.startswith("project:"):
-                # Through the members door's own rule, which keeps a project its last direct admin.
-                await project_admins.revoke_admin(client, grant.object, grant.user, actor=DECLARATION.subject, origin="declaration")
+                # Through the members door's own rule, which keeps a project administered.
+                await project_admins.withdraw(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")
             else:
                 await fga.delete_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
             await filing.send(told)

@@ -3,8 +3,8 @@
 The gap: ``project#admin``/``member`` were writable only by ``seed_project_admin`` at create time and
 by the estate-gated raw tuple editor, so a project admin could not invite anyone into their own
 tenant. These pin how the grant door writes and how the door lists. The property that makes
-``can_grant_admin: admin`` safe to ship, that a project always keeps a direct admin, is driven against a real
-OpenFGA in ``services/catalog/tests/test_a_project_always_keeps_a_direct_admin.py``.
+``can_grant_admin: admin`` safe to ship, that a project always keeps an administrator, is driven against a real
+OpenFGA in ``services/catalog/tests/test_a_project_always_keeps_an_administrator.py``.
 
 Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set ``asyncio_mode``).
 """

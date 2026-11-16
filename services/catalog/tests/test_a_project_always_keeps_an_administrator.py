@@ -1,14 +1,14 @@
-"""A project always keeps a direct admin: the authorization store arbitrates the revoke door's last-admin guard ([[LH-434]]).
+"""A project always keeps an administrator: the authorization store arbitrates the revoke door's last-admin guard ([[LH-434]]).
 
-The members door refuses to revoke a project's last direct ``admin`` (409, code 14), since a project with none can be
-governed through none of its own doors. The count is a read, so two revokes of two admins each read two and each
+The members door refuses to revoke the last ``admin`` that reaches a person (409, code 14), since a project nobody
+administers can be governed through none of its own doors. The count is a read, so two revokes of two admins each read two and each
 passed: measured live on helm rev 16, 10 of 10 trials of two admins revoking each other at once left the project with
 no admin. The door now deletes the admin tuple and moves the project's ``admin_revision`` in one OpenFGA Write that the
 store refuses whole once another revoke moved the revision, and the loser reads again and judges the admins it finds.
 
 Every decision is the real model's, on a store of this test's own. The estate admin's ``owner`` tuple on the estate is
 seeded as the catalog's declaration grants it; everything else goes through the doors: root creates ``acme`` and grants
-the rungs, and the ``acme`` fixture says which two direct admins it leaves.
+the rungs, and the ``acme`` fixture says which two admins it leaves.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _members(catalog: Any, caller: str) -> list[tuple[str, str]]:  # noqa: ANN40
 
 @pytest.fixture
 def acme(request: pytest.FixtureRequest, governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """``acme`` with gina a member and two direct admins: alice and bob once alice has revoked root (``settled``, the
+    """``acme`` with gina a member and two admins: alice and bob once alice has revoked root (``settled``, the
     default, an admin revision already written), or root and alice with no revoke yet (``fresh``, no revision)."""
     catalog = governed_catalog
     fresh = getattr(request, "param", "settled") == "fresh"
@@ -108,7 +108,7 @@ def test_a_revoke_one_at_a_time_answers_on_the_admins_it_finds(
 
     assert answered.status_code == status, answered.text
     if status == 409:
-        assert (answered.json()["code"], "only remaining admin" in answered.json()["detail"]) == (CONCURRENT_MODIFICATION, True)
+        assert (answered.json()["code"], "last administrator" in answered.json()["detail"]) == (CONCURRENT_MODIFICATION, True)
     assert _members(acme, "alice") == left
 
 

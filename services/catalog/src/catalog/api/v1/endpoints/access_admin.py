@@ -70,7 +70,7 @@ log = logging.getLogger(__name__)
 
 
 #: OpenFGA's Read page-size ceiling — a larger request is a server-side 400, so cap it at the API edge.
-_MAX_PAGE_SIZE = subject_tuples.PAGE_SIZE
+_MAX_PAGE_SIZE = fga.READ_PAGE_SIZE
 #: The warehouse relation only the catalog's own maintainer seed and its declaration converge write ([[LH-473]]).
 _MAINTENANCE = "maintenance"
 
@@ -722,9 +722,9 @@ async def delete_principal(
 
     A grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door
     reads them type by type rather than trusting any one door's list. It never strands an administration: a principal
-    holding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything
+    who is the last person a project's ``admin`` reaches, directly or through its roles, is refused before anything
     is revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the
-    store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
+    store-arbitrated removal its own door uses, which refuses again should another change strand the project meanwhile;
     what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
     them, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_git_declares`). Re-running the door
     revokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed
