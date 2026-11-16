@@ -11,6 +11,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     {{- include "lance.reconciledJob" "Sync" | nindent 4 }}
 spec:
+  {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
   backoffLimit: 10
   ttlSecondsAfterFinished: 300
   template:

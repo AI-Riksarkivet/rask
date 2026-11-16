@@ -50,11 +50,11 @@ carries `admin:*` and only the hook and the fixture's Job hold the root (ADR 016
 One policy per platform row, selecting the row's components and admitting them to the peers its value states. The
 rows' callers, each under the condition its template renders: the API server's are the token verifiers (catalog and
 lineage under `auth.enabled`, reading the service-account issuer's discovery and key set), the issuer mirror, the dev
-store's pod (the openbao fixture's; its Kubernetes auth backend reviews ESO's logins), the Collector (`k8sattributes`
-reads pod metadata), the volume-snapshot CronJob (`kubectl`); OpenFGA's are the tuple writers
+store's pod (the openbao fixture's; its Kubernetes auth backend reviews ESO's logins), the volume-snapshot CronJob
+(`kubectl`); OpenFGA's are the tuple writers
 (`lance.fgaWriters`) and the model hook, the list its in-namespace ingress admits; the secret
 store's are the pods that log in to it (`lance.secretReaderComponents`, as the dev store's ingress lock); the
-telemetry backend's is the Collector; the S3's are the pods holding a store session (`lance.objectStoreClients`), whose
+telemetry gateway's are the exporting services (`lance.otlpExporters`); the S3's are the pods holding a store session (`lance.objectStoreClients`), whose
 STS answers at addresses the same rules name; the IdP's are the doors verifying a person's token (`lance.tokenVerifiers`);
 the bus's are every service pod (`lance.secretReaderComponents`: each dials the bus itself, as its own bus user) and the
 stream Job (`lance.busClients`); and the graph backend's is lineage, whose

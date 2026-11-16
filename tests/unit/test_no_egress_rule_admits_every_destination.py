@@ -93,7 +93,7 @@ class _Endpoint(BaseModel):
 
 
 _ENDPOINTS: dict[str, _Endpoint] = {
-    "api server": _Endpoint(cidr=chart_render.API_SERVER_CIDR, overlays=("default", "prod"), known_caller="Deployment/rask-otel-collector"),
+    "api server": _Endpoint(cidr=chart_render.API_SERVER_CIDR, overlays=("default", "prod"), known_caller="Deployment/rask-catalog"),
     "object store": _Endpoint(cidr=chart_render.OBJECT_STORE_CIDR, overlays=("prod",), known_caller="Deployment/rask-catalog"),
     "bus": _Endpoint(cidr=chart_render.BUS_CIDR, overlays=("prod",), known_caller="Job/rask-nats-stream-r1"),
     "issuer": _Endpoint(cidr=chart_render.ISSUER_CIDR, overlays=("prod",), known_caller="Deployment/rask-catalog"),
@@ -194,7 +194,7 @@ def test_only_a_pod_that_dials_a_platform_endpoint_may_reach_it(endpoint: str, o
     """The policies that admit an endpoint's stated peer select exactly the first-party pods that dial it.
 
     A pod with nothing to say to an endpoint has, in a path there, only a path out; a first-party pod that dials it and is
-    not admitted fails at its first call (a verifier's key set, the Collector's pod metadata, a store session, a bus
+    not admitted fails at its first call (a verifier's key set, a store session, a bus
     connection, an IdP's discovery, a forwarded event). A subchart's pod with an unused token is not ours to admit.
     """
     wanted = _ENDPOINTS[endpoint]

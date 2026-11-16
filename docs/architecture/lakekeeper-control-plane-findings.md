@@ -359,7 +359,7 @@ medium (one model per action); low risk.
 - **Data contract hook** (`crates/lakekeeper/src/service/contract_verification.rs`). rask judges commits at
   `version/create` and gates publication (ADR 0160, ADR 0161).
 - **Endpoint statistics** (`service/endpoint_statistics.rs`). Per-endpoint counts stored in the catalog database; rask's
-  metrics go to the OTel Collector.
+  metrics go over OTLP to the platform's gateway.
 - **Iceberg-only parts**: views and their security mode (`lakekeeper_view.fga`), generic tables, format-version policy,
   `x-project-id` resolution for header-less Iceberg routes (`service/request_project.rs`), the Iceberg `/config`
   endpoint, and the Postgres task queue.

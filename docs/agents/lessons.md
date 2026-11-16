@@ -13,8 +13,8 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
   behaviour (policy, CAS, STS) on rask's fixture or a Dagger lane, and see `rask-rustfs` before reading its docs.
 - **Current state is test data.** "Destructive on real data" is not a blocker before production; only owner-held facts
   and missing permissions are.
-- **The observability seam is the OTel Collector.** The store behind it is swappable and out of scope; prove the
-  exported signal, not the backend.
+- **The observability seam is each service's OTLP export to the platform's gateway** (ADR 0215). The gateway and the
+  store behind it are swappable and out of scope; prove the exported signal, not the backend.
 
 ## Traps
 

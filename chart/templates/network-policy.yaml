@@ -160,7 +160,7 @@ spec:
 ---
 # (3b') openfga:8080/8081 — the authorization store, which authorizes none of its callers ([[LH-442]]): any token it
 # admits may write any tuple. Only the tuple writers reach its API (the catalog, `lance.fgaWriters`, and the hook that
-# publishes the model); every other service asks the catalog's doors. The Collector reaches the metrics port alone.
+# publishes the model); every other service asks the catalog's doors.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -183,10 +183,8 @@ spec:
       ports:
         - { protocol: TCP, port: 8080 }
         - { protocol: TCP, port: 8081 }
-    {{- if .Values.observability.enabled }}
-    - from:
-        - podSelector:
-            matchLabels: { app.kubernetes.io/component: otel-collector }
+    {{- with .Values.networkPolicy.openfgaMetricsFrom }}
+    - from: {{- toYaml . | nindent 8 }}
       ports:
         - { protocol: TCP, port: 2112 }
     {{- end }}

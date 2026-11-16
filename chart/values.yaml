@@ -272,21 +272,6 @@ resources:
   lineage:
     requests: { cpu: 250m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
-  # THE COLLECTOR, which named no tier and therefore silently ran on `default` — 50m CPU — while being
-  # the sole path for OpenFGA's metrics, every infra pod's logs and the whole estate's three
-  # signals. Measured 2026-08-23: 45m against a 50m request, i.e. 90% of its request with ~10% headroom.
-  # Converging the fleet's OTel env onto this Collector takes it from 10 producers to 16, so this tier is
-  # that change's own blast radius rather than an adjacent nicety.
-  #
-  # RAISE REQUESTS, NOT THE MEMORY LIMIT. `memory_limiter.limit_mib: 400` is hardcoded in
-  # templates/otel-collector.yaml and does not track this tier, so a 1Gi limit would buy headroom the
-  # Collector refuses to use — it still sheds telemetry at 400 MiB. At 512Mi the limiter sits at ~78% of
-  # the limit, which is upstream's guidance, and requests == limits gives the pod Guaranteed QoS for
-  # memory, which is what you want under a fixed soft limiter.
-  # -- CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter.
-  otel-collector:
-    requests: { cpu: 300m, memory: 512Mi }
-    limits: { cpu: "1", memory: 512Mi }
 
 # === Graceful rollouts =============================================================================
 # preStop sleep: endpoint removal must propagate to kube-proxy and the Gateway BEFORE the app receives
@@ -304,7 +289,10 @@ resources:
 # default, so one slow request holds the process until SIGKILL and the teardown never runs. At the
 # bound uvicorn cancels the ASYNC work still running and runs the teardown, which keeps
 # `teardownSeconds` before the kubelet's SIGKILL: 40 - 5 - 10 = 25s for the 40s pods,
-# 120 - 5 - 10 = 105s for maintenance. Work in a THREAD (Starlette's run_in_threadpool, which runs
+# 120 - 5 - 10 = 105s for maintenance. The catalog and lineage answer every door by `requestDeadlineSeconds`
+# (ADR 0203), so their grace is derived from that deadline (`lance.deadlineGrace`): 5 + 300 + 10 = 315s, a drain as long
+# as the deadline, in which every request in flight at SIGTERM is answered. A door still working past its deadline is
+# ended by SIGKILL at the grace like any other thread. Work in a THREAD (Starlette's run_in_threadpool, which runs
 # maintenance's sweep) is not interrupted by the bound: it ends by returning, or by that
 # SIGKILL at the pod's grace. No container the chart renders sets `command`, so each image's tini,
 # its ENTRYPOINT, runs uvicorn's command line from `args` and uvicorn is never PID 1 ([[LH-313]]):
@@ -318,7 +306,7 @@ resources:
 lifecycle:
   # -- Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first.
   preStopSeconds: 5
-  # -- Pod grace period in seconds; uvicorn's graceful-shutdown bound is this minus preStopSeconds and teardownSeconds.
+  # -- Grace period in seconds of the pods whose requests answer at no deadline (the console, the issuer mirror); uvicorn's graceful-shutdown bound is this minus preStopSeconds and teardownSeconds. The catalog's and lineage's grace is derived instead: preStopSeconds + their `requestDeadlineSeconds` + teardownSeconds, so every request in flight when the pod is stopped is answered before SIGKILL.
   terminationGracePeriodSeconds: 40
   # -- Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed.
   maintenanceTerminationGracePeriodSeconds: 120
@@ -390,13 +378,15 @@ networkPolicy:
   # Extra `from` peers for the object-store policy — a client outside the release's component labels:
   # -- List of extra NetworkPolicy `from` peers allowed to reach the object store.
   objectStoreExtraFrom: []
+  # -- List of NetworkPolicy `from` peers allowed to scrape the in-chart OpenFGA's metrics port (2112): the platform's collector, e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]. Empty admits none.
+  openfgaMetricsFrom: []
   # Extra egress rules (verbatim NetworkPolicy egress entries) for every pod but the console, to an endpoint no value of
   # its own names: the platform's Postgres (age.externalHost) when OpenFGA runs in the chart. The API server, OpenFGA, the
   # secret store, the telemetry backend, the S3, the bus and the IdP take rules of their own, scoped to the pods that dial
   # them (`lance.platformEgress`).
   # -- List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination.
   extraEgress: []
-  # The pods that call the Kubernetes API (the token verifiers, the dev store's login reviews, the Collector's pod metadata,
+  # The pods that call the Kubernetes API (the token verifiers, the dev store's login reviews,
   # the snapshot CronJob) reach it through these rules and no other pod does. The API server is
   # Service-less from a policy's view: the CNI judges the endpoint after the `kubernetes` Service's translation, so
   # state the endpoints `kubectl get endpointslice -n default -l kubernetes.io/service-name=kubernetes` lists, at
@@ -479,7 +469,7 @@ auth:
     # -- The claims a person's subject is read from, the first the token carries winning (`RASK_OIDC_SUBJECT_CLAIMS`); empty is `sub` alone. Name another first where the provider's `sub` is not the stable id a grant needs (Entra's `oid`). Never set beside `connectors`; with `dex.enabled`, setting it reads the development Dex's people by subject instead of by connector.
     subjectClaims: []
     # -- How the issuer marks a token its client was issued for itself where its `sub` is not the client's id (`RASK_OIDC_CLIENT_MARKER`; `{claim: client_id}` for Keycloak's service accounts, `{claim: idtyp, value: app}` for Entra, an optional claim the tenant turns on, without which its apps read as people); never a claim every token carries; the client is named by the token's `client_id`, `azp` or `appid`. Empty, a token is a client's when its `sub` is the `client_id` it names (RFC 9068).
-    clientMarker: {}
+    clientMarker: {} # @schema additionalProperties: true
     # -- Further issuers people and clients sign in at beside `issuer` (`RASK_OIDC_PROVIDERS`), each `{issuer, idpId, discoveryUrl, subjectClaims, connectors, clientMarker}` read as the keys above: an https issuer named once, and idp ids no other issuer names. `egress` must admit each of them under `networkPolicy.enabled`.
     providers: []
     # A DEX THAT BROKERS SEVERAL UPSTREAM PROVIDERS may be named connector by connector instead ([[LH-063]]): the idp
@@ -489,7 +479,7 @@ auth:
     # The development Dex's one connector, its password database `local`, is `dex` whenever `dex.enabled`, this names
     # no `local` of its own and `subjectClaims` is empty.
     # -- The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes` and never ending in `-client`. With `dex.enabled` and no `subjectClaims` the development Dex's `local` connector is `dex` unless named here. Under it `idpId` names the issuer's clients alone.
-    connectors: {}
+    connectors: {} # @schema additionalProperties: true
   # Lock root (top-level) namespace/table creation to warehouse-create-grant holders.
   #
   # DELIBERATELY UNSET, and that is what makes the control work. A key here is a key `hasKey` finds,
@@ -581,7 +571,7 @@ vending:
   # catalog's role is the platform's. A warehouse create writes and reads back an object encrypted with it,
   # so a store without the grant is refused 400 rather than found at the first table's first write.
   # -- Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default.
-  encryption: {}
+  encryption: {} # @schema additionalProperties: true
   # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on create.
   # Off by default: (1) external bytes live outside the lakehouse (Lance's GC can't protect them, a source
   # delete dangles the pointer); (2) SSRF — a client-controlled pointer URI is fetched server-side by the
@@ -720,7 +710,7 @@ catalog:
   # namespaces and tables are never declared: they stay with their doors.
   declared:
     # -- Projects git declares, each `{id, admins, protected}`: `admins` lists people's principals (`<idp-id>~<user id>`), and a project naming none is administered by `auth.bootstrapAdmin` when that is set; `protected` arms its deletion protection. The default declares one project, so a one-team install never creates one.
-    projects:
+    projects: # @schema item: object; itemProperties: {"id": {"type": "string"}, "admins": {"type": "array", "items": {"type": "string"}}, "protected": {"type": "boolean"}}
       - id: default
     # -- Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it. The id is the first segment of every name in the warehouse.
     warehouses: []
@@ -1157,7 +1147,7 @@ objectStore:
       # -- The role the control-root backup's token is exchanged for (`backups.controlRoot`).
       backup-control-root: "arn:aws:iam::000000000000:role/rask-backup-control-root"
     # -- Store identities of the release's namespace outside the lakehouse's own workloads, as `{<ServiceAccount name>: [<policy statement>, ...]}`: each ServiceAccount is rendered with no token mounted, and on the development store the provisioning hook writes its statements as the canned policy its token's subject names, beside the workloads' own, so the hook's prune keeps it. Empty: no other identity holds a store session.
-    extra: {}
+    extra: {} # @schema additionalProperties: true
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   # -- The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox).
@@ -1397,7 +1387,7 @@ nats:
     # -- Longest a session the signer grants lives, in seconds: at least 60 and below the projected token's 600 s.
     sessionSeconds: 300 # @schema type: integer; minimum: 60; maximum: 599
     # -- Extra user grants keyed by a values flag path, or several joined by `,` that must all be true, merged into `nats.auth.users` only while the key holds (lance.natsTable).
-    flagged:
+    flagged: # @schema additionalProperties: true
       catalog.controlEmit:
         catalog:
           publish:
@@ -1423,7 +1413,7 @@ nats:
             - $JS.ACK.LINEAGE.maintenance-arrival.>
             - $JS.API.CONSUMER.INFO.LINEAGE.maintenance-arrival # the sampler's read of the lane's backlog
     # -- The bus user table, one user per connection a service opens (named by its app id) plus admin, monitor and object-store, each with publish and subscribe subject lists (never empty); a row supplied by values may name its `serviceAccount` to be a session user.
-    users:
+    users: # @schema skipProperties: true; additionalProperties: {"type": "object", "additionalProperties": false, "properties": {"publish": {"type": "array", "items": {"type": "string"}}, "subscribe": {"type": "array", "items": {"type": "string"}}, "serviceAccount": {"type": "string"}}}
       admin:
         publish:
           - $JS.API.INFO
@@ -1495,13 +1485,13 @@ nats:
 
 # === OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
 # datastore is the AGE Postgres (it's just postgres), so grants survive a restart. -----------------
-openfga:
+openfga: # @schema skipProperties: true; additionalProperties: true
   # -- Install the OpenFGA authorization server subchart, plus rask's migrate Job, authn subject ConfigMap and PodDisruptionBudget for it.
   enabled: true
   # -- Subchart passthrough: number of OpenFGA server replicas.
   replicaCount: 1
 
-  # TELEMETRY ([[XC-047]]). Metrics come from the Collector's `openfga` scrape job and are the
+  # TELEMETRY ([[XC-047]]). Metrics come from the platform's scrape of OpenFGA's metrics port and are the
   # STANDING signal. Tracing is a DEBUGGING tool here and is OFF by default, which is a measured
   # decision rather than timidity.
   #
@@ -1517,18 +1507,16 @@ openfga:
   # of 0.001 lands near 18 spans/s — comparable to the catalog's own share — and still traces one Check
   # every ~100 s, which is enough to see the shape of a resolution.
   #
-  # TO THE COLLECTOR, not to the store: the Collector's `otlphttp/traces` exporter adds
-  # `observability.export.traceHeaders`, a store's INGESTION requirement rather than an OTLP one, so
-  # OpenFGA speaks plain OTLP and the header is added downstream — which is the point of the
-  # Collector being the single seam.
-  # -- Subchart passthrough: OpenFGA OTLP tracing to the OTel Collector; off by default, ratio 0.001 because each Check emits ~1,900 spans.
+  # TO THE PLATFORM'S GATEWAY over OTLP/gRPC, which adds whatever its store requires; OpenFGA presents no token, so a
+  # gateway admits it on its own terms (the development Collector serves gRPC to the platform's own components).
+  # -- Subchart passthrough: OpenFGA OTLP tracing to the platform's gateway; off by default, ratio 0.001 because each Check emits ~1,900 spans.
   telemetry:
     trace:
       enabled: false
       otlp:
         # LITERAL, because Helm does not template values.yaml — a subchart's values are data, not a
-        # template. The estate already names in-cluster services this way (`http://rask-lineage:8000`).
-        endpoint: "rask-otel-collector:4317"
+        # template. The install names its gateway's OTLP/gRPC address (deploy/values-local.yaml names development's).
+        endpoint: ""
       # A NUMBER, not a string: the subchart's schema types this `null or number` and a quoted value
       # fails the render outright — the good failure, caught before deploy.
       sampleRatio: 0.001
@@ -1798,7 +1786,7 @@ openbao:
   # -- Port of the development store's Service.
   port: 8200
   # -- A client that reads the store under a role of its own, keyed by its app id `<app>`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`; the render refuses an app id that is no lowercase name, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-<name>`, `signing-key-<name>`, `signing-public-<name>`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `<release>-<app>` is ESO's; and a ServiceAccount the lakehouse renders or `default`.
-  externalReaders: {}
+  externalReaders: {} # @schema additionalProperties: true
   # EACH APP LOGS IN AS ITSELF ([[XC-165]], [[XC-199]]). Each lakehouse service logs in to the store with the store's
   # Kubernetes auth method (`externalSecrets.kubernetesAuthPath`), as the role `<release>-<app id>`, presenting a
   # ServiceAccount token the kubelet projects for `audience` into its pod, and reads its own secrets under the store token
@@ -1958,47 +1946,32 @@ allocator:
   arrowMemoryPool: system
 
 # ==== observability ==========================================================
-# rask's telemetry seam is ONE OpenTelemetry Collector (templates/otel-collector.yaml): it RECEIVES the lakehouse services'
-# OTLP, TAILS infra-pod logs (filelog), SCRAPES OpenFGA, and
-# EXPORTS everything over OTLP/HTTP to the endpoint named here. What stores, graphs and alerts on that telemetry is
-# the platform's (ADR 0153): rask installs no store, no dashboards and no alert evaluator. Its alert rules are an
-# artefact of their own (deploy/alerting/rules.yml), and development gets the chain from
-# deploy/fixtures/observability (GreptimeDB, Perses, vmalert, Alertmanager), which deploy/values-local.yaml names.
-#
-# THE AUDIT STORE'S CONTRACT, A PREREQUISITE LIKE ESO ([[XC-003]], owner 2026-10-10). Whatever store receives the
-# Collector's export (traces, metrics, and the `lance_audit` trail) must REFUSE an unauthenticated write and an
-# unauthenticated delete on every listener it serves, and admit the credential the Collector presents. The store is
-# downstream of the Collector and so not rask's to configure; what rask owns is the Collector's half: it sends HTTP
-# basic auth on every exporter, read from files ESO writes from the store's `otel-collector-export` secret (fields
-# username, password; the dev OpenBao mints it, a platform store must hold it). GAP, stated: the fixture's GreptimeDB
-# has no user provider, so it ignores the credential.
+# THE TELEMETRY PIPELINE IS THE PLATFORM'S (ADR 0153, ADR 0199): the Collector, the store, the dashboards, the alert
+# evaluator and how the audit trail is routed and kept. The product chart renders none of it. Each lakehouse service
+# exports its traces, metrics and logs over OTLP/HTTP to the endpoint named here, and its `lance.audit` records under
+# that instrumentation scope, which is what the platform routes the governance trail by. Every export presents the
+# pod's own projected ServiceAccount token for `identity.audience` as a bearer (`lakehouse.otlp_identity`), so the
+# platform's gateway verifies the sender against the cluster's issuer and no telemetry credential exists. rask's alert
+# rules are an artefact of their own (deploy/alerting/rules.yml). Development gets the platform's half from
+# deploy/fixtures/observability (a Collector that verifies the token, GreptimeDB, Perses, vmalert, Alertmanager),
+# which deploy/values-local.yaml names.
 observability:
-  # -- Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services and OpenFGA to it; needs `export.endpoint`.
+  # -- Turn on OTLP export from the lakehouse services to `export.endpoint`, and OpenFGA's tracing; needs `export.endpoint`.
   enabled: false
   # -- Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace.
   environment: rask # deployment.environment.name resource attr — override per deploy (dev / staging / prod)
-  otelCollector:
-    # -- Container image for the OTel Collector (contrib distribution).
-    image: otel/opentelemetry-collector-contrib:0.157.0
-  # Where the Collector sends what it collects. Every exporter presents the credential above. The headers are the
-  # backend's ingestion contract, not OTLP's, so the chart names none: the install sets its backend's, as the dev
-  # overlay sets GreptimeDB's (deploy/values-local.yaml). The audit trail leaves on its own exporter, so its headers can
-  # route the governance trail apart from telemetry, to be kept longer.
   export:
-    # -- OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render, and http on a real deployment.
+    # -- OTLP/HTTP base URL every service exports traces, metrics and logs to (`/v1/traces` etc. are appended): the platform's gateway. Required while `enabled`: empty fails the render, and http on a real deployment.
     endpoint: ""
-    # -- Headers sent on every export: the backend's ingestion contract, none by default (the dev overlay names GreptimeDB's).
-    headers: {}
-    # -- Headers added to the trace export.
-    traceHeaders: {}
-    # -- Headers added to the export of `lance.audit` records, which leave on their own exporter, so a backend can route the governance trail apart from telemetry.
-    auditHeaders: {}
-    # -- NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled.
+    # -- NetworkPolicy egress rules ({to, ports}) admitting the exporting services to the gateway at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled.
     egress: []
+  identity:
+    # -- Audience of the ServiceAccount token each service presents on every export; the platform's gateway admits a token for this audience from the cluster's issuer.
+    audience: rask-otlp
   # LANCE'S OWN PER-FILE RECORD ([[LH-232]]). pylance reads `LANCE_LOG` (env_logger syntax) and writes each event to
   # the container's stderr, outside OTLP: `lance::events::file_audit` one line per file it creates or deletes (mode,
   # type, path) and `lance::events::dataset_events` one per load, write, commit and cleanup (the dataset's URI). The
-  # Collector's filelog receiver keeps a lakehouse pod's stderr line that is not Python's (it starts with `[`), so the
+  # platform's log collector (the development gateway's filelog receiver) keeps a lakehouse pod's stderr line that is not Python's (it starts with `[`), so the
   # lines reach the general log table beside rask's own `lakehouse.file_audit` lines. Measured on pylance 13.0.0: a
   # cleanup writes a delete line per data and manifest file with its path and none for a transaction file it removes,
   # and a create line names its file bare (a manifest's by a placeholder), so the record is whole for data files and manifests.

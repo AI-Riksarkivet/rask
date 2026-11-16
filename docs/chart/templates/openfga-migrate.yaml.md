@@ -24,3 +24,12 @@ value ([[XC-081]]). `openfga migrate` reads `datastore.uri` from `/etc/openfga/c
 ## `- { name: HOME, value: /tmp }`
 
 HOME on the tmp emptyDir: this container now runs with a read-only rootfs, and the CLI writes under $HOME.
+
+## `name: {{ include "lance.fullname" . }}-openfga-migrate-{{ $spec | sha256sum | trunc 8 }}`
+
+The Job is named by a digest of its own rendered spec (`lance.openfgaMigrateSpec`: the image, the datastore it reaches,
+its arguments), so an upgrade that changes none of them leaves the same object in place and runs nothing, and one that
+changes any of them creates the next Job (XC-160), under Helm and under Argo CD alike: it is an ordinary object to both,
+with no hook annotation (a hook runs on every sync whatever its name) and no TTL (a reaped Job would be created and run
+again by the next upgrade). The finished Job stays until its inputs change, when the release removes it for the next.
+Pinned by `tests/unit/test_an_upgrade_that_changes_no_input_of_the_migration_runs_none.py`.

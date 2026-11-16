@@ -16,9 +16,9 @@ spec:
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: catalog
-        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
+        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP), so a platform collector can drop the file-tailed copy
     spec:
-      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ include "lance.deadlineGrace" (list . .Values.catalog.requestDeadlineSeconds) }}
       {{- if .Values.podDisruptionBudget.enabled }}
       {{- include "lance.spreadConstraints" "catalog" | nindent 6 }}
       {{- end }}
@@ -42,7 +42,7 @@ spec:
             - {{ .Values.services.catalog.module | quote }}
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.catalog.port }}"
-            {{- include "rask.shutdownArg" . | nindent 12 }}
+            {{- include "rask.shutdownArg" (list . (include "lance.deadlineGrace" (list . .Values.catalog.requestDeadlineSeconds) | int)) | nindent 12 }}
             {{- include "rask.proxyHeaderArgs" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.catalog.port }} }]
           env:
@@ -149,6 +149,7 @@ spec:
             {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
             {{- include "lance.identityTokens" (list "mounts" (include "lance.objectStoreAudience" .)) | nindent 12 }}
             {{- include "lance.busIdentity" (list $root "mounts") | nindent 12 }}
+            {{- include "lance.otlpIdentity" (list $root "mounts") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.services.catalog.appId "volumes") | nindent 8 }}
@@ -159,6 +160,7 @@ spec:
         {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
         {{- include "lance.identityTokens" (list "volumes" (include "lance.objectStoreAudience" .)) | nindent 8 }}
         {{- include "lance.busIdentity" (list $root "volumes") | nindent 8 }}
+        {{- include "lance.otlpIdentity" (list $root "volumes") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service
@@ -190,9 +192,9 @@ spec:
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: lineage
-        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
+        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP), so a platform collector can drop the file-tailed copy
     spec:
-      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ include "lance.deadlineGrace" (list . .Values.services.lineage.requestDeadlineSeconds) }}
       {{- if .Values.podDisruptionBudget.enabled }}
       {{- include "lance.spreadConstraints" "lineage" | nindent 6 }}
       {{- end }}
@@ -216,7 +218,7 @@ spec:
             - {{ .Values.services.lineage.module | quote }}
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.lineage.port }}"
-            {{- include "rask.shutdownArg" . | nindent 12 }}
+            {{- include "rask.shutdownArg" (list . (include "lance.deadlineGrace" (list . .Values.services.lineage.requestDeadlineSeconds) | int)) | nindent 12 }}
             {{- include "rask.proxyHeaderArgs" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.lineage.port }} }]
           env:
@@ -280,12 +282,14 @@ spec:
             {{- include "lance.storeIdentity" (list $root .Values.services.lineage.appId "mounts") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "lineage") | nindent 12 }}
             {{- include "lance.busIdentity" (list $root "mounts") | nindent 12 }}
+            {{- include "lance.otlpIdentity" (list $root "mounts") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.services.lineage.appId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "lineage") | nindent 8 }}
         {{- include "lance.busIdentity" (list $root "volumes") | nindent 8 }}
+        {{- include "lance.otlpIdentity" (list $root "volumes") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

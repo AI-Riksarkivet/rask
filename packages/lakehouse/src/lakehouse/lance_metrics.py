@@ -3,7 +3,7 @@
 pylance ≥ 9.0 ships ``lance.otel.instrument_lance_metrics()`` (the ``pylance[otel]`` extra), which
 registers Lance's Rust-side object-store/IO metrics as observable instruments on the global
 ``MeterProvider`` — the one ``opentelemetry-instrument`` already installs in every deployed service,
-so the metrics flow through the existing OTLP export to the OTel Collector with zero new config.
+so the metrics flow through the existing OTLP export to the platform's OTLP gateway with zero new config.
 
 The lock pins pylance 13.0.0, so the bridge is live in the catalog and maintenance, its two callers; the
 import guard stays because a consumer resolving pylance < 9 must degrade to a logged no-op, not fail

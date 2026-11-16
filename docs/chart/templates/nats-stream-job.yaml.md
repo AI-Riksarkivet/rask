@@ -195,7 +195,9 @@ since RustFS 1.0.3 refuses a stream whose window is shorter (274 s at its 30 s a
 event is a hint: the table's daily recheck finds what a lost one would have reported. So the stream drops its oldest
 events past `maintenance.queue.storeEventsMaxBytes` (`discard` old) rather than refusing the store, because it shares
 the bus's JetStream disk with LINEAGE and the work queue, and a long maintenance outage must not fill that disk for
-them. One event is about 2 KB (RustFS 1.0.3), so the default 128 MiB holds about 65,000.
+them. One event is about 2 KB (RustFS 1.0.3), so the default 128 MiB holds about 65,000. It is declared whenever the
+release runs the development store as well as whenever maintenance runs: the store publishes as the bus user the
+release issues it, and with no stream behind the subject its publishes are refused and its own outbound queue fills.
 
 ## `declare_stream CATALOG_CONTROL "catalog.control.>"`
 

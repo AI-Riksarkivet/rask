@@ -1,7 +1,7 @@
 # Alert rules for the Lance-lakehouse estate, in Prometheus rule-file format: an artefact the platform's
 # evaluator loads (vmalert, Prometheus, a GreptimeDB ruler), never part of the rask chart. In development the
 # observability fixture's vmalert loads this file (deploy/fixtures/observability) against its GreptimeDB's PromQL
-# endpoint and routes through Alertmanager. Every metric below is one this estate emits through the OTel Collector.
+# endpoint and routes through Alertmanager. Every metric below is one this estate's services export to the platform's OTLP gateway.
 # Proven to FIRE on synthetic series by rules_test.yml (`make alert-rules-check` → promtool), and accepted by the
 # GreptimeDB engine by `make alert-rules-drill` (docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md).
 # The point: these turn SILENT failures (data quietly stops flowing) into a page. See docs/runbooks/RUNBOOK-oncall.md.

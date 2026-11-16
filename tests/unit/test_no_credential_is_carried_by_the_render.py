@@ -45,11 +45,15 @@ def test_a_cluster_less_render_mints_no_credential(overlay: str) -> None:
 
 
 def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
-    """A credential the chart once read from a value is refused, by name, on any render."""
+    """A credential passed as a value is refused, by name, on any render: no credential is a key `values.yaml` declares, and
+    the schema refuses a key it does not declare at every level, before anything is stored in the release."""
     with pytest.raises(subprocess.CalledProcessError) as refused:
         render_text(*DEFAULT_ARGS, "--set-string", "age.password=a-password", "--set-string", "objectStore.secretKey=a-root-secret")
 
-    assert "A CREDENTIAL IS NOT A CHART VALUE: age.password, objectStore.secretKey." in refused.value.stderr
+    assert sorted(line for line in refused.value.stderr.splitlines() if "additional properties" in line) == [
+        "- at '/age': additional properties 'password' not allowed",
+        "- at '/objectStore': additional properties 'secretKey' not allowed",
+    ]
 
 
 @pytest.mark.parametrize(

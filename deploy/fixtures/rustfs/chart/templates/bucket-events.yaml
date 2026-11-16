@@ -24,9 +24,16 @@ data:
     set -eu
     config='{"QueueConfigurations":[{"Id":"store-events","QueueArn":"arn:rustfs:sqs::primary:nats","Events":["s3:ObjectCreated:*"]}]}'
     buckets=$(aws s3api list-buckets --query 'Buckets[].Name' --output text)
+    failed=""
     for bucket in $buckets; do
-      aws s3api put-bucket-notification-configuration --bucket "$bucket" --notification-configuration "$config"
+      if ! out=$(aws s3api put-bucket-notification-configuration --bucket "$bucket" --notification-configuration "$config" 2>&1); then
+        case "$out" in
+          *NoSuchBucket*) echo "skipped $bucket: deleted since the listing" ;;
+          *) echo "$bucket: $out" >&2; failed="$failed $bucket" ;;
+        esac
+      fi
     done
+    [ -z "$failed" ] || { echo "bucket events not configured on:$failed" >&2; exit 1; }
     echo "bucket events configured on: $buckets"
 ---
 apiVersion: batch/v1

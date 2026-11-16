@@ -83,18 +83,19 @@ catalog:
 
 # The telemetry chain is the platform's (ADR 0153); on a dev estate it is the observability fixture
 # (deploy/fixtures/observability, namespace `observability`), which `make k3s-up` installs first.
+# Each service exports to the fixture's Collector, the stand-in for a platform's OTLP gateway: it verifies the token every
+# export presents and routes the signals and the audit trail into GreptimeDB.
 observability:
   enabled: true
   export:
-    endpoint: http://greptimedb.observability:4000/v1/otlp
-    # GreptimeDB's ingestion contract, the fixture's backend: the database every signal lands in, the pipeline traces
-    # are ingested through, and the audit trail's own table (each verified against GreptimeDB v1.1.1).
-    headers:
-      x-greptime-db-name: public
-    traceHeaders:
-      x-greptime-pipeline-name: greptime_trace_v1
-    auditHeaders:
-      x-greptime-log-table-name: lance_audit
+    endpoint: http://otel-collector.observability:4318
+# OpenFGA's tracing stays off (values.yaml `openfga.telemetry`); turned on while diagnosing, it sends to the fixture
+# Collector's OTLP/gRPC receiver.
+openfga:
+  telemetry:
+    trace:
+      otlp:
+        endpoint: otel-collector.observability:4317
 
 # The bus is the platform's (ADR 0153); on a dev estate it is the nats fixture (deploy/fixtures/nats, release `nats`
 # in this namespace), which `make k3s-up` installs first, in operator mode (`nats.auth.server`, the Makefile's

@@ -1,4 +1,5 @@
 {{- if .Values.openfga.enabled }}
+{{- $spec := include "lance.openfgaMigrateSpec" . }}
 # OpenFGA schema migration against the AGE Postgres (the chart's bundled migrate is broken in 0.3.9 —
 # it fails to pass the datastore flags). Waits for Postgres (nc succeeds only once initdb has created
 # the openfga db and TCP is open), then runs `openfga migrate` with explicit flags (idempotent).
@@ -11,15 +12,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "lance.fullname" . }}-openfga-migrate-{{ include "rask.bootstrapRev" . }}
+  name: {{ include "lance.fullname" . }}-openfga-migrate-{{ $spec | sha256sum | trunc 8 }}
   labels: {{- include "lance.labels" . | nindent 4 }}
-  annotations:
-    {{- include "lance.reconciledJob" "Sync" | nindent 4 }}
+{{ $spec }}
+{{- end }}
+{{- define "lance.openfgaMigrateSpec" -}}
 spec:
-  # Reap the finished pod. Each revision's job carries a -r<revision> name, so Helm's
-  # before-hook-creation delete policy never matches the previous one — without a TTL every
-  # `helm upgrade` left another Completed husk behind (14 were sitting in `kubectl get pods`).
-  ttlSecondsAfterFinished: 3600
   {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
   backoffLimit: 30
   template:

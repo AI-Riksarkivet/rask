@@ -495,7 +495,7 @@ DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
 # given the issuer rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's; observability is
-# the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to.
+# the OTLP gateway every service exports to (its Collector), the store, dashboards and alerting; marquez is the graph lineage forwards to.
 FIXTURES ?= external-secrets nats cloudnative-pg dex rustfs openbao observability marquez
 
 # The dev estate's bus enforces what a platform's does: operator mode, TLS on the client port and the stand-in signer

@@ -247,6 +247,7 @@ nav = [
       { "Durability" = "DURABILITY.md" },
       { "Resilience" = "RESILIENCE.md" },
       { "CNPG + AGE" = "CNPG-AGE.md" },
+      { "Production Install Runbook" = "runbooks/RUNBOOK-prod-install.md" },
       { "On-call Runbook" = "runbooks/RUNBOOK-oncall.md" },
       { "Backup & Restore Runbook" = "runbooks/RUNBOOK-restore.md" },
     ]},

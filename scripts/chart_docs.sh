@@ -21,9 +21,11 @@ fi
 generated="$(mktemp)"
 schema="$(mktemp)"
 trap 'rm -f "$generated" "$schema"' EXIT
-# The root refuses a key values.yaml does not declare, so a value the chart stopped reading, or a misspelt one, fails
-# the render instead of riding along in the release unread ([[XC-194]]). The generator adds Helm's own `global` key.
-"$HELM_SCHEMA" --use-helm-docs --schema-root.additional-properties=false --values "$CHART/values.yaml" --output "$schema" >/dev/null
+# Every object refuses a key values.yaml does not declare, at the root and at every depth, so a value the chart stopped
+# reading, or one misspelt anywhere, fails the render instead of riding along in the release unread ([[XC-194]], XC-086).
+# A map whose keys are the installer's (a bus user, a client's reader, a subchart's passthrough) opens itself with a
+# `# @schema` annotation in values.yaml. The generator adds Helm's own `global` key.
+"$HELM_SCHEMA" --use-helm-docs --schema-root.additional-properties=false --no-additional-properties --values "$CHART/values.yaml" --output "$schema" >/dev/null
 # --dry-run prints the README on stdout and logs on stderr. -c/-g name the one chart, so the vendored
 # subcharts under chart/charts are not documented in its place.
 "$HELM_DOCS" --chart-search-root "$CHART" --chart-to-generate "$CHART" --dry-run --log-level error > "$generated"

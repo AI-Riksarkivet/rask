@@ -130,3 +130,4 @@ forgotten  # unused variable (services/maintenance/src/maintenance/services/comm
 deleting_by  # unused variable (services/catalog/src/catalog/services/control_records.py, ProjectRecord: read by the key DELETING_BY)
 put_policy  # unused function (packages/lakehouse/src/lakehouse/maintenance_policies.py: the seeding write tests arrange a stored policy with)
 dataschema  # unused variable (packages/lakehouse/src/lakehouse/cloud_events.py, CloudEvent: a CloudEvents attribute, serialized by as_wire)
+reset_circuit  # unused function (packages/lakehouse/src/lakehouse/governed/fga.py: the root conftest gives each test a closed circuit with it)

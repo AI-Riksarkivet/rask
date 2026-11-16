@@ -7,7 +7,7 @@ templates. Each section is headed by the template line it explains.
 
 Durable retention: a post-install/post-upgrade Helm hook that sets a database-level TTL on
 GreptimeDB's `public` database (observability.dbName). Every table inherits the DB TTL
-unless it sets its own — the OTel Collector's filelog `opentelemetry_logs`,
+unless it sets its own — the gateway Collector's `opentelemetry_logs`,
 `opentelemetry_traces`, and the metrics physical table — so all
 three signals age out at observability.retention instead of growing forever on the single
 local disk. Idempotent: ALTER DATABASE just re-sets the value on every upgrade. It runs as

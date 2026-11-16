@@ -4,7 +4,6 @@
 {{- $natsUsers := include "lance.natsStaticUsers" . | splitList " " | compact }}
 {{- $natsSessions := include "lance.natsSessionUsers" . | splitList " " | compact }}
 {{- $natsTable := include "lance.natsTable" . | fromJson }}
-{{- $otelSeed := .Values.observability.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -448,14 +447,6 @@ data:
     bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \
       object-store-secret-key=@"$G/object-store-secret-key" >/dev/null
     echo "seeded secret/object-store-root into OpenBao"
-    {{- end }}
-    {{- if $otelSeed }}
-    c="$HOME/seed/otel-collector-export"
-    if [ ! -s "$c" ]; then
-      if svc_get otel-collector-export password; then v=$got; else v=$(head -c 30 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'); fi
-      (umask 077; printf '%s' "$v" > "$c")
-    fi
-    bao kv put secret/otel-collector-export username=otel-collector password=@"$c" >/dev/null
     {{- end }}
     i="$HOME/seed/commit-id-key"
     if [ ! -s "$i" ]; then

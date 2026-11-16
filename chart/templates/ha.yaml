@@ -5,33 +5,14 @@
 {{- $svc := index $.Values.services $name }}
 {{- $bounds := include "lance.replicaBounds" (list $ $svc) | fromJson }}
 {{- if gt (int $bounds.min) 1 }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "lance.fullname" $ }}-{{ $name }}
-  labels: {{- include "lance.labels" $ | nindent 4 }}
-spec:
-  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      app.kubernetes.io/component: {{ $name }}
-      app.kubernetes.io/instance: {{ $.Release.Name }}
+{{- include "lance.pdb" (list $ $name) }}
 {{- end }}
 {{- end }}
 {{- if and .Values.maintenance.enabled (gt (int .Values.maintenance.worker.replicas) 1) }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "lance.fullname" . }}-maintenance-worker
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      app.kubernetes.io/component: maintenance-worker
-      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- include "lance.pdb" (list . "maintenance-worker") }}
+{{- end }}
+{{- if and .Values.console.enabled (gt (int .Values.console.replicas) 1) }}
+{{- include "lance.pdb" (list . "console") }}
 {{- end }}
 {{- if .Values.openfga.enabled }}
 ---

@@ -8,7 +8,7 @@ GreptimeDB store, not mocks:
   1. Durable provenance                    — the create's event landed on lineage's feed (the pipeline actually works)
   2. The custom domain metric in GreptimeDB — lineage_events_processed_total by lance_lineage_outcome went UP
   3. A distributed trace in GreptimeDB      — ONE trace spans catalog → its publish on the bus → lineage → its feed write
-  4. Logs in GreptimeDB                      — apps (OTLP) + infra (Collector filelog) → opentelemetry_logs
+  4. Logs in GreptimeDB                      — apps (OTLP) + infra (the gateway's filelog) → opentelemetry_logs
 
 Run (port-forward the three services first), or `make e2e-obs`:
 
@@ -210,13 +210,13 @@ def test_distributed_trace_spans_catalog_to_lineage(pipeline_run: dict[str, Any]
 @pytest.mark.usefixtures("pipeline_run")
 def test_logs_populated() -> None:
     """4. Both log paths land in GreptimeDB's `opentelemetry_logs` — OTel-first, one table:
-    the apps push OTLP logs (trace-correlated) directly, and the OTel Collector's filelog receiver
-    tails the no-SDK infra pods into the SAME table (Vector is gone; there is no more `lance_logs`)."""
+    the apps export OTLP logs (trace-correlated) as themselves to the gateway, and the gateway's filelog receiver
+    (the observability fixture's Collector) tails the no-SDK infra pods into the SAME table."""
 
     def app_and_infra_logs_present() -> bool | None:
         # opentelemetry_logs has no top-level service_name column (service.name lives in resource_attributes);
         # distinguish the two paths by trace_id instead. App OTLP logs are emitted inside a span → carry a
-        # trace_id; the Collector's file-tailed infra logs have no span context → no trace_id. Both present in
+        # trace_id; the gateway's file-tailed infra logs have no span context → no trace_id. Both present in
         # the ONE table proves both paths landed (Vector is gone — its lance_logs table no longer exists).
         #
         # THE INFRA HALF IS A SUBTRACTION, because GreptimeDB cannot answer it directly. `trace_id` is

@@ -251,10 +251,18 @@ def test_an_image_reference_that_helm_parsed_as_a_number_is_refused_at_render(ke
     [
         pytest.param("undeclared:\n  enabled: true\n", r"\(root\)|at ''", id="top-level-key"),
         pytest.param("image:\n  tags:\n    undeclared: x\n", r"image\.tags|at '/image/tags'", id="image-the-chart-renders-none-of"),
+        pytest.param("age:\n  undeclared: oops\n", r"(?<![a-z])age|at '/age'", id="a-misspelt-key-of-a-block"),
+        pytest.param("lifecycle:\n  undeclared: 1\n", r"lifecycle|at '/lifecycle'", id="a-misspelt-lifecycle-number"),
+        pytest.param(
+            "nats:\n  auth:\n    users:\n      catalog:\n        undeclared: [x]\n",
+            r"nats\.auth\.users|at '/nats/auth/users",
+            id="a-misspelt-field-of-a-bus-user",
+        ),
     ],
 )
 def test_a_values_file_naming_what_the_chart_does_not_declare_fails_the_render(tmp_path: Path, values: str, node: str) -> None:
-    """[[XC-194]]: a key the chart stopped reading, kept by a release or an overlay, is refused rather than carried unread.
+    """[[XC-194]], XC-086: a key the chart stopped reading, kept by a release or an overlay, or a key misspelt at any depth, is
+    refused rather than carried unread.
 
     Measured 2026-11-06 at rask helm revision 12: the live release held top-level keys of departed clients and image tags
     of departed images that no template read, and nothing refused them. The values schema's root admits only the keys
@@ -669,20 +677,8 @@ def test_the_one_read_only_window_reaches_every_lakehouse_service(window: tuple[
 #: Deployments this gate does NOT cover, enumerated from an actual render rather than guessed.
 #: Matched as substrings of the rendered name, like the sibling gates in this file.
 #:
-#: Two different reasons, kept apart on purpose:
-#:
-#:  * SUBCHARTS AND FIXTURES — nats, openfga, dex, rustfs. Not ours to template,
-#:    so not ours to harden.
-#:  * INFRA PODS WE DO TEMPLATE — the OTel collector. Its securityContext is gated behind
-#:    `security.infraContexts.enabled`, which values.yaml defaults OFF and stages explicitly:
-#:    "both default OFF (behavior-identical); flip after the §7a live checks". That is a known,
-#:    sequenced decision with its own live-check step, not an oversight, so this gate must not
-#:    silently pre-empt it. It is listed HERE, visibly, rather than being missing from a
-#:    hand-written first-party tuple where nobody could tell the difference.
-_UNCOVERED_DEPLOYMENTS = (
-    "nats", "openfga", "dex", "rustfs",
-    "otel-collector",
-)  # fmt: skip
+#: SUBCHARTS AND FIXTURES — nats, openfga, dex, rustfs. Not ours to template, so not ours to harden.
+_UNCOVERED_DEPLOYMENTS = ("nats", "openfga", "dex", "rustfs")
 
 
 def _first_party_deployments(docs: list[dict]) -> list[dict]:

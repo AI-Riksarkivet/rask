@@ -63,7 +63,9 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   that trust and those policies; on AWS it is an IAM OIDC provider and one role per account
   (`objectStore.identity.roleArns.<component>`), its trust policy naming the subject and its permission policy the
   ConfigMap's document.
-- `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector.
+- `postgres` (field `password`), read by ESO for the AGE server and OpenFGA.
+- `commit-id-key` (field `key`, 32 random bytes as hex), read by the catalog alone: the key it derives every
+  announcement's run id under (LH-497). It is never rotated, and the catalog is not Ready until it reads one.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
   every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
   `signing:`; the render refuses the platform's store until its operator created them and `signing.provisioned` says so.
@@ -72,8 +74,8 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   `nats-callout`, in operator mode). A session user (a row with a `serviceAccount`: every lakehouse pod and the stream
   Job) has no secret: it presents its projected ServiceAccount token to the bus. `nats.auth.provisioned` attests that the
   platform's signer admits each session user and that the static users' secrets exist.
-- With the in-chart Collector, `otel-collector-export` (fields username, password), the credential the audit store
-  admits. A multibase data base holds none: it is its
+- No telemetry credential is a secret: each service presents its pod's ServiceAccount token for
+  `observability.identity.audience` to the platform's OTLP gateway (ADR 0215). A multibase data base holds none: it is its
   tables' storage on the estate's store, reached under the catalog's own identity ([[LH-286]]).
 
 No secret holds a store root: rask presents none in production, and on the dev store the root sits at
@@ -116,6 +118,15 @@ them would delete every CNPG CRD, and every `Cluster` with them, on uninstall.
 The version rask is tested against is in `deploy/fixtures/cloudnative-pg` (the development install `make k3s-up` runs,
 release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs applied server-side from
 `chart/crds-bootstrap/` by `make k3s-crds` before it. The path itself needs CNPG >= 1.27 and Kubernetes 1.33+.
+
+## Prerequisite: an OTLP gateway, with `observability.enabled`
+
+Each lakehouse service exports its telemetry as itself, and the chart renders no Collector (ADR 0215). With
+`observability.enabled` the platform provides an **OTLP/HTTP gateway** at `observability.export.endpoint` that
+verifies ServiceAccount tokens of `observability.identity.audience` (default `rask-otlp`) signed by the cluster's
+issuer, routes the `lance.audit` instrumentation scope to a store that refuses unauthenticated writes and deletes, and
+admits that scope only from the lakehouse's own ServiceAccounts (`system:serviceaccount:<namespace>:<release>-sa-catalog`, `-sa-lineage`, `-sa-maintenance`), since any ServiceAccount of the cluster can ask for a token of the audience.
+Development's is the observability fixture's Collector; see *Observability* below.
 
 ## Prerequisites in production: OpenFGA and its Postgres
 
@@ -287,7 +298,6 @@ address, token, scrape job, alert or network peer (ADR 0189).
   OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA); see *Prerequisites in production*.
 - **Its own configuration of what it does not run**: the NATS stream
   Job (its streams and durable consumers), the ExternalSecrets and SecretStore, the object store's bucket and user hooks, and the dev OpenBao's seed scripts.
-- **The OTel Collector**, with `observability.enabled` (see below).
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
 `deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, NATS, the CloudNativePG operator,
@@ -333,24 +343,29 @@ the empty string disables dynamic provisioning, which is why the templates use `
 
 ### Observability (`observability.enabled`)
 
-rask's telemetry seam is one **OTel Collector** (`chart/templates/otel-collector.yaml`, `rask-otel-collector`),
-the **single log shipper** (Vector retired, owner ruling 2026-07-27). It receives the fleet's OTLP, tails
-infra-pod logs (filelog), scrapes OpenFGA, and exports
-everything over OTLP/HTTP to **`observability.export.endpoint`**, with the backend's ingestion headers from
-`observability.export.{headers,traceHeaders,auditHeaders}` and HTTP basic auth from the store's
-`otel-collector-export` secret (via ESO, as mounted files).
+The product chart renders **no OTel Collector** (ADR 0215). Each lakehouse service (catalog, lineage,
+maintenance-worker) exports traces, metrics and logs over OTLP/HTTP to **`observability.export.endpoint`**, the
+platform's OTLP gateway, as itself: every export carries the pod's projected ServiceAccount token for
+`observability.identity.audience` (default `rask-otlp`) as a bearer, read from file on each request by the OTel SDK
+credential entry point `rask_service_account` (`lakehouse.otlp_identity`). No telemetry secret exists. The governance
+trail rides the same export under the `lance.audit` instrumentation scope.
 
-**The store, dashboards and alerting are a prerequisite, not part of the chart** (ADR 0153). A platform names
-its OTLP backend in `observability.export.endpoint` (values-prod leaves it empty and the render refuses
-that, and an http one on a real deployment, since the Collector sends it the export credential with every batch), and loads rask's alert rules, **`deploy/alerting/rules.yml`** (Prometheus rule-file format; proven by
+**The gateway, store, dashboards and alerting are a prerequisite, not part of the chart** (ADR 0153). A platform
+provides an **OTLP/HTTP gateway** that verifies ServiceAccount tokens of `observability.identity.audience` signed by the
+cluster's issuer, routes the `lance.audit` scope to a store that refuses unauthenticated writes and deletes, and
+admits that scope only from the lakehouse's own ServiceAccounts (`system:serviceaccount:<namespace>:<release>-sa-catalog`, `-sa-lineage`, `-sa-maintenance`), since any ServiceAccount of the cluster can ask for a token of the audience; it also
+ships pod logs and scrapes OpenFGA as it sees fit. The install names the gateway in `observability.export.endpoint`
+(values-prod leaves it empty and the render refuses that, and an http one on a real deployment, since every export
+carries a bearer token), and the platform loads rask's alert rules, **`deploy/alerting/rules.yml`** (Prometheus rule-file format; proven by
 `make alert-rules-check` and replayed against GreptimeDB by `make alert-rules-drill`), into its own
 evaluator. The store must meet the audit store's contract in `chart/values.yaml` `observability`.
 
 **Development** gets the chain from the `observability` fixture (`deploy/fixtures/observability`, release
-`observability` in namespace `observability`, installed by `make k3s-up`), which `deploy/values-local.yaml` names:
+`observability` in namespace `observability`, installed by `make k3s-up`), whose gateway `deploy/values-local.yaml` names:
 
 | Component | Version | Service | Role |
 |---|---|---|---|
+| **OTel Collector** (the gateway) | contrib 0.157.0 | `otel-collector.observability:4318` (OTLP/HTTP), `:4317` (OTLP/gRPC) | Admits an export on 4318 only with a token of the audience from the cluster's issuer (oidc extension), routes `lance.audit` to GreptimeDB's `lance_audit`, tails pod logs, scrapes OpenFGA; 4317 takes OpenFGA's traces and feeds no log pipeline (`deploy/fixtures/observability/docs/collector.yaml.md`) |
 | **GreptimeDB** | `greptimedb-standalone` 0.4.5 (app 1.1.1) | `greptimedb.observability:4000` | Metrics/logs/traces store on a local volume: OTLP at `/v1/otlp`, PromQL at `/v1/prometheus`, SQL at `/v1/sql`; a retention Job sets the database and audit-table TTLs |
 | **Perses** | 0.22.0 | `perses.observability:8080` | rask's dashboards-as-code over GreptimeDB's PromQL |
 | **vmalert** | v1.106.1 | `observability-vmalert:8880` | Evaluates `deploy/alerting/rules.yml` (passed with `--set-file`) |
@@ -359,9 +374,9 @@ evaluator. The store must meet the audit store's contract in `chart/values.yaml`
 **App instrumentation:** the chart launches each lakehouse service under `opentelemetry-instrument`
 when telemetry is on, so each service roots or continues the trace of every request the cluster route hands it. It wires both **traces** and **RED
 metrics**: the FastAPI/HTTPX instrumentation emits `http.server.*`/`http.client.*` request count,
-duration, and active-request metrics automatically. Every plane exports plain OTLP/HTTP to the
-Collector (`OTEL_EXPORTER_OTLP_ENDPOINT` when `observability.enabled=true`) and names
-no store; the Collector adds the backend's headers. When the toggle is off the env vars are absent and
+duration, and active-request metrics automatically. Every service exports plain OTLP/HTTP to the
+gateway (`OTEL_EXPORTER_OTLP_ENDPOINT` when `observability.enabled=true`) and names
+no store; the gateway adds whatever its store needs. When the toggle is off the env vars are absent and
 instrumentation is a no-op. Standard OTLP throughout; OTel-Arrow is not used (the Python SDK lacks OTAP support).
 
 Greenfield local cutover (drops old PVCs): `make k3s-purge && make k3s-up`.

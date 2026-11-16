@@ -147,9 +147,11 @@ spec:
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 12 }}
             {{- include "lance.storeIdentity" (list . .Values.maintenance.appId "mounts") | nindent 12 }}
             {{- include "lance.busIdentity" (list $root "mounts") | nindent 12 }}
+            {{- include "lance.otlpIdentity" (list $root "mounts") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.maintenance.appId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
         {{- include "lance.busIdentity" (list $root "volumes") | nindent 8 }}
+        {{- include "lance.otlpIdentity" (list $root "volumes") | nindent 8 }}
 {{- end }}

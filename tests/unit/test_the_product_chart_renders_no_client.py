@@ -29,11 +29,6 @@ import pytest
 from tests.unit.chart_render import DEFAULT_ARGS, PROD_ARGS, REPO, render
 
 
-#: A deployed release's values can hold a key a client once owned: revision 35's (`helm get values rask`, 2026-11-02)
-#: held the inbox's email channel under `services.notifications`. The deployed overlay carries it, so such a key is shown
-#: to render nothing.
-_STALE_CLIENT_VALUES = '{"channels":{"email":{"enabled":true,"host":"rask-mailpit","port":1025,"secretName":"notifications-smtp"}}}'
-
 _OVERLAYS: dict[str, tuple[str, ...]] = {
     "default": DEFAULT_ARGS,
     "deployed": (
@@ -41,8 +36,6 @@ _OVERLAYS: dict[str, tuple[str, ...]] = {
         "image.localImages=true",
         "-f",
         str(REPO / "deploy/values-local.yaml"),
-        "--set-json",
-        f"services.notifications={_STALE_CLIENT_VALUES}",
     ),
     "prod": PROD_ARGS,
 }

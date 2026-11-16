@@ -3,19 +3,19 @@
 Rationale for `chart/templates/prod-credentials.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- $v := .Values.AsMap -}}`
+## `{{- if include "rask.isRealDeployment" . -}}`
 
 CREDENTIALS — no chart value carries one, and a real deployment carries no published dev secret.
 
 Renders no object: it exists only to fail a render that
 would otherwise install cleanly and be indefensible afterwards.
 
-1. A CREDENTIAL PASSED AS A VALUE IS REFUSED ON EVERY RENDER ([[XC-004]]). A value is stored in the
-release (`helm get values`), in every revision kept, and readable by anyone who can read the release, so
-a secret there is a secret at rest outside the store. Every credential the estate uses is a field of the
-store: the dev OpenBao's are generated in-cluster (external-secrets.yaml), a real deployment's are
-provisioned by the platform. The keys below are the ones this chart once read; each refusal names the
-store field that replaced it. `make k3s-converge` strips them from the release it carries forward.
+1. A CREDENTIAL PASSED AS A VALUE IS REFUSED ON EVERY RENDER ([[XC-004]]), by the values schema rather than here: no
+credential is a key `values.yaml` declares, and the schema refuses an undeclared key at every depth (XC-086), naming it
+before anything is stored. A value is stored in the release (`helm get values`), in every revision kept, and readable by
+anyone who can read the release, so a secret there would be a secret at rest outside the store. Every credential the
+estate uses is a field of the store: the dev OpenBao's are generated in-cluster (external-secrets.yaml), a real
+deployment's are provisioned by the platform.
 
 2. A REAL DEPLOYMENT carries no published dev secret. The condition comes from `rask.isRealDeployment`,
 so this template and the root-create lock (services.yaml, F2-11) cannot answer "is this real?"
@@ -64,12 +64,12 @@ A PLATFORM ADDRESS THE CHART NAMES IS HTTPS ON A REAL DEPLOYMENT. Each hop is li
 - `vending.endpoint`: every vended session's requests and the tables' bytes. The vend sets `allow_http=true` whenever
   its endpoint's scheme is http (`lakehouse.endpoint_scheme.allow_http_for`), which turns off Lance's TLS-only default
   for that client (`lance_docs/lance/guide/object_store.md`: `allow_http`, default `False`).
-- `observability.export.endpoint`, read while `observability.enabled`: the export credential, which the Collector's
-  basic auth sends with every batch (`otel-collector.yaml`).
+- `observability.export.endpoint`, read while `observability.enabled`: each exporting service's projected
+  ServiceAccount token for `observability.identity.audience`, which it sends as a bearer on every export (ADR 0215).
 - `services.lineage.forward.url`: every event the estate's provenance records, and the backend's API key when
   `forward.authSecret` names one.
 
-A development estate reaches its fixtures over http (the store's node port, GreptimeDB, Marquez), so the rule follows
+A development estate reaches its fixtures over http (the store's node port, the OTLP gateway, Marquez), so the rule follows
 `rask.isRealDeployment` rather than refusing every http address. The platform's secret store (`lance.platformStoreAddr`)
 and IdP (`lance.oidcIssuer`) are refused http by their own helpers on any render that names them. The release's own
 Services (the bundled OpenFGA, the issuer mirror) are in-cluster hops and not judged here; nor is the Postgres

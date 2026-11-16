@@ -11,7 +11,7 @@
 # serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167), on the
 # lakehouse and its platform fixtures alone, with no client installed (XC-183).
 #
-# The telemetry chain is on (ADR 0214): rask's Collector exports to the observability fixture's store, where the
+# The telemetry chain is on (ADR 0214): each service exports to the observability fixture's Collector and store, where the
 # `observability` suite reads each service's signals. Maintenance is on, because a commit's pass on the deployed queue
 # is a lakehouse claim (`tests/e2e-py/test_maintenance_e2e.py`).
 #
@@ -119,16 +119,13 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # The governed stack's values, shared with scripts/install_from_empty.sh so the two lanes install one shape.
 # shellcheck source=scripts/stack_values.sh
 . "$(dirname "$0")/stack_values.sh"
-# THE TELEMETRY CHAIN IS ON IN THIS LANE (ADR 0214): rask's Collector is rendered, and exports to the observability
-# fixture's store as the dev estate's does (deploy/values-local.yaml names the same endpoint and ingestion headers), so
-# the `observability` suite reads each service's metric, trace and logs where the Collector delivered them. Set after
-# stack_values.sh, whose `observability.enabled=false` the empty-cluster install keeps: a later --set wins.
+# THE TELEMETRY CHAIN IS ON IN THIS LANE (ADR 0214): each service exports, as itself, to the observability fixture's
+# Collector, the stand-in for a platform's OTLP gateway, as the dev estate's do (deploy/values-local.yaml names the same
+# endpoint), so the `observability` suite reads each service's metric, trace and logs where the gateway delivered them.
+# Set after stack_values.sh, whose `observability.enabled=false` the empty-cluster install keeps: a later --set wins.
 HELM_SET+=(
   --set observability.enabled=true
-  --set-string observability.export.endpoint=http://greptimedb.observability:4000/v1/otlp
-  --set-string observability.export.headers.x-greptime-db-name=public
-  --set-string observability.export.traceHeaders.x-greptime-pipeline-name=greptime_trace_v1
-  --set-string observability.export.auditHeaders.x-greptime-log-table-name=lance_audit
+  --set-string observability.export.endpoint=http://otel-collector.observability:4318
 )
 
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
@@ -202,7 +199,8 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # Dex, the dev OIDC issuer the lane mints its tokens from, the dev object store and the dev secret store are fixtures too
 # ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
 # seed scripts are rask's), so fixtures.sh does not wait for them.
-# The observability fixture is the store behind rask's Collector (ADR 0214), Ready before any rask pod exports to it.
+# The observability fixture is the gateway every rask service exports to and its store (ADR 0214, ADR 0215), Ready before
+# any rask pod exports to it.
 "$(dirname "$0")/fixtures.sh" external-secrets nats dex openbao observability
 
 step "3/8 side-load the images"

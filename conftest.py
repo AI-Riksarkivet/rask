@@ -43,7 +43,7 @@ from typing import Final
 import pytest
 import respx
 
-from lakehouse.governed import secrets
+from lakehouse.governed import fga, secrets
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -181,6 +181,17 @@ def _no_held_secret_store_session() -> Iterator[None]:
     secrets.forget_secret_store()
     yield
     secrets.forget_secret_store()
+
+
+@pytest.fixture(autouse=True)
+def _a_closed_openfga_circuit() -> Iterator[None]:
+    """Give each test a process whose circuit over OpenFGA is closed and has counted no outage.
+
+    The circuit is the process's, so one test's outage would otherwise refuse the next test's checks at once.
+    """
+    fga.reset_circuit()
+    yield
+    fga.reset_circuit()
 
 
 @pytest.fixture(autouse=True)

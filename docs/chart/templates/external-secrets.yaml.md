@@ -59,10 +59,6 @@ other: each one's store identity is its ServiceAccount token ([[XC-084]]). A pla
 operator holds its root and provisions rask's identities. `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`
 gates who reads it.
 
-## `apiVersion: external-secrets.io/v1`
-
-The in-chart Collector's credential for the audit store, mounted as files (otel-collector.yaml).
-
 ## `{{- if hasKey (include "lance.natsFiles" . | fromJson) "object-store-bus-creds" }}`
 
 The development object store's NATS credential, a creds file: the static user `object-store` (values.yaml `nats.auth`),

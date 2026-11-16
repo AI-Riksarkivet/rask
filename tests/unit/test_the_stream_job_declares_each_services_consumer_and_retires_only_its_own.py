@@ -113,3 +113,17 @@ def test_the_retire_phase_runs_once_the_sync_is_applied_under_either_reconciler(
         "declare": (None, "Sync"),
         "retire": ("post-install,post-upgrade", "PostSync"),
     }
+
+
+def test_a_store_the_release_runs_has_a_stream_to_publish_its_events_to_with_maintenance_off() -> None:
+    """The development store publishes each object write on `store.events` as the bus user the release issues it whenever
+    the store is on. With no stream behind the subject its publishes are refused and its own outbound queue fills, so the
+    Job declares STORE_EVENTS (bounded by `maintenance.queue.storeEventsMaxBytes` and a week's age) for a store as well as
+    for maintenance's lane, which alone binds a consumer to it."""
+    scripts = " ".join(
+        " ".join(str(arg) for arg in container.get("command") or [])
+        for workload, _, container in containers(render(*DEFAULT_ARGS, "--set", "maintenance.enabled=false"))
+        if workload.startswith("Job/rask-nats-stream-r")
+    )
+
+    assert "converge_stream STORE_EVENTS" in scripts

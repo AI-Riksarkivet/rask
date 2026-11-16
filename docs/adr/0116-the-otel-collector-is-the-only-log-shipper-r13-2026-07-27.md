@@ -1,6 +1,6 @@
 # 0116. The OTel Collector is the only log shipper (R13, 2026-07-27)
 
-**Status:** accepted.
+**Status:** accepted, amended by [ADR 0215](0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md): the Collector that ships every log is the platform's, not rask's; in development it is the observability fixture's.
 
 Source: `docs/architecture/lance-ns-merge.md:448` (at `44b354f3`), resolving the open decision in P4 at `:334` (owner ruling R13, 2026-07-27).
 

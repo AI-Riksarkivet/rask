@@ -35,9 +35,6 @@ Ready without its users hands the bus an empty config. The bundle is kept like t
 revoked by its key in the APP account the server preloads, and its secret is deleted from this pod's store; a store role or policy the release no longer
 renders is deleted. A store holding nothing undeclared revokes and deletes nothing.
 
-[[XC-003]] puts the in-chart Collector's audit-store credential through it: `otel-collector-export` is kept, else carried
-from the store behind the Service, else minted, so a surge keeps the credential the store admits.
-
 [[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills one Secret per
 credential once (`<release>-dev-credential-<key>`, [[XC-164]]), the pod mounts them as one directory, and the seed writes
 each field from its file, so no credential is in the render, an argument list or an output stream. No workload's object-store
@@ -273,7 +270,6 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str], 
         tar.add(root, arcname=".")
     (served / "nats-root").write_text(f"nsc={base64.b64encode(packed.getvalue()).decode()}\n")
     (served / "nats-route").write_text("user=route\npassword=an-earlier-route-password\n")
-    (served / "otel-collector-export").write_text("username=otel-collector\npassword=an-earlier-collector-password\n")
     if regranted:
         user, pair = regranted
         grant = {"pub": {"allow": ["dlq.wider.>"]}, "sub": {"allow": ["_INBOX.>"]}, "type": "user", "version": 2}
@@ -284,7 +280,6 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str], 
         "operator": (root / "operator").read_text(),
         "account": (root / "APP.pub").read_text(),
         "password": "an-earlier-route-password",
-        "collector": "an-earlier-collector-password",
     }
 
 
@@ -382,7 +377,7 @@ def _signer_problems(docs: tuple[dict, ...], signer: dict[str, str], root: dict[
             "",
             True,
             "nats-carried",
-            id="carried-bus-root-route-and-collector-credential-and-a-regranted-user-keeps-its-key-and-loses-its-old-grant",
+            id="carried-bus-root-and-route-and-a-regranted-user-keeps-its-key-and-loses-its-old-grant",
         ),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "undeclared", id="a-bus-user-and-a-store-reader-rask-stops-declaring-are-revoked-and-deleted"),
         pytest.param(
@@ -656,14 +651,6 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         assert root["operator"] == carried["operator"] and route["password"] == carried["password"], (
             "the trust root or the route credential behind the Service was replaced, so the running server refuses every new client"
         )
-    collector = _store(stores, "local", "secret/otel-collector-export")
-    assert collector.get("username") == "otel-collector" and collector.get("password"), f"the Collector's audit-store credential is not seeded: {collector}"
-    if carried:
-        assert collector["password"] == carried["collector"], "the Collector's credential behind the Service was replaced, so the store refuses it"
-    if local == "restart":
-        first = _store(stores, "before-restart", "secret/otel-collector-export").get("password")
-        assert first and collector["password"] == first, "a server restarted in place was seeded a new Collector credential, not the one it held"
-    assert collector["password"] not in streams, "the Collector's credential reached an output stream or a bao argument list"
     for user, (publish, subscribe) in users.items():
         issued = _store(stores, "local", f"secret/nats-user-{user}")
         claim = _claim(issued.get("jwt", "eyJ.e30"))

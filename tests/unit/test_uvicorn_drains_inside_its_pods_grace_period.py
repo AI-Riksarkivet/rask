@@ -92,6 +92,28 @@ def test_every_uvicorn_drains_inside_its_own_pods_grace_period(lifecycle: dict[s
     assert all(grace - pre_stop - teardown > 0 for grace, pre_stop, _ in bounded.values())
 
 
+#: Each service whose doors answer at a deadline, and the variable that carries it (ADR 0203).
+_DEADLINES = {"Deployment/rask-catalog": "LANCE_REQUEST_DEADLINE_SECONDS", "Deployment/rask-lineage": "LINEAGE_REQUEST_DEADLINE_SECONDS"}
+
+
+@pytest.mark.parametrize("deadline", [None, 45], ids=["default-deadline", "deadline-moved"])
+def test_a_door_answered_at_its_deadline_ends_inside_its_pods_grace(deadline: int | None) -> None:
+    """Every door is answered by its deadline (ADR 0203), and it works in a thread that uvicorn's bound does not interrupt
+    and only the kubelet's SIGKILL ends. So the drain of a pod whose doors answer at a deadline lasts that deadline: a
+    shorter one lets a rollout or an eviction kill a write that would have been answered."""
+    sets = () if deadline is None else ("--set", f"catalog.requestDeadlineSeconds={deadline}", "--set", f"services.lineage.requestDeadlineSeconds={deadline}")
+    docs = render(*_overlay({}), *sets)
+    bounded = _bounded(docs)
+    envs = {
+        workload: {env["name"]: env.get("value") for env in container.get("env") or []}
+        for workload, _, container in containers(docs)
+        if workload in _DEADLINES and _runs_uvicorn(container)
+    }
+
+    drains = {workload: int(args[0].removeprefix(_FLAG)) for (workload, _), (_, _, args) in bounded.items() if workload in _DEADLINES}
+    assert drains == {workload: int(envs[workload][variable]) for workload, variable in _DEADLINES.items()}
+
+
 _OUT_OF_BUDGET = "lifecycle: need 0 <= teardownSeconds < grace - preStopSeconds"
 
 
@@ -143,7 +165,7 @@ def test_every_uvicorn_runs_under_its_images_init_never_as_its_containers_pid_1(
 def test_every_deployment_keeps_each_pod_serving_until_its_replacement_is_ready() -> None:
     """A rollout takes no serving pod away before the pod replacing it is Ready ([[LH-483]]). Kubernetes' default lets a
     quarter of a Deployment's replicas be down at once, which at one replica is nothing and at four is a pod's worth of
-    requests refused on every upgrade. Judged on every Deployment rask's own templates render, the Collector included."""
+    requests refused on every upgrade. Judged on every Deployment rask's own templates render."""
     own = [
         doc
         for doc in render(*DEFAULT_ARGS, *OBSERVABILITY_ARGS)
@@ -152,6 +174,4 @@ def test_every_deployment_keeps_each_pod_serving_until_its_replacement_is_ready(
 
     taken_away = {doc["metadata"]["name"]: (doc["spec"].get("strategy") or {}).get("rollingUpdate", {}).get("maxUnavailable") for doc in own}
 
-    assert taken_away == dict.fromkeys(
-        ("rask-catalog", "rask-console", "rask-issuer-mirror", "rask-lineage", "rask-maintenance-worker", "rask-otel-collector"), 0
-    )
+    assert taken_away == dict.fromkeys(("rask-catalog", "rask-console", "rask-issuer-mirror", "rask-lineage", "rask-maintenance-worker"), 0)

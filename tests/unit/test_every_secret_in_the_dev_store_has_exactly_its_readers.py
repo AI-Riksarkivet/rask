@@ -54,7 +54,7 @@ STORE_POD: Final = "Deployment/rask-openbao"
 #: The KV v2 data path a policy grants a secret by.
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
-_POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "CronJob/rask-pg-backup"})
+_POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-<digest>", "CronJob/rask-pg-backup"})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 
@@ -88,7 +88,6 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
             }
         ),
     },
-    "otel-collector-export": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-otel-collector"})},
 }
 
 ROOT_ID_FIELD: Final = "object-store-access-key"
@@ -324,6 +323,9 @@ def test_every_secret_in_the_dev_store_has_exactly_its_readers_and_no_published_
     store, unbound = _store_readers(estate, chart, namespace)
     pods, generated = _pod_readers(estate)
     universe = set(store) | set(pods) | set(EXPECTED)
+    pods = {
+        secret: {re.sub(r"-openfga-migrate-[0-9a-f]{8}$", "-openfga-migrate-<digest>", workload) for workload in readers} for secret, readers in pods.items()
+    }
     columns = {"store": store, "pods": pods}
     actual = {
         secret: found

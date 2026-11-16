@@ -60,6 +60,9 @@ spec:
         {{- include "rask.componentLabels" (list . "console") | nindent 8 }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- if .Values.podDisruptionBudget.enabled }}
+      {{- include "lance.spreadConstraints" "console" | nindent 6 }}
+      {{- end }}
       serviceAccountName: {{ include "lance.saName" (list . "console") }}
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}

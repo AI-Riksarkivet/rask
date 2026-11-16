@@ -129,7 +129,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | lifecycle.maintenanceTerminationGracePeriodSeconds | int | `120` | Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed. |
 | lifecycle.preStopSeconds | int | `5` | Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first. |
 | lifecycle.teardownSeconds | int | `10` | Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this. |
-| lifecycle.terminationGracePeriodSeconds | int | `40` | Pod grace period in seconds; uvicorn's graceful-shutdown bound is this minus preStopSeconds and teardownSeconds. |
+| lifecycle.terminationGracePeriodSeconds | int | `40` | Grace period in seconds of the pods whose requests answer at no deadline (the console, the issuer mirror); uvicorn's graceful-shutdown bound is this minus preStopSeconds and teardownSeconds. The catalog's and lineage's grace is derived instead: preStopSeconds + their `requestDeadlineSeconds` + teardownSeconds, so every request in flight when the pod is stopped is answered before SIGKILL. |
 | maintenance.appId | string | `"maintenance"` | Maintenance's app id: its secret-store role (`<release>-<id>`), the bus user its events are published as and its OTel service. |
 | maintenance.arrivalEnabled | bool | `true` | Run the write-event lane: queue the written table's pass on each announced commit. |
 | maintenance.controlEmit | bool | `false` | Announce each reclamation on the catalog control topic (catalog.control.v1) over the worker's own bus connection. Off by default. |
@@ -188,6 +188,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination. |
 | networkPolicy.objectStoreExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the object store. |
 | networkPolicy.openbaoExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the development store (`openbao.enabled`; e.g. the external-secrets namespace). |
+| networkPolicy.openfgaMetricsFrom | list | `[]` | List of NetworkPolicy `from` peers allowed to scrape the in-chart OpenFGA's metrics port (2112): the platform's collector, e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]. Empty admits none. |
 | objectStore.accessKey | string | `"rustfsadmin"` | Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `<release>-object-store-root`, which only the store and the provisioning hook mount. No workload presents it. |
 | objectStore.bucket | string | `"lance-catalog"` | The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox). |
 | objectStore.buckets | list | `[]` | Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed data only, not the root or feature buckets. |
@@ -204,15 +205,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | objectStore.identity.roleArns.maintenance | string | `"arn:aws:iam::000000000000:role/rask-maintenance"` | The role maintenance's token is exchanged for. |
 | objectStore.identity.sessionSeconds | int | `3600` | How long a workload's session lasts (`*_S3_SESSION_SECONDS`, 900 to 43200 s): a service renews its own at half its life, and a backup run asks for one. |
 | objectStore.port | int | `9000` | S3 API port of the development store's Service. |
-| observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services and OpenFGA to it; needs `export.endpoint`. |
+| observability.enabled | bool | `false` | Turn on OTLP export from the lakehouse services to `export.endpoint`, and OpenFGA's tracing; needs `export.endpoint`. |
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
-| observability.export.auditHeaders | object | `{}` | Headers added to the export of `lance.audit` records, which leave on their own exporter, so a backend can route the governance trail apart from telemetry. |
-| observability.export.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled. |
-| observability.export.endpoint | string | `""` | OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render, and http on a real deployment. |
-| observability.export.headers | object | `{}` | Headers sent on every export: the backend's ingestion contract, none by default (the dev overlay names GreptimeDB's). |
-| observability.export.traceHeaders | object | `{}` | Headers added to the trace export. |
+| observability.export.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the exporting services to the gateway at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled. |
+| observability.export.endpoint | string | `""` | OTLP/HTTP base URL every service exports traces, metrics and logs to (`/v1/traces` etc. are appended): the platform's gateway. Required while `enabled`: empty fails the render, and http on a real deployment. |
+| observability.identity.audience | string | `"rask-otlp"` | Audience of the ServiceAccount token each service presents on every export; the platform's gateway admits a token for this audience from the cluster's issuer. |
 | observability.lanceLog | string | `"warn,lance::events::file_audit=info,lance::events::dataset_events=info"` | `LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off. |
-| observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
 | openbao.ca.configMap | string | `""` | The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`. |
 | openbao.ca.key | string | `"ca.crt"` | The key of `ca.configMap` that holds the CA certificate, in PEM. |
 | openbao.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false. |
@@ -238,7 +236,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.podSecurityContext | object | `{"fsGroup":65532}` | Subchart passthrough: the OpenFGA pod's securityContext; fsGroup 65532, the image's own user, which may read the mounted config file. |
 | openfga.replicaCount | int | `1` | Subchart passthrough: number of OpenFGA server replicas. |
 | openfga.resources | object | `{"limits":{"memory":"2Gi"},"requests":{"cpu":"50m","memory":"512Mi"}}` | Subchart passthrough: CPU and memory requests/limits for the OpenFGA server. |
-| openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":"rask-otel-collector:4317"},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the OTel Collector; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
+| openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":""},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the platform's gateway; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
 | podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service running more than one replica. |
 | podDisruptionBudget.minAvailable | int | `1` | minAvailable of every rendered PodDisruptionBudget. |
 | pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage events are published on and each consumer of them is filtered to (LANCE_LINEAGE_TOPIC and siblings). |
@@ -248,7 +246,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | resources.default | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources). |
 | resources.lineage | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful. |
 | resources.maintenanceWorker | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"256Mi"}}` | CPU/memory requests and limits for maintenance's queue worker pods (`maintenance.worker`); the web pods keep the default tier. |
-| resources.otel-collector | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"300m","memory":"512Mi"}}` | CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter. |
 | route.enabled | bool | `true` | Renders the HTTPRoutes publishing each `/api/*` prefix, and `/dex` with the development Dex, on the Gateway `parentRefs` names. |
 | route.hostnames | list | `[]` | Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts. |
 | route.parentRefs | list | `[]` | Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`. |

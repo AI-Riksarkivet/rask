@@ -1,8 +1,9 @@
 """The compliance trail has one writer: fail when lakehouse code names the `lance.audit` logger outside its writer.
 
-The Collector routes a log record to the audit trail by its instrumentation scope, which the OpenTelemetry SDK's
-`LoggingHandler` names after the Python logger that made the record (`chart/templates/otel-collector.yaml`,
-`filter/audit_only` and `filter/drop_audit`). Every record on the `lance.audit` logger is therefore an audit record,
+The platform's OTLP gateway routes a log record to the audit trail by its instrumentation scope, which the OpenTelemetry
+SDK's `LoggingHandler` names after the Python logger that made the record (the development gateway's split is
+`deploy/fixtures/observability/chart/templates/collector.yaml`, `filter/audit_only` and `filter/drop_audit`). Every record on
+the `lance.audit` logger is therefore an audit record,
 and `audit()` is what gives one its closed vocabulary, its format version and its request id, so no other module may
 obtain that logger.
 

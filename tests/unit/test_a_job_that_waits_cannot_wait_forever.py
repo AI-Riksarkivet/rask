@@ -34,7 +34,10 @@ _OVERLAY = ("--set", "image.localImages=true", "--set", "auth.enabled=true")
 
 
 def _jobs() -> list[tuple[str, bool, int | None]]:
-    """`(name, waits, activeDeadlineSeconds)` for every Job and CronJob the chart renders."""
+    """`(name, needs a deadline, activeDeadlineSeconds)` for every Job and CronJob the chart renders.
+
+    A CronJob's run needs one when it waits; a Job always does: it runs inside an install or an upgrade, which a pod that
+    hangs for any reason (a call with no timeout, an image that never pulls) would otherwise hold open."""
     out = []
     for doc in render(*_OVERLAY, *OIDC_ARGS):
         kind = doc.get("kind")
@@ -46,7 +49,7 @@ def _jobs() -> list[tuple[str, bool, int | None]]:
             " ".join(str(part) for part in (container.get("command") or []) + (container.get("args") or []))
             for container in (pod.get("containers") or []) + (pod.get("initContainers") or [])
         )
-        out.append((doc["metadata"]["name"], bool(_WAITS.search(command)), spec.get("activeDeadlineSeconds")))
+        out.append((doc["metadata"]["name"], kind == "Job" or bool(_WAITS.search(command)), spec.get("activeDeadlineSeconds")))
     return out
 
 

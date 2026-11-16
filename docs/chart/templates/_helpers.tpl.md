@@ -70,14 +70,14 @@ lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helper
 
 Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
 object-store-provisioning.yaml, object-store-identities.yaml, openbao-seed.yaml, age-postgres.yaml,
-otel-collector.yaml, network-policy.yaml, ha.yaml, …). None of them
+network-policy.yaml, ha.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
   age.externalHost · auth.enabled · catalog.controlEmit ·
   auth.oidc.{issuer,audience} · dex.{enabled,port} · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   nats.url ·
-  observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.topic ·
+  observability.{enabled,environment,export.endpoint,identity.audience} · openbao.{enabled,port,externalAddr} · pubsub.topic ·
   resources.{default,<component>} · objectStore.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
   services.{catalog,lineage}.{port,appId} · services.lineage.relay.periodSeconds
 `objectStore.bucket` (singular) is the one that is easy to lose: rask's values ship `objectStore.buckets` (a
@@ -159,8 +159,8 @@ and lineage's Deployments render the fewest as their `replicas`.
 How a request-serving Deployment rolls: no pod is taken away before the pod replacing it is Ready
 (`maxUnavailable: 0`), and a quarter more than its replicas may run meanwhile (`maxSurge: 25%`, at least one).
 Kubernetes' default lets a quarter of the replicas be down at once, which at one replica rounds to none and at four is
-a pod's worth of requests refused on every upgrade ([[LH-483]]). The catalog, lineage, the console, the issuer mirror
-and the Collector render it; the maintenance worker keeps its own, a surge of exactly one, since each extra worker
+a pod's worth of requests refused on every upgrade ([[LH-483]]). The catalog, lineage, the console and the issuer mirror
+render it; the maintenance worker keeps its own, a surge of exactly one, since each extra worker
 takes tasks. None of them mounts a volume or a host port only one pod can hold, so a surge pod always schedules.
 
 ## `{{- define "rask.isRealDeployment" -}}`
@@ -213,7 +213,7 @@ named after the chart), and the tag/digest/prefix rules are now whatever the res
 ## `{{- define "lance.s3Endpoint" -}}`
 
 CONSUMER endpoints — return the EXTERNAL override when set (the in-cluster component is then usually
-disabled, e.g. a managed S3 / Postgres / Vault / collector in prod), else the in-cluster address. The
+disabled, e.g. a managed S3 / Postgres / Vault in prod), else the in-cluster address. The
 component's OWN Service/StatefulSet keeps the plain *Host helper above; only the apps that CONNECT switch.
 This is what makes the docs/DURABILITY.md tier-3 externalization real (values-prod.yaml sets the overrides).
 
@@ -223,13 +223,34 @@ nothing serves; the S3 behind a real estate is the platform's, and the chart onl
 
 ## `{{- define "lance.otlpEndpoint" -}}`
 
-The OTLP endpoint every plane exports to: the in-chart Collector, rask's one telemetry seam (ADR 0153). Where the
-telemetry goes after it is `observability.export`, the Collector's business alone.
+The OTLP/HTTP endpoint every lakehouse service exports to: `observability.export.endpoint`, the platform's gateway
+(ADR 0153, ADR 0215). `required`: the chart renders no Collector of its own, so a telemetry-on render that names no
+gateway would leave every service exporting into nothing; it fails instead.
+
+## `{{- define "lance.otlpAudience" -}}`
+
+`observability.identity.audience` (default `rask-otlp`), the audience of the projected ServiceAccount token each
+service presents on every export. `required`, because the gateway admits a token by its audience: an empty one would
+project a token the gateway refuses. The mount path and `RASK_OTLP_TOKEN_FILE` (`lance.otelEnv`) are both derived from
+it, so the file the SDK reads is the token the pod projects.
+
+## `{{- define "lance.otlpExporters" -}}`
+
+The components that export OTLP: `catalog`, `lineage`, and `maintenance-worker` with `maintenance.enabled`, as JSON.
+`lance.platformEgress` hands it to the `observability.export.egress` row, so the NetworkPolicy admits exactly the pods
+that dial the gateway, and one list feeds both, so a new exporter cannot reach the gateway's rules without being in it.
+
+## `{{- define "lance.otlpIdentity" -}}`
+
+The projected token for `lance.otlpAudience`, as the `mounts` or `volumes` half of `lance.identityTokens` (call:
+include "lance.otlpIdentity" (list $root "mounts"|"volumes")), rendered only when `lance.otelEnabled`: a pod that
+exports nothing projects no token for the gateway. Each exporting workload includes both halves, so its token sits at
+`/var/run/secrets/rask/identity/<audience>/token`, the path `lance.otelEnv` names.
 
 ## `{{- define "lance.otelEnabled" -}}`
 
-Whether the apps carry the OTel SDK wiring (instrument + otelEnv): exactly when
-`observability.enabled` deploys the Collector they export to. Non-empty string = on (helm `if` truthiness).
+Whether the apps carry the OTel SDK wiring (instrument, otelEnv, the gateway's token): exactly when
+`observability.enabled`. Non-empty string = on (helm `if` truthiness).
 
 ## `{{- define "lance.platformStoreAddr" -}}`
 
@@ -374,15 +395,30 @@ The Secrets ESO writes for the NATS pods that read a credential from a file, as 
 ## `{{- define "lance.otelEnv" -}}`
 
 OTel SDK env for an app (call: include "lance.otelEnv" (list $root "<service.name>")). The apps run
-under `opentelemetry-instrument` and export all three signals OTLP. OTel-first: the target is the Collector
-(lance.otlpEndpoint), which adds the backend's headers — so the app stays backend-agnostic (plain OTLP, no
+under `opentelemetry-instrument` and export all three signals OTLP. OTel-first: the target is the platform's gateway
+(lance.otlpEndpoint), which adds whatever its store needs, so the app stays backend-agnostic (plain OTLP, no
 vendor headers). The SDK appends /v1/{traces,metrics,logs} to the endpoint.
+
+## `- { name: OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER, value: "rask_service_account" }`
+
+Each export is the service's own, authenticated (ADR 0215). The OTel SDK's OTLP/HTTP exporters load the
+`requests.Session` they post with from the entry point this names (group `opentelemetry_otlp_credential_provider`);
+`rask_service_account` is `lakehouse.otlp_identity`, a session that reads the pod's projected token from
+`RASK_OTLP_TOKEN_FILE` on every request and sends it as a bearer, so a rotated token is used from the kubelet's next
+write and no telemetry secret exists. The exporter itself stays the SDK's.
+
+## `- { name: RASK_OTLP_TOKEN_FILE, value: "/var/run/secrets/rask/identity/{{ include "lance.otlpAudience" $root }}/token" }`
+
+The token `lance.otlpIdentity` projects for `observability.identity.audience`, at the path `lance.identityTokens`
+mounts it under. The gateway verifies its signature against the cluster issuer's keys and its audience against the
+same value, so a 401 at the gateway names a token that is missing here or minted for another audience.
 
 ## `- { name: OTEL_LOGS_EXPORTER, value: "otlp" }`
 
-Logs go out via the OTel SDK (OTLP → the Collector → GreptimeDB `opentelemetry_logs`) — the "three
-signals, one SDK, all OTLP" path. NO double-ingest: the app pods carry `lance.dev/logs=otlp`, and the
-Collector's filelog receiver drops that label (a filter processor), so the file-tailed infra logs (no OTel
+Logs go out via the OTel SDK (OTLP → the platform's gateway; in development the observability fixture's Collector →
+GreptimeDB `opentelemetry_logs`) — the "three signals, one SDK, all OTLP" path. NO double-ingest: the app pods carry
+`lance.dev/logs=otlp`, which a gateway that also tails pod logs keys its drop of the file-tailed copy on (the
+development gateway's filter processor, `deploy/fixtures/observability/docs/collector.yaml.md`), so the file-tailed infra logs (no OTel
 SDK) land in the SAME `opentelemetry_logs` table without duplicating the app logs. The filter drops ONLY
 what the SDK also exported: a file-tailed line is a duplicate iff a root-logger handler emitted it, and those
 all begin with an ISO date — so the condition additionally requires `IsMatch(body, "^[0-9]{4}-...")`. A pre-SDK crash and a uvicorn.error record therefore
@@ -423,6 +459,16 @@ the Gateway, so in-flight requests drain instead of hitting connection-refused �
 the apps' /readyz shutting_down branch actually reachable during a rollout. Pairs with pod-level
 terminationGracePeriodSeconds (grace > preStop + app drain). sh exists in every app image
 (python-slim).
+
+## `{{- define "lance.deadlineGrace" -}}`
+
+The grace period of a pod whose doors answer at a deadline: `lifecycle.preStopSeconds` + its `requestDeadlineSeconds`
++ `lifecycle.teardownSeconds` (call: include "lance.deadlineGrace" (list $root <requestDeadlineSeconds>)). The catalog
+and lineage answer every door by that deadline (ADR 0203), so a pod stopped while one runs holds SIGKILL off for the
+preStop sleep, the whole deadline and the lifespan's teardown, and every request in flight is answered. Work a door
+still does past its deadline ends with the pod. Both
+`terminationGracePeriodSeconds` and the `--timeout-graceful-shutdown` `rask.shutdownArg` derives read this one sum, so
+the two cannot disagree. Every other pod keeps `lifecycle.terminationGracePeriodSeconds`.
 
 ## `{{- define "rask.shutdownArg" -}}`
 
@@ -718,8 +764,8 @@ backups (`JobStoreIdentity`, `job_client`) cannot read the identity under differ
 
 ## `{{- define "lance.serviceAccounts" -}}`
 
-Every ServiceAccount the product chart renders: the `lance.saComponents` accounts, the two a template renders
-beside its own workload (the backup snapshot, the OTel Collector), and, with `console.enabled`, the
+Every ServiceAccount the product chart renders: the `lance.saComponents` accounts, the backup snapshot's and
+OpenFGA's, each rendered beside its own workload, and, with `console.enabled`, the
 console's `rask-sa-console` (`console.yaml`). `lance.storeReads` refuses an
 external reader whose role would bind one of them, or the namespace's shared `default`: a role bound to the lakehouse's
 own account hands that reader's reads to a lakehouse pod, and one bound to `default` hands them to every pod that names

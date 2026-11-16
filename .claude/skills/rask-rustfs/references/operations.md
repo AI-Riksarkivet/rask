@@ -34,9 +34,11 @@ Citations: `rustfs@1.0.3:<path>:<line>`, `docs:<path>`, rask paths bare.
   exporter appends `/v1/traces`, `/v1/metrics`, `/v1/logs` (`rustfs@1.0.3:crates/obs/src/telemetry/otel.rs:20-33,150-161,424-480`;
   `rustfs@1.0.3:rustfs/src/config/cli.rs:1583-1590`). Default empty: no export. No `/metrics` route exists. The
   Thanos page scrapes `rustfs:9000/metrics` (contradiction: `docs:developer/integration/observability/thanos.md`).
-- In rask: `RUSTFS_OBS_ENDPOINT=http://<release>-otel-collector:4318` when `observability.enabled`, which fits the one
-  telemetry seam. The OTLP exporter does not go through the outbound egress guard (no `egress` reference under
-  `rustfs@1.0.3:crates/obs/src`, grep), so a private Collector address needs no `RUSTFS_OUTBOUND_ALLOW_ORIGINS` entry.
+- In rask: unset. The fixture logs to stdout (`RUSTFS_OBS_LOG_DIRECTORY=""`), which the development gateway's
+  filelog tails; the gateway's OTLP/HTTP receiver admits only a ServiceAccount token of `observability.identity.audience`
+  (ADR 0215), which RustFS's exporter does not present. The OTLP exporter does not go through the outbound egress guard
+  (no `egress` reference under `rustfs@1.0.3:crates/obs/src`, grep), so a private gateway address would need no
+  `RUSTFS_OUTBOUND_ALLOW_ORIGINS` entry.
   With OTLP log export on, logs go to OTLP only, so `kubectl logs` shows none (`otel.rs:181-203`).
 - Log routing, in order: any OTLP endpoint → OTLP pipeline (file logs only if OTLP log export is unavailable); else a
   non-empty `RUSTFS_OBS_LOG_DIRECTORY` → rolling files; else stdout JSON

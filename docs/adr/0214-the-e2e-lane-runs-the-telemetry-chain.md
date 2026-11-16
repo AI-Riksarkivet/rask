@@ -2,7 +2,9 @@
 
 **Status:** accepted. Source: owner, 2026-11-16, two answers on XC-208 (#814, which holds the merged row XC-064 #213)
 through the multi-question tool: the e2e-stack lane runs the `observability` suite, and that reverses decision 3 of
-ADR 0167, which a new ADR supersedes. Supersedes ADR 0167 decision 3; its decisions 1 and 2 stand.
+ADR 0167, which a new ADR supersedes. Supersedes ADR 0167 decision 3; its decisions 1 and 2 stand. Amended by
+[ADR 0215](0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md): the lane's Collector is the observability fixture's, which the services export to as themselves at
+`http://otel-collector.observability:4318`, with no ingestion headers.
 
 ## Context
 

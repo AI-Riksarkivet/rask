@@ -31,6 +31,7 @@ import asyncio
 import functools
 import json
 import logging
+import time
 import unicodedata
 from collections.abc import Awaitable, Callable, Collection, Iterable
 from contextlib import suppress
@@ -106,6 +107,13 @@ DEFAULT_RETRY_MAX_BACKOFF_SECONDS = 2.0
 # Overall wall-clock budget for one logical call's retries, so a flapping OpenFGA
 # (whose own backoff can be long) cannot pin a request worker for minutes.
 DEFAULT_RETRY_OVERALL_BUDGET_SECONDS = 15.0
+
+#: Calls in a row that end in an outage (each after its retries) before the circuit opens. While it is open every call
+#: is refused at once with the same 503, so a request does not pay the retry budget against an OpenFGA that is down.
+BREAKER_THRESHOLD = 5
+#: Seconds an open circuit refuses every call before it lets calls through to ask again; the first answer closes it, the
+#: first outage opens it again.
+BREAKER_RESET_SECONDS = 15.0
 
 # The async (aiohttp) OpenFGA client raises a down/unreachable server as a raw transport
 # error — NOT openfga_sdk.ApiException — so these must be retried AND caught by the
@@ -380,6 +388,44 @@ def _is_transient(exc: BaseException) -> bool:
     return bool(exc.is_retryable())
 
 
+class _Circuit:
+    """The process's one circuit over OpenFGA, which every call through :func:`_guarded` passes.
+
+    Closed, it counts outages in a row. At ``BREAKER_THRESHOLD`` it opens and refuses every call for
+    ``BREAKER_RESET_SECONDS``; after that calls pass again, and the first to end decides: an answer closes the circuit,
+    an outage opens it again at once. A call that ends any other way (cancelled, a fault of this process) says nothing
+    about OpenFGA and changes nothing. Timed on the monotonic clock, so a stepped wall clock neither holds it open nor
+    closes it early.
+    """
+
+    def __init__(self) -> None:
+        self._outages = 0
+        self._opened_at: float | None = None
+
+    def refuses(self) -> bool:
+        """Whether a call made now is refused without dialling."""
+        return self._opened_at is not None and time.monotonic() - self._opened_at < BREAKER_RESET_SECONDS
+
+    def answered(self) -> None:
+        """OpenFGA answered, with a verdict or a definitive refusal of the request."""
+        self._outages = 0
+        self._opened_at = None
+
+    def outage(self) -> None:
+        """A call ended in an outage after its retries."""
+        self._outages += 1
+        if self._opened_at is not None or self._outages >= BREAKER_THRESHOLD:
+            self._opened_at = time.monotonic()
+
+
+_CIRCUIT = _Circuit()
+
+
+def reset_circuit() -> None:
+    """Close the circuit over OpenFGA and forget the outages it counted, as a process that has just started."""
+    _CIRCUIT.answered()
+
+
 def _log_retry(retry_state: RetryCallState) -> None:
     """Log each retry so a flapping OpenFGA is visible (silent retries hide outages)."""
     exc = retry_state.outcome.exception() if retry_state.outcome else None
@@ -442,12 +488,24 @@ async def _guarded[T](
     ``event`` and ``extra`` are all that ever differed: the log line's name and the fields identifying
     what was being asked. The message is deliberately CONSTANT — a caller must not be able to tell
     which authorization call failed, and every one of them means the same thing to a client.
+
+    Every call passes the process's circuit over OpenFGA (:class:`_Circuit`): after ``BREAKER_THRESHOLD`` outages in a
+    row a call is refused with that same 503 without dialling, until ``BREAKER_RESET_SECONDS`` have passed.
     """
+    if _CIRCUIT.refuses():
+        log.warning("openfga_circuit_open", extra=extra)
+        raise ServiceUnavailableError("authorization service unavailable")
     try:
-        return await _retrying(attempts, backoff, max_backoff)(operation)()
+        answer = await _retrying(attempts, backoff, max_backoff)(operation)()
     except _FAIL_CLOSED as exc:
+        if _is_transient(exc):
+            _CIRCUIT.outage()
+        else:
+            _CIRCUIT.answered()
         log.error(event, extra=extra, exc_info=True)
         raise ServiceUnavailableError("authorization service unavailable") from exc
+    _CIRCUIT.answered()
+    return answer
 
 
 # --------------------------------------------------------------------------- #

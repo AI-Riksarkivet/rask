@@ -186,11 +186,6 @@ lakehouse workload's store identity is its ServiceAccount token ([[XC-084]], ADR
 `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows it through every path a pod reads a
 secret by.
 
-## `c="$HOME/seed/otel-collector-export"`
-
-THE COLLECTOR'S AUDIT-STORE CREDENTIAL ([[XC-003]]), create-if-absent: kept, else carried from the store behind
-the Service, else minted.
-
 ## `i="$HOME/seed/commit-id-key"`
 
 LH-497: the key the catalog derives every announcement's run id under, which only the catalog reads (`lance.storeReads`). Carried from the store behind the Service when a pod replaces this one, like a signing pair, because it is never rotated: an id derived under a new key would announce every commit still unconfirmed a second time. Minted as 32 random bytes of hex only when no store serves one. A platform store's operator provisions `commit-id-key` itself; the catalog is not Ready until it reads one.

@@ -3,7 +3,7 @@ and every first-party service runs as its own ServiceAccount.
 
 [[XC-202]]. `nodes/proxy` hands its holder the kubelet's API through the API server, exec into every pod on the node
 included (a websocket upgrade is a GET), and a pod's own exec, attach or port-forward is the same reach into one pod. No
-first-party pod needs either: the Collector reads pod and node metadata through ordinary reads.
+first-party pod needs either.
 
 [[XC-076]]. A binding of `secrets: get` to the namespace's `default` ServiceAccount (a subchart or platform chart
 that binds a secret reader to it is the known case) reaches any pod the chart gives no SA of its own, which runs as
@@ -266,14 +266,16 @@ def test_no_first_party_service_account_can_read_a_secret_review_a_token_or_reac
 
     # The walk sees the chart's pods and the subcharts', and the classifier reads rendered roles; without these every
     # assertion below passes by parsing nothing.
-    assert sum(pod.first_party for pod in pods) >= 8, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
+    assert sum(pod.first_party for pod in pods) >= 7, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
     # OpenFGA is the chart's one subchart and production names the platform's ([[XC-132]]), so the overlays that run it
     # prove the split.
     if overlay != "prod":
         assert any(not pod.first_party for pod in pods), f"{overlay}: no subchart pods rendered; the source split is broken"
     # No role the render holds grants `secrets` (the operators that needed one are prerequisites, ADR 0153), so the proof that
-    # the classifier recognises one is the planted binding of the module's mutation check.
-    assert any(b.role not in _BUILTIN_GRANTS for b in bindings), f"{overlay}: no binding to a rendered role was classified"
+    # the classifier recognises one is the planted binding of the module's mutation check. Production binds no role to
+    # any pod: every workload that called the Kubernetes API there is the platform's.
+    if overlay != "prod":
+        assert any(b.role not in _BUILTIN_GRANTS for b in bindings), f"{overlay}: no binding to a rendered role was classified"
 
     assert _offending(args) == [], f"{overlay}: {_offending(args)}"
     # The dev store is the openbao fixture's ([[XC-131]]): rask binds no reviewer, and the fixture binds the SA its own pod

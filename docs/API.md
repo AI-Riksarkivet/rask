@@ -27,14 +27,14 @@ an OpenFGA outage is `503`, a denial is `403`, a missing token is `401`.
 **Audit trail (#41, configurable via `LANCE_AUDIT_ENABLED`).** Every security-relevant *catalog* action —
 authn success/failure, authz allow/deny (single, batch, and warehouse gates), credential vending — emits a
 structured event (who / what / resource / outcome) on the dedicated `lance.audit` logger, exported over
-OTLP to GreptimeDB and queryable by `audit.action` / `audit.outcome` / `audit.subject`. Scope: the catalog
+OTLP under that instrumentation scope to the platform's gateway (in development into GreptimeDB) and queryable by `audit.action` / `audit.outcome` / `audit.subject`. Scope: the catalog
 service (the policy-decision point); lineage-read governance is enforced by its own FGA gates and logged
 through the standard service logs, and durable data/model-mutation provenance (who created/wrote/promoted
 what, when) additionally lives in lineage's commit feed, for `services.lineage.eventsRetentionDays`, and in the
-graph backend lineage forwards every event to. Retention: audit records last as long as the
-platform's telemetry store keeps what the OTel Collector exports to it (`observability.export.endpoint`); the chart
-sets no retention, so a compliance deploy sets it on that store. Routing `lance.audit` to an independently-retained
-table is a known open enhancement.
+graph backend lineage forwards every event to. Retention: each service exports its audit records as itself to the
+platform's OTLP gateway (`observability.export.endpoint`, ADR 0215), which routes the `lance.audit` scope to a store of
+its own; the chart sets no retention, so a compliance deploy sets it on that store. In development the observability
+fixture's gateway writes the scope to GreptimeDB's `lance_audit` table.
 
 | Capability | Endpoints | Notes |
 |---|---|---|

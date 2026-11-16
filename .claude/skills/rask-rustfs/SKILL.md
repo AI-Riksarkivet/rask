@@ -243,7 +243,7 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
 - **Readiness is read quorum, not write quorum** (`readiness.rs:867-886`). On one drive they coincide; on a multi-node
   store a Ready pod may not accept writes. A resilience drill proves writes with a real conditional PUT.
 - **No Prometheus endpoint.** RustFS pushes OTLP/HTTP only; there is no `/metrics` route
-  (`rustfs@1.0.3:crates/obs/src/telemetry/otel.rs:424-480`). Point `RUSTFS_OBS_ENDPOINT` at the Collector's 4318.
+  (`rustfs@1.0.3:crates/obs/src/telemetry/otel.rs:424-480`). `RUSTFS_OBS_ENDPOINT` names an OTLP/HTTP endpoint; the fixture leaves it unset and logs to stdout.
 - **Bucket versioning and Object Lock break Lance cleanup.** On a versioned bucket a delete only writes a marker, and a
   locked version cannot be deleted. Lance keeps its own versions; rask buckets stay unversioned and unlocked
   (`references/operations.md` § Data features).

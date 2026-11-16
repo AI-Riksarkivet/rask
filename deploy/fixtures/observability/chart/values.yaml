@@ -1,11 +1,33 @@
-# NOT FOR PRODUCTION (deploy/fixtures/README.md). The observability chain a platform team runs for rask's OTel
-# Collector to export to: GreptimeDB, Perses, vmalert and Alertmanager, in the `observability` namespace.
+# NOT FOR PRODUCTION (deploy/fixtures/README.md). The observability chain a platform team runs for rask's services to
+# export to: an OTLP gateway (the Collector), GreptimeDB, Perses, vmalert and Alertmanager, in the `observability`
+# namespace.
 
-# The store rask's Collector writes and its readers query (rask `observability.export` / `query`).
+# The platform's OTLP gateway: rask's services export to it (rask `observability.export.endpoint`,
+# `http://otel-collector.observability:4318`), each presenting its own ServiceAccount token. docs/collector.yaml.md.
+collector:
+  # -- Render the Collector (Service `otel-collector`): OTLP/HTTP on 4318 for tokens of `identity.audience`, OTLP/gRPC on 4317 for the platform's own traces (OpenFGA's).
+  enabled: true
+  # -- The Collector image (contrib distribution: the oidc extension, filelog, k8sattributes, prometheus).
+  image: otel/opentelemetry-collector-contrib:0.157.0
+  # -- The image of the init container that reads the cluster's ServiceAccount signing keys before the Collector starts.
+  keysImage: curlimages/curl:8.10.1
+  identity:
+    # -- The cluster's ServiceAccount issuer (`kubectl get --raw /.well-known/openid-configuration`): every export's token must name it.
+    issuer: https://kubernetes.default.svc.cluster.local
+    # -- The audience every export's token must carry (rask `observability.identity.audience`).
+    audience: rask-otlp
+    # -- Regular expression of the token subjects whose `lance.audit` records reach the audit table: the lakehouse's own ServiceAccounts. Any ServiceAccount can ask for a token of the audience, so the audience alone admits telemetry and never the governance trail.
+    auditSubjects: "^system:serviceaccount:default:rask-sa-(catalog|lineage|maintenance)$"
+  # -- CPU and memory for the Collector; the memory limit sits above its 400 MiB memory_limiter.
+  resources:
+    requests: { cpu: 300m, memory: 512Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+# The store the Collector writes and its readers query (rask `query`).
 store:
   # -- GreptimeDB HTTP port: /v1/otlp (ingest), /v1/prometheus (PromQL), /v1/sql, /health.
   port: 4000
-  # -- GreptimeDB database every signal lands in (rask's export header `x-greptime-db-name`); the retention Job alters it.
+  # -- GreptimeDB database every signal lands in (the Collector's export header `x-greptime-db-name`); the retention Job alters it.
   dbName: public
   # Retention for logs/traces/metrics: a database-level TTL set by the post-install/post-upgrade Job
   # (templates/retention-job.yaml), so every table (opentelemetry_logs, opentelemetry_traces, the metrics
@@ -13,10 +35,10 @@ store:
   # -- Database-level TTL for logs, traces and metrics (e.g. 14d); empty = no TTL.
   retention: "14d"
   # THE GOVERNANCE TRAIL IS NOT TELEMETRY: measured 2026-09-18 on the live store, 8,590,872 `lance.audit` rows
-  # sat inside `opentelemetry_logs` beside 114,938,016 telemetry rows under one `ttl = '14days'`. rask's Collector
-  # routes them to their own table (`x-greptime-log-table-name`, verified against GreptimeDB v1.1.1) and the
+  # sat inside `opentelemetry_logs` beside 114,938,016 telemetry rows under one `ttl = '14days'`. The Collector
+  # routes them by their `lance.audit` scope to their own table (`x-greptime-log-table-name`, verified against GreptimeDB v1.1.1) and the
   # retention Job gives that table its own TTL, which overrides the database's (read back by SHOW CREATE TABLE).
-  # -- GreptimeDB table rask's Collector routes `lance.audit` records to (rask's `observability.export.auditHeaders`).
+  # -- GreptimeDB table the Collector routes `lance.audit` records to (`x-greptime-log-table-name`).
   auditTable: lance_audit
   # -- Separate TTL for the audit table, overriding the database TTL; empty leaves audit records on `retention`.
   auditRetention: "400d"
@@ -56,7 +78,7 @@ greptimedb-standalone:
   #
   # BOUNDING IS NOT SHRINKING: with these set, an oversized scan fails ITS OWN QUERY
   # (`scan_memory_on_exhausted = "fail"`, the default) instead of taking the process down with every log,
-  # metric and trace it holds; rask's Collector queues and retries a rejected write.
+  # metric and trace it holds; the gateway Collector queues and retries a rejected write.
   #
   # SIZING against the 8Gi limit below. Worst case sums to ~6.3GiB:
   #   caches ~1.31GiB + write-buffer reject 1GiB + query 2GiB + scan 1GiB + compaction 1GiB.

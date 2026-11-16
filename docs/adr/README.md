@@ -128,7 +128,7 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0111](0111-gold-carries-its-lineage-as-a-jsonb-column-r26-2026-07-28.md) | R26 | Gold carries its lineage as a JSONB column (R26, 2026-07-28) | superseded by 0156 |
 | [0114](0114-lance-ns-s-frontend-toolchain-and-zone-directory-win-r10-r11.md) | R10, R11 | lance-ns's frontend toolchain and zone directory win (R10, R11, 2026-07-27) | amended |
 | [0115](0115-dagger-tracks-the-newest-release-r12-2026-07-27.md) | R12 | Dagger tracks the newest release (R12, 2026-07-27) | accepted |
-| [0116](0116-the-otel-collector-is-the-only-log-shipper-r13-2026-07-27.md) | R13 | The OTel Collector is the only log shipper (R13, 2026-07-27) | accepted |
+| [0116](0116-the-otel-collector-is-the-only-log-shipper-r13-2026-07-27.md) | R13 | The OTel Collector is the only log shipper (R13, 2026-07-27) | amended |
 | [0117](0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) | merge decision 4, R14 | nginx is retired, and the FastAPI gateway is the in-cluster edge (merge decision 4, R14, 2026-07-24) (the gateway is removed by 0165) | superseded by 0165 |
 | [0118](0118-common-merges-into-service-kit-r19-2026-07-27.md) | R19 | common merges into service-kit (R19, 2026-07-27) | superseded by 0195 |
 | [0120](0120-one-compute-lineage-layer-lineage-kit-r21-2026-07-27.md) | R21 | One compute-lineage layer, `lineage-kit` (R21, 2026-07-27) | superseded by 0195 |
@@ -220,4 +220,5 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md) | LH-596 | Labels a project defines replace tiers, and the run rule stands alone as `rask.requires_run` (2026-11-15) | accepted |
 | [0212](0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md) | LH-594 | Publication goes, and a table's data contract is checked on every commit (2026-11-16) | accepted |
 | [0213](0213-a-projects-administrators-are-everyone-its-admin-reaches-through-its-roles.md) | LH-597 | A project's administrators are everyone its admin reaches through its roles (2026-11-16) | accepted |
-| [0214](0214-the-e2e-lane-runs-the-telemetry-chain.md) | XC-208 | The e2e lane runs the telemetry chain and reads rask's signals behind the Collector (2026-11-16) | accepted |
+| [0214](0214-the-e2e-lane-runs-the-telemetry-chain.md) | XC-208 | The e2e lane runs the telemetry chain and reads rask's signals behind the Collector (2026-11-16) | amended |
+| [0215](0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md) | XC-207 | Each service exports its telemetry to the platform's gateway as itself; the product chart renders no Collector (2026-11-16) | accepted |

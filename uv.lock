@@ -1097,6 +1097,7 @@ dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pylance", extra = ["otel"] },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "tenacity" },
     { name = "urllib3" },
 ]
@@ -1135,6 +1136,7 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.1" },
     { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "tenacity", specifier = ">=9.1.4" },
     { name = "urllib3", specifier = ">=2.8.0" },
 ]

@@ -18,7 +18,7 @@ true, `rustfs@1.0.3:rustfs/src/init.rs:78-86`).
 | `RUSTFS_OBS_LOG_DIRECTORY` | `""` (stdout) | unset in code; `/logs` in the image | `crates/config/src/observability/mod.rs:61`; `crates/obs/src/config.rs:286-293`; `Dockerfile:118` |
 | `RUSTFS_OBS_LOGGER_LEVEL` | `info` or `warn` | `error` in code; `warn` in the image | `app.rs:26-27`; `Dockerfile:117` |
 | `RUSTFS_OBS_PROFILING_EXPORT_ENABLED` | `false` | `true` | `observability/mod.rs:48`; `app.rs:367-368` |
-| `RUSTFS_OBS_ENDPOINT` | `http://<release>-otel-collector:4318` when observability is on | `""` | `cli.rs:1583-1590`; `app.rs:59` |
+| `RUSTFS_OBS_ENDPOINT` | unset: the fixture logs to stdout, which the development gateway's filelog tails | `""` | `cli.rs:1583-1590`; `app.rs:59` |
 | `RUSTFS_OBS_USE_STDOUT` | `false` when OTLP is on | forced true with no endpoint | `observability/mod.rs:37`; `crates/obs/src/config.rs:273-285` |
 | `RUSTFS_OBS_SERVICE_NAME` | `rustfs` | `RustFS` | `app.rs:20` |
 | `RUSTFS_DURABILITY_MODE` | unset (strict) | strict | `crates/ecstore/src/disk/local.rs:1289-1296` |

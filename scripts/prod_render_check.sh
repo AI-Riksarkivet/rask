@@ -65,7 +65,6 @@ OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
 helm template rask "$CHART" -f "$PROD_VALUES" \
-  --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
   --set route.hostnames[0]=lance.example.com "${COMMON[@]}" > "$OUT"
 
 # RENDER_ONLY=PATH keeps the production render at PATH and checks nothing: `dagger call scan-config` scans it, so the
@@ -134,18 +133,18 @@ spread=$(grep -c "topologySpreadConstraints:" "$OUT" || true)
 tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
 [ "$tiers" -ge 1 ] || fail "prod must tier the memory-heavy workload (the catalog) to 1Gi, got $tiers"
 
-# 7. The Collector exports to the endpoint the deployer names, and rask ships no store or alert engine of its own
-# (ADR 0153): the alert rules are deploy/alerting/rules.yml, for the platform's evaluator.
-grep -q 'endpoint: "https://otlp.example.com:4318/v1/otlp"' "$OUT" || fail "prod's Collector must export to observability.export.endpoint"
-# Default-deny egress would drop an off-namespace export silently: the Collector's egress must admit the backend the
-# deployer states (observability.export.egress).
-grep -A20 "name: rask-allow-telemetry-export-egress$" "$OUT" | grep -q "cidr: 203.0.113.10/32" \
-  || fail "prod's NetworkPolicy must let the Collector reach the export backend observability.export.egress names"
+# 7. Every service exports to the endpoint the deployer names, and rask ships no Collector, store or alert engine of its
+# own (ADR 0153, ADR 0199): the alert rules are deploy/alerting/rules.yml, for the platform's evaluator.
+grep -q 'value: "https://otlp.example.com:4318/v1/otlp"' "$OUT" || fail "prod's services must export to observability.export.endpoint"
+# Default-deny egress would drop an off-namespace export silently: the exporting services' egress must admit the
+# gateway the deployer states (observability.export.egress).
+grep -A30 "name: rask-allow-telemetry-export-egress$" "$OUT" | grep -q "cidr: 203.0.113.10/32" \
+  || fail "prod's NetworkPolicy must let the services reach the OTLP gateway observability.export.egress names"
 grep -qE "name: rask-(vmalert|alertmanager|greptimedb-standalone|perses)$" "$OUT" \
   && fail "prod must not render an observability store, dashboard or alert engine (they are the platform's)"
 
-# 8. NO bespoke scraper is shipped — the OTel Collector's prometheus receiver owns every scrape.
-grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the OTel Collector owns every scrape)"
+# 8. NO bespoke scraper is shipped: collecting telemetry is the platform's.
+grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (collecting telemetry is the platform's)"
 
 # 8b. THE EDGE'S FORMERLY-UNAUTHENTICATED DOORS STAY SHUT IN PROD.
 #

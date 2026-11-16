@@ -1,10 +1,9 @@
-# Production overlay — apply ON TOP of values.yaml:
-#   helm upgrade lance-ns ./chart -f chart/values.yaml -f deploy/values-prod.yaml
+# Production overlay, applied on top of chart/values.yaml with the environment's own values file after it
+# (docs/runbooks/RUNBOOK-prod-install.md is the ordered install).
 #
-# It flips the safe-by-default-OFF prod switches and is the place to externalize the durable/stateful
-# tier. See docs/DURABILITY.md for the tier model (ephemeral compute / durable data / external-in-prod).
-# Switches set here are wired today; the EXTERNALIZE stanzas at the bottom are commented because they
-# also need the matching external-endpoint chart hooks (tracked as follow-up) before they do anything.
+# It flips the safe-by-default-OFF prod switches and names every platform service as external. See docs/DURABILITY.md
+# for the tier model (ephemeral compute / durable data / external-in-prod). The commented stanzas show the shape of the
+# values the environment's file supplies; the render refuses each one left empty.
 
 # --- App images: a released chart (`oci://<registry>/charts/rask:<version>`, .github/workflows/release.yml) pins the
 # lakehouse image by the digest it was released with, so the environment's GitOps object names the chart version and
@@ -34,6 +33,9 @@ services:
   # service except the gateway, and values-prod leaves all of them single-replica"). Each of these
   # argues at its own definition site that it scales safely, and prod then left it at one — so a node
   # drain on a cluster upgrade was a full outage window for each.
+# The console is the estate's UI, so a node's loss or a drain must not take it away either.
+console:
+  replicas: 2
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
@@ -70,7 +72,7 @@ objectStore:
 # the store reach its addresses, `openbao.egress`). The chart ships the full, correct impl (templates/network-policy.yaml);
 # it was simply never enabled on the documented prod overlay — the security audit's headline gap. REQUIRES a
 # policy-enforcing CNI (Calico/Cilium): kind's default kindnet SILENTLY ignores NetworkPolicy, so this can't
-# be proven on the demo — verify with the negative-isolation probe (docs/KIND-RUNBOOK.md) on the real
+# be proven on the demo — verify with the negative-isolation probe (docs/runbooks/RUNBOOK-prod-install.md, Read back) on the real
 # cluster as a prod acceptance step. (prod-readiness P1)
 networkPolicy:
   enabled: true
@@ -107,14 +109,13 @@ resources:
     limits: { cpu: "2", memory: 1Gi } # sized by catalog.maxConcurrentWrites above (cap×256MiB + 512Mi)
 
 # --- Backups (P4): the Postgres is the platform's, and its operator does PITR and scheduled backups, so the pg_dump
-# CronJob is off. The volume snapshot covers the development store's PVC; with the platform's S3 set it false too.
-# (snapshotClassName must be a real CSI VolumeSnapshotClass.) ----
+# CronJob is off. The volume snapshot covers the development store's PVC, and the store here is the platform's S3, whose
+# durability is its operator's, so there is no volume to snapshot. ----
 backups:
   pgDump:
     enabled: false
   volumeSnapshot:
-    enabled: true
-    snapshotClassName: "" # set your cluster's CSI VolumeSnapshotClass
+    enabled: false
 
 # --- Secrets: the platform's Vault or OpenBao ([[XC-149]]); the chart renders no secret store. The deployer names
 # it as `openbao.externalAddr` (https; the render refuses http) with `openbao.egress`, the NetworkPolicy rule reaching
@@ -159,20 +160,21 @@ route:
   hostnames: [] # e.g. [lance.example.com]
 #   parentRefs: [{name: edge, namespace: kgateway-system, sectionName: https}]
 
-# The telemetry store, its dashboards and its alerting are the platform's (ADR 0153). rask's Collector exports to
-# the OTLP endpoint named here, and the platform's evaluator loads deploy/alerting/rules.yml.
+# The telemetry pipeline is the platform's (ADR 0153, ADR 0199): its OTLP gateway, the store, its dashboards, its alerting
+# and how the audit trail is routed. Each service exports to the endpoint named here, presenting its own ServiceAccount
+# token for `observability.identity.audience`, and the platform's evaluator loads deploy/alerting/rules.yml.
 observability:
-  # ON in prod: the Collector ships the estate's telemetry and the `lance.audit` trail to the platform's backend.
+  # ON in prod: every service ships its telemetry and the `lance.audit` trail to the platform's gateway.
   enabled: true
   # The resource attribute every trace and metric carries. values.yaml defaults it to `rask` with the
   # note "override per deploy" and this overlay never did, so prod telemetry — the cascade's included —
   # was indistinguishable from dev in GreptimeDB. Measured on this render 2026-09-16:
   # `deployment.environment.name=rask`. An alert that fires on "the estate" cannot say which one.
   environment: prod
-  # `export.endpoint` (the platform's OTLP backend; the render refuses it empty or http) is the deployer's to name, with the
-  # NetworkPolicy egress that reaches it (`export.egress`: {to, ports} rules naming the backend's addresses). The store must meet the audit store's
-  # contract (values.yaml `observability`): refuse unauthenticated writes and deletes, admit
-  # `otel-collector-export`.
+  # `export.endpoint` (the platform's OTLP gateway; the render refuses it empty or http) is the deployer's to name, with
+  # the NetworkPolicy egress that reaches it (`export.egress`: {to, ports} rules naming the gateway's addresses). The
+  # gateway admits a token for `identity.audience` from the cluster's issuer, routes the `lance.audit` scope to the
+  # governance trail's store, and that store refuses unauthenticated writes and deletes.
 
 # ===================================================================================================
 # EXTERNALIZE the durable/managed tier (tier 3 in docs/DURABILITY.md). Disable the in-cluster component

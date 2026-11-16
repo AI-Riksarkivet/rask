@@ -446,14 +446,19 @@ answered (`delivery_handling_failed` for a handling that raised or ran past its 
 **Symptom.** `HttpServerMetricsMissing` (critical): no `http_server_request_duration_seconds_count` series has arrived for
 15 minutes, so `HttpServerErrorRatioHigh` and `HttpServerLatencyHigh` cannot fire.
 
-**Cause.** Usually the telemetry path rather than the apps: the OTel Collector (`rask-otel-collector`) is down or cannot
-export to the store. Every app down at once would do it too, and the other alerts would say so.
+**Cause.** Usually the telemetry path rather than the apps: the platform's OTLP gateway at
+`observability.export.endpoint` is down, refuses the services' tokens, or cannot write its store (ADR 0215). Every app
+down at once would do it too, and the other alerts would say so.
 
-**Diagnose.** `kubectl get deploy rask-otel-collector`, and its log for export errors
-(`kubectl logs deploy/rask-otel-collector`). An app's pod names the Collector in `OTEL_EXPORTER_OTLP_ENDPOINT`. The
-store must answer at `observability.export.endpoint` (GreptimeDB in development).
+**Diagnose.** An app's pod names the gateway in `OTEL_EXPORTER_OTLP_ENDPOINT`. In development the gateway is the
+observability fixture's Collector: `kubectl -n observability get deploy otel-collector`, and its log for refusals and
+export errors (`kubectl -n observability logs deploy/otel-collector`). A 401 there is a token the gateway refused: check
+that the app's pod mounts the file its `RASK_OTLP_TOKEN_FILE` names and that the token's audience is
+`observability.identity.audience` (the gateway's `identity.audience`). After the cluster's ServiceAccount signing key
+rotates, the development gateway refuses every token until it restarts, since it reads the issuer's keys at start. On
+a platform, the gateway's own runbook takes over.
 
-**Act.** Restore the Collector or its export. The apps keep serving meanwhile; only their telemetry is lost.
+**Act.** Restore the gateway or its export. The apps keep serving meanwhile; only their telemetry is lost.
 
 ## A process ended itself (exit 70)
 
@@ -468,7 +473,7 @@ ends only on a fault no loop handles: the store, the bus and the identity provid
 their loop.
 
 **Diagnose.** `kubectl logs <pod> --previous`: the `loop` the line names and its traceback. The process gives its
-records 3 s at most to reach the Collector before it ends, and a maintenance worker holding a task only what its lease
+records 3 s at most to reach the OTLP gateway before it ends, and a maintenance worker holding a task only what its lease
 leaves, so a line missing from the store is still in the container's previous log. A pylance panic inside one
 maintenance pass is not this: it fails that task alone (`maintenance.tasks.retried`, then `ended`). A maintenance
 worker also ends itself when it can no longer hold its task alone, each with a CRITICAL line of its own:

@@ -119,7 +119,40 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 
-{{- define "lance.otlpEndpoint" -}}http://{{ include "lance.fullname" . }}-otel-collector:4318{{- end -}}
+{{- define "lance.otlpEndpoint" -}}{{ required "observability.export.endpoint: the OTLP/HTTP endpoint every service exports to (the platform's gateway)" .Values.observability.export.endpoint }}{{- end -}}
+
+{{- define "lance.otlpAudience" -}}{{ required "observability.identity.audience: the audience of the token each service presents to the platform's OTLP gateway" .Values.observability.identity.audience }}{{- end -}}
+
+{{- define "lance.otlpTokenFile" -}}/var/run/secrets/rask/identity/{{ include "lance.otlpAudience" . }}/token{{- end -}}
+
+{{- define "lance.pdb" -}}
+{{- $root := index . 0 -}}{{- $component := index . 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lance.fullname" $root }}-{{ $component }}
+  labels: {{- include "lance.labels" $root | nindent 4 }}
+spec:
+  minAvailable: {{ $root.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+{{- end -}}
+
+{{- define "lance.otlpExporters" -}}
+{{- $c := list "catalog" "lineage" -}}
+{{- if .Values.maintenance.enabled }}{{- $c = append $c "maintenance-worker" }}{{- end -}}
+{{- toJson $c -}}
+{{- end -}}
+
+{{- define "lance.otlpIdentity" -}}
+{{- $root := index . 0 -}}{{- $part := index . 1 -}}
+{{- if include "lance.otelEnabled" $root }}
+{{- include "lance.identityTokens" (list $part (include "lance.otlpAudience" $root)) }}
+{{- end }}
+{{- end -}}
 
 {{- define "lance.egressRules" -}}
 {{- $value := index . 0 -}}{{- $rules := index . 1 -}}{{- $reaches := index . 2 -}}
@@ -163,7 +196,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if and $v.auth.issuerMirror.enabled (or $v.openfga.enabled $v.objectStore.enabled) }}{{- $api = append $api "issuer-mirror" }}{{- end -}}
 {{- if $v.openbao.enabled }}{{- $api = append $api "openbao" }}{{- end -}}
 {{- if not (include "rask.isRealDeployment" .) }}{{- $api = append $api "bus-signer" }}{{- end -}}
-{{- if $v.observability.enabled }}{{- $api = append $api "otel-collector" }}{{- end -}}
 {{- if $v.backups.volumeSnapshot.enabled }}{{- $api = append $api "object-store-backup" }}{{- end -}}
 {{- if $api -}}
 {{- $rows = append $rows (dict "name" "apiserver" "value" "networkPolicy.apiServerEgress" "rules" $v.networkPolicy.apiServerEgress "reaches" "the Kubernetes API server's endpoints, at the port a policy sees after the kubernetes Service's translation" "components" $api) -}}
@@ -175,7 +207,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $rows = append $rows (dict "name" "secret-store" "value" "openbao.egress" "rules" $v.openbao.egress "reaches" "the platform's secret store at openbao.externalAddr" "components" (splitList "," (include "lance.secretReaderComponents" .) | compact)) -}}
 {{- end -}}
 {{- if $v.observability.enabled -}}
-{{- $rows = append $rows (dict "name" "telemetry-export" "value" "observability.export.egress" "rules" $v.observability.export.egress "reaches" "the telemetry backend at observability.export.endpoint" "components" (list "otel-collector")) -}}
+{{- $rows = append $rows (dict "name" "telemetry-export" "value" "observability.export.egress" "rules" $v.observability.export.egress "reaches" "the platform's OTLP gateway at observability.export.endpoint" "components" (include "lance.otlpExporters" . | fromJsonArray)) -}}
 {{- end -}}
 {{- if not $v.objectStore.enabled -}}
 {{- $rows = append $rows (dict "name" "object-store" "value" "objectStore.egress" "rules" $v.objectStore.egress "reaches" "the platform's S3 and its STS at objectStore.externalEndpoint" "components" (include "lance.objectStoreClients" . | fromJsonArray)) -}}
@@ -438,6 +470,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 - { name: OTEL_SERVICE_NAME, value: {{ $svc | quote }} }
 - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "{{ include "lance.otlpEndpoint" $root }}" }
 - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "http/protobuf" }
+- { name: OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER, value: "rask_service_account" }
+- { name: RASK_OTLP_TOKEN_FILE, value: {{ include "lance.otlpTokenFile" $root | quote }} }
 - { name: OTEL_TRACES_EXPORTER, value: "otlp" }
 - { name: OTEL_METRICS_EXPORTER, value: "otlp" }
 
@@ -458,6 +492,11 @@ lifecycle:
       command: ["sh", "-c", "sleep {{ .Values.lifecycle.preStopSeconds }}"]
 {{- end -}}
 
+{{- define "lance.deadlineGrace" -}}
+{{- $root := index . 0 -}}{{- $deadline := index . 1 -}}{{- $l := $root.Values.lifecycle -}}
+{{- add $l.preStopSeconds (int (required "a service's requestDeadlineSeconds" $deadline)) (required "lifecycle.teardownSeconds" $l.teardownSeconds) -}}
+{{- end -}}
+
 {{- define "rask.shutdownArg" -}}
 {{- $r := . -}}{{- $g := 0 -}}
 {{- if kindIs "slice" . }}{{ $r = index . 0 }}{{ $g = index . 1 }}{{ else }}{{ $g = .Values.lifecycle.terminationGracePeriodSeconds }}{{ end -}}
@@ -476,7 +515,8 @@ lifecycle:
 topologySpreadConstraints:
   - maxSkew: 1
     topologyKey: kubernetes.io/hostname
-    whenUnsatisfiable: ScheduleAnyway
+    whenUnsatisfiable: DoNotSchedule
+    nodeTaintsPolicy: Honor
     labelSelector:
       matchLabels:
         app.kubernetes.io/component: {{ . }}
@@ -736,7 +776,7 @@ buckets as the estate's reads already are. */ -}}
 
 {{- define "lance.serviceAccounts" -}}
 {{- $root := . -}}{{- $fullname := include "lance.fullname" . -}}
-{{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-otel-collector" $fullname) (printf "%s-openfga" .Release.Name) -}}
+{{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-openfga" .Release.Name) -}}
 {{- range (include "lance.saComponents" . | fromJsonArray) }}{{- $names = append $names (include "lance.saName" (list $root .)) }}{{- end -}}
 {{- if .Values.console.enabled }}{{- $names = append $names (include "lance.saName" (list $root "console")) }}{{- end -}}
 {{- toJson $names -}}
@@ -1061,7 +1101,7 @@ activeDeadlineSeconds: 1800
 {{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api) -}}
 {{- end -}}
 {{- end -}}
-{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "nats-callout" "openbao-seeded" "commit-id-key" "otel-collector-export" "object-store-root" "postgres") -}}
+{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "nats-callout" "openbao-seeded" "commit-id-key" "object-store-root" "postgres") -}}
 {{- range $reads }}{{- $held = concat $held .api }}{{- end -}}
 {{- $lakehouseApps := list $v.services.catalog.appId $v.services.lineage.appId $v.maintenance.appId -}}
 {{- $external := $v.openbao.externalReaders | default dict -}}
@@ -1094,7 +1134,6 @@ activeDeadlineSeconds: 1800
 {{- $v := .Values -}}
 {{- $reads := list "postgres" -}}
 {{- if $v.objectStore.enabled }}{{- $reads = append $reads "object-store-root" }}{{- end -}}
-{{- if $v.observability.enabled }}{{- $reads = append $reads "otel-collector-export" }}{{- end -}}
 {{- range $files := include "lance.natsFiles" . | fromJson }}{{- $reads = concat $reads $files }}{{- end -}}
 {{- toJson ($reads | uniq | sortAlpha) -}}
 {{- end -}}

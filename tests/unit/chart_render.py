@@ -76,7 +76,7 @@ PREREQ_ARGS: tuple[str, ...] = (
     "--set-json", f'auth.oidc.egress=[{{"to":[{{"ipBlock":{{"cidr":"{ISSUER_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":443}}]}}]',
 )  # fmt: skip
 
-#: Observability ON with the backend an operator names ([[XC-127]]): off by default, it renders the Collector and the
+#: Observability ON with the backend an operator names ([[XC-127]]): off by default, it renders the
 #: fleet's OTLP export only with an endpoint to send to. A gate of a pod's telemetry wiring states it.
 OBSERVABILITY_SETS: tuple[str, ...] = ("observability.enabled=true", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp")
 OBSERVABILITY_ARGS: tuple[str, ...] = tuple(arg for value in OBSERVABILITY_SETS for arg in ("--set", value))
@@ -108,7 +108,6 @@ PROD_ARGS: tuple[str, ...] = (
     "--set-json", f'openbao.egress=[{{"to":[{{"ipBlock":{{"cidr":"{SECRET_STORE_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":8200}}]}}]',
     "--set-string", f"services.lineage.forward.url={GRAPH_URL}",
     "--set-json", f'services.lineage.forward.egress=[{{"to":[{{"ipBlock":{{"cidr":"{GRAPH_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":443}}]}}]',
-    "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     # `--set-json`, so a gate's later `--set-json route.hostnames=[]` replaces it: helm applies every `--set` after every `--set-json`.
     "--set-json", 'route.hostnames=["lance.example.com"]',
     "--set", "image.repository=ghcr.io/example/rask",

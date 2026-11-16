@@ -46,9 +46,8 @@ Routes disabled — nothing publishes /api; port-forward a service directly.
 
 {{- if .Values.observability.enabled }}
 
-Observability (rask's OTel Collector; the store, dashboards and alerting are the platform's):
-  - collector:  {{ include "lance.fullname" $root }}-otel-collector:4318 (OTLP/HTTP in; also tails infra pod logs)
-  - export:     {{ .Values.observability.export.endpoint }}
+Observability (the Collector, store, dashboards and alerting are the platform's):
+  - export:     {{ .Values.observability.export.endpoint }} (OTLP/HTTP; each service presents its token for {{ .Values.observability.identity.audience }})
   - rules:      deploy/alerting/rules.yml, for the platform's alert evaluator
 {{- end }}
 

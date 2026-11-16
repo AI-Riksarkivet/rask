@@ -15,7 +15,7 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 | **External Secrets Operator** | the ExternalSecrets and SecretStore behind every credential a pod takes as a Kubernetes Secret (§ 8) |
 | **NATS JetStream** | the stream Job that declares rask's streams and durable consumers, and one bus user per app (§ 7) |
 | **CloudNativePG operator** | a `Cluster` only with `age.cnpgCluster.enabled`; see [`CNPG-AGE.md`](CNPG-AGE.md) |
-| **The OTel backend** | the Collector's export endpoint and headers; the store, dashboards and alerting are the platform's |
+| **The OTLP gateway** | `observability.export.endpoint` and `observability.identity.audience`: each service exports to the gateway as itself with its ServiceAccount token ([ADR 0215](adr/0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md)); the gateway, store, dashboards and alerting are the platform's |
 
 The lakehouse runs no compute and submits no job ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)):
 KubeRay, Kueue, GPU operators and whatever orchestrates a pipeline belong to the user who runs that pipeline, and no

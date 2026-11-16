@@ -167,7 +167,7 @@ Off by default (`RUSTFS_AUDIT_ENABLE`, `rustfs@1.0.3:crates/config/src/constants
 kafka, mqtt, mysql, postgres, nats, redis, amqp, pulsar; no OTLP audit target (`rustfs@1.0.3:crates/config/src/audit/mod.rs:41-53`).
 Webhook delivery is at-least-once and probes the endpoint origin with `HEAD /`
 (`rustfs@1.0.3:crates/targets/src/target/webhook.rs:90`). Records carry access keys, claims and headers: treat the
-stream as sensitive. Reaching rask's Collector needs a webhook receiver there plus an `RUSTFS_OUTBOUND_ALLOW_ORIGINS`
+stream as sensitive. Reaching the platform's OTLP gateway (ADR 0215) needs a webhook receiver there plus an `RUSTFS_OUTBOUND_ALLOW_ORIGINS`
 entry; an open design choice.
 
 ## Surfaces to keep closed
