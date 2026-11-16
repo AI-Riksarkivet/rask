@@ -95,6 +95,14 @@ before rask's mirror does (`rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:151-197`
 `/health/live` answers during startup, before the store serves; `/health/ready` answers once the store takes S3
 requests (read quorum, which on one drive is write quorum too). A "store is back" check reads readiness.
 
+With store events on, the liveness probe also restarts the store when its bus credential is reissued. RustFS reads
+`nats.creds` once, at start: measured 2026-11-16 on RustFS 1.0.3 (helm rev 28), after the dev OpenBao reissued the
+`object-store` user and the bus revoked the old JWT, RustFS kept presenting the old one (`authorization violation`
+every 4 s) with the new file already mounted, and published no store event until it restarted. `postStart` records the
+credential's sha256 in `/tmp/bus-credential-at-start` (the digest only: the credential stays in the Secret's volume),
+and the probe fails once the mounted file's digest differs, so the kubelet restarts the container onto the new file.
+Pinned by `tests/unit/test_the_dev_store_restarts_when_its_bus_credential_is_reissued.py`.
+
 ## `name: tmp`
 
 A bounded `emptyDir`: an unbounded one draws from the node's ephemeral storage, so a runaway write evicts every pod on

@@ -97,10 +97,25 @@ spec:
             {{- end }}
           ports:
             - { name: s3, containerPort: {{ .Values.port }} }
+          {{- if .Values.events.busAddress }}
+          lifecycle:
+            postStart:
+              exec:
+                command: ["sh", "-c", "sha256sum < /run/secrets/rustfs-bus/nats.creds > /tmp/bus-credential-at-start"]
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - curl -fsS -o /dev/null http://127.0.0.1:{{ .Values.port }}/health/live && sha256sum < /run/secrets/rustfs-bus/nats.creds | cmp -s - /tmp/bus-credential-at-start
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          {{- else }}
           livenessProbe:
             httpGet: { path: /health/live, port: s3 }
             initialDelaySeconds: 10
             periodSeconds: 15
+          {{- end }}
           readinessProbe:
             httpGet: { path: /health/ready, port: s3 }
             initialDelaySeconds: 5
