@@ -27,6 +27,10 @@ what it owns is the part that is identical in all of them:
      ``traceparent`` continued where one is sent, so its id is the one correlation id (ADR 0209) the log lines, the
      audit trail, the problem body's ``instance``, the commits and the events it causes all carry. OUTERMOST, so every
      refusal a layer below answers runs in it.
+   * ``NoStoreMiddleware``: every answer carries ``Cache-Control: no-store`` unless its door named its own caching, and
+     varies on ``Authorization``, since a door may answer the credentials it vends (`lakehouse.no_store`). It wraps
+     the app's own entry point (:class:`_UncachedApp`), so the server's error layer is inside it: an unexpected
+     exception's 500 is answered by that error layer, outside every layer ``add_middleware`` installs.
    * ``PanicCatcherMiddleware``: a native library's panic answers 500 with the problem body and the process
      serves on.
    * ``RequestDeadlineMiddleware``: a request with no answer begun within ``request_deadline_seconds`` is
@@ -45,7 +49,7 @@ import logging
 import os
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Final
+from typing import Any, Final, override
 
 from fastapi import APIRouter, FastAPI
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -54,12 +58,14 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.middleware import Middleware
+from starlette.types import Receive, Scope, Send
 
 from lakehouse.app import setup_logging
 from lakehouse.body_limit import BodySizeLimitMiddleware
 from lakehouse.deadline import RequestDeadlineMiddleware
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import configure_audit
+from lakehouse.no_store import NoStoreMiddleware
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.panic_catcher import PanicCatcherMiddleware
 from lakehouse.probes import LiveCheck, ReadyCheck, make_probes_router
@@ -88,6 +94,21 @@ _SERVED_BESIDE_THE_SCHEMA: Final = "."
 
 #: The schema as each docs page names it: beside the page, whatever prefix the page was reached under.
 _SCHEMA_BESIDE_THE_PAGE: Final = "openapi.json"
+
+
+class _UncachedApp(FastAPI):
+    """A FastAPI app whose every answer passes `NoStoreMiddleware`, the catch-all handler's among them.
+
+    Starlette answers an unhandled exception from its own error layer, which it builds outside every layer
+    ``add_middleware`` installs, so a layer added that way never sees that answer. The layer therefore goes around the
+    app's own entry point, and not into the stack the app builds: OpenTelemetry's instrumentation wraps that stack and
+    refuses one whose outermost layer is not Starlette's error layer (measured on the locked instrumentation: it logs
+    "Skipping FastAPI instrumentation due to unexpected middleware stack" and traces nothing).
+    """
+
+    @override
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await NoStoreMiddleware(super().__call__)(scope, receive, send)
 
 
 def _trace_every_request(app: FastAPI) -> None:
@@ -165,7 +186,7 @@ def build_lance_service_app(
     setup_logging()
     configure_audit(enabled=audit_enabled)
     _forbid_migrations_on_read()
-    app = FastAPI(
+    app = _UncachedApp(
         title=title,
         version=version,
         lifespan=lifespan,

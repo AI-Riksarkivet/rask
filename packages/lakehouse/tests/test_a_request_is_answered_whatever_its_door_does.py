@@ -5,6 +5,9 @@ that has begun no answer within the request deadline is answered 503 (code 17) a
 cancelled, since a lakehouse door undoes its half-done work in its own ``except`` blocks. A door in which a native library
 panics, which pyo3 raises as a BaseException that no Exception handler catches, is answered 500 (code 18) as any other
 failure is, rather than by the server's bare text 500.
+
+Every answer, a door's or a layer's refusal in front of it, tells any cache between the caller and the service to keep
+none of it ([[LH-486]]): a door may answer the credentials it vends, and what one caller is answered is no other's.
 """
 
 from __future__ import annotations
@@ -12,10 +15,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+import httpx
+import pytest
+from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
 from lakehouse.lance_app import build_lance_service_app
@@ -83,3 +88,56 @@ def test_a_door_in_which_a_native_library_panics_is_answered_500_with_the_proble
         answered = client.get("/panics")
 
     assert (answered.status_code, answered.headers.get("content-type"), answered.json().get("code")) == (500, "application/problem+json", 18), answered.text
+
+
+def _a_doors_answer(client: TestClient) -> httpx.Response:
+    return client.get("/answers")
+
+
+def _a_refusal_in_front_of_the_door(client: TestClient) -> httpx.Response:
+    """A body over the app's cap, which the body cap refuses before the door runs."""
+    return client.post("/answers", content=b"x" * 2048)
+
+
+def _an_answer_naming_its_own_caching(client: TestClient) -> httpx.Response:
+    return client.get("/cached")
+
+
+def _a_door_that_fails_unexpectedly(client: TestClient) -> httpx.Response:
+    """A door raising an exception no handler names, which the server's own error layer answers."""
+    return client.get("/fails")
+
+
+@pytest.mark.parametrize(
+    ("ask", "status", "cache_control", "vary"),
+    [
+        pytest.param(_a_doors_answer, 200, "no-store", "Authorization", id="a-doors-answer"),
+        pytest.param(_a_refusal_in_front_of_the_door, 413, "no-store", "Authorization", id="a-refusal-in-front-of-the-door"),
+        pytest.param(_an_answer_naming_its_own_caching, 200, "private, max-age=60", "Accept, Authorization", id="an-answer-naming-its-own-caching"),
+        pytest.param(_a_door_that_fails_unexpectedly, 500, "no-store", "Authorization", id="a-door-that-fails-unexpectedly"),
+    ],
+)
+def test_every_answer_tells_a_cache_to_keep_none_of_it_unless_its_door_says_otherwise(
+    ask: Callable[[TestClient], httpx.Response], status: int, cache_control: str, vary: str
+) -> None:
+    app = _app(deadline_seconds=30.0)
+
+    @app.get("/answers")
+    @app.post("/answers")
+    async def _answers() -> dict[str, str]:
+        return {"storage_options": "a credential"}
+
+    @app.get("/cached")
+    async def _cached(response: Response) -> dict[str, str]:
+        response.headers["Cache-Control"] = "private, max-age=60"
+        response.headers["Vary"] = "Accept"
+        return {"answer": "public knowledge"}
+
+    @app.get("/fails")
+    async def _fails() -> None:
+        raise RuntimeError("nothing names this failure")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        answered = ask(client)
+
+    assert (answered.status_code, answered.headers.get("cache-control"), answered.headers.get("vary")) == (status, cache_control, vary), answered.text
