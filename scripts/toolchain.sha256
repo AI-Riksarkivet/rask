@@ -1,0 +1,27 @@
+# The sha256 of every binary or archive a script downloads, by the URL it is downloaded from (scripts/fetch_pinned.sh).
+# Each is the upstream release's published checksum for that asset, read 2026-11-16. A version bump adds its URLs here,
+# or the download fails.
+b22ff7e5c02b8011e82cc3223d069d178b9e1543f1deb21e936d11764780a3d8  https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
+981f6b49577068bc174275184d8ee7105d8e54f40733792c519cd85023984c0f  https://dl.k8s.io/release/v1.31.3/bin/linux/amd64/kubectl
+06e544e3f12ea54de5962ceaecd97513a25dbab4168a44f03f01833349afdda3  https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-arm64
+a3953ad2b32eca0b429249a5fbdf4f8ef7d57223c45cc0401fd80fd12c7b9071  https://dl.k8s.io/release/v1.31.3/bin/linux/arm64/kubectl
+180404ae1c0de8d333583d2958cdfac5338ec3e32cd765a158cfd6d09eb8cd7d  https://kind.sigs.k8s.io/dl/v0.25.0/kind-darwin-amd64
+66f49bbb19869f0735517a331c946fe1296d2f0f8cb5e7e7fb6ba33a8cee113c  https://dl.k8s.io/release/v1.31.3/bin/darwin/amd64/kubectl
+222701bb72ff596928c57b3c64ca3e0b969d593ef24ccc790f9c17904e7b63ea  https://kind.sigs.k8s.io/dl/v0.25.0/kind-darwin-arm64
+ef34c2c7debe346e5fd47065d9f66229edf164b043aa908fa5af0808f642ec7b  https://dl.k8s.io/release/v1.31.3/bin/darwin/arm64/kubectl
+03f3becc8a0a3279f303291b01ed5468be683f6ad7c519ed570af1df4b4bdcc3  https://github.com/openfga/cli/releases/download/v0.6.4/fga_0.6.4_linux_amd64.tar.gz
+03934727bfbf39b1e61a74d8e045796cda2de14f8ce4c01df27f43d4494021de  https://github.com/derailed/k9s/releases/download/v0.32.7/k9s_Linux_amd64.tar.gz
+a8cf72ada34fad93285ba2a452b38bdc5bd52cc9a571236244ec31022928d6cc  https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Linux_x86_64.tar.gz
+c3447c1be91b987678e70996451b6cf2169b9f44fea8fe670dc0f340281f11e8  https://github.com/losisin/helm-values-schema-json/releases/download/v2.6.0/helm-values-schema-json_2.6.0_linux_amd64.tgz
+e0712bb4e95a0f66ec6ab14cc61c963e25965d30a4ffcd3fa9a1f05b115dedea  https://github.com/openfga/cli/releases/download/v0.6.4/fga_0.6.4_linux_arm64.tar.gz
+b890a7a212a3fc69e6ea4b2a29d59f80ed501a27ad654c819a155cc7c3c6aa8d  https://github.com/derailed/k9s/releases/download/v0.32.7/k9s_Linux_arm64.tar.gz
+c3787212332386dcd122debef7848feb165aa701467ae3e3442df7638f3ac4e4  https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Linux_arm64.tar.gz
+baf7c867fb4cb6903f49e5698b74a850912b6af9c84108668351e312b59e0e4f  https://github.com/losisin/helm-values-schema-json/releases/download/v2.6.0/helm-values-schema-json_2.6.0_linux_arm64.tgz
+1e9fa851dcb71ca8b76c9e61e94799e29f03f085675e6c69b88b9a90c56d14e4  https://github.com/openfga/cli/releases/download/v0.6.4/fga_0.6.4_darwin_amd64.tar.gz
+64c0b81aa844aa3160e9c93d44eb17a5cdb0b7ff605eaff3467c94ebfd8c8f79  https://github.com/derailed/k9s/releases/download/v0.32.7/k9s_Darwin_amd64.tar.gz
+b2f1ffd0feef8dc0901a38a2053481d1d67b63ca30da4ac774166c6b52fa2245  https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Darwin_x86_64.tar.gz
+2efefae69eb445670d74760313274e803f5556dc4bd5a20b8fea1d97d8ed7c71  https://github.com/losisin/helm-values-schema-json/releases/download/v2.6.0/helm-values-schema-json_2.6.0_darwin_amd64.tgz
+d9df63af574ac39b9b428630037e8c50bb4dc198aa8d9ed982de0149ecb7485e  https://github.com/openfga/cli/releases/download/v0.6.4/fga_0.6.4_darwin_arm64.tar.gz
+39b885668f07a1156f55ad3cb6b4b06c0b4ed6ef363db8a8c966aeabb1e67ad3  https://github.com/derailed/k9s/releases/download/v0.32.7/k9s_Darwin_arm64.tar.gz
+2d8399db5b33d240d5f8985241bcf5483563150b968e3229823822979f3e4b8b  https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Darwin_arm64.tar.gz
+270d6212b8f01d5639288168e0ebb70fd82fdc8bda1b87c22762bbfe93874e90  https://github.com/losisin/helm-values-schema-json/releases/download/v2.6.0/helm-values-schema-json_2.6.0_darwin_arm64.tgz

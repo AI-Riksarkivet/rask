@@ -413,8 +413,12 @@ Every later release publishes into them as they stand.
 
 Each architecture's images are built natively on a runner of their own (`dagger call publish-image`): under emulation
 the catalog image's import gate dies of SIGILL in a native wheel. Every image passes a scan gate before it is pushed: a
-HIGH or CRITICAL finding a fixed release exists for refuses the release. `dagger call publish` then joins each image's
-architectures into one index and pushes the chart with `scripts/pin_chart_release.py`'s pin ([[XC-202]]). It signs each
+HIGH or CRITICAL finding a fixed release exists for refuses the release, and the job prints each image it pushed by
+digest, which the workflow hands to the publish job as an artifact. `dagger call publish --pushed <file of those references>` then joins
+exactly those images, one per image and platform, each bound to its repository and to the platform its own config names,
+into one index per image, and refuses an index the registry then holds with any other child; it never resolves a
+`<version>-<arch>` tag, so an image pushed over one after the scan is not what is signed ([[XC-215]]). It pushes the
+chart with `scripts/pin_chart_release.py`'s pin ([[XC-202]]). It signs each
 index, every manifest in it and the chart keylessly, as the release workflow at the release's tag (a short-lived
 Sigstore certificate for the workflow's OIDC token, recorded in the public transparency log, so no signing key exists),
 attests each platform manifest's CycloneDX SBOM the same way, and verifies each signature and attestation as it is
@@ -423,11 +427,13 @@ https://github.com/AI-Riksarkivet/rask/.github/workflows/release.yml@refs/tags/l
 --certificate-oidc-issuer https://token.actions.githubusercontent.com <image or chart>@<digest>`, and an SBOM with
 `cosign verify-attestation --type cyclonedx` and the same two flags against a platform manifest. `dagger call
 release-dry-run --version <semver>` runs the same path end to end into a registry that lives only in its session,
-signing with a key pair generated there, and publishes nothing. The released chart is a real deployment by default, so it refuses the
+signing with a key pair generated there, and publishes nothing. `dagger call release-handoff` (an `ms-gates` leg) moves
+every tag after its stand-in scan and proves the indexes and the verified chart hold only the scanned images. The released chart is a real deployment by default, so it refuses the
 development stand-ins until an install names the platform's services. `Lakehouse` is the exception: it stands the
-release up as the local estate it is. It verifies the pinned catalog image as signed by the release workflow at that
-version's tag, copies it into a registry inside the session, installs the
-published chart with the development fixtures (`scripts/install_from_empty.sh`, `CHART` and `CHART_VERSION`), and
+release up as the local estate it is. It verifies the chart as signed by the release workflow at that version's tag, on the
+digest the tag names, and fetches the archive by that digest ([[XC-216]]); verifies the catalog image the chart pins the
+same way, copies it into a registry inside the session, installs that verified archive with the development fixtures
+(`scripts/install_from_empty.sh`, `CHART`), and
 returns a `RaskLakehouse` whose `Service` serves the catalog on 2333, lineage on 8000 (its OpenLineage intake,
 `POST /api/v1/lineage`), Dex on 5556 and the object store on 9000. Bind that service as `rask-catalog`, `rask-lineage`,
 `rask-dex` and `rask-rustfs`, so a token's issuer and a vended endpoint resolve under the names the catalog uses.

@@ -24,6 +24,12 @@ const greptimeImage = "docker.io/greptime/greptimedb:v1.1.1"
 // minor, and the chart deps are vendored (chart/charts/*.tgz) so template/lint run fully offline.
 const helmVersion = "3.16.4"
 
+// helmSHA256 is each architecture's helmVersion archive digest, from get.helm.sh's own `.sha256sum` files (read 2026-11-16).
+var helmSHA256 = map[string]string{
+	"amd64": "fc307327959aa38ed8f9f7e66d45492bb022a66c3e5da6063958254b9767d179",
+	"arm64": "d3f8f15b3d9ec8c8678fbf3280c3e5902efabe5912e2f9fcf29107efbc8ead69",
+}
+
 // helmDocsVersion is the helm-docs that generates chart/README.md; the Makefile's HELM_DOCS_V pins the same one,
 // because a different version renders a different README and the staleness check would then disagree with itself.
 const helmDocsVersion = "1.14.2"
@@ -50,10 +56,14 @@ func helmBinary() *dagger.File {
 		// The official get.helm.sh archive extracts to linux-<arch>/helm, and the arch is READ off the
 		// container rather than written here ([[XC-070]]). `dpkg --print-architecture` spells it exactly
 		// as get.helm.sh does — `amd64`, `arm64` — so no translation table sits between them to drift.
+		// The archive is held to its published sha256 before it is unpacked: the release path renders and pushes the chart
+		// with this helm, so a swapped download must not run there.
 		WithExec([]string{"sh", "-c",
 			"set -eu; a=\"$(dpkg --print-architecture)\"; " +
-				"curl -fsSL https://get.helm.sh/helm-v" + helmVersion + "-linux-${a}.tar.gz" +
-				" | tar xz -C /tmp && install -m0755 /tmp/linux-${a}/helm /usr/local/bin/helm"}).
+				"case \"$a\" in amd64) sum=" + helmSHA256["amd64"] + ";; arm64) sum=" + helmSHA256["arm64"] + ";; *) echo \"no pinned helm digest for $a\" >&2; exit 1;; esac; " +
+				"curl -fsSL -o /tmp/helm.tgz https://get.helm.sh/helm-v" + helmVersion + "-linux-${a}.tar.gz; " +
+				"echo \"$sum  /tmp/helm.tgz\" | sha256sum -c --strict -; " +
+				"tar xzf /tmp/helm.tgz -C /tmp && install -m0755 /tmp/linux-${a}/helm /usr/local/bin/helm"}).
 		File("/usr/local/bin/helm")
 }
 

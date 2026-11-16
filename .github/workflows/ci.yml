@@ -29,6 +29,11 @@ concurrency:
   group: ci-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.sha) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# No job here writes anything: the token reads the repository and nothing else. Every action is pinned by commit, so a
+# moved tag cannot change what runs with it.
+permissions:
+  contents: read
+
 jobs:
   # ── THE MICROSERVICE PLANE (ms-*) ─────────────────────────────────────────────────────────────
   # Python: packages/ + services/ + the chart that ships them. The frontend plane is `web-*` and
@@ -53,7 +58,7 @@ jobs:
   ms-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
       - name: Tests — offline pytest suite, -m "not e2e" (Dagger)
         env:
@@ -94,6 +99,11 @@ jobs:
   #             retire phases run with their rendered scripts; maintenance's worker shares the work queue, a
   #             killed replica's task goes to another, and its commit lane settles each announcement. Hermetic,
   #             public images only. `dagger call nats-auth` == `make nats-auth`.
+  #   release-handoff
+  #             a release built from the image references its scan returned, in a session registry where every
+  #             `<version>-<arch>` tag was then moved: each index must hold exactly the scanned images, the chart
+  #             fetched by its verified digest must pin exactly those indexes, and an unsigned chart, an incomplete
+  #             or foreign handover are refused. `dagger call release-handoff` == `make release-handoff`.
   ms-gates:
     name: ms-${{ matrix.gate }}
     runs-on: ubuntu-latest
@@ -104,9 +114,11 @@ jobs:
         # every workload is Ready ([[XC-133]]); the command a developer runs locally.
         # gitops-from-empty: the same empty k3s, rask installed by a pinned Argo CD from an in-cluster Helm repository
         # serving this tree's chart, then one changed input converging on the next automated sync ([[XC-164]]).
-        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty, gitops-from-empty]
+        # release-handoff: a release joins and signs only the images its scan returned, after their tags were moved, and
+        # a chart is installed only as the archive whose signature was verified ([[XC-215]], [[XC-216]]).
+        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty, gitops-from-empty, release-handoff]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
       - name: dagger call ${{ matrix.gate }}
         env:
@@ -133,7 +145,7 @@ jobs:
       matrix:
         leg: [audit, scan-config]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
       - name: dagger call ${{ matrix.leg }}
         env:
@@ -155,7 +167,7 @@ jobs:
   supply-chain-secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - uses: ./.github/actions/dagger
@@ -186,7 +198,7 @@ jobs:
       matrix:
         image: [rest-catalog, frontend]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
       - name: Reclaim runner disk
         run: |
@@ -203,12 +215,12 @@ jobs:
   ms-authz:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: OpenFGA model test
         run: |
           FGA_V=0.6.4
-          curl -fsSL "https://github.com/openfga/cli/releases/download/v${FGA_V}/fga_${FGA_V}_linux_amd64.tar.gz" \
-            | tar xz -C /usr/local/bin fga
+          bash scripts/fetch_pinned.sh "https://github.com/openfga/cli/releases/download/v${FGA_V}/fga_${FGA_V}_linux_amd64.tar.gz" "$RUNNER_TEMP/fga.tgz"
+          tar xzf "$RUNNER_TEMP/fga.tgz" -C /usr/local/bin fga
           # R19 moved this tree: `services/common/auth/` no longer exists, and these four paths
           # pointed at it until 2026-07-28 — so this entire step was failing on a missing file and
           # the authz-model gate had not actually run since the merge. Paths are now the real ones.
@@ -247,7 +259,7 @@ jobs:
   web-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
       - name: Frontend bun gate — svelte-check + unit + lint + fmt (Dagger)
         env:
@@ -264,7 +276,7 @@ jobs:
   web-e2e:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2
         with:
           # The workspace's own pin (`packageManager`), so `--frozen-lockfile` meets the bun that wrote the lockfile.
@@ -287,7 +299,7 @@ jobs:
 
       - name: Upload Playwright traces on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
           path: frontend/console/test-results/
@@ -310,11 +322,11 @@ jobs:
     timeout-minutes: 70
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
 
@@ -322,8 +334,7 @@ jobs:
         run: uv sync --frozen --all-packages --all-groups
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
-
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
       # The script drives kind/kubectl/helm/fga out of .localbin (same as every make target), so the
       # toolchain bootstrap is the repo's own — not a CI-only fork that can drift from local behavior.
       - name: Bootstrap the pinned toolchain into .localbin
@@ -338,7 +349,7 @@ jobs:
       # The images `scripts/e2e_stack.sh` keeps across runs: those whose dockerfile copies nothing from the checkout, each
       # filed under the hash of its dockerfile and of the script that writes the archive, so a change to either rebuilds it.
       - name: Restore the kept image builds
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/rask-e2e-images
           key: e2e-images-${{ hashFiles('.docker/*.dockerfile', 'scripts/dagger-image.sh') }}
@@ -370,8 +381,7 @@ jobs:
       matrix:
         lane: [governance-chain, rustfs-lifecycle, rustfs-provisioning, smoke-rustfs]
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
 
       - name: dagger call ${{ matrix.lane }}

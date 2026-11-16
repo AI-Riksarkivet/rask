@@ -191,13 +191,20 @@ finish() {
 
 TOTAL_STAGES=8
 have() { command -v "$1" >/dev/null 2>&1; }
-DAGGER_VERSION="0.21.8"   # dagger.json engineVersion
+# The toolchain's pins. This runs from the handover kit before the repository is cloned, so it carries its own copies:
+# the Dagger CLI's version is dagger.json's engineVersion and its archive digests are .github/actions/dagger's, bun's
+# version is frontend/package.json's packageManager and its digests that release's SHASUMS256.txt, and uv's installer
+# digest is read off https://astral.sh/uv/<version>/install.sh (2026-11-16).
+DAGGER_VERSION="0.21.8"
+BUN_VERSION="1.4.4"
+UV_VERSION="0.12.18"
+UV_INSTALLER_SHA256="e62a5ea089de9c6a9b1f767166c9f33194e18d350e9f375c6355fac3ba0fb42b"
 
 banner "rask on a new computer"
 
 stage "Prerequisites"
 say "The estate runs on k3s (sudo). Docker hosts the dev image registry and the Dagger engine; nothing else uses it."
-for tool in git curl sudo make docker; do
+for tool in git curl unzip sudo make docker; do
   if have "$tool"; then step "$tool: found"; else warn "$tool: missing"; SKIPPED+=("install $tool"); fi
 done
 if ! have docker; then
@@ -209,12 +216,56 @@ pause
 stage "Command-line tools"
 say "uv (Python), bun (frontend), prek (git hooks), the Dagger CLI pinned at v$DAGGER_VERSION, gh and Claude Code."
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
-have uv  || { step "installing uv";  curl -LsSf https://astral.sh/uv/install.sh | sh; }
-have bun || { step "installing bun"; curl -fsSL https://bun.sh/install | bash; }
+# Every download below is pinned by version and held to its sha256 before it runs or is unpacked: a script piped from a
+# moved URL runs whatever that URL serves that day.
+# pinned_digest TOOL: this machine's archive name and digest for TOOL (bun or dagger), or nothing on an architecture no
+# digest is pinned for.
+pinned_digest() {
+  case "$1:$(uname -m)" in
+    bun:x86_64) echo "bun-linux-x64 bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c" ;;
+    bun:aarch64) echo "bun-linux-aarch64 baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e" ;;
+    dagger:x86_64) echo "amd64 53e226c7da8fb75171e58c35759d736d961ce8b3a12db0baa7b7107954fccc5a" ;;
+    dagger:aarch64) echo "arm64 cd0df4885f2050082932b4abc5a6aad9a733f6aa4e7d8474740558517ffec4af" ;;
+  esac
+}
+# fetch_pinned URL SHA256 FILE: URL saved as FILE once its digest is SHA256; otherwise FILE is removed, the mismatch is
+# said, and it fails.
+fetch_pinned() {
+  if curl -fsSL -o "$3" "$1" && echo "$2  $3" | sha256sum --check --strict --status -; then return 0; fi
+  rm -f "$3"
+  warn "$1 does not match its pinned digest"
+  return 1
+}
+# skip_install TOOL: record that TOOL was not installed, and why, for the closing summary.
+skip_install() { SKIPPED+=("install $1 (its download did not match its pinned digest, or no digest is pinned for $(uname -m))"); }
+if ! have uv; then
+  step "installing uv $UV_VERSION"
+  # uv's own installer, which holds the archive it fetches to that release's published checksum.
+  installer="$(mktemp)"
+  if fetch_pinned "https://astral.sh/uv/$UV_VERSION/install.sh" "$UV_INSTALLER_SHA256" "$installer"; then sh "$installer"; rm -f "$installer"; else skip_install uv; fi
+fi
+if ! have bun; then
+  step "installing bun $BUN_VERSION into ~/.bun/bin"
+  read -r asset sum <<<"$(pinned_digest bun)"
+  archive="$(mktemp)"
+  if [[ -n "${sum:-}" ]] && fetch_pinned "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$asset.zip" "$sum" "$archive"; then
+    mkdir -p "$HOME/.bun/bin" && unzip -oqj "$archive" "$asset/bun" -d "$HOME/.bun/bin" && chmod 0755 "$HOME/.bun/bin/bun"
+    rm -f "$archive"
+  else
+    rm -f "$archive"; skip_install bun
+  fi
+fi
 have prek || { step "installing prek"; uv tool install prek; }
 if ! have dagger || ! dagger version 2>/dev/null | grep -q "v$DAGGER_VERSION"; then
   step "installing the Dagger CLI v$DAGGER_VERSION into ~/.local/bin"
-  curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION="$DAGGER_VERSION" BIN_DIR="$HOME/.local/bin" sh
+  read -r arch sum <<<"$(pinned_digest dagger)"
+  archive="$(mktemp)"
+  if [[ -n "${sum:-}" ]] && fetch_pinned "https://dl.dagger.io/dagger/releases/$DAGGER_VERSION/dagger_v${DAGGER_VERSION}_linux_${arch}.tar.gz" "$sum" "$archive"; then
+    mkdir -p "$HOME/.local/bin" && tar -xzf "$archive" -C "$HOME/.local/bin" dagger
+    rm -f "$archive"
+  else
+    rm -f "$archive"; skip_install dagger
+  fi
 fi
 if ! have gh; then
   open_url "https://github.com/cli/cli#installation"

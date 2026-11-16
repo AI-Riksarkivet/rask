@@ -1,4 +1,4 @@
-.PHONY: fga-store-check sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: fga-store-check sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth release-handoff go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -427,6 +427,9 @@ governance-chain: ## Governance e2e — authz + provenance authorship + lineage 
 nats-auth: ## NATS auth e2e — each bus client admitted only to its own subjects, each lane on its own connection (operator-mode broker)
 	$(DAGGER) call nats-auth
 
+release-handoff: ## A release signs only the images its scan returned, and a chart installs only as its verified digest
+	$(DAGGER) call release-handoff
+
 # ---- local k3s ------------------------------------------------------------
 # An image that is not in $(K3S_IMAGES) is never built by `make k3s-build` and never
 # side-loaded by `make k3s-import`, so a hand-built image lands outside CONTAINERD and k3s answers
@@ -653,6 +656,8 @@ K9S_V     := v0.32.7
 HELM_DOCS_V := 1.14.2
 # helm-values-schema-json's standalone `schema` binary: chart/values.schema.json from values.yaml (scripts/chart_docs.sh).
 HELM_SCHEMA_V := 2.6.0
+# Every download is held to its digest in scripts/toolchain.sha256 before it is written or unpacked.
+FETCH := bash scripts/fetch_pinned.sh
 # helm-docs names its assets Linux/Darwin and x86_64/arm64.
 HELM_DOCS_ARCH := $(shell uname -m | sed -e 's/aarch64/arm64/')
 # k9s tags its assets Linux/Darwin (capitalised), unlike everything else above.
@@ -661,12 +666,12 @@ K9S_OS    := $(shell uname -s)
 bootstrap: ## Download kind/kubectl/fga/k9s/helm-docs/helm-schema into .localbin (idempotent) — helm must be on PATH
 	@mkdir -p $(LOCALBIN)
 	@test -n "$(HOST_ARCH)" || { echo "!! unsupported CPU '$$(uname -m)' — need x86_64 or arm64"; exit 1; }
-	@test -x $(KIND)              || { echo "kind ->"; curl -fsSL -o $(KIND) "https://kind.sigs.k8s.io/dl/$(KIND_V)/kind-$(HOST_OS)-$(HOST_ARCH)" && chmod +x $(KIND); }
-	@test -x $(LOCALBIN)/kubectl  || { echo "kubectl ->"; curl -fsSL -o $(LOCALBIN)/kubectl "https://dl.k8s.io/release/$(KUBECTL_V)/bin/$(HOST_OS)/$(HOST_ARCH)/kubectl" && chmod +x $(LOCALBIN)/kubectl; }
-	@test -x $(LOCALBIN)/fga      || { echo "fga ->"; curl -fsSL "https://github.com/openfga/cli/releases/download/v$(FGA_V)/fga_$(FGA_V)_$(HOST_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) fga; }
-	@test -x $(LOCALBIN)/k9s      || { echo "k9s ->"; curl -fsSL "https://github.com/derailed/k9s/releases/download/$(K9S_V)/k9s_$(K9S_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) k9s; }
-	@test -x $(LOCALBIN)/helm-docs || { echo "helm-docs ->"; curl -fsSL "https://github.com/norwoodj/helm-docs/releases/download/v$(HELM_DOCS_V)/helm-docs_$(HELM_DOCS_V)_$(K9S_OS)_$(HELM_DOCS_ARCH).tar.gz" | tar xz -C $(LOCALBIN) helm-docs; }
-	@test -x $(LOCALBIN)/helm-schema || { echo "helm-schema ->"; curl -fsSL "https://github.com/losisin/helm-values-schema-json/releases/download/v$(HELM_SCHEMA_V)/helm-values-schema-json_$(HELM_SCHEMA_V)_$(HOST_OS)_$(HOST_ARCH).tgz" | tar xz -C $(LOCALBIN) schema && mv $(LOCALBIN)/schema $(LOCALBIN)/helm-schema; }
+	@test -x $(KIND)              || { echo "kind ->"; $(FETCH) "https://kind.sigs.k8s.io/dl/$(KIND_V)/kind-$(HOST_OS)-$(HOST_ARCH)" $(KIND) && chmod +x $(KIND); }
+	@test -x $(LOCALBIN)/kubectl  || { echo "kubectl ->"; $(FETCH) "https://dl.k8s.io/release/$(KUBECTL_V)/bin/$(HOST_OS)/$(HOST_ARCH)/kubectl" $(LOCALBIN)/kubectl && chmod +x $(LOCALBIN)/kubectl; }
+	@test -x $(LOCALBIN)/fga      || { echo "fga ->"; $(FETCH) "https://github.com/openfga/cli/releases/download/v$(FGA_V)/fga_$(FGA_V)_$(HOST_OS)_$(HOST_ARCH).tar.gz" $(LOCALBIN)/.fga.tgz && tar xzf $(LOCALBIN)/.fga.tgz -C $(LOCALBIN) fga && rm $(LOCALBIN)/.fga.tgz; }
+	@test -x $(LOCALBIN)/k9s      || { echo "k9s ->"; $(FETCH) "https://github.com/derailed/k9s/releases/download/$(K9S_V)/k9s_$(K9S_OS)_$(HOST_ARCH).tar.gz" $(LOCALBIN)/.k9s.tgz && tar xzf $(LOCALBIN)/.k9s.tgz -C $(LOCALBIN) k9s && rm $(LOCALBIN)/.k9s.tgz; }
+	@test -x $(LOCALBIN)/helm-docs || { echo "helm-docs ->"; $(FETCH) "https://github.com/norwoodj/helm-docs/releases/download/v$(HELM_DOCS_V)/helm-docs_$(HELM_DOCS_V)_$(K9S_OS)_$(HELM_DOCS_ARCH).tar.gz" $(LOCALBIN)/.helm-docs.tgz && tar xzf $(LOCALBIN)/.helm-docs.tgz -C $(LOCALBIN) helm-docs && rm $(LOCALBIN)/.helm-docs.tgz; }
+	@test -x $(LOCALBIN)/helm-schema || { echo "helm-schema ->"; $(FETCH) "https://github.com/losisin/helm-values-schema-json/releases/download/v$(HELM_SCHEMA_V)/helm-values-schema-json_$(HELM_SCHEMA_V)_$(HOST_OS)_$(HOST_ARCH).tgz" $(LOCALBIN)/.helm-schema.tgz && tar xzf $(LOCALBIN)/.helm-schema.tgz -C $(LOCALBIN) schema && mv $(LOCALBIN)/schema $(LOCALBIN)/helm-schema && rm $(LOCALBIN)/.helm-schema.tgz; }
 	@command -v helm   >/dev/null || { echo "!! helm not on PATH — install https://helm.sh/docs/intro/install/"; exit 1; }
 	@echo "toolchain ready in .localbin ($(HOST_OS)/$(HOST_ARCH))"
 

@@ -65,6 +65,7 @@ var (
 	releaseVersion = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$`)
 	pushedDigest   = regexp.MustCompile(`(?m)^Digest: (sha256:[0-9a-f]{64})$`)
 	imageDigest    = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+	onlyDigest     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 // releaseBuild is what every image of one release is built with: the source, the labels each image is stamped with (when
@@ -123,7 +124,11 @@ func (m *Rask) PublishImage(
 		if err != nil {
 			return "", fmt.Errorf("pushing %s: %w", image.name, err)
 		}
-		pushed = append(pushed, ref)
+		scanned, err := scannedReference(ref)
+		if err != nil {
+			return "", err
+		}
+		pushed = append(pushed, scanned)
 	}
 	return strings.Join(pushed, "\n"), nil
 }
@@ -166,6 +171,9 @@ func (m *Rask) Publish(
 	password *dagger.Secret,
 	// The release workflow's GitHub OIDC token for the audience `sigstore` (its job holds `id-token: write`).
 	identityToken *dagger.Secret,
+	// The references PublishImage printed on each release runner, `<registry>/<image>@sha256:<hex>` separated by white
+	// space: each index is built from exactly these, the images that passed the scan gate.
+	pushed *dagger.File,
 	// +optional
 	// +default="ghcr.io/ai-riksarkivet"
 	registry string,
@@ -184,45 +192,203 @@ func (m *Rask) Publish(
 		verify: []string{"--certificate-identity", releaseIdentity(version), "--certificate-oidc-issuer", releaseIssuer},
 		crane:  crane(credential),
 	}
-
-	var report strings.Builder
-	digests := make([]string, 0, len(releaseImages))
-	for _, image := range releaseImages {
-		variants := make([]*dagger.Container, 0, len(releasePlatforms))
-		sboms := make(map[dagger.Platform]*dagger.File, len(releasePlatforms))
-		for _, platform := range releasePlatforms {
-			variant := dag.Container(dagger.ContainerOpts{Platform: platform}).
-				WithRegistryAuth(host, username, password).
-				From(fmt.Sprintf("%s/%s:%s-%s", registry, image.name, version, archOf(platform)))
-			variants = append(variants, variant)
-			sboms[platform] = m.sbomContainer(variant, image.name)
-		}
-		ref, err := variants[0].
-			Publish(ctx, fmt.Sprintf("%s/%s:%s", registry, image.name, version), dagger.ContainerPublishOpts{PlatformVariants: variants[1:]})
-		if err != nil {
-			return "", fmt.Errorf("publishing the %s index: %w", image.name, err)
-		}
-		_, digest, found := strings.Cut(ref, "@")
-		if !found {
-			return "", fmt.Errorf("the registry answered %q, which names no digest", ref)
-		}
-		index := fmt.Sprintf("%s/%s@%s", registry, image.name, digest)
-		if err := signer.signImage(ctx, index, sboms); err != nil {
-			return "", err
-		}
-		digests = append(digests, image.name+"="+digest)
-		fmt.Fprintf(&report, "image  %s\n", index)
+	handed, err := pushed.Contents(ctx)
+	if err != nil {
+		return "", fmt.Errorf("reading the scanned images handed over: %w", err)
 	}
-
-	chartDigest, err := pushChart(ctx, withRegistryLogin(withRenderableChart(m.base(src)), host, username, password), version, registry, digests)
+	children, err := signer.releaseChildren(ctx, registry, strings.Fields(handed))
 	if err != nil {
 		return "", err
 	}
-	if err := signer.signArtifact(ctx, fmt.Sprintf("%s/charts/rask@%s", registry, chartDigest)); err != nil {
+	sboms := make(map[string]*dagger.File)
+	for _, image := range releaseImages {
+		for platform, ref := range children[image.name] {
+			sboms[ref] = m.sbomContainer(dag.Container(dagger.ContainerOpts{Platform: platform}).WithRegistryAuth(host, username, password).From(ref), image.name)
+		}
+	}
+	published, err := signer.publishRelease(ctx, withRegistryLogin(withRenderableChart(m.base(src)), host, username, password), registry, version, children, sboms)
+	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(&report, "chart  oci://%s/charts/rask:%s@%s\nsigned as %s (issuer %s)\n", registry, version, chartDigest, releaseIdentity(version), releaseIssuer)
-	return report.String(), nil
+	return published.report() + fmt.Sprintf("signed as %s (issuer %s)\n", releaseIdentity(version), releaseIssuer), nil
+}
+
+// scannedReference is `published`, the reference a push answered (`<registry>/<image>:<tag>@sha256:<hex>`), by its
+// digest alone, as PublishImage prints it and releaseChildren takes it: the tag is what may move.
+func scannedReference(published string) (string, error) {
+	name, digest, found := strings.Cut(published, "@")
+	if !found || !onlyDigest.MatchString(digest) {
+		return "", fmt.Errorf("the registry answered %q, which names no digest", published)
+	}
+	if tag := strings.LastIndex(name, ":"); tag > strings.LastIndex(name, "/") {
+		name = name[:tag]
+	}
+	return name + "@" + digest, nil
+}
+
+// pushedReference is a reference PublishImage returns: `<registry>/<image>@sha256:<hex>`.
+var pushedReference = regexp.MustCompile(`^(.+)/([a-z0-9][a-z0-9-]*)@(sha256:[0-9a-f]{64})$`)
+
+// releaseChildren binds `pushed`, the references PublishImage returned on each release runner, to the release image and
+// platform each holds, reading the platform off the image's own config: every release image under `registry` needs
+// exactly one image manifest per release platform, and a reference naming anything else refuses the release. A release's
+// indexes are built from these alone, so what is signed is what passed the scan gate, whatever a tag names by then.
+func (s releaseSigner) releaseChildren(ctx context.Context, registry string, pushed []string) (map[string]map[dagger.Platform]string, error) {
+	children := make(map[string]map[dagger.Platform]string, len(releaseImages))
+	for _, image := range releaseImages {
+		children[image.name] = make(map[dagger.Platform]string, len(releasePlatforms))
+	}
+	for _, ref := range pushed {
+		parts := pushedReference.FindStringSubmatch(strings.TrimSpace(ref))
+		if parts == nil || parts[1] != registry || children[parts[2]] == nil {
+			return nil, fmt.Errorf("%q is no release image under %s named by its digest", ref, registry)
+		}
+		platform, err := s.platformOf(ctx, parts[0])
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(releasePlatforms, platform) {
+			return nil, fmt.Errorf("%s is built for %s, which a release does not publish", parts[0], platform)
+		}
+		if held, found := children[parts[2]][platform]; found {
+			return nil, fmt.Errorf("%s and %s are both %s for %s", held, parts[0], parts[2], platform)
+		}
+		children[parts[2]][platform] = parts[0]
+	}
+	for _, image := range releaseImages {
+		for _, platform := range releasePlatforms {
+			if _, found := children[image.name][platform]; !found {
+				return nil, fmt.Errorf("no scanned %s for %s was handed over", image.name, platform)
+			}
+		}
+	}
+	return children, nil
+}
+
+// platformOf is the platform the image manifest `ref` names was built for, read off its config; an index is refused, since
+// a release's children are images.
+func (s releaseSigner) platformOf(ctx context.Context, ref string) (dagger.Platform, error) {
+	held, err := s.indexChildren(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	if held != nil {
+		return "", fmt.Errorf("%s is an index, not one platform's image", ref)
+	}
+	config, err := s.crane.WithExec(slices.Concat([]string{"config"}, s.read, []string{ref}), dagger.ContainerWithExecOpts{UseEntrypoint: true}).Stdout(ctx)
+	if err != nil {
+		return "", fmt.Errorf("reading %s's config: %w", ref, err)
+	}
+	var built struct {
+		OS           string `json:"os"`
+		Architecture string `json:"architecture"`
+	}
+	if err := json.Unmarshal([]byte(config), &built); err != nil {
+		return "", fmt.Errorf("reading %s's config: %w", ref, err)
+	}
+	if built.OS == "" || built.Architecture == "" {
+		return "", fmt.Errorf("%s's config names no platform", ref)
+	}
+	return dagger.Platform(built.OS + "/" + built.Architecture), nil
+}
+
+// publishedRelease is what publishRelease pushed: each release image's index digest, under the image's name, and the
+// chart's digest.
+type publishedRelease struct {
+	registry string
+	version  string
+	indexes  map[string]string
+	chart    string
+}
+
+// pins are the indexes as the chart's `image.digests` takes them, `<image>=sha256:<hex>`, in releaseImages' order.
+func (p publishedRelease) pins() []string {
+	pins := make([]string, 0, len(releaseImages))
+	for _, image := range releaseImages {
+		pins = append(pins, image.name+"="+p.indexes[image.name])
+	}
+	return pins
+}
+
+func (p publishedRelease) report() string {
+	var report strings.Builder
+	for _, image := range releaseImages {
+		fmt.Fprintf(&report, "image  %s/%s@%s\n", p.registry, image.name, p.indexes[image.name])
+	}
+	fmt.Fprintf(&report, "chart  oci://%s/charts/rask:%s@%s\n", p.registry, p.version, p.chart)
+	return report.String()
+}
+
+// publishRelease joins each release image's `children` (releaseChildren) into one index, `<registry>/<image>:<version>`,
+// refusing an index the registry then holds with any other child, signs it, and attests to each child its SBOM (`sboms`,
+// by the child's reference); then pins a copy of the product chart in `chartPusher` to the indexes' digests, pushes it
+// with `pushFlags` and signs it. Publish and ReleaseHandoff differ only in what they hand it.
+func (s releaseSigner) publishRelease(
+	ctx context.Context,
+	chartPusher *dagger.Container,
+	registry, version string,
+	children map[string]map[dagger.Platform]string,
+	sboms map[string]*dagger.File,
+	pushFlags ...string,
+) (publishedRelease, error) {
+	published := publishedRelease{registry: registry, version: version, indexes: make(map[string]string, len(releaseImages))}
+	for _, image := range releaseImages {
+		digest, err := s.joinIndex(ctx, fmt.Sprintf("%s/%s:%s", registry, image.name, version), children[image.name])
+		if err != nil {
+			return publishedRelease{}, err
+		}
+		index := fmt.Sprintf("%s/%s@%s", registry, image.name, digest)
+		attested := make(map[dagger.Platform]*dagger.File, len(children[image.name]))
+		for platform, ref := range children[image.name] {
+			attested[platform] = sboms[ref]
+		}
+		if err := s.signImage(ctx, index, attested); err != nil {
+			return publishedRelease{}, err
+		}
+		published.indexes[image.name] = digest
+	}
+	chart, err := pushChart(ctx, chartPusher, version, registry, published.pins(), pushFlags...)
+	if err != nil {
+		return publishedRelease{}, err
+	}
+	if err := s.signArtifact(ctx, fmt.Sprintf("%s/charts/rask@%s", registry, chart)); err != nil {
+		return publishedRelease{}, err
+	}
+	published.chart = chart
+	return published, nil
+}
+
+// joinIndex pushes the index `tag` from `children` (one image manifest by digest per platform) and returns its digest,
+// once the index the registry holds under that digest lists exactly those children. crane joins them by digest, so no
+// tag is resolved on the way.
+func (s releaseSigner) joinIndex(ctx context.Context, tag string, children map[dagger.Platform]string) (string, error) {
+	join := slices.Concat([]string{"index", "append"}, s.read)
+	for _, platform := range slices.Sorted(maps.Keys(children)) {
+		join = append(join, "--manifest", children[platform])
+	}
+	out, err := s.crane.WithExec(append(join, "--tag", tag), dagger.ContainerWithExecOpts{UseEntrypoint: true}).Stdout(ctx)
+	if err != nil {
+		return "", fmt.Errorf("joining %s: %w", tag, err)
+	}
+	digest := imageDigest.FindString(out)
+	if digest == "" {
+		return "", fmt.Errorf("crane printed no digest for %s:\n%s", tag, out)
+	}
+	// The tag is the last `:`'s: a registry's own may carry a port.
+	repository := tag[:strings.LastIndex(tag, ":")]
+	held, err := s.indexChildren(ctx, repository+"@"+digest)
+	if err != nil {
+		return "", err
+	}
+	if len(held) != len(children) {
+		return "", fmt.Errorf("%s@%s holds %d manifests, not the %d it was joined from", repository, digest, len(held), len(children))
+	}
+	for platform, ref := range children {
+		if _, want, _ := strings.Cut(ref, "@"); held[platform] != want {
+			return "", fmt.Errorf("%s@%s holds %s for %s, not the scanned %s", repository, digest, held[platform], platform, want)
+		}
+	}
+	return digest, nil
 }
 
 // pushChart pins a copy of the product chart in `pusher` (a container holding it, able to reach `registry`) to `digests`
@@ -338,9 +504,27 @@ func (s releaseSigner) signImage(ctx context.Context, ref string, sboms map[dagg
 // platformDigest is the digest of the manifest `ref` holds for `platform`: the entry an index lists for that operating
 // system and architecture, or `ref`'s own digest when it names one image's manifest.
 func (s releaseSigner) platformDigest(ctx context.Context, ref string, platform dagger.Platform) (string, error) {
+	held, err := s.indexChildren(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	if held == nil {
+		_, digest, _ := strings.Cut(ref, "@")
+		return digest, nil
+	}
+	if digest, found := held[platform]; found {
+		return digest, nil
+	}
+	return "", fmt.Errorf("%s lists no manifest for %s", ref, platform)
+}
+
+// indexChildren is the manifest digest the index `ref` lists for each `<os>/<architecture>`, or nil when `ref` names one
+// image's manifest. An index listing one platform twice is refused, since which of the two a client pulls is not the
+// release's choice.
+func (s releaseSigner) indexChildren(ctx context.Context, ref string) (map[dagger.Platform]string, error) {
 	out, err := s.crane.WithExec(slices.Concat([]string{"manifest"}, s.read, []string{ref}), dagger.ContainerWithExecOpts{UseEntrypoint: true}).Stdout(ctx)
 	if err != nil {
-		return "", fmt.Errorf("reading %s's manifest: %w", ref, err)
+		return nil, fmt.Errorf("reading %s's manifest: %w", ref, err)
 	}
 	var manifest struct {
 		Manifests []struct {
@@ -352,19 +536,20 @@ func (s releaseSigner) platformDigest(ctx context.Context, ref string, platform 
 		} `json:"manifests"`
 	}
 	if err := json.Unmarshal([]byte(out), &manifest); err != nil {
-		return "", fmt.Errorf("reading %s's manifest: %w", ref, err)
+		return nil, fmt.Errorf("reading %s's manifest: %w", ref, err)
 	}
 	if len(manifest.Manifests) == 0 {
-		_, digest, _ := strings.Cut(ref, "@")
-		return digest, nil
+		return nil, nil
 	}
-	want := strings.SplitN(string(platform), "/", 3)
+	held := make(map[dagger.Platform]string, len(manifest.Manifests))
 	for _, entry := range manifest.Manifests {
-		if len(want) >= 2 && entry.Platform.OS == want[0] && entry.Platform.Architecture == want[1] {
-			return entry.Digest, nil
+		platform := dagger.Platform(entry.Platform.OS + "/" + entry.Platform.Architecture)
+		if _, found := held[platform]; found {
+			return nil, fmt.Errorf("%s lists %s twice", ref, platform)
 		}
+		held[platform] = entry.Digest
 	}
-	return "", fmt.Errorf("%s lists no manifest for %s", ref, platform)
+	return held, nil
 }
 
 // dryRunRegistry is the registry path a dry run publishes under: the session's own registry, bound as `rask-registry`.
@@ -403,27 +588,9 @@ func (m *Rask) ReleaseDryRun(
 	}
 	run := time.Now().UTC().Format(time.RFC3339Nano)
 	registry := sessionRegistry(run)
-	keyPassword, err := sessionSecret("release-dry-run-key-password")
+	signer, err := sessionSigner(ctx, registry, run)
 	if err != nil {
 		return "", err
-	}
-	registryPassword, err := sessionSecret("release-dry-run-registry-password")
-	if err != nil {
-		return "", err
-	}
-	credential, err := registryCredential(ctx, registryHost(dryRunRegistry), "dry-run", registryPassword)
-	if err != nil {
-		return "", err
-	}
-	signer := releaseSigner{
-		cosign: cosign(credential).
-			WithServiceBinding("rask-registry", registry).
-			WithMountedDirectory("/keys", dryRunKeys(run, keyPassword)).
-			WithSecretVariable("COSIGN_PASSWORD", keyPassword),
-		sign:   []string{"--key", "/keys/cosign.key", "--signing-config", "/keys/signing-config.json", "--allow-http-registry", "--allow-insecure-registry"},
-		verify: []string{"--key", "/keys/cosign.pub", "--insecure-ignore-tlog=true", "--allow-http-registry", "--allow-insecure-registry"},
-		crane:  crane(credential).WithServiceBinding("rask-registry", registry),
-		read:   []string{"--insecure"},
 	}
 
 	var report strings.Builder
@@ -457,6 +624,277 @@ func (m *Rask) ReleaseDryRun(
 	}
 	fmt.Fprintf(&report, "chart  oci://%s/charts/rask:%s@%s  pins %s, signed, signature verified\n", dryRunRegistry, version, chartDigest, strings.Join(digests, " "))
 	return report.String(), nil
+}
+
+// sessionSigner is a releaseSigner on `registry`, one that lives only in this session, bound as `rask-registry`: it signs
+// with a key pair generated in the session for `keys` and uploads nothing to a transparency log, and holds a registry
+// credential mounted as Publish mounts one (the session registry asks for none).
+func sessionSigner(ctx context.Context, registry *dagger.Service, keys string) (releaseSigner, error) {
+	keyPassword, err := sessionSecret("release-session-key-password")
+	if err != nil {
+		return releaseSigner{}, err
+	}
+	registryPassword, err := sessionSecret("release-session-registry-password")
+	if err != nil {
+		return releaseSigner{}, err
+	}
+	credential, err := registryCredential(ctx, registryHost(dryRunRegistry), "session", registryPassword)
+	if err != nil {
+		return releaseSigner{}, err
+	}
+	return releaseSigner{
+		cosign: cosign(credential).
+			WithServiceBinding("rask-registry", registry).
+			WithMountedDirectory("/keys", dryRunKeys(keys, keyPassword)).
+			WithSecretVariable("COSIGN_PASSWORD", keyPassword),
+		sign:   []string{"--key", "/keys/cosign.key", "--signing-config", "/keys/signing-config.json", "--allow-http-registry", "--allow-insecure-registry"},
+		verify: []string{"--key", "/keys/cosign.pub", "--insecure-ignore-tlog=true", "--allow-http-registry", "--allow-insecure-registry"},
+		crane:  crane(credential).WithServiceBinding("rask-registry", registry),
+		read:   []string{"--insecure"},
+	}, nil
+}
+
+// ReleaseHandoff proves a release signs only what passed its scan gate ([[XC-215]]). In a registry that lives only in this
+// session it pushes, for each release image and platform, an image standing for the one PublishImage scanned (A), then
+// moves that image's `<version>-<arch>` tag to another (B), as anything able to push could between the release's two
+// jobs. Publishing from the references the scan returned must build each index from exactly the A images, and the chart
+// fetched as Lakehouse fetches one (verifiedChart) must pin exactly those indexes. A handover that misses an image, names
+// one twice, names another repository or names another image's digest is refused; and once the same version's chart tag
+// is moved to a chart granting a workload cluster-admin, that chart is refused whether nobody signed it or another key did
+// ([[XC-216]]). Nothing is built or scanned: each image is one file on an empty filesystem for its platform, so both architectures run
+// on any runner.
+//
+// +cache="never"
+func (m *Rask) ReleaseHandoff(
+	ctx context.Context,
+	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
+	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
+	//          "**/coverage", "**/storybook-static", "**/build",
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache", "chart/charts", "deploy/fixtures/*/chart/charts"]
+	// +defaultPath="/"
+	src *dagger.Directory,
+	// +optional
+	// +default="0.0.0-handoff"
+	version string,
+) (string, error) {
+	if err := requireReleaseVersion(version); err != nil {
+		return "", err
+	}
+	run := time.Now().UTC().Format(time.RFC3339Nano)
+	registry := sessionRegistry(run)
+	signer, err := sessionSigner(ctx, registry, run)
+	if err != nil {
+		return "", err
+	}
+	fetcher := withCrane(withRenderableChart(m.base(src))).WithServiceBinding("rask-registry", registry)
+
+	var report strings.Builder
+	pushed := make([]string, 0, len(releaseImages)*len(releasePlatforms))
+	moved := make(map[string]string, cap(pushed))
+	sboms := make(map[string]*dagger.File, cap(pushed))
+	for _, image := range releaseImages {
+		for _, platform := range releasePlatforms {
+			tag := fmt.Sprintf("%s/%s:%s-%s", dryRunRegistry, image.name, version, archOf(platform))
+			scanned := handoffImage(platform, image.name+" scanned "+run)
+			a, err := pushTarball(ctx, signer.crane, scanned, tag)
+			if err != nil {
+				return "", fmt.Errorf("pushing %s: %w", tag, err)
+			}
+			b, err := pushTarball(ctx, signer.crane, handoffImage(platform, image.name+" substituted "+run), tag)
+			if err != nil {
+				return "", fmt.Errorf("moving %s: %w", tag, err)
+			}
+			now, err := signer.crane.WithExec(slices.Concat([]string{"digest"}, signer.read, []string{tag}), dagger.ContainerWithExecOpts{UseEntrypoint: true}).Stdout(ctx)
+			if err != nil {
+				return "", fmt.Errorf("reading %s: %w", tag, err)
+			}
+			if a == b || strings.TrimSpace(now) != b {
+				return "", fmt.Errorf("%s was not moved off the scanned %s (it names %s)", tag, a, strings.TrimSpace(now))
+			}
+			// What a push answers names the tag too; PublishImage prints it by its digest alone.
+			ref, err := scannedReference(fmt.Sprintf("%s@%s", tag, a))
+			if err != nil {
+				return "", err
+			}
+			pushed = append(pushed, ref)
+			moved[ref] = b
+			sboms[ref] = m.sbomContainer(scanned, image.name)
+		}
+	}
+
+	// Each handover is refused for its own reason: an image's digest is held only by the repository it was pushed to, so
+	// naming it under another release image's repository is refused when that repository cannot read it.
+	refused := map[string]struct {
+		pushed []string
+		reason string
+	}{
+		"an image missing":       {pushed[1:], "was handed over"},
+		"an image named twice":   {append(slices.Clone(pushed), fmt.Sprintf("%s/%s@%s", dryRunRegistry, releaseImages[0].name, moved[pushed[0]])), "are both"},
+		"another repository":     {append([]string{strings.Replace(pushed[0], dryRunRegistry, registryHost(dryRunRegistry)+"/elsewhere", 1)}, pushed[1:]...), "is no release image under"},
+		"another image's digest": {append([]string{strings.Replace(pushed[len(releasePlatforms)], releaseImages[1].name, releaseImages[0].name, 1)}, pushed[1:]...), "reading"},
+	}
+	for _, handover := range slices.Sorted(maps.Keys(refused)) {
+		_, err := signer.releaseChildren(ctx, dryRunRegistry, refused[handover].pushed)
+		if err == nil || !strings.Contains(err.Error(), refused[handover].reason) {
+			return "", fmt.Errorf("a handover with %s was not refused for its own reason (%q): %v", handover, refused[handover].reason, err)
+		}
+		fmt.Fprintf(&report, "refused  a handover with %s\n", handover)
+	}
+
+	children, err := signer.releaseChildren(ctx, dryRunRegistry, pushed)
+	if err != nil {
+		return "", err
+	}
+	published, err := signer.publishRelease(ctx, fetcher, dryRunRegistry, version, children, sboms, "--plain-http")
+	if err != nil {
+		return "", err
+	}
+	for _, image := range releaseImages {
+		index := fmt.Sprintf("%s/%s@%s", dryRunRegistry, image.name, published.indexes[image.name])
+		held, err := signer.indexChildren(ctx, index)
+		if err != nil {
+			return "", err
+		}
+		for _, platform := range releasePlatforms {
+			scanned := children[image.name][platform]
+			if _, want, _ := strings.Cut(scanned, "@"); held[platform] != want {
+				return "", fmt.Errorf("%s holds %s for %s, not the scanned %s (the moved tag names %s)", index, held[platform], platform, want, moved[scanned])
+			}
+		}
+		fmt.Fprintf(&report, "index    %s holds the scanned %s and none of the moved tags' images\n", index, strings.Join(slices.Sorted(maps.Values(held)), " "))
+	}
+
+	chart, err := signer.verifiedChart(ctx, fetcher, dryRunRegistry+"/charts/rask", version)
+	if err != nil {
+		return "", err
+	}
+	pins, err := chartPins(ctx, fetcher, chart)
+	if err != nil {
+		return "", err
+	}
+	if !maps.Equal(pins, published.indexes) {
+		return "", fmt.Errorf("the verified chart pins %v, not the published indexes %v", pins, published.indexes)
+	}
+	fmt.Fprintf(&report, "chart    oci://%s/charts/rask:%s@%s verified, pins %s\n", dryRunRegistry, version, published.chart, strings.Join(published.pins(), " "))
+
+	// The same version's tag moved to a chart that grants a workload cluster-admin, as anything able to push could: the
+	// chart is refused whether nobody signed it or another key did.
+	tampered, err := pushChart(ctx, fetcher.WithNewFile("/src/chart/templates/zz-handoff.yaml", handoffBinding), version, dryRunRegistry, published.pins(), "--plain-http")
+	if err != nil {
+		return "", err
+	}
+	impostor, err := sessionSigner(ctx, registry, run+"-impostor")
+	if err != nil {
+		return "", err
+	}
+	for _, how := range []string{"unsigned", "signed by another key"} {
+		if how == "signed by another key" {
+			if err := impostor.signArtifact(ctx, fmt.Sprintf("%s/charts/rask@%s", dryRunRegistry, tampered)); err != nil {
+				return "", err
+			}
+		}
+		_, err := signer.verifiedChart(ctx, fetcher, dryRunRegistry+"/charts/rask", version)
+		if err == nil || !strings.Contains(err.Error(), "carries no signature") {
+			return "", fmt.Errorf("the tampered chart %s, %s, was not refused as unsigned by the release: %v", tampered, how, err)
+		}
+		fmt.Fprintf(&report, "refused  the same version's tag moved to a chart granting cluster-admin, %s\n", how)
+	}
+	return report.String(), nil
+}
+
+// handoffBinding is what the tampered chart in ReleaseHandoff adds: a workload's ServiceAccount bound to cluster-admin.
+const handoffBinding = `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: handoff-tampered
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: rask-sa-catalog
+    namespace: default
+`
+
+// handoffImage is an image for `platform` holding one file that says `what`: an image of that platform, built without
+// running anything, so any runner makes one for every release platform.
+func handoffImage(platform dagger.Platform, what string) *dagger.Container {
+	return dag.Container(dagger.ContainerOpts{Platform: platform}).WithNewFile("/release", what+" "+string(platform)+"\n")
+}
+
+// helmChartContent is the media type of the layer an OCI helm chart's manifest carries the chart archive in.
+const helmChartContent = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+// withCrane puts the pinned crane on `c`'s PATH, for a container that also runs a shell.
+func withCrane(c *dagger.Container) *dagger.Container {
+	return c.WithFile("/usr/local/bin/crane", dag.Container().From(craneImage).File("/ko-app/crane"), dagger.ContainerWithFileOpts{Permissions: 0o755})
+}
+
+// verifiedChart is release `version` of the chart `chart` (`<registry>/charts/rask`, no scheme), fetched in `fetcher`
+// (withCrane's, able to reach the registry) once `s` has verified the signature on the digest the version names. The
+// archive is fetched by that digest, and its own digest is checked against the manifest's, so what is installed is what
+// was verified, whatever the tag names by then.
+func (s releaseSigner) verifiedChart(ctx context.Context, fetcher *dagger.Container, chart, version string) (*dagger.File, error) {
+	read := func(args ...string) (string, error) {
+		return fetcher.WithExec(slices.Concat([]string{"crane"}, args[:1], s.read, args[1:])).Stdout(ctx)
+	}
+	// The tag is resolved afresh on every call: Dagger reuses an exec whose inputs it has seen, and a tag is what moves.
+	out, err := fetcher.WithEnvVariable("RESOLVED_AT", time.Now().UTC().Format(time.RFC3339Nano)).
+		WithExec(slices.Concat([]string{"crane", "digest"}, s.read, []string{chart + ":" + version})).Stdout(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading release %s's chart: %w", version, err)
+	}
+	digest := strings.TrimSpace(out)
+	if !onlyDigest.MatchString(digest) {
+		return nil, fmt.Errorf("crane named no digest for release %s's chart: %q", version, out)
+	}
+	ref := chart + "@" + digest
+	if err := verify(ctx, s.cosign, ref, s.verify...); err != nil {
+		return nil, fmt.Errorf("release %s's chart carries no signature from the release: %w", version, err)
+	}
+	manifest, err := read("manifest", ref)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s's manifest: %w", ref, err)
+	}
+	var shape struct {
+		Layers []struct {
+			MediaType string `json:"mediaType"`
+			Digest    string `json:"digest"`
+		} `json:"layers"`
+	}
+	if err := json.Unmarshal([]byte(manifest), &shape); err != nil {
+		return nil, fmt.Errorf("reading %s's manifest: %w", ref, err)
+	}
+	var archives []string
+	for _, layer := range shape.Layers {
+		if layer.MediaType == helmChartContent && onlyDigest.MatchString(layer.Digest) {
+			archives = append(archives, layer.Digest)
+		}
+	}
+	if len(archives) != 1 {
+		return nil, fmt.Errorf("%s holds %d chart archives, not one", ref, len(archives))
+	}
+	return fetcher.WithExec(slices.Concat([]string{"bash", "-c",
+		`set -euo pipefail; crane blob "${@:3}" "$1@$2" > /tmp/chart.tgz; [ "sha256:$(sha256sum /tmp/chart.tgz | cut -d' ' -f1)" = "$2" ]`,
+		"verified-chart", chart, archives[0]}, s.read)).
+		File("/tmp/chart.tgz"), nil
+}
+
+// chartPins is the `image.digests` the chart archive `chart` pins, read in `reader` (a container with helm and uv).
+func chartPins(ctx context.Context, reader *dagger.Container, chart *dagger.File) (map[string]string, error) {
+	out, err := reader.WithMountedFile("/tmp/pinned.tgz", chart).
+		WithExec([]string{"bash", "-c", "set -euo pipefail; helm show values /tmp/pinned.tgz | uv run --no-project --with pyyaml python -c " +
+			"'import json, sys, yaml; print(json.dumps(yaml.safe_load(sys.stdin)[\"image\"][\"digests\"]))'"}).
+		Stdout(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the chart's pins: %w", err)
+	}
+	pins := map[string]string{}
+	if err := json.Unmarshal([]byte(out), &pins); err != nil {
+		return nil, fmt.Errorf("reading the chart's pins: %w", err)
+	}
+	return pins, nil
 }
 
 // sessionSecret is a random secret that exists only in this session, named `name` and a random suffix that shares no
@@ -588,12 +1026,24 @@ func (m *Rask) Lakehouse(
 	if dexClient != "" && !dexClientID.MatchString(dexClient) {
 		return nil, fmt.Errorf("dexClient %q is not a client id (%s)", dexClient, dexClientID)
 	}
+	repository, found := strings.CutPrefix(chart, "oci://")
+	if !found {
+		return nil, fmt.Errorf("chart %q is not an oci:// reference", chart)
+	}
 	run := time.Now().UTC().Format(time.RFC3339Nano)
-	tool := withRenderableChart(m.tools(src))
+	// The chart is installed only if the release workflow signed it at this version's tag, and as the archive whose digest
+	// that signature covers, so a tag moved after the release installs nothing else.
+	release := releaseSigner{cosign: cosign(nil), verify: []string{"--certificate-identity", releaseIdentity(version), "--certificate-oidc-issuer", releaseIssuer}}
+	fetcher := withCrane(withRenderableChart(m.tools(src)))
+	archive, err := release.verifiedChart(ctx, fetcher, repository, version)
+	if err != nil {
+		return nil, err
+	}
+	tool := fetcher.WithMountedFile(lakehouseChart, archive)
 
-	pinned, err := tool.WithExec([]string{"bash", "-c", fmt.Sprintf("set -euo pipefail\nhelm show values %s --version %s | uv run --no-project --with pyyaml python -c "+
+	pinned, err := tool.WithExec([]string{"bash", "-c", fmt.Sprintf("set -euo pipefail\nhelm show values %s | uv run --no-project --with pyyaml python -c "+
 		"'import sys, yaml; i = yaml.safe_load(sys.stdin)[\"image\"]; print(i[\"repository\"] + \"/%s@\" + i[\"digests\"][\"%s\"])'",
-		chart, version, catalogImageName, catalogImageName)}).Stdout(ctx)
+		lakehouseChart, catalogImageName, catalogImageName)}).Stdout(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading the image release %s pins: %w", version, err)
 	}
@@ -621,7 +1071,7 @@ func (m *Rask) Lakehouse(
 	}
 	cluster := installer(tool, k3s, kubeconfig, run)
 	// A client's e2e drives the doors, not the console, so the session's registry holds the catalog image alone.
-	install := cluster.WithEnvVariable("CHART", chart).WithEnvVariable("CHART_VERSION", version).WithEnvVariable("CONSOLE_ENABLED", "false")
+	install := cluster.WithEnvVariable("CHART", lakehouseChart).WithEnvVariable("CONSOLE_ENABLED", "false")
 	if values != nil {
 		install = install.WithMountedFile("/client/values.yaml", values).WithEnvVariable("VALUES", "/client/values.yaml")
 	}
@@ -661,6 +1111,9 @@ var (
 	k8sAccount   = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]*[a-z0-9])?):([a-z0-9]([a-z0-9.-]*[a-z0-9])?)$`)
 	doorAudience = map[string]bool{"rask-catalog": true, "rask-lineage": true}
 )
+
+// lakehouseChart is where Lakehouse mounts the release's verified chart archive, which it installs.
+const lakehouseChart = "/release/rask.tgz"
 
 // clientAccountLabel marks a ServiceAccount ServiceAccountToken created for a client, the only kind it mints for.
 const clientAccountLabel = "rask.dev/client-account"

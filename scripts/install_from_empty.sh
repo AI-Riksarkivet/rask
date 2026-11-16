@@ -8,8 +8,8 @@
 # `dagger call install-from-empty` builds them into a registry its k3s mirrors, `dagger call lakehouse` copies a release's
 # published images there by digest, and scripts/e2e_stack.sh loads them into kind.
 #
-# CHART is the chart to install: this tree's ./chart by default, or a published release's OCI reference with
-# CHART_VERSION naming its version ([[XC-187]]).
+# CHART is the chart to install: this tree's ./chart by default, or a published release's chart archive, which
+# `dagger call lakehouse` fetches by the digest whose signature it verified ([[XC-187]], [[XC-216]]).
 #
 # A client's e2e against a pinned lakehouse ([[XC-189]]) passes the integration its own release sets: VALUES names a
 # values file (`networkPolicy.objectStoreExtraFrom`; a key HELM_SET sets stays the stack's, as Helm applies `--set` over
@@ -27,7 +27,6 @@ cd "$(dirname "$0")/.."
 RELEASE="${RELEASE:-rask}"
 TAG="${TAG:-dev}"
 CHART="${CHART:-./chart}"
-CHART_VERSION="${CHART_VERSION:-}"
 VALUES="${VALUES:-}"
 CONSOLE_ENABLED="${CONSOLE_ENABLED:-true}"
 DEX_VALUES=()
@@ -62,7 +61,7 @@ install_stack_fixtures "${DEX_VALUES[@]}"
 
 echo "==> rask"
 start_job_recorder "$JOB_LOGS"
-scripts/helm.sh upgrade --install "$RELEASE" "$CHART" ${CHART_VERSION:+--version "$CHART_VERSION"} --timeout "$TIMEOUT" "${HELM_SET[@]}" \
+scripts/helm.sh upgrade --install "$RELEASE" "$CHART" --timeout "$TIMEOUT" "${HELM_SET[@]}" \
   --set "console.enabled=$CONSOLE_ENABLED" ${VALUES:+-f "$VALUES"}
 
 echo "==> ready"

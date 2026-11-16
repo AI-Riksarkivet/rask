@@ -31,8 +31,9 @@ jobs:
       # Build Zensical docs (with mkdocstrings for auto-generated API reference)
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: 3.x
-      - run: pip install zensical mkdocstrings-python
+          python-version: "3.13"
+      # Every package by version and hash (.github/docs-requirements.txt): this job publishes with a write token.
+      - run: pip install --require-hashes -r .github/docs-requirements.txt
       - run: zensical build --clean
 
       # Build Storybook (component-lib) and embed in docs site
@@ -47,7 +48,8 @@ jobs:
       # space silently no-ops in bun, and one wrong form here is another 30-second red run nobody reads.
       - name: Install dependencies
         working-directory: frontend
-        run: bun install
+        # The lockfile as committed: a resolve at publish time would run whatever the registry serves that day.
+        run: bun install --frozen-lockfile
       - name: Build Storybook
         working-directory: frontend/packages/ui
         run: bun run build-storybook

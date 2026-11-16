@@ -26,8 +26,16 @@ printf 'fs.inotify.max_user_instances = 8192\nfs.inotify.max_user_watches = 5242
 sudo sysctl -q --load=/etc/sysctl.d/90-rask-inotify.conf
 
 echo ">> [1/2] k3s"
+# k3s's own installer at a pinned version, held to its digest before it runs; it then holds the k3s binary it fetches to
+# that release's published sha256sum.
+K3S_VERSION="v1.36.4+k3s1"
+K3S_INSTALLER_SHA256="46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad"
 if ! command -v k3s >/dev/null 2>&1; then
-  curl -sfL https://get.k3s.io | sh -
+  installer="$(mktemp)"
+  curl -fsSL -o "$installer" "https://raw.githubusercontent.com/k3s-io/k3s/${K3S_VERSION/+/%2B}/install.sh"
+  echo "$K3S_INSTALLER_SHA256  $installer" | sha256sum --check --strict -
+  INSTALL_K3S_VERSION="$K3S_VERSION" sh "$installer"
+  rm -f "$installer"
 fi
 sudo k3s kubectl get nodes
 
@@ -40,8 +48,24 @@ sudo chmod 644 "$KUBECONFIG_PATH" || true
 sudo install -m 0644 "$(dirname "$0")/../deploy/k3s/traefik-gateway.yaml" /var/lib/rancher/k3s/server/manifests/traefik-gateway.yaml
 
 echo ">> [2/2] helm"
+# The helm .dagger/charts.go pins (helmVersion, helmSHA256), read from there so the two cannot drift, its release
+# archive held to its digest before it is unpacked.
 if ! command -v helm >/dev/null 2>&1; then
-  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  case "$(uname -m)" in
+    x86_64) arch=amd64 ;;
+    aarch64) arch=arm64 ;;
+    *) echo "!! no pinned helm digest for $(uname -m)" >&2; exit 1 ;;
+  esac
+  pins="$(dirname "$0")/../.dagger/charts.go"
+  HELM_VERSION="$(sed -n 's/^const helmVersion = "\(.*\)"$/\1/p' "$pins")"
+  sum="$(sed -n "s/^[[:space:]]*\"$arch\": \"\([0-9a-f]\{64\}\)\",\$/\1/p" "$pins")"
+  [ -n "$HELM_VERSION" ] && [ -n "$sum" ] || { echo "!! no helm pin for $arch in $pins" >&2; exit 1; }
+  archive="$(mktemp)"
+  curl -fsSL -o "$archive" "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${arch}.tar.gz"
+  echo "$sum  $archive" | sha256sum --check --strict -
+  tar -xzf "$archive" -C /tmp "linux-${arch}/helm"
+  sudo install -m 0755 "/tmp/linux-${arch}/helm" /usr/local/bin/helm
+  rm -rf "$archive" "/tmp/linux-${arch}"
 fi
 
 echo "bootstrap done. Next: make k3s-build && make k3s-import && make k3s-up"
