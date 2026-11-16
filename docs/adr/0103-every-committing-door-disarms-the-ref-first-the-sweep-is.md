@@ -1,5 +1,7 @@
 # 0103. Every committing door disarms the ref first; the sweep is the backstop (LH-245, 2026-10-05)
 
+**Status:** accepted.
+
 The sweep-only disarm above failed live on helm rev 280: the queue lane visits about 5 datasets a minute against
 606 work orders a tick (LH-195), so an armed scratch table waited 45 minutes unvisited, and three appends through
 the insert door deleted versions 1 and 2. A design that leaves a table armed until the sweep reaches it cannot meet

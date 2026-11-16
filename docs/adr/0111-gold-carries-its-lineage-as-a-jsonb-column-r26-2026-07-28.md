@@ -1,5 +1,7 @@
 # 0111. Gold carries its lineage as a JSONB column (R26, 2026-07-28)
 
+**Status:** superseded by [ADR 0156](0156-the-audit-grilling-amends-0155.md) (C9): a write's run and inputs ride the commit as `rask.*` transaction properties, not a column.
+
 Source: `docs/architecture/lance-ns-merge.md:461` (at `44b354f3`) (owner ruling R26, 2026-07-28; executes R25's (b)).
 
 ## Context

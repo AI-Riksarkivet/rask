@@ -1,5 +1,7 @@
 # 0001. P0.1 — why e2e_stack.sh exists (live-verify honesty)
 
+**Status:** accepted.
+
 **Decision.** CI boots a real kind stack and runs the e2e suites (outbox, warehouses, multibase,
 client-direct, CAS, governance) via `scripts/e2e_stack.sh`; a condition that cannot be proven by a grep,
 a CI test, or a live assertion with a durable artifact is **not a condition, it is a claim**. The runner

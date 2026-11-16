@@ -1,5 +1,7 @@
 # 0091. The promotion review goes through the saga port (LH-226, 2026-10-05)
 
+**Status:** superseded by [ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md): the promotion review is a durable record answered on a door, with no saga port.
+
 `medallion.api.promotions` starts, reads and answers `promotion_review` through `service_kit.lakehouse.saga.SagaClient`
 and names no workflow engine. The port is `start`, `state` (an engine-neutral `SagaStatus`, with `live` for PENDING,
 RUNNING and SUSPENDED, and the stored input) and `signal(instance_id, event, data)`. `exists` left it: `state` answers

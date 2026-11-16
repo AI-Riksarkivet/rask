@@ -1,5 +1,7 @@
 # 0062. Bounding a read changes what every caller of the unbounded contract MEANS (2026-09-07)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 `/runs` returned the estate's whole run board — 5,122 rows / 2.65 MB — to an endpoint its own
 docstring says is polled every two seconds. `cypher.py` had predicted the growth with a date, calling
 the unbounded shape "currently fine — `/runs` measured 272 rows on the live estate 2026-08-23" while

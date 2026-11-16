@@ -1,5 +1,7 @@
 # 0068. The `R#` rulings are the lance-ns merge's, they were ACCEPTED in July, and three rows gated on them anyway (2026-09-20)
 
+**Status:** retired: the rows it unblocked and the zone and media rulings they cited is gone from the lakehouse (XC-192, [ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md)); kept as the record of the decision.
+
 **Finding.** Three register rows stood blocked on "owner acknowledgement of R5 / R8 / R9". Those are
 not open questions and never were: `docs/architecture/lance-ns-merge.md:435` heads a table titled
 "Owner rulings (2026-07-24) — ACCEPTED, supersede anything above that conflicts", and a later commit

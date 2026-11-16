@@ -1,5 +1,7 @@
 # 0152. service-kit ships py.typed, and skip attribution reports zeros (2026-10-10)
 
+**Status:** superseded by [ADR 0195](0195-the-three-kits-fold-into-one-lakehouse-library.md): the one `lakehouse` library ships `py.typed`; the skip attribution went with the stage runners.
+
 Source: owner decision, 2026-10-10 grilling session (two questions with no counted row).
 
 ## Context

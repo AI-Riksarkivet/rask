@@ -1,5 +1,7 @@
 # 0065. `RESULT` is a capability, and both stage lanes go through the port (2026-09-17)
 
+**Status:** retired: the executor port and both stage lanes is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md), XC-192); kept as the record of the decision.
+
 Settles the open decision the entry above leaves standing, by the third of the three options it names:
 widen the port. Owner ruling, 2026-09-17.
 

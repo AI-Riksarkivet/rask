@@ -1,5 +1,7 @@
 # 0044. Comments carry rationale and provenance, never a changelog of the prose (2026-08-30, owner ruling)
 
+**Status:** accepted.
+
 **Decision.** Module prose sorts into three kinds. Two stay; one is banned in NEW code and left alone
 where it already stands.
 

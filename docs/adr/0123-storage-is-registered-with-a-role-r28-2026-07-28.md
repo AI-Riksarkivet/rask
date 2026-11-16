@@ -1,5 +1,7 @@
 # 0123. Storage is registered with a role (R28, 2026-07-28)
 
+**Status:** superseded by [ADR 0210](0210-the-console-shows-what-is-there-by-its-path.md): the console shows what is there by its path; the storage registry's roles are gone.
+
 Source: `docs/architecture/lance-ns-merge.md:463` (at `44b354f3`) (owner ruling R28, 2026-07-28).
 
 ## Context

@@ -1,5 +1,7 @@
 # 0013. AGE-on-CNPG vs Lance-native-graph (the lineage-store decision)
 
+**Status:** superseded by [ADR 0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md): lineage keeps no database, and the lineage graph is bring-your-own.
+
 **Decision.** The lineage graph needs the Apache **AGE** extension, but CNPG runs stock Postgres — so the
 rask fold-in must pick one of: (a) point CNPG at a custom Postgres-with-AGE image, (b) keep AGE as a separate
 operand, or (c) execute the pivot to move lineage to a **Lance-native graph**, which drops the AGE/Postgres

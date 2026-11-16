@@ -1,5 +1,7 @@
 # 0019. FEATURE-GAP §1 (serving) — blob serving is a governed proxy, not presigned URLs
 
+**Status:** accepted.
+
 **Decision.** Credential-less consumers (browser, notebook) fetch blob bytes back through the catalog:
 `GET /management/v1/table/{id}/blobs?column=&row=[&version=]` streams the bytes with RFC 9110 Range support — a
 `Range: bytes=…` request reads only the window from storage via the lazy `BlobFile` (206 +

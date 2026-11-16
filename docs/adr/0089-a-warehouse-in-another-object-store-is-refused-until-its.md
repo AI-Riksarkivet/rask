@@ -1,5 +1,7 @@
 # 0089. A warehouse in another object store is refused until its credential is consumed (LH-205, 2026-10-05)
 
+**Status:** accepted.
+
 The catalog signs every connection with the estate's one key pair. A warehouse record could name its own
 `endpoint` (LH-067) and the opens followed it, but no request sets `credential_ref` and nothing reads it, so
 an open under such a record signed toward a host a project admin chose with the estate's access-key id, its

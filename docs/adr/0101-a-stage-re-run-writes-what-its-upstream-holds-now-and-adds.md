@@ -1,5 +1,7 @@
 # 0101. A stage re-run writes what its upstream holds now, and adds a column by `id` (LH-213, 2026-10-05)
 
+**Status:** retired: the in-process stage is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md)); kept as the record of the decision.
+
 The in-process stage skipped its write whenever the target's columns were a subset of the run's output and the
 `source_rowid` lists matched element for element. Values were never compared, and a row corrected in place keeps
 its stable `_rowid` and its position (it moves only its `_row_last_updated_at_version`,

@@ -1,6 +1,6 @@
 # 0197. Maintenance writes only under a vend, and no workload holds a store key (2026-11-08)
 
-**Status:** accepted. Source: [[XC-084]] (#205), its widening on the owner's word of 2026-11-03 ("a compromised
+**Status:** accepted, amended by [ADR 0204](0204-maintenances-commits-are-the-catalogs-and-its-vend-puts-nothing.md). Source: [[XC-084]] (#205), its widening on the owner's word of 2026-11-03 ("a compromised
 maintenance pod must not be able to defeat an erasure or a hold"), [[LH-219]] (#121) and [[LH-238]] (#158). Extends
 [ADR 0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md) from the catalog to every
 lakehouse workload.

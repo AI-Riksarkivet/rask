@@ -1,5 +1,7 @@
 # 0074. A duration is not evidence of the mechanism that produced it (2026-09-22)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 [[LH-190]] was filed HIGH on a measured 324s gap in the maintenance work lane after a worker restart,
 and attributed it to the consumer's `ackWait: 720s`. The number was real. The attribution was not:
 nothing in the original trace separated "the lane is refusing to deliver" from "the pods are not

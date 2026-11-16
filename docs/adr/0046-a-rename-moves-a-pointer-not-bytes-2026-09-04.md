@@ -1,5 +1,7 @@
 # 0046. A rename moves a POINTER, not bytes (2026-09-04)
 
+**Status:** accepted.
+
 `rename_table` copied the dataset root in-process and deleted the source. It answered 200, which is
 why nothing flagged it, but the cost of a rename was the DATASET's size, paid inside a request
 handler — unbounded work no pod sizing fixes, the same class as the `maintenance/compact` door before

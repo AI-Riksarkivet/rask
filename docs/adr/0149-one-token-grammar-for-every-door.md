@@ -1,5 +1,7 @@
 # 0149. One token grammar for every door (2026-10-10)
 
+**Status:** accepted: no door takes a token today (those doors left with `services/medallion`, LH-464); the rule binds the next one.
+
 Source: owner decision, 2026-10-10 grilling session (LH-300 #311, first answer).
 
 ## Context

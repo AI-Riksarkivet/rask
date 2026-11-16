@@ -1,5 +1,7 @@
 # 0073. A memory bound applies at every hop, not at the layer that happens to set it (2026-09-22)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 **What was decided before.** `compact_one` was deliberately a faithful pass-through for its three
 compaction bounds: the safe default lived in `MaintenanceSettings` and was applied by the SWEEP, so a
 caller with its own memory story could reach Lance's native ceilings on purpose. A test pinned it by

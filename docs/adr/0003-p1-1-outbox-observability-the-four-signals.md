@@ -1,5 +1,7 @@
 # 0003. P1.1 — outbox observability (the four signals)
 
+**Status:** accepted.
+
 **Decision.** The lineage outbox is an external boundary (S3 + pub/sub) and carries the four golden
 signals — counters for staged / drained / poison plus gauges for outbox **depth** and **oldest-age** —
 exported OTLP-direct to GreptimeDB, with a Perses alert on `depth>0` sustained.

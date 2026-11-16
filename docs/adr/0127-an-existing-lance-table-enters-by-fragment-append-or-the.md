@@ -1,5 +1,7 @@
 # 0127. An existing Lance table enters by fragment append or the register door, never by overwrite (ingest 1b, 2026-08-07)
 
+**Status:** accepted, amended by [ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md): the register door stands; the `lance-append` ingest kind is gone.
+
 Source: `docs/architecture/ingest-and-tier-movement.md` (decision 1b), ruled in `open_ingest_design.md` on
 2026-08-07 and migrated to `docs/` on 2026-08-22 when that plan was retired.
 

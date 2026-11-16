@@ -1,5 +1,7 @@
 # 0110. Serialization is a projection from gold, served by its own service (R4, R25, 2026-07-24)
 
+**Status:** retired: the exporter service is gone from the lakehouse (XC-192); kept as the record of the decision.
+
 Source: `docs/architecture/lance-ns-merge.md:26,442,460` (at `44b354f3`) (owner rulings R4, accepted 2026-07-24, and R25, 2026-07-28).
 
 ## Context

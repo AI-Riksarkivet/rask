@@ -1,5 +1,7 @@
 # 0033. P4/P7 — backups + structural SPOFs: the prod answer is externalize, not in-chart HA
 
+**Status:** accepted, amended by [ADR 0153](0153-the-app-chart-is-the-product.md) (the store and the databases are the platform's) and [ADR 0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md) (no lineage graph).
+
 **Decision.** (Extracted from the retired `GOAL-production-readiness.md`.) The two big structural SPOFs —
 RustFS and AGE-Postgres single-replica — are deliberately *not* solved in-chart: that would need an
 object-store operator / CloudNativePG, the same class as the parked items. The chart instead wires the

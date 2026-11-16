@@ -1,6 +1,6 @@
 # 0181. A Dex client signed in for itself is a machine principal (2026-10-27)
 
-**Status:** accepted. Source: XC-174 (#681), admitted by the owner on 2026-10-20 ("a Dex client-credentials token is a
+**Status:** accepted, amended by [ADR 0208](0208-a-person-is-named-by-their-issuer-and-subject-at-any-openid-provider.md) (the idp id of the machine principal). Source: XC-174 (#681), admitted by the owner on 2026-10-20 ("a Dex client-credentials token is a
 machine principal named `<idp-id>~<client-id>`, as LH-063 names a person, admitted at the verifier"). Extends ADR 0156 C5
 and ADR 0159 D5.
 

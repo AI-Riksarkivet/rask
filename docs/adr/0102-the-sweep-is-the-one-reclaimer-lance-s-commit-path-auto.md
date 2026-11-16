@@ -1,5 +1,7 @@
 # 0102. The sweep is the one reclaimer: Lance's commit-path auto-cleanup is closed (LH-245, 2026-10-05)
 
+**Status:** accepted.
+
 Lance runs automatic cleanup inside the commit of whoever writes, every N commits, from the
 `lance.auto_cleanup.*` manifest keys (`lance_docs/lance/guide/read_and_write.md:1003-1065`). Measured on pylance 12.0.0: with
 `interval=1, older_than=0s` one ordinary append took a table from versions 1..7 to 7..8, and a

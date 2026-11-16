@@ -1,5 +1,7 @@
 # 0072. A resource measurement runs OUTSIDE the thing it measures (2026-09-21)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 **The incident.** Investigating [[LH-183]]'s maintenance OOM, a repro driving four full `run_sweep`
 passes was executed via `kubectl exec` INSIDE the pod whose RSS was the measurement. An exec process
 shares the container's cgroup, so it counted against both the 512Mi limit and every reading: the series

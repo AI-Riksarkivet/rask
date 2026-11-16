@@ -1,5 +1,7 @@
 # 0034. Medallion tiers — hybrid physical layout (2026-07-24)
 
+**Status:** superseded by [ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md): the lakehouse lays out no medallion; a project's layering is labels it defines ([ADR 0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md)).
+
 **Decision.** The medallion tiers get a **hybrid** physical layout per tenant: **raw/bronze/silver are
 namespaces** (prefixes, `<work-root>/medallion/<stage>`) inside the tenant's **work** warehouse, while
 **gold is a separate per-tenant SERVING warehouse** — a normal registry record created through

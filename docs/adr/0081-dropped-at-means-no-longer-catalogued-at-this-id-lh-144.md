@@ -1,5 +1,7 @@
 # 0081. `dropped_at` means "no longer catalogued at this id" (LH-144, owner scope 2026-09-27)
 
+**Status:** superseded by [ADR 0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md): lineage keeps no graph, so a drop is read from the catalog's trash record, not a graph stamp.
+
 The catalog announces a drop as a `DatasetEvent`, which leaves no run, and `repository.dropped_at` read
 only run history, so every catalog drop read as a live table whose grants were gone: the reconcile named
 it `ungoverned` on every tick (measured 2026-09-27: `ungoverned=83`, including tables created and dropped

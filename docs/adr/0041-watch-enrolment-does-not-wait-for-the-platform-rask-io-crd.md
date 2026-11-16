@@ -1,5 +1,7 @@
 # 0041. Watch enrolment does not wait for the `platform.rask.io` CRD (2026-08-16)
 
+**Status:** retired: the notifications page is gone from the lakehouse ([ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md)); kept as the record of the decision.
+
 **Decision.** The notifications page reads its project list from `me.projects`, not from the
 controlplane. The `platform.rask.io` Project CRD is **ABANDONED as a rask-repo concern** — it lives in
 the separate `rask-operator` repo, and landing the CRD here alone would be a regression rather than a

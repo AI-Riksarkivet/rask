@@ -1,5 +1,7 @@
 # 0020. FEATURE-GAP minor deviations #1–#7 — the spec-deviation register
 
+**Status:** accepted.
+
 **Decision.** The catalog's conscious deviations from `ns_catalog/spec.yaml`, recorded so each is a
 decision rather than drift (originally the retired `FEATURE-GAP.md` §1 table; #1/#3/#5/#7 since fixed):
 

@@ -1,5 +1,7 @@
 # 0114. lance-ns's frontend toolchain and zone directory win (R10, R11, 2026-07-27)
 
+**Status:** accepted, amended by [ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) and [ADR 0201](0201-the-console-holds-its-api-client-and-graph-views.md): oxlint and oxfmt stand; the zone directory is gone.
+
 Source: `docs/architecture/lance-ns-merge.md:446,466` (at `44b354f3`) (owner rulings R10 and R11, 2026-07-27).
 
 ## Context

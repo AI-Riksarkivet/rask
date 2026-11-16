@@ -1,5 +1,7 @@
 # 0097. One dataset location has one holder, and the purge spares bytes any id resolves to (LH-204, 2026-10-05)
 
+**Status:** accepted.
+
 The `dir` backend arbitrates only ADDs of an object id (`lance_docs/ns_catalog/catalog/dir/index.md` § Manifest
 Table Commits): a register at a location another id holds commits, and two deregisters of one id both succeed.
 Retiring a rename's source before registering its destination therefore arbitrated nothing. Measured on pylance

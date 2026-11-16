@@ -1,5 +1,7 @@
 # 0125. AGE on CNPG via ImageVolume, behind its own gate (merge decision 1, 2026-07-24)
 
+**Status:** accepted, amended by [ADR 0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md) (the database serves OpenFGA only; no lineage graph).
+
 Source: `docs/architecture/lance-ns-merge.md:48,82,332,560` (at `44b354f3`) (proposed decision 1 of the merge plan, 2026-07-24, restated with survey evidence and later settled).
 
 ## Context

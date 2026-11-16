@@ -1,5 +1,7 @@
 # 0099. An Overwrite is a new version of the same table (LH-242, 2026-10-05)
 
+**Status:** accepted.
+
 The spec gives `CreateTable` an Overwrite mode ("the existing table is dropped and a new table with this name is
 created") and `InsertIntoTable` one ("remove all data in the table and then insert data to it"). The catalog serves
 both as a Lance overwrite on the same dataset, whose earlier versions stay readable by time travel (measured on pylance

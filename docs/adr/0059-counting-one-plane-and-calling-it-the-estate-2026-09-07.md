@@ -1,5 +1,7 @@
 # 0059. Counting one plane and calling it the estate (2026-09-07)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 §F2-5 — Dapr access control — carried a measurement that made it look small: *"only TWO
 service-invocation callers exist, so a `defaultAction: deny` needs 11 allow entries."* The two are
 real. They are also the callers on ONE of three planes, because the count came from grepping

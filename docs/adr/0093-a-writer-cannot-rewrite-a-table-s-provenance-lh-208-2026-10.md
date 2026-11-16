@@ -1,5 +1,7 @@
 # 0093. A writer cannot rewrite a table's provenance (LH-208, 2026-10-05)
 
+**Status:** accepted.
+
 Table metadata and column changes are writer operations in the spec, so rask reserves what its provenance rests on
 (`catalog.core.provenance_guard`). Schema-metadata keys under `lineage.*` and `rask.*` are the platform's: setting or
 nulling one is refused 400 `InvalidInput` at `schema_metadata/update` before it splits into its native and dataplane

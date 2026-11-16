@@ -1,5 +1,7 @@
 # 0104. A carried blob column keeps every payload and its field metadata (LH-217, 2026-10-05)
 
+**Status:** retired: the stage write that carried blob columns is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md)); kept as the record of the decision.
+
 An external base does not make every row of a blob column external. Blob V2 places each value by itself: a
 `Blob(uri=...)` under the base is kind 3, and bytes written in the same column land inline (0), packed (1) or
 dedicated (2) by the column's thresholds. Measured on pylance 12.0.0, a bronze column held kinds `[3, 0, 1, 2,

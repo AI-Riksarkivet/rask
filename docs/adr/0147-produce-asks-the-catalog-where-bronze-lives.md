@@ -1,5 +1,7 @@
 # 0147. /produce asks the catalog where bronze lives (2026-10-10)
 
+**Status:** retired: `/produce` is gone from the lakehouse ([ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); kept as the record of the decision.
+
 Source: owner decision, 2026-10-10 grilling session (D6, LH-164 part 1, LH-194's compensation shape, LH-420); the
 DeclareTable shape follows from the lance_docs check the same day.
 

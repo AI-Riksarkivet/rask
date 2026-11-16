@@ -1,5 +1,7 @@
 # 0067. The three mesh headers stay in the spec document, and the quota has no upstream precedent (owner, 2026-09-20)
 
+**Status:** accepted, amended by [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md) (the mesh headers went with Dapr; the quota placement stands).
+
 Two answers on [[LH-021]] and [[LH-074]], taken after the route and query-parameter halves of LH-021
 had already closed.
 

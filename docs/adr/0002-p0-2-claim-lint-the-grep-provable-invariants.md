@@ -1,5 +1,7 @@
 # 0002. P0.2 — claim-lint (the grep-provable invariants)
 
+**Status:** accepted.
+
 **Decision.** The recurring bug classes are pinned as mechanical tests in `tests/unit/test_invariants.py`,
 run in CI: no bare lineage publish bypasses the outbox (the #4 uniformity invariant), every chart-injected
 env var is read somewhere in `services/`, every FGA relation the code writes/checks exists in the compiled

@@ -1,5 +1,7 @@
 # 0146. An expired drop releases its grants and its name (2026-10-10)
 
+**Status:** accepted.
+
 Source: owner decision, 2026-10-10 grilling session (LH-228's expiry half; reverses diff2 F10 item 5).
 
 ## Context

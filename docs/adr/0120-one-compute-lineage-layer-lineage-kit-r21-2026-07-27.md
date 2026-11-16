@@ -1,5 +1,7 @@
 # 0120. One compute-lineage layer, `lineage-kit` (R21, 2026-07-27)
 
+**Status:** superseded by [ADR 0195](0195-the-three-kits-fold-into-one-lakehouse-library.md): lineage emission lives in the `lakehouse` library, and no Ray work is the lakehouse's.
+
 Source: `docs/architecture/lance-ns-merge.md:456` (at `44b354f3`) (owner ruling R21, decided and landed 2026-07-27).
 
 ## Context

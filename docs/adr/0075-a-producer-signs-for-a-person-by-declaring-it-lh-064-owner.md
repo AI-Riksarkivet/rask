@@ -1,5 +1,7 @@
 # 0075. A producer signs for a person by DECLARING it (LH-064, owner 2026-09-24)
 
+**Status:** superseded by [ADR 0084](0084-lineage-events-are-signed-with-ed25519-the-keys-in-the.md): lineage events are signed with Ed25519; the delegation rule carries over as `onBehalfOf`.
+
 *Superseded by the 2026-10-02 entry "Lineage events are signed with Ed25519, the keys in the store" below: the HMAC
 scheme and its symmetric-key acceptance are gone. The delegation rule carries over as `onBehalfOf`.*
 

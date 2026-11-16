@@ -1,5 +1,7 @@
 # 0092. restore serves its branch, and the branch gate drives the doors (LH-272, 2026-10-05)
 
+**Status:** accepted.
+
 `POST /v1/table/{id}/restore` serves `branch`: the upstream `dir` `restore_table` restores the named ref (measured on
 pylance 12.0.0: a branch at v3 restored to v2 went to v4, main kept its version), so the door opens the ref first, which
 answers 22 `TableBranchNotFound` for a missing branch and 11 for a version the branch lacks where upstream answered 4

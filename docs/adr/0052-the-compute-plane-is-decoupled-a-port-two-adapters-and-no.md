@@ -1,5 +1,7 @@
 # 0052. The compute plane is decoupled: a port, two adapters, and no engine in the platform (2026-09-04)
 
+**Status:** superseded by [ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md): the lakehouse runs no stage and no engine, and holds no compute port.
+
 docs/adr/0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md "The compute plane is decoupled" (§7.4), closed. What the platform holds and what an adapter holds are now
 different things, and the boundary is measurable rather than asserted:
 

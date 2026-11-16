@@ -1,5 +1,7 @@
 # 0051. Cascade repair — detection, and the repair verb (2026-09-04)
 
+**Status:** retired: the medallion cascade is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md)); kept as the record of the decision.
+
 A missed cascade hop was undetectable and unrepairable: the only remedy was re-publishing the
 upstream table, which re-drives every consumer of it rather than the one edge that failed. Five
 pieces closed it (C1, C3a, C3b, C3, C4, C2); what survives here is the reasoning that would otherwise

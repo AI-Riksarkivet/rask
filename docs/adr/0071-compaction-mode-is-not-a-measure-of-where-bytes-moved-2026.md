@@ -1,5 +1,7 @@
 # 0071. `compaction_mode` is not a measure of where bytes moved (2026-09-21)
 
+**Status:** retired: in-pod compaction and its `compaction_mode` is gone from the lakehouse ([ADR 0162](0162-the-lakehouse-builds-nothing-maintenance-decides.md)); kept as the record of the decision.
+
 **The correction.** A maintenance OOMKill (`rask-maintenance`, 6 restarts, exit 137, 512Mi) was
 attributed to in-pod compaction on the strength of the sweep's own per-dataset line: 2,207 of 4,276
 outcomes in the killed container carried `mode='in_pod'`, and `chart/templates/maintenance-worker.yaml`

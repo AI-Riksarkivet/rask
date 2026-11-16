@@ -1,5 +1,7 @@
 # 0054. On a drifted estate, omitting a value is not a no-op (2026-09-07)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 Deploying the stage-runner rename, the scoped storage identities were deliberately HELD BACK —
 `--set-string rustfs.medallionAccessKey= --set-string rustfs.maintenanceAccessKey=` — so that one
 upgrade carried one attributable change. The reasoning was sound and the result was two crash-looping

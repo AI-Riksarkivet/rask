@@ -1,5 +1,7 @@
 # 0115. Dagger tracks the newest release (R12, 2026-07-27)
 
+**Status:** accepted.
+
 Source: `docs/architecture/lance-ns-merge.md:447` (at `44b354f3`) (owner ruling R12, 2026-07-27, wave 2; supersedes the same-day v0.20.3 hold).
 
 ## Context

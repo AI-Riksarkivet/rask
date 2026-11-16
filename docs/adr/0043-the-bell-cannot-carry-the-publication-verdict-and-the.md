@@ -1,5 +1,7 @@
 # 0043. The bell cannot carry the publication verdict, and the reason is the claim check (2026-08-16)
 
+**Status:** retired: the notifications inbox and its bell is gone from the lakehouse ([ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md)); kept as the record of the decision.
+
 **Decision.** The inbox row for a refused publication keeps reading "Complete". Not deferred on cost
 this time — **REFUSED on the plane's own invariant**, which the earlier deferral note got wrong.
 

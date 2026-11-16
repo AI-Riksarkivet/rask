@@ -1,5 +1,7 @@
 # 0141. The orphan scan reports and does not gate the purge (2026-10-10)
 
+**Status:** accepted.
+
 Source: owner decision, 2026-10-10 grilling session (D13, LH-227 #147).
 
 ## Context

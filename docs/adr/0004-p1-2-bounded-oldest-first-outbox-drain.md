@@ -1,5 +1,7 @@
 # 0004. P1.2 — bounded, oldest-first outbox drain
 
+**Status:** accepted.
+
 **Decision.** The reconcile drain caps how many staged events it processes per tick, **oldest-first**,
 carrying the remainder to the next tick (`outbox_drain_limit`).
 

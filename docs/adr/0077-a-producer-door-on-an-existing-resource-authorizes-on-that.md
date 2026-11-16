@@ -1,5 +1,7 @@
 # 0077. A producer door on an existing resource authorizes on THAT resource (owner, 2026-09-25)
 
+**Status:** retired: the producer's doors is gone from the lakehouse ([ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); kept as the record of the decision.
+
 **Decision** ("Authorize on the resource"). `?project=` names a WRITE TARGET, so it stays on `POST /produce`
 (and on `GET /stage-runners`, whose answer is the same for every tenant). A door that reads or stops
 something that already exists authenticates only (`produce_auth.admit_caller`) and checks

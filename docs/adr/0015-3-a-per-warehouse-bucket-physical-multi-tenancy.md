@@ -1,5 +1,7 @@
 # 0015. #3-A — per-warehouse bucket (physical multi-tenancy)
 
+**Status:** accepted, amended by [ADR 0206](0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md) (a warehouse is the first segment of every name).
+
 **Decision.** A warehouse is a runtime-provisioned, **physically separate bucket** (one tenant → one bucket;
 isolation — Lakekeeper parity), provisioned + governed through an admin control-plane API, not the shared
 `lance-catalog` bucket by prefix. Warehouse-create provisions the bucket, registers it as the warehouse

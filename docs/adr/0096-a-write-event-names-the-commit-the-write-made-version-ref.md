@@ -1,5 +1,7 @@
 # 0096. A write event names the commit the write made: version, ref and branch incarnation (LH-214, 2026-10-05)
 
+**Status:** accepted.
+
 Every catalog write door states the version its own commit made, and `emit_measured_write` takes `pin_version` and
 `branch` with no default, so a door that states neither no longer falls back to a reopen. The version comes from the
 write itself: a handle's `version` after the commit (insert, update, delete, the column ops, schema metadata on the

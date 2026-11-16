@@ -1,5 +1,7 @@
 # 0028. control-events — per-replica cursor boundary
 
+**Status:** accepted, reopened by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) (a per-replica cursor loses to cloud native).
+
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the per-replica cursor loses to cloud native (a cursor read on another replica answers an empty page); decided with ADR 0027's reopening.
 
 **Decision.** The ring buffer **and** its monotonic cursor are **per-replica** (each broadcast subscriber

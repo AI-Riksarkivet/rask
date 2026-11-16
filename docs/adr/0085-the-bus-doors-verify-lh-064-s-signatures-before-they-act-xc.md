@@ -1,5 +1,7 @@
 # 0085. The bus doors verify LH-064's signatures before they act (XC-078 slice 1, owner 2026-10-04)
 
+**Status:** accepted, amended by [ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md) and [ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) (the cascade heads and the inbox doors it names are gone).
+
 A Dapr scope limits which components an app may use, not which subjects it may publish, and the subscriber's own
 sidecar delivers a raw publish with the real app token, so a door's token check cannot tell a forgery from a producer.
 The doors therefore verify the producer's signature: the cascade heads (`/bronze-arrival`, `/publication-arrival`),

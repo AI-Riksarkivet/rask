@@ -1,5 +1,7 @@
 # 0086. NATS authenticates every client, one user per app (XC-078 slices 2 and 3, owner 2026-10-04/05)
 
+**Status:** accepted, amended by [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md) (a lakehouse pod's user is a session the bus's signer grants).
+
 **Superseded in its credential mechanism 2026-11-15** by [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md): a lakehouse pod's user is a session the bus's signer grants to its ServiceAccount token, not a stored JWT and seed.
 
 Dapr 1.18.1's pubsub.jetstream authenticates only with a user JWT plus seed, a TLS file pair or one shared token, so

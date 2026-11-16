@@ -1,5 +1,7 @@
 # 0132. The two cascade heads are distinct events, and both fire (2026-08-15)
 
+**Status:** retired: the cascade heads is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md)); kept as the record of the decision.
+
 Source: `docs/architecture/medallion-cascade.md` §10 (DECIDED 2026-08-15 in `open_medallion_workflow.md`, commit
 `9af803ce`; migrated 2026-08-22). Raised as a defect ("a table emitting both signals cascades twice") and closed as
 correct behaviour. The source's line citations were stale; the ones below are read from the code at this commit, and

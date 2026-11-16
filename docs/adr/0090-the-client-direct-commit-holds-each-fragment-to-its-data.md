@@ -1,5 +1,7 @@
 # 0090. The client-direct commit holds each fragment to its data files (LH-211, 2026-10-05)
 
+**Status:** accepted, amended by [ADR 0157](0157-stock-clients-commit-through-managed-versioning.md) (the checks guard `CreateTableVersion`; the `/commit` door is gone).
+
 `/commit` folded a vended writer's `FragmentMetadata` into a version after one existence check per file, and Lance's
 commit trusts the rest. Measured on pylance 12.0.0, a false size or row count, out-of-range column indices, a copied
 `row_id_meta`, an overlay, a 2.1 or 2.3 file declared 2.2, the same file listed twice (every field id in the table

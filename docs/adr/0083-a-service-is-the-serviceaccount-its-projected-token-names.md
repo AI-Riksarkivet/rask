@@ -1,5 +1,7 @@
 # 0083. A service is the ServiceAccount its projected token names (LH-220, D1, 2026-10-02)
 
+**Status:** accepted, reopened by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) (no door bounds a token's lifetime).
+
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the 660 s bound holds only for a token the kubelet projects; a door checks no ceiling on `exp - iat`, so a token minted for a rask audience with a long duration outlives its pod and its account.
 
 Before this row a service authenticated with the estate-wide `APP_API_TOKEN` plus an `x-lance-service-identity`

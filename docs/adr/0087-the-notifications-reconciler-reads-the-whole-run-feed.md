@@ -1,5 +1,7 @@
 # 0087. The notifications reconciler reads the whole run feed through a rung of its own (CTL-021, 2026-10-05)
 
+**Status:** retired: the notifications reconciler is gone from the lakehouse ([ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md)); kept as the record of the decision.
+
 The reconciler walked lineage's `/events`, which is governed per dataset, as `notifications`, a subject the chart
 granted `reader` on `warehouse:lance_catalog` alone. A run whose output lived in any tenant warehouse was filtered out
 before the walk saw it, and the tick still logged `lineage_feed_reconciled`: the one lane for ingest, Ray TRAIN and

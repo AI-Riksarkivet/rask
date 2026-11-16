@@ -1,5 +1,7 @@
 # 0095. A branch's directory holds only that branch's files (LH-203, 2026-10-05)
 
+**Status:** accepted.
+
 The format joins a branch name verbatim onto `tree/` and allows `/` and `_` in it (`lance_docs/lance/format/table/branch_tag.md` § Branch
 Name, § Branch Dataset Layout), so `a/b` lives inside `tree/a/` and `a/_versions` inside branch `a`'s version directory.
 Lance treats what lies under a branch's directory as that branch's. Measured on pylance 12.0.0: a reclaim of `a` deleted

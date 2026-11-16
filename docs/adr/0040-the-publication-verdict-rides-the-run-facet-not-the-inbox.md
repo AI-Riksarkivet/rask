@@ -1,5 +1,7 @@
 # 0040. The publication verdict rides the run FACET, not the inbox pointer (2026-08-16)
 
+**Status:** retired: the notifications inbox is gone from the lakehouse ([ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md)); kept as the record of the decision.
+
 **Decision.** A refused publication is stamped on the terminal run event's `lance` facet
 (`published` / `publish_reason` / `publish_error`). The inbox ROW that a person sees keeps saying
 "Complete", and making it say otherwise is DEFERRED — deliberately, not by omission.

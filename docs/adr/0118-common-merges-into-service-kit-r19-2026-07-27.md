@@ -1,5 +1,7 @@
 # 0118. common merges into service-kit (R19, 2026-07-27)
 
+**Status:** superseded by [ADR 0195](0195-the-three-kits-fold-into-one-lakehouse-library.md): one `lakehouse` library replaces `service-kit`.
+
 Source: `docs/architecture/lance-ns-merge.md:454` (at `44b354f3`) (owner ruling R19, 2026-07-27).
 
 ## Context

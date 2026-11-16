@@ -1,6 +1,6 @@
 # 0121. Raw is not a catalog tier, and ingest is its own service (R23, R24, 2026-07-28)
 
-**Status:** R24 is superseded by [ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md): ingest is a client job on bring-your-own compute, not a lakehouse service. R23 stands.
+**Status:** superseded by [ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md) and [ADR 0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md): ingest (R24) is a client job on bring-your-own compute, not a lakehouse service, and the governed tiers R23 counts are gone (a project's layering is labels it defines).
 
 Source: `docs/architecture/lance-ns-merge.md:458-459` (at `44b354f3`) (owner rulings R23 and R24, 2026-07-28).
 

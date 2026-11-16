@@ -1,5 +1,7 @@
 # 0100. An erasure is verified on bytes: index segments, held surfaces and the branch copy cap (LH-263, 2026-10-05)
 
+**Status:** accepted, amended by [ADR 0163](0163-an-erasure-is-an-obligation-a-job-fulfils-and-the-catalog-verifies.md) (a bring-your-own job erases; the catalog verifies).
+
 `erase()` reported `complete: true` while the subject sat in files no step reached. Measured on pylance 12.0.0:
 a BTREE or BITMAP segment keeps its UUID and the subject's key through the materialising rewrite (its fragment
 bitmap is remapped onto the new fragment) and through `cleanup_old_versions(0)`; an external blob-v2 payload under

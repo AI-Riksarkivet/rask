@@ -1,5 +1,7 @@
 # 0053. A stage runner runs a stage; nothing was ever moved (2026-09-07)
 
+**Status:** retired: the stage runners is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md)); kept as the record of the decision.
+
 **Owner ruling.** The three cascade Deployments are STAGE RUNNERS, not "movers". The old word is
 inherited from the R23 wave, whose vocabulary was "tier movement" — `ingest-and-tier-movement.md`
 still carries it in its filename.

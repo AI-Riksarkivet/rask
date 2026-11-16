@@ -1,5 +1,7 @@
 # 0148. Classification governs delivery, not column reads (2026-10-10)
 
+**Status:** accepted.
+
 Source: owner decision, 2026-10-10 grilling session (classification scope, LH-288).
 
 ## Context

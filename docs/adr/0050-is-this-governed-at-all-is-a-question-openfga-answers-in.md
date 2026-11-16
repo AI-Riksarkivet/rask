@@ -1,5 +1,7 @@
 # 0050. "Is this governed at all" is a question OpenFGA answers in one pass (2026-09-11)
 
+**Status:** accepted.
+
 The reconcile sweep reported three datasets as `storage_loss` — "a bad restore, a wipe... only a human
 can answer for it" — and all three held ZERO authorization tuples. A table nobody holds a tuple on
 cannot be read, maintained, dropped or re-created by anyone including its creator, so its bytes being

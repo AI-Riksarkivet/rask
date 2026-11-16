@@ -1,5 +1,7 @@
 # 0138. An erasure releases a pinning branch or tag after a seven-day notice (2026-10-10)
 
+**Status:** accepted, amended by [ADR 0163](0163-an-erasure-is-an-obligation-a-job-fulfils-and-the-catalog-verifies.md) (when the notice is sent).
+
 Source: owner decision D4, 2026-10-10, taken in a grilling session over LH-178 (#116); the tag clause was ruled the same
 day after the lance_docs check, and the descendant clause after the measurements. Every behaviour cited as measured was
 measured on pylance 12.0.0 with stable row ids and file version 2.2, by the scripts on branch

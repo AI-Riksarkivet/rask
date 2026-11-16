@@ -1,5 +1,7 @@
 # 0150. Protection guards deletion, not history reclaim (2026-10-10)
 
+**Status:** accepted.
+
 Source: owner decision, 2026-10-10 grilling session (LH-300 #311, second answer); the tag and branch clause was ruled
 the same day after the lance_docs check.
 

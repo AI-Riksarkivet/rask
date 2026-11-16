@@ -1,5 +1,7 @@
 # 0126. The merge's other four decisions: Dex stays, zone names stay, e2e is extended, NATS HA is parked (2026-07-24)
 
+**Status:** accepted, amended by [ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) (the zones are gone) and [ADR 0208](0208-a-person-is-named-by-their-issuer-and-subject-at-any-openid-provider.md) (any OpenID provider; Dex is a development fixture).
+
 Source: `docs/architecture/lance-ns-merge.md:561-564` (at `44b354f3`) (proposed decisions 2-5 of the merge plan, 2026-07-24, restated with survey evidence "not relitigated"), with the defaults at `:469`.
 
 These four are recorded together because each is a short hold-the-line decision with no later ruling

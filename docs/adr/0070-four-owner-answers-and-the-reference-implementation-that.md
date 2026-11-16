@@ -1,5 +1,7 @@
 # 0070. Four owner answers, and the reference implementation that unblocked three of them (owner, 2026-09-21)
 
+**Status:** accepted.
+
 Five of the six decision clusters holding [[open_backlog_left_new.md]]'s Phase 1 were put to the owner
 as one question each. Three came back as rulings, and two came back as *"why is this even blocked"* —
 which turned out to be right, and is the part worth recording.

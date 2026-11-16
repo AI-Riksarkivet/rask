@@ -1,5 +1,7 @@
 # 0106. The stage write is one module both engines land through (CP-056 step 2, 2026-10-05)
 
+**Status:** retired: the stage write and both engines is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md), XC-192); kept as the record of the decision.
+
 The in-process engine (`compute.transform_stage`) and the Ray stage job (`scripts/ray_stage_job.py`) each held their
 own write: create, converge, widen, retraction, conflict re-plan, dataset-id stamp, label carry, lineage index,
 contract and marker. Every write-semantics fix landed twice, and the Ray copy had drifted: it rebuilt blob fields bare

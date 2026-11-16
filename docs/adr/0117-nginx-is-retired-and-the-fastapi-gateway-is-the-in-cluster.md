@@ -1,5 +1,7 @@
 # 0117. nginx is retired, and the FastAPI gateway is the in-cluster edge (merge decision 4, R14, 2026-07-24)
 
+**Status:** superseded by [ADR 0165](0165-the-edge-is-the-platforms-gateway-api.md): rask runs no edge process; the platform's Gateway routes each prefix.
+
 Source: `docs/architecture/lance-ns-merge.md:257` (at `44b354f3`) (naming rule 4, "Gateway", 2026-07-24) and `:449` (owner ruling R14, 2026-07-27).
 
 **Citation note.** Chart and script comments that cite "lance-ns-merge.md decision 4" (often as "decision

@@ -1,5 +1,7 @@
 # 0022. UI-operability boundaries — what deliberately has NO browser surface (2026-07-23)
 
+**Status:** retired: the micro-frontend zones and their BFF whose surface it judged is gone from the lakehouse ([ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md)); kept as the record of the decision.
+
 **Decision.** The planes-vs-UI completeness sweep (every mutating backend op vs its MFE surface) closed with
 two lists. The following are **WONTFIX — no UI surface, by design**, each for the stated reason:
 - **Credential vending** (`POST /management/v1/table/{id}/credentials`) — client/API-only: the browser talks through

@@ -1,5 +1,7 @@
 # 0016. #3-B — Lance multi-base (throughput, tiering, DR)
 
+**Status:** accepted.
+
 **Decision.** Expose `data_bases` so **one table can span N buckets** via `base_paths[]` + `base_id`
 (round-robin writes, fan-out reads) while staying strictly relative-path portable and governed per-base. The
 security crux: `data_bases` is restricted to an **allowlist** (`LANCE_MULTIBASE_DATA_BASES`) — an off-list

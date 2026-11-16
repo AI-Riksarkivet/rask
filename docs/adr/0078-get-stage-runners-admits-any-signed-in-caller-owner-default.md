@@ -1,5 +1,7 @@
 # 0078. `GET /stage-runners` admits any signed-in caller (owner default, 2026-09-26)
 
+**Status:** retired: `GET /stage-runners` is gone from the lakehouse ([ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); kept as the record of the decision.
+
 **Decision.** The producer's stage-runner list is a deployment-config read: any caller
 `produce_auth.admit_caller` admits gets it (`admit_config_read`), with no `?project=` and no project
 check. This supersedes the 2026-09-25 entry above where it keeps `?project=` "on `GET /stage-runners`".

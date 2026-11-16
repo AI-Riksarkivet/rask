@@ -1,5 +1,7 @@
 # 0039. Lineage records what happened to DATA; an authorization denial is not a data event (2026-08-16)
 
+**Status:** accepted.
+
 **Ruled** while closing the notifications coverage register, which proposed emitting an OpenLineage
 FAIL when a medallion stage runner is denied by FGA (`transform.py`'s `medallion_stage_denied` path). It
 should not, and the existing behaviour — drop, count, log — is right.

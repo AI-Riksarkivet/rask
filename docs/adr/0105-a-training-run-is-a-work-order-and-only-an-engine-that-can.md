@@ -1,5 +1,7 @@
 # 0105. A training run is a work order, and only an engine that can lose a record is resubmitted to (CP-044, 2026-10-05)
 
+**Status:** retired: training is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md), XC-192); kept as the record of the decision.
+
 Training submitted around the executor port: `train_plans` called `ray_submit.submit_train_job`, which built its own
 Jobs-API body in its own vocabulary (`MODEL`, `TRAIN_TOKEN`, `LINEAGE_URL`, blank OTLP names) under an id from
 `ray_submit.train_submission_id` (`ray-train-<token>`). It now builds a `WorkOrder` (`train_plans.train_order`) and

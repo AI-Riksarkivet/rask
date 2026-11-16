@@ -1,5 +1,7 @@
 # 0055. A privileged credential has THREE halves (2026-09-07)
 
+**Status:** superseded by [ADR 0083](0083-a-service-is-the-serviceaccount-its-projected-token-names.md): a service is its ServiceAccount token, and no per-identity token is seeded.
+
 Adding `service-maintenance` to the catalog's privileged subjects, the pair everyone talks about was
 in place — the service reads its own token (`catalog_compaction.dedicated_token_for`) and the door
 demands it (`LANCE_PRIVILEGED_SUBJECTS`) — and it would still have 401'd every call.

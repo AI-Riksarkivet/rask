@@ -1,5 +1,7 @@
 # 0124. Chart unification: one control plane each, one object store, every hook pod labelled (P4, 2026-07-24)
 
+**Status:** accepted, amended by [ADR 0153](0153-the-app-chart-is-the-product.md) (operators, the bus and the store are prerequisites, not subcharts).
+
 Source: `docs/architecture/lance-ns-merge.md:325-354` (at `44b354f3`) (phase P4, "Chart unification", in the merge plan authored 2026-07-24) and risk 4 at `:422`. Chart comments cite these as "P4" or "lance-ns-merge P4".
 
 ## Context

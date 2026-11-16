@@ -1,5 +1,7 @@
 # 0012. schema-declaration + claim-check hardening
 
+**Status:** retired: the stage runners' declared columns is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md); the quality gate is [ADR 0161](0161-the-tag-gate-runs-at-publish.md)'s); kept as the record of the decision.
+
 **Decision.** Two data-contract hardenings. (1) **Schema declaration** — stage runners declare `requiredColumns`;
 the quality gate asserts the declared columns landed (blocks promotion, the write still commits + audits a
 FAIL run) and the reconcile patrol re-checks the same declarations estate-wide, so a dropped/renamed declared

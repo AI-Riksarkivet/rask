@@ -1,5 +1,7 @@
 # 0029. control-events — estate-admin scope
 
+**Status:** accepted.
+
 **Decision.** `GET /v1/events` is gated by a real **catalog-side** FGA check of `can_observe_events` on
 the fixed root object (`settings.fga_root_object` = `warehouse:lance_catalog`), an owner-tier
 **platform** privilege — a mere project admin gets 403, and the client treats 403 as terminal. A

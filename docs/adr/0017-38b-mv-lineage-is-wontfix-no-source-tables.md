@@ -1,5 +1,7 @@
 # 0017. #38b — MV-lineage is WONTFIX (no source_tables)
 
+**Status:** accepted.
+
 **Decision.** The materialized-view path emits **no** OpenLineage, and this is WONTFIX with the current code.
 Do **not** fabricate an MV lineage edge from the view's own id/output_schema — that names the OUTPUT, not its
 sources, a false provenance claim.

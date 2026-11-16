@@ -1,5 +1,7 @@
 # 0014. Control-plane vs data-plane split (the prod cut)
 
+**Status:** accepted.
+
 **Decision.** *Authorize the manifest commit and the provisioning ops; let bytes go direct to the store under
 scoped, expiring vended creds — never through the server.* Four planes:
 

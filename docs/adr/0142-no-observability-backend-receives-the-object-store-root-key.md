@@ -1,5 +1,7 @@
 # 0142. No observability backend receives the object store's root key (2026-10-10)
 
+**Status:** accepted.
+
 Source: owner decision, 2026-10-10 grilling session (LH-161 #209; same seam as XC-003 #107; R8 in ADR 0085; XC-118).
 
 ## Context

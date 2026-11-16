@@ -1,5 +1,7 @@
 # 0005. P2.1 — single-base cascade write
 
+**Status:** retired: the medallion cascade's stage write is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md)); kept as the record of the decision.
+
 **Decision.** The medallion/Ray cascade writes `mode="overwrite"` to **one** root; Lance multi-base (#3-B)
 stays REST-create-only and is deliberately **not** wired through the stage runner write path — WONTFIX, stated as
 a boundary in the `compute.py` stage runner docstring, not an accidental omission.

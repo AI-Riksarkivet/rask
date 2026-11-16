@@ -1,5 +1,7 @@
 # 0076. Code with no production caller is deleted with the tests that kept it green (owner, 2026-09-25)
 
+**Status:** accepted.
+
 The test audit found functions whose only callers were their own tests, so every one read as covered
 while nothing in the estate ran it. Owner ruling: delete them with their tests, no compatibility shim.
 Deleted: `executor.may_resubmit` and `executor.TERMINAL`, `task_registry.resolve_task`,

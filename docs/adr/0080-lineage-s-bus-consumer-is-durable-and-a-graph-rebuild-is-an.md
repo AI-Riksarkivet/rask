@@ -1,5 +1,7 @@
 # 0080. Lineage's bus consumer is durable, and a graph rebuild is an explicit step (LH-303, owner 2026-09-26)
 
+**Status:** accepted, amended 2026-11-14 (below) and by [ADR 0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md): lineage pulls a durable consumer and keeps no graph to rebuild.
+
 Lineage consumed `lineage.events.v1` through an EPHEMERAL JetStream consumer with `deliverPolicy: all`,
 on purpose: every pod restart replayed the retained stream into the idempotent ingest, and that replay
 was the stated way to rebuild the graph. LH-199's live outage proof showed what else it meant. NATS

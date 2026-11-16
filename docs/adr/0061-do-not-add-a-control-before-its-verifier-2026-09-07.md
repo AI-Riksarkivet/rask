@@ -1,5 +1,7 @@
 # 0061. Do not add a control before its verifier (2026-09-07)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 §F2-12 asks for signed and attested images, and the obvious move is to add cosign to the publish
 path. Measuring first says not to, for a reason this backlog has produced six times in one day.
 

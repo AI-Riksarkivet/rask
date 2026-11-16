@@ -1,5 +1,7 @@
 # 0032. P3b — alerting: rule logic proven hermetically; the live transport is a drill
 
+**Status:** accepted, amended by [ADR 0153](0153-the-app-chart-is-the-product.md) (the rules are `deploy/alerting/rules.yml`, for the platform's evaluator).
+
 **Decision.** (Extracted from the retired `GOAL-production-readiness.md`.) The alert rules
 (`chart/alerting/rules.yml`) are *proven to fire* on synthetic series by `chart/alerting/rules_test.yml`
 via `promtool test rules` (`make alert-rules-check`, in the CI test job) — a hermetic proof render-checking

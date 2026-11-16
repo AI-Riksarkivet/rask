@@ -6,7 +6,7 @@
 
 **Amended 2026-11-14** (XC-199 step D4, #787): the worker pulls the commit announcements itself, and maintenance's web process is gone; see the amendment below.
 
-**Status:** accepted. Owner, 2026-11-08, through the multi-question tool: "Registered, by tag" for how a clone keeps its
+**Status:** accepted, amended by [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md) (decision 5). Owner, 2026-11-08, through the multi-question tool: "Registered, by tag" for how a clone keeps its
 source, and "Ship it, then redesign" for the order (XC-084 shipped first, ADR 0197). Supersedes the discovery decision
 of [ADR 0045](0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md) ("maintenance discovers work by listing
 buckets, and must"), the whole-estate protection pre-pass of

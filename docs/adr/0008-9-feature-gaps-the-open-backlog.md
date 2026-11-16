@@ -1,5 +1,7 @@
 # 0008. §9 — feature gaps (the open backlog)
 
+**Status:** retired: the backlog it kept is gone from the lakehouse (the backlog is the issue tracker, [ADR 0079](0079-2026-09-26-phase-1-s-five-criteria-and-the-backlog-does-not.md)); kept as the record of the decision.
+
 **Decision.** The net-new feature backlog beyond the shipped parity work, kept visible as future work:
 per-project **schema declaration** (see below), **claim-check** payload-size guards at every publish site
 (P1) and facet-bloat caps for wide tables (P2), the **pointer-aware GC** posture and broader orphan-janitor

@@ -1,5 +1,7 @@
 # 0082. The store's newest authorization model decides nothing; each component uses the model its image carries (LH-201, 2026-09-28)
 
+**Status:** accepted.
+
 Every service resolved the `lance-catalog` store at boot and took its NEWEST model, and the newest is
 whoever wrote last: the catalog's boot (`fga.provision`), the chart's `openfga-model` hook, and older images
 that still provision their own body (compute, controlplane and flows run images built 2026-09-03, measured

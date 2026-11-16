@@ -1,5 +1,7 @@
 # 0038. Helm release storage: the SQL driver stands; the chart is NOT split (2026-08-15)
 
+**Status:** accepted, amended by [ADR 0153](0153-the-app-chart-is-the-product.md), which supersedes its no-split half.
+
 **Decision.** Keep `HELM_DRIVER=sql`. Do not split the chart into infra + app now.
 
 **What forced the choice.** `helm upgrade` began failing outright:

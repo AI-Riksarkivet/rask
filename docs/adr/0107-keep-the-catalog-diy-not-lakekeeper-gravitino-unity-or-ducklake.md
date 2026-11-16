@@ -1,5 +1,7 @@
 # 0107. Keep the catalog DIY, not Lakekeeper, Gravitino, Unity or DuckLake (2026-09-02)
 
+**Status:** accepted.
+
 Source: `docs/audits/lakehouse-2026-09/verdict.md:5-37` (the verdict, 2026-09-02) and
 `docs/audits/lakehouse-2026-09/catalog-build-vs-buy.md:9-15,66-74,114-118` (the build-or-buy analysis, same date).
 The three locks it was decided under are the owner's: the Lance table format only (no Iceberg, Delta or Parquet

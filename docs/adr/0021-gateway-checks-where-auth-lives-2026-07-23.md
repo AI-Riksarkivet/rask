@@ -1,5 +1,7 @@
 # 0021. Gateway checks — where auth lives (2026-07-23)
 
+**Status:** accepted, amended by [ADR 0165](0165-the-edge-is-the-platforms-gateway-api.md) and [ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md): the edge is the platform's Gateway and checks nothing; the zones, their BFF and the Dapr delivery guard it names are gone, and each service still authenticates and authorizes every request itself.
+
 **Decision.** No gateway-level authorization, ever; no gateway-level authentication today. AuthN = the IdP
 issues JWTs, every service verifies signatures locally (JWKS, cached); authZ = the owning service resolves
 the object (path/body/SQL → canonical id) and checks OpenFGA — the gateway routes and knows nothing.

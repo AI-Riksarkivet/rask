@@ -1,5 +1,7 @@
 # 0058. A dedicated credential is a property of the TRANSPORT, not only of the service (2026-09-07)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 F2-3's ordering rule had two cases and needed a third, which the estate paid for live.
 
 The two known cases: the CLIENT half alone (a service reads its own token) is inert, because nothing

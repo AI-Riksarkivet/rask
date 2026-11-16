@@ -1,5 +1,7 @@
 # 0084. Lineage events are signed with Ed25519, the keys in the store (LH-064, owner 2026-10-02)
 
+**Status:** accepted, amended by [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md) (each pod reads its key under its own store login; no sidecar).
+
 This supersedes the 2026-09-24 entry above that accepted symmetric event signatures, and LH-064's earlier OpenBao
 Transit wording. XC-078 makes the cascade heads and notifications verify events too, and an HMAC verifier holds the
 very key that forges what it verifies, so each new verifier would have been a new forger. Transit keeps the private key

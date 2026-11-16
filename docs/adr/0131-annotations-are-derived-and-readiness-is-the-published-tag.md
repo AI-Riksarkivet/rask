@@ -1,5 +1,7 @@
 # 0131. Annotations are derived, and readiness is the `published` tag (ingest 3/4, 2026-08-07)
 
+**Status:** accepted, amended by [ADR 0171](0171-the-lakehouse-knows-no-annotation-tool.md) and [ADR 0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md): readiness is still the `published` tag; no annotation tool and no tier remain.
+
 Source: `docs/architecture/ingest-and-tier-movement.md` (decisions 3 and 4, "What landed" and "The cross-cutting
 rules worth keeping"), ruled in `open_ingest_design.md` on 2026-08-07, migrated 2026-08-22.
 

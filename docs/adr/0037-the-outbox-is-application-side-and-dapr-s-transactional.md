@@ -1,5 +1,7 @@
 # 0037. The outbox is application-side, and Dapr's transactional outbox cannot replace it (2026-08-15)
 
+**Status:** accepted.
+
 **Decision.** `service_kit.lakehouse.outbox` — stage the event to object storage, publish, drop on ack,
 relay any survivor — stays. Dapr's transactional outbox is not an available alternative, and the
 proposal to reach it by "writing a transactional marker to Dapr state after the Lance write" does not

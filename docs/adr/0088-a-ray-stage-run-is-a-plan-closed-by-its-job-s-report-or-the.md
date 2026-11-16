@@ -1,5 +1,7 @@
 # 0088. A Ray stage run is a plan, closed by its job's report or the sweep (CP-029 S1, 2026-10-05)
 
+**Status:** retired: the Ray stage lane is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md), XC-192); kept as the record of the decision.
+
 The stage lane learned a Ray job's outcome from `stage_run`, a Dapr workflow that polled the head for up to a day and
 then guessed (`abandoned`, `unnotified`). It is deleted with its activities and its operator routes; the stage runners
 host no workflow runtime and leave the actor state store's scopes. In its place, Lakekeeper's shape (leased records

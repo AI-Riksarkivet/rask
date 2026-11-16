@@ -1,5 +1,7 @@
 # 0143. A project is created by an estate admin or an operator (2026-10-10)
 
+**Status:** accepted.
+
 Source: owner decision, 2026-10-10 grilling session (D2, LH-076).
 
 ## Context

@@ -1,5 +1,7 @@
 # 0018. Lance-spec landmines
 
+**Status:** accepted.
+
 **Decision.** Format-spec constraints any catalog/pipeline code must honor (each a silent footgun):
 
 - `enable_stable_row_ids` is **create-time-only** (silently no-ops later) → verify the `FLAG_STABLE_ROW_IDS`

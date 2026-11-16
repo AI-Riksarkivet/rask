@@ -1,5 +1,7 @@
 # 0130. A manual push to bronze is an authorization policy, not a tier guard (ingest 2, 2026-08-07)
 
+**Status:** superseded by [ADR 0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md): there is no bronze tier; a project's layering is labels, and who writes where is grants.
+
 Source: `docs/architecture/ingest-and-tier-movement.md` (decision 2 and "The two policies this plan was the only record
 of"), ruled in `open_ingest_design.md` on 2026-08-07, migrated 2026-08-22. Corrected here against the code: the
 source text says the policy is a human `writer` on `namespace:<proj>-bronze`, and that is not what the two push doors

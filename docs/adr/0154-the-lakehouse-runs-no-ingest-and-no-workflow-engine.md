@@ -1,5 +1,7 @@
 # 0154. The lakehouse runs no ingest and no workflow engine; data enters through the catalog's namespace doors (2026-10-12)
 
+**Status:** accepted.
+
 Source: owner, 2026-10-12, in a grilling session after CP-056 closed ("Ofc ingest should be out"; compute "as I said
 BYO and aswel workflow engine/orchestration"). Supersedes R24 of ADR 0121, ADR 0036, and ADR 0006 (Dapr Workflow for the promotion).
 

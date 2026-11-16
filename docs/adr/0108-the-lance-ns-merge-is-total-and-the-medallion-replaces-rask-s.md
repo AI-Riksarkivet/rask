@@ -1,5 +1,7 @@
 # 0108. The lance-ns merge is total, and the medallion replaces rask's orchestration (R1, R2, 2026-07-24)
 
+**Status:** superseded by [ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md) and [ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md): the lakehouse runs no orchestration, no stage and no media plane.
+
 Source: `docs/architecture/lance-ns-merge.md:22-26,439-440` (at `44b354f3`) (owner rulings R1 and R2, accepted 2026-07-24).
 
 ## Context

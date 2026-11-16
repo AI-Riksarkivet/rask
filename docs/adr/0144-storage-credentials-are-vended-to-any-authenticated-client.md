@@ -1,5 +1,7 @@
 # 0144. Storage credentials are vended to any authenticated client, wherever it runs (2026-10-10)
 
+**Status:** accepted.
+
 Source: owner decision, 2026-10-10 grilling session (D9, LH-177).
 
 ## Context

@@ -1,6 +1,6 @@
 # 0176. A table's history is fenced between reclaims and ref writes (2026-10-24)
 
-**Status:** accepted. Source: LH-308 (#329), admitted by the owner on 2026-10-20, whose admission names the fix taken
+**Status:** accepted, amended by [ADR 0179](0179-branch-creates-take-turns-and-leases-run-on-the-stores-clock.md). Source: LH-308 (#329), admitted by the owner on 2026-10-20, whose admission names the fix taken
 here: "a lease or conditional record on the control root that tags/create, tags/update, branches/create and every
 reclaim path take".
 

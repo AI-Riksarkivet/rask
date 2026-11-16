@@ -1,5 +1,7 @@
 # 0056. A control's NAME is not evidence that it exists (2026-09-07)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 Draining §F2 produced three findings in one day that are the same mistake wearing different clothes,
 and none of them was settled by reading the thing that carried the name:
 

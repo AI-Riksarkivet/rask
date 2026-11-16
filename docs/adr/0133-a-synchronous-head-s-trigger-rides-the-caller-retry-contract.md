@@ -1,5 +1,7 @@
 # 0133. A synchronous head's trigger rides the caller-retry contract (2026-08-15)
 
+**Status:** retired: the synchronous cascade head is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md)); kept as the record of the decision.
+
 Source: `docs/architecture/medallion-cascade.md` §11 (DROPPED 2026-08-15 in `open_medallion_workflow.md`, commit
 `6e35fe45`; migrated 2026-08-22).
 

@@ -1,5 +1,7 @@
 # 0007. §7a — live-verification residuals
 
+**Status:** retired: the lineage graph whose residuals it tracked is gone from the lakehouse ([ADR 0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md): lineage keeps no graph); kept as the record of the decision.
+
 **Decision.** A bounded set of provenance-visibility residuals is tracked (not corruption, not blocking):
 overwrite leaves stale column nodes on the reused dataset id; reconcile false-flags a *deliberately* dropped
 table as `MISSING_ON_STORAGE` from a stale `source_uri`; column-level lineage is emitted as a facet but not

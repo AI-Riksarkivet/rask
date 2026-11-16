@@ -3,7 +3,7 @@
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): grants made only at the doors lose to GitOps; this record stands until the planned operator is designed.
 **Amended 2026-11-13** by [ADR 0206](0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md): a grant to a principal that is not a person may be declared in git (the chart's `catalog.declared.grants`) and is converged by the catalog, which revokes only the tuples it wrote from the declaration; a person's grant stays at the doors.
 
-**Status:** accepted. Source: LH-563 (#771). The owner ruled "Grants via doors" on 2026-11-06, after the client-move audit
+**Status:** accepted, amended by [ADR 0206](0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md) (a client's project and warehouse grants may also be declared in git and converged by the catalog). Source: LH-563 (#771). The owner ruled "Grants via doors" on 2026-11-06, after the client-move audit
 and the parity audit against Lakekeeper `9124ea8`, and chose the two open points through the multi-question tool the same
 day: "Refused, as absent" (how the decision door answers an object outside its caller's scope) and "Revoke, re-grant
 scoped" (the client grants the old values had made on the live estate). Amends [ADR 0174](0174-the-provenance-namespace-is-maintained-as-every-table-is.md)

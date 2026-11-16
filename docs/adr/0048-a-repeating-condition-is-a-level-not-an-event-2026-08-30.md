@@ -1,5 +1,7 @@
 # 0048. A repeating condition is a LEVEL, not an event (2026-08-30)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 Measured, and the measurement is the argument. Between 2026-08-29 22:00 and 08:08 the notifications
 reconciler logged **1210 `lineage_feed_pruned_below_cursor` + 1210 `lineage_event_invalid`** — two per
 cron tick for ten hours, from ONE pruned feed and ONE malformed row. The pod never restarted; it healed

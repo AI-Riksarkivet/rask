@@ -1,5 +1,7 @@
 # 0129. Ingest needs the warehouse and namespace, never the table (ingest 1d, 2026-08-07)
 
+**Status:** superseded by [ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md): the lakehouse runs no ingest.
+
 Source: `docs/architecture/ingest-and-tier-movement.md` (decision 1d and "What landed"), ruled in
 `open_ingest_design.md` on 2026-08-07, migrated 2026-08-22.
 

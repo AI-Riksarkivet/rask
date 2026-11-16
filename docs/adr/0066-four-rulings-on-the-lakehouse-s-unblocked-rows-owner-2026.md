@@ -1,5 +1,7 @@
 # 0066. Four rulings on the lakehouse's unblocked rows (owner, 2026-09-19)
 
+**Status:** accepted, amended by [ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md) (the `/produce` ruling went with `/produce`).
+
 Four rows had stood blocked on an owner call, each with its evidence complete and re-measured
 immediately before the question. All four were answered in one sitting; they are recorded together
 because that is how they were decided, not because they interact.

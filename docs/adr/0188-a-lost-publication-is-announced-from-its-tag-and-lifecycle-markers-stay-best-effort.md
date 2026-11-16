@@ -3,7 +3,7 @@
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): best-effort lifecycle markers lose to cloud native; they are to ride the outbox, decided after the store requests per door are counted.
 **Amended 2026-11-12** by [ADR 0205](0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md): see the amendment below.
 
-**Status:** accepted. Source: LH-552 (#743), admitted by the owner on 2026-11-01 from that day's design audit. The owner
+**Status:** accepted, amended by [ADR 0205](0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md). Source: LH-552 (#743), admitted by the owner on 2026-11-01 from that day's design audit. The owner
 chose its scope the same day through the multi-question tool ("Publication only"), after the research below.
 
 ## Context

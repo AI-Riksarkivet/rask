@@ -1,5 +1,7 @@
 # 0060. An operator toggle is not evidence the resource exists (2026-09-07)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 `CLAUDE.md` stated that the lineage (AGE) and OpenFGA Postgres databases are CloudNativePG. They are
 not, and have not been. Measured live: **zero** `cluster.postgresql.cnpg.io` objects, `rask-age-0`
 owned by `StatefulSet/rask-age`, and `age.cnpgCluster.enabled` defaulting **false** — with the

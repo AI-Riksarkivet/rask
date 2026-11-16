@@ -1,6 +1,6 @@
 # 0159. Four owner rulings of 2026-09-25/26 that no ADR recorded: branch writes, the principal key, catalog drop events, an unplannable compaction (2026-10-12)
 
-**Status:** accepted. Source: owner rulings given 2026-09-25 and 2026-09-26 through the multi-question tool, until now
+**Status:** accepted, amended by [ADR 0208](0208-a-person-is-named-by-their-issuer-and-subject-at-any-openid-provider.md) (D5). Source: owner rulings given 2026-09-25 and 2026-09-26 through the multi-question tool, until now
 held only in an agent's memory. Recorded here so a session on another machine has them. Machine identity (D1) is
 already ADR 0083 and ADR 0156 C5; Kueue being someone else's (D11) is ADR 0153.
 

@@ -1,5 +1,7 @@
 # 0057. A dependency revert that leaves the range open reverts nothing (2026-09-07)
 
+**Status:** accepted: a lesson the estate taught, and its rule stands.
+
 Bumping `lance-namespace` 0.11.0 → 0.12.0 (A10) broke `merge_insert` on the catalog's native path,
 and both halves of what happened next are worth keeping.
 

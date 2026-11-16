@@ -1,5 +1,7 @@
 # 0134. The stage workflow review and its operator surface (2026-08-16, superseded by 0088)
 
+**Status:** retired: the stage workflow and its successor, the Ray stage plan is gone from the lakehouse ([ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md), XC-192); kept as the record of the decision.
+
 Source: `docs/architecture/medallion-cascade.md` §12 (REVIEWED 2026-08-16, corrected 2026-08-22). **Superseded on
 2026-10-05 by [0088](0088-a-ray-stage-run-is-a-plan-closed-by-its-job-s-report-or-the.md):** `stage_run` and its
 activities are deleted, and a Ray stage is a plan closed by its job's outcome report or a cron sweep. What remains

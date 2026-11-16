@@ -1,5 +1,7 @@
 # 0063. The object store is MinIO, and the reason is who may call AssumeRole (2026-09-11, LH-133)
 
+**Status:** superseded by [ADR 0168](0168-the-development-object-store-is-rustfs.md): the development and CI object store is RustFS.
+
 **Superseded by ADR 0168** (2026-10-18).
 
 P4 resolved the store question as *"RustFS: rask's operator Tenant wins; keep-PVC posture via Tenant

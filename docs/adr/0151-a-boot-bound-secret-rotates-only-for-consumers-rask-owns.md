@@ -1,5 +1,7 @@
 # 0151. A boot-bound secret rotates only for consumers rask owns in production (2026-10-10)
 
+**Status:** accepted, amended by [ADR 0155](0155-the-medallion-is-tier-governance-in-the-catalog.md) and [ADR 0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md): no Ray head and no lineage graph remain; OpenFGA's database is the consumer.
+
 Source: owner decision, 2026-10-10 grilling session (D8, XC-001's infra half #195). Reference: R1 in ADR 0085 (platform services are external in production).
 
 ## Context

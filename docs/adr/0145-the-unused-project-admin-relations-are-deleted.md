@@ -1,5 +1,7 @@
 # 0145. The unused project admin relations are deleted (2026-10-10)
 
+**Status:** accepted.
+
 Source: owner decision, 2026-10-10 grilling session (CTL-019; `docs/audits/2026-09-25/lakekeeper-deep-read/authz.md` §8 item 1).
 
 ## Context

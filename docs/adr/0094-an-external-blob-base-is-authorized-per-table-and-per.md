@@ -1,5 +1,7 @@
 # 0094. An external blob base is authorized per table and per object, and no vend grants one (LH-209, 2026-10-05)
 
+**Status:** accepted.
+
 The create door registered every `LANCE_EXTERNAL_BLOB_BASES` entry on every create, and the vend's allowlist was the
 union of that list and the multi-base data list. With the chart default (`s3://<bucket>/models/`, the model-artifact tree
 of every project), every plain create's read vend granted `ListBucket` and `GetObject` on `<bucket>/models/*`, and a

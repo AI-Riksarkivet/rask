@@ -1,5 +1,7 @@
 # 0024. Team/role administration — WONTFIX until the Keycloak sync (2026-07-23)
 
+**Status:** retired: the wait for an IdP sync is gone from the lakehouse (a project's members and roles are administered through the catalog's own doors, LH-557); kept as the record of the decision.
+
 **Decision.** No UI or API surface for administering the *identity-shaped* tuples — `team:<t>#member`,
 `role:<r>#assignee`, `project:<p>` `team`/`member` — is built. Per the gateway-checks entry above, these
 tuples become **event-synced from the IdP** at rask-merge time (a Keycloak event listener writes

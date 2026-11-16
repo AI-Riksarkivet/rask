@@ -1,5 +1,7 @@
 # 0031. control-events — fail-open emit contract
 
+**Status:** accepted, amended by [ADR 0205](0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md) (a door files its announcements before its change, and a failed door's are finished later).
+
 **Decision.** Every control-plane mutation endpoint `await`s the emit (`packages/service-kit/src/service_kit/control_emit.py`)
 **after** the backend/FGA mutation succeeds — so a change that did not happen is never announced — and
 the emitter **swallows every error**: a bus outage degrades to "no live refresh + the audit trail still

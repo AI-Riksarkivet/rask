@@ -1,5 +1,7 @@
 # 0098. A namespace Overwrite replaces only an empty namespace, and a Skip drop finishes the trailer (LH-037, 2026-10-05)
 
+**Status:** accepted.
+
 `CreateNamespaceRequest.mode` Overwrite (`lance_docs/ns_catalog/spec.yaml`: "the existing namespace is dropped and a
 new empty namespace with this name is created") is served as drop-then-create with RESTRICT semantics. An empty
 namespace needs what `POST /v1/namespace/{id}/drop` needs — `can_delete` on it and no deletion protection — on top of

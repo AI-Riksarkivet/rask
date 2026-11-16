@@ -1,5 +1,7 @@
 # 0023. Workflow history has no browser surface — the ALERT is the surface (2026-08-26, owner ruling)
 
+**Status:** retired: Dapr Workflow and its history is gone from the lakehouse ([ADR 0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md), [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md)); kept as the record of the decision.
+
 **Decision.** No zone shows how much Dapr workflow history exists, how old it is, or what the retention
 policy is, and **none will**. The operator concern is carried by
 `DaprWorkflowHistoryNotCollected` + `DaprWorkflowStateMetricsMissing` in `chart/alerting/rules.yml`.

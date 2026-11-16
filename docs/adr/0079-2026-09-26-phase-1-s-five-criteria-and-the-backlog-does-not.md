@@ -1,5 +1,7 @@
 # 0079. 2026-09-26 — Phase 1's five criteria, and the backlog does not grow without the owner
 
+**Status:** accepted.
+
 The owner confirmed the five conditions that finish the lakehouse, in these words: (1) provenance/lineage
 correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or
 Ray; (4) events correct; (5) resilient. XC-090 (#108) is the live scenario that

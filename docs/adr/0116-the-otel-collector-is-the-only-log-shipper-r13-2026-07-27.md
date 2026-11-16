@@ -1,5 +1,7 @@
 # 0116. The OTel Collector is the only log shipper (R13, 2026-07-27)
 
+**Status:** accepted.
+
 Source: `docs/architecture/lance-ns-merge.md:448` (at `44b354f3`), resolving the open decision in P4 at `:334` (owner ruling R13, 2026-07-27).
 
 ## Context
