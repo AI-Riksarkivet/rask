@@ -1,7 +1,7 @@
 """The catalog's write transport: a table written through the spec's REST doors.
 
 :class:`RestCatalogWriteTransport` writes through ``POST /v1/table/{id}/merge_insert`` and ``/delete``, so the catalog
-governs the write (its authorization, quality gate and the announcement on lineage). The base URL comes from the
+governs the write (its authorization, the table's contract and the announcement on lineage). The base URL comes from the
 caller and the transport carries a urllib3 ``Retry``; catalog errors are translated onto the DomainError hierarchy so a
 denial or a conflict keeps its status through the caller.
 """

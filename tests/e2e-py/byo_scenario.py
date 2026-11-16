@@ -1,23 +1,23 @@
 """The bring-your-own pipeline scenario Phase 1's acceptance drives, once per session ([[LH-478]], XC-090).
 
 The lakehouse runs no pipeline. A user's job, on its own compute, writes every table through the catalog's Lance
-Namespace doors with a stock client, follows the commit feed to learn what to do next, and publishes through the
-tag gate. `drive` is that job, run from outside the cluster:
+Namespace doors with a stock client, follows the commit feed to learn what to do next, and marks the version it vetted
+with a tag of its own. `drive` is that job, run from outside the cluster:
 
 1. it seeds bronze with stock pylance through the namespace, on the credential the catalog vends, each commit staging
    the run that made it as `rask.*` transaction properties;
 2. it follows lineage's `GET /events?since=` forward to the bronze write and the version it committed;
 3. it derives silver through the catalog's create and insert doors, naming its run and the bronze input at that
    version in the spec Context (`x-rask-run-id`, `x-rask-job-namespace`, `x-rask-job`, `x-rask-inputs`);
-4. it publishes: the project's gate holds a breaching version behind `published`, readers of `@published` keep the
-   previous version, and a validator approves the held version;
-5. it follows the feed over silver and reads its writes and both publications in commit order;
+4. it marks the version it vetted: it creates the tag `stable` on silver through the spec's tag door, readers of the
+   tag keep that version while the next batch lands on main, and it moves the tag once that batch is vetted (ADR 0212);
+5. it follows the feed over silver and reads its writes in commit order;
 6. it writes a branch, as every table writer may (D3): it cuts `staging` from silver and commits a stock append on it
    through `version/create`, naming the run and the bronze input as transaction properties.
 
 Three Dex users from the deployed configmap play the parts. The estate admin creates a scratch tenant (a project,
-a warehouse with its own bucket, and in it a bronze and a silver namespace) and declares its gate. The pipeline
-identity holds only `writer` on the two namespaces, so it owns what it creates. The validator holds `validator` on
+a warehouse with its own bucket, and in it a bronze and a silver namespace). The pipeline
+identity holds only `writer` on the two namespaces, so it owns what it creates. The consumer holds `reader` on
 silver. The tenant is deleted at the end of the session, unless the session keeps the drive for the soak (`kept_drive`).
 
 ONE DRIVE, MANY READERS. `tests/e2e-py/conftest.py` serves the tenant and one drive's `ScenarioRun` as session
@@ -54,7 +54,9 @@ DEX = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
 DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
 ADMIN_USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
 PIPELINE_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")
-VALIDATOR_USER = os.environ.get("LANCE_E2E_VALIDATOR_USER", "bob@example.com")
+CONSUMER_USER = os.environ.get("LANCE_E2E_CONSUMER_USER", "bob@example.com")
+#: The tag the pipeline marks its vetted version with: a name of its own choosing, which the catalog reads nothing into.
+READY_TAG = "stable"
 #: How long a committed write may take to reach lineage's feed.
 SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
 #: How long a commit's pass may take to follow it: the first commit of a burst holds its table's pass the commit delay out
@@ -135,7 +137,7 @@ class Tenant:
         """A tenant of its own, or the one named ``project`` that an earlier session made, signed in again."""
         self.admin = Identity.person(ADMIN_USER)
         self.pipeline = Identity.person(PIPELINE_USER)
-        self.validator = Identity.person(VALIDATOR_USER)
+        self.consumer = Identity.person(CONSUMER_USER)
         self.project = project or f"byo-{uuid.uuid4().hex[:8]}"
         #: The tenant's two namespaces, in its own warehouse (whose id is the project's), so no other tenant's names meet them.
         self.bronze = f"{self.project}$bronze"
@@ -150,7 +152,7 @@ class Tenant:
     @property
     def people(self) -> dict[str, Identity]:
         """The three people the scenario names, by the part each plays."""
-        return {"admin": self.admin, "pipeline": self.pipeline, "validator": self.validator}
+        return {"admin": self.admin, "pipeline": self.pipeline, "consumer": self.consumer}
 
     def create(self) -> None:
         admin = self.admin
@@ -161,12 +163,7 @@ class Tenant:
         for namespace, properties in ((self.bronze, {}), (self.silver, {"rask.requires_run": "true"})):
             ok(admin.http.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={"properties": properties}))
             ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{namespace}/access/grant", json={"user": self.pipeline.principal, "relation": "writer"}))
-        ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.silver}/access/grant", json={"user": self.validator.principal, "relation": "validator"}))
-        self.declare_gate(review=False)
-
-    def declare_gate(self, *, review: bool) -> None:
-        body = {"key_column": "id", "review_band": 0.25, "review_enabled": review}
-        ok(self.admin.http.post(f"{CATALOG}/management/v1/project/{self.project}/gate/set", json=body))
+        ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.silver}/access/grant", json={"user": self.consumer.principal, "relation": "reader"}))
 
     def tear_down(self) -> list[str]:
         """Drop every table the pipeline made, then the warehouse with its bucket, then the project; what failed."""
@@ -241,9 +238,9 @@ def writes(rows: list[dict[str, Any]]) -> list[tuple[str, int]]:
     return [(str(lance_facet(row).get("operation")), int(lance_facet(row)["version"])) for row in rows if "version" in lance_facet(row)]
 
 
-def published_rows(identity: Identity, table_id: list[str]) -> int:
-    """What a stock reader of `@published` sees: the row count of the version the tag names."""
-    return lance.dataset(namespace_client=identity.namespace(), table_id=table_id, version="published").count_rows()
+def tagged_rows(identity: Identity, table_id: list[str]) -> int:
+    """What a stock reader of the pipeline's tag sees: the row count of the version the tag names."""
+    return lance.dataset(namespace_client=identity.namespace(), table_id=table_id, version=READY_TAG).count_rows()
 
 
 class NamedRun(BaseModel):
@@ -291,15 +288,12 @@ class ScenarioRun(BaseModel):
     silver_table: str
     #: Every commit the pipeline made, in order: bronze's stock seed, silver's create and insert, and its append on `staging`.
     commits: list[Commit]
-    #: The publish door's answers: the first version, then the breaching one the gate holds.
-    first_publish: dict[str, Any]
-    held_publish: dict[str, Any]
-    #: Rows a stock reader of `@published` saw, and rows a stock reader of main saw, while the breach was held.
-    published_rows_while_held: int
-    stock_rows_while_held: int
-    approval: dict[str, Any]
-    published_rows_after_approval: int
-    #: Silver's feed rows through the approval's publication, the cursor after them, and a poll from that cursor.
+    #: Rows a stock reader of the pipeline's tag saw, and rows a stock reader of main saw, while the second batch was on
+    #: main and the tag still named the first version; then what the tag's reader saw once the pipeline moved it.
+    tagged_rows_before_the_move: int
+    main_rows_before_the_move: int
+    tagged_rows_after_the_move: int
+    #: Silver's feed rows through its second commit, the cursor after them, and a poll from that cursor.
     silver_rows: list[dict[str, Any]]
     cursor: int
     caught_up: dict[str, Any]
@@ -307,7 +301,7 @@ class ScenarioRun(BaseModel):
 
 def drive(tenant: Tenant) -> ScenarioRun:
     """Run the pipeline once on ``tenant`` and record what it saw (the module docstring's six steps)."""
-    pipeline, validator, admin = tenant.pipeline, tenant.validator, tenant.admin
+    pipeline, consumer = tenant.pipeline, tenant.consumer
     bronze_id, silver_id = [*tenant.bronze.split("$"), "orders"], [*tenant.silver.split("$"), "orders"]
     bronze_table, silver_table = "$".join(bronze_id), "$".join(silver_id)
     start = feed_start(pipeline)
@@ -346,29 +340,27 @@ def drive(tenant: Tenant) -> ScenarioRun:
         lance_namespace.CreateTableRequest(id=silver_id, mode="create"), arrow_ipc(rows_of(range(8)))
     )
     tenant.tables.append(silver_table)
-    first = ok(pipeline.http.post(f"{CATALOG}/management/v1/table/{silver_table}/publish", json={"version": 1, "key_column": "id"}, timeout=120))
+    assert created.version is not None, f"silver's create answered version {created.version}"
 
-    # 4. The project turns review on; the next batch triples silver, past the 0.25 band, and is held behind `published`.
-    tenant.declare_gate(review=True)
+    # 4. The pipeline vetted the first version and marks it with its own tag, through the spec's tag door. The next batch
+    #    lands on main, and a reader of the tag keeps the vetted version until the pipeline moves the tag.
+    stock.create_table_tag(lance_namespace.CreateTableTagRequest(id=silver_id, tag=READY_TAG, version=created.version))
     second_run = first_run.model_copy(update={"run_id": str(uuid.uuid4())})
     inserted = pipeline.namespace(**second_run.context()).insert_into_table(
         lance_namespace.InsertIntoTableRequest(id=silver_id, mode="append"), arrow_ipc(rows_of(range(8, 24)))
     )
-    assert created.version is not None and inserted.version is not None, f"silver's create answered version {created.version}, its insert {inserted.version}"
+    assert inserted.version is not None, f"silver's insert answered version {inserted.version}"
     commits += [
         Commit(table=silver_table, version=created.version, run=first_run, operation="create_table"),
         Commit(table=silver_table, version=inserted.version, run=second_run, operation="insert"),
     ]
-    held = ok(pipeline.http.post(f"{CATALOG}/management/v1/table/{silver_table}/publish", json={"version": 2, "key_column": "id"}, timeout=120))
-    published_while_held = published_rows(admin, silver_id)
-    stock_while_held = lance.dataset(namespace_client=stock, table_id=silver_id).count_rows()
+    tagged_before = tagged_rows(consumer, silver_id)
+    main_before = lance.dataset(namespace_client=stock, table_id=silver_id).count_rows()
+    stock.update_table_tag(lance_namespace.UpdateTableTagRequest(id=silver_id, tag=READY_TAG, version=inserted.version))
+    tagged_after = tagged_rows(consumer, silver_id)
 
-    # The validator approves the held version, which moves `published` to it.
-    approved = ok(validator.http.post(f"{CATALOG}/management/v1/table/{silver_table}/promotion/approve", json={"version": 2}, timeout=120))
-    published_after = published_rows(admin, silver_id)
-
-    # 5. Following silver's feed reads its writes and both publications in commit order.
-    silver_rows, cursor = follow(pipeline, since=silver_start, table=silver_table, until=lambda rows: ("publish_table", 2) in writes(rows))
+    # 5. Following silver's feed reads its writes in commit order.
+    silver_rows, cursor = follow(pipeline, since=silver_start, table=silver_table, until=lambda rows: ("insert", 2) in writes(rows))
     caught_up = ok(pipeline.http.get(f"{LINEAGE}/events", params={"since": cursor, "table": silver_table}, timeout=30))
 
     # 6. The pipeline cuts `staging` from silver through the spec's CreateTableBranch, then commits a stock append on it
@@ -388,12 +380,9 @@ def drive(tenant: Tenant) -> ScenarioRun:
         bronze_table=bronze_table,
         silver_table=silver_table,
         commits=commits,
-        first_publish=first,
-        held_publish=held,
-        published_rows_while_held=published_while_held,
-        stock_rows_while_held=stock_while_held,
-        approval=approved,
-        published_rows_after_approval=published_after,
+        tagged_rows_before_the_move=tagged_before,
+        main_rows_before_the_move=main_before,
+        tagged_rows_after_the_move=tagged_after,
         silver_rows=silver_rows,
         cursor=cursor,
         caught_up=caught_up,

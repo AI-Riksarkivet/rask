@@ -34,24 +34,14 @@ const OBJECT_PAGES: Readonly<Record<string, { param: string; table: boolean }>> 
 
 /**
  * The breadcrumb for the route `routeId` with `params`: Catalog, Warehouses, then one crumb per level of
- * the object's path, the last the object itself; a held promotion's page is Catalog, Promotions, then
- * the held table's path. `null` for a route that is no catalog object's page, whose breadcrumb is its
- * own path.
+ * the object's path, the last the object itself. `null` for a route that is no catalog object's page,
+ * whose breadcrumb is its own path.
  */
 export function catalogTrail(
 	routeId: string | null,
 	params: Partial<Record<string, string>>,
 ): ShellCrumb[] | null {
 	const catalog: ShellCrumb = { id: '/catalog', label: 'Catalog', href: '/catalog', page: false };
-	const held = routeId === '/catalog/promotions/[table]' ? params.table : undefined;
-	if (held) {
-		const href = `/catalog/promotions/${enc(held)}`;
-		return [
-			catalog,
-			{ id: '/catalog/promotions', label: 'Promotions', href: '/catalog/promotions', page: true },
-			{ id: href, label: catalogPath(held), href, page: true },
-		];
-	}
 	const route = routeId === null ? undefined : OBJECT_PAGES[routeId];
 	const id = route === undefined ? undefined : params[route.param];
 	if (route === undefined || !id) return null;

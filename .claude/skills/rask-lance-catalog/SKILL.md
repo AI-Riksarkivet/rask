@@ -334,7 +334,7 @@ included) → parent exists (404) → authz (403) → conflict (409) → tuples 
 Guards run BEFORE `native.call` — rejecting after leaves a real Lance object with no authz parent.
 
 `project` and `warehouse` are **rask's objects, not spec objects** — their endpoints
-(`/management/v1/projects`, `/management/v1/warehouses`, `/management/v1/project/{id}/gate/*`, …) are ours, and the catalog's registry and
+(`/management/v1/projects`, `/management/v1/warehouses`, …) are ours, and the catalog's registry and
 FGA are the only project store (there is no controlplane service, ADR 0157). Keep their errors in the
 same problem-body format so one client error path serves the whole API. **`/v1` holds only spec
 operations** (ADR 0156, LH-476): every rask-only route is served under `/management/v1`, projects on
@@ -384,8 +384,7 @@ the rule:
   of that refusal). A compaction and a restore add no data, so they name no run. A rename commits nothing a run can
   reach, so moving a table into a namespace under the rule from one that is not is refused, and so is `register` into one, which
   attaches bytes no run produced through the catalog ([[LH-463]]). `update` and `add_columns` read no run from the
-  Context, so the rule refuses them 406. The judge answers allow or refuse; a version breaching the project's
-  quality gate is held when it is published, at the publish door (ADR 0161, below). Nothing reads the rule from a name.
+  Context, so the rule refuses them 406. The judge answers allow or refuse. Nothing reads the rule from a name.
 - **Labels classify and authorize nothing** (ADR 0211). A project's admin defines its labels
   (`POST /management/v1/projects/{p}/labels/define`, `GET .../labels`, `POST .../labels/{name}/delete`, 409 code 3 while
   any object carries one): a name, a scope (`namespace`, `table`), a kind (`marker`, `free_text`, `enumerated` with
@@ -396,6 +395,24 @@ the rule:
   root (`catalog.services.object_labels`, `catalog/api/v1/endpoints/labels.py`); a rename keeps them, the object's
   ending ends them (`lakehouse.object_records`), a project's delete ends its definitions. No door reads a label to
   decide. Pinned by `tests/integration/test_a_project_defines_labels_its_owners_attach.py`.
+- **A table's data contract is checked on every commit, and nowhere else** (ADR 0212, [[LH-594]]). A table's owner
+  sets an ODCS v3 document at `POST /management/v1/table/{id}/contract/set` (`can_set_contract`, `owner_effective`;
+  `contract/describe` at `can_get_metadata`, `contract/delete` at `can_set_contract`; `catalog/api/v1/endpoints/contracts.py`,
+  `catalog/services/contracts.py`). The document is read strictly: a `quality` rule, `slaProperties` or `unique` on a
+  column that is no primary key is refused 406 (the catalog scans no data and runs no timer), a field outside the
+  enforced subset 400, a contract the table does not meet now (main or a branch) 409 code 19, and one that takes back
+  what the standing contract promises without a higher major version 400. `required` is a non-nullable Lance field,
+  `primaryKey` a field of Lance's unenforced primary key, `physicalType` the column's Arrow type as pyarrow spells it.
+  The record is `record_key("_contracts", "table", uuid)` on the control root (in `OBJECT_RECORD_PREFIXES`, so a rename
+  keeps it and the table's ending ends it), the first set a put-if-absent and a replacement a write over the record it
+  judged; the set reads the table before and after it writes the record and takes the record back when the second
+  read fails; a record that is no contract refuses every commit, and a set replaces it and a delete removes it; set
+  and delete announce `table_contract_set` / `table_contract_deleted`. A commit that drops, renames, retypes or
+  loosens a contracted column is refused 409 code 19 (`contracts.require_kept`, which refuses only a violation the
+  commit introduces over the version it follows, so a table already breaking its contract is not frozen) where every
+  commit passes: `managed_versions.judge` (a stock client), `dataplane.commit_stamped` (every catalog door, a restore
+  included) and the create door's Overwrite; each reads the contract off the control root through `DoorTable.contract`.
+  Pinned by `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py`.
 - **Every version names its author, and every door commits stamped** ([[LH-497]]). Each catalog door stamps
   `rask.author` (the verified caller) and `rask.operation` (the lineage operation it announces) on its commit, on main
   and on every branch, through `dataplane.commit_stamped`: the door's transaction is planned on the ref's latest version,
@@ -470,13 +487,7 @@ the rule:
   only then takes the location's claim, which is what makes a table one the tick reads. The versions a register attaches
   were committed past every door, so none is announced or counted, whatever `rask.author` it carries; its
   `register_table` marker is their announcement. A refused or undone register ends the records under that uuid.
-  The catalog refuses an announced write while it holds no commit id key (`api/signing_gate.py`). A publication commits
-  no version, so the same tick reads it off the table's `published` tag ([[LH-552]], ADR 0188): the publish and approve
-  doors record the mover right before an advancing move (`commit_records.record_tag_move`, under the table's
-  `_commit_authors/<uuid>/tags/published/`), the run id is derived from the table's uuid, the version and the tag
-  file's `updatedAt` (`commit_ids.tag_move_run_id`, since an erasure can drop the tag and a version be published again),
-  and a move the feed holds no run for is announced for that mover; one with no recorded mover is counted unauthored once
-  (the `tag:published` mark, keyed by the move). A table's lifecycle markers (declare, register, rename (one `RENAME`
+  The catalog refuses an announced write while it holds no commit id key (`api/signing_gate.py`). A table's lifecycle markers (declare, register, rename (one `RENAME`
   dataset change naming the old id as `previousIdentifier`, ADR 0191),
   drop, deregister) are filed before their change, with the control event each door sends, and a door that fails after its change has them sent by the catalog's finish (`POST /management/v1/announcement-intents/finish`, asked by maintenance's hourly audit), under the run id and event id the door built (ADR 0205, [[LH-576]]); the namespace and warehouse cascades file theirs the same way. Pinned by
   `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
@@ -705,8 +716,8 @@ governing their data. The project-scoped surface is the console's project page, 
   `_META_READ_ACTIONS`/`_DATA_READ_ACTIONS`/`_MAINTENANCE_ACTIONS`) —
   `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
   on one that has none. **Every control-root record kept for a table or namespace is keyed by its uuid** ([[LH-523]],
-  ADR 0173 §8): protection and maintenance policy (`lakehouse.object_records.OBJECT_RECORD_PREFIXES`), a
-  promotion hold, maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
+  ADR 0173 §8): protection, maintenance policy, labels and the data contract (`lakehouse.object_records.OBJECT_RECORD_PREFIXES`),
+  maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
   maintenance's policy cadence stamps and its copy of the table's commit records (`_maintenance_files/`, which
   `file_identities.end` deletes with the records). A door resolves the uuid from the name it is addressed by
   (`ResolvedTable.require_uuid`, `fga_deps.identify`) and refuses `InternalError` for an object that records none,
@@ -839,7 +850,7 @@ governing their data. The project-scoped surface is the console's project page, 
   whatever the replica count: its schedule fires on a subject of its own, and the queue holds one task per subject. The
   two share one claim (`queue._claim_key`, `reconcile`), since each repairs the estate from a report of its own: they
   never run at once, and the scan fires off the hour so it rarely waits. Maintenance runs no fixed timer; the estate's
-  seven are the catalog's six and lineage's relay (`lakehouse.timers`, `catalog.api.timers`, `lineage.api.relay`).
+  six are the catalog's five and lineage's relay (`lakehouse.timers`, `catalog.api.timers`, `lineage.api.relay`).
 - **OpenFGA rejects a bare-type Read.** `read_tuples(obj="project:")` with no user is HTTP 400
   (*"the object id and user cannot be empty"*), and the wrapper reports it as
   `ServiceUnavailableError` — so it presents as a permanent outage on a healthy server. To enumerate
@@ -880,8 +891,7 @@ governing their data. The project-scoped surface is the console's project page, 
   platform writes them with pylance directly, and a client creating from an upstream's schema strips its
   schema metadata first. `description` is the one user-facing reserved key (the
   console renders it under the table name); everything else in that map is opaque user data.
-- **`drop_columns` / `alter_columns` refuse to drop, rename or re-type provenance** ([[LH-208]]): the
-  column `source_rowid` by name (`stage` and `lineage` are the writer's, ADR 0156 C9), and every field carrying
+- **`drop_columns` / `alter_columns` refuse to drop, rename or re-type the table's key** ([[LH-208]]): every field carrying
   `lance-schema:unenforced-primary-key` plus its ancestors, by metadata, in any table. Measured on pylance
   12.0.0, Lance itself accepts all of those (a re-type strips the key); it refuses only `nullable=True` on
   the key (mapped to 400 in `_column_op`) and changes to the key's field metadata.
@@ -1103,7 +1113,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `rask.clone.<sha256 of the clone's location>`, on the source version the clone's first transaction (a shallow
   `Clone`) names, under the source's history fence (`table_bases.admit_clone`, `clone_sources.take`). It takes one on EVERY table the clone reads through: a clone of a clone reads the first source's files where they are (measured on pylance 13.0.0), so it tags that source too, at the version its own source's record pins, and the end of the clone between them releases only that clone's tag. A clone of a source branch names `<source>/tree/<branch>` and `Clone.ref_name`, and is tagged `(branch, version)` on the source table. Each `derived_from` entry of the clone's base record keeps the version and branch it pins, because the clone's own version expiry removes the transaction that says so: a later registration of it tags from the record, and a recorded root with no pin is refused (400), never admitted untagged. Its caller must
   hold `can_read_data` and `can_create_tag` on each source, asked in that order and in the order the clone reads through
-  them (`table_bases.CLONE_RELATIONS`: the clone's owner reads the source's rows, and the model's `publisher`, who may
+  them (`table_bases.CLONE_RELATIONS`: the clone's owner reads the source's rows, and the model's `tagger`, who may
   tag, is no reader; owner 2026-11-09 on the tag rung: a reader would pin the owner's table), BEFORE the native register
   (`tables._require_clone_sources`), so a refused caller leaves no row, mark or claim: 403 code 15, and for a caller
   holding nothing on a source one sentence (`can_read_data required on <source root>`) whether a governed table is at
@@ -1165,7 +1175,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
   20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
-  `tags/update`, `branches/create`, publication's tag move, the erasure release's branch re-creation) holds the fence,
+  `tags/update`, `branches/create`, the erasure release's branch re-creation) holds the fence,
   one record per table uuid under `_history_fences/`; holders of one kind share it, the other kind is refused 409 code
   14 (`DoorTable.history_held`), and a fenced expiry is `skipped="history_fenced"`, its table's pass tried again after
   `retrySeconds` (`table_pass._dataset_due_at`). A branch create (the create door,
@@ -1339,7 +1349,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`maintenance_task_table_trashed`). Diagnosing that by hand-running `cleanup_old_versions(older_than=7d)` on one of them (done
   2026-08-16, on `bind86-bronze$converge-proof`) IS the destructive call the exclusion exists to
   prevent: it removed 5 versions / 7,567 bytes and destroyed time-travel to v1–v4 on an object that
-  was still restorable. The latest version, row count, `published` tag and undrop all survived, so
+  was still restorable. The latest version, row count, its tags and undrop all survived, so
   cleanup was working correctly — maintenance was right to decline and the operator was wrong to
   override it. Tags are not the check; the trash record is.
   **Every maintenance writer reads the record itself** ([[LH-449]]). A table's pass asks `trash.keeps` by the task's
@@ -1394,22 +1404,11 @@ governing their data. The project-scoped surface is the console's project page, 
   **EVERY TABLE IS WRITTEN THROUGH THE CATALOG, and the writer is the user's pipeline** (ADR 0154, ADR 0155): a table
   is a `table:` object with a record and ownership tuples from its first row, and the catalog announces every committed
   write on lineage. Moving rows between tables runs on the user's own compute and orchestrator; the
-  lakehouse runs no stage. **The promotion gate is the `published` tag** (ADR 0156 C1, ADR 0161, [[LH-466]]): readers of a
-  governed table read `@published`, and `POST /management/v1/table/{id}/publish` runs the project's quality gate
-  (`/management/v1/project/{id}/gate/*`) against the committed version; a pass advances the tag. A declaration that
-  exists and cannot be read, or the table's warehouse record (which names its project), refuses the publish (503 when the store did not
-  answer, 500 code 18 for a record that cannot be read as one) rather than judging it against the request's own weaker
-  values (`publication.declared_gate`, [[LH-572]]). With
-  `review_enabled` on that gate, a version whose non-structural assertions fail, or whose row count moves past
-  `review_band` from the published one (or that would be the table's first publication), is HELD
-  (`catalog.services.promotions`): `published` stays, one record per table under `_promotions/` on the control
-  root lists it on `GET /management/v1/promotions`, and the tag `rask.held` pins it against cleanup. A `can_promote`
-  holder answers on `POST /management/v1/table/{id}/promotion/approve` (`published` moves to it) or
-  `.../promotion/reject` (main is restored to the published version as a new commit); a hold unanswered after the
-  gate's `review_hours` expires on the `catalog-promotion-expiry` timer. Every move of `published` emits a `publish_table`
-  lineage run, which a notifier delivers to the project's watchers (`docs/COMMIT-EVENTS.md`), and the spec's tag doors refuse
-  `published` and every `rask.` tag (400): each publish pins its candidate under a `rask.publishing.<token>` tag of its own, and ends another's older than a day (`publication.STALE_PIN_AGE`); a publish another overtook while it gated, `published` moved to or past its version, is refused 409 code 14 rather than moving it back; and a rejection while main holds a commit after the held version is refused 409 code 14, the hold staying open (ADR 0161, amended 2026-11-12), while a retried rejection finds the restore it already made (`promotions.restore_made`), so nothing else moves it. A governed row needs no column (C9, [[LH-477]]): `source_rowid`
-  is an opt-in the publish door holds to uint64 stable row ids, and `stage` and `lineage` are the writer's.
+  lakehouse runs no stage. **Marking a version ready is the pipeline's own tag** (ADR 0212): the catalog serves no
+  gate, publish or promotion. A pipeline tags the version it vetted through the spec's tag doors (`tags/create`,
+  `tags/update`, at `can_create_tag` / `can_update_tag`, which an owner or a `tagger` holds), under any name; the tag
+  doors refuse only `rask.clone.*`, the tag a registered clone holds on its source (`tags._refuse_a_catalog_tag`). A
+  governed row needs no column (C9, [[LH-477]]): the platform names none.
 
   **`register_table` is the door for bytes written outside the catalog's own doors.** It turns written
   bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,
@@ -1460,10 +1459,7 @@ governing their data. The project-scoped surface is the console's project page, 
   histories are numbered independently, and pylance's `tags.get_version` answers the version alone (measured on pylance
   13.0.0: a tag on `("work", 3)` answers 3). Every catalog reader resolves a tag through `dataplane.tag_reference`,
   which reads both. DescribeTable refuses a tag on a branch with the code `branch` gets (406, code 0), since
-  DescribeTableResponse has no field to name the branch. The tags the catalog keeps on main (`published`,
-  `rask.publishing.*`, `rask.held`) are read through `dataplane.main_version_of_tag`, which refuses one found on a branch 409
-  code 19. Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog` and
-  `tests/unit/test_publication.py`.
+  DescribeTableResponse has no field to name the branch. Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog`.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**
   `packages/lakehouse/src/lakehouse/features.py` reads
   `reader_feature_flags`/`writer_feature_flags` as varints at

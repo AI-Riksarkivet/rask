@@ -40,8 +40,8 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
   no client does: a client reaches the lakehouse through its doors and events.
 - `services/` — runnable Python services (uv workspace members):
   - **the lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
-    tables, and the write governance a pipeline's writes pass through: the opt-in run rule, project-defined labels, the
-    publish-time quality gate), `lineage`
+    tables, and the write governance a pipeline's writes pass through: the opt-in run rule, project-defined labels, a
+    table's data contract), `lineage`
     (the OpenLineage intake, the commit feed and edge list as Lance tables, and the durable `GET /events` log; the
     lineage graph is bring-your-own, ADR 0158), `maintenance` (version expiry, trash purge, the orphan scan,
     cross-store reconcile, and the list of tables due for a bring-your-own compaction or index optimize; ADR 0162)

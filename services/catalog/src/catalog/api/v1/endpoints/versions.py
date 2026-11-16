@@ -239,6 +239,8 @@ async def create_table_version(
                 managed_versions.judge,
                 base_judge=judge,
                 external_bases=record.entries if record is not None else (),
+                # A table's first version holds no contract yet: one is set on a table that exists.
+                contract=None if staged.creates else await run_in_threadpool(table.contract),
             ),
             staged,
             so,

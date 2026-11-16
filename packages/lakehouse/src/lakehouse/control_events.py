@@ -51,10 +51,6 @@ ControlAction = Literal[
     "warehouse_unprotected",
     "policy_set",
     "policy_deleted",
-    # A project's quality-gate settings changed through the catalog door. Audited because it decides
-    # whether a promotion waits for a human. Untargeted: it names no party, like `policy_set`.
-    "gate_set",
-    "gate_deleted",
     "namespace_created",
     "namespace_dropped",
     "table_created",
@@ -84,25 +80,12 @@ ControlAction = Literal[
     # Additive: `extra.reason` stays, so a consumer keying on it keeps working.
     "table_purged",
     "namespace_purged",
-    # § D2 D-R2: the tag is the truth, this event is only the NOTIFICATION. A publication moves the
-    # `published` ref, so it belongs to the same family as the other ref-plane mutations here — and a
-    # consumer that misses it loses nothing, because the tag still answers "what is ready?".
-    # `extra` carries {from_version, to_version}: the RANGE (D-R3) a consumer resolves by the change-feed
-    # consumer rule (`catalog.services.changes`), holding no bookmark of its own.
-    "table_published",
-    # THE TAG GATE'S HOLD (ADR 0156 C1, [[LH-466]]): a publish the project's gate holds for a `can_promote`
-    # holder, a rejection that restores main to the published version, and a hold nobody answered before its
-    # deadline. An approval moves `published` and is announced as `table_published`. UNTARGETED: each changes a
-    # table's publication, not a person's standing, and the watchers hear the tag move through lineage.
-    "promotion_held",
-    "promotion_rejected",
-    "promotion_expired",
     # THE REF PLANE ([[LH-056]]), and UNTARGETED for the reason the rule states: a control event is
     # targeted when it changes what a specific person may do or must do, not when it changes an object.
     # Creating or deleting a branch, and creating, moving or deleting a tag, change an OBJECT -- nobody's
     # standing moves -- so they belong with the other object-lifecycle members and name no person a notifier
-    # could address. `table_published` is the sibling that is NOT here, and the
-    # difference is instructive: a publication stamps an `originator`, so it names somebody.
+    # could address. A tag is how a pipeline marks a version ready (ADR 0212), so a tag's move is what a reader of
+    # "which version is ready" follows.
     "table_branch_created",
     "table_branch_deleted",
     "table_tag_created",
@@ -132,18 +115,17 @@ ControlAction = Literal[
     "table_unlabelled",
     "namespace_labelled",
     "namespace_unlabelled",
+    # A table's data contract set or deleted by its owner (ADR 0212). `object_id` is the table; `extra.version` is the
+    # contract's own version. Untargeted: it changes what the table's commits may do to its schema, nobody's standing.
+    "table_contract_set",
+    "table_contract_deleted",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the
 #: top of rask's hierarchy (project > warehouse > namespace > table) and became a first-class control object
 #: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1). Every member is a lakehouse
 #: object: a tool that works on the lakehouse keeps its own objects and its own channel for them (ADR 0171).
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate", "principal", "role", "label"]
-
-#: The cap on the CLAIM a publication echoes onto `table_published`'s `extra`: the person the publication is for. The
-#: catalog's publish door enforces it, and a door that takes it from a caller declares the same cap, so a claim it
-#: accepts is never refused at that publish.
-ORIGINATOR_MAX_LENGTH = 256
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "principal", "role", "label"]
 
 
 class CatalogControlEvent(BaseModel):
@@ -224,8 +206,6 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "warehouse_unprotected"
             | "policy_set"
             | "policy_deleted"
-            | "gate_set"
-            | "gate_deleted"
             | "namespace_created"
             | "namespace_dropped"
             | "table_created"
@@ -240,10 +220,6 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "namespace_unprotected"
             | "table_undropped"
             | "namespace_undropped"
-            | "table_published"
-            | "promotion_held"
-            | "promotion_rejected"
-            | "promotion_expired"
             | "table_branch_created"
             | "table_branch_deleted"
             | "table_tag_created"
@@ -259,6 +235,8 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "table_unlabelled"
             | "namespace_labelled"
             | "namespace_unlabelled"
+            | "table_contract_set"
+            | "table_contract_deleted"
         ):
             return "catalog"
         case "table_purged" | "namespace_purged":

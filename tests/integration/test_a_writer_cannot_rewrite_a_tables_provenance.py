@@ -4,7 +4,7 @@ Every door below runs at the writer rung, and the Lance Namespace spec treats ea
 writer operation. Measured on pylance 12.0.0 before the guard: `schema_metadata/update` set or nulled
 `lineage.dataset_id` and wrote `rask.*` on both of its routes; a create payload's schema metadata and
 its `properties` landed on the table verbatim while lineage emission was off; `drop_columns` and
-`alter_columns` dropped, renamed and re-typed the tier's provenance columns and the unenforced primary
+`alter_columns` dropped, renamed and re-typed the unenforced primary
 key (a re-type strips the key, after which a key-less `merge_insert` refuses the table); and
 `nullable=True` on the key, which Lance itself refuses, answered 500.
 
@@ -33,16 +33,13 @@ PK = {"lance-schema:unenforced-primary-key": "true"}
 DECLARED = {b"lineage.dataset_id": b"m$t"}
 FORGED_UUID = "00000000-0000-4000-8000-000000000000"
 
-#: A governed table's shape: the key (top level and nested, so ancestors are exercised) and the three
-#: provenance columns `lakehouse.provenance_stamp` names. The nested key field declares itself `on`, a spelling Lance reads
+#: A governed table's shape: the key, top level and nested, so ancestors are exercised, and a payload column.
+#: The nested key field declares itself `on`, a spelling Lance reads
 #: as part of the key (pylance 13.0.0), so the guard protects the key Lance dedupes on, not a parse of its own.
 SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64(), nullable=False, metadata=PK),
         pa.field("payload", pa.string()),
-        pa.field("stage", pa.string()),
-        pa.field("lineage", pa.string()),
-        pa.field("source_rowid", pa.uint64()),
         pa.field("st", pa.struct([pa.field("k", pa.int64(), nullable=False, metadata={"lance-schema:unenforced-primary-key": "on"})]), nullable=False),
     ]
 )
@@ -57,7 +54,7 @@ def _ipc(table: pa.Table) -> bytes:
 
 def _rows(metadata: dict[bytes, bytes] | None = None) -> pa.Table:
     table = pa.table(
-        {"id": [1, 2], "payload": ["a", "b"], "stage": ["silver"] * 2, "lineage": ["{}"] * 2, "source_rowid": [0, 1], "st": [{"k": 1}, {"k": 2}]},
+        {"id": [1, 2], "payload": ["a", "b"], "st": [{"k": 1}, {"k": 2}]},
         schema=SCHEMA,
     )
     return table.replace_schema_metadata(metadata) if metadata else table
@@ -90,22 +87,15 @@ CASES: dict[str, tuple[str, Any]] = {
     "rask.* in declare properties": ("/v1/table/lance_catalog$m$u/declare", {"properties": {"rask.uuid": FORGED_UUID}}),
     "rask.* in register properties": ("/v1/table/lance_catalog$m$u/register", {"location": "elsewhere", "properties": {"rask.uuid": FORGED_UUID}}),
     "lineage.* in an insert overwrite payload": ("/v1/table/lance_catalog$m$t/insert?mode=overwrite", _rows({b"lineage.dataset_id": b"victim$payroll"})),
-    # [[LH-242]] A create overwrite of an existing table is a new version of it, so it keeps the provenance columns.
+    # [[LH-242]] A create overwrite of an existing table is a new version of it, so it keeps the table's key.
     "a create overwrite without the primary key": ("/v1/table/lance_catalog$m$t/create?mode=overwrite", _rows().drop_columns(["id"])),
-    "a create overwrite re-typing source_rowid": (
-        "/v1/table/lance_catalog$m$t/create?mode=overwrite",
-        _rows().set_column(4, pa.field("source_rowid", pa.int64()), pa.array([0, 1], pa.int64())),
-    ),
     "drop the primary key": ("/v1/table/lance_catalog$m$t/drop_columns", {"columns": ["id"]}),
     "drop a struct holding a key field": ("/v1/table/lance_catalog$m$t/drop_columns", {"columns": ["st"]}),
     "drop a nested key field": ("/v1/table/lance_catalog$m$t/drop_columns", {"columns": ["st.k"]}),
-    "drop source_rowid": ("/v1/table/lance_catalog$m$t/drop_columns", {"columns": ["source_rowid"]}),
     "rename the primary key": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "id", "rename": "id2"}]}),
     "rename a struct holding a key field": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "st", "rename": "st2"}]}),
-    "rename source_rowid": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "source_rowid", "rename": "parent"}]}),
     "re-type the primary key to its own type": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "id", "data_type": {"type": "int64"}}]}),
     "re-type a nested key field": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "st.k", "data_type": {"type": "int64"}}]}),
-    "re-type source_rowid": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "source_rowid", "data_type": {"type": "int64"}}]}),
     "make the primary key nullable": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "id", "nullable": True}]}),
 }
 

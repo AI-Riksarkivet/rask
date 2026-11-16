@@ -170,7 +170,7 @@ HTTP request
 
 ```
 estate                       (the root the estate admin's rungs are held on)
-project                      (the tenant: admins, members, roles, the quality gate)
+project                      (the tenant: admins, members, roles, label definitions)
   └── warehouse              (one bucket; its id is the first segment of every name in it: acme)
         └── namespace        (self-nesting: acme$bronze, acme$bronze$domain1, …)
               └── table      (acme$bronze$images; held by its uuid, `table:<uuid>`)
@@ -197,9 +197,9 @@ scenario whose namespaces are named bronze/silver/gold, with ingestion/data_engi
 
 ### The hierarchy as built
 
-The model now carries `estate`, `project`, `warehouse`, `team`, `classification` and the `validator` and `publisher`
-rungs beside the types above (`model.fga`). A table lives in `project > warehouse > namespace > table`; a team is
-granted a rung on a project or a namespace, and `can_promote` / `can_update_tag` gate publication. See
+The model now carries `estate`, `project`, `warehouse`, `team`, `classification` and the `tagger`
+rung beside the types above (`model.fga`). A table lives in `project > warehouse > namespace > table`; a team is
+granted a rung on a project or a namespace, and `can_create_tag` / `can_update_tag` gate a table's tags. See
 [`AUTHZ.md`](AUTHZ.md) and the `openfga` skill.
 
 ---
@@ -240,8 +240,8 @@ catalog's**, applied in its write path so no writer can bypass them
 [ADR 0156](adr/0156-the-audit-grilling-amends-0155.md)). A pipeline authenticates → `describe`s its input
 [authz `can_read_data` + location/creds] → reads → transforms → `create`/`insert`s the next table
 [authz `can_create_table`/`can_write_data`] → a new Lance version is committed and the catalog announces it on
-lineage. A write under the run rule must name its run and its inputs. Publishing a version runs the
-project's quality gate and moves the table's `published` tag. What the catalog enforces is in
+lineage. A write under the run rule must name its run and its inputs, and a commit keeps the columns the table's
+data contract names. A pipeline marks the version it vetted with a tag of its own. What the catalog enforces is in
 [`WRITE-GOVERNANCE.md`](WRITE-GOVERNANCE.md).
 
 ---
@@ -256,10 +256,10 @@ project's quality gate and moves the table's `published` tag. What the catalog e
 | Authz (OpenFGA, `can_*` per op, concentric + parent cascade, roles-as-subjects) | ✅ done, e2e-verified |
 | Post-create ownership seeding (single `seed_ownership` helper) | ✅ done |
 | Resilience (retry + fail-closed incl. transport errors; one retry layer; bounded) | ✅ done |
-| Authorization model + tests (persona roles, the validator rung) | ✅ done (model + `model.fga.yaml`) |
-| Data movement between tables | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog judges every write (the run rule where a namespace declares it) and runs the publish-time quality gate ([`WRITE-GOVERNANCE.md`](WRITE-GOVERNANCE.md)) |
-| `project` type + governance (teams × projects × namespaces) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
-| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), lineage's relay tick and the catalog's six ticks are fixed timers in each service's own process, each window claimed by one conditional write on the control root (`lakehouse.timers`), and NATS JetStream, the one bus (ADR 0199), carries the internal events |
+| Authorization model + tests (persona roles, the tagger rung) | ✅ done (model + `model.fga.yaml`) |
+| Data movement between tables | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog judges every write (the run rule where a namespace declares it, and the table's data contract) ([`WRITE-GOVERNANCE.md`](WRITE-GOVERNANCE.md)) |
+| `project` type + governance (teams × projects × namespaces) | ✅ modeled (`model.fga`: project/warehouse/team) + fga-tested |
+| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), lineage's relay tick and the catalog's five ticks are fixed timers in each service's own process, each window claimed by one conditional write on the control root (`lakehouse.timers`), and NATS JetStream, the one bus (ADR 0199), carries the internal events |
 | Lineage (authenticated OpenLineage intake, the commit feed and table-level edges as catalog-governed Lance tables, a forwarder to a bring-your-own graph backend; producer-side emitter) | ✅ service built & deployed; read-side authz implemented (see §9, `docs/LINEAGE.md`) |
 | OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-observability`-verified |
 

@@ -422,7 +422,7 @@ def test_list_users_passes_a_userset_filter_through(gate_seen: dict[str, Any], r
 
     async def _fake(_client: Any, **kwargs: Any) -> list[str]:
         seen.update(kwargs)
-        return ["role:validators#assignee"]
+        return ["role:stewards#assignee"]
 
     monkeypatch.setattr(ep.fga, "list_users", _fake)
     response = asyncio.run(
@@ -431,11 +431,11 @@ def test_list_users_passes_a_userset_filter_through(gate_seen: dict[str, Any], r
             settings=_settings(),
             client=_fga_client(),
             token=None,
-            body=AccessListUsersRequest(object=NAMESPACE, relation="validator", user_type="role", user_relation="assignee"),
+            body=AccessListUsersRequest(object=NAMESPACE, relation="classifier", user_type="role", user_relation="assignee"),
         )
     )
     assert (seen["user_type"], seen["user_relation"]) == ("role", "assignee")
-    assert response.users == ["role:validators#assignee"]
+    assert response.users == ["role:stewards#assignee"]
     assert response.truncated is False
 
 

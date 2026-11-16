@@ -12,10 +12,9 @@ namespace. A writer who sets or nulls one of them re-points or erases another pa
 table, so every such write is refused, whichever route the request takes and whatever the create
 payload carries.
 
-THE PROVENANCE COLUMN. A governed row needs no column (ADR 0156 C9): its run and inputs ride the commit
-([[LH-225]]), and `stage` and `lineage` are the writer's own. `source_rowid` is the one column the platform names
-(`lakehouse.provenance_stamp`), an opt-in that traces a row to the source row it descends from, and every
-reader resolves it by that name, so it is protected by name wherever it appears. The row identity is protected by Lance's own declaration instead: any
+THE ROW IDENTITY. A governed row needs no column (ADR 0156 C9): its run and inputs ride the commit
+([[LH-225]]), and the platform names no column of a table's (ADR 0212); a column a consumer relies on is held by the
+table's data contract (`catalog.services.contracts`). The row identity is protected by Lance's own declaration: any
 field carrying `lance-schema:unenforced-primary-key`, and each of its ancestors, in any table
 (`lance_docs/lance/format/table/index.md` § Unenforced Primary Key), read through Lance's own parser
 (`primary_keys.declared_key`), so the key protected here is the key Lance dedupes and merges on: measured on
@@ -43,14 +42,10 @@ import pyarrow as pa
 from lance_namespace import InvalidInputError
 
 from catalog.services import primary_keys
-from lakehouse.provenance_stamp import SOURCE_ROWID_COLUMN
 
 
 #: Schema-metadata namespaces only the platform writes. A key under either is refused at every write door.
 RESERVED_METADATA_PREFIXES: Final = ("lineage.", "rask.")
-
-#: The platform's provenance column, by the name `lakehouse.provenance_stamp` gives it.
-PROVENANCE_COLUMNS: Final = frozenset({SOURCE_ROWID_COLUMN})
 
 
 def metadata_text(key: str | bytes) -> str:
@@ -100,7 +95,7 @@ def protected_paths(schema: pa.Schema) -> dict[str, str]:
     A key field's ancestors are protected as the key itself is: dropping a struct drops the key inside
     it, and renaming one moves the path a key-less merge resolves.
     """
-    protected: dict[str, str] = {name: "a provenance column" for name in schema.names if name in PROVENANCE_COLUMNS}
+    protected: dict[str, str] = {}
     for key in primary_keys.declared_key(schema):
         protected[key] = "the table's primary key"
         parts = key.split(".")
@@ -111,11 +106,11 @@ def protected_paths(schema: pa.Schema) -> dict[str, str]:
 
 def _refuse(door: str, verb: str, hits: Mapping[str, str]) -> None:
     named = "; ".join(f"{path!r} is {why}" for path, why in sorted(hits.items()))
-    raise InvalidInputError(f"{door}: refusing to {verb} {named} — provenance columns and the primary key are not writer-alterable")
+    raise InvalidInputError(f"{door}: refusing to {verb} {named} — the primary key is not writer-alterable")
 
 
 def refuse_provenance_drop(schema: pa.Schema, columns: Sequence[str]) -> None:
-    """Raise 400 if dropping ``columns`` would remove a provenance column or any part of the primary key.
+    """Raise 400 if dropping ``columns`` would remove any part of the primary key.
 
     Raises:
         InvalidInputError: A named column is protected, or contains a protected path.
@@ -127,11 +122,10 @@ def refuse_provenance_drop(schema: pa.Schema, columns: Sequence[str]) -> None:
 
 
 def refuse_provenance_alter(schema: pa.Schema, alterations: Sequence[Mapping[str, object]]) -> None:
-    """Raise 400 if an alteration renames or re-types a provenance column or any part of the primary key.
+    """Raise 400 if an alteration renames or re-types any part of the primary key.
 
     ``alterations`` are in pylance's shape (`path`, `name`, `data_type`, `nullable`). A nullability
-    change passes through: Lance refuses it on the key itself, and on a provenance column it rewrites
-    nothing a reader resolves.
+    change passes through: Lance refuses it on the key itself.
 
     Raises:
         InvalidInputError: An alteration renames or re-types a protected path.
@@ -161,7 +155,7 @@ def keep_provenance(table_schema: pa.Schema, payload: pa.Table) -> pa.Table:
     overwrite's schema from the payload, metadata included (measured on pylance 12.0.0: a payload with
     no metadata erased ``lineage.*`` and the primary key at top level and inside a struct). So:
 
-    * each top-level column :func:`protected_paths` names (a provenance column, a key field, or an
+    * each top-level column :func:`protected_paths` names (a key field, or an
       ancestor of a nested key) must be in the payload with the table's type, ignoring metadata and
       nullability, and is written as the table's own field, which carries the key back;
     * schema metadata under the reserved namespaces is the table's, whatever the payload stamped; the

@@ -1,21 +1,11 @@
-"""`LANCE_CONTROL_OUTBOX_URI` stages `table_published`, and NOTHING on the estate republished it.
+"""The control lane's relay delivers what `LANCE_CONTROL_OUTBOX_URI` kept staged.
 
-The control lane got the durable half of the outbox (`BusControlEmitter.emit` stages before it
-publishes and drops only on ack — `test_control_events_survive_a_bus_outage.py` proves that much) and
-never got the delivery half. A grep for `outbox.list_events` / `outbox.drop_event` reached exactly one
-consumer, `services/lineage/api/reconcile_cron.py`, which drains the LINEAGE prefix and re-ingests each
-staged blob as an OpenLineage `RunEvent`.
+`BusControlEmitter.emit` stages a control event before it publishes and drops it only on ack
+(`test_control_events_survive_a_bus_outage.py`). An event that stayed staged through a bus outage is delivered by the
+catalog's own relay, at its own prefix: lineage's relay drains the LINEAGE prefix and reads each object as an
+OpenLineage `RunEvent`, so a control event staged there would be classified poison and deleted.
 
-So the staged copy was a copy nothing read. Two ways that lands, both silent:
-
-* configured at its own prefix, a `table_published` survives the NATS blip and sits there forever —
-  and `table_published` is the ONLY thing that wakes silver->gold, so the cascade stops with every pod
-  green and nothing red;
-* pointed at the LINEAGE prefix so that "a relay drains it", every `CatalogControlEvent` fails
-  `RunEvent.model_validate_json` in that drain, is classified POISON and is DELETED
-  (`reconcile_cron.py` `_drain_outbox`) — the staged copy is destroyed by the thing meant to save it.
-
-These tests drive the relay that closes it. A signing catalog's relay DELIVERS ONLY WHAT THIS CATALOG SIGNED
+These tests drive that relay. A signing catalog's relay DELIVERS ONLY WHAT THIS CATALOG SIGNED
 ([[XC-078]]): a staged object proves nothing about who wrote it, since anything with write access to the prefix can put one
 there, so the relay verifies each one against the keys the catalog publishes and republishes the staged bytes as they are.
 It signs nothing, so it cannot vouch for an actor nobody authenticated. Each test runs the relay's tick on the app's own
@@ -75,7 +65,7 @@ FORGED_GRANT: dict[str, Any] = {
 FORGED_PUBLICATION: dict[str, Any] = {
     "event_id": "forged-publication",
     "occurred_at": "2026-10-04T12:00:00+00:00",
-    "action": "table_published",
+    "action": "table_tag_updated",
     "object_type": "table",
     "object_id": "table:acme-silver$features",
     "actor": None,
@@ -198,7 +188,7 @@ def _altered_after_the_catalog_signed_it(catalog: Any, _mint: Any) -> dict[str, 
 
 def _published_event() -> CatalogControlEvent:
     return CatalogControlEvent(
-        action="table_published",
+        action="table_tag_updated",
         object_type="table",
         object_id="table:acme-silver$features",
         actor="user:alice",
@@ -296,7 +286,7 @@ def _enveloped(event: dict[str, Any], **attributes: str) -> str:
     [
         pytest.param("{'this': not json}", id="text-that-is-not-json"),
         pytest.param(json.dumps(_published_event().model_dump(mode="json")), id="an-event-in-no-envelope"),
-        pytest.param(_enveloped({"action": "table_published"}), id="an-object-that-is-no-control-event"),
+        pytest.param(_enveloped({"action": "table_tag_updated"}), id="an-object-that-is-no-control-event"),
         pytest.param(_enveloped(_published_event().model_dump(mode="json") | {"event_id": ""}), id="a-control-event-no-envelope-can-carry"),
         pytest.param(
             _enveloped(_published_event().model_dump(mode="json") | {"extra": {"blob": "x" * (MAX_PAYLOAD_BYTES + 1)}}),

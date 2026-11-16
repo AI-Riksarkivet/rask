@@ -198,7 +198,7 @@ jobs:
 
   # NOT daggerized — it needs the `fga` CLI + jq rather than the uv/helm/promtool toolchain the Dagger
   # functions carry, so it stays a native step. The OpenFGA authorization model is source-of-truth for
-  # who-can, so gate its tests (7 types, concentric rungs, the validator promote gate, create-on-parent)
+  # who-can, so gate its tests (7 types, concentric rungs, the tagger rung, create-on-parent)
   # and a model edit cannot silently regress access.
   ms-authz:
     runs-on: ubuntu-latest

@@ -1,20 +1,9 @@
-"""A dropped `table_published` cancels the cascade, and the emitter was documented as losing nothing.
+"""A control event the bus did not take is staged, and the emitter says whether the outbox holds it.
 
-`BusControlEmitter.emit` swallowed every publish failure into a counter whose own description read
-"fail-open: the change itself still happened and is audited, only the live-refresh hint is lost", and
-the publication endpoint asserted "a consumer that MISSES this event loses nothing: the `published`
-tag still answers 'what is ready?'".
-
-Both claims hold for any POLLING consumer. Both are false
-for a pipeline whose next hop happens ONLY when it receives this event and that runs no cron and no
-reconcile, so it never re-reads the tag. A 5s publish timeout during a NATS blip therefore ends that
-cascade outright: the tag advanced, the data IS consumable, the route returned
-200, every pod is green, and the only signal is a counter that says nothing was lost.
-
-Owner ruling 2026-08-25: extend the EXISTING outbox rather than build a second one. The swallow stays
--- `emit` is called after the change is made and audited, so raising would turn a delivered mutation
-into a 500 the caller retries -- but the event is no longer gone: it is staged before the publish and
-dropped only on ack.
+`BusControlEmitter.emit` swallows a publish failure: it runs after the change is made and audited, so raising would
+turn a delivered mutation into a 500 the caller retries. A polling consumer loses only a refresh hint. A pipeline whose
+next step starts when it receives the event (a tag's move, say) and that polls nothing loses that step, so the event is
+staged before the publish and dropped only on ack, and the relay delivers what stayed staged.
 """
 
 from __future__ import annotations
@@ -33,7 +22,7 @@ from tests.unit.no_store_session import no_store_session
 
 
 def _event() -> CatalogControlEvent:
-    return CatalogControlEvent(action="table_published", object_type="table", object_id="table:acme-silver$features", actor=None)
+    return CatalogControlEvent(action="table_tag_updated", object_type="table", object_id="table:acme-silver$features", actor=None)
 
 
 @pytest.mark.asyncio

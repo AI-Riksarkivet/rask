@@ -3,9 +3,7 @@
 A committed version is announced as a run whose id the catalog derives from the commit's own coordinates: the table's
 uuid, the ref it landed on, that ref's incarnation and the version. The original announcement and a re-announcement the
 reconciler makes from the version log (`catalog.services.commit_reconcile`) carry the same id, so lineage's feed, which
-keys a run's terminal state on ``<runId>@COMPLETE``, lands one row however many arrive. A publication, which moves a tag
-and commits nothing, is announced under an id derived the same way from the table's uuid, the operation, the version the
-tag moved to and the time the tag file records the move at ([[LH-552]]).
+keys a run's terminal state on ``<runId>@COMPLETE``, lands one row however many arrive.
 
 THE DERIVATION IS KEYED (owner, 2026-10-25). Lineage binds a run id to the author of its first recorded event and never
 lets another extend it ([[LIN-5]]), and any producer holding ``can_write_data`` on some table may post a RunEvent with any
@@ -64,18 +62,6 @@ def commit_run_id(key: bytes, *, table_uuid: str, branch: str | None, branch_ide
     alone names two commits (pylance 12 records a fresh ``branch_identifier`` per create).
     """
     return _keyed_uuid(key, (table_uuid, branch or "", branch_identifier or "", str(version)))
-
-
-def tag_move_run_id(key: bytes, *, table_uuid: str, operation: str, version: int, moved_at: str) -> str:
-    """The run id of the announcement that ``operation`` moved its tag on ``table_uuid`` to ``version`` of main at
-    ``moved_at`` ([[LH-552]]): every announcement of one move is one run.
-
-    ``moved_at`` is the tag file's own ``updatedAt`` (`lance_docs/lance/format/table/branch_tag.md` § Tag File Format), as
-    the door reads it right after the move and the reconciler reads it later: the version alone does not name a move,
-    since a tag an erasure dropped can be moved to a version it named before. The first field is a word no uuid spells,
-    so no move's id is a commit's.
-    """
-    return _keyed_uuid(key, ("tag", table_uuid, operation, str(version), moved_at))
 
 
 def lifecycle_run_id(key: bytes, *, table_uuid: str, operation: str, announced_at: str) -> str:

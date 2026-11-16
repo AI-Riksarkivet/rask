@@ -171,7 +171,7 @@ def test_re_granting_yourself_what_you_already_hold_is_allowed(monkeypatch: pyte
 
 def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) -> None:
     """Refusing only a literal `user:<principal>` would leave the same escalation one indirection away:
-    judy grants `owner` to `role:validators#assignee`, a userset she is already inside."""
+    judy grants `owner` to `role:stewards#assignee`, a userset she is already inside."""
 
     async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
         if relation == "assignee":
@@ -179,7 +179,7 @@ def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) 
         return relation.startswith("can_grant_")  # may grant; does not hold the rung
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:validators#assignee", "relation": "owner"})))
+    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:stewards#assignee", "relation": "owner"})))
 
     with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
         asyncio.run(

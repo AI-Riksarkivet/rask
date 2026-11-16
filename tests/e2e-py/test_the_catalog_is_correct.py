@@ -1250,7 +1250,7 @@ CELLS = [
 def tenant_b(byo_tenant: Tenant) -> Iterator[str]:
     """A second tenant, administered by bob: the estate admin makes the project and bob its admin, and bob makes its
     warehouse, which only an admin of that project may do."""
-    admin, bob = byo_tenant.admin, byo_tenant.validator
+    admin, bob = byo_tenant.admin, byo_tenant.consumer
     project = f"c2b-{uuid.uuid4().hex[:8]}"
     scenario.ok(admin.http.post(f"{CATALOG}/management/v1/projects", json={"id": project}, timeout=60))
     try:
@@ -1277,7 +1277,7 @@ def scene(byo_tenant: Tenant, tenant_b: str) -> Iterator[Scene]:
         Role.WRITER: Identity.person(WRITER_USER),
         Role.READER: Identity.person(READER_USER),
         Role.OUTSIDER: Identity.person(OUTSIDER_USER),
-        Role.TENANT_B_ADMIN: byo_tenant.validator,
+        Role.TENANT_B_ADMIN: byo_tenant.consumer,
         Role.SERVICE: service,
     }
     made = Scene(byo_tenant, callers, tenant_b)

@@ -286,7 +286,7 @@ async def publish_with_outbox(
     """Durably publish ANY bus event: stage → publish → drop-on-ack (#4).
 
     Lane-agnostic on purpose: what a lane brings is its event's envelope (`lakehouse.cloud_events`). The
-    control lane needs the guarantee the lineage lane has — a dropped `table_published` cancels the next
+    control lane needs the guarantee the lineage lane has — a dropped `table_tag_updated` cancels the next
     hop of a pipeline that waits on it — and a SECOND implementation is how two mechanisms doing one job
     drift apart (owner ruling 2026-08-25).
 

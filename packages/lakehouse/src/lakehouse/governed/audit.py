@@ -56,7 +56,6 @@ class AuditAction(StrEnum):
     VEND_CREDENTIALS = "vend_credentials"
     COMMIT_VERSION = "commit_version"
     COMMIT_VERSION_ANNOUNCED = "commit_version_announced"
-    PUBLICATION_ANNOUNCED = "publication_announced"
     WRITE_JUDGE = "write_judge"
     EVENT_STREAM_OPENED = "event_stream_opened"
     LIST_PROJECTS = "list_projects"

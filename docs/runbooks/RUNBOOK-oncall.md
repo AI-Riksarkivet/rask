@@ -302,7 +302,7 @@ there, and one made by hand before git declared it is taken over as it stands.
 ## A timer has stopped
 
 **Symptom.** `LakehouseTimerStopped` (warning) names a timer (`catalog-control-relay`, `catalog-erasure-release`,
-`catalog-promotion-expiry`, `catalog-commit-reconcile`, `catalog-manifest-reclaim`, `catalog-declaration-converge` or
+`catalog-commit-reconcile`, `catalog-manifest-reclaim`, `catalog-declaration-converge` or
 `lineage-relay`): the newest window any replica saw claimed began more than three of the timer's periods ago, or every turn
 the timer took in fifteen minutes found its claim unreadable.
 

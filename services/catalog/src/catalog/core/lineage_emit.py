@@ -40,7 +40,7 @@ import lance
 from opentelemetry import metrics
 from pydantic import BaseModel
 
-from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id, tag_move_run_id
+from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id
 from catalog.core.identifiers import warehouse_of
 from catalog.core.run_context import RunContext
 from lakehouse import outbox
@@ -136,16 +136,6 @@ REGISTER_TABLE = "register_table"
 #: A table moved to a new name, its uuid, data and grants kept: one DatasetEvent on the new name, whose standard
 #: ``lifecycleStateChange`` is ``RENAME`` with the old name as ``previousIdentifier`` ([[LH-554]]).
 RENAME_TABLE = "rename_table"
-#: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so its readers now read
-#: ``version``, the tag's target. It mints no version, and it is a run of its own so the project's watchers are told
-#: that new data is live: a notifier targets them by this event's ``rask_lance.project``
-#: (`docs/COMMIT-EVENTS.md`, WATCH).
-PUBLISH_TABLE = "publish_table"
-
-#: The operations that move a tag and commit no version: the ``version`` their event names is the tag's target, a version
-#: another write committed and announced, so their run is never that commit's ([[LH-497]]).
-TAG_MOVES = frozenset({PUBLISH_TABLE})
-
 #: A table coming into the catalog or leaving it: versionless markers whose door files them before its act, so a finish
 #: can send one a failure left ([[LH-576]]).
 LIFECYCLE_MARKERS = frozenset({DROP_TABLE, DEREGISTER_TABLE, DECLARE_TABLE, REGISTER_TABLE, RENAME_TABLE})
@@ -752,11 +742,9 @@ class _BaseLineageEmitter:
 
     def _run_id(self, version: int | None, operation: str, fields: EmitFields) -> str:
         """The event's run id, for a version of a table the catalog minted a uuid for: derived from the commit, so every
-        announcement of one commit is one run ([[LH-497]]), or for a publication from the move, whose ``eventTime`` is the
-        tag file's own ``updatedAt``, so every announcement of one move is one run ([[LH-552]]). A table's lifecycle marker
+        announcement of one commit is one run ([[LH-497]]). A table's lifecycle marker
         (a drop, a declare) whose door fixed its time when it filed the announcement is derived from that time, so the
-        door's announcement and a finish's are one run ([[LH-576]]). A fresh id for any other versionless event and for a
-        publication whose move time was not read.
+        door's announcement and a finish's are one run ([[LH-576]]). A fresh id for any other versionless event.
 
         Raises:
             SigningKeyUnavailableError: The catalog reads its key from the store and does not hold it.
@@ -766,12 +754,9 @@ class _BaseLineageEmitter:
         event_time = fields.get("event_time")
         if version is None and table_uuid and event_time and operation in LIFECYCLE_MARKERS:
             return lifecycle_run_id((self._commit_ids or UnkeyedCommitIds()).key(), table_uuid=table_uuid, operation=operation, announced_at=event_time)
-        moved_at = event_time if operation == PUBLISH_TABLE else None
-        if version is None or not table_uuid or (operation in TAG_MOVES and not moved_at):
+        if version is None or not table_uuid:
             return str(uuid.uuid4())
         key = (self._commit_ids or UnkeyedCommitIds()).key()
-        if moved_at:
-            return tag_move_run_id(key, table_uuid=table_uuid, operation=operation, version=version, moved_at=moved_at)
         return commit_run_id(key, table_uuid=table_uuid, branch=fields.get("branch"), branch_identifier=fields.get("branch_identifier"), version=version)
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:  # pragma: no cover — abstract

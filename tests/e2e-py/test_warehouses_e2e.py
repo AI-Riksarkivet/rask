@@ -50,7 +50,7 @@ from lakehouse.storage_options import s3_filesystem
 S3 = os.environ.get("LANCE_E2E_S3", "")
 #: The person granted on the second warehouse's namespace: a Dex user of the deployed configmap who holds nothing in the
 #: scratch project.
-OTHER_USER = os.environ.get("LANCE_E2E_VALIDATOR_USER", "bob@example.com")
+OTHER_USER = os.environ.get("LANCE_E2E_CONSUMER_USER", "bob@example.com")
 #: The namespace name both warehouses hold.
 SAME_NAME = "sales"
 #: How long a grant written to the store may take to reach every check.

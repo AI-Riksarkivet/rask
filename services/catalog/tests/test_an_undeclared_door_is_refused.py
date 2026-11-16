@@ -276,6 +276,7 @@ _READ_DOORS: frozenset[tuple[str, str]] = frozenset(
             (suffix, "")
             for suffix in ("describe", "exists", "explain_plan", "history", "index/list", "index/{index_name}/stats", "labels/describe", "policy/describe")
         ),
+        *((suffix, "") for suffix in ("contract/describe",)),
         *((suffix, "") for suffix in ("query", "stats", "tags/list", "tags/version", "tasks", "version/describe", "version/list")),
         ("credentials", "tier=read"),
     }

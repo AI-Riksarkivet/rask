@@ -1,6 +1,6 @@
 """#72 grant/revoke — the MUTATE half of the access surface must be fail-closed and precise.
 
-Pins: only a grantable BASE rung (owner/writer/reader/validator) may be written — a derived ``can_*`` action
+Pins: only a grantable BASE rung (owner/writer/reader/maintainer) may be written — a derived ``can_*`` action
 or the structural ``parent`` edge is a 4xx, never a junk tuple; the grantee is resolved like access/check
 (a principal key → ``user:…``, a qualified userset verbatim); grant writes, revoke deletes; an OpenFGA outage
 propagates (fail-closed), never a silent no-op. Sync via ``asyncio.run`` — no async-plugin dependency.
@@ -115,7 +115,7 @@ def test_grantable_relations_are_the_base_rungs_only() -> None:
     namespace defines it. It is a rung of ``classification`` alone.
     """
     for t in ("table", "namespace"):
-        assert access._grantable_relations(t) == ("owner", "writer", "reader", "validator", "maintainer", "manage_grants", "pass_grants", "classifier")
+        assert access._grantable_relations(t) == ("owner", "writer", "reader", "maintainer", "manage_grants", "pass_grants", "classifier")
     assert access._grantable_relations("classification") == ("pass_grants", "apply")
 
 

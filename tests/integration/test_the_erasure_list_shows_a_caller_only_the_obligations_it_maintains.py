@@ -2,8 +2,8 @@
 
 An obligation names its table and the person who asked for the erasure, so the list is filtered per table as the due
 list beside it is. On the real app with OIDC and FGA on, the OpenFGA store an in-memory double that allows exactly the
-grants named, so what is asserted is the filter. The erasure list and the promotions list beside it name and judge
-their records only as a page fills ([[LH-576]] E10b), as the due list does.
+grants named, so what is asserted is the filter. The erasure list names and judges
+its records only as a page fills ([[LH-576]] E10b), as the due list does.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from openfga_sdk.client.models import ClientBatchCheckRequest, ClientBatchCheckR
 
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import parse_identifier
-from catalog.services import erasure_obligations, promotions, table_claims
+from catalog.services import erasure_obligations, table_claims
 from catalog.services.erasure_obligations import ErasureObligation
 from lakehouse import location_claims
 from tests.integration.openfga_grants import Grants, act_as
@@ -74,24 +74,6 @@ def _obligation(settings: Settings, table: str, tmp_path: Path, *, deadline: dat
     return obligation
 
 
-def _hold(settings: Settings, table: str, tmp_path: Path, *, deadline: datetime) -> promotions.Hold:
-    """An open promotion hold on ``table``, a table the catalog holds at a location of its own."""
-    table_uuid, location = str(uuid4()), f"{tmp_path}/{uuid4()}"
-    location_claims.take(table_claims.claim_store(settings), location, table, parse_identifier(table), is_gone=lambda _claim: False, uuid=table_uuid)
-    hold = promotions.Hold(
-        table=table,
-        uuid=table_uuid,
-        location=location,
-        version=2,
-        published_version=1,
-        reasons=["row count moved past the band"],
-        requested_by="user:dex~olivia",
-        opened_at=deadline - timedelta(hours=24),
-        expires_at=deadline,
-    )
-    return promotions.open_hold(settings.registry_root, settings.storage_options(), hold)
-
-
 def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestClient, tmp_path: Path) -> None:
     client = real_ns_client
     settings, grants = _governed(client, tmp_path)
@@ -110,7 +92,6 @@ def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestCli
     ("door", "rows", "relation", "recorded"),
     [
         pytest.param("/management/v1/erasures", "obligations", "can_maintain", lambda s, t, p, d: _obligation(s, t, p, deadline=d).table_uuid, id="erasures"),
-        pytest.param("/management/v1/promotions", "holds", "can_get_metadata", lambda s, t, p, d: _hold(s, t, p, deadline=d).uuid, id="promotions"),
     ],
 )
 def test_a_page_judges_only_the_records_it_needs(

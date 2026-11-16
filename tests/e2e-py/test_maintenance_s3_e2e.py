@@ -168,7 +168,7 @@ def estate(s3: Any, rustfs_store: ThrowawayStore) -> Iterator[Estate]:
     lance.write_dataset(_rows(offset=10), built.plain_uri, mode="append", storage_options=options.in_clear())
     lance.write_dataset(_rows(offset=20), built.plain_uri, mode="append", storage_options=options.in_clear())
     # A TAG — `_refs/tags/blessed.json`, a live version pointer. The first live run of this pass named
-    # every promotion tag in the estate as an orphan.
+    # every tag in the estate as an orphan.
     lance.dataset(built.plain_uri, storage_options=options.in_clear()).tags.create("blessed", 1)
 
     # A REAL blob sidecar: blob-v2 at data_storage_version 2.2 writes the bytes to

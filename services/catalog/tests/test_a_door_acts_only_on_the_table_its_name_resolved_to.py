@@ -41,6 +41,14 @@ _ARROW = {"Content-Type": ARROW_STREAM_MEDIA_TYPE}
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64()), "v": pa.array([10, 20], pa.int64())}))
 _RIVAL_ROWS = encode_arrow_stream(pa.table({"id": pa.array([9], pa.int64()), "v": pa.array([90], pa.int64())}))
 _QUERY = {"k": 10, "vector": {"single_vector": []}}
+_CONTRACT = {
+    "apiVersion": "v3.0.2",
+    "kind": "DataContract",
+    "id": "t",
+    "version": "1.0.0",
+    "status": "active",
+    "schema": [{"name": "t", "properties": [{"name": "id", "physicalType": "int64"}]}],
+}
 _TABLE = "/v1/table/lance_catalog$db$t"
 _MANAGED = "/management/v1/table/lance_catalog$db$t"
 
@@ -92,9 +100,9 @@ _DOORS = [
     pytest.param("POST", f"{_MANAGED}/maintenance/run", {"json": {"retain_versions": 1}}, id="maintenance-run"),
     pytest.param("POST", f"{_MANAGED}/erasure", {"json": {"predicate": "id = 1"}}, id="erasure"),
     pytest.param("POST", f"{_MANAGED}/erasure/{{obligation}}/verify", {"json": {"predicate": "id = 1"}}, id="erasure-verify"),
-    pytest.param("POST", f"{_MANAGED}/publish", {"json": {"version": 1, "key_column": "id"}}, id="publish"),
-    pytest.param("POST", f"{_MANAGED}/promotion/approve", {"json": {"version": 1}}, id="approve-promotion"),
-    pytest.param("POST", f"{_MANAGED}/promotion/reject", {"json": {"version": 1}}, id="reject-promotion"),
+    pytest.param("POST", f"{_MANAGED}/contract/describe", {}, id="describe-contract"),
+    pytest.param("POST", f"{_MANAGED}/contract/set", {"json": _CONTRACT}, id="set-contract"),
+    pytest.param("POST", f"{_MANAGED}/contract/delete", {}, id="delete-contract"),
 ]
 
 #: The rivals beside a destroying drop and a create landing after authorization, which every door is driven against: two

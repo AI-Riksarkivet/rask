@@ -6,6 +6,29 @@ One entry per change to `model.fga` that a store holding tuples has to know abou
 whether the change writes new tuples into a store. When both are `FALSE`, deploying the model is the whole migration:
 `write_model.py` writes it, and every tuple in the store keeps its name and is read by the new model as it stands.
 
+## 2026-11-16: publication goes; a tagger tags, and a table's owner sets its contract
+
+```text
+MODIFIES_TUPLES: FALSE
+ADDS_TUPLES:     FALSE
+```
+
+Row LH-594 (#832), ADR 0212.
+
+- **Removed:** `validator`, `validator_effective`, `can_promote` and `can_grant_validator` on `warehouse`,
+  `namespace` and `table`. The catalog has no promotion to approve.
+- **Renamed:** `publisher` and `publisher_effective` are `tagger` and `tagger_effective`. The rung still opens
+  `can_create_tag` and `can_update_tag` and nothing else: a pipeline marks the version it vetted with a tag.
+- **Added:** `table#can_set_contract: owner_effective`, the verb the contract doors ask. Computed, so every owner
+  holds it and no tuple is written.
+
+**Stored `validator` and `publisher` tuples.** No door rewrites or removes them. The model no longer defines either
+relation, so a stored tuple under one authorizes nothing: measured 2026-11-16 on the pinned OpenFGA, a `Check` ignores
+it, a `Read` of its object still lists it, and a delete of it under the new model answers 200. Each therefore ends as
+every tuple of its object does, when the object ends or its principal is offboarded. A deployment whose pipeline
+identity held `publisher` grants it `tagger` (a declared grant, `catalog.declared.grants`), or it is refused the tag
+doors.
+
 ## 2026-11-13: stored and effective rungs, bounded visibility, a member holds no data rung, one estate verb per door
 
 ```text

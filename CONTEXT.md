@@ -74,7 +74,7 @@ _Avoid_: Ray, compute plane, cluster
 ### Catalog
 
 **Project**:
-The tenant: the people-and-policy scope above warehouses, holding its admins, members, roles and quality gate. A
+The tenant: the people-and-policy scope above warehouses, holding its admins, members, roles and label definitions. A
 project holds any number of warehouses, and a default project, `default`, is declared at install (ADR 0206).
 _Avoid_: tenant (as a type name), organisation, workspace, realm
 
@@ -169,7 +169,7 @@ _Avoid_: tier judge, write gate
 **Write governance**:
 The rules the catalog applies in its own write path to every write, so no writer can bypass them: the writer's
 permission, the run rule where a namespace declares it (ADR 0156, ADR 0211; the run-and-inputs rule is LH-225), the
-reserved provenance columns and the publish-time promotion gate.
+reserved platform keys and primary key, and the table's data contract (ADR 0212).
 _Avoid_: tier governance, the medallion service, the cascade
 
 **Pipeline**:
@@ -181,15 +181,15 @@ The event the catalog records for every committed write, read by a pipeline from
 with its own token. The NATS topics it travels on are internal.
 _Avoid_: cascade head, bronze arrival
 
-**Promotion gate**:
-The check a project declares for its tables, run when a version is published by moving the table's `published` tag,
-the version readers of `@published` read. With review declared, a version that breaches it is held, not published.
-_Avoid_: promotion saga, review workflow
+**Data contract**:
+The ODCS v3 document a table's owner sets, naming the columns its consumers rely on. The catalog refuses a commit that
+drops, renames, retypes or loosens one of them, and checks nothing else of it (ADR 0212).
+_Avoid_: quality gate, schema registry, promotion gate
 
-**Hold**:
-A version the promotion gate kept from readers for a person to decide: approving it publishes it, rejecting it returns
-the table to its published version, and a hold nobody decides in time expires with nothing published.
-_Avoid_: pending promotion, review
+**Tag**:
+Lance's named pointer to one version of a table. A pipeline marks the version it vetted with a tag under a name it
+chooses, and its readers open that tag; no tag name is the catalog's but `rask.clone.*`.
+_Avoid_: published version, publication, promotion, release
 
 **Erasure obligation**:
 A data subject's erasure the catalog has accepted for one table, open until the catalog has itself read that the

@@ -1,12 +1,7 @@
-"""The provenance a table's own bytes carry: the one column the platform names and the dataset id it declares.
+"""The provenance a table's own bytes carry: the dataset id it declares.
 
-`source_rowid` is the one column the platform names: an opt-in a pipeline writes so impact analysis can trace a row
-to the row it descends from (ADR 0156 C9). The catalog's provenance guard reserves it and the publish door's quality
-gate judges its type, so the name lives here, once, for both. `lineage.dataset_id` is schema metadata the catalog
-stamps on every table it writes, naming the table by its uuid ([[LH-520]]).
-
-IT LIVES IN THE LIBRARY rather than in a service because the catalog and its quality gate both read it, and a
-governance contract cannot belong to one of its readers.
+`lineage.dataset_id` is schema metadata the catalog stamps on every table it writes, naming the table by its uuid
+([[LH-520]]). The platform names no column of a table's: a row's run and inputs ride its commit (ADR 0156 C9).
 """
 
 from __future__ import annotations
@@ -15,9 +10,6 @@ from typing import Final
 
 import pyarrow as pa
 
-
-#: The row a row descends from: an opt-in column a pipeline writes, held to uint64 stable row ids.
-SOURCE_ROWID_COLUMN: Final = "source_rowid"
 
 #: The canonical catalog name of the dataset a row was written INTO — schema metadata rather than a
 #: column, because it describes the dataset and not the row. Maintenance names a dataset by the catalog's

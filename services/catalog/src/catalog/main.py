@@ -355,7 +355,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     app.state.health = HealthWatch(_dependencies(app, settings, bus))
     app.state.health.watch(loops)
     # THE CATALOG'S FIXED TIMERS ([[XC-199]]), started last, once everything a tick works with is on `app.state`: the
-    # control relay, the erasure release, the promotion expiry, the commit reconcile, the manifest reclaim and the
+    # control relay, the erasure release, the commit reconcile, the manifest reclaim and the
     # declaration converge, each a loop of `loops` on the period git gives it, each window claimed on the control root
     # so a tick runs once whatever the replica count (`catalog.api.timers`).
     start_timers(app, settings, loops)

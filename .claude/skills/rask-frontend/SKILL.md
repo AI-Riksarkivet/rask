@@ -48,11 +48,11 @@ modules are fine, and the data layer is `reads.svelte.ts`. `tsconfig.json` exten
 
 | path | what it is |
 |---|---|
-| `/` | Home: the caller's tables per project, lineage's latest commits, the held promotions, and for an estate admin the DLQ depth and the latest governance changes, each from a door the caller already reads (`#lib/home.ts`) |
+| `/` | Home: the caller's tables per project and lineage's latest commits, and for an estate admin the DLQ depth and the latest governance changes, each from a door the caller already reads (`#lib/home.ts`) |
 | `/projects`, `/projects/[project]` | the project gallery and one project's overview (create, delete, policies) |
 | `/settings`, `/settings/access` | estate configuration, estate-admin only (`settings/+layout.ts`): Users & roles (the FGA explorer) and a link to Projects |
 | `/catalog` | a 307 to `/catalog/tables` (`catalog/+page.ts`): an old bookmark lands on a list; the group is no page, so its breadcrumb crumb is plain text |
-| `/catalog/{warehouses,namespaces,tables,promotions}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`, `promotions/[table]`) | the catalog; the four lists take `?project=<id>` (below) |
+| `/catalog/{warehouses,namespaces,tables}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`) | the catalog; the three lists take `?project=<id>` (below) |
 | `/admin`, `/admin/{events,dlq}` | operations, estate-admin only (`admin/+layout.ts`) |
 | `/workbench` | the dock (events, tables) |
 | `/auth/{login,callback,logout}` | the sign-in round trip, client pages |
@@ -89,9 +89,14 @@ hidden one. Home and the workbench name themselves with a visually hidden `h1` (
 they draw), and a list drawn in a workbench panel (`TableRegistry`'s `frame="panel"`) heads itself with an `h2`, at the
 panel's width.
 
-**A table's and a namespace's tabs.** A table has Overview, Preview, Versions (the commit log, its tags and branches,
-and a summary naming the version the `published` tag points at and the latest; the publish door moves that tag), Connect
-and Access; a namespace has Overview, Connect and Access. Both Overviews hold the object's labels
+**A table's and a namespace's tabs.** A table has Overview, Preview, Versions (the commit log, its tags and branches as
+Lance has them: each tag with the version, and the branch, it names, and no tag name treated specially), Connect and
+Access; a namespace has Overview, Connect and Access. A table's Overview shows its data contract
+(`#lib/data/TableContract.svelte`, ADR 0212), read from `POST /management/v1/table/{id}/contract/describe`
+(`fetchTableContract`, `#lib/data/contract.ts`): the ODCS document's id, version and status, who set it and when, and its
+columns (a nested one by its dotted path, its physical type, required, primary key), or one line saying the table holds
+none and that its owner sets one at the `contract/set` door; the console writes no contract, and a refused read is one
+line. Both Overviews hold the object's labels
 (`#lib/data/ObjectLabels.svelte`, ADR 0211): its chips and, for whoever the catalog lets label it, an add form offering the
 `available` definitions its own `labels/describe` answers, so an owner who is no member of the project can label. A
 project's page defines its labels (`ProjectLabels.svelte`); the Tables and Namespaces lists carry a labels column and a
@@ -104,7 +109,7 @@ audience scope from `/config.json` (`auth.issuer`, `auth.scopes`) and holds no s
 against the dev estate (2026-11-15).
 
 **One navigation, the sidebar, on every page** (ADR 0202). `consoleSidebar(me)` in `#lib/nav.ts` builds it: Home and
-Projects, a Catalog group (Warehouses, Namespaces, Tables, Promotions), an Operations group (Events,
+Projects, a Catalog group (Warehouses, Namespaces, Tables), an Operations group (Events,
 DLQ), and Workbench and Settings pinned at the foot; `@rask/ui`'s shell renders it (`app-sidebar`, `page-nav`) inside one
 `<nav aria-label="Pages">`. The top bar holds only the sidebar's toggle, the breadcrumb (the route's own path,
 `pathCrumbs`, named and linked by `AppShell`'s `pages`; a group such as Catalog is plain text), the bell and the account
@@ -116,7 +121,7 @@ their choice, and marks its heading while it holds the current page. Below the s
 with a title row and a close button; picking a page closes it, and its rows carry no tooltip, so Escape reaches it. There is no active project: nothing about which project a
 person looks at is kept in a cookie or storage.
 
-**The project filter is a view, never a boundary.** Warehouses, namespaces, tables and promotions each have a project
+**The project filter is a view, never a boundary.** Warehouses, namespaces and tables each have a project
 column and a `ProjectFilter` select (`#lib/data/ProjectFilter.svelte`, `project-filter.ts`): a plain value and an
 `onchange`, over the projects `GET /management/v1/projects` answers the caller. Each list's page keeps the value in its
 URL (`?project=<id>`, `project-filter-url.ts`'s `showProject`, one history entry per change, so Back is the rows as they
@@ -151,10 +156,8 @@ description, rather than offer what will be refused.
 
 **Every page in the sidebar works** (ADR 0210). A view that needs what no Gateway route serves a browser (the platform's
 telemetry store for an audit trail, the NATS monitor for streams, a stores-by-class registry no door keeps) has no page:
-a page that can only say it cannot work is not offered. The e2e mocks serve only doors that exist. Promotions read the
-catalog's own doors:
-`GET /management/v1/promotions` for the open holds, and `POST /management/v1/table/{id}/promotion/{approve,reject}` for a
-decision, keyed by table.
+a page that can only say it cannot work is not offered. The e2e mocks serve only doors that exist (an unseeded
+`contract/describe` answers `contract: null`, `e2e/mock-contracts.ts`, as the catalog does for a table holding none).
 
 ## Sign-in and tokens
 

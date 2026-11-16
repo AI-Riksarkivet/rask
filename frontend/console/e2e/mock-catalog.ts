@@ -11,6 +11,7 @@
 // EVERYTHING is keyed by the BEARER, never by shared server state: the suite is fullyParallel, and
 // session.ts signs each test in with its own token, so nothing is shared.
 
+import { contractDoor } from './mock-contracts';
 import { labelDoor } from './mock-labels';
 import { MOCK_CATALOG_PORT } from './ports';
 import {
@@ -286,6 +287,8 @@ Bun.serve({
 		if (!isSeeded) {
 			const labelled = await labelDoor(req, url, bearer);
 			if (labelled) return labelled;
+			const contract = contractDoor(req, url);
+			if (contract) return contract;
 		}
 
 		// ── the seeded surface ──

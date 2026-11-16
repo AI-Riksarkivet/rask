@@ -7,7 +7,6 @@ import {
 	LayoutDashboard,
 	Radio,
 	Settings,
-	ShieldCheck,
 	Warehouse,
 } from '@lucide/svelte';
 import type { PageNav, PageNavLeaf } from '@rask/ui/shell';
@@ -24,8 +23,7 @@ import { isEstateAdmin } from '#lib/estate-admin.ts';
  * feature, while a disabled one says whom to ask.
  */
 
-/** The catalog, in hierarchy order below a project: warehouse, namespace, table; then the held
- *  promotions (a decision gated on `can_promote` on the held table). */
+/** The catalog, in hierarchy order below a project: warehouse, namespace, table. */
 const CATALOG: PageNavLeaf[] = [
 	{
 		title: 'Warehouses',
@@ -40,12 +38,6 @@ const CATALOG: PageNavLeaf[] = [
 		icon: Boxes,
 	},
 	{ title: 'Tables', href: '/catalog/tables', match: seg('/catalog/tables'), icon: Database },
-	{
-		title: 'Promotions',
-		href: '/catalog/promotions',
-		match: seg('/catalog/promotions'),
-		icon: ShieldCheck,
-	},
 ];
 
 /** Running the estate: its events and dead letters, behind the estate-admin door. */

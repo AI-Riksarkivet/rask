@@ -2,8 +2,8 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { MOCK_CATALOG } from './ports';
 import { ME_ADMIN, ME_MEMBER, mockMe, signIn, TOKEN } from './session';
 
-// Home reads the doors the caller already reads (ADR 0210): the catalog's tables, warehouses and held
-// promotions, seeded per bearer on the mock catalog; lineage's feed and DLQ, and the catalog's control
+// Home reads the doors the caller already reads (ADR 0210): the catalog's tables and warehouses,
+// seeded per bearer on the mock catalog; lineage's feed and DLQ, and the catalog's control
 // events, answered in the browser. An estate admin sees the DLQ and the governance changes; anyone else
 // gets neither, and the console does not ask for them.
 
@@ -58,21 +58,6 @@ async function seedWorld(page: Page): Promise<{ dlqAsked: () => boolean }> {
 						'lance_catalog$provenance$events',
 					],
 				},
-				'GET /management/v1/promotions?limit=100': {
-					holds: [
-						{
-							table: 'globex-wh$silver$u',
-							uuid: 'uuid-u',
-							version: 3,
-							published_version: 2,
-							reasons: ['row_count_delta'],
-							opened_at: '2026-11-15T10:00:00Z',
-							expires_at: '2026-11-18T10:00:00Z',
-							state: 'open',
-						},
-					],
-					page_token: null,
-				},
 			},
 		},
 	});
@@ -95,7 +80,7 @@ test.beforeEach(async ({ context }, testInfo) => {
 	await signIn(context, { token: bearer });
 });
 
-test('an estate admin’s Home counts their tables per project, and shows commits, holds, dead letters and governance', async ({
+test('an estate admin’s Home counts their tables per project, and shows commits, dead letters and governance', async ({
 	page,
 }) => {
 	await mockMe(page, ME_ADMIN);
@@ -122,7 +107,6 @@ test('an estate admin’s Home counts their tables per project, and shows commit
 		'/catalog/tables/acme-wh%24bronze%24orders',
 	);
 
-	await expect(page.getByTestId('home-promotions')).toHaveText('1');
 	await expect(page.getByTestId('home-dlq')).toHaveText('3');
 	await expect(page.getByTestId('home-governance')).toContainText('table created');
 });
@@ -135,7 +119,7 @@ test('a non-admin’s Home shows their own figures and asks for no admin read', 
 	await expect(page.getByTestId('home-signed-in')).toHaveText(`Signed in as ${ME_MEMBER.name}`);
 	const tables = page.getByTestId('home-tables');
 	await expect(tables.locator('tbody tr')).toHaveCount(3);
-	await expect(page.getByTestId('home-promotions')).toHaveText('1');
+	await expect(page.getByTestId('home-attention')).toHaveCount(0);
 	await expect(page.getByTestId('home-dlq')).toHaveCount(0);
 	await expect(page.getByTestId('home-governance')).toHaveCount(0);
 	expect(world.dlqAsked()).toBe(false);

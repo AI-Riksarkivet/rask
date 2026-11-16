@@ -18,10 +18,8 @@ import logging
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
-from lance_namespace import ServiceUnavailableError
 
 from lakehouse.lancekit.blobs import BLOB_V2_EXTENSION_NAME, blob_descriptors, blob_field_names, holds_blob, is_blob_field, nested_fields, schema_has_blob
-from lakehouse.outage import reads_as_store_outage
 
 
 #: Re-exported deliberately: callers import these FROM here and the names are part of this module's
@@ -29,7 +27,6 @@ from lakehouse.outage import reads_as_store_outage
 __all__ = [
     "BLOB_V2_EXTENSION_NAME",
     "EXTERNAL_KIND",
-    "blob_column_resolves",
     "blob_descriptors",
     "blob_field_names",
     "carry_external_descriptor",
@@ -101,56 +98,9 @@ def read_aligned_table(
     ``read_blobs`` and ``take_blobs`` keep a null row's slot too (measured on pylance 12.0.0: ``read_blobs`` over
     indices ``[0, 1, 2]`` with a null in slot 1 answers ``[(0, b'a'), (1, None), (2, b'c')]``, and ``take_blobs``
     answers ``[BlobFile, None, BlobFile]``). They read by row, and are the reads for single-row serving and for a
-    known set of row ids (:func:`blob_column_resolves`).
+    known set of row ids.
 
     THIS IS A WHOLE-RESULT READ: ``to_table`` holds every selected payload at once. ``limit`` bounds it for a caller
     that needs a few rows; a caller that consumes every payload streams a bounded scanner instead ([[CP-051]]).
     """
     return ds.scanner(columns=columns, blob_handling="all_binary", with_row_id=with_row_id, limit=limit).to_table()
-
-
-def blob_column_resolves(ds: lance.LanceDataset, column: str) -> bool:
-    """Whether ``column``'s blob payloads actually dereference — probed on the FIRST and LAST rows.
-
-    The SHARED pointer-health probe (quality gate at promotion time; reconcile after the fact). One
-    real byte is read per probed payload: ``BlobFile.size()`` reads only the stored descriptor
-    (probed at pylance 8.0.0 — it succeeds against a DELETED object), so only an actual
-    ``read_range`` proves the bytes are reachable; and for a dangling EXTERNAL pointer even
-    ``take_blobs`` itself raises (it opens the object), which is why the whole probe sits in the
-    try. First+last catches the wholesale failures these checks exist for (wiped bucket, wrong or
-    unregistered external base) at the cost of two 1-byte reads; per-row bitrot auditing is a
-    scrubber's job. Zero-length/null payloads resolve trivially — through pylance 9 ``take_blobs`` returned no
-    handle for them at all; from 10.0.0 it returns ``None`` in that slot, which the loop skips. An EMPTY dataset
-    resolves trivially too (nothing to probe).
-
-    A probe the store did not answer says nothing about the payload, so it is raised as the outage it is rather than
-    answered dangling: a dangling column refuses a promotion as a data defect no review can wave through, while an
-    outage is a 503 the caller retries ([[LH-572]]).
-
-    Raises:
-        ServiceUnavailableError: The store did not answer a probe (:func:`lakehouse.outage.reads_as_store_outage`).
-    """
-    rows = ds.count_rows()
-    if rows == 0:
-        return True
-    try:
-        for row in sorted({0, rows - 1}):
-            for handle in ds.take_blobs(column, indices=[row]):
-                # `handle is None` IS the null payload, and testing for it is required from pylance
-                # 10.0.0. Through 9.0.0 `take_blobs` OMITTED a null row from its result, so the loop
-                # simply did not run for it — the "returns no handle for them" the docstring above
-                # describes. 10.0.0 returns a same-length list with `None` in that slot instead
-                # (measured 2026-08-16: row 0 -> BlobFile, row 1 (null) -> None, row 2 -> BlobFile),
-                # so the old loop reached `None.size()` and raised AttributeError — turning a healthy
-                # dataset whose first or last payload is null into a reported DANGLING column, which
-                # is a promotion-blocking verdict on correct data.
-                if handle is None:
-                    continue
-                if handle.size() > 0:
-                    handle.read_range(0, 1)
-    except Exception as exc:
-        if reads_as_store_outage(exc):
-            raise ServiceUnavailableError(f"the store did not answer the probe of blob column {column!r}'s payload: {exc}") from exc
-        log.warning("blob_resolve_failed", extra={"column": column, "error": str(exc)})
-        return False
-    return True

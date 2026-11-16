@@ -43,7 +43,6 @@ test("the sidebar is every page's one navigation; an anonymous visitor sees the 
 		['Warehouses', '/catalog/warehouses'],
 		['Namespaces', '/catalog/namespaces'],
 		['Tables', '/catalog/tables'],
-		['Promotions', '/catalog/promotions'],
 		['Workbench', '/workbench'],
 	] as const) {
 		await expect(nav.getByRole('link', { name, exact: true })).toHaveAttribute('href', href);
@@ -70,7 +69,7 @@ test('the landing is HOME — a summary of the estate, not the project gallery',
 			.first(),
 	).toBeVisible();
 	// Every card reads a door (ADR 0210): nothing on it is a placeholder.
-	for (const card of ['home-tables', 'home-commits', 'home-attention']) {
+	for (const card of ['home-tables', 'home-commits']) {
 		await expect(page.getByTestId(card)).toBeVisible();
 	}
 	await expect(page.getByText('Not wired')).toHaveCount(0);

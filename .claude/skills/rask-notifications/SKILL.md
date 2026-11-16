@@ -50,11 +50,9 @@ pipeline's runs reach people through the OpenLineage events its job emits, targe
 or by `rask_lance.originator` when the job authenticates as a service (Q2). The catalog's own COMPLETE for each commit
 the pipeline makes is authored as the verified caller.
 
-**Moving a table's `published` tag is a WATCH event** (ADR 0156 C1, ADR 0161, [[LH-466]]): the catalog emits a
-`publish_table` run authored by the verified caller, its `rask_lance.project` the tenant and its output the table.
-Lineage's bus doors record it on the catalog's signature, as they record every announcement the catalog signs for the
-caller it authenticated ([[LH-551]]); its HTTP door, which verifies no signature, authorizes a `publish_table` run on
-`can_update_tag` or `can_promote` rather than the writer rung (`lineage/api/fga_deps.py`). Lineage answers no graph
+**A tag's move names nobody.** A pipeline marks the version it vetted with a tag of its own (ADR 0212), and the tag
+doors announce it as an untargeted control event (`table_tag_created`, `table_tag_updated`): no lineage run, so no
+watcher is told. A pipeline that wants its project's watchers told emits its own run (Q1 to Q3). Lineage answers no graph
 query (ADR 0158): a person cannot be targeted on an upstream or downstream walk, only on what the event itself names.
 
 Q4 is the sharpest and is why the control lane names its subject at all: *losing access silently is how someone
@@ -188,11 +186,10 @@ the action names it reads must survive a member it does not know, since the lake
    beside it, so every hop that carries the work re-carries it.
    **A service subject in the originator is the same defect, and it is worse than silence because it looks
    addressed.** A service authenticates to the catalog AS ITSELF, so an originator derived from a control event's
-   `actor` names the service. The catalog RESOLVES the originator of a publication once
-   (`publication.publication_originator` — a service caller's carried claim, else a human caller's own verified sub,
-   else nothing) and echoes it onto `table_published`, so a reader takes `extra` instead of guessing. The catalog owns
-   that decision because its door is the one that verified the caller: a `ServicePrincipal` (a projected service-account
-   token, [[LH-220]]) is a service, and an IdP token is a person whatever claims it carries.
+   `actor` names the service. The catalog reduces a caller's `x-lance-originator` claim to a person's subject or
+   nothing (`catalog.api.dependencies.originator_hint`) and stamps it on the run it emits for that request. The catalog
+   owns that decision because its door is the one that verified the caller: a `ServicePrincipal` (a projected
+   service-account token, [[LH-220]]) is a service, and an IdP token is a person whatever claims it carries.
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer, `enforce_author`
    (`lineage/api/fga_deps.py`) **overwrites** the facet with that service's sub — "never trust the request body" is
    doing its job, and your human is gone. Carrying the human's sub through your own call graph is the only fix.

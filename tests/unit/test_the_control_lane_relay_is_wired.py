@@ -7,9 +7,8 @@ LINEAGE prefix: lineage's relay parses every object in its own prefix as an Open
 cannot parse, so a shared prefix hands the control lane's only durable copy to something that destroys it, strictly
 worse than staging nowhere.
 
-Why this matters more than the usual wiring gate: `table_published` is the ONLY thing that wakes
-silver->gold. Nothing re-reads the `published` tag, so a lost publish stops the cascade with the tag
-advanced, the route 200 and every pod green.
+Why this matters more than the usual wiring gate: a pipeline whose next step starts on a control event (a tag's move)
+and polls nothing loses that step with the tag moved, the route 200 and every pod green.
 """
 
 from __future__ import annotations
@@ -67,8 +66,8 @@ def test_the_catalog_stages_control_events_into_a_prefix_its_OWN_relay_drains() 
     staged = env.get("LANCE_CONTROL_OUTBOX_URI", "")
     assert staged, (
         "the catalog Deployment renders no LANCE_CONTROL_OUTBOX_URI, so `BusControlEmitter.emit` degrades "
-        "to a plain publish: a NATS blip during a publication loses `table_published` outright, and with it "
-        "the silver->gold hop that event is the only trigger for"
+        "to a plain publish: a NATS blip loses a control event outright, and with it the step of any pipeline "
+        "that event is the only trigger for"
     )
     lineage_prefix = env.get("LANCE_LINEAGE_OUTBOX_URI", "")
     assert staged.rstrip("/") != lineage_prefix.rstrip("/"), (

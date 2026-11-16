@@ -442,7 +442,7 @@ def project_of(control_root: str, storage_options: StorageOptions, warehouse_id:
     """The tenant owning warehouse ``warehouse_id``, or ``None`` for the estate's own warehouse or an id no record holds.
 
     A name's project is its first segment's warehouse's ([[LH-593]]): one registry read. Its consumers are the run
-    rule's admin, a label's project, the quality gate, a role grant's tenant, and lineage's ``rask_lance.project`` facet, where
+    rule's admin, a label's project, a role grant's tenant, and lineage's ``rask_lance.project`` facet, where
     ``None`` costs an event its watchers and never its author.
 
     Raises:

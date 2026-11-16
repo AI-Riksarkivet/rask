@@ -69,7 +69,7 @@
 		/** The version list from the page's detail aggregate (ascending) — the format's own answer to
 		 *  "which versions exist", and the source of the unambiguous commit timestamps. */
 		manifests: Manifest[];
-		tags: [string, { version?: number }][];
+		tags: [string, { version?: number; branch?: string | null }][];
 		branches: [string, { createAt?: number; manifestSize?: number | null }][];
 		/** The version the page believes is current, for the restore staleness check. */
 		currentVersion: number | null;
@@ -142,13 +142,6 @@
 			if (tag.version != null) (acc[tag.version] ??= []).push(name);
 			return acc;
 		}, {}),
-	);
-
-	/** The tag the catalog's publish door moves (`catalog.services.publication.PUBLISHED_TAG`): the
-	 *  version it names is what readers of the table's published view get. */
-	const PUBLISHED_TAG = 'published';
-	const publishedVersion = $derived(
-		tags.find(([name]) => name === PUBLISHED_TAG)?.[1].version ?? null,
 	);
 
 	type LogRow = {
@@ -452,12 +445,7 @@
 				>tip</span
 			>{/if}
 		{#each row.refs as name (name)}
-			<span
-				class={['tagchip mono', { published: name === PUBLISHED_TAG }]}
-				title={name === PUBLISHED_TAG
-					? `v${row.version} is published: the publish door moved this tag here`
-					: `tag ${name} pins v${row.version}`}>{name}</span
-			>
+			<span class="tagchip mono" title={`tag ${name} pins v${row.version}`}>{name}</span>
 		{/each}
 		{#if row.schemaChange}
 			<span class="schemadot" title="this commit changed the schema" aria-label="schema change"
@@ -535,11 +523,6 @@
 		Every version of this table, newest first — read out of the Lance transaction log.
 	</p>
 	<p class="summary" data-testid="versions-summary">
-		{#if publishedVersion !== null}
-			<span>Published <span class="mono">v{publishedVersion}</span></span>
-		{:else}
-			<span>Nothing published yet</span>
-		{/if}
 		{#if currentVersion !== null}<span>Latest <span class="mono">v{currentVersion}</span></span
 			>{/if}
 		<span>{tags.length} tag{tags.length === 1 ? '' : 's'}</span>
@@ -788,7 +771,7 @@
 	<h3>Tags</h3>
 	<div class="refs">
 		{#if tags.length === 0}
-			<span class="mut">No tags — a promotion pins its version with one (e.g. blessed).</span>
+			<span class="mut">No tags: a tag pins one version of the table by a name you choose.</span>
 		{:else}
 			{#each tags as [name, t] (name)}
 				{#if movingTag === name}
@@ -809,7 +792,7 @@
 					</span>
 				{:else}
 					<span class="chip tag mono"
-						>{name} → v{t.version}
+						>{name} → v{t.version}{#if t.branch}&nbsp;on {t.branch}{/if}
 						<button
 							class="chip-x"
 							title="move tag"
@@ -1087,11 +1070,6 @@
 		gap: 4px 16px;
 		margin: 0 0 12px;
 		font-size: 13px;
-	}
-	/* The version readers of the published view read: the tag's own semantic colour. */
-	.tagchip.published {
-		border-color: var(--success);
-		font-weight: 600;
 	}
 	.chip {
 		align-items: center;

@@ -2,7 +2,7 @@
 
 The catalog mints a table's uuid when the table comes into being and a rename keeps it ([[LH-519]], ADR 0173 §2). Every
 control-root record kept for the table names that uuid (ADR 0173 §8, [[LH-523]]): its protection, its maintenance
-policy, a promotion hold, maintenance's due record and an erasure obligation. A rename changes the table's name and
+policy, its data contract, maintenance's due record and an erasure obligation. A rename changes the table's name and
 writes no record, and every surface that lists one names the table by its name now. A table created later under a
 name another table gave up is given a new uuid, so nothing kept for the old table governs it, even when the drop that
 ended the old table failed to end its records.
@@ -27,7 +27,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings
-from catalog.services import promotions
 from lakehouse import location_claims, maintenance_due, object_records
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.maintenance_due import CompactionDue, DueRecord
@@ -41,7 +40,16 @@ from tests.integration.openfga_grants import TupleStore, act_as
 
 _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 #: The control-root registries a table's own records live in.
-_RECORD_PREFIXES = ("_protection", "_policies", "_promotions", "_maintenance_due", "_erasure_obligations")
+_RECORD_PREFIXES = ("_protection", "_policies", "_contracts", "_maintenance_due", "_erasure_obligations")
+#: A contract naming the one column `_ROWS` holds.
+_CONTRACT = {
+    "apiVersion": "v3.0.2",
+    "kind": "DataContract",
+    "id": "src",
+    "version": "1.0.0",
+    "status": "active",
+    "schema": [{"name": "src", "properties": [{"name": "id", "physicalType": "int64"}]}],
+}
 
 
 @pytest.fixture
@@ -104,9 +112,12 @@ def _listed(client: TestClient, path: str, field: str) -> list[str]:
     return [str(entry["table"]) for entry in answer.json()[field]]
 
 
-def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(real_ns_client: TestClient, governed: TupleStore, tmp_path: Path) -> None:
+def test_a_rename_keeps_the_tables_protection_policy_and_contract_and_writes_no_record(
+    real_ns_client: TestClient, governed: TupleStore, tmp_path: Path
+) -> None:
     _ok(real_ns_client, "/management/v1/table/lance_catalog$db$src/protection", json={"protected": True})
     _ok(real_ns_client, "/management/v1/table/lance_catalog$db$src/policy/set", json={"retention_days": 7})
+    _ok(real_ns_client, "/management/v1/table/lance_catalog$db$src/contract/set", json=_CONTRACT)
     minted, location = _described(real_ns_client, "lance_catalog$db$src")
     records = _record_keys(tmp_path)
 
@@ -116,6 +127,7 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
     assert _described(real_ns_client, "lance_catalog$db$dst")[0] == minted, "the renamed table answers another uuid"
     assert _protected(real_ns_client, "lance_catalog$db$dst"), "the renamed table arrived unprotected"
     assert _ok(real_ns_client, "/management/v1/table/lance_catalog$db$dst/policy/describe")["retention_days"] == 7
+    assert _ok(real_ns_client, "/management/v1/table/lance_catalog$db$dst/contract/describe")["contract"] == _CONTRACT
     gone = real_ns_client.post("/management/v1/table/lance_catalog$db$src/policy/describe")
     assert (gone.status_code, gone.json()["code"]) == (404, 4), "the name the rename left answers a policy read as a table"
     settings = MaintenanceSettings.model_validate({"MAINTENANCE_POLICY_ROOT": str(tmp_path), "MAINTENANCE_CONTROL_ROOT": str(tmp_path)})
@@ -134,22 +146,10 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
 
 
 @pytest.mark.usefixtures("governed")
-def test_a_hold_a_due_record_and_an_erasure_obligation_are_listed_under_the_tables_new_name(real_ns_client: TestClient, tmp_path: Path) -> None:
+def test_a_due_record_and_an_erasure_obligation_are_listed_under_the_tables_new_name(real_ns_client: TestClient, tmp_path: Path) -> None:
     root = str(tmp_path)
     minted, location = _described(real_ns_client, "lance_catalog$db$src")
     now = datetime.now(UTC)
-    held = promotions.Hold(
-        table="lance_catalog$db$src",
-        uuid=minted,
-        location=location,
-        version=1,
-        published_version=None,
-        reasons=["row_count_delta"],
-        requested_by=None,
-        opened_at=now,
-        expires_at=now + timedelta(days=1),
-    )
-    promotions.open_hold(root, StorageOptions(), held)
     due = DueRecord(
         table="lance_catalog$db$src",
         uuid=minted,
@@ -164,7 +164,6 @@ def test_a_hold_a_due_record_and_an_erasure_obligation_are_listed_under_the_tabl
 
     _ok(real_ns_client, "/v1/table/lance_catalog$db$src/rename", json={"new_table_name": "dst"})
 
-    assert _listed(real_ns_client, "/management/v1/promotions", "holds") == ["lance_catalog$db$dst"]
     assert _listed(real_ns_client, "/management/v1/maintenance/due", "tables") == ["lance_catalog$db$dst"]
     assert _listed(real_ns_client, "/management/v1/erasures", "obligations") == ["lance_catalog$db$dst"]
 

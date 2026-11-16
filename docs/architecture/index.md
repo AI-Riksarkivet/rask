@@ -7,7 +7,7 @@ and events across them. This section describes the system as it runs today.
 
 The **catalog** serves the Lance Namespace REST specification (`lance_docs/ns_catalog/spec.yaml`) over Lance datasets
 on S3, organised as `project > warehouse > namespace > table`. Every write enters through its namespace doors, is
-authorized on **OpenFGA**, and is governed in the catalog's write path, which is where the opt-in run rule and the publish-time quality gate
+authorized on **OpenFGA**, and is governed in the catalog's write path, which is where the opt-in run rule and a table's data contract
 live ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md),
 [ADR 0211](../adr/0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md)); how a project layers
 its data is its own vocabulary, kept as labels it defines. The catalog announces each

@@ -8,24 +8,16 @@ one accepted `branch`, answered 200, and wrote to main.
 
 WHAT IS ASSERTED
 
-1. THE PROVENANCE COLUMN (`publication.refuse_a_table_without_provenance`, ADR 0156 C9). A governed row needs
-   no column; `source_rowid` is the one column the platform names, an opt-in held to uint64 on a dataset
-   created with stable row ids, and `stage`/`lineage` are the writer's own. Five drives: `source_rowid`
-   alone publishes, the wrong width is refused, a dataset whose row ids are not stable is refused at the
-   register door it arrives through, the full tier publishes, and a plain table is untouched.
+1. A REGISTERED DATASET HAS STABLE ROW IDS. `enable_stable_row_ids` is create-time only, so a dataset made
+   without it carries row ids compaction moves; the register door refuses it before it is a table.
 
-2. GATE/PUBLISH SYMMETRY. `gate_only=true` is the ASK and a bare publish is the ACT. Both doors are
-   driven against ONE non-conforming table and must agree on status AND on the refusal text — a gate
-   that under-reports sends the promotion review an approval the act will refuse, and the reviewer has
-   no way to see it coming.
-
-3. BRANCH ISOLATION. `update`, `delete` and `schema_metadata/update` each take a branch. Each must
+2. BRANCH ISOLATION. `update`, `delete` and `schema_metadata/update` each take a branch. Each must
    leave MAIN at the version and content it had, and each must actually reach the branch. Both halves
    matter and only the pair is a proof: a route that silently no-ops passes "main is untouched" while
    losing the caller's write.
 
-4. THE READ SIDE OF THE SAME PROPERTY. `count_rows` declares `branch` too, and a door that ignores it
-   answers main's number with a 200. This section exists because driving section 3 made it visible:
+3. THE READ SIDE OF THE SAME PROPERTY. `count_rows` declares `branch` too, and a door that ignores it
+   answers main's number with a 200. This section exists because driving section 2 made it visible:
    while a branch-scoped write lands on main the two refs hold identical rows, so no read can be shown
    to be wrong. Only a genuinely diverged branch separates a read that honours the ref from one that
    does not.
@@ -52,8 +44,7 @@ drive recorded with the fix.
 ISOLATION AND CLEANUP. Each run mints its OWN tenant — project, warehouse (its own bucket) and
 namespace, all uuid-suffixed — so it shares nothing with bronze/silver/gold or any existing tenant, and
 a mid-run failure strands artefacts under one obviously-scratch name. Teardown drops the tables, then
-deletes the warehouse with its bucket, then the project. A fresh project also means NO declared
-`GateSpec`, so the gate under test is the one the request names rather than a tenant's policy.
+deletes the warehouse with its bucket, then the project.
 
 Run against the deployed release with `bash scripts/e2e_live.sh tests/e2e-py/test_track_a_acceptance.py`, which
 discovers the addresses and writes the credentials, or `make e2e-track-a` with the catalog's and the store's addresses
@@ -148,32 +139,16 @@ class Estate:
         _TABLE_IDS[location] = self.table_id(name)
         return location
 
-    def publish(self, name: str, *, version: int = 1, key_column: str = "id", gate_only: bool = False) -> requests.Response:
-        body: dict[str, Any] = {"version": version, "key_column": key_column}
-        if gate_only:
-            body["gate_only"] = True
-        return requests.post(f"{CATALOG}/management/v1/table/{self.table_id(name)}/publish", json=body, headers=_auth(), timeout=120)
-
     def branch(self, name: str, branch: str) -> None:
         r = requests.post(f"{CATALOG}/v1/table/{self.table_id(name)}/branches/create", json={"name": branch}, headers=_auth(), timeout=60)
         assert r.status_code == 200, r.text
 
 
-def _tier(rows: int = 2, *, source_rowid_type: pa.DataType | None = None) -> pa.Table:
-    """A conforming governed table: the identity column, the writer's `stage` and `lineage`, and `source_rowid`.
-
-    `source_rowid` defaults to the width Lance's own stable row id uses; the wrong-width drive names
-    int64 explicitly, because that is the whole content of the case it asserts.
-    """
+def _rows(rows: int = 2) -> pa.Table:
     return pa.table(
         {
             "id": pa.array([f"row-{i}" for i in range(rows)], pa.string()),
             "payload": pa.array([f"payload-{i}" for i in range(rows)], pa.string()),
-            "stage": pa.array(["silver"] * rows, pa.string()),
-            # JSONB is the provenance column's type for this column — the publish door refuses a string,
-            # because the platform's JSON scalar index over `lineage -> run_id` cannot be built on one.
-            "lineage": pa.array(['{"run_id": "run-track-a"}'] * rows, pa.string()).cast(pa.json_()),
-            "source_rowid": pa.array(list(range(rows)), source_rowid_type or pa.uint64()),
         }
     )
 
@@ -259,48 +234,19 @@ def estate() -> Iterator[Estate]:
         requests.delete(f"{CATALOG}/management/v1/projects/{live.project}", headers=_auth(), timeout=60)
 
 
-# --- 1. the provenance column --------------------------------------------------------------------
-
-
-def test_a_source_rowid_without_stage_or_lineage_publishes(estate: Estate) -> None:
-    """`source_rowid` is an opt-in that stands on its own: the door holds its width and nothing beside it.
-
-    `stage` and `lineage` are the writer's columns (ADR 0156 C9), so a table carrying only the parent-row
-    column is a conforming tier, and refusing it would make the platform name a workload-shaped schema.
-    """
-    estate.create("rowid_only", pa.table({"id": pa.array(["a"], pa.string()), "source_rowid": pa.array([0], pa.uint64())}))
-
-    response = estate.publish("rowid_only")
-
-    assert response.status_code == 200, response.text
-    assert response.json()["published"] is True, response.text
-
-
-def test_a_tier_whose_source_rowid_is_the_wrong_width_cannot_publish(estate: Estate) -> None:
-    """An int64 `source_rowid` is a DIFFERENT column wearing the right name.
-
-    The failure a reader is least likely to see: present, non-null, and passing every count-based check,
-    while Lance's own stable row id is uint64 — so the values are not the ids they claim to be.
-    """
-    estate.create("wrong_width", _tier(source_rowid_type=pa.int64()))
-
-    response = estate.publish("wrong_width")
-
-    assert response.status_code == 400, response.text
-    assert "not uint64" in response.json()["detail"], response.text
+# --- 1. a registered dataset has stable row ids ------------------------------------------------
 
 
 def test_a_dataset_without_stable_row_ids_cannot_be_registered(estate: Estate) -> None:
-    """The half the columns cannot show, and the only leg that needs a hand-written dataset.
+    """The only leg that needs a hand-written dataset.
 
-    `enable_stable_row_ids` is CREATE-TIME ONLY, so a dataset made without it carries a perfectly
-    well-typed `source_rowid` whose values do not survive compaction. The catalog's own create door always
-    sets the flag, so such a dataset arrives only through `register` — the door that attaches bytes somebody
-    else wrote — and that door refuses it before it is a table anyone could publish.
+    `enable_stable_row_ids` is CREATE-TIME ONLY, so a dataset made without it holds row ids that are physical
+    addresses compaction moves. The catalog's own create door always sets the flag, so such a dataset arrives only
+    through `register`, the door that attaches bytes somebody else wrote, and that door refuses it.
     """
     name = f"unstable_{uuid.uuid4().hex[:6]}"
     unstable = store_options(S3_ENDPOINT).in_clear()
-    lance.write_dataset(_tier(), f"s3://{estate.warehouse}/{name}", storage_options=unstable, enable_stable_row_ids=False)
+    lance.write_dataset(_rows(), f"s3://{estate.warehouse}/{name}", storage_options=unstable, enable_stable_row_ids=False)
     # A RELATIVE location: `register_table` refuses an absolute URI, because a registration that could name
     # any bucket would attach storage the namespace does not own.
     registered = requests.post(f"{CATALOG}/v1/table/{estate.table_id(name)}/register", json={"location": name}, headers=_auth(), timeout=120)
@@ -309,84 +255,7 @@ def test_a_dataset_without_stable_row_ids_cannot_be_registered(estate: Estate) -
     assert "without stable row ids" in registered.json()["detail"], registered.text
 
 
-def test_a_conforming_tier_publishes(estate: Estate) -> None:
-    """The contract must not refuse the shape it exists to require — the half that makes the other three honest."""
-    estate.create("conforming", _tier())
-
-    response = estate.publish("conforming")
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["published"] is True, body
-    assert body["to_version"] == 1, body
-    # The gate the REQUEST named governed, not a tenant's declaration: the scratch project declares none.
-    assert body["gate_source"] == "request", body
-
-
-def test_a_plain_table_is_untouched_by_the_tier_contract(estate: Estate) -> None:
-    """A table without `source_rowid` carries no provenance column and publishes on its gate alone.
-
-    The rule is opt-in by column, and this is what makes it safe to enforce at a door every writer passes:
-    a registered external dataset or a user's own table that carries no `source_rowid` is left alone.
-    """
-    estate.create("plain", pa.table({"id": pa.array(["a", "b"], pa.string()), "text": pa.array(["one", "two"], pa.string())}))
-
-    response = estate.publish("plain")
-
-    assert response.status_code == 200, response.text
-    assert response.json()["published"] is True, response.text
-
-
-# --- 2. gate/publish symmetry ------------------------------------------------------------------
-
-
-def test_the_gate_refuses_exactly_what_the_publish_refuses(estate: Estate) -> None:
-    """One non-conforming table, both doors, and the answers must be identical.
-
-    The ASK and the ACT are separate endpoints so the promotion review can decide before promoting. That
-    only works if they answer the same question: a gate that reported a pass on a table the publish will
-    refuse hands the reviewer an approval that cannot be executed, and the reviewer cannot see it coming.
-    The refusal TEXT is compared too, not merely the status — two 400s for different reasons would still
-    be a disagreement.
-    """
-    estate.create("symmetry", _tier(source_rowid_type=pa.int64()))
-
-    ask = estate.publish("symmetry", gate_only=True)
-    act = estate.publish("symmetry")
-
-    assert ask.status_code == act.status_code == 400, (ask.text, act.text)
-    assert ask.json()["detail"] == act.json()["detail"], (ask.text, act.text)
-    assert "not uint64" in ask.json()["detail"], ask.text
-    # And the ASK stayed an ask: a refused gate must not have moved the pointer on its way to the 400.
-    tag = requests.post(f"{CATALOG}/v1/table/{estate.table_id('symmetry')}/tags/list", json={}, headers=_auth(), timeout=60)
-    assert tag.status_code == 200, tag.text
-    assert "published" not in tag.json().get("tags", {}), tag.text
-
-
-def test_the_gate_agrees_with_the_publish_on_a_conforming_tier(estate: Estate) -> None:
-    """Symmetry has to hold in the PASSING direction too, or the ask is useless rather than dangerous.
-
-    A gate that refused what the publish accepts would stall every promotion review on a table that is
-    fine — the same disagreement, costing availability instead of correctness.
-    """
-    estate.create("symmetry_ok", _tier())
-
-    ask = estate.publish("symmetry_ok", gate_only=True)
-
-    assert ask.status_code == 200, ask.text
-    body = ask.json()
-    # A verdict, never a write: `published` is false on this path whatever the assertions say.
-    assert body["published"] is False, body
-    assert body["reason"] is None, body
-    assert body["assertions"], f"the gate judged no assertion, so its pass says nothing: {body}"
-    assert all(a["success"] for a in body["assertions"]), body
-
-    act = estate.publish("symmetry_ok")
-    assert act.status_code == 200, act.text
-    assert act.json()["published"] is True, act.text
-
-
-# --- 3. branch isolation -----------------------------------------------------------------------
+# --- 2. branch isolation -----------------------------------------------------------------------
 
 
 def test_a_branch_scoped_update_leaves_main_untouched(estate: Estate) -> None:
@@ -482,7 +351,7 @@ def test_a_branch_scoped_schema_metadata_update_leaves_main_untouched(estate: Es
     assert branch_meta.get("second") == "2", branch_meta
 
 
-# --- 4. the read side of branch isolation ------------------------------------------------------
+# --- 3. the read side of branch isolation ------------------------------------------------------
 #
 # Found by driving this suite, not by reading it: with the write half correct, main and the branch
 # genuinely differ, and only then can a read that ignores `branch` be told apart from one that honours it.

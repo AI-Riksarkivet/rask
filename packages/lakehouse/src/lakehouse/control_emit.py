@@ -135,7 +135,7 @@ class BusControlEmitter:
                 "refused or timed out) or `unsigned` (this service's signing key is unresolved, or it cannot sign "
                 "the event at all). The change ITSELF still happened and is audited. Whether anything is "
                 "lost depends on the consumer: a console ring buffer or a tag-polling reader loses only a refresh "
-                "hint, but a pipeline whose next stage wakes on `table_published` "
+                "hint, but a pipeline whose next step wakes on a control event (a tag's move, say) "
                 "and does NOT poll loses that hop outright. When an outbox is "
                 "configured a failed publish stays STAGED and its relay delivers it. An `unsigned` event is never "
                 "staged, whatever the configuration, and the service reports itself not ready meanwhile; so a rising "

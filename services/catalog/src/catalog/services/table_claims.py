@@ -36,7 +36,7 @@ from pydantic import BaseModel
 
 from catalog.core.config import Settings
 from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_unchecked
-from catalog.services import native
+from catalog.services import contracts, native
 from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
 from lakehouse.base_refs import decoded_path
@@ -385,6 +385,18 @@ class DoorTable:
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
         file_identities.record(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), committed)
+
+    def contract(self) -> contracts.Contract | None:
+        """The data contract the table holds (ADR 0212), read off the control root its claim is kept on; ``None`` for a
+        table holding none.
+
+        Raises:
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+            ServiceUnavailableError: The store did not answer the read.
+            InternalError: The record is there and is not a contract.
+        """
+        record = contracts.held(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid())
+        return record.contract() if record is not None else None
 
     def forget_committed_files(self, transaction_uuid: str) -> None:
         """Delete the record of what the commit of ``transaction_uuid`` added, a commit that did not land ([[LH-564]]).

@@ -6,7 +6,7 @@ description: "Index of rask's lakehouse documentation: the catalog, write govern
 # Lakehouse platform
 
 The lakehouse is the catalog (Lance Namespace REST over Lance tables), the write governance in
-its write path (the run rule, labels, the quality gate), lineage, authorization, maintenance and the events they emit. Compute, ingest and orchestration are the
+its write path (the run rule, labels, a table's data contract), lineage, authorization, maintenance and the events they emit. Compute, ingest and orchestration are the
 user's ([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md),
 [ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)). The rulings behind it are the
 [decision records](../adr/README.md).
@@ -19,7 +19,7 @@ The load-bearing records, in reading order:
 - [End-to-End Flow](../FLOW.md) — what happens to a write, in order
 - [Data Contract](../DATA-CONTRACT.md) — what it is, how it is enforced
 - [Decisions](../adr/README.md) — consolidated architecture decisions
-- [Write Governance](../WRITE-GOVERNANCE.md) — the run rule, labels and the quality gate, in the catalog's write path
+- [Write Governance](../WRITE-GOVERNANCE.md) — the run rule, labels and a table's data contract, in the catalog's write path
 - [Lineage](../LINEAGE.md) — OpenLineage intake, the commit feed and the edge list, forwarded to a graph backend
 - [Authorization](../AUTHZ.md) — who can see and do what in the console
 - [DuckDB Access](../DUCKDB.md) — querying governed tables from DuckDB

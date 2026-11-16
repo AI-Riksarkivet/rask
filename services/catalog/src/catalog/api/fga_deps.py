@@ -164,7 +164,7 @@ _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
 # branch is a parameter of a table operation, so ``insert``, ``merge_insert`` and a write vend naming one ask
 # ``can_write_data`` on the table as on main. ``tags/create`` / ``tags/update`` re-point the
 # ref-plane and are privileged too — above the writer rung, since moving a named pointer is no data
-# write — but they resolve through ``owner or publisher`` rather than
+# write — but they resolve through ``owner or tagger`` rather than
 # ``owner`` alone (owner ruling 2026-09-10). A tag is a NAMED POINTER at a version that already exists,
 # so blessing one destroys nothing, and welding that to ownership is what forced every pipeline identity
 # to hold ``owner`` on every tenant. Their ``*/list`` / ``*/version`` siblings are reads, resolved on the
@@ -190,10 +190,8 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "branches/delete": "can_drop",
         "tags/create": "can_create_tag",
         "tags/update": "can_update_tag",
-        # DELETE completes the tag lifecycle, and it clears the owner bar because at the writer rung a plain
-        # data writer could remove the pin that `published` is —
-        # and then defeat the owner-tier rollback guard, since publication refuses to move `published`
-        # BACKWARDS but has nothing to say about republishing after the tag is gone.
+        # DELETE completes the tag lifecycle, and it clears the owner bar because a tag pins its version against
+        # cleanup: at the writer rung a plain data writer could remove the pin a reader's `stable` is.
         #
         # `can_drop` rather than a new relation: the bar it has to clear is the one already carried by
         # `maintenance/run`, which reclaims version history and EXEMPTS tagged versions. The door that
@@ -270,17 +268,10 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "labels/remove": "can_label",
         # #75 undrop RESTORES the object into its namespace — the same authority as removing it.
         "undrop": "can_drop",
-        # Publication ADVANCES the `published` tag, so it clears the same bar as `tags/update` — the
-        # rung that already exists for re-pointing the ref plane. Anything lower would make `publish`
-        # a way for a plain data writer to move a tag they are not allowed to move directly, which is
-        # the escalation the ref-plane rungs exist to close. The quality gate is orthogonal: it
-        # decides whether the DATA may be published, this decides whether the CALLER may.
-        "publish": "can_update_tag",
-        # The tag gate's answer (ADR 0156 C1, [[LH-466]]): approving a held version moves `published` past the
-        # project's gate, and rejecting it restores main. Both are the VALIDATOR's act, a rung no writer or
-        # publisher holds, so a writer cannot approve its own held version (ADR 0160).
-        "promotion/approve": "can_promote",
-        "promotion/reject": "can_promote",
+        # A table's data contract (ADR 0212) decides what its commits may do to its schema, so setting or deleting one
+        # is the owner's act; its own relation so the trail tells it from a drop. Reading it is a metadata read.
+        "contract/set": "can_set_contract",
+        "contract/delete": "can_set_contract",
     },
     "namespace": {
         "drop": "can_delete",
@@ -768,7 +759,7 @@ async def _authorize_grant(
     the owner who delegated to them" — true of ``owner``, and false of everything at or below the
     delegate's own rung. ``can_grant_reader`` is ``manage_grants or (reader and pass_grants)``, so
     kevin (``writer`` + ``pass_grants``, the fixture's "delegate and no more") could DELETE carol's
-    reader tuple, and every other reader/writer/validator tuple on the object including the owner's.
+    reader tuple, and every other reader/writer tuple on the object including the owner's.
     Revoke goes to ``can_revoke_grant``, which every type the door serves defines stricter than its grants:
     ``manage_grants`` alone on a table or a namespace, ``curator`` alone on a classification label.
 
@@ -850,7 +841,7 @@ async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: ob
     if resolved != subject:
         if "#" not in resolved:
             return  # a plain grant to somebody else
-        # A USERSET. `role:validators#assignee` names everyone holding `assignee` on that role, so a
+        # A USERSET. `role:stewards#assignee` names everyone holding `assignee` on that role, so a
         # caller already inside it is granting themselves by indirection. One check, and only on the
         # userset path — the common case costs nothing.
         userset_object, _, userset_relation = resolved.partition("#")
@@ -2505,7 +2496,7 @@ async def revoke_ownership(client: OpenFgaClient | None, settings: Settings, *, 
     """Delete every FGA tuple on ``obj``, a just-dropped object (the revoke counterpart of :func:`seed_ownership`).
 
     No-op when FGA is off or the client is unwired — so lifecycle endpoints call it with one line.
-    Removes the owner grant, the ``parent`` edge, AND any later reader/writer/validator grants. Needs no token: the
+    Removes the owner grant, the ``parent`` edge, AND any later reader or writer grants. Needs no token: the
     mutation was already authorized by :func:`authorize`, and the cleanup deletes every subject's tuple regardless of
     who.
 

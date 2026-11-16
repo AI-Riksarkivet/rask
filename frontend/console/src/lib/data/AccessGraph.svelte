@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	// #81 Authorization graph — an interactive relationship explorer for a table's OpenFGA grants, the
 	// visual upgrade of the #68 who-can-do-what form. One hop: the focus object, every subject directly
-	// granted a rung (edges subject→object labelled owner/writer/reader/validator), and the parent/project
+	// granted a rung (edges subject→object labelled owner/writer/reader), and the parent/project
 	// container edge. Click a subject to prefill the grant form; grant/revoke re-fetches so the graph
 	// reflects the change. SvelteFlow (reusing the LineageExplorer pattern) + @rask/ui Select + GSAP.
 	import AccessNode, { type AccessNodeType } from '#lib/data/AccessNode.svelte';

@@ -8,7 +8,7 @@ also carries the catalog's lifecycle markers, and maps each event to at most one
 * A **write** or a **registration** holds its table's pass a delay out (``MAINTENANCE_COMMIT_PASS_DELAY_SECONDS``), unless
   one is held already, which covers it (:meth:`maintenance.services.queue.TaskQueue.follow_up`): a burst of commits makes
   one pass, at most one per delay, and that pass reads the table after every commit it covers. A create is announced as a
-  write, and so is a publication's tag move. A registration (``register_table``, which both undrop doors send too) waits
+  write. A registration (``register_table``, which both undrop doors send too) waits
   the same delay, which an undrop needs: it announces the table before it clears the trash record, and a pass that read
   the record in between would end the table's schedule.
 * A **drop** (``drop_table``) queues the trash task of the table's uuid (:mod:`maintenance.services.trash_task`), which

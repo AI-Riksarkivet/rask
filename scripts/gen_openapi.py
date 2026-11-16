@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Generate the committed OpenAPI specs for the REST services from their live FastAPI apps.
 
-The catalog + lineage REST surfaces — including every net-new endpoint (model promotion, warehouse admin,
+The catalog + lineage REST surfaces — including every net-new endpoint (warehouse admin,
 client-direct commit, materialized views, …) — are defined by the code, not a hand-written spec. This dumps
 FastAPI's generated OpenAPI to ``docs/<service>-openapi.json`` so there is one canonical, reviewable spec of
 what we actually serve, and CI fails if it drifts from the routes (``make openapi`` regenerates; the CI step

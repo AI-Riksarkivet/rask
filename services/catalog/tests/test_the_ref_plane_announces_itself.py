@@ -1,9 +1,8 @@
 """Every branch and tag MUTATION announces itself on the control lane; the reads stay silent.
 
-[[LH-056]]. The ref plane is where `published` lives, and `table_published` already announced that one
-tag moving. The other five ref mutations moved in silence: a console holding a branch or tag list had
-no way to learn one appeared, moved or vanished, and a reader that polls discovers a deleted tag by a
-failing read.
+[[LH-056]]. A tag is how a pipeline marks a version ready and a branch is where it stages work, so each of the five
+ref mutations is announced: a console holding a branch or tag list learns one appeared, moved or vanished, and a
+reader of a tag need not discover its move by polling.
 
 UNTARGETED: a control event names a person to tell when it changes what a specific person may do or
 must do, not when it changes an object. A branch or tag is an object, so these five name nobody -- they
@@ -134,9 +133,7 @@ def test_a_tag_mutation_announces_itself_including_the_MOVE(app: FastAPI, emitte
         assert client.post(f"/v1/table/{TABLE_PATH}/tags/update", json={"id": TABLE, "tag": "ready", "version": 1}).status_code == 200
         assert client.post(f"/v1/table/{TABLE_PATH}/tags/delete", json={"id": TABLE, "tag": "ready"}).status_code == 200
 
-    assert _actions(emitted) == ["table_tag_created", "table_tag_updated", "table_tag_deleted"], (
-        f"a tag moved with no control event; `table_published` is the only ref mutation anyone hears: {emitted}"
-    )
+    assert _actions(emitted) == ["table_tag_created", "table_tag_updated", "table_tag_deleted"], f"a tag moved with no control event: {emitted}"
 
 
 def test_a_READ_of_the_ref_plane_stays_SILENT(app: FastAPI, emitted: list[dict[str, Any]]) -> None:

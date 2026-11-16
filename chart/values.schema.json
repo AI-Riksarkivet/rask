@@ -269,7 +269,7 @@
                     "type": "object",
                     "properties": {
                         "enabled": {
-                            "description": "Stage control events in a durable S3 outbox and run the relay timer that drains it; carries `table_published` to its subscribers. Requires `controlEmit`.",
+                            "description": "Stage control events in a durable S3 outbox and run the relay timer that drains it. Requires `controlEmit`.",
                             "type": "boolean"
                         },
                         "periodSeconds": {
@@ -361,16 +361,6 @@
                         "dataBases": {
                             "description": "Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates.",
                             "type": "array"
-                        }
-                    }
-                },
-                "promotion": {
-                    "type": "object",
-                    "properties": {
-                        "expiryPeriodSeconds": {
-                            "description": "Seconds between two ticks of the timer that expires promotion holds past their review deadline (`LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS`); lateness only costs time.",
-                            "type": "integer",
-                            "minimum": 1
                         }
                     }
                 },

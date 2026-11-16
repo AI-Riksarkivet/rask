@@ -55,7 +55,7 @@ reclaim here has been checked against is not cleaned.
        [[LH-332]], ADR 0183)
 
 **A DERIVED TABLE IS NAMED, NEVER JUDGED** (owner, 2026-10-20, ADR 0178). A run that read this table wrote its rows into
-another, under columns of that table's own, or only as the `source_rowid` of this one's stable row ids
+another, under columns of that table's own, or only as a column holding this one's stable row ids
 (`lance_docs/lance/format/table/row_id_lineage.md` "Stable Row ID"), so this predicate proves nothing about it. Each table
 derived from this one, one whose run declared it or a table derived from it among its inputs (ADR 0183), is a
 `derived:<uuid>` surface, open until whoever may erase that table records an obligation following this one with a

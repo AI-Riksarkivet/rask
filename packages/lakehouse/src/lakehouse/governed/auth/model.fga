@@ -5,7 +5,7 @@ model
 #
 # Hierarchy:  project -> warehouse(= one S3 bucket) -> namespace (self-nesting) -> table
 #   the estate's containment rule end to end, with lance's
-#   concentric-rung style (owner > writer > reader) layered on top, plus a `validator` rung.
+#   concentric-rung style (owner > writer > reader) layered on top.
 #   `materialized_view` hangs off namespace/warehouse and inherits the SAME rungs via `parent`, so a grant on the
 #   enclosing namespace reaches the views inside it. A transaction is no object: its id names its table, and both
 #   transaction doors are asked on that table ([[LH-221]]).
@@ -14,9 +14,7 @@ model
 #   that imply it and what flows down from the parent, and no `can_*` reads a bare data rung. `visible_below` reads the bare
 #   names alone and recurses downward, so upward visibility never asks a descendant about its parents ([[LH-222]]).
 #   `CHANGELOG.md` beside this file says, per change, whether a store's tuples are added to or rewritten.
-# Privileges: concentric rungs cascade DOWN via `parent` / `project`. A SEPARATE `validator` rung decides a
-#   held PROMOTION (a published version the project's quality gate held for review): a plain writer can write a
-#   table but cannot approve its held version; only an owner or an explicit validator can (`can_promote: validator`).
+# Privileges: concentric rungs cascade DOWN via `parent` / `project`.
 # Multi-tenancy: each project is a tenant holding its warehouses (buckets). Projects are isolated — a grant
 #   on project A's warehouse never reaches project B, and a role of project B is granted nothing in A.
 # Permissions: every API operation is checked against a `can_*` ACTION relation (the model, not the app,
@@ -256,9 +254,6 @@ type warehouse
     define writer_effective: writer or owner_effective
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define reader_effective: reader or writer_effective
-    # A warehouse-level validator validates EVERY namespace below it.
-    define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
-    define validator_effective: validator or owner_effective
     # THE MAINTENANCE IDENTITY, the platform's own: the catalog writes it for `LANCE_FGA_MAINTAINERS` at warehouse
     # create and backfill, no grant door hands it out, and it alone opens the maintain storage tier
     # (`table.can_vend_maintain`, ADR 0156 C4). One tuple per warehouse keeps the grant enumerable.
@@ -284,18 +279,18 @@ type warehouse
     # owner, and one tuple per tenant should reach every namespace beneath it.
     define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define classifier_effective: classifier or owner_effective
-    # PUBLICATION is not ownership, and the model has to say so or a pipeline's identity needs `owner` on every
-    # tenant. Advancing the `published` ref says which version is BLESSED; it destroys nothing, forks
-    # nothing and grants nothing. `can_maintain`'s precedent, applied to the other unattended plane:
-    # a maintainer rewrites HOW a dataset is stored, a publisher moves the pointer that says which
-    # version consumers should read, and neither is a licence to drop, restore or re-grant.
+    # TAGGING A VERSION is not ownership, and the model has to say so or a pipeline's identity needs `owner` on every
+    # tenant. A tag is how a pipeline marks the version it vetted, under a name it chooses (ADR 0212); creating or
+    # moving one says which version its readers should open, and destroys nothing, forks nothing and grants nothing.
+    # `can_maintain`'s precedent, applied to the other unattended plane: a maintainer rewrites HOW a dataset is
+    # stored, a tagger moves a named pointer, and neither is a licence to drop, restore or re-grant.
     #
     # Measured 2026-09-10 before this existed: each of four pipeline identities held `owner` on 95
-    # warehouses, bought for the single `publish` door, since `can_update_tag` had no rung below owner.
+    # warehouses, since `can_update_tag` had no rung below owner.
     # Granted at the WAREHOUSE for the same reason the maintainer is: one tuple per tenant reaches
-    # every namespace and every table beneath it, so a publisher's reach stays enumerable.
-    define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
-    define publisher_effective: publisher or owner_effective
+    # every namespace and every table beneath it, so a tagger's reach stays enumerable.
+    define tagger: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
+    define tagger_effective: tagger or owner_effective
     # The decision scope ([[LH-563]], see `project`), granted on this warehouse alone by whoever manages its grants.
     define decider: [user]
     define can_decide_access: decider or can_decide_access from project
@@ -357,9 +352,9 @@ type warehouse
     # MANAGED ACCESS WITHDRAWS THIS TOO, and it did not until 2026-08-16. Withdrawing it from
     # `manage_grants` alone left the whole control bypassable: `can_grant_reader` is
     # `manage_grants or (reader and pass_grants)`, so an owner who ALSO held the grant option kept
-    # granting reader, writer and validator through the second branch after the first was closed.
+    # granting reader and writer through the second branch after the first was closed.
     # Measured with the real evaluator before the fix — owner + pass_grants in a managed warehouse:
-    # can_grant_owner false, and can_grant_reader/writer/validator all TRUE. Only the owner-tier
+    # can_grant_owner false, and can_grant_reader/writer both TRUE. Only the owner-tier
     # grants were ever actually withdrawn.
     #
     # The subtraction is on the ROLE rather than on each `can_grant_*`, because a `can_*` relation is
@@ -422,7 +417,6 @@ type warehouse
     define can_grant_owner: manage_grants
     define can_grant_writer: manage_grants or (writer_effective and pass_grants)
     define can_grant_reader: manage_grants or (reader_effective and pass_grants)
-    define can_grant_validator: manage_grants or (validator_effective and pass_grants)
     # Maintaining is a bring-your-own compaction's rung (ADR 0162): `version/create` admits a `ReserveFragments`
     # and a `Rewrite` only from a `maintainer`. A job's own identity is never an owner (LH-433), so it is granted
     # this rung, with the same grant option as `writer`; the maintain-tier credential stays `maintenance`'s alone.
@@ -443,7 +437,7 @@ type warehouse
     # It was, and the symmetry was wrong. `can_grant_reader` is `manage_grants or (reader and
     # pass_grants)`, so routing revoke at it let a DELEGATE strip grants they never issued: kevin,
     # holding `writer` + `pass_grants` and nothing else, could delete carol's `reader` — and every
-    # other reader/writer/validator tuple on the object, including the ones the owner issued. The old
+    # other reader/writer tuple on the object, including the ones the owner issued. The old
     # rule's stated justification ("a weaker revoke bar would let a delegate strip the owner who
     # delegated to them") is satisfied only for `owner`; at and below the delegate's own rung it was
     # not satisfied at all.
@@ -474,10 +468,6 @@ type namespace
     define writer_effective: writer or owner_effective or writer_effective from parent
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define reader_effective: reader or writer_effective or reader_effective from parent
-    # The validator rung is SEPARATE from writer — a writer is NOT a validator. Inherits from the parent
-    # so a warehouse/parent validator validates this namespace.
-    define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
-    define validator_effective: validator or owner_effective or validator_effective from parent
     # The maintainer rung is SEPARATE from writer IN BOTH DIRECTIONS, which is the whole point of it.
     # A writer is not a maintainer, and — the half that matters — a MAINTAINER IS NOT A WRITER: the
     # sweep may rewrite a dataset's files and reclaim its versions, and may not change what the data
@@ -492,10 +482,10 @@ type namespace
     define classifier_effective: classifier or owner_effective or classifier_effective from parent
     # Labelling a table this namespace holds; asked where the table is not made yet, a create carrying a label ([[LH-207]]).
     define can_classify: classifier_effective
-    # Publication, inherited — see the `warehouse` rung. A publisher here may bless a version of any
+    # Tagging, inherited — see the `warehouse` rung. A tagger here may tag a version of any
     # table in this namespace without being able to destroy one.
-    define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
-    define publisher_effective: publisher or owner_effective or publisher_effective from parent
+    define tagger: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
+    define tagger_effective: tagger or owner_effective or tagger_effective from parent
     # ---- the GRANT axis ---- (see `warehouse` for why it is separate from the rungs above)
     # Managed access, inherited: setting the flag on the warehouse governs every namespace beneath it, and
     # a namespace may also set it for itself. The recursion is what makes "manage this collection centrally"
@@ -541,7 +531,6 @@ type namespace
     # owner still grants ON it where only its own flag is set, and so accepts into it.
     define can_accept_moved_table: (writer_effective but not managed_access_inheritance) or (manage_grants and writer_effective)
     define can_update_properties: writer_effective
-    define can_promote: validator_effective
     define can_delete: owner_effective
     # Arming or disarming deletion protection on a namespace — the table rung's twin, one level up, and
     # at the same tier as the `can_delete` it guards. See `type table`'s `can_set_protection` for why a
@@ -553,7 +542,6 @@ type namespace
     define can_grant_owner: manage_grants
     define can_grant_writer: manage_grants or (writer_effective and pass_grants)
     define can_grant_reader: manage_grants or (reader_effective and pass_grants)
-    define can_grant_validator: manage_grants or (validator_effective and pass_grants)
     define can_grant_maintainer: manage_grants or (maintainer_effective and pass_grants)
     # The same tier as its three neighbours, and at the SAME level as the rung it confers:
     # `classifier` cascades `... from parent`, so a tenant grant made here reaches every table
@@ -566,7 +554,7 @@ type namespace
     # It was, and the symmetry was wrong. `can_grant_reader` is `manage_grants or (reader and
     # pass_grants)`, so routing revoke at it let a DELEGATE strip grants they never issued: kevin,
     # holding `writer` + `pass_grants` and nothing else, could delete carol's `reader` — and every
-    # other reader/writer/validator tuple on the object, including the ones the owner issued. The old
+    # other reader/writer tuple on the object, including the ones the owner issued. The old
     # rule's stated justification ("a weaker revoke bar would let a delegate strip the owner who
     # delegated to them") is satisfied only for `owner`; at and below the delegate's own rung it was
     # not satisfied at all.
@@ -588,8 +576,6 @@ type table
     define writer_effective: writer or owner_effective or writer_effective from parent
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define reader_effective: reader or writer_effective or reader_effective from parent
-    define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
-    define validator_effective: validator or owner_effective or validator_effective from parent
     # See the namespace rung for why this is separate from `writer` in both directions.
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define maintainer_effective: maintainer or owner_effective or maintainer_effective from parent
@@ -599,10 +585,10 @@ type table
     define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define classifier_effective: classifier or owner_effective or classifier_effective from parent
     # See the `warehouse` rung. Separate from `writer` in both directions for the same reason
-    # `maintainer` is: writing a version and BLESSING one are different authorities, and a pipeline
+    # `maintainer` is: writing a version and TAGGING one are different authorities, and a pipeline
     # needs the second without the destructive half of the first's container.
-    define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
-    define publisher_effective: publisher or owner_effective or publisher_effective from parent
+    define tagger: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
+    define tagger_effective: tagger or owner_effective or tagger_effective from parent
     # ---- the GRANT axis ---- (see `warehouse`)
     # A table takes no `managed_access` of its own — the flag is a CONTAINER policy, and a per-table
     # switch would let an owner exempt their own table from the collection's rule, which is the rule's
@@ -642,7 +628,6 @@ type table
     # a table unvendable as raw bytes). `classifier`, never `writer`: the whole point is that someone may
     # label data they may not read, and that someone who may WRITE rows may not un-label it.
     define can_classify: classifier_effective
-    define can_promote: validator_effective
     define can_drop: owner_effective
     # ARMING OR DISARMING deletion protection ([[LH-055]]). A DISTINCT ACTION over the SAME effective
     # tier as the destruction it guards — the reference model's shape, and the reason it is a non-problem
@@ -665,6 +650,9 @@ type table
     # Attaching or removing a label the project defines (ADR 0211). A label grants nothing and refuses nothing, so
     # classifying the table is the owner's statement about it, at the protection's tier and under its own name.
     define can_label: owner_effective
+    # Setting or deleting the table's data contract (ADR 0212), which decides what its commits may do to its schema:
+    # the owner's act, at the protection's tier and under its own name, so the trail tells it from a drop.
+    define can_set_contract: owner_effective
     define can_deregister: owner_effective
     # MOVING A TABLE INTO ANOTHER NAMESPACE ([[LH-568]]), which a rename naming one does. It retires the name as a drop
     # does, so it is the owner's act, and the table's grants, held by its uuid, go with it, so it is a grant-management
@@ -676,34 +664,32 @@ type table
     # own, so insert, merge_insert, a write vend naming a branch and a stock client's writer operations committed on
     # one ask `can_write_data` on the table, as on main. CREATING or deleting a branch and REWINDING history (restore)
     # stay at the OWNER tier, admin-inclusive via the parent cascade and never grantable to a mere writer, because
-    # `can_restore` is DESTRUCTIVE; the tag rungs below admit an owner or a publisher.
+    # `can_restore` is DESTRUCTIVE; the tag rungs below admit an owner or a tagger.
     define can_create_branch: owner_effective
-    # THE TAG RUNGS ADMIT A PUBLISHER; `can_create_branch` and `can_restore` beside them do not, and
+    # THE TAG RUNGS ADMIT A TAGGER; `can_create_branch` and `can_restore` beside them do not, and
     # that split is the whole reason the rung exists. A tag is a NAMED POINTER at a version that
     # already exists — creating or moving one destroys nothing, forks nothing and grants nothing,
     # which is categorically unlike the two it sits between.
     #
-    # BOTH, not just the update: the catalog's `publish` door creates the `published` tag on first
-    # publication and moves it thereafter (`publication.py::_set_tag`), gating once on the path. A
-    # publisher that could only move an existing tag would be refused on every tenant's first
-    # promotion and work forever after — the worst shape a permission can have.
-    define can_create_tag: owner_effective or publisher_effective
-    define can_update_tag: owner_effective or publisher_effective
+    # BOTH, not just the update: a pipeline creates its tag the first time it marks a version and moves
+    # it thereafter. A tagger that could only move an existing tag would be refused on every table's
+    # first tagged version and work forever after — the worst shape a permission can have.
+    define can_create_tag: owner_effective or tagger_effective
+    define can_update_tag: owner_effective or tagger_effective
     define can_restore: owner_effective
     # ---- grant actions ---- (same shape as `warehouse`; see there for the reasoning)
     define can_grant_owner: manage_grants
     define can_grant_writer: manage_grants or (writer_effective and pass_grants)
     define can_grant_reader: manage_grants or (reader_effective and pass_grants)
-    define can_grant_validator: manage_grants or (validator_effective and pass_grants)
     define can_grant_maintainer: manage_grants or (maintainer_effective and pass_grants)
-    # GRANTABLE THROUGH THE API, unlike `maintainer` and `publisher` — and the difference is WHO holds it.
+    # GRANTABLE THROUGH THE API, unlike `maintainer` and `tagger` — and the difference is WHO holds it.
     # Those two are service rungs the catalog seeds; `classifier` is meant for a PERSON (a
     # data-protection officer labelling data they may not read), and a person's grant belongs on the grant
     # door rather than in a deploy. `_grant_actions` reads this set off the model, so without this line
     # the rung would be declared and reachable by owners alone — a separation of duties nobody could
     # actually delegate, which is the "configured but inert" shape the estate keeps catching.
     #
-    # Delegation admitted (`… or (classifier and pass_grants)`) exactly as `can_grant_validator` does;
+    # Delegation admitted (`… or (classifier and pass_grants)`) exactly as `can_grant_maintainer` does;
     # taking it back stays `manage_grants` alone, because revocation is administration, never delegation.
     define can_grant_classifier: manage_grants or (classifier_effective and pass_grants)
     define can_grant_manage_grants: manage_grants
@@ -712,7 +698,7 @@ type table
     # It was, and the symmetry was wrong. `can_grant_reader` is `manage_grants or (reader and
     # pass_grants)`, so routing revoke at it let a DELEGATE strip grants they never issued: kevin,
     # holding `writer` + `pass_grants` and nothing else, could delete carol's `reader` — and every
-    # other reader/writer/validator tuple on the object, including the ones the owner issued. The old
+    # other reader/writer tuple on the object, including the ones the owner issued. The old
     # rule's stated justification ("a weaker revoke bar would let a delegate strip the owner who
     # delegated to them") is satisfied only for `owner`; at and below the delegate's own rung it was
     # not satisfied at all.
@@ -812,7 +798,7 @@ type materialized_view
 # supplied by the CALLER in the check's context. That split is the whole design: the store holds the
 # window, the caller holds the clock, and neither can drift the other.
 #
-# Applied to the USE rungs only — reader / writer / validator / refresher. Deliberately NOT `owner`:
+# Applied to the USE rungs only — reader / writer / refresher. Deliberately NOT `owner`:
 # ownership is not something you lend for an hour, and a temporary owner could hand out PERMANENT access
 # to someone else before their own lapsed, which silently outlives the window. Also not the structural
 # edges (`parent`, `project`) — those are topology, not privilege, and an expiring parent would

@@ -142,7 +142,7 @@ ternary (NOT `| default`, which treats false as empty) so a key missing under
 ## `- { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }`
 
 #4 transactional outbox on the CONTROL lane + the timer that RELAYS it. A control event lost
-to a NATS blip (a grant, a `table_published`) reaches nobody — not a notifier on the control
+to a NATS blip (a grant, a tag's move) reaches nobody — not a notifier on the control
 lane, not any replica's GET /management/v1/events buffer — with every pod green. Staged here, re-published by
 `catalog/api/control_relay.py` on the catalog's `catalog-control-relay` timer.
 
@@ -161,7 +161,7 @@ outbox is, since without it there is nothing to relay.
 ## `- { name: LANCE_ERASURE_RELEASE_PERIOD_SECONDS, value: {{ required "catalog.erasure.releasePeriodSeconds is un...`
 
 The periods of the catalog's other timers (`LANCE_ERASURE_RELEASE_PERIOD_SECONDS`,
-`LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS`, `LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`,
+`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`,
 `LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS`, `LANCE_MANIFEST_RECLAIM_PERIOD_SECONDS`), each claimed per window as the
 control relay's is. Rendered whatever carries the bus: a timer needs only the object store and the catalog. Each is
 `required`, so a release upgraded with `--reuse-values` from one without them fails the render rather than running no

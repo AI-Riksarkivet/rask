@@ -2,7 +2,7 @@
 
 An erasure covers one table. A run that read it wrote rows into another table, which keeps them whatever the job does to
 this one, and the source's predicate cannot judge that table: it may keep the subject under columns of its own, or only
-as the ``source_rowid`` of the source's stable row ids (`lance_docs/lance/format/table/row_id_lineage.md` "Stable Row ID").
+as a column holding the source's stable row ids (`lance_docs/lance/format/table/row_id_lineage.md` "Stable Row ID").
 So the verification names every table derived from the erased one and holds the obligation open until whoever may erase
 each records an obligation following it, with a predicate of its own (owner, 2026-10-20, ADR 0178).
 

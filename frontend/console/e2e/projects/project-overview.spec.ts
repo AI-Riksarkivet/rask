@@ -66,7 +66,7 @@ test('each warehouse row links to its catalog page', async ({ page }) => {
 	await expect(back).toHaveAttribute('href', '/projects');
 	// …and the catalog's lists open filtered to this project, the filter in the URL.
 	const lists = page.getByRole('navigation', { name: 'This project in the catalog' });
-	for (const list of ['warehouses', 'namespaces', 'tables', 'promotions']) {
+	for (const list of ['warehouses', 'namespaces', 'tables']) {
 		await expect(lists.locator(`a[href="/catalog/${list}?project=acme"]`)).toBeVisible();
 	}
 });

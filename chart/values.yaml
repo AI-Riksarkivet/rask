@@ -664,9 +664,9 @@ catalog:
   # reads; a relay without staging drains an empty prefix.
   #
   # Why the control lane needs durability at all, when the events are documented as refresh hints: most
-  # of them are, and `table_published` is not: a subscriber that acts on a publication learns of it only
-  # from this lane, so a lost event is a publication nobody downstream ever hears of. A 5s publish timeout
-  # during a NATS blip lost such an event outright with every pod green.
+  # of them are, and a tag's move is not: a pipeline that starts its next step when a table's `stable` tag moves
+  # learns of it only from this lane, so a lost event is a version nobody downstream ever hears of. A 5s publish
+  # timeout during a NATS blip lost such an event outright with every pod green.
   #
   # THE PREFIX MUST DIFFER FROM `_lineage_outbox`. Lineage's relay parses every object in its
   # own prefix as an OpenLineage RunEvent and DELETES what it cannot parse, so pointing this lane at
@@ -676,7 +676,7 @@ catalog:
   # Cost is one S3 PUT + DELETE per catalog MUTATION (not per row) against the already-provisioned
   # objectStore.bucket. Requires catalog.controlEmit (nothing stages when emission is off).
   controlOutbox:
-    # -- Stage control events in a durable S3 outbox and run the relay timer that drains it; carries `table_published` to its subscribers. Requires `controlEmit`.
+    # -- Stage control events in a durable S3 outbox and run the relay timer that drains it. Requires `controlEmit`.
     enabled: true
     # Bounds how long a control event stays undelivered after a bus outage. Tighter than the commit reconcile
     # because that one re-reads Lance manifests estate-wide while this one is a LIST over a prefix that
@@ -697,12 +697,6 @@ catalog:
     # How late a due release may run; late costs only time, so this is loose.
     # -- Seconds between two ticks of the timer that runs due erasure pin releases (`LANCE_ERASURE_RELEASE_PERIOD_SECONDS`); lateness only costs time.
     releasePeriodSeconds: 300 # @schema type: integer; minimum: 1
-  # ADR 0156 C1 (LH-466): a publish the project's quality gate holds waits for a can_promote holder until the
-  # project's declared review_hours pass; this timer expires the holds nobody answered, and `published` stays.
-  promotion:
-    # A tick lists the open holds, an empty prefix in the healthy case, so it is cheap at this cadence.
-    # -- Seconds between two ticks of the timer that expires promotion holds past their review deadline (`LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS`); lateness only costs time.
-    expiryPeriodSeconds: 60 # @schema type: integer; minimum: 1
   # LH-497: the commit is the outbox. A write's announcement is made after its commit, and a crash between the commit
   # and the staging of its event loses it; this timer reads each table's version log after its mark and announces every
   # committed version lineage's feed lacks, under the run id derived from the commit, and pages on each find.

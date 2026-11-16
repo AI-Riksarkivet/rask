@@ -377,8 +377,8 @@ def _versions_due(result: DatasetResult, policy: ExpiryPolicy) -> bool:
 def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
     """Reclaim superseded versions once enough are reclaimable; tagged versions are EXEMPT.
 
-    ``error_if_tagged_old_versions=False``: the default RAISES once any tag ages past ``older_than``, and the catalog's
-    long-lived ``published`` tag would then stall reclamation on that dataset forever. Each transaction file the cleanup
+    ``error_if_tagged_old_versions=False``: the default RAISES once any tag ages past ``older_than``, and a table's
+    long-lived tag (a pipeline's ``stable``) would then stall reclamation on that dataset forever. Each transaction file the cleanup
     removes is recorded under the vend ([[LH-232]]); Lance records the rest itself.
     """
     if not _versions_due(result, policy):

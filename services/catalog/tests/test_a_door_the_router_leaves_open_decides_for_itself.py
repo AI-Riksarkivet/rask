@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from abc import abstractmethod
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -42,7 +42,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import get_fga_client
 from catalog.api.security import authenticate
 from catalog.core.config import get_settings
-from catalog.services import promotions, warehouses
+from catalog.services import warehouses
 from lakehouse import maintenance_due
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
@@ -203,9 +203,6 @@ _DOORS: list[_Door] = [
         method="POST", route="/management/v1/projects/{id}/labels/define", params={"id": PROJECT}, body={"name": "pii", "scope": ["table"], "kind": "marker"}
     ),
     _Refusing(method="POST", route="/management/v1/projects/{id}/labels/{name}/delete", params={"id": PROJECT, "name": "pii"}),
-    _Refusing(method="POST", route="/management/v1/project/{id}/gate/set", params={"id": PROJECT}, body={}),
-    _Refusing(method="POST", route="/management/v1/project/{id}/gate/describe", params={"id": PROJECT}),
-    _Refusing(method="POST", route="/management/v1/project/{id}/gate/delete", params={"id": PROJECT}),
     # A warehouse's doors.
     _Refusing(method="POST", route="/management/v1/warehouses", body={"id": "wh-rival", "project": PROJECT}),
     _Refusing(method="GET", route="/management/v1/warehouses/{warehouse_id}", params={"warehouse_id": WAREHOUSE}),
@@ -255,7 +252,6 @@ _DOORS: list[_Door] = [
     _Listing(method="GET", route="/v1/table", shown={"tables": []}),
     _Listing(method="GET", route="/management/v1/erasures", shown={"obligations": [], "page_token": None}),
     _Listing(method="GET", route="/management/v1/maintenance/due", shown={"tables": [], "page_token": None}),
-    _Listing(method="GET", route="/management/v1/promotions", shown={"holds": [], "page_token": None}),
 ]
 
 #: The route that answers its caller about themself, which no grant decides.
@@ -295,8 +291,7 @@ def estate(request: pytest.FixtureRequest) -> Any:
     alice owns the estate, as the catalog's declaration grants it, and makes ``acme``, the two namespaces in its
     warehouse, a table in one, an erasure obligation on that table and bob's grant on the other namespace through the
     doors. What no door on a ``dir`` estate makes is written where its writer keeps it: the warehouse's record, its row in
-    its root's catalog and its project edge (its door provisions a bucket and probes the store), maintenance's due record and a promotion hold (written by a
-    publish a review gate holds).
+    its root's catalog and its project edge (its door provisions a bucket and probes the store), and maintenance's due record.
     """
     catalog = request.getfixturevalue("governed_catalog")
     client, alice = catalog.client, catalog.bearer("alice")
@@ -316,18 +311,6 @@ def estate(request: pytest.FixtureRequest) -> Any:
     assert obliged.status_code == 202, obliged.text
     described = _ok(client.post(f"/v1/table/{TABLE}/describe", json={}, headers=alice)).json()
     uuid, location = described["properties"]["rask.uuid"], described["location"]
-    held = promotions.Hold(
-        table=TABLE,
-        uuid=uuid,
-        location=location,
-        version=1,
-        published_version=None,
-        reasons=["row_count_delta"],
-        requested_by=None,
-        opened_at=now,
-        expires_at=now + timedelta(days=1),
-    )
-    promotions.open_hold(root, so, held)
     compaction = CompactionDue(fragments=4, candidate_fragments=4, tasks=1)
     maintenance_due.write_due(root, so, DueRecord(table=TABLE, uuid=uuid, location=location, version=1, compaction=compaction, evaluated_at=now))
     return catalog

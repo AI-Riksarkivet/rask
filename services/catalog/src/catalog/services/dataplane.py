@@ -118,7 +118,7 @@ from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.core.run_context import AUTHOR_PROPERTY, IDEMPOTENCY_KEY_PROPERTY, OPERATION_PROPERTY
 from catalog.core.vending import classified_columns, labelled_fields
-from catalog.services import changes, commit_authors, committed_files, native, primary_keys, table_bases, table_claims
+from catalog.services import changes, commit_authors, committed_files, contracts, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse import (
@@ -803,9 +803,13 @@ def create_table(
             current = disarm_commit_path_cleanup(opened, segments)
             # The table's key, not the payload's: a key is fixed once set (`lance_docs/lance/format/table/index.md:87`).
             primary_keys.refuse_repeats_within(table, primary_keys.key_columns(current.lance_schema), door="create")
+            kept = provenance_guard.keep_provenance(current.schema, table)
+            if overwriting is not None:
+                # An Overwrite is a new version of the same table, so it keeps what the table's contract names (ADR 0212).
+                contracts.require_kept(overwriting.contract(), current.schema, kept.schema, door="create")
             _before_commit(before_commit, existing, registry)
             dataset = _write_blob(
-                provenance_guard.keep_provenance(current.schema, table),
+                kept,
                 existing,
                 so,
                 mode="overwrite",
@@ -1478,6 +1482,7 @@ def commit_stamped[T](
         InvalidInputError: The commit adds or changes a field's encoding knob to one Lance cannot honour ([[LH-246]]).
         InvalidInputError: The commit's new rows repeat a value of the table's primary key, within themselves or with a row it
             carries ([[LH-540]]), as ``version/create`` refuses a stock commit's.
+        InvalidTableStateError: The commit breaks the data contract the table holds (ADR 0212).
     """
     table_id = table.segments
     ref = recorded_branch(branch)
@@ -1506,6 +1511,7 @@ def commit_stamped[T](
                     _refuse_a_lost_label(dataset, detached)
                 encoding.require_no_new_invalid_encoding(dataset, detached)
                 primary_keys.refuse_repeats_in_version(detached, dataset, door=properties[OPERATION_PROPERTY])
+                contracts.require_kept(table.contract(), dataset.schema, detached.schema, door=properties[OPERATION_PROPERTY])
                 wrote = committed_files.added(
                     dataset, detached, table_location=table.location, branch=ref, so=so, transaction_uuid=stamped.uuid, read_version=stamped.read_version
                 )
@@ -2879,27 +2885,16 @@ def refuse_a_restore_carrying_refused_config(target: lance.LanceDataset, *, vers
         )
 
 
-class RefMovedError(ConcurrentModificationError):
-    """The ref holds a version after the one a commit was to follow, so the commit was not made (the spec's code 14)."""
-
-    def __init__(self, *, follows: int, head: int) -> None:
-        self.follows = follows
-        self.head = head
-        super().__init__(f"the ref is at version {head}, past version {follows} the commit was to follow")
-
-
 def restore(
     table: table_claims.DoorTable,
     so: StorageOptions,
     req: RestoreTableRequest,
     *,
     transaction_properties: dict[str, str],
-    follows: int | None = None,
 ) -> tuple[RestoreTableResponse, int]:
     """Commit ``req``'s ref at ``req.version`` again as its newest version: the spec's answer, and the version made.
 
     The spec's ``RestoreTable`` answers a transaction id and no version; the version is the one the restore committed.
-    Shared by the restore door and a promotion's rejection, which restores main to the published version (ADR 0156 C1).
 
     The version is opened at the door's location, where a missing branch answers 22 and a version the ref lacks 11, the
     codes every other door mints, and the restore is Lance's own ``Restore`` operation committed with
@@ -2907,21 +2902,15 @@ def restore(
     the table and would resolve it again ([[LH-530]]). Measured on pylance 13.0.0, a ``Restore`` committed this way leaves
     the rows and schema the handle's own ``restore()`` leaves. Unchecked, because a restore reads no row.
 
-    ``follows`` commits the restore only as the version right after it: a promotion's rejection restores over the held
-    version and nothing a writer committed after it, which a restore would discard (owner, 2026-11-12).
-
     Raises:
         InvalidInputError: The version to restore carries config no writer may set (auto-cleanup or compaction).
         TableChangedError: The table changed since the door's resolution.
-        RefMovedError: The ref holds a version after ``follows``; nothing was committed.
     """
     target = table.open_unchecked(so, version=req.version, branch=req.branch)
     refuse_a_restore_carrying_refused_config(target, version=req.version)
     restored = int(target.version)
 
     def plan(latest: lance.LanceDataset) -> tuple[Transaction, str]:
-        if follows is not None and latest.version != follows:
-            raise RefMovedError(follows=follows, head=latest.version)
         transaction = Transaction(read_version=latest.version, operation=lance.LanceOperation.Restore(restored))
         return transaction, transaction.uuid
 
@@ -3240,10 +3229,10 @@ def read_changes(
     than the query door's, because `QueryTableRequest` is a VECTOR model (`k` and `vector` required).
 
     `deleted` is not a predicate: the rows are gone from the scan, so Lance answers from the transaction
-    range instead (`DatasetDelta.get_deleted_row_ids()`, a single `_rowid` column). The publication delta
-    is insert-only while the cascade's writer hard-deletes with `when_not_matched_by_source_delete`, so
-    without this a retracted row left the tier without a trace any consumer could follow. Served on
-    demand rather than stamped into the publish event (owner decision, 2026-09-11): a deleted-row set is
+    range instead (`DatasetDelta.get_deleted_row_ids()`, a single `_rowid` column). A writer that hard-deletes
+    with `when_not_matched_by_source_delete` leaves no row for the inserted and updated windows to show, so
+    without this a retracted row left the table without a trace any consumer could follow. Served on
+    demand rather than stamped into an event (owner decision, 2026-09-11): a deleted-row set is
     unbounded, and stamping it turns a large delete into a large message on the bus.
 
     FILE FRAMING, not stream: this answers `application/vnd.apache.arrow.file`, matching the query
@@ -4003,24 +3992,6 @@ def tag_reference(dataset: lance.LanceDataset, tag: str) -> TagReference:
     if entry is None:
         raise TableTagNotFoundError(f"tag {tag!r} not found")
     return TagReference(tag=tag, branch=recorded_branch(entry.get("branch")), version=entry["version"])
-
-
-def main_version_of_tag(dataset: lance.LanceDataset, tag: str, *, remedy: str) -> int | None:
-    """The main version ``tag`` names, or ``None`` when no tag has the name, for a tag only main may hold.
-
-    The catalog moves ``published``, each publish's ``rask.publishing.*`` pin and ``rask.held`` on main alone, and so does a model's promotion, so
-    one of them on a branch was written past those doors, and its number names the branch's snapshot.
-
-    Raises:
-        InvalidTableStateError: The tag names a version of a branch; ``remedy`` says how it is put back on main.
-    """
-    try:
-        ref = tag_reference(dataset, tag)
-    except TableTagNotFoundError:
-        return None
-    if ref.branch is not None:
-        raise InvalidTableStateError(f"{ref}, and only main may hold it: {remedy}")
-    return ref.version
 
 
 def get_tag_version(table: table_claims.DoorTable, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:

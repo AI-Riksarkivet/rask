@@ -4,8 +4,8 @@
 and refuses a suffix no map declares. So a destructive verb listed in the writer map instead of the
 owner map is the hole left to close here: `_OWNER_SUFFIX_RELATION`'s own comments record two verbs that
 reached the writer rung, `branches/delete` letting a non-owner destroy a branch while the same caller
-was refused the lesser `tags/delete`, and `tags/delete` letting a plain writer remove the pin that
-`published` is.
+was refused the lesser `tags/delete`, and `tags/delete` letting a plain writer remove the pin a
+tag is.
 
 WHY THE SUFFIXES COME OFF THE APP RATHER THAN A LIST. A test naming the doors it knows about cannot
 fail for the door somebody adds next — which is the only failure that matters here, since every hole

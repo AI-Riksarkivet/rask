@@ -37,19 +37,6 @@ describe('catalogTrail', () => {
 		]);
 	});
 
-	it('names a held table by its path under Promotions', () => {
-		expect(
-			catalogTrail('/catalog/promotions/[table]', { table: 'acme$silver$orders' })?.map((c) => [
-				c.label,
-				c.href,
-			]),
-		).toEqual([
-			['Catalog', '/catalog'],
-			['Promotions', '/catalog/promotions'],
-			['acme › silver › orders', '/catalog/promotions/acme%24silver%24orders'],
-		]);
-	});
-
 	it('leaves every other route to the path', () => {
 		expect(catalogTrail('/catalog/tables', {})).toBeNull();
 	});

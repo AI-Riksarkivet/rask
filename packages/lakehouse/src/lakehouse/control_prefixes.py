@@ -27,7 +27,6 @@ POLICIES: Final = "_policies"
 PROTECTION: Final = "_protection"
 BASES: Final = "_bases"
 LOCATIONS: Final = "_locations"
-GATES: Final = "_gates"
 MAINTENANCE_DUE: Final = "_maintenance_due"
 COMMIT_AUTHORS: Final = "_commit_authors"
 COMMIT_MARKS: Final = "_commit_marks"
@@ -37,7 +36,8 @@ MAINTENANCE_FILES: Final = "_maintenance_files"
 CLONE_ENDINGS: Final = "_clone_endings"
 ERASURE_OBLIGATIONS: Final = "_erasure_obligations"
 ERASURE_RELEASES: Final = "_erasure_releases"
-PROMOTIONS: Final = "_promotions"
+#: A table's data contract, keyed by its uuid (ADR 0212).
+CONTRACTS: Final = "_contracts"
 #: A project's label definitions, and the labels attached to each table or namespace (ADR 0211).
 LABEL_DEFINITIONS: Final = "_label_definitions"
 LABELS: Final = "_labels"
@@ -77,7 +77,6 @@ RECORD_PREFIXES: Final[frozenset[str]] = frozenset(
         PROTECTION,
         BASES,
         LOCATIONS,
-        GATES,
         MAINTENANCE_DUE,
         COMMIT_AUTHORS,
         COMMIT_MARKS,
@@ -86,7 +85,7 @@ RECORD_PREFIXES: Final[frozenset[str]] = frozenset(
         CLONE_ENDINGS,
         ERASURE_OBLIGATIONS,
         ERASURE_RELEASES,
-        PROMOTIONS,
+        CONTRACTS,
         TABLE_INPUTS,
         ROLES,
         PRINCIPALS,

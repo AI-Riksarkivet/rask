@@ -348,11 +348,11 @@ def test_every_event_is_the_shape_its_contract_writes(captured: Captured) -> Non
     assert errors == []
 
 
-def test_lineage_recorded_each_event_as_the_person_who_called_the_catalogs_door(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> None:
-    """The pipeline made every commit but one; the validator's approval moved `published` to silver's second version.
-    The catalog signs as itself on behalf of the person it authenticated, so its signature names that person."""
-    pipeline, validator = byo_tenant.pipeline.principal, byo_tenant.validator.principal
-    people = {f"user:{identity.principal}" for identity in (byo_tenant.admin, byo_tenant.pipeline, byo_tenant.validator)}
+def test_lineage_recorded_each_event_as_the_person_who_called_the_catalogs_door(captured: Captured, byo_tenant: Tenant) -> None:
+    """The pipeline made every commit. The catalog signs as itself on behalf of the person it authenticated, so its
+    signature names that person."""
+    pipeline = byo_tenant.pipeline.principal
+    people = {f"user:{identity.principal}" for identity in (byo_tenant.admin, byo_tenant.pipeline, byo_tenant.consumer)}
 
     def stamp(event: dict[str, Any], project: object) -> dict[str, object]:
         facets = _facets(event)
@@ -364,10 +364,7 @@ def test_lineage_recorded_each_event_as_the_person_who_called_the_catalogs_door(
             "for": signature.get("onBehalfOf"),
         }
 
-    def expected(row: dict[str, Any]) -> dict[str, object]:
-        who = validator if _commit(row) == (byo_run.silver_table, "publish_table", 2) else pipeline
-        return {"author": who, "project": byo_tenant.project, "signer": CATALOG_SIGNER, "for": who}
-
+    expected = {"author": pipeline, "project": byo_tenant.project, "signer": CATALOG_SIGNER, "for": pipeline}
     recorded = {row["seq"]: stamp(row["event"], scenario.lance_facet(row).get("project")) for row in captured.feed}
     announced = {
         message.seq: (
@@ -378,7 +375,7 @@ def test_lineage_recorded_each_event_as_the_person_who_called_the_catalogs_door(
         for message in captured.control
     }
 
-    assert recorded == {row["seq"]: expected(row) for row in captured.feed}
+    assert recorded == {row["seq"]: expected for row in captured.feed}
     assert announced == {message.seq: (True, CATALOG_SIGNER, message.event.get("actor")) for message in captured.control}
 
 
@@ -388,7 +385,7 @@ def test_each_event_names_the_person_it_grants_and_the_table_it_wrote_by_the_uui
     """What a notifier targets by, and the lakehouse writes (`docs/COMMIT-EVENTS.md`): a grant
     reaches the person its `extra.subject` names, and a write reaches whoever may read the table its `tableUuid` names,
     so a rename or a name taken again sends it nowhere else. The drive made the admin the project's admin, the pipeline a
-    writer on bronze and silver, and the validator a validator on silver, and granted none of them anything else."""
+    writer on bronze and silver, and the consumer a reader on silver, and granted none of them anything else."""
     tenant = byo_tenant
     uuids = uuids_of(tenant.pipeline, (byo_run.bronze_table, byo_run.silver_table))
     events = [(f"bus {message.stream} #{message.seq}", message.event) for message in captured.lineage]
@@ -403,7 +400,7 @@ def test_each_event_names_the_person_it_grants_and_the_table_it_wrote_by_the_uui
     assert granted == {
         "admin": [(f"project:{tenant.project}", "admin")],
         "pipeline": sorted([(tenant.bronze, "writer"), (tenant.silver, "writer")]),
-        "validator": [(tenant.silver, "validator")],
+        "consumer": [(tenant.silver, "reader")],
     }
     assert named, "the capture holds no lineage event to judge"
     assert named == {where: {table: uuids.get(table) for table in written} for where, written in named.items()}
@@ -419,7 +416,7 @@ def test_each_event_is_recorded_once_and_a_redelivery_of_its_bytes_adds_nothing(
     assert [key for key, count in keys.items() if count > 1] == []
     assert commits == {
         byo_run.bronze_table: [("declare_table", None), ("create_table", 1), ("insert", 2)],
-        byo_run.silver_table: [("create_table", 1), ("publish_table", 1), ("insert", 2), ("publish_table", 2), ("insert", 3)],
+        byo_run.silver_table: [("create_table", 1), ("insert", 2), ("insert", 3)],
     }
     assert redelivery.landed == []
 

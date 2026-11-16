@@ -14,7 +14,7 @@ from functools import partial
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api import commit_reconcile, control_relay, declaration_converge, erasure_release, manifest_reclaim, promotion_expiry
+from catalog.api import commit_reconcile, control_relay, declaration_converge, erasure_release, manifest_reclaim
 from catalog.api.ticks import Tick
 from catalog.core.config import Settings
 from lakehouse import outbox_metrics
@@ -49,7 +49,6 @@ def catalog_timers(settings: Settings) -> dict[str, CatalogTimer]:
         # The relay measures the control outbox's backlog on each tick, so a replica another ran the window of drops its own.
         "catalog-control-relay": CatalogTimer(period=settings.control_relay_period_seconds, tick=control_relay.tick, elsewhere=outbox_metrics.forget_backlog),
         "catalog-erasure-release": CatalogTimer(period=settings.erasure_release_period_seconds, tick=erasure_release.tick),
-        "catalog-promotion-expiry": CatalogTimer(period=settings.promotion_expiry_period_seconds, tick=promotion_expiry.tick),
         "catalog-commit-reconcile": CatalogTimer(period=settings.commit_reconcile_period_seconds, tick=commit_reconcile.tick),
         "catalog-manifest-reclaim": CatalogTimer(period=settings.manifest_reclaim_period_seconds, tick=manifest_reclaim.tick),
         "catalog-declaration-converge": CatalogTimer(period=settings.declaration_converge_period_seconds, tick=declaration_converge.tick),

@@ -663,6 +663,82 @@ test('a table the catalog says lies in no project shows no labels block', async 
 	await expect(page.getByText('could not be read')).toHaveCount(0);
 });
 
+// --- the data contract (ADR 0212): the overview shows the ODCS document the table holds ---
+
+test('a table holding a contract shows its id, version, status, who set it and its columns', async ({
+	page,
+}) => {
+	await seed(page, {
+		[`POST /management/v1/table/${TABLE}/contract/describe`]: {
+			table: 'db1$t',
+			uuid: 'uuid-t',
+			set_by: 'dex~owner',
+			set_at: '2026-11-16T09:30:00Z',
+			contract: {
+				apiVersion: 'v3.0.2',
+				kind: 'DataContract',
+				id: 'orders-contract',
+				version: '1.2.0',
+				status: 'active',
+				schema: [
+					{
+						name: 't',
+						properties: [
+							{ name: 'id', physicalType: 'int64', required: true, primaryKey: true },
+							{
+								name: 'address',
+								logicalType: 'object',
+								properties: [{ name: 'city', physicalType: 'string' }],
+							},
+						],
+					},
+				],
+			},
+		},
+	});
+	await page.goto('/catalog/tables/db1%24t');
+	const contract = page.getByTestId('table-contract');
+	await expect(contract).toContainText('orders-contract');
+	await expect(contract).toContainText('1.2.0');
+	await expect(contract).toContainText('active');
+	await expect(contract.locator('[data-slot="subject"]')).toContainText('dex~owner');
+	await expect(contract).toContainText('2026-11-16 09:30:00 UTC');
+	const rows = contract
+		.getByRole('table', { name: 'Columns the contract names' })
+		.locator('tbody tr');
+	await expect(rows).toHaveCount(3);
+	await expect(rows.nth(0)).toHaveText(/id\s*int64\s*yes\s*yes/);
+	await expect(rows.nth(1)).toHaveText(/address\s*—\s*no\s*no/);
+	await expect(rows.nth(2)).toHaveText(/address\.city\s*string\s*no\s*no/);
+});
+
+test('a table holding no contract says so in one line, and names the door its owner sets one at', async ({
+	page,
+}) => {
+	await page.goto('/catalog/tables/db1%24t');
+	const contract = page.getByTestId('table-contract');
+	await expect(contract).toContainText(
+		"This table holds no contract. Its owner sets one at the catalog's contract/set door.",
+	);
+	await expect(contract.getByRole('table')).toHaveCount(0);
+});
+
+test('a refused contract read is said in one line, and the rest of the overview stands', async ({
+	page,
+}) => {
+	await seed(page, {
+		[`POST /management/v1/table/${TABLE}/contract/describe`]: {
+			status: 403,
+			body: { detail: 'user:e2e lacks can_get_metadata on table' },
+		},
+	});
+	await page.goto('/catalog/tables/db1%24t');
+	await expect(page.getByTestId('table-contract')).toContainText(
+		'The contract could not be read (HTTP 403): user:e2e lacks can_get_metadata on table',
+	);
+	await expect(page.getByRole('heading', { name: 'Stats' })).toBeVisible();
+});
+
 // --- #85 danger zone: drop / deregister (AlertDialog confirm) + rename (navigates) ---
 
 test('danger-zone drop confirms via the AlertDialog, closes it, and the registry row is gone (#85)', async ({

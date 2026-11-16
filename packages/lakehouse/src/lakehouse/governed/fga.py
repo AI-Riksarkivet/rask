@@ -7,8 +7,7 @@ The authorization model (``lakehouse/governed/auth/model.fga`` / ``model.json``)
 rungs via ``parent``). Every one is a lakehouse object or a subject of one: a tool that works on the lakehouse
 authorizes its own objects itself (ADR 0171). The count is worth keeping honest because it is the first thing
 a reader checks this docstring against.
-Privileges are concentric (``owner`` ⊇ ``writer`` ⊇ ``reader``, plus a separate ``validator`` rung gating
-``can_promote``) and cascade DOWN the hierarchy via ``parent`` (project → warehouse → namespace →
+Privileges are concentric (``owner`` ⊇ ``writer`` ⊇ ``reader``) and cascade DOWN the hierarchy via ``parent`` (project → warehouse → namespace →
 nested namespace → table / materialized_view). Every API operation is checked against a
 ``can_*`` ACTION relation — the model owns the op→privilege map, the app just names the action (see
 ``services/catalog/api/fga_deps.py``). Tuples persist in the OpenFGA datastore (Postgres in the deployed
@@ -258,7 +257,7 @@ def subject_of(user_id: str) -> str:
 def grantee_object(grantee: str) -> str:
     """The OpenFGA user a grant names: an object of another model type passes, a principal becomes its ``user``.
 
-    ``role:validators#assignee``, ``project:p`` and the typed wildcard ``user:*`` name objects of
+    ``role:stewards#assignee``, ``project:p`` and the typed wildcard ``user:*`` name objects of
     the model's own grammar and pass as written. ``user:<id>`` is an OpenFGA user id, the form the store hands back,
     so it is decoded and encoded again (:func:`subject_of`, :func:`user_object`): a stored id a reader echoes back names
     the tuple it came from. A bare value is a principal key (``<idp-id>~<subject>``), a service account's included, and
@@ -2491,8 +2490,8 @@ async def revoke_object_tuples(
     tuples were already read in order to be deleted, so handing them back costs nothing and is what
     lets a caller name the affected principals. Callers wanting the old number take ``len(...)``.
 
-    A dropped/renamed object's grants (owner, the parent edge, AND any later reader/writer/
-    validator grants) must not linger: if the id is later reused, those stale tuples would
+    A dropped/renamed object's grants (owner, the parent edge, AND any later reader or writer
+    grants) must not linger: if the id is later reused, those stale tuples would
     silently re-grant the old subjects on the NEW object (stale-grant privilege bleed). Reads the
     full tuple set, then deletes it. No-op (0) when the object has none.
 

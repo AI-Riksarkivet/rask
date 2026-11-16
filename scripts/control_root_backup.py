@@ -2,7 +2,7 @@
 
 [[LH-110]]. The control root holds the estate's governance as small JSON objects, the records
 `lakehouse.control_prefixes` names: the project and warehouse registries, every table's location claim (which holds
-its uuid, and so every grant), protection, maintenance policies, quality gates, erasure obligations, roles, and the
+its uuid, and so every grant), protection, maintenance policies, data contracts, erasure obligations, roles, and the
 trash records that make a drop recoverable. Lose them and the Lance data survives while every statement about who may
 touch it does not.
 

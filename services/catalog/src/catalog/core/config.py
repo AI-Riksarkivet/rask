@@ -309,9 +309,6 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: Seconds between two ticks of the timer that releases what is due (`catalog/api/erasure_release.py`). 0 = no
     #: timer, so a deployment schedules releases that nothing performs: the chart sets it.
     erasure_release_period_seconds: float = Field(default=0, ge=0, alias="LANCE_ERASURE_RELEASE_PERIOD_SECONDS")
-    #: Seconds between two ticks of the timer that expires promotion holds past their review deadline
-    #: (`catalog/api/promotion_expiry.py`, ADR 0156 C1). 0 = no timer, so a hold waits until it is decided.
-    promotion_expiry_period_seconds: float = Field(default=0, ge=0, alias="LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS")
     #: Seconds between two ticks of the timer that announces every committed version lineage's feed lacks
     #: (`catalog/api/commit_reconcile.py`, [[LH-497]]). 0 = no timer, so an announcement lost between a commit and its
     #: staging is never made.
@@ -678,7 +675,7 @@ class Settings(
         drain classifies it POISON and DELETES it. Sharing the prefix therefore does not give the
         control lane a relay — it hands the control lane's only durable copy to something that destroys
         it, which is strictly worse than staging nowhere. Fail loudly at boot rather than lose a
-        `table_published` per outage in a log nobody reads.
+        control event per outage in a log nobody reads.
         """
         if self.control_outbox_uri and self.control_outbox_uri.rstrip("/") == self.lineage_outbox_uri.rstrip("/"):
             raise ValueError(

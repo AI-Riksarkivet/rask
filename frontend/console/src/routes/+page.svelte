@@ -14,14 +14,13 @@
 	import { projectOf } from '#lib/data/project-filter.ts';
 	import { ProjectIndexRead } from '#lib/data/project-index.svelte.ts';
 	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
-	import { listPromotions } from '#lib/data/remote/promotions.api.ts';
 	import { fetchDlq, fetchRecentEvents } from '#lib/lineage/remote/lineage.api.ts';
 	import { controlFeed } from '#lib/live/feeds.api.ts';
 
 	// HOME — what this estate is and what is happening in it, for the person signed in. Every figure is
 	// a read the doors already serve the caller, so it is the caller's own view: the tables their grants
-	// list, the commits lineage shows them, the holds they may see. An estate admin also sees the dead
-	// letters and the latest governance changes, which the doors refuse everyone else.
+	// list and the commits lineage shows them. An estate admin also sees the dead letters and the latest
+	// governance changes, which the doors refuse everyone else.
 
 	/** How many of the newest commits and governance changes the page lists. */
 	const RECENT = 8;
@@ -34,7 +33,6 @@
 
 	const tables = fetchTables();
 	const events = fetchRecentEvents(RECENT);
-	const promotions = listPromotions({});
 	// Only an estate admin may read these two, and creating a read sends it, so nobody else asks.
 	// One event is enough: the backlog's `depth` counts every one.
 	const dlq = $derived(admin ? fetchDlq(1) : null);
@@ -146,7 +144,10 @@
 			{/if}
 		</Card>
 
-		<Card class="flex flex-col gap-3 p-5" data-testid="home-commits">
+		<Card
+			class={`flex flex-col gap-3 p-5 ${admin ? '' : 'md:col-span-2'}`}
+			data-testid="home-commits"
+		>
 			<div class="flex items-center gap-2">
 				<Activity class="text-muted-foreground size-4" aria-hidden="true" />
 				<h2 class="font-medium">Recent commits</h2>
@@ -181,29 +182,13 @@
 			{/if}
 		</Card>
 
-		<Card class="flex flex-col gap-3 p-5" data-testid="home-attention">
-			<div class="flex items-center gap-2">
-				<TriangleAlert class="text-muted-foreground size-4" aria-hidden="true" />
-				<h2 class="font-medium">Needs attention</h2>
-			</div>
-			<dl class="flex flex-col gap-2 text-sm">
-				<div class="flex items-baseline gap-2">
-					<dt>
-						<a class="underline-offset-2 hover:underline" href={resolve('/catalog/promotions')}
-							>Promotions held for review</a
-						>
-					</dt>
-					<dd class="ml-auto font-medium tabular-nums" data-testid="home-promotions">
-						{#if promotions.current?.ok}
-							{promotions.current.data.holds.length}{promotions.current.data.page_token ? '+' : ''}
-						{:else if promotions.current}
-							<span class="text-muted-foreground font-normal"
-								>unavailable ({failed(promotions.current)})</span
-							>
-						{:else}…{/if}
-					</dd>
+		{#if admin}
+			<Card class="flex flex-col gap-3 p-5" data-testid="home-attention">
+				<div class="flex items-center gap-2">
+					<TriangleAlert class="text-muted-foreground size-4" aria-hidden="true" />
+					<h2 class="font-medium">Needs attention</h2>
 				</div>
-				{#if admin}
+				<dl class="flex flex-col gap-2 text-sm">
 					<div class="flex items-baseline gap-2">
 						<dt>
 							<a class="underline-offset-2 hover:underline" href={resolve('/admin/dlq')}
@@ -220,15 +205,9 @@
 							{:else}…{/if}
 						</dd>
 					</div>
-				{/if}
-			</dl>
-			<p class="text-muted-foreground text-xs">
-				A promotion is a publish the project’s quality gate held for someone who can promote to
-				approve or reject.
-			</p>
-		</Card>
+				</dl>
+			</Card>
 
-		{#if admin}
 			<Card class="flex flex-col gap-3 p-5 md:col-span-2" data-testid="home-governance">
 				<div class="flex items-center gap-2">
 					<Radio class="text-muted-foreground size-4" aria-hidden="true" />

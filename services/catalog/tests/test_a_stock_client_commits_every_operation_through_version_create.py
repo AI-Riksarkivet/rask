@@ -50,11 +50,14 @@ from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
 from catalog.services import dataplane, table_claims
-from lakehouse import commit_records, commit_turns, manifest_wire, records
+from lakehouse import commit_records, commit_turns, control_prefixes, manifest_wire, records
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from lakehouse.record_store import put_record, record_key
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
 from tests.integration import store_requests
@@ -1786,3 +1789,198 @@ def test_a_commit_declaring_an_input_that_is_no_table_the_caller_may_read_is_ref
     refusal = f"the input {'$'.join(table)!r} its run declares (rask.inputs) names no table the committer may read (can_read_data)"
     assert (code, refusal in detail) == (13, True), detail
     assert _opened(stock).version == 1
+
+
+#: An ODCS v3 contract naming both columns of ``_keyed``'s table as its consumers rely on them (ADR 0212).
+_CONTRACT: dict[str, Any] = {
+    "apiVersion": "v3.0.2",
+    "kind": "DataContract",
+    "id": "orders",
+    "version": "1.0.0",
+    "status": "active",
+    "schema": [
+        {
+            "name": "t",
+            "properties": [
+                {"name": "id", "physicalType": "int64", "required": True, "primaryKey": True, "primaryKeyPosition": 1, "unique": True},
+                {"name": "v", "logicalType": "string", "physicalType": "string"},
+            ],
+        }
+    ],
+}
+_CONTRACT_DOOR = "/management/v1/table/lance_catalog$db$t/contract"
+
+
+def _without_v(version: str) -> dict[str, Any]:
+    """``_CONTRACT`` at ``version``, no longer naming ``v``."""
+    table = _CONTRACT["schema"][0]
+    return {**_CONTRACT, "version": version, "schema": [{**table, "properties": table["properties"][:1]}]}
+
+
+def _with_v(column: dict[str, Any], version: str) -> dict[str, Any]:
+    """``_CONTRACT`` at ``version``, stating ``column`` for ``v``."""
+    table = _CONTRACT["schema"][0]
+    return {**_CONTRACT, "version": version, "schema": [{**table, "properties": [table["properties"][0], column]}]}
+
+
+class _Announced:
+    """The control emitter, as a list of the actions the doors announced."""
+
+    def __init__(self) -> None:
+        self.actions: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(self, event: CatalogControlEvent) -> None:
+        self.actions.append((event.action, event.extra))
+
+
+def _answered(served: Served, path: str, body: object | None = None, *, arrow: bytes | None = None) -> tuple[int, int | None]:
+    """The status and spec code of a POST to ``path``, of ``body`` as JSON or of ``arrow`` as an Arrow stream."""
+    if arrow is not None:
+        answer = httpx.post(f"{served.url}{path}", headers={**_TOKEN, "Content-Type": ARROW_STREAM_MEDIA_TYPE}, content=arrow)
+    else:
+        answer = httpx.post(f"{served.url}{path}", headers=_TOKEN, json=body)
+    return answer.status_code, answer.json().get("code") if answer.status_code >= 400 else None
+
+
+def test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_makes(served: Served) -> None:
+    """ADR 0212: a contract its owner set is read back as set, and from then on a commit that retypes, renames, drops or
+    loosens a column it names is refused 409 (code 19) wherever it is made, while one that adds a column lands. A
+    breaking change is made by setting a contract that allows it under a higher major version."""
+    from catalog.api.dependencies import get_control_emitter
+    from catalog.main import app
+
+    announced = _Announced()
+    app.dependency_overrides[get_control_emitter] = lambda: announced
+    stock = _created(served)
+    table = "/v1/table/lance_catalog$db$t"
+    # `v` holds no null, so its owner makes it non-nullable first: a contract states what the table already is.
+    assert _answered(served, f"{table}/alter_columns", {"alterations": [{"path": "v", "nullable": False}]}) == (200, None)
+    contract = _with_v({"name": "v", "logicalType": "string", "physicalType": "string", "required": True}, "1.0.0")
+
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", contract) == (200, None)
+    described = httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()
+    assert (described["contract"], described["set_by"]) == (contract, "user:dex~alice")
+
+    # A stock client's retype of a contracted column: refused at `version/create`, the table left at its version.
+    with contextlib.suppress(OSError):
+        _opened(stock).alter_columns(cast("Iterable[AlterColumn]", {"path": "v", "data_type": pa.large_string()}))
+    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 3)
+    assert (status, code) == (409, 19), detail
+    assert "column 'v' is large_string, and the contract states string" in detail and "version 1.0.0" in detail, detail
+    # The catalog's own doors commit through the same judge: a loosening, a rename, a drop, and an Overwrite that leaves
+    # the column out.
+    assert _answered(served, f"{table}/alter_columns", {"alterations": [{"path": "v", "nullable": True}]}) == (409, 19)
+    assert _answered(served, f"{table}/alter_columns", {"alterations": [{"path": "v", "rename": "w"}]}) == (409, 19)
+    assert _answered(served, f"{table}/drop_columns", {"columns": ["v"]}) == (409, 19)
+    overwrite = encode_arrow_stream(_keyed([9], ["z"]).drop_columns(["v"]))
+    assert _answered(served, f"{table}/create?mode=overwrite", arrow=overwrite) == (409, 19)
+    assert (_opened(stock).version, _opened(stock).schema.names) == (2, ["id", "v"])
+
+    # An additive change lands, from a stock client and from a door.
+    _opened(stock).add_columns({"n": "id * 2"})
+    assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "m", "expression": "id + 1"}]}) == (200, None)
+    assert (_opened(stock).version, _opened(stock).schema.names) == (4, ["id", "v", "n", "m"])
+
+    # A changed contract carries a higher version, and taking `v` out of it is a breaking change to it: refused under
+    # the same major, set under the next.
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", {**contract, "status": "deprecated"}) == (400, 13)
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", _without_v("1.1.0")) == (400, 13)
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", _without_v("2.0.0")) == (200, None)
+    assert _answered(served, f"{table}/alter_columns", {"alterations": [{"path": "v", "rename": "w"}]}) == (200, None)
+    # A table held to no contract commits as before.
+    assert _answered(served, f"{_CONTRACT_DOOR}/delete") == (200, None)
+    assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] is None
+    assert _answered(served, f"{table}/drop_columns", {"columns": ["w"]}) == (200, None)
+    assert [(action, extra.get("version")) for action, extra in announced.actions if "contract" in action] == [
+        ("table_contract_set", "1.0.0"),
+        ("table_contract_set", "2.0.0"),
+        ("table_contract_deleted", "2.0.0"),
+    ]
+
+
+def test_a_table_already_breaking_its_contract_is_not_frozen_and_an_unreadable_contract_is_its_owners_to_end(served: Served) -> None:
+    """A commit is refused for what it breaks. A contract the table stopped meeting past the catalog's doors (here: put
+    straight on the control root, as a set racing a commit leaves it) refuses no commit that leaves the breach as it
+    was, and still refuses one that breaks another column. A record that is no contract refuses every commit, since it
+    may be the one a commit breaks, until its owner replaces or deletes it at the contract's own doors."""
+    from catalog.core.config import get_settings
+
+    stock = _created(served)
+    table, settings = "/v1/table/lance_catalog$db$t", get_settings()
+    uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    key = record_key(control_prefixes.CONTRACTS, "table", uuid)
+    breached = _with_v({"name": "v", "physicalType": "int32"}, "1.0.0")
+    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": breached, "set_at": "2026-11-16T00:00:00Z"})
+
+    lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+    assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "m", "expression": "id + 1"}]}) == (200, None)
+    assert _answered(served, f"{table}/drop_columns", {"columns": ["v"]}) == (409, 19)
+    assert _opened(stock).version == 3
+
+    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z"})
+    assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "k", "expression": "id + 2"}]}) == (500, 18)
+    assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).status_code == 500
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", _CONTRACT) == (200, None)
+    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z"})
+    assert _answered(served, f"{_CONTRACT_DOOR}/delete") == (200, None)
+    assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "k", "expression": "id + 2"}]}) == (200, None)
+
+
+@pytest.mark.parametrize(
+    ("change", "status", "code"),
+    [
+        pytest.param({"slaProperties": [{"property": "latency", "value": 4, "unit": "d"}]}, 406, 0, id="a-freshness-rule"),
+        pytest.param({"quality": [{"type": "sql", "query": "select count(*) from t", "mustBeGreaterThan": 0}]}, 406, 0, id="a-quality-rule"),
+        pytest.param(
+            {"schema": [{"name": "t", "properties": [{"name": "v", "physicalType": "string", "quality": [{"rule": "nullCheck"}]}]}]},
+            406,
+            0,
+            id="a-column-quality-rule",
+        ),
+        pytest.param({"schema": [{"name": "t", "properties": [{"name": "v", "physicalType": "string", "unique": True}]}]}, 406, 0, id="unique-on-no-key"),
+        pytest.param({"servers": [{"server": "prod", "type": "s3"}]}, 400, 13, id="a-field-outside-the-subset"),
+        pytest.param({"apiVersion": "v2.2.2"}, 400, 13, id="another-odcs-major"),
+        pytest.param({"schema": [{"name": "t", "properties": [{"name": "v", "physicalType": "int32"}]}]}, 409, 19, id="a-type-the-table-does-not-hold"),
+        pytest.param(
+            {"schema": [{"name": "t", "properties": [{"name": "v", "logicalType": "integer", "physicalType": "string"}]}]},
+            409,
+            19,
+            id="a-logical-type-of-another-family",
+        ),
+        pytest.param(
+            {"schema": [{"name": "t", "properties": [{"name": "v", "physicalType": "string", "required": True}]}]}, 409, 19, id="required-on-a-nullable-column"
+        ),
+    ],
+)
+def test_a_contract_the_catalog_cannot_hold_the_table_to_is_refused_and_none_is_set(served: Served, change: dict[str, Any], status: int, code: int) -> None:
+    """A quality or freshness rule is a check nobody runs, so it is refused as unsupported (406); a document outside the
+    enforced subset is malformed (400); one the table does not meet now is refused for the table's state (409, code 19)."""
+    _created(served)
+
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", {**_CONTRACT, **change}) == (status, code)
+
+    assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] is None
+
+
+def test_a_stock_client_marks_a_version_ready_with_a_tag_of_its_own_and_no_publication_door_is_served(served: Served) -> None:
+    """ADR 0212: marking a version ready is the pipeline's own tag through the spec's tag doors, under any name it
+    chooses, `published` included; the catalog serves no gate, publish or promotion door."""
+    stock = _created(served)
+    lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+
+    stock.create_table_tag(lance_namespace.CreateTableTagRequest(id=_TABLE, tag="published", version=1))
+    stock.update_table_tag(lance_namespace.UpdateTableTagRequest(id=_TABLE, tag="published", version=2))
+
+    assert stock.get_table_tag_version(lance_namespace.GetTableTagVersionRequest(id=_TABLE, tag="published")).version == 2
+    assert _rows(lance.dataset(namespace_client=stock, table_id=_TABLE, version="published")) == [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
+    # The one name still refused is the catalog's own: the tag a registered clone holds on its source.
+    assert _answered(served, "/v1/table/lance_catalog$db$t/tags/create", {"tag": "rask.clone.x", "version": 1}) == (400, 13)
+    gone = [
+        "/management/v1/table/lance_catalog$db$t/publish",
+        "/management/v1/table/lance_catalog$db$t/promotion/approve",
+        "/management/v1/table/lance_catalog$db$t/promotion/reject",
+        "/management/v1/project/acme/gate/set",
+        "/management/v1/project/acme/gate/describe",
+    ]
+    assert [httpx.post(f"{served.url}{path}", json={}, headers=_TOKEN).status_code for path in gone] == [404] * len(gone)
+    assert httpx.get(f"{served.url}/management/v1/promotions", headers=_TOKEN).status_code == 404

@@ -16,7 +16,7 @@ moves no data between tables ([ADR 0155](../adr/0155-the-medallion-is-tier-gover
   those writes is [Write Governance](../WRITE-GOVERNANCE.md).
 - **Annotation output and readiness**:
   [ADR 0131](../adr/0131-annotations-are-derived-and-readiness-is-the-published-tag.md): an annotation is derived data,
-  and readiness is the `published` tag.
+  and readiness is a tag the pipeline names itself (ADR 0212).
 
 ADRs 0127, 0128, 0129 and 0130 describe the mechanics of an in-lakehouse ingest service, which the lakehouse does not
 run (ADR 0154); an ingest client reads them as design input, not as a contract the catalog serves.

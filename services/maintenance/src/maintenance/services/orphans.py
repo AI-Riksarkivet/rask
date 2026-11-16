@@ -104,9 +104,9 @@ _TRANSACTIONS_DIR = "_transactions"
 _VERSIONS_DIR = "_versions"
 #: Tags and branches — NAMED VERSION POINTERS, and live metadata by definition. A tag PINS a version
 #: (and `cleanup_old_versions` exempts tagged versions for exactly that reason), so a tag file can
-#: never be unreferenced while it exists. Found the hard way: the first live run reported every
-#: `publish-*` promotion tag in the estate as an orphan — the precise failure this module exists to
-#: avoid, since a reclaimer acting on it would unpin published data.
+#: never be unreferenced while it exists. Measured on the first live run: every tag in the estate was
+#: reported an orphan, the precise failure this module exists to avoid, since a reclaimer acting on
+#: it would unpin the versions readers open.
 _REFS_DIR = "_refs"
 
 #: Named branches live here — `tree/{branch_name}/` holds a WHOLE parallel dataset (its own

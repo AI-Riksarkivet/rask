@@ -1,7 +1,7 @@
 """A registered table whose bytes are gone must answer 404, never a bare 500.
 
-Measured live: `silver$features` was registered at a bucket that no longer held the dataset, and
-`POST /publish` answered
+Measured live: a table was registered at a bucket that no longer held the dataset, and a door that
+opens it answered
 
     500 Internal Server Error
     ValueError: Dataset at path medallion/silver was not found: Not found: medallion/silver/_versions

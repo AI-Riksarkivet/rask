@@ -2,7 +2,8 @@
 
 **Status:** accepted; C8's tier is superseded by
 [ADR 0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md): the run rule is
-`rask.requires_run`, and labels classify. Source: owner, 2026-10-12, three grilling rounds over a read-only audit
+`rask.requires_run`, and labels classify; C1's tag gate and C9's `source_rowid` are superseded by
+[ADR 0212](0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md): no publication, and the platform names no column. Source: owner, 2026-10-12, three grilling rounds over a read-only audit
 (lance_docs format and namespace spec read in full, Lakekeeper as reference architecture, 459 open issues, tests and
 docs). The owner's standing facts judged every option: zero trust, cloud native, Lance-idiomatic. Amends ADR 0155.
 

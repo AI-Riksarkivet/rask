@@ -103,8 +103,7 @@ def test_a_request_that_WRITES_is_refused_through_the_window(read_only_catalog: 
 
 #: Every catalog timer's period, each set: a timer runs only where git gives it a period.
 TIMER_PERIODS = {
-    f"LANCE_{timer}_PERIOD_SECONDS": "60"
-    for timer in ("CONTROL_RELAY", "ERASURE_RELEASE", "PROMOTION_EXPIRY", "COMMIT_RECONCILE", "MANIFEST_RECLAIM", "DECLARATION_CONVERGE")
+    f"LANCE_{timer}_PERIOD_SECONDS": "60" for timer in ("CONTROL_RELAY", "ERASURE_RELEASE", "COMMIT_RECONCILE", "MANIFEST_RECLAIM", "DECLARATION_CONVERGE")
 }
 
 

@@ -755,14 +755,6 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
     one (§ J1), because following every row a table ever received is the most disclosing read
     available, not a metadata lookup.
 
-    THE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find
-    it. That `ControlAction` (`lakehouse.control_events.ControlAction`) announces a version advance and
-    carries `{from_version, to_version}` — "the RANGE (D-R3) the notification carries, so a consumer
-    resolves the delta" (`catalog/services/publication.py:245-254`) — which is exactly the window this
-    door takes. Its emitter is a DIFFERENT `publication.py`, the route module
-    `catalog/api/v1/endpoints/publication.py:343-356`, gated on `result.advanced` so only a real
-    advance signals. A consumer subscribes to `catalog.control.v1`, reads the pair off the event, and
-    calls here with it — no new `ControlAction` member, so no added control-buffer cost.
     It names no person a notifier addresses: a version advance changes an OBJECT, not
     what any particular person may do, so it is an untargeted control event like the other 31 and
     reaches a feed rather than a person.

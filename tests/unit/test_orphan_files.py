@@ -377,9 +377,9 @@ def _plant(uri: str, rel: str, body: bytes = b"x") -> None:
 
 class TestTheLiveFilesThatLookLikeGarbage:
     def test_a_TAG_is_never_an_orphan(self, dataset: str) -> None:
-        """The failure this module exists to avoid: the first live run reported every `publish-*`
-        promotion tag in the estate. A tag PINS a version, so deleting one unpins published data."""
-        _plant(dataset, "_refs/tags/publish-1.json", b'{"version": 1}')
+        """The failure this module exists to avoid: a tag reported as an orphan. A tag PINS a version, so deleting one
+        unpins the version its readers open."""
+        _plant(dataset, "_refs/tags/stable.json", b'{"version": 1}')
 
         assert not [p for p in _scan(dataset) if p.startswith("_refs/")]
 
@@ -437,7 +437,7 @@ class TestKindClassification:
             ("_indices/uuid/index.idx", "indices"),
             ("_transactions/3-uuid.txn", "transactions"),
             ("_versions/2.manifest", "versions"),
-            ("_refs/tags/publish-1.json", "refs"),
+            ("_refs/tags/stable.json", "refs"),
             (".lance-reserved", "other"),
         ],
     )

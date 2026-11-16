@@ -2,7 +2,7 @@
 
 A shallow clone reads its source's data files where they are, and its registration tags the version it reads on the source,
 which keeps that version through the source's cleanup and refuses the source's destroying drop. So registering one asks
-what the tag door asks on each source, ``can_create_tag`` (an owner or a publisher): a reader who could register a clone
+what the tag door asks on each source, ``can_create_tag`` (an owner or a tagger): a reader who could register a clone
 would pin the owner's table. The question is asked before anything is attached, so a refused caller leaves no row, mark
 or claim behind. Its refusal is one sentence whether a governed table is at the source's root or not, and names only that
 root, which the caller's own manifest holds, never the table there ([[LH-436]]).
@@ -42,7 +42,7 @@ def _source_root(clone: Path) -> str:
 def cloned(governed_catalog: Any, tmp_path: Path) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
     """alice's ``lance_catalog$db$src`` and a shallow clone of it at ``<root>/clone``; a dataset no table holds and a shallow clone of it
     at ``<root>/stray``; carol a writer on ``lance_catalog$db2``, bob a writer on ``lance_catalog$db2`` and a reader on ``lance_catalog$db``, and dave a writer on
-    ``lance_catalog$db2`` and a publisher of ``lance_catalog$db$src`` who reads nothing there."""
+    ``lance_catalog$db2`` and a tagger of ``lance_catalog$db$src`` who reads nothing there."""
     catalog = governed_catalog
     alice = catalog.bearer("alice")
     for namespace in ("db", "db2"):
@@ -65,7 +65,7 @@ def cloned(governed_catalog: Any, tmp_path: Path) -> Any:  # noqa: ANN401 — th
         granted = catalog.client.post(f"/management/v1/namespace/{namespace}/access/grant", json={"user": f"dex~{user}", "relation": relation}, headers=alice)
         assert granted.status_code == 200, granted.text
     described = catalog.client.post("/v1/table/lance_catalog$db$src/describe", json={}, headers=alice)
-    catalog.store.write((catalog.person("dave"), "publisher", fga.table_object(described.json()["properties"]["rask.uuid"])))
+    catalog.store.write((catalog.person("dave"), "tagger", fga.table_object(described.json()["properties"]["rask.uuid"])))
     return catalog
 
 
@@ -74,7 +74,7 @@ def cloned(governed_catalog: Any, tmp_path: Path) -> Any:  # noqa: ANN401 — th
     [
         pytest.param("carol", "clone", "can_read_data", id="a-caller-with-no-grant-on-the-source"),
         pytest.param("bob", "clone", "can_create_tag", id="a-reader-of-the-source"),
-        pytest.param("dave", "clone", "can_read_data", id="a-publisher-who-may-not-read-the-source"),
+        pytest.param("dave", "clone", "can_read_data", id="a-tagger-who-may-not-read-the-source"),
         pytest.param("carol", "stray", "can_read_data", id="a-source-no-table-holds"),
     ],
 )

@@ -118,23 +118,23 @@ def test_expand_preserves_intersection_and_difference() -> None:
     # The operator IS the explanation. A `but not` that normalises away turns a denied subject into an
     # allowed-looking one on screen — the precise failure both reference playgrounds ship.
     tree = _node(
-        "table:t#can_promote",
+        "table:t#can_classify",
         intersection=_nodes(
             _node("a", leaf=_leaf(computed="writer")),
             _node(
                 "b",
                 difference=SimpleNamespace(
-                    base=_node("base", leaf=_leaf(computed="validator")),
+                    base=_node("base", leaf=_leaf(computed="classifier")),
                     subtract=_node("sub", leaf=_leaf(users=["user:banned"])),
                 ),
             ),
         ),
     )
-    result = asyncio.run(fga.expand(_client({"table:t#can_promote": tree}), relation="can_promote", obj="table:t"))
+    result = asyncio.run(fga.expand(_client({"table:t#can_classify": tree}), relation="can_classify", obj="table:t"))
 
     assert [c["name"] for c in result["intersection"]] == ["a", "b"]
     difference = result["intersection"][1]["difference"]
-    assert difference["base"]["leaf"]["computed"] == "validator"
+    assert difference["base"]["leaf"]["computed"] == "classifier"
     assert difference["subtract"]["leaf"]["users"] == ["user:banned"]
 
 
@@ -245,14 +245,14 @@ def test_list_users_returns_the_userset_arm_it_used_to_discard() -> None:
             del body
             return SimpleNamespace(
                 users=[
-                    SimpleNamespace(object=None, userset=SimpleNamespace(type="role", id="validators", relation="assignee"), wildcard=None),
+                    SimpleNamespace(object=None, userset=SimpleNamespace(type="role", id="stewards", relation="assignee"), wildcard=None),
                     SimpleNamespace(object=SimpleNamespace(type="user", id="alice"), userset=None, wildcard=None),
                     SimpleNamespace(object=None, userset=None, wildcard=SimpleNamespace(type="user")),
                 ]
             )
 
     result = asyncio.run(fga.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", qualified=True))
-    assert result == ["role:validators#assignee", "user:*", "user:alice"]
+    assert result == ["role:stewards#assignee", "user:*", "user:alice"]
 
 
 def test_list_users_passes_the_requested_filter_through() -> None:

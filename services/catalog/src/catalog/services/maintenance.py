@@ -4,7 +4,7 @@
 current version, the pins on THIS ref (a version tagged on this branch, or one a child branch was cut
 from, is NEVER collected), the retain-last-N window, and the age cutoff — it never mutates. ``run_gc``
 performs the reclaim with the SAME tag exemption the sweep uses (``error_if_tagged_old_versions=False``),
-so a long-lived promotion tag can't stall GC. ``delete_versions`` backs the spec's version-delete door
+so a long-lived tag can't stall GC. ``delete_versions`` backs the spec's version-delete door
 with the same reclaim, for named versions, and refuses a pinned one instead of skipping it. Pure over a
 Lance dataset handle, so these are unit-testable with a fake ``ds``.
 

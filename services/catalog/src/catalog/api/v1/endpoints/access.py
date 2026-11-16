@@ -91,7 +91,7 @@ classification_router = APIRouter(prefix="/management/v1/classification", tags=[
 #: The rungs this surface may hand out: every one the model gives a `can_grant_<rung>`, other than the tenancy rungs
 #: the members door serves. A service's own identity is granted here like a person's ([[LH-563]]): `maintainer` for a
 #: bring-your-own compaction job, `decider` on a project or a warehouse for a service asking the decision door there.
-#: `publisher` and the warehouse's `maintenance` have no grant action in the model, so this surface hands out neither.
+#: `tagger` and the warehouse's `maintenance` have no grant action in the model, so this surface hands out neither.
 #:
 #: IT MUST COVER EVERY `can_grant_<rung>` THE MODEL DECLARES, and did not — `classifier` shipped with
 #: its grant action and the argument for it written into `model.fga`, while this hand-kept tuple
@@ -102,7 +102,6 @@ _GRANTABLE_BASE: tuple[str, ...] = (
     "owner",
     "writer",
     "reader",
-    "validator",
     "maintainer",
     "manage_grants",
     "pass_grants",

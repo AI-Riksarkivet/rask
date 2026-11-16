@@ -167,7 +167,7 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md) | LH-468 | Provenance is a rask service; the lineage graph is bring-your-own (2026-10-12) | accepted |
 | [0159](0159-four-owner-rulings-recorded-from-agent-memory.md) | LH-063 | Four owner rulings of 2026-09-25/26 that no ADR recorded: branch writes, the principal key, catalog drop events, an unplannable compaction (2026-10-12) | amended |
 | [0160](0160-the-tier-judge-owns-the-write-rung-and-a-tier-is-declared-once.md) | LH-470 | The tier judge owns the write rung, and a tier is declared once (2026-10-13) | superseded by 0211 |
-| [0161](0161-the-tag-gate-runs-at-publish.md) | LH-466 | The tag gate runs when a version is published, so a hold is the publish door's answer (2026-10-15) | accepted |
+| [0161](0161-the-tag-gate-runs-at-publish.md) | LH-466 | The tag gate runs when a version is published, so a hold is the publish door's answer (2026-10-15) | superseded by 0212 |
 | [0162](0162-the-lakehouse-builds-nothing-maintenance-decides.md) | LH-467 | The lakehouse builds nothing: compaction and indexing commit through `version/create`, and maintenance decides (2026-10-15) (superseded in part by 0198) | amended |
 | [0163](0163-an-erasure-is-an-obligation-a-job-fulfils-and-the-catalog-verifies.md) | LH-493 | An erasure is an obligation a bring-your-own job fulfils and the catalog verifies (2026-10-15) | amended |
 | [0164](0164-a-stock-client-commits-on-a-branch-through-create-table-version.md) | LH-490 | A stock client commits on a branch through `CreateTableVersion`; `CreateTableBranch` creates it (2026-10-15) | accepted |
@@ -218,3 +218,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0209](0209-the-requests-w3c-trace-is-the-one-correlation-id.md) | XC-048 | The request's W3C trace is the one correlation id: request-id is gone, every request runs in a trace, events carry it on their envelope and commits as `rask.traceparent` (2026-11-15) | accepted |
 | [0210](0210-the-console-shows-what-is-there-by-its-path.md) | FE-022 | The console shows what is there, by its path: only working pages, Home from real reads, catalog objects named by path, connect snippets, a Versions tab (2026-11-15) | amended |
 | [0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md) | LH-596 | Labels a project defines replace tiers, and the run rule stands alone as `rask.requires_run` (2026-11-15) | accepted |
+| [0212](0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md) | LH-594 | Publication goes, and a table's data contract is checked on every commit (2026-11-16) | accepted |

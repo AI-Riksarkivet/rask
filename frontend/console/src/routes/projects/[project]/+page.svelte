@@ -274,7 +274,6 @@
 			<a href={resolve(`catalog/warehouses?project=${encodeURIComponent(project)}`)}>Warehouses</a>
 			<a href={resolve(`catalog/namespaces?project=${encodeURIComponent(project)}`)}>Namespaces</a>
 			<a href={resolve(`catalog/tables?project=${encodeURIComponent(project)}`)}>Tables</a>
-			<a href={resolve(`catalog/promotions?project=${encodeURIComponent(project)}`)}>Promotions</a>
 		</nav>
 
 		<!-- The hierarchy first: the relationship the estate is built on — project › warehouse ›

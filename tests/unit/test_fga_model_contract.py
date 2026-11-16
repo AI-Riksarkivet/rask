@@ -233,9 +233,8 @@ def test_a_destructive_door_is_owner_tier(suffix: str) -> None:
     (``can_drop``), the same bar as ``maintenance/run``, which reclaims old versions and EXEMPTS tagged ones.
 
     Undeclared a suffix is refused for every caller; on the writer map a plain data writer clears it.
-    ``tags/delete`` at the writer rung removes the pin that defeats the owner-tier rollback guard
-    (publication refuses to move ``published`` backwards, so a writer deletes the tag and republishes at
-    an older version). ``published`` is the estate's serving pointer, and Lance keeps the CAS in the
+    ``tags/delete`` at the writer rung removes the pin a reader's tag is: the version it names becomes
+    reclaimable. A pipeline's ``stable`` is the pointer its readers open, and Lance keeps the CAS in the
     object store, so the pointer is a tag INSIDE the dataset and authorization carries the weight a
     catalog transaction would carry elsewhere. A branch FORKS HISTORY (``branches/create``), so refusing a
     writer the pointer's delete while permitting the fork's is incoherent.
@@ -431,7 +430,7 @@ def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
 #: The (type, relation) pairs a TIME-BOXED grant may be written against — every direct type
 #: restriction carrying the `non_expired_grant` condition.
 #:
-#: The set is exactly the three data rungs (`reader`, `writer`, `validator`) plus the materialized
+#: The set is exactly the two data rungs (`reader`, `writer`) plus the materialized
 #: view's `refresher`, plus `maintainer`, and its shape is the invariant: **ownership and grant
 #: AUTHORITY are never time-boxable.**
 #:
@@ -447,12 +446,12 @@ def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
 #: `pass_grants` is the same failure one axis over: the delegation lapses while the grants it issued
 #: stand, and nobody is left able to revoke them.
 #:
-#: `publisher` qualifies on the same rule, decided 2026-09-10 when the rung was added. An expired
-#: publisher leaves the `published` tag exactly where it was last moved: the version that was blessed
-#: stays blessed, consumers keep resolving it, and nothing is stranded, unlistable or unrevocable. The
-#: only loss is the ability to bless the NEXT version, which is the fail-safe direction and is
+#: `tagger` qualifies on the same rule, decided 2026-09-10 when the rung was added. An expired
+#: tagger leaves each tag exactly where it was last moved: the version that was tagged
+#: stays tagged, consumers keep resolving it, and nothing is stranded, unlistable or unrevocable. The
+#: only loss is the ability to tag the NEXT version, which is the fail-safe direction and is
 #: repairable by an owner moving the tag or by re-granting. It wants an expiry for the same reason
-#: `maintainer` does — a promotion campaign scoped to one migration should lapse on its own.
+#: `maintainer` does: a campaign scoped to one migration should lapse on its own.
 #:
 #: `classifier` qualifies, and it is the CLEAREST case of the rule yet ([[LH-058]], 2026-09-22). What an
 #: expiry leaves behind is a table whose classification STANDS: the label lives in Lance field metadata
@@ -467,21 +466,18 @@ _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
     {
         ("warehouse", "reader"),
         ("warehouse", "writer"),
-        ("warehouse", "validator"),
         ("namespace", "reader"),
         ("namespace", "writer"),
-        ("namespace", "validator"),
         ("table", "reader"),
         ("table", "writer"),
-        ("table", "validator"),
         ("materialized_view", "reader"),
         ("materialized_view", "refresher"),
         ("warehouse", "maintainer"),
         ("namespace", "maintainer"),
         ("table", "maintainer"),
-        ("warehouse", "publisher"),
-        ("namespace", "publisher"),
-        ("table", "publisher"),
+        ("warehouse", "tagger"),
+        ("namespace", "tagger"),
+        ("table", "tagger"),
         ("warehouse", "classifier"),
         ("namespace", "classifier"),
         ("table", "classifier"),

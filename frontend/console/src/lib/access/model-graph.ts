@@ -22,7 +22,7 @@ export type RelationEdgeKind =
 	| 'assignable' // `[user]` — a tuple can be written directly
 	| 'implies' // `or writer` — a same-object rung (computedUserset)
 	| 'from-parent' // `or owner from parent` — tupleToUserset, the cascade
-	| 'requires' // `and validator` — intersection
+	| 'requires' // `and member` — intersection
 	| 'excludes'; // `but not banned` — difference
 
 const KIND_LABEL: Record<RelationEdgeKind, string> = {

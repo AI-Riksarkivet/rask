@@ -124,7 +124,6 @@ nav = [
           "adr/0157-stock-clients-commit-through-managed-versioning.md",
           "adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md",
           "adr/0159-four-owner-rulings-recorded-from-agent-memory.md",
-          "adr/0161-the-tag-gate-runs-at-publish.md",
           "adr/0162-the-lakehouse-builds-nothing-maintenance-decides.md",
           "adr/0163-an-erasure-is-an-obligation-a-job-fulfils-and-the-catalog-verifies.md",
           "adr/0164-a-stock-client-commits-on-a-branch-through-create-table-version.md",
@@ -175,6 +174,7 @@ nav = [
           "adr/0209-the-requests-w3c-trace-is-the-one-correlation-id.md",
           "adr/0210-the-console-shows-what-is-there-by-its-path.md",
           "adr/0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md",
+          "adr/0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md",
         ]},
         { "Superseded and retired" = [
           "adr/0005-p2-1-single-base-cascade-write.md",
@@ -232,6 +232,7 @@ nav = [
           "adr/0147-produce-asks-the-catalog-where-bronze-lives.md",
           "adr/0152-service-kit-ships-py-typed-and-skips-report-zeros.md",
           "adr/0160-the-tier-judge-owns-the-write-rung-and-a-tier-is-declared-once.md",
+          "adr/0161-the-tag-gate-runs-at-publish.md",
         ]},
       ]},
       { "Write Governance" = "WRITE-GOVERNANCE.md" },

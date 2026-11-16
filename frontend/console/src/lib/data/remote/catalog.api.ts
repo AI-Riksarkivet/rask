@@ -24,6 +24,7 @@ import {
 
 import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
+import { ContractResponseSchema, type ContractResponse } from '../contract';
 // Transport: the console's catalog door, `#lib/doors`.
 // The catalog TABLE-LIFECYCLE plane, declared with `query`/`command`: one named function per door, each
 // answering the shared `ApiResult` union, so no call site indexes a door by a client-supplied string.
@@ -98,6 +99,17 @@ export type TrashEntry = v.InferOutput<typeof TrashEntrySchema>;
 
 export const fetchTableTasks = query(v.string(), async (table): Promise<ApiResult<TrashEntry[]>> =>
 	parsed(await catalogJSON(`/management/v1/table/${enc(table)}/tasks`), v.array(TrashEntrySchema)),
+);
+
+/** The data contract the table holds (ADR 0212), read at `can_get_metadata`; `contract` is null for a
+ *  table that holds none. Setting one is the owner's, at the catalog's `contract/set` door. */
+export const fetchTableContract = query(
+	v.string(),
+	async (table): Promise<ApiResult<ContractResponse>> =>
+		parsed(
+			await catalogJSON(`/management/v1/table/${enc(table)}/contract/describe`, { method: 'POST' }),
+			ContractResponseSchema,
+		),
 );
 
 /** Recover a dropped table from the trash (#75). Owner-gated at the catalog; a 404 means the grace

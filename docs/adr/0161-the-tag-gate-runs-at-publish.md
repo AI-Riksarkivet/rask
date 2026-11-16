@@ -1,6 +1,7 @@
 # 0161. The tag gate runs when a version is published, so a hold is the publish door's answer (2026-10-15)
 
-**Status:** accepted. Source: owner, 2026-10-15, choosing between two designs through the multi-question tool while
+**Status:** superseded by [ADR 0212](0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md): the catalog serves no gate, publish or promotion; a pipeline tags the
+version it vetted, and a table's data contract is checked on every commit. Source: owner, 2026-10-15, choosing between two designs through the multi-question tool while
 taking LH-466 (#586). Refines ADR 0156 C1 and ADR 0160.
 
 ## Context

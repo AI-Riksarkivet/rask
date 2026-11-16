@@ -25,7 +25,7 @@ boundary. What a record says is not: a record that reached the store past the do
 it. A drop or deregister ends a table's record through :mod:`lakehouse.object_records`.
 
 Fields: ``retention_days`` / ``retain_versions`` (old-version cleanup overrides — Lance itself exempts
-tag-pinned versions from cleanup, so ``published`` and every other tag survive any policy), ``compact_enabled``
+tag-pinned versions from cleanup, so every tagged version survives any policy), ``compact_enabled``
 (opt a dataset out of maintenance entirely), ``compact_interval_hours`` (cadence — the sweep skips the
 dataset until the interval has elapsed since its last maintenance; the sweep records that stamp under
 ``_policies/state/<table uuid>/``, a separate prefix so the two writers never contend, which the table's ending ends). All IO is blocking; callers

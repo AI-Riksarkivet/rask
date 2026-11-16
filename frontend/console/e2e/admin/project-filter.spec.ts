@@ -16,17 +16,6 @@ const WAREHOUSE = (id: string, project: string) => ({
 	status: 'active',
 });
 
-const HOLD = (table: string) => ({
-	table,
-	uuid: `uuid-${table}`,
-	version: 3,
-	published_version: 2,
-	reasons: ['row_count_delta'],
-	opened_at: '2026-11-01T10:00:00Z',
-	expires_at: '2026-11-04T10:00:00Z',
-	state: 'open',
-});
-
 test.beforeEach(async ({ context, request }, testInfo) => {
 	bearer = `${TOKEN.admin}:project-filter:${testInfo.testId}`;
 	await signIn(context, { token: bearer });
@@ -40,10 +29,6 @@ test.beforeEach(async ({ context, request }, testInfo) => {
 				],
 				'GET /v1/table': {
 					tables: ['acme-wh$db1$t', 'globex-wh$db2$u', 'lance_catalog$provenance$events'],
-				},
-				'GET /management/v1/promotions?limit=100': {
-					holds: [HOLD('acme-wh$db1$t'), HOLD('globex-wh$db2$u')],
-					page_token: null,
 				},
 				// The projects the caller can see: `globex` is one this caller holds no role on, and
 				// `initech` one with no warehouse, so nothing in any list.
@@ -107,10 +92,6 @@ test('the tables list filters by project, in the URL, and a table in the estate 
 	);
 });
 
-test('the promotions list filters by project, in the URL', async ({ page }) => {
-	await proveFilter(page, '/catalog/promotions', 'acme-wh › db1 › t', 'globex-wh › db2 › u');
-});
-
 test('a filter the list cannot apply says why and offers to clear it, and an empty match names the project', async ({
 	page,
 	request,
@@ -138,19 +119,6 @@ test('a filter the list cannot apply says why and offers to clear it, and an emp
 	await notice.getByRole('button', { name: 'Show all projects' }).click();
 	await expect(page).not.toHaveURL(/project=/);
 	await expect(page.getByText('globex-wh › db2 › u', { exact: true })).toBeVisible();
-});
-
-test('promotions filtered to a project with no hold say so, and say the filter reads only the holds loaded', async ({
-	page,
-}) => {
-	await page.goto('/catalog/promotions?project=initech');
-	await expect(
-		page.getByText('No promotion of project initech is waiting for a decision.'),
-	).toBeVisible();
-	await expect(page.getByTestId('promotions-filter-scope')).toHaveText(
-		'Among the 2 holds loaded, which are all of them.',
-	);
-	await expect(page.getByTestId('promotions')).toHaveCount(0);
 });
 
 test('a filter naming no project the reader can see, and no row, says so and offers every project', async ({

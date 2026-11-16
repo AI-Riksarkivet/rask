@@ -1073,70 +1073,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/management/v1/project/{id}/gate/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Delete Gate
-         * @description Stop overriding — the chart's settings govern again. Never writes zeros; see the module note.
-         */
-        post: operations["delete_gate_management_v1_project__id__gate_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/project/{id}/gate/describe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Describe Gate
-         * @description This project's declared gate, or ``null`` when the chart's settings still govern.
-         *
-         *     ``null`` rather than a populated default: a caller must be able to tell "nothing is declared" —
-         *     where a `helm upgrade` is still the only lever — from "declared, and these are the values". A declaration that cannot
-         *     be read is neither, so it is refused as the publish refuses it ([[LH-572]]).
-         */
-        post: operations["describe_gate_management_v1_project__id__gate_describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/project/{id}/gate/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Gate
-         * @description Declare (or re-declare) this project's gate settings — admin-gated; idempotent.
-         */
-        post: operations["set_gate_management_v1_project__id__gate_set_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/management/v1/project/{id}/policy/delete": {
         parameters: {
             query?: never;
@@ -1680,32 +1616,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/management/v1/promotions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Promotions
-         * @description The open holds the caller may see, the soonest the sweep expires first: each table's held version, what
-         *     `published` names, why it is held and when the sweep expires it. A hold names its table as the table is named now,
-         *     and is listed to a caller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and
-         *     expires.
-         *
-         *     A hold is named and judged only as the page fills (:func:`fga_deps.named_record_page`), on the uuid it records
-         *     ([[LH-524]]), the object the table's grants are held by: a page costs about the holds it serves or passes over.
-         */
-        get: operations["list_promotions_management_v1_promotions_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/management/v1/table/{id}/access/check": {
         parameters: {
             query?: never;
@@ -1893,14 +1803,6 @@ export interface paths {
          *     one (§ J1), because following every row a table ever received is the most disclosing read
          *     available, not a metadata lookup.
          *
-         *     THE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find
-         *     it. That `ControlAction` (`lakehouse.control_events.ControlAction`) announces a version advance and
-         *     carries `{from_version, to_version}` — "the RANGE (D-R3) the notification carries, so a consumer
-         *     resolves the delta" (`catalog/services/publication.py:245-254`) — which is exactly the window this
-         *     door takes. Its emitter is a DIFFERENT `publication.py`, the route module
-         *     `catalog/api/v1/endpoints/publication.py:343-356`, gated on `result.advanced` so only a real
-         *     advance signals. A consumer subscribes to `catalog.control.v1`, reads the pair off the event, and
-         *     calls here with it — no new `ControlAction` member, so no added control-buffer cost.
          *     It names no person a notifier addresses: a version advance changes an OBJECT, not
          *     what any particular person may do, so it is an untargeted control event like the other 31 and
          *     reaches a feed rather than a person.
@@ -1912,6 +1814,74 @@ export interface paths {
          *     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
          */
         post: operations["table_changes_management_v1_table__id__changes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/contract/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Table Contract
+         * @description Delete the table's data contract (idempotent): its commits are held to no contract after. Asked at
+         *     ``can_set_contract``.
+         */
+        post: operations["delete_table_contract_management_v1_table__id__contract_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/contract/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Table Contract
+         * @description The data contract the table holds, as the ODCS v3 document its owner set; ``contract`` is null for a table
+         *     holding none. Read at ``can_get_metadata``.
+         */
+        post: operations["describe_table_contract_management_v1_table__id__contract_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/contract/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Table Contract
+         * @description Set the table's data contract: an ODCS v3 document naming the columns its consumers rely on. Asked at
+         *     ``can_set_contract``, the table owner's.
+         *
+         *     The document is read strictly: a quality or service-level rule is refused 406, since the catalog checks a
+         *     contract's schema on every commit and nothing else. The table must meet the contract now, and a contract that takes
+         *     back what the standing one promises carries a higher major version. From then on a commit that drops, renames,
+         *     retypes or loosens a contracted column is refused 409 (code 19), through every door and from a stock client alike.
+         */
+        post: operations["set_table_contract_management_v1_table__id__contract_set_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2304,60 +2274,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/management/v1/table/{id}/promotion/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Approve Promotion
-         * @description Approve the held `version`: `published` moves to it (the spec's `UpdateTableTag`) and its watchers are told.
-         *
-         *     Gated on `can_promote` by the router (`fga_deps`), and the write judge decides it like every write. The approval
-         *     is recorded before the tag moves, so approving again completes one whose tag move failed and otherwise answers
-         *     as decided. 409 when the table holds no such version, it was decided otherwise, or `published` reached it.
-         */
-        post: operations["approve_promotion_management_v1_table__id__promotion_approve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/table/{id}/promotion/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reject Promotion
-         * @description Reject the held `version`: main is restored to the published version (the spec's `RestoreTable`), as a new
-         *     commit, so the next writer builds on what readers read. `published` does not move.
-         *
-         *     Gated on `can_promote` by the router (`fga_deps`), and the write judge decides it like every write. The rejection
-         *     is recorded before main is restored, and main is restored once: rejecting again completes a restore the first
-         *     call could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past
-         *     the held version meanwhile, there is nothing to restore and the rejection only closes the hold. A rejection whose
-         *     restore landed and whose record of it failed finds that restore when asked again and records it, rather than
-         *     restoring a second time. 409 when the table holds no such version, it was decided otherwise, or `published` reached
-         *     it; and 409 (code 14) naming main's head while main holds a commit after the held version, which a restore would
-         *     discard: the hold stays open for an approval, a RestoreTable, or a later rejection (owner, 2026-11-12).
-         */
-        post: operations["reject_promotion_management_v1_table__id__promotion_reject_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/management/v1/table/{id}/protection": {
         parameters: {
             query?: never;
@@ -2387,33 +2303,6 @@ export interface paths {
          *     and unreachable from the future properties write door (#78).
          */
         post: operations["set_table_protection_management_v1_table__id__protection_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/table/{id}/publish": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Publish Table
-         * @description Gate `version` and, if it passes, advance `published` to it; hold it when it breaches under review.
-         *
-         *     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
-         *     and the system did exactly what it should. A held one is a 200 with `held=True` and the hold. Errors
-         *     are reserved for the caller getting it wrong — an unknown version (404), a backwards move (409), a
-         *     malformed one (400), a version older than the one held (409), a version another publish overtook while
-         *     its gate ran (409, code 14) — all raised as `lance_namespace` typed errors so the shared problem-body
-         *     handler renders them.
-         */
-        post: operations["publish_table_management_v1_table__id__publish_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4127,9 +4016,8 @@ export interface paths {
          *     control event is targeted when it changes what a specific PERSON may do or must do, not when it
          *     changes an object. A tag is a ref, so this joins the members that name nobody.
          *
-         *     THE REF PLANE IS WHERE `published` LIVES, which is why these three matter more than their size
-         *     suggests: `table_published` already announces the publication tag moving, and until now the OTHER
-         *     ref mutations moved in silence — a console could not tell a tag was gone.
+         *     A TAG IS HOW A PIPELINE MARKS A VERSION READY (`lance_docs/lance/guide/tags_and_branches.md`), under a name it
+         *     chooses, so each of the three ref mutations is announced: a reader holding "tag -> version" learns it moved.
          */
         post: operations["create_table_tag_v1_table__id__tags_create_post"];
         delete?: never;
@@ -4153,7 +4041,7 @@ export interface paths {
          *
          *     Authorization alone governs it (``can_drop``): a tag pins the version it names against cleanup, so deleting
          *     one makes that version reclaimable, which is history reclaim, and deletion protection guards dropping the
-         *     table, not its history (ADR 0150). The catalog's own tags, ``published`` among them, are refused here.
+         *     table, not its history (ADR 0150). The catalog's own clone tags are refused here.
          */
         post: operations["delete_table_tag_v1_table__id__tags_delete_post"];
         delete?: never;
@@ -4597,7 +4485,7 @@ export interface components {
          * AccessGrantRequest
          * @description Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` → ``user:alice``)
          *     or a fully-qualified userset (``role:<id>#assignee``); ``relation`` must
-         *     be a grantable base rung the compiled model defines on the type (owner/writer/reader/validator) — never
+         *     be a grantable base rung the compiled model defines on the type (owner/writer/reader/maintainer) — never
          *     a derived ``can_*`` action nor the structural ``parent`` edge.
          */
         AccessGrantRequest: {
@@ -5716,7 +5604,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted" | "role_created" | "role_deleted" | "label_defined" | "label_deleted" | "table_labelled" | "table_unlabelled" | "namespace_labelled" | "namespace_unlabelled";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted" | "role_created" | "role_deleted" | "label_defined" | "label_deleted" | "table_labelled" | "table_unlabelled" | "namespace_labelled" | "namespace_unlabelled" | "table_contract_set" | "table_contract_deleted";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5735,7 +5623,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "gate" | "principal" | "role" | "label";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "principal" | "role" | "label";
             /** Object Uuid */
             object_uuid?: string | null;
             /**
@@ -5831,6 +5719,24 @@ export interface components {
             target_rows_per_fragment?: number | null;
             /** Tasks */
             tasks: number;
+        };
+        /**
+         * ContractResponse
+         * @description The data contract a table holds (ADR 0212): the ODCS v3 document its owner set, or none.
+         */
+        ContractResponse: {
+            /** Contract */
+            contract?: {
+                [key: string]: unknown;
+            } | null;
+            /** Set At */
+            set_at?: string | null;
+            /** Set By */
+            set_by?: string | null;
+            /** Table */
+            table: string;
+            /** Uuid */
+            uuid: string;
         };
         /**
          * CountTableRowsRequest
@@ -7619,55 +7525,6 @@ export interface components {
             multi_match?: components["schemas"]["MultiMatchQuery"] | null;
             phrase?: components["schemas"]["PhraseQuery"] | null;
         };
-        /**
-         * GateSpecRequest
-         * @description Declare one project's gate. The project comes from the gated PATH, never from here.
-         *
-         *     Omitting ``project`` is the security half: a body-supplied project would let an admin of one
-         *     tenant pass ``can_administer`` on their own project while rewriting somebody else's gate.
-         *
-         *     Field semantics live on ``lakehouse.gate_specs.GateSpec``, which is the model this
-         *     validates into.
-         */
-        GateSpecRequest: {
-            /**
-             * Key Column
-             * @default id
-             */
-            key_column?: string;
-            /** Required Columns */
-            required_columns?: string[];
-            /**
-             * Review Band
-             * @default 0.25
-             */
-            review_band?: number;
-            /**
-             * Review Enabled
-             * @default false
-             */
-            review_enabled?: boolean;
-            /**
-             * Review Hours
-             * @default 72
-             */
-            review_hours?: number;
-        };
-        /** GateSpecResponse */
-        GateSpecResponse: {
-            /** Key Column */
-            key_column: string;
-            /** Project */
-            project: string;
-            /** Required Columns */
-            required_columns?: string[];
-            /** Review Band */
-            review_band: number;
-            /** Review Enabled */
-            review_enabled: boolean;
-            /** Review Hours */
-            review_hours: number;
-        };
         /** GcPreview */
         GcPreview: {
             /** Current Version */
@@ -8957,75 +8814,6 @@ export interface components {
             /** Status */
             status: string;
         };
-        /**
-         * PromotionDecision
-         * @description What a decision did: the closed hold, what readers of `published` now read, and main's restore.
-         */
-        PromotionDecision: {
-            hold: components["schemas"]["PromotionHold"];
-            /** Published Version */
-            published_version: number | null;
-            /** Restored Version */
-            restored_version?: number | null;
-        };
-        /**
-         * PromotionDecisionRequest
-         * @description The held version being decided. A decision lands only on the hold its decider reviewed.
-         */
-        PromotionDecisionRequest: {
-            /** Version */
-            version: number;
-        };
-        /**
-         * PromotionHold
-         * @description A version the project's quality gate holds for a `can_promote` holder, or the last decision on one.
-         */
-        PromotionHold: {
-            /** Decided At */
-            decided_at?: string | null;
-            /** Decided By */
-            decided_by?: string | null;
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-            /**
-             * Opened At
-             * Format: date-time
-             */
-            opened_at: string;
-            /** Published Version */
-            published_version: number | null;
-            /** Reasons */
-            reasons: string[];
-            /** Requested By */
-            requested_by?: string | null;
-            /** Restored Version */
-            restored_version?: number | null;
-            /**
-             * State
-             * @default open
-             * @enum {string}
-             */
-            state?: "open" | "approved" | "rejected" | "expired" | "superseded";
-            /** Table */
-            table: string;
-            /** Uuid */
-            uuid: string;
-            /** Version */
-            version: number;
-        };
-        /**
-         * PromotionsListResponse
-         * @description The open holds the caller may see, the soonest the sweep expires first.
-         */
-        PromotionsListResponse: {
-            /** Holds */
-            holds: components["schemas"]["PromotionHold"][];
-            /** Page Token */
-            page_token?: string | null;
-        };
         /** ProtectionResponse */
         ProtectionResponse: {
             /** Id */
@@ -9034,69 +8822,6 @@ export interface components {
             protected: boolean;
             /** Set By */
             set_by?: string | null;
-        };
-        /**
-         * PublishRequest
-         * @description Ask the catalog to gate a committed version and, if it passes, publish it.
-         *
-         *     `version` is explicit rather than "whatever is latest": between a writer's commit and its publish
-         *     call another writer may have committed, and publishing a version nobody gated is the failure the
-         *     gate exists to prevent. The caller names what it wrote.
-         */
-        PublishRequest: {
-            /** Accept Assertions */
-            accept_assertions?: string[];
-            /**
-             * Gate Only
-             * @default false
-             */
-            gate_only?: boolean;
-            /** Key Column */
-            key_column: string;
-            /**
-             * Originator
-             * @default
-             */
-            originator?: string;
-            /** Required Columns */
-            required_columns?: string[];
-            /** Version */
-            version: number;
-        };
-        /**
-         * PublishResult
-         * @description The outcome, and the RANGE a notification should carry (§ D2 D-R3).
-         *
-         *     `published=False` is a normal answer, not an error: the gate refused, the pointer did not move,
-         *     and the previously published version keeps serving. `assertions` come back either way so a
-         *     blocked batch is auditable without re-running anything.
-         */
-        PublishResult: {
-            /** Assertions */
-            assertions?: {
-                [key: string]: unknown;
-            }[];
-            /** From Version */
-            from_version: number | null;
-            /**
-             * Gate Source
-             * @default request
-             */
-            gate_source?: string;
-            /**
-             * Held
-             * @default false
-             */
-            held?: boolean;
-            hold?: components["schemas"]["PromotionHold"] | null;
-            /** Published */
-            published: boolean;
-            /** Reason */
-            reason?: string | null;
-            /** Table */
-            table: string;
-            /** To Version */
-            to_version: number;
         };
         /**
          * QueryTableRequest
@@ -11873,114 +11598,6 @@ export interface operations {
             };
         };
     };
-    delete_gate_management_v1_project__id__gate_delete_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_gate_management_v1_project__id__gate_describe_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GateSpecResponse"] | null;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_gate_management_v1_project__id__gate_set_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GateSpecRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GateSpecResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_project_policy_management_v1_project__id__policy_delete_post: {
         parameters: {
             query?: {
@@ -12916,41 +12533,6 @@ export interface operations {
             };
         };
     };
-    list_promotions_management_v1_promotions_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                /** @description Continue after this hold (the previous page's `page_token`). */
-                page_token?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PromotionsListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     check_table_access_management_v1_table__id__access_check_post: {
         parameters: {
             query?: {
@@ -13255,6 +12837,114 @@ export interface operations {
                 };
                 content: {
                     "application/vnd.apache.arrow.file": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_table_contract_management_v1_table__id__contract_delete_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContractResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_table_contract_management_v1_table__id__contract_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContractResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_table_contract_management_v1_table__id__contract_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContractResponse"];
                 };
             };
             /** @description Validation Error */
@@ -13792,88 +13482,6 @@ export interface operations {
             };
         };
     };
-    approve_promotion_management_v1_table__id__promotion_approve_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PromotionDecisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PromotionDecision"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reject_promotion_management_v1_table__id__promotion_reject_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PromotionDecisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PromotionDecision"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_table_protection_management_v1_table__id__protection_get: {
         parameters: {
             query?: {
@@ -13933,47 +13541,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProtectionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    publish_table_management_v1_table__id__publish_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PublishRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublishResult"];
                 };
             };
             /** @description Validation Error */

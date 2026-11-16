@@ -13,7 +13,6 @@ const LIST_ROUTES = {
 	warehouses: '/catalog/warehouses',
 	namespaces: '/catalog/namespaces',
 	tables: '/catalog/tables',
-	promotions: '/catalog/promotions',
 } as const;
 
 export type CatalogList = keyof typeof LIST_ROUTES;

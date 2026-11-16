@@ -18,7 +18,7 @@ before trusting either in an incident.
 |---|---|---|---|
 | **pg_dump** (gzip) | the `openfga` DB (authz tuples) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
 | **VolumeSnapshot** | the RustFS fixture's data PVC = the **Lance lakehouse** (every tier + registry data, and lineage's provenance tables) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
-| **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + bucket claims), `_declared_grants/` (the tuples the catalog wrote from git's declaration), `_trash/`, `_protection/`, `_policies/`, `_gates/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
+| **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + bucket claims), `_declared_grants/` (the tuples the catalog wrote from git's declaration), `_trash/`, `_protection/`, `_policies/`, `_contracts/`, `_labels/`, `_label_definitions/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
 
 > **The VolumeSnapshot row needs a cluster that can take one.** Measured 2026-09-14 on the k3s dev
 > cluster: `kubectl get volumesnapshotclass` answers *"the server doesn't have a resource type"*, and

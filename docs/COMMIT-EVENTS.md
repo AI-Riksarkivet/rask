@@ -80,7 +80,7 @@ absent when the catalog could not read it. The OpenLineage dataset `name` stays 
 Every dataset the catalog and maintenance name is under one OpenLineage `namespace`, the catalog's endpoint:
 `lance-namespace://<host>/api/catalog`, the release's public host ([[LH-553]]; OpenLineage names a catalog's tables by the
 catalog serving them, https://openlineage.io/docs/spec/naming). Two estates' `acme$bronze$events` are then two datasets
-in one graph backend. An event that names a table's location (a create, a write, a register, a publication) also lists
+in one graph backend. An event that names a table's location (a create, a write, a register) also lists
 it in the dataset's standard `symlinks` facet as OpenLineage's clients name a storage location, type `LOCATION`:
 `s3://<bucket>` and the key, or `file` and the path. So an engine that reads the table by its location (Spark, Ray or
 DataFusion through the namespace) names the same dataset in the graph the feed is forwarded to: Marquez joins a dataset
@@ -113,16 +113,14 @@ OpenLineage `RunEvent` whose `producer` is the catalog's emitter
 - `run.facets.rask_author.sub`: the subject of the verified token that made the call.
 - `inputs`: the tables the write derived from, at their versions.
 
-### A publication
+### A version a pipeline marked ready
 
-The table's `published` tag moved: the version readers of `@published` read changed, and no row was committed
-([ADR 0161](adr/0161-the-tag-gate-runs-at-publish.md)). `event_type` is `COMPLETE` and `event` is a `RunEvent` from the
-catalog's emitter whose `run.facets.rask_lance.operation` is `publish_table` and whose `version` is the version now
-published, a version an earlier row already committed. `run.facets.rask_author.sub` is who moved it: the publisher when the
-project's gate passed the version, or the validator who approved it when the gate held it. Trigger the next table's build on
-this row when it should read only what readers of `@published` read. Its run id is derived from the table, the version
-and the time the tag moved, so one publication is one row however many times it is announced, and a version published
-again later (after an erasure dropped the tag) is a new row.
+The feed carries commits. Which version is ready is the pipeline's own tag, under a name it chooses
+([`WRITE-GOVERNANCE.md`](WRITE-GOVERNANCE.md) § Marking a version ready,
+[ADR 0212](adr/0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md)), and a tag commits no
+version, so no feed row announces one. A consumer that should read only what its producer marked opens the tag
+(`version="stable"`) when it runs, or reads the tag's version through `GetTableTagVersion` and follows the feed up to
+it.
 
 ### A dataset change
 
@@ -165,11 +163,6 @@ an outside source, and so is a dataset under another catalog's `lance-namespace:
   the estate's operator (LH-550). A table registered over a dataset written elsewhere is
   looked at from its register on (LH-550): the versions it held then were committed past the catalog, so none is
   announced, whatever author it names, and the register's own `register_table` event is the one the feed carries.
-- A publication is recovered the same way (LH-552, [ADR 0188](adr/0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md)):
-  the reconcile timer reads the version each table's `published` tag names and when the tag moved there, and when the feed
-  holds no `publish_table` for that move, announces it for the person the catalog recorded moving the tag. A tag moved past the catalog's doors names no
-  such person: it is counted unauthored, which pages, and never announced. Only the version the tag names now is looked
-  for, so a publication the tag moved past before the reconcile ran is not announced; the newer one is.
 - A table's lifecycle markers (a declare, a register, a rename, a drop, a deregister, an undrop) and the control
   events the doors that change grants, roles, projects and principals send are filed on the control root before their
   change ([ADR 0205](adr/0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md)). A door
@@ -227,9 +220,6 @@ percent-encoded, which `fga.subject_of` decodes, or a userset):
 | `grant_added`, `grant_revoked` | the principal or userset the grant names; `extra.relation` is the rung and `object_id` the object |
 | `erasure_release_scheduled` | one event per person the release costs (the erasure's requester and each table owner), with the deadline in `extra.due_at` |
 | `principal_deleted` | the principal the estate admin offboarded: nobody is left to tell, so a notifier erases what it keeps for them |
-
-`table_published` carries `extra.originator`, the person a publication was for, as the catalog resolved it from a
-service's claim or a person's own token.
 
 ### What a notifier asks
 

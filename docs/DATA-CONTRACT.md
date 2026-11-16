@@ -1,80 +1,133 @@
-# The data contract — what it is here, how it's enforced, and what is honestly not yet
+# The data contract: what it is here, and where it is enforced
 
-**Status: DOCUMENTED 2026-07-11 (§9 P1 — previously existed only in chat).** Answers four
-questions in order: what a data contract is, how THIS platform's works, whether it's prod-ready
-(honest split), and how it relates to NATS and to Lakekeeper. Every claim cites shipped code.
+A data contract is the agreement between a table's **producer** and its **consumers** about what the data looks like and
+how it may change. This page answers, in order: what the contract is made of here, how a table's owner states one, where
+the catalog holds a commit to it, what is deliberately not enforced, and what the bus adds. Every claim cites shipped
+code. The decision is [ADR 0212](adr/0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md).
 
-## 1 · What a "data contract" is
-
-The agreement between a data **producer** and its **consumers** about what the data looks like and
-how it may change: the schema, the versioning/evolution rules, the quality guarantees, and how a
-consumer can rely on all three without talking to the producer's team. In classic stacks this is a
-separate ARTIFACT — an Avro schema in a Kafka schema registry, a dbt model contract, a
-`datacontract.yaml` — that some gate validates against.
-
-**This platform deliberately has no schema registry.** The contract is *structural*: it falls out
-of three properties the storage and bus already have, plus two enforcement points that check it.
-
-## 2 · Our contract, in one table
+## 1 · What the contract is made of
 
 | Layer | The contract | Where it lives |
 |---|---|---|
-| **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists), proven per store by `tests/e2e-py/test_object_store_cas_e2e.py` (`make e2e-cas`), verdict in `docs/DURABILITY.md` |
-| **Bus** | **Events carry POINTERS, never data** (claim-check): a catalog write announcement names the table, its Lance version, its branch and its author; a control event names an object and an action. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code. | `catalog/core/lineage_emit.py`; facet URLs in `packages/lakehouse/src/lakehouse/openlineage.py` |
-| **Identity** | One uuid threads all planes: the catalog mints it for a table and keeps it across a rename (ADR 0173), and it is the OpenFGA object (`table:<uuid>`), the table's location (`<root>/<uuid>`) and the key lineage's edge list records; the name is how a caller addresses the table — so the contract's subject is never ambiguous, even across a rename. | catalog (`table_claims`) + `model.fga` + `lineage/services/provenance.py` |
+| **Storage** | The Lance manifest is the schema, and the version is the handshake. Every write commits an immutable, numbered version whose manifest holds the full schema, so a table describes itself at every version. | `lance_docs/lance/format/table/index.md`, `schema.md` |
+| **The table's own contract** | An ODCS v3 document its owner sets, naming the columns consumers rely on. The catalog refuses a commit that breaks one of them. | `catalog/services/contracts.py`, `_contracts/` on the control root |
+| **Bus** | Events carry pointers, never data: a write's announcement names the table, its version, its branch and its author. | § 5 and § 7 |
+| **Identity** | One uuid threads every plane: the catalog mints it for a table and keeps it across a rename (ADR 0173). It is the OpenFGA object (`table:<uuid>`), the key of the table's contract, and the `tableUuid` on its events. | `catalog/services/table_claims.py` |
 
-The **handshake in practice**: the catalog announces every committed write on lineage, naming the table and the
-version it produced; a user's pipeline reads the upstream at a version, writes downstream through the catalog
-producing a NEW version, and names its inputs at their versions in its own OpenLineage run. A pipeline reads the
-announcements from lineage's durable `GET /events` with its own token; the forward `since=` cursor and a documented
-commit-event shape are LH-472 (#598).
+The handshake in practice: the catalog announces every committed write on lineage, naming the table and the version
+it produced. A pipeline reads its upstream at a version, writes downstream through the catalog, and names its inputs at
+their versions. It follows the announcements on lineage's durable `GET /events` with its own token
+([`COMMIT-EVENTS.md`](COMMIT-EVENTS.md)).
 
-## 3 · The two enforcement points (who checks the contract, when)
+There is no schema registry: the manifest is the schema, and the contract is one record beside the table.
 
-| When | Gate | What it enforces | Code |
-|---|---|---|---|
-| **Publish-time** | The project's quality gate, declared on the catalog's gates door and run by the publish door | the DATA is good enough to publish: `row_count_positive` + `not_null(key_column)` + `blob_resolves` per blob column (one real byte read from the first and last rows' payloads, so a dangling external pointer is caught at publish rather than at first read) + `column_declared` per column the gate declares a consumer depends on | `catalog/services/publication.py`, `packages/lakehouse/src/lakehouse/quality.py` |
-| **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion, checked at every catalog door | `packages/lakehouse/src/lakehouse/governed/fga.py`, `catalog/api/fga_deps.py` |
+## 2 · Stating a contract
 
-Plus the provenance guard: a writer cannot drop, rename or rewrite the provenance column `source_rowid` or the
-`lineage.*` / `rask.*` schema-metadata keys (`catalog/core/provenance_guard.py`); every other column is the writer's.
+A contract is an [ODCS v3](https://bitol-io.github.io/open-data-contract-standard/) document (Open Data Contract
+Standard, Bitol). The table's owner sets it at the catalog, and a producer keeps it in its own repository and applies it
+from there:
 
-## 4 · Is it prod-ready? The honest split
+```bash
+curl -X POST "$CATALOG/management/v1/table/acme\$sales\$orders/contract/set" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d @orders.contract.json
+```
 
-**Enforced today and proven (unit and/or live):**
-- Immutable versions + CAS commits — the storage half of the contract rests on put-if-not-exists, which the
-  3-tier contended-write harness proved against RustFS (`docs/DURABILITY.md`), and 16 racing conditional writers
-  left one winner in each of 20 rounds on RustFS 1.0.1 (measured 2026-10-18 by `scripts/rustfs_sts_measure.py`; the audit is in git history at 64ef118a9).
-- The publish-time quality gate, FGA gates and the provenance guard — all shipped with tests.
-- **Additive** schema evolution is safe *by construction*: `add_columns` makes a new version;
-  old versions stay readable; each version's manifest carries its own schema.
+```json
+{
+  "apiVersion": "v3.0.2",
+  "kind": "DataContract",
+  "id": "orders",
+  "version": "1.0.0",
+  "status": "active",
+  "schema": [
+    {
+      "name": "orders",
+      "properties": [
+        { "name": "id", "physicalType": "int64", "required": true, "primaryKey": true, "primaryKeyPosition": 1 },
+        { "name": "placed_at", "physicalType": "timestamp[us, tz=UTC]", "required": true },
+        { "name": "customer", "physicalType": "struct", "properties": [{ "name": "email", "physicalType": "string" }] }
+      ]
+    }
+  ]
+}
+```
 
-**NOT yet prod-grade (tracked, deliberate):**
-- **Freshness** has no enforcement point: nothing in the estate flags a table whose newest version is older than
-  a budget.
-- **Drift between a commit and its announcement.** A crash between the Lance commit and the catalog's outbox stage
-  loses that write's announcement, and nothing detects it yet (LH-497, #641). An external payload deleted after
-  publication changes no Lance version, so only the publish gate's `blob_resolves` probe sees it, at publish.
-- **Breaking changes.** A gate's declared columns turn a dropped or renamed column into a publish-time
-  `column_declared` failure; nothing patrols the same declarations between publishes. Additive evolution is never
-  blocked. The wider schema-declaration item is tracked in
-  `docs/adr/0012-schema-declaration-claim-check-hardening.md`.
-- **Inputs are declared by the writer, and required only under the run rule.** Under a namespace that declares
-  `rask.requires_run = "true"`, the run and inputs are part of the write itself, carried in the spec `Context` and
-  stamped by the catalog (ADR 0156 C2, LH-225, #180), and the write judge refuses a write adding data without them at
-  every write door (ADR 0211). Outside the rule a writer names its inputs only if it chooses, so a table there may
-  have no recorded upstream.
+| Door | Asks | Does |
+|---|---|---|
+| `POST /management/v1/table/{id}/contract/set` | `can_set_contract` (the table's owner) | Reads the document strictly, checks the table meets it, records it under the table's uuid, announces `table_contract_set` |
+| `POST /management/v1/table/{id}/contract/describe` | `can_get_metadata` | Answers the document as it was set, with who set it and when; `contract` is null for a table holding none |
+| `POST /management/v1/table/{id}/contract/delete` | `can_set_contract` | Removes it (idempotent), announces `table_contract_deleted` |
+
+**What each field becomes.**
+
+- `physicalType` is the column's Arrow type as pyarrow spells it (`int64`, `string`, `timestamp[us, tz=UTC]`). A
+  property with nested `properties` is a struct, judged child by child. `logicalType`, where stated, must be the
+  family that type belongs to (`integer` for `int64`).
+- `required: true` is a non-nullable Lance field. Lance refuses a fragment whose schema differs from the table's,
+  nullability included, so Lance holds the rows to it and the catalog holds the schema to it.
+- `primaryKey: true` is a field of Lance's unenforced primary key, which is fixed once set
+  (`lance_docs/lance/format/table/index.md` § Unenforced Primary Key). The catalog already refuses a commit that
+  repeats a key value (`catalog/services/primary_keys.py`).
+
+**What a set refuses.**
+
+| Answer | When |
+|---|---|
+| 406 (code 0) | The document states a `quality` rule, `slaProperties`, or `unique` on a column that is no primary key. The catalog scans no data and runs no timer, so a contract may not promise a check nobody runs. |
+| 400 (code 13) | The document is not ODCS v3, or carries a field outside the enforced subset. |
+| 409 (code 19) | The table does not meet the contract now, on main or on a branch: a contract states what the table already is. |
+| 400 (code 13) | It takes back what the standing contract promises without a higher major version, or its version did not move forward. |
+
+## 3 · Where a commit is held to it
+
+A commit that drops, renames, retypes or loosens a contracted column is refused **409 (code 19)**, naming the
+column and the contract's version. A commit is refused for what it breaks: a violation the version it follows
+already had (a branch cut from a version older than the contract) is not the next writer's, so its commits land
+and the owner mends the table or the contract. It is checked where every commit already passes, so no writer can go around it:
+
+| Writer | Where | Code |
+|---|---|---|
+| A stock Lance client | `POST /v1/table/{id}/version/create`, which judges the staged manifest before it is finalized | `catalog/services/managed_versions.py::judge` |
+| A catalog door (`alter_columns`, `drop_columns`, `restore`, …) | The stamped commit every door makes | `catalog/services/dataplane.py::commit_stamped` |
+| `create?mode=Overwrite` over an existing table | Before the overwrite is written | `catalog/services/dataplane.py::create_table` |
+
+A column is named by its path, so a rename reads as a removal. Adding a column passes. Nothing else is checked, and
+nothing is checked at any other time: the catalog holds no version back, scans no row and runs no freshness timer.
+
+**Making a breaking change.** Set a contract that no longer forbids it, under a higher major version, then commit the
+change, then (if the column returns in a new shape) set the contract that names it again.
+
+Access is a separate gate, checked at every door: OpenFGA decides who may read, write or tag
+(`packages/lakehouse/src/lakehouse/governed/fga.py`, `catalog/api/fga_deps.py`).
+
+## 4 · What is and is not enforced
+
+**Enforced and proven:**
+
+- **Immutable versions and compare-and-swap commits.** The storage half rests on put-if-not-exists, proven against
+  RustFS ([`DURABILITY.md`](DURABILITY.md)).
+- **Breaking changes to a contracted column**, at every commit
+  (`services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py`).
+- **Additive schema evolution** is safe by construction: `add_columns` makes a new version, old versions stay
+  readable, and each version's manifest carries its own schema.
+- **A lost announcement is found.** A crash between a commit and its announcement loses the event, and the catalog's
+  commit reconciler announces it from the version log (ADR 0187).
+
+**Not enforced, by design:**
+
+- **Quality and freshness.** No rule on the data's values or its age is checked anywhere in the lakehouse. A pipeline
+  that vets its data marks the version it vetted with a tag of its own
+  ([`WRITE-GOVERNANCE.md`](WRITE-GOVERNANCE.md) § Marking a version ready).
+- **Columns no contract names.** A table with no contract, and every column a contract leaves out, changes freely.
+- **Inputs outside the run rule.** Under a namespace declaring `rask.requires_run = "true"` a write names its run and
+  inputs (ADR 0211). Elsewhere a writer names them only if it chooses, so a table there may record no upstream.
 - **The claim-check rule is a guard on size, not on shape.** Every publish goes through `lakehouse.bus.publish_event`,
-  which refuses an envelope past 900 KiB and logs one past 64 KiB; nothing below that caps facet metadata bloat for
-  thousand-column tables. NATS's ~1 MB message limit is the physical backstop.
+  which refuses an envelope past 900 KiB and logs one past 64 KiB.
 - **A message body is read as an envelope only when it is a JSON object nested no deeper than 300 levels**
-  (`lakehouse.bus_delivery.envelope_of`, the one reader every lane and every publisher's read-back goes through). The
-  envelope is the first level, and each object or array inside another is one more. A body past that is handled as one
-  that carries no event: lineage takes it as malformed and records nothing, the catalog's lane passes it over, and the
-  maintenance worker ends it. Lineage's own model accepts an event at most 258 levels deep in its envelope, so nothing
-  its HTTP door accepts is past the bound.
-- **The quality gate is a floor**: row count, key non-null, blob resolution, declared columns. Real deployments add
-  domain assertions in their own pipelines.
+  (`lakehouse.bus_delivery.envelope_of`). A body past that is handled as one that carries no event.
+
+**Recorded, not built:** a `DataContract` custom resource, reconciled by the rask operator (XC-210), will later apply
+the same door from git.
 
 ## 5 · What NATS and the bus seam actually enforce (and what they don't)
 
@@ -99,7 +152,7 @@ makes the data contract *checkable*:
   again after its lane's delay) or park (kept by the lane, then ended), and a handling is cut 10 s before its
   consumer's ack wait. Who wrote an event is proven by its `rask_signature`, which each lane verifies, not by the bus.
 - The **data** contract itself is enforced by Lance (manifest schema + CAS commit) and by the
-  catalog at the gates above. The bus's job is narrower: an event arrives at least once, and because every
+  catalog where a commit lands (§ 3). The bus's job is narrower: an event arrives at least once, and because every
   handler is idempotent (deterministic run ids, feed dedup), at-least-once is as good as exactly-once. The bus is
   internal: a user's pipeline reads the durable feed, not the topic.
 
@@ -114,15 +167,15 @@ No — related species, different format and bigger scope on our side:
 | AuthZ | OpenFGA (same choice — we studied theirs) | OpenFGA, threaded through the SAME table uuid as lineage (`table:<uuid>`) |
 | Lineage | none | OpenLineage intake, a durable commit feed and a table-level edge list as catalog-governed Lance tables, every event forwarded to a bring-your-own graph backend |
 | Change events | CloudEvents emitted on every change | OpenLineage events on lineage's durable `GET /events` feed |
-| Change approval | a `ContractVerification` trait inside the catalog that can refuse a table change that would break a data contract or quality SLO | the same idea on the Lance write path: the run rule and the publish-time gate in the catalog (ADR 0155, ADR 0156, ADR 0211) |
+| Change approval | a `ContractVerification` trait inside the catalog that can refuse a table change that would break a data contract; the open-source binary installs no verifier | the same idea on the Lance write path, shipped: a table's ODCS contract is checked on every commit, beside the run rule (ADR 0155, ADR 0156, ADR 0211) |
 | Data movement | none (catalog only) | none either: moving data between tables is the user's pipeline (ADR 0155) |
 
 We deliberately mined Lakekeeper for patterns: vended
 credentials with `expires_at_millis`, idempotency keys, scoped event emission — adopted; their
 route-enum conformance markers — skipped. Neither system is a "data contract product" like a
 schema registry; the difference is that Iceberg's contract semantics (column-ID-based evolution)
-are ecosystem-standardized, while ours lean on Lance's manifest + our own gates — which is why
-the breaking-change detector in §4 is OUR item to build, not something the format gives us.
+are ecosystem-standardized, while ours lean on Lance's manifest and the table's contract, which is why
+the breaking-change check in § 3 is the catalog's own, not something the format gives us.
 
 ## 7 · The event fabric contract
 

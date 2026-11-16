@@ -42,7 +42,7 @@ from catalog.core import encoding, formats, lineage_emit, manifest_bytes, proven
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import overlapping_segments
 from catalog.core.vending import labelled_fields
-from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, row_digests, table_claims
+from catalog.services import client_fragments, committed_files, contracts, dataplane, maintenance, primary_keys, row_digests, table_claims
 from lakehouse import base_registry, commit_records, commit_turns, features, file_identities
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.features import CREATE_FORMAT, table_file_format
@@ -889,6 +889,7 @@ def judge(
     *,
     base_judge: BaseJudge,
     external_bases: Sequence[base_registry.RecordedBase],
+    contract: contracts.Contract | None,
 ) -> Verdict:
     """Refuse the staged version if it breaks a rule the catalog's own write doors hold; say whether it adds data, and
     what it adds under the table's root.
@@ -901,12 +902,14 @@ def judge(
 
     Raises:
         InvalidInputError: The version breaks one of the rules below; nothing was finalized.
+        InvalidTableStateError: The version breaks ``contract``, the data contract the table holds (ADR 0212).
         UnsupportedOperationError: The version needs a Lance feature this catalog does not serve.
     """
     proposed = _open(staged, so)
     current = None if staged.creates else lance.dataset(staged.location, version=staged.version - 1, storage_options=so.in_clear() or None)
     _refuse_changed_invariants(proposed, current)
     _refuse_changed_schema_governance(proposed, current, operation=staged.operation)
+    contracts.require_kept(contract, current.schema if current is not None else None, proposed.schema, door="version/create")
     encoding.require_no_new_invalid_encoding(current, proposed)
     _refuse_config(proposed, current)
     held = None if current is None else _held_counters(staged.location, so, staged.version - 1)

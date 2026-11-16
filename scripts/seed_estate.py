@@ -28,8 +28,8 @@ writing it is precisely how a ghost is made.
 THE ESTATE MIRRORS THE FGA FIXTURES (``lakehouse/governed/auth/model.fga.yaml``), the same set
 ``fga_seed_demo.py`` loads and CI asserts against, so this is a replacement rather than a toy: three
 projects, three warehouses, the bronze, silver and gold namespaces under acme, each project's admins as a role of
-that project, a validators persona,
-and the users that exercise the interesting cases (a writer who is NOT a validator, a validator who
+that project, a stewards persona,
+and the users that exercise the interesting cases (a writer who is NO classifier, a classifier who
 reaches gold only through a role, a tenant member who is not an admin). Three deliberate differences:
 
 * **A warehouse is named for its tenant and holds its bucket.** The fixtures write ``warehouse:acme_bucket``;
@@ -198,7 +198,7 @@ DEMO_ESTATE = Estate(
             id="acme",
             # alice is in no role: the seed runs as her, and no door lets a caller assign herself to a role (a grant may not
             # raise its caller's own access); she administers every project she creates through its creator's admin.
-            roles=(Role(name="admins", assignees=("user:bob",)), Role(name="validators", assignees=("user:carol",))),
+            roles=(Role(name="admins", assignees=("user:bob",)), Role(name="stewards", assignees=("user:carol",))),
             warehouses=(
                 Warehouse(
                     id="acme",
@@ -238,7 +238,7 @@ DEMO_ESTATE = Estate(
         Grant("role:acme/admins#assignee", "admin", "project:acme"),
         Grant("role:research/admins#assignee", "admin", "project:research"),
         Grant("role:beta/admins#assignee", "admin", "project:beta"),
-        # dave: a plain WRITER on the bucket — writes any namespace, but is NOT a validator.
+        # dave: a plain WRITER on the bucket — writes any namespace, and holds no other rung.
         Grant("user:dave", "writer", "warehouse:acme"),
         # NO READ GRANT FOR A CLIENT'S OWN SERVICE ACCOUNT, and its absence is the control (Q17-8 / §F2-2 F2-4).
         # A client that sends its own identity when there is no session makes it the ANONYMOUS principal —
@@ -246,7 +246,7 @@ DEMO_ESTATE = Estate(
         # lineage with their OWN bearer; if a surface needs to be public, grant this subject that surface
         # explicitly and it becomes visible in the model.
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
-        Grant("role:acme/validators#assignee", "validator", "namespace:acme$gold"),
+        Grant("role:acme/stewards#assignee", "classifier", "namespace:acme$gold"),
         Grant("user:carol", "reader", "warehouse:acme"),
         # gina: a plain tenant member (not via acme's admins role): listed in the tenant and granted no data rung.
         Grant("user:gina", "member", "project:acme"),

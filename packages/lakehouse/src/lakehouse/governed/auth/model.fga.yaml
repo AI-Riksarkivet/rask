@@ -41,29 +41,26 @@ tuples:
   # service-pipeline-b: a pipeline writer — the two rungs its work needs and nothing above them.
   # Same grant shape as the sweep's: one tuple per warehouse per rung, enumerable and revocable per tenant.
   - { user: user:service-pipeline-b, relation: writer, object: warehouse:acme_bucket }
-  - { user: user:service-pipeline-b, relation: publisher, object: warehouse:acme_bucket }
-  # `validator` is the third and last: `/publish` with `accept_assertions` needs `can_promote`, which
-  # is how the producer resumes a promotion a HUMAN approved. `owner` used to imply it.
-  - { user: user:service-pipeline-b, relation: validator, object: warehouse:acme_bucket }
-  # dave: a plain WRITER on the warehouse (writes any namespace, but is NOT a validator)
+  - { user: user:service-pipeline-b, relation: tagger, object: warehouse:acme_bucket }
+  # dave: a plain WRITER on the warehouse (writes any namespace, and holds no other rung)
   - { user: user:dave, relation: writer, object: warehouse:acme_bucket }
-  # carol: a VALIDATOR on the gold namespace via role:validators, + reader on the warehouse (to read silver)
-  - { user: user:carol, relation: assignee, object: role:validators }
-  # role:validators BELONGS to acme. Its tenant is what lets a grant door refuse a cross-project
+  # carol: a CLASSIFIER on the gold namespace via role:stewards, + reader on the warehouse (to read silver)
+  - { user: user:carol, relation: assignee, object: role:stewards }
+  # role:stewards BELONGS to acme. Its tenant is what lets a grant door refuse a cross-project
   # grant of this role onto another project's namespace; role:estate_auditors below carries no
   # project and is deliberately estate-wide.
-  - { user: project:acme, relation: project, object: role:validators }
+  - { user: project:acme, relation: project, object: role:stewards }
   # grace holds ONLY security_admin on acme — the split's whole point is that this is grantable
   # without admin, so she governs access without gaining it.
   - { user: user:grace, relation: security_admin, object: project:acme }
   - { user: user:frank, relation: assignee, object: role:estate_auditors }
-  - { user: "role:validators#assignee", relation: validator, object: namespace:acme_gold }
+  - { user: "role:stewards#assignee", relation: classifier, object: namespace:acme_gold }
   # A role assigned to a ROLE — `role#assignee` accepts `role#assignee`, so the grant graph recurses.
   # hana holds nothing on acme directly; she reaches the gold namespace through two hops of userset
   # nesting. This is the shape `weighted_graph_check` most plausibly alters and the fixture had no
   # instance of it (see the userset row near the end of this file).
-  - { user: "role:senior_validators#assignee", relation: assignee, object: role:validators }
-  - { user: user:hana, relation: assignee, object: role:senior_validators }
+  - { user: "role:senior_stewards#assignee", relation: assignee, object: role:stewards }
+  - { user: user:hana, relation: assignee, object: role:senior_stewards }
   - { user: user:carol, relation: reader, object: warehouse:acme_bucket }
   # a materialized view under the silver namespace — only the `parent` edge is stored, so it inherits the
   # namespace's owner/writer/reader rungs (no per-object grants needed).
@@ -665,7 +662,7 @@ tuples:
   - { user: 'role:cycle_a#assignee', relation: reader, object: 'table:wide_0_0' }
   # A PIPELINE'S OWN OUTPUT — the tuple `register_table` writes for itself. Registering calls
   # `seed_ownership_or_compensate(resource="table")`, so the identity that registered a table is
-  # granted `owner` on it. That is what decides whether a pipeline can publish what it just wrote, and
+  # granted `owner` on it. That is what decides whether a pipeline can tag what it just wrote, and
   # nothing in any seed script grants it.
   - { user: 'user:service-pipeline-a', relation: owner, object: 'table:acme_silver$features' }
   - { user: 'namespace:acme_silver', relation: parent, object: 'table:acme_silver$features' }
@@ -673,8 +670,6 @@ tuples:
   - { user: 'user:service-pipeline-a', relation: writer, object: 'namespace:acme_silver' }
   # A table the pipeline did NOT register — same namespace, no ownership tuple.
   - { user: 'namespace:acme_silver', relation: parent, object: 'table:acme_silver$foreign' }
-  # The promoting pipeline: validator on gold, never owner.
-  - { user: 'user:service-pipeline-b', relation: validator, object: 'namespace:acme_gold' }
 
 tests:
   - name: the project admin split is additive, and a split rung does not imply the others
@@ -708,19 +703,19 @@ tests:
     # role and does not decide who is in it. Each negative holds the rung just below the one asked.
     check:
       - user: user:alice # admin, so security_admin
-        object: role:validators
+        object: role:stewards
         assertions: { can_manage_assignees: true, can_delete: true, can_read: true }
       - user: user:grace # security_admin only
-        object: role:validators
+        object: role:stewards
         assertions: { can_manage_assignees: true, can_delete: true, can_read: true }
       - user: user:rita # a plain member reads the project's roles and changes none
-        object: role:validators
+        object: role:stewards
         assertions: { can_manage_assignees: false, can_delete: false, can_read: true }
       - user: user:carol # an assignee is not its manager
-        object: role:validators
+        object: role:stewards
         assertions: { can_manage_assignees: false, can_delete: false, can_read: false }
       - user: user:frank # beta's admin manages no acme role
-        object: role:validators
+        object: role:stewards
         assertions: { can_manage_assignees: false, can_delete: false, can_read: false }
       - user: user:alice # an unscoped role has no project, so no project's admin manages it
         object: role:estate_auditors
@@ -735,33 +730,33 @@ tests:
         object: project:acme
         assertions: { can_create_role: false, can_list_roles: false }
   - name: a role carries its tenant, and an unscoped role carries none
-    # The edge exists so a grant door can tell `role:validators` (acme's) from an estate-wide role.
+    # The edge exists so a grant door can tell `role:stewards` (acme's) from an estate-wide role.
     # Nothing in the model GRANTS through it — the refusal is the door's — so this pins the fact the
     # door reads rather than an authorization outcome.
     check:
       - user: project:acme
-        object: role:validators
+        object: role:stewards
         assertions:
           project: true
       - user: project:beta
-        object: role:validators
+        object: role:stewards
         assertions:
           project: false
       - user: project:acme
         object: role:estate_auditors
         assertions:
           project: false
-  - name: a pipeline can PUBLISH what it registered, and only what it registered
-    # P5 of "pipelines publish the tag". `publish` is gated at `can_update_tag`, which is OWNER-tier —
-    # strictly above the writer/validator rungs the pipelines are seeded with. It resolves anyway,
-    # because registering a table grants the registrant `owner` ON THAT TABLE. So no model change and
-    # no new grant are needed, and the scope is exactly right: a pipeline may move the tag on its own
+  - name: a pipeline can TAG what it registered, and only what it registered
+    # A pipeline marks the version it vetted with a tag (ADR 0212), and `can_update_tag` is OWNER-tier,
+    # strictly above the writer rung the pipelines are seeded with. It resolves anyway,
+    # because registering a table grants the registrant `owner` ON THAT TABLE. So no new grant is
+    # needed, and the scope is exactly right: a pipeline may move a tag on its own
     # output and on nothing else.
     check:
       - user: user:service-pipeline-a
         object: table:acme_silver$features
         assertions:
-          can_update_tag: true       # its own output — publishable
+          can_update_tag: true       # its own output
           can_create_tag: true
           can_read_data: true
       - user: user:service-pipeline-a
@@ -769,16 +764,6 @@ tests:
         assertions:
           can_update_tag: false      # a table it did not register, in the SAME namespace
           can_write_data: true       # writer still cascades from the namespace
-      # The separation the model exists to enforce is untouched: owning the table it wrote does not
-      # let a plain writer promote INTO a gated namespace, which is gated on the DESTINATION namespace.
-      - user: user:service-pipeline-a
-        object: namespace:acme_gold
-        assertions:
-          can_promote: false
-      - user: user:service-pipeline-b
-        object: namespace:acme_gold
-        assertions:
-          can_promote: true
 
   - name: only an ESTATE admin can observe the estate-wide control-plane event feed
     check:
@@ -807,10 +792,10 @@ tests:
       # which is the reach that makes the identity worth asserting on a leaf rather than a container.
       - user: user:alice
         object: table:acme_gold_catalog
-        assertions: { owner_effective: true, can_drop: true, can_set_protection: true, can_label: true }
+        assertions: { owner_effective: true, can_drop: true, can_set_protection: true, can_label: true, can_set_contract: true }
       - user: user:peter
         object: table:acme_gold_catalog
-        assertions: { can_write_data: true, can_drop: false, can_set_protection: false, can_label: false }
+        assertions: { can_write_data: true, can_drop: false, can_set_protection: false, can_label: false, can_set_contract: false }
       - user: user:alice
         object: namespace:acme_bronze
         assertions: { can_delete: true, can_set_protection: true, can_label: true }
@@ -905,7 +890,6 @@ tests:
           can_grant_owner: false
           can_grant_writer: false
           can_grant_reader: false
-          can_grant_validator: false
       # ---- the rungs a mutation sweep found unpinned (2026-08-22) ----
       # Method: widen each can_* to its type's LOWEST rung and re-run. 47 derivations were already
       # caught by assertions above; these survived silently, so each is named here with a subject that
@@ -966,32 +950,32 @@ tests:
         object: warehouse:beta_bucket
         assertions: { can_get_metadata: true, can_create_table: true }
 
-  - name: a plain WRITER can write a namespace but CANNOT promote to gold
+  - name: a plain WRITER writes a namespace and holds no rung a role was granted there
     check:
       - user: user:dave
         object: table:acme_silver_features
         assertions: { can_read_data: true, can_write_data: true }
-      - user: user:dave # the headline: writer is NOT a validator → no promotion into gold
+      - user: user:dave # the headline: a writer is no classifier
         object: namespace:acme_gold
-        assertions: { can_get_metadata: true, can_promote: false }
+        assertions: { can_get_metadata: true, can_classify: false }
       - user: user:dave
         object: table:acme_gold_catalog
-        assertions: { can_write_data: true, can_promote: false }
+        assertions: { can_write_data: true, can_classify: false }
 
-  - name: a VALIDATOR can promote silver to gold; an owner is implicitly a validator
+  - name: a rung granted to a ROLE on a namespace reaches its assignees and the tables beneath; an owner holds it too
     check:
-      - user: user:carol # validator on gold via role:validators
+      - user: user:carol # classifier on gold via role:stewards
         object: namespace:acme_gold
-        assertions: { can_promote: true }
+        assertions: { can_classify: true }
       - user: user:carol
-        object: table:acme_gold_catalog # validator cascades to tables in the gold namespace
-        assertions: { can_promote: true }
-      - user: user:carol # she can read silver (reader on the bucket) to do the promotion
+        object: table:acme_gold_catalog # the rung cascades to tables in the gold namespace
+        assertions: { can_classify: true }
+      - user: user:carol # she reads silver (reader on the bucket), a grant of her own
         object: table:acme_silver_features
         assertions: { can_read_data: true }
-      - user: user:alice # owner ⇒ validator, so admins promote too
+      - user: user:alice # owner implies classifier, so admins classify too
         object: namespace:acme_gold
-        assertions: { can_promote: true }
+        assertions: { can_classify: true }
 
   - name: an outsider with no grants is denied
     check:
@@ -1000,7 +984,7 @@ tests:
         assertions: { can_get_metadata: false }
       - user: user:eve
         object: table:acme_gold_catalog
-        assertions: { can_read_data: false, can_promote: false }
+        assertions: { can_read_data: false, can_classify: false }
 
   # UPWARD VISIBILITY. A single-table grantee must be able to SEE the containers on the path to their
   # own table, or the grant is unreachable: every list above it comes back empty and the breadcrumb
@@ -1126,23 +1110,20 @@ tests:
         object: namespace:acme_silver
         assertions: { can_create_namespace: false, can_create_table: false }
 
-  - name: who can promote into gold? (list_users) — owners + validators, never plain writers
-    # `service-pipeline-b` (a pipeline promoting into gold) belongs here, holding exactly this, and the
-    # enumeration is the check that a plain writer never appears. A pipeline owning the table it wrote
-    # (see the P5 test above) does not put it in this list — promotion is gated on the DESTINATION
-    # namespace, which no amount of table ownership reaches.
+  - name: who can classify in gold? (list_users) — owners + the role's assignees, never plain writers
+    # The enumeration is the check that a plain writer never appears.
     #
     # hana is the one to read carefully: she is granted NOTHING on acme. She is an assignee of
-    # `role:senior_validators`, which is an assignee of `role:validators`, which holds `validator` here
+    # `role:senior_stewards`, which is an assignee of `role:stewards`, which holds `classifier` here
     # — two hops of userset nesting, and the enumeration resolves all of it. That is the property worth
-    # having in an audience list rather than only in a Check: a fan-out that enumerates promoters gets
+    # having in an audience list rather than only in a Check: a fan-out that enumerates holders gets
     # the transitively-granted human, not just the directly-granted one.
     list_users:
       - object: namespace:acme_gold
         user_filter: [{ type: user }]
         assertions:
-          can_promote:
-            users: [user:alice, user:bob, user:carol, user:hana, user:service-pipeline-b]
+          can_classify:
+            users: [user:alice, user:bob, user:carol, user:hana]
 
   - name: which buckets can the writer dave see? (list_objects) — only acme, by isolation
     list_objects:
@@ -1378,10 +1359,9 @@ tests:
           can_grant_owner: true
           can_grant_writer: true
           can_grant_reader: true
-          can_grant_validator: true
           can_grant_maintainer: true
           can_read_assignments: true
-          # …and may not read, write or promote a single byte. This is the whole point.
+          # …and may not read or write a single byte. This is the whole point.
           can_get_metadata: false
           can_create_table: false
       - user: user:judy # and it cascades, so access admin is delegated once at the top
@@ -1399,9 +1379,8 @@ tests:
           # He is a writer, so he may pass writer — and reader, which writer already implies.
           can_grant_writer: true
           can_grant_reader: true
-          # He is NOT an owner, a validator or a maintainer, so he cannot mint any of them. No escalation via delegation.
+          # He is NOT an owner or a maintainer, so he cannot mint any of them. No escalation via delegation.
           can_grant_owner: false
-          can_grant_validator: false
           can_grant_maintainer: false
           # Nor can he create further delegates, or promote himself to grant-manager.
           can_grant_pass_grants: false
@@ -1412,7 +1391,7 @@ tests:
 
   - name: REVOKING is not the mirror of granting — a delegate may hand on, never take back
     # The bar that was wrong. `access/revoke` used to be gated on `can_grant_<rung>`, so kevin —
-    # `writer` + `pass_grants`, "a delegate and no more" — could DELETE any reader/writer/validator
+    # `writer` + `pass_grants`, "a delegate and no more" — could DELETE any reader/writer
     # tuple on the object, including ones the owner issued. Revoking is `manage_grants` alone now.
     check:
       - user: user:kevin
@@ -1722,14 +1701,13 @@ tests:
     check:
       # THE BUG, at the warehouse. `can_grant_reader` is `manage_grants or (reader and pass_grants)`.
       # Subtracting from `manage_grants` alone shut the first branch and left the second wide open, so an
-      # owner holding the grant option kept handing out reader/writer/validator inside a scope whose whole
+      # owner holding the grant option kept handing out reader/writer inside a scope whose whole
       # purpose is that only the records manager does that. Measured TRUE before this fix.
       - user: user:oskar
         object: warehouse:beta_bucket
         assertions:
           can_grant_reader: false
           can_grant_writer: false
-          can_grant_validator: false
           can_grant_owner: false
       # The PURE delegate — reader + grant option, never an owner — so the fix cannot be one that only
       # looks at ownership.
@@ -1894,7 +1872,6 @@ tests:
           can_read_data: false
           can_get_metadata: false
           can_drop: false
-          can_promote: false
       # …and it does not leak to another tenant's warehouse, which is what "one tuple per warehouse"
       # buys over an estate-wide grant.
       - user: user:service-maintenance
@@ -1912,7 +1889,7 @@ tests:
           can_create_version: true
           can_maintain: false
           can_vend_maintain: false
-      # An OWNER keeps the maintainer doors, concentrically, exactly as `validator` behaves: alice
+      # An OWNER keeps the maintainer doors, concentrically, as it keeps every rung's: alice
       # administers the project. The maintain storage tier is not among them: its credential puts and
       # deletes `_versions/` and `_refs/`, which would let an owner finalize a version or move a tag around
       # `version/create` (ADR 0156 C4).
@@ -1922,33 +1899,30 @@ tests:
           can_maintain: true
           can_vend_maintain: false
 
-  - name: a pipeline writer may PUBLISH what it may not DESTROY, and that separation runs both ways
-    # Owner ruling 2026-09-10 (zero trust). The cascade calls four table doors — describe, credentials,
-    # register, publish — and only `publish` sat above the writer tier, because `can_update_tag` had no
+  - name: a pipeline writer may TAG what it may not DESTROY, and that separation runs both ways
+    # Owner ruling 2026-09-10 (zero trust). A pipeline describes, takes credentials, registers and tags,
+    # and only the tag sat above the writer tier, because `can_update_tag` had no
     # rung beneath `owner`. So every pipeline was granted `owner` on every tenant warehouse to buy
     # one capability, and got `can_drop`, `can_deregister`, `can_restore`, `can_create_branch` and
     # `manage_grants` on every table in the estate with it. Measured on the live store 2026-09-10:
     # 95 owner tuples EACH, across four identities.
     check:
       # Granted at the WAREHOUSE and cascading to every namespace and table beneath it — the sweep's shape,
-      # one tuple per tenant per rung, so the cascade's reach stays enumerable.
+      # one tuple per tenant per rung, so a pipeline's reach stays enumerable.
       - user: user:service-pipeline-b
         object: warehouse:acme_bucket
-        assertions: { publisher: true, writer: true, validator: true }
+        assertions: { tagger: true, writer: true }
       - user: user:service-pipeline-b
         object: namespace:acme_gold
-        assertions: { publisher_effective: true }
+        assertions: { tagger_effective: true }
       - user: user:service-pipeline-b
         object: table:acme_gold_catalog
         assertions:
-          # What it needs: write the tier, then bless the version it wrote. BOTH tag rungs, because the
-          # publish door creates the tag on first publication and moves it thereafter.
+          # What it needs: write the table, then tag the version it wrote. BOTH tag rungs, because a
+          # pipeline creates its tag on the first version it marks and moves it thereafter.
           can_write_data: true
           can_create_tag: true
           can_update_tag: true
-          # The accept-assertions override, and it is a capability the cascade holds TODAY via `owner`
-          # rather than one this grant adds. Only the producer's resume path uses it.
-          can_promote: true
           # THE HALF THAT MATTERS. A pipeline writer may not destroy the table, rewind its history, fork
           # it, or hand its access to anyone — so a compromised pipeline cannot take the estate with
           # it. Each of these was TRUE for all four identities on every tenant before this rung existed.
@@ -1962,17 +1936,17 @@ tests:
       # buys over an estate-wide grant.
       - user: user:service-pipeline-b
         object: warehouse:beta_bucket
-        assertions: { publisher: false }
-      # The other direction: a plain data WRITER is not a publisher. dave writes any namespace in acme and
-      # still may not bless a version — publication is an operational authority, not a side-effect of
-      # write. Without this the rung would be decorative: `publisher` has to be a rung you are GIVEN.
+        assertions: { tagger: false }
+      # The other direction: a plain data WRITER is not a tagger. dave writes any namespace in acme and
+      # still may not tag a version: tagging is an authority of its own, not a side-effect of
+      # write. Without this the rung would be decorative: `tagger` has to be a rung you are GIVEN.
       - user: user:dave
         object: table:acme_gold_catalog
         assertions:
           can_write_data: true
           can_update_tag: false
           can_create_tag: false
-      # An OWNER keeps it, concentrically, exactly as `maintainer` and `validator` behave.
+      # An OWNER keeps it, concentrically, exactly as `maintainer` behaves.
       - user: user:alice
         object: table:acme_gold_catalog
         assertions: { can_update_tag: true, can_create_tag: true }
@@ -1998,7 +1972,7 @@ tests:
           can_deregister: true
           can_restore: true
           manage_grants: true
-      # The pipeline that would have registered it: writer and publisher through the warehouse
+      # The pipeline that would have registered it: writer and tagger through the warehouse
       # grant LH-052 left it, and none of the destructive rungs an owner tuple would have added.
       - user: user:service-pipeline-b
         object: table:acme_gold_catalog
@@ -2010,11 +1984,11 @@ tests:
           can_restore: false
           manage_grants: false
 
-  - name: a USERSET is a subject too — `role:validators#assignee` and `role:acme_admins#assignee` asked directly
+  - name: a USERSET is a subject too — `role:stewards#assignee` and `role:acme_admins#assignee` asked directly
     # [[XC-018]]. Measured 2026-09-20 before writing this: of 169 `check` cases in this file, **zero**
     # named a userset as the subject — every one asked about a `user:`. That is a hole under exactly the
     # thing the model is built out of: `role#assignee` and `user:*` appear in fourteen
-    # relation definitions, and the tuple four hundred lines up (`role:validators#assignee` → validator
+    # relation definitions, and the tuple four hundred lines up (`role:stewards#assignee` → classifier
     # on `namespace:acme_gold`) is a userset SUBJECT the file stored and then never asked about.
     #
     # IT IS NOT AN ACADEMIC SHAPE — the estate runs `weighted_graph_check` (chart/values.yaml, via
@@ -2026,18 +2000,18 @@ tests:
     # EVERY VALUE BELOW IS THE ENGINE'S ANSWER, NOT A PREDICTION. Each was first asserted inverted and
     # corrected to what `fga model test` returned, because two of them are not what a reader expects.
     check:
-      # THE ONE WORTH READING TWICE: a userset that holds `validator` may PROMOTE into the gold namespace
-      # and may neither READ it nor be NOTIFIED about it. That is the rung separation the `validator`
-      # comment claims ("SEPARATE from writer") holding for a userset subject — and it is sharper than
-      # the comment says, because `validator` does not imply `reader` either. Whoever grants a promotion
+      # THE ONE WORTH READING TWICE: a userset that holds `classifier` may CLASSIFY in the gold namespace
+      # and may neither READ it nor be NOTIFIED about it. That is the rung separation the `classifier`
+      # comment claims (classifying is not writing) holding for a userset subject, and `classifier` does
+      # not imply `reader` either. Whoever grants a classifying
       # role and expects the holder to see the namespace must grant `reader` as a second, deliberate act.
-      - user: "role:validators#assignee"
+      - user: "role:stewards#assignee"
         object: namespace:acme_gold
         assertions:
-          can_promote: true
-          can_create_table: false # validator is not writer
-          can_delete: false # validator is not owner
-          can_get_metadata: false # validator is not reader — the promoter cannot list the namespace
+          can_classify: true
+          can_create_table: false # classifier is not writer
+          can_delete: false # classifier is not owner
+          can_get_metadata: false # classifier is not reader: the holder cannot list the namespace
           can_be_notified: false # and is not in its audience, for the same reason
       # A userset holding `admin` on the project: the answer cascades to the warehouse exactly as a
       # `user:` subject's would.
@@ -2056,29 +2030,29 @@ tests:
       # assertion above could be passing because userset subjects resolve true generally.
       - user: "role:estate_auditors#assignee"
         object: namespace:acme_gold
-        assertions: { can_promote: false, can_get_metadata: false }
+        assertions: { can_classify: false, can_get_metadata: false }
       # THE SELF-REFERENTIAL CASE: `role#assignee: [user, role#assignee]` — a role may be
-      # assigned to a role, so the subject graph recurses through itself. `role:senior_validators` holds
-      # nothing on any namespace; it is an assignee of `role:validators`, which holds `validator` on
+      # assigned to a role, so the subject graph recurses through itself. `role:senior_stewards` holds
+      # nothing on any namespace; it is an assignee of `role:stewards`, which holds `classifier` on
       # gold. The rung separation survives the recursion intact — two hops in, it still cannot read.
-      - user: "role:senior_validators#assignee"
+      - user: "role:senior_stewards#assignee"
         object: namespace:acme_gold
-        assertions: { can_promote: true, can_get_metadata: false }
+        assertions: { can_classify: true, can_get_metadata: false }
       # And the recursion reaches a PERSON: hana is an assignee of the nested role and nothing else.
       - user: user:hana
         object: namespace:acme_gold
-        assertions: { can_promote: true, can_get_metadata: false }
+        assertions: { can_classify: true, can_get_metadata: false }
     # And the ENUMERATION side of the same hole: both `list_users` blocks in this file filter
     # `[{ type: user }]`, so a userset holder is invisible to every audience question asked here. A
-    # fan-out that enumerates only `user:` misses the role the promotion was actually granted to.
+    # fan-out that enumerates only `user:` misses the role the rung was actually granted to.
     list_users:
       - object: namespace:acme_gold
         user_filter: [{ type: role, relation: assignee }]
         assertions:
           # The grant, seen from the object's side, beside the project admins' role, which owns the namespace.
-          can_promote:
-            users: ["role:validators#assignee", "role:acme_admins#assignee", "role:senior_validators#assignee"]
-          # The two rungs the validator roles do NOT carry, enumerated to prove the filter is not simply
+          can_classify:
+            users: ["role:stewards#assignee", "role:acme_admins#assignee", "role:senior_stewards#assignee"]
+          # The two rungs the steward roles do NOT carry, enumerated to prove the filter is not simply
           # returning every role that appears anywhere: only the owning admins' role holds them.
           can_delete:
             users: ["role:acme_admins#assignee"]

@@ -33,6 +33,7 @@
 	import { fmtBytes } from './history';
 	import TableHistory from './TableHistory.svelte';
 	import ObjectLabels from './ObjectLabels.svelte';
+	import TableContract from './TableContract.svelte';
 	import TablePreview from './TablePreview.svelte';
 	import TableProperties from './TableProperties.svelte';
 	import BlobPreviewSection from './table-detail/BlobPreviewSection.svelte';
@@ -49,7 +50,7 @@
 	let { table }: { table: string } = $props();
 
 	// The FGA view lives on an Access TAB (overview stays the default), and the overview carries the
-	// table's labels. Preview shows rows; Versions is the commit log with its tags and
+	// table's labels and its data contract. Preview shows rows; Versions is the commit log with its tags and
 	// branches; Connect is how a pipeline reaches the table.
 	// `?tab=` deep-links a tab (the registry drawer's "access" jump uses it) and the tab bar now WRITES it,
 	// so a tab is linkable, reload-stable and back-button-able.
@@ -164,7 +165,12 @@
 	const tags = $derived(
 		partErrored(detail?.tags)
 			? []
-			: Object.entries((detail?.tags?.tags ?? {}) as Record<string, { version?: number }>),
+			: Object.entries(
+					(detail?.tags?.tags ?? {}) as Record<
+						string,
+						{ version?: number; branch?: string | null }
+					>,
+				),
 	);
 	// Lance branches: a name → BranchContents map (createAt in seconds, manifestSize in bytes).
 	const branches = $derived(
@@ -299,6 +305,7 @@
 			     (see the header comment). Keep any new section INSIDE this block for the same reason. -->
 			{#key table}
 				<ObjectLabels kind="table" id={table} />
+				<TableContract {table} />
 				<SchemaSection {table} fields={schemaFields} onchanged={load} />
 
 				<!-- #74 tail — table + per-column property editor (writer-gated by the catalog, on the signed-in user's bearer). -->

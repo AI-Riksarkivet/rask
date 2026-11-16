@@ -22,7 +22,8 @@ from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOpt
 from catalog.api.pagination import ListLimit
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import dataplane, publication
+from catalog.services import dataplane
+from lakehouse import clone_sources
 from lakehouse.control_emit import emit_control
 from lakehouse.governed import fga
 
@@ -31,15 +32,17 @@ router = APIRouter(prefix="/v1/table", tags=["tag"])
 
 
 def _refuse_a_catalog_tag(tag: str) -> None:
-    """Refuse a tag the catalog moves itself (`publication.is_catalog_tag`), on every door that writes a tag.
+    """Refuse a tag the catalog writes itself, on every door that writes a tag: the tag a registered clone holds on the
+    source version it reads (`lakehouse.clone_sources`), which the clone's own end releases. Every other name is the
+    caller's, `published` and `stable` included: marking a version ready is a pipeline's own tag (ADR 0212).
 
     Raises:
-        InvalidInputError: ``tag`` is `published` or under `rask.`.
+        InvalidInputError: ``tag`` is under `rask.clone.`.
     """
-    if publication.is_catalog_tag(tag):
+    if tag.startswith(clone_sources.TAG_PREFIX):
         raise InvalidInputError(
-            f"tag {tag!r} is the catalog's own: `published` moves only through POST /management/v1/table/{{id}}/publish and a "
-            "can_promote holder's approval of a held version, and the other catalog tags pin versions for those doors"
+            f"tag {tag!r} is the catalog's own: a tag under {clone_sources.TAG_PREFIX!r} keeps the version a registered clone reads, "
+            "and is released when that clone ends"
         )
 
 
@@ -79,9 +82,8 @@ async def create_table_tag(
     control event is targeted when it changes what a specific PERSON may do or must do, not when it
     changes an object. A tag is a ref, so this joins the members that name nobody.
 
-    THE REF PLANE IS WHERE `published` LIVES, which is why these three matter more than their size
-    suggests: `table_published` already announces the publication tag moving, and until now the OTHER
-    ref mutations moved in silence — a console could not tell a tag was gone.
+    A TAG IS HOW A PIPELINE MARKS A VERSION READY (`lance_docs/lance/guide/tags_and_branches.md`), under a name it
+    chooses, so each of the three ref mutations is announced: a reader holding "tag -> version" learns it moved.
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
@@ -152,7 +154,7 @@ async def delete_table_tag(
 
     Authorization alone governs it (``can_drop``): a tag pins the version it names against cleanup, so deleting
     one makes that version reclaimable, which is history reclaim, and deletion protection guards dropping the
-    table, not its history (ADR 0150). The catalog's own tags, ``published`` among them, are refused here.
+    table, not its history (ADR 0150). The catalog's own clone tags are refused here.
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)

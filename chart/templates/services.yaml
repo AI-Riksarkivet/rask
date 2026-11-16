@@ -114,7 +114,6 @@ spec:
             - { name: LANCE_ERASURE_CLEANUP_WINDOW_DAYS, value: {{ required "maintenance.olderThanDays is required" .Values.maintenance.olderThanDays | quote }} }
             - { name: LANCE_MANIFEST_RETAIN_SECONDS, value: {{ required "catalog.manifestReclaim.retainSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.retainSeconds | quote }} }
             - { name: LANCE_ERASURE_RELEASE_PERIOD_SECONDS, value: {{ required "catalog.erasure.releasePeriodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.erasure.releasePeriodSeconds | quote }} }
-            - { name: LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS, value: {{ required "catalog.promotion.expiryPeriodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.promotion.expiryPeriodSeconds | quote }} }
             - { name: LANCE_COMMIT_RECONCILE_PERIOD_SECONDS, value: {{ required "catalog.commitReconcile.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.commitReconcile.periodSeconds | quote }} }
             - { name: LANCE_DECLARATION_FILE, value: "/etc/rask/declaration/declaration.json" }
             - { name: LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS, value: {{ required "catalog.declarationConverge.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.declarationConverge.periodSeconds | quote }} }

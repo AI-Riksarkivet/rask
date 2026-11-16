@@ -23,7 +23,7 @@ it signs the whole run with (`lakehouse.store_session.JobStoreIdentity`, `job_cl
 endpoint and the role are required, so a run missing one fails at its start rather than signing with whatever boto3's
 default chain finds, which on a cloud node is the node's own role. The session's reach is the canned policy written
 under the account's name (`lance.objectStorePolicy`, `<release>-object-store-identities`): read the control-root record
-prefixes it copies (`_projects`, `_warehouses`, `_trash`, `_protection`, `_policies`, `_gates`, `_bases`), and write and
+prefixes it copies (`_projects`, `_warehouses`, `_trash`, `_protection`, `_policies`, `_contracts`, `_bases`), and write and
 prune under `backups.controlRoot.dest` (default `<control bucket>/_backups/control`), and nothing else. It shares no
 account with the pg dump, so neither can write the other's backups.
 

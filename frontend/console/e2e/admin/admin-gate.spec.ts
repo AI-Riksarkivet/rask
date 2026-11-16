@@ -90,7 +90,6 @@ test('a page has one name across its sidebar row, crumb, h1 and title; a named o
 	await expect(crumbs.getByRole('link', { name: 'Operations' })).toHaveCount(0);
 	for (const [path, title, h1] of [
 		['/catalog/tables/db1%24t', 'db1 › t · tables · rask', 'db1 › t'],
-		['/catalog/promotions/db1%24t', 'db1 › t · promotions · rask', 'db1 › t'],
 	] as const) {
 		await page.goto(path);
 		await expect(page, path).toHaveTitle(title);

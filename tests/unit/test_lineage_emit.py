@@ -23,7 +23,6 @@ from catalog.core.lineage_emit import (
     DROP_TABLE,
     INSERT,
     MERGE_INSERT,
-    PUBLISH_TABLE,
     BusEmitter,
     HttpLineageEmitter,
     InputPin,
@@ -497,10 +496,6 @@ def test_http_emitter_emit_write_posts_operation_and_version_under_the_commits_r
     assert client.posted["outputs"][0]["facets"]["version"]["datasetVersion"] == "4"
     # Two announcements of one commit are one run ([[LH-497]]), under the empty key of a stack with no store.
     assert first == second == commit_run_id(b"", table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01", branch=None, branch_identifier=None, version=4)
-    # A tag move names the version another write committed, and is never that commit's run.
-    uuids = DatasetUuids(table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
-    asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=4, operation=PUBLISH_TABLE, uuids=uuids))
-    assert client.posted["run"]["runId"] != first
 
 
 @pytest.mark.asyncio

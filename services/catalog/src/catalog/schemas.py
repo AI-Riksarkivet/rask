@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from catalog.services.changes import ChangeKind
 from catalog.services.control_records import DeleteMode
 from catalog.services.object_labels import LabelDefinition, LabelKind, LabelScope
-from lakehouse.control_events import ORIGINATOR_MAX_LENGTH, CatalogControlEvent
+from lakehouse.control_events import CatalogControlEvent
 from lakehouse.features import TableFileFormat
 from lakehouse.maintenance_due import CompactionDue, IndexDue
 
@@ -125,7 +125,7 @@ class AccessCheckResponse(BaseModel):
 class AccessGrantRequest(RequestBody):
     """Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` → ``user:alice``)
     or a fully-qualified userset (``role:<id>#assignee``); ``relation`` must
-    be a grantable base rung the compiled model defines on the type (owner/writer/reader/validator) — never
+    be a grantable base rung the compiled model defines on the type (owner/writer/reader/maintainer) — never
     a derived ``can_*`` action nor the structural ``parent`` edge."""
 
     user: str
@@ -937,121 +937,6 @@ class TenancyRebuildResponse(BaseModel):
     unjustified: dict[str, str] = Field(default_factory=dict)
 
 
-class PublishRequest(RequestBody):
-    """Ask the catalog to gate a committed version and, if it passes, publish it.
-
-    `version` is explicit rather than "whatever is latest": between a writer's commit and its publish
-    call another writer may have committed, and publishing a version nobody gated is the failure the
-    gate exists to prevent. The caller names what it wrote.
-    """
-
-    version: int = Field(ge=1)
-    #: The identity column the `not_null` assertion checks. Tables key differently — a source table on `id`,
-    #: a derived one possibly on something else — so the caller names it rather than the gate guessing.
-    key_column: str = Field(min_length=1, max_length=128)
-    required_columns: list[str] = Field(default_factory=list)
-    #: Failed assertions the caller explicitly accepts — the third answer to a held promotion, where a
-    #: validator judges a finding unusual rather than broken. NAMED, never a blanket `force`: accepting
-    #: one finding must not wave through a second the approver never saw. Structural findings
-    #: (`STRUCTURAL_ASSERTIONS`) are refused however they are named, and a non-empty list additionally
-    #: requires `can_promote` — a rung ABOVE the `can_update_tag` publish itself needs.
-    accept_assertions: list[str] = Field(default_factory=list)
-    #: THE PERSON THE BATCH IS FOR, when the caller is a service running on their behalf.
-    #:
-    #: An untrusted CLAIM: it authorizes nothing here and nothing downstream
-    #: — a notifier re-derives every recipient's visibility at delivery — so carrying it
-    #: across the bus needs no new trust. It is a TARGETING hint, and the reason it must be a hint is
-    #: that the truthful actor cannot serve: a pipeline's service principal authenticates to this door as
-    #: itself, so its publish names the service, and a stage that fails later would address an inbox
-    #: actor named after a service.
-    #:
-    #: Resolved, never echoed blindly — see `publication_originator`, which prefers this over the actor
-    #: only when the actor is a SERVICE, and refuses anything that names no person.
-    originator: str = Field(default="", max_length=ORIGINATOR_MAX_LENGTH)
-    #: Ask for the gate's VERDICT without publishing. The identical assertions on the identical
-    #: version, with `published` false and the tag untouched — a question, never a write.
-    #:
-    #: It exists for a review that decides before publishing: once `published` moves, every reader of
-    #: the table's published view already reads the version, so a reviewer asks first and publishes
-    #: after.
-    #:
-    #: Guarded by the SAME rung as an ordinary publish, deliberately: only a caller who could publish
-    #: has any business asking whether this door would accept a version, and a cheaper rung would make
-    #: the gate a free full-scan for anyone who can read.
-    gate_only: bool = False
-
-
-class PublishResult(BaseModel):
-    """The outcome, and the RANGE a notification should carry (§ D2 D-R3).
-
-    `published=False` is a normal answer, not an error: the gate refused, the pointer did not move,
-    and the previously published version keeps serving. `assertions` come back either way so a
-    blocked batch is auditable without re-running anything.
-    """
-
-    table: str
-    published: bool
-    from_version: int | None
-    to_version: int
-    assertions: list[dict[str, object]] = Field(default_factory=list)
-    reason: str | None = None
-    #: WHICH gate ran — ``"declared"`` when the project's declared ``GateSpec`` supplied the key column,
-    #: ``"request"`` when this request's own fields did. A publish under a declaration is a different
-    #: governance fact from one under a caller's parameters, and the two are otherwise byte-identical:
-    #: a caller whose ``key_column`` was superseded reads the same body either way and cannot tell
-    #: which record governed its data.
-    gate_source: str = "request"
-    #: The gate breached under the project's review: `to_version` waits for a `can_promote` holder on
-    #: `GET /management/v1/promotions`, and `published` stays at `from_version` (ADR 0156 C1).
-    held: bool = False
-    hold: PromotionHold | None = None
-
-
-class PromotionHold(BaseModel):
-    """A version the project's quality gate holds for a `can_promote` holder, or the last decision on one."""
-
-    #: The table's name now (`acme-silver$orders`), or the name the hold kept when the table is gone.
-    table: str
-    #: The table's uuid (ADR 0173 §11), which the hold is kept under: a rename keeps it.
-    uuid: str
-    version: int
-    #: What `published` named when the version was held; `None` when nothing was published.
-    published_version: int | None
-    #: The failed assertions a validator may waive, then the band's reasons.
-    reasons: list[str]
-    requested_by: str | None = None
-    opened_at: datetime
-    #: When the sweep expires the hold if nobody has answered it.
-    expires_at: datetime
-    state: Literal["open", "approved", "rejected", "expired", "superseded"] = "open"
-    decided_by: str | None = None
-    decided_at: datetime | None = None
-    #: The version a rejection restored main as; `None` before or without a restore.
-    restored_version: int | None = None
-
-
-class PromotionsListResponse(BaseModel):
-    """The open holds the caller may see, the soonest the sweep expires first."""
-
-    holds: list[PromotionHold]
-    page_token: str | None = None
-
-
-class PromotionDecisionRequest(RequestBody):
-    """The held version being decided. A decision lands only on the hold its decider reviewed."""
-
-    version: int = Field(ge=1)
-
-
-class PromotionDecision(BaseModel):
-    """What a decision did: the closed hold, what readers of `published` now read, and main's restore."""
-
-    hold: PromotionHold
-    published_version: int | None
-    #: The version main was restored at by a rejection; `None` when nothing was published to restore.
-    restored_version: int | None = None
-
-
 # --------------------------------------------------------------------------- #
 # Deletion protection + recoverable drops (#73 / #75)
 # --------------------------------------------------------------------------- #
@@ -1117,6 +1002,17 @@ class ObjectLabelsResponse(BaseModel):
     available: list[LabelDefinition] | None = None
 
 
+class ContractResponse(BaseModel):
+    """The data contract a table holds (ADR 0212): the ODCS v3 document its owner set, or none."""
+
+    table: str
+    uuid: str
+    #: The ODCS v3 document as it was set; ``None`` for a table holding no contract.
+    contract: dict[str, Any] | None = None
+    set_by: str | None = None
+    set_at: datetime | None = None
+
+
 class LabelledObjectsResponse(BaseModel):
     """A page of a project's labelled objects the caller may see, each named as it is named now."""
 
@@ -1150,42 +1046,6 @@ class TrashListing(BaseModel):
     objects: list[TrashEntry]
     #: Continues the listing; absent once every drop was judged (`lance_docs/ns_catalog/spec.yaml` PageToken).
     page_token: str | None = None
-
-
-# --------------------------------------------------------------------------- #
-# Quality gates — a project's promotion gate, DECLARED as a record
-# --------------------------------------------------------------------------- #
-
-
-class GateSpecRequest(RequestBody):
-    """Declare one project's gate. The project comes from the gated PATH, never from here.
-
-    Omitting ``project`` is the security half: a body-supplied project would let an admin of one
-    tenant pass ``can_administer`` on their own project while rewriting somebody else's gate.
-
-    Field semantics live on ``lakehouse.gate_specs.GateSpec``, which is the model this
-    validates into.
-    """
-
-    key_column: str = "id"
-    required_columns: list[str] = Field(default_factory=list)
-    review_band: float = 0.25
-    review_enabled: bool = False
-    review_hours: float = 72.0
-
-
-class GateSpecResponse(BaseModel):
-    project: str
-    key_column: str
-    required_columns: list[str] = Field(default_factory=list)
-    review_band: float
-    review_enabled: bool
-    review_hours: float
-
-
-# --------------------------------------------------------------------------- #
-# Self-describe (`/management/v1/me`) and tenant membership (`/management/v1/projects/{id}/members`)
-# --------------------------------------------------------------------------- #
 
 
 class MeProject(BaseModel):

@@ -61,7 +61,7 @@ def test_committed_openapi_contract_covers_every_live_ENUM_MEMBER() -> None:
     """A schema keeps its name while its enum gains a member, and the name check above cannot see it.
 
     That is not hypothetical: the five ref-plane ``ControlAction`` members landed on the bus while
-    ``docs/catalog-openapi.json`` still stopped at ``table_published``, and the only thing that
+    ``docs/catalog-openapi.json`` still lacked them, and the only thing that
     noticed was ``make openapi-check``'s whole-file diff — which a filtered ``pytest tests/unit``
     never runs.
     """

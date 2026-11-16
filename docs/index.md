@@ -29,7 +29,7 @@ flowchart LR
 
 1. A client (the user's pipeline, an ingest job, a notebook) writes through the catalog's **Lance Namespace** doors;
    the catalog authorizes it on **OpenFGA** and judges it in its own write path (the opt-in run rule, the
-   publish-time quality gate); a project classifies its tables and namespaces with labels it defines.
+   table's data contract); a project classifies its tables and namespaces with labels it defines.
 2. The catalog announces every committed write as an **OpenLineage** event; lineage records it, serves the
    durable `GET /events` feed a pipeline polls and forwards it to a graph backend of the operator's choice; a
    notifier, a client the lakehouse does not run, tells the right person from the fields each event names

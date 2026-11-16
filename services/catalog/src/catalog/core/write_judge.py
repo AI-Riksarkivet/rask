@@ -11,9 +11,7 @@ writes them into its staged manifest. A door that reads no run from the request'
 ``add_columns``), or that attaches bytes written elsewhere (``register``), is refused there, because its commit would
 name no run. Every named input, under the rule or not, names a table the committer may read (``can_read_data``): naming
 a table one cannot read as an input would launder it into the derived table's lineage, and an erasure names a derived
-table by what its commits declared (ADR 0183). The judge answers allow or refuse before a write; a version that
-breaches the project's quality gate is held when it is published, by the publish door (``catalog.services.promotions``,
-ADR 0161). A staged manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run
+table by what its commits declared (ADR 0183). The judge answers allow or refuse before a write. A staged manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run
 here.
 """
 

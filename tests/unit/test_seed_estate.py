@@ -92,7 +92,7 @@ _REGISTRY = [
 #: object rather than a tuple about nothing.
 _TABLES = {"acme$bronze": [], "acme$silver": ["features", "undeclared"], "acme$gold": ["catalog"], "beta$locked": ["records"]}
 #: The roles each project's role door lists after a clean seed, each with the uuid the fake minted for it.
-_ROLES = {"acme": ["admins", "validators"], "research": ["admins"], "beta": ["admins"]}
+_ROLES = {"acme": ["admins", "stewards"], "research": ["admins"], "beta": ["admins"]}
 
 
 def _uuid(kind: str, name: str) -> str:
@@ -256,7 +256,7 @@ def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(cap
 
 def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> None:
     # THE ghost rule. OpenFGA stores a tuple whether or not its object exists, so writing the gold
-    # namespace's validator grant after that namespace failed to be created is exactly how the live
+    # namespace's classifier grant after that namespace failed to be created is exactly how the live
     # estate got three tenants the catalog had never heard of.
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if request.url.path == "/v1/namespace/acme$gold/create":
@@ -397,4 +397,4 @@ def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo
     assert seed_estate.remap_subject("user:carol", principals) == "demo~carol"
     # Only the SUBJECT side: the wildcard, a userset or an object type is never a principal to remap.
     assert seed_estate.remap_subject("user:*", principals) == "user:*"
-    assert seed_estate.remap_subject("role:acme/validators#assignee", principals) == "role:acme/validators#assignee"
+    assert seed_estate.remap_subject("role:acme/stewards#assignee", principals) == "role:acme/stewards#assignee"

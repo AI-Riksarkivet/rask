@@ -44,7 +44,7 @@
 	}: GrantFormProps = $props();
 
 	// The rung ladder, in ONE place, so every surface that grants offers the same rungs.
-	const GRANTABLE = ['reader', 'writer', 'validator', 'owner', 'pass_grants', 'manage_grants'];
+	const GRANTABLE = ['reader', 'writer', 'owner', 'pass_grants', 'manage_grants'];
 	const RUNG_LABEL: Record<string, string> = {
 		pass_grants: 'pass_grants — may re-grant what they hold',
 		manage_grants: 'manage_grants — may grant anything, reads nothing',

@@ -1,6 +1,5 @@
 /**
- * The project column and the project filter of the catalog's lists (warehouses, namespaces, tables,
- * promotions).
+ * The project column and the project filter of the catalog's lists (warehouses, namespaces, tables).
  *
  * The filter is a VIEW, never a boundary. Every list reads estate-wide, and the catalog answers each
  * read with what the caller's grants allow; the filter only narrows, in this browser, rows the caller
@@ -8,8 +7,8 @@
  * rows, and nothing about the person is kept in a cookie or storage.
  *
  * A row's project is read from data the lists already hold: a warehouse names its project, and every
- * namespace and table id begins with its warehouse (ADR 0206), so a namespace, a table and a held
- * promotion belong to the project of the warehouse their id opens with. The estate's own warehouse
+ * namespace and table id begins with its warehouse (ADR 0206), so a namespace and a table belong to
+ * the project of the warehouse their id opens with. The estate's own warehouse
  * (`lance_catalog`, which holds the lakehouse's `provenance` namespace) has no registry record and
  * belongs to no project, so what lies in it shows a dash.
  */
