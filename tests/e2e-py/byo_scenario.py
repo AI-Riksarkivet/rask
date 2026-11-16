@@ -54,7 +54,8 @@ DEX = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
 DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
 ADMIN_USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
 PIPELINE_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")
-CONSUMER_USER = os.environ.get("LANCE_E2E_CONSUMER_USER", "bob@example.com")
+#: Not the person criterion 2's matrix makes tenant B's admin (bob), who must hold nothing in this tenant.
+CONSUMER_USER = os.environ.get("LANCE_E2E_CONSUMER_USER", "dave@example.com")
 #: The tag the pipeline marks its vetted version with: a name of its own choosing, which the catalog reads nothing into.
 READY_TAG = "stable"
 #: How long a committed write may take to reach lineage's feed.

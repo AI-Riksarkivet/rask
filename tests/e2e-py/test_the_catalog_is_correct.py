@@ -93,6 +93,9 @@ SPEC = Path(__file__).resolve().parents[2] / "lance_docs" / "ns_catalog" / "spec
 WRITER_USER = os.environ.get("LANCE_E2E_WRITER_USER", "carol@example.com")
 READER_USER = os.environ.get("LANCE_E2E_READER_USER", "dave@example.com")
 OUTSIDER_USER = os.environ.get("LANCE_E2E_OUTSIDER_USER", "erin@example.com")
+#: Tenant B's admin holds nothing in the shared tenant, so it is nobody the scenario grants there: a caller who reads
+#: any namespace of a warehouse is answered a hidden sibling's 404, where this role is owed the 403.
+TENANT_B_ADMIN_USER = os.environ.get("LANCE_E2E_TENANT_B_ADMIN_USER", "bob@example.com")
 #: A token a fleet service account (`<release>-sa-lineage`) holds for the catalog's audience, minted by the launcher.
 SERVICE_TOKEN = credential(Credential.SERVICE_TOKEN)
 #: The spec's error codes this module reads (spec.yaml, `ErrorResponse.code`).
@@ -1247,10 +1250,15 @@ CELLS = [
 
 
 @pytest.fixture(scope="module")
-def tenant_b(byo_tenant: Tenant) -> Iterator[str]:
+def tenant_b_admin() -> Identity:
+    return Identity.person(TENANT_B_ADMIN_USER)
+
+
+@pytest.fixture(scope="module")
+def tenant_b(byo_tenant: Tenant, tenant_b_admin: Identity) -> Iterator[str]:
     """A second tenant, administered by bob: the estate admin makes the project and bob its admin, and bob makes its
     warehouse, which only an admin of that project may do."""
-    admin, bob = byo_tenant.admin, byo_tenant.consumer
+    admin, bob = byo_tenant.admin, tenant_b_admin
     project = f"c2b-{uuid.uuid4().hex[:8]}"
     scenario.ok(admin.http.post(f"{CATALOG}/management/v1/projects", json={"id": project}, timeout=60))
     try:
@@ -1267,7 +1275,7 @@ def tenant_b(byo_tenant: Tenant) -> Iterator[str]:
 
 
 @pytest.fixture(scope="module")
-def scene(byo_tenant: Tenant, tenant_b: str) -> Iterator[Scene]:
+def scene(byo_tenant: Tenant, tenant_b: str, tenant_b_admin: Identity) -> Iterator[Scene]:
     """The matrix's scene on the shared tenant, its owner the scenario's pipeline and its tenant-B admin bob. The
     tenant's cascade removes what the scene made in its warehouse; the matrix label it removes itself."""
     service = Identity(SERVICE_TOKEN)
@@ -1277,7 +1285,7 @@ def scene(byo_tenant: Tenant, tenant_b: str) -> Iterator[Scene]:
         Role.WRITER: Identity.person(WRITER_USER),
         Role.READER: Identity.person(READER_USER),
         Role.OUTSIDER: Identity.person(OUTSIDER_USER),
-        Role.TENANT_B_ADMIN: byo_tenant.consumer,
+        Role.TENANT_B_ADMIN: tenant_b_admin,
         Role.SERVICE: service,
     }
     made = Scene(byo_tenant, callers, tenant_b)
