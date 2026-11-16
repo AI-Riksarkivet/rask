@@ -57,6 +57,12 @@ argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 {{- end -}}
 {{- end -}}
 
+{{- define "lance.rollout" -}}
+strategy:
+  type: RollingUpdate
+  rollingUpdate: { maxUnavailable: 0, maxSurge: 25% }
+{{- end -}}
+
 {{- define "rask.isRealDeployment" -}}
 {{- $repo := (.Values.image.repository | default "") -}}
 {{- $sideloaded := or .Values.image.localImages (hasPrefix "localhost:" $repo) (hasPrefix "127.0.0.1:" $repo) (hasPrefix "172.17.0.1:" $repo) -}}

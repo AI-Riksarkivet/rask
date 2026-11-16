@@ -7,6 +7,7 @@ metadata:
   labels: {{- include "rask.componentLabels" (list . "issuer-mirror") | nindent 4 }}
 spec:
   replicas: 1
+  {{- include "lance.rollout" . | nindent 2 }}
   selector:
     matchLabels: { app.kubernetes.io/component: issuer-mirror, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:

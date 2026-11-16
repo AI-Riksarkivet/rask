@@ -8,6 +8,7 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ (include "lance.replicaBounds" (list . .Values.services.catalog) | fromJson).min | int }}
   {{- end }}
+  {{- include "lance.rollout" . | nindent 2 }}
   selector:
     matchLabels: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
@@ -181,6 +182,7 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ (include "lance.replicaBounds" (list . .Values.services.lineage) | fromJson).min | int }}
   {{- end }}
+  {{- include "lance.rollout" . | nindent 2 }}
   selector:
     matchLabels: { app.kubernetes.io/component: lineage, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:

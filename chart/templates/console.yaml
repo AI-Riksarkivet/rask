@@ -48,6 +48,7 @@ metadata:
     {{- include "rask.componentLabels" (list . "console") | nindent 4 }}
 spec:
   replicas: {{ .Values.console.replicas }}
+  {{- include "lance.rollout" . | nindent 2 }}
   selector:
     matchLabels:
       {{- toYaml $selector | nindent 6 }}

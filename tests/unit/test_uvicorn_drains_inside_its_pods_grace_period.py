@@ -24,7 +24,7 @@ from collections.abc import Callable
 import pytest
 import yaml
 
-from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_SETS, REPO, containers, render, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_ARGS, OBSERVABILITY_SETS, REPO, containers, render, render_text
 
 
 _FLAG = "--timeout-graceful-shutdown="
@@ -138,3 +138,20 @@ def test_every_uvicorn_runs_under_its_images_init_never_as_its_containers_pid_1(
 
     assert found, "no container runs uvicorn, so this gate checks nothing"
     assert {where: shape for where, shape in found.items() if shape[0] is not None or shape[1] not in _LAUNCHERS} == {}
+
+
+def test_every_deployment_keeps_each_pod_serving_until_its_replacement_is_ready() -> None:
+    """A rollout takes no serving pod away before the pod replacing it is Ready ([[LH-483]]). Kubernetes' default lets a
+    quarter of a Deployment's replicas be down at once, which at one replica is nothing and at four is a pod's worth of
+    requests refused on every upgrade. Judged on every Deployment rask's own templates render, the Collector included."""
+    own = [
+        doc
+        for doc in render(*DEFAULT_ARGS, *OBSERVABILITY_ARGS)
+        if doc.get("kind") == "Deployment" and not str(doc["metadata"].get("labels", {}).get("helm.sh/chart", "")).startswith("openfga")
+    ]
+
+    taken_away = {doc["metadata"]["name"]: (doc["spec"].get("strategy") or {}).get("rollingUpdate", {}).get("maxUnavailable") for doc in own}
+
+    assert taken_away == dict.fromkeys(
+        ("rask-catalog", "rask-console", "rask-issuer-mirror", "rask-lineage", "rask-maintenance-worker", "rask-otel-collector"), 0
+    )

@@ -154,6 +154,15 @@ The fewest and most replicas a request-serving service runs: an autoscaler's `mi
 `autoscaling.enabled`, else its own `replicas` for both. The PodDisruptionBudget reads the fewest, and the catalog's
 and lineage's Deployments render the fewest as their `replicas`.
 
+## `{{- define "lance.rollout" -}}`
+
+How a request-serving Deployment rolls: no pod is taken away before the pod replacing it is Ready
+(`maxUnavailable: 0`), and a quarter more than its replicas may run meanwhile (`maxSurge: 25%`, at least one).
+Kubernetes' default lets a quarter of the replicas be down at once, which at one replica rounds to none and at four is
+a pod's worth of requests refused on every upgrade ([[LH-483]]). The catalog, lineage, the console, the issuer mirror
+and the Collector render it; the maintenance worker keeps its own, a surge of exactly one, since each extra worker
+takes tasks. None of them mounts a volume or a host port only one pod can hold, so a surge pod always schedules.
+
 ## `{{- define "rask.isRealDeployment" -}}`
 
 IS THIS A REAL DEPLOYMENT? One definition, because two are two chances to answer it too narrowly at

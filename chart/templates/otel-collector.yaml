@@ -46,6 +46,7 @@ metadata:
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- include "lance.rollout" . | nindent 2 }}
   selector:
     matchLabels: { app.kubernetes.io/component: otel-collector, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
