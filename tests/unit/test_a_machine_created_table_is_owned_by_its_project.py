@@ -1,10 +1,10 @@
 """CONTRACT (owner ruling 2026-09-10): a table a SERVICE registers is not owned by that service.
 
-LH-052 withdrew the cascade's `owner` on every tenant WAREHOUSE. It did not touch the second, quieter
+LH-052 withdrew a pipeline service's `owner` on every tenant WAREHOUSE. It did not touch the second, quieter
 grant: `seed_ownership` gives `owner` on the just-created object to whoever created it, and for a
-pipeline service's output that creator is the service. So a cascade identity kept `can_drop`,
+pipeline service's output that creator is the service. So a pipeline identity kept `can_drop`,
 `can_deregister`, `can_restore` and `manage_grants` on every table it had ever registered — which,
-for the cascade, is every governed table of every tenant it has run in. Narrower than the warehouse
+for such a service, is every governed table of every tenant it has run in. Narrower than the warehouse
 grant it replaced, and not nothing.
 
 THE PROJECT ADMIN ALREADY OWNS IT, so nothing needs to be granted in its place. The chain is
@@ -87,7 +87,7 @@ _TABLE_UUID = uuid_of("table", ["acme-silver", "features"])
 @pytest.mark.asyncio
 async def test_a_SERVICE_creating_a_table_is_not_granted_owner(monkeypatch: pytest.MonkeyPatch) -> None:
     """The withdrawal itself: a service registering its output does not become its owner."""
-    written = await _tuples_written(ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-silver-to-gold"), monkeypatch)
+    written = await _tuples_written(ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-pipeline"), monkeypatch)
     assert not [t for t in written if t[1] == "owner"], f"the registering service was granted ownership of its output: {written}"
     # The hierarchy edge is still written, and that is what keeps this a withdrawal rather than an
     # orphaning: ownership descends to the table from the project's admin through this link.

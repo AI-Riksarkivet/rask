@@ -31,7 +31,7 @@ took it from everyone else), its provenance (``provenance_guard.keep_provenance`
 survives as the owner-tier ``can_drop`` gate: the tip's schema and rows are replaced.
 
 It imports ``catalog.api.fga_deps`` for the authorization seam, exactly as
-``catalog.services.cascade_backfill`` already does: the guards are the estate's one implementation and
+``catalog.services.warehouse_grant_backfill`` already does: the guards are the estate's one implementation and
 re-deriving them here would be the weakened duplicate the audit keeps finding elsewhere.
 """
 

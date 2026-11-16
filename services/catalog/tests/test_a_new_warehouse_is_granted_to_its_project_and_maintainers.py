@@ -1,8 +1,8 @@
 """A new warehouse is granted to its project and its maintainers at create, and a repair writes the same set.
 
-Granted at the WAREHOUSE, not per tier, and that is `optimize-tuples.md`'s rule rather than a
+Granted at the WAREHOUSE, not per namespace, and that is `optimize-tuples.md`'s rule rather than a
 shortcut: `namespace` and `table` both define the rungs as `... or <rung> from parent`, so one tuple at
-the container reaches every tier and every table under it.
+the container reaches every namespace and every table under it.
 
 Empty by default. An estate that declares no maintenance identity gets only the project edge and the
 creator's grant.
@@ -84,7 +84,7 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
 
     async def _repair() -> None:
         async with fga.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
-            await fga_deps.converge_cascade_grants(store, settings, warehouse_id="wh1", project="acme", actor="system:cascade-backfill")
+            await fga_deps.converge_warehouse_grants(store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill")
 
     asyncio.run(_repair())
 
@@ -103,7 +103,7 @@ async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
     [[LH-165]]. `warehouse.maintenance` has no `from parent`, so the sweep reaches a tenant's tables
     through exactly one tuple, `warehouse:<id>#maintenance@<maintenance identity>`, and the create door is
     where it has to be written: there is then no window in which a tenant exists and its data cannot be
-    maintained. It rides in `cascade_tuples`, which the create door and `converge_cascade_grants` share,
+    maintained. It rides in `cascade_tuples`, which the create door and `converge_warehouse_grants` share,
     so the two populations of warehouse cannot differ. Measured 2026-09-15 on the live estate: the 4 of
     97 warehouses without the tuple were the 4 newest, every one created after the hand-written grants.
     """

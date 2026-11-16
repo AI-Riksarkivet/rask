@@ -22,8 +22,8 @@ after an append and an update, and the `inserted` window (1, 3] answers []. A co
 catalog cannot rule the case out at creation alone: a table registered at an empty location, or one
 whose bytes were rewritten outside the catalog, reaches this door without passing a create.
 
-THE CONSUMER RULE, stated once for every published range (`table_published`'s and a stage trigger's
-`{from_version, to_version}`, a work order's `version_floor`). A consumer resolves the window
+THE CONSUMER RULE, stated once for every published range (`table_published`'s `{from_version, to_version}`, or one a
+pipeline keeps for itself). A consumer resolves the window
 `(from, to]` in one of two ways, and in no other:
 
     1. through `/changes` — `inserted`, `updated` and `deleted` for that window, applied together; or
@@ -86,7 +86,7 @@ _UPDATED = "_row_last_updated_at_version"
 #: What the feed adds to every projection. `lance_docs/lance/format/table/row_id_lineage.md:441` states the documented result returns rows "including
 #: the version metadata columns" — Lance does NOT project pseudo-columns unless they are named, so the
 #: door names them. `_rowid` rides along because it is what identifies the row an update applies TO: the
-#: primary key is the transform's business, and the cascade's tiers do not all carry one.
+#: primary key is the transform's business, and a pipeline's tables do not all carry one.
 FEED_COLUMNS: Final = (_CREATED, _UPDATED, "_rowid")
 
 

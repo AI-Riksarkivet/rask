@@ -230,7 +230,7 @@ async def establish_warehouse(
     if owner is not None:
         await fga_deps.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project)
     elif author is not None:
-        await fga_deps.converge_cascade_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject)
+        await fga_deps.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject)
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
     await emit_control(
         control,

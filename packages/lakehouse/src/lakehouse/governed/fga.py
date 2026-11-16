@@ -2002,14 +2002,14 @@ TupleOrigin = Literal[
     "create",
     "project_create",
     "warehouse_create",
-    # Converging the cascade's grants over warehouses that already exist: re-asserting those the release declares and
+    # Converging the warehouse grants over warehouses that already exist: re-asserting those the release declares and
     # taking back the maintenance rung from its own accounts it no longer declares. Distinct from
     # "warehouse_create" deliberately: an audit row that claims a tuple was written at CREATE time,
     # when it was actually written by a backfill months later, destroys the one property the origin
     # field exists for.
-    "cascade_backfill",
+    "warehouse_grant_backfill",
     # Re-asserting a tuple the control-plane REGISTRY still justifies, after the store lost it
-    # ([[LH-061]]). Its own value for `cascade_backfill`'s reason one step further: this grant was not
+    # ([[LH-061]]). Its own value for `warehouse_grant_backfill`'s reason one step further: this grant was not
     # made by anyone, at create time or later — it was RECONSTRUCTED from a record, and an auditor
     # reviewing who granted a tenant's admin rung needs to see that no person did. It also bounds what
     # the row can be read to mean: the registry justifies the SEED and nothing after it, so a
@@ -2138,7 +2138,7 @@ async def grant_on_create(
     """
     # `grant_owner=False` writes the hierarchy edge ALONE — for a creator who should not own what it
     # made. The estate's case is a machine: a service principal registering its own output would
-    # become that table's owner, keeping drop/deregister/restore/manage_grants on every tier of every
+    # become that table's owner, keeping drop/deregister/restore/manage_grants on every namespace of every
     # tenant it wrote to (owner ruling 2026-09-10). The object is not left unowned — ownership still descends the
     # parent chain from the project's admin — which is exactly why the edge must still be written, and
     # why this is a flag on the SAME batch rather than a second call: dropping the owner tuple and

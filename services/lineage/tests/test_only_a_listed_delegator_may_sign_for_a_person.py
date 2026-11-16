@@ -29,7 +29,7 @@ from lakehouse.governed.signing_key import signing_public_secret
 from tests.secret_store_double import SecretStoreDouble
 
 
-CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver", "service-trainer", "dex~alice"
+CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-pipeline-a", "service-trainer", "dex~alice"
 #: A listed signer that is no delegator and signs its own runs, as the principal it is.
 PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
 #: The uuids the catalog minted for the run's output, the table it read and the table a drop names, which its events carry

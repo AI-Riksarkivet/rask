@@ -32,7 +32,7 @@ So the split is:
   decision is one call away and is still a decision.
 
 THE BOUND, STATED SO NOBODY READS THIS AS A BACKUP. Nothing here restores access. Grants, ownership,
-role assignments, per-table owners and the cascade identities (catalog CONFIG, in no record
+role assignments, per-table owners and the service identities (catalog CONFIG, in no record
 at all) come back from nothing. What comes back is the shape of the estate.
 
 OFF AND DRY-RUN BY DEFAULT, the same two flags the floor raise carries and for the same reason: "does

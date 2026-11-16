@@ -7,7 +7,7 @@ model
 #   the estate's containment rule end to end, with lance's
 #   concentric-rung style (owner > writer > reader) layered on top, plus a `validator` rung.
 #   `materialized_view` hangs off namespace/warehouse and inherits the SAME rungs via `parent`, so a grant on the
-#   enclosing stage reaches the views inside it. A transaction is no object: its id names its table, and both
+#   enclosing namespace reaches the views inside it. A transaction is no object: its id names its table, and both
 #   transaction doors are asked on that table ([[LH-221]]).
 # Stored and effective: every assignable data rung is TWO relations. The bare name (`reader`) holds only what was
 #   granted on the object itself, and grants are written to and listed from it. Its `_effective` twin adds the rungs
@@ -31,7 +31,7 @@ model
 #   running the same checklist does not re-file them as gaps:
 #     project   -> warehouse                        `can_create_warehouse`
 #     warehouse -> namespace / table / mat.view     `can_create_namespace` / `_table` / `_materialized_view`
-#     namespace -> namespace / table / mat.view     same three, so a nested create is gated by its enclosing stage
+#     namespace -> namespace / table / mat.view     same three, so a nested create is gated by its enclosing namespace
 #     project   -> role                             `can_create_role`
 #     estate    -> project                          `can_create_project`: minting a TENANT is the estate admin's or a
 #         provisioning operator's (`POST /management/v1/projects`, ADR 0143), asked on the ROOT object; the door
@@ -256,14 +256,14 @@ type warehouse
     define writer_effective: writer or owner_effective
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define reader_effective: reader or writer_effective
-    # A warehouse-level validator validates EVERY stage below it.
+    # A warehouse-level validator validates EVERY namespace below it.
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define validator_effective: validator or owner_effective
     # THE MAINTENANCE IDENTITY, the platform's own: the catalog writes it for `LANCE_FGA_MAINTAINERS` at warehouse
     # create and backfill, no grant door hands it out, and it alone opens the maintain storage tier
     # (`table.can_vend_maintain`, ADR 0156 C4). One tuple per warehouse keeps the grant enumerable.
     define maintenance: [user]
-    # A warehouse-level maintainer maintains EVERY stage below it.
+    # A warehouse-level maintainer maintains EVERY namespace below it.
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define maintainer_effective: maintainer or owner_effective or maintenance
     # CLASSIFYING A COLUMN IS NOT WRITING TO IT ([[LH-058]]). Attaching a classification to a field says
@@ -281,19 +281,19 @@ type warehouse
     #
     # `maintainer`'s shape exactly — grantable, conditional, cascading from the parent — because it is
     # the same kind of privilege: a standing, narrow capability held by someone who is not the data's
-    # owner, and one tuple per tenant should reach every tier beneath it.
+    # owner, and one tuple per tenant should reach every namespace beneath it.
     define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define classifier_effective: classifier or owner_effective
-    # PUBLICATION is not ownership, and the model has to say so or the cascade needs `owner` on every
+    # PUBLICATION is not ownership, and the model has to say so or a pipeline's identity needs `owner` on every
     # tenant. Advancing the `published` ref says which version is BLESSED; it destroys nothing, forks
     # nothing and grants nothing. `can_maintain`'s precedent, applied to the other unattended plane:
     # a maintainer rewrites HOW a dataset is stored, a publisher moves the pointer that says which
     # version consumers should read, and neither is a licence to drop, restore or re-grant.
     #
-    # Measured 2026-09-10 before this existed: each of the four cascade identities held `owner` on 95
+    # Measured 2026-09-10 before this existed: each of four pipeline identities held `owner` on 95
     # warehouses, bought for the single `publish` door, since `can_update_tag` had no rung below owner.
     # Granted at the WAREHOUSE for the same reason the maintainer is: one tuple per tenant reaches
-    # every tier and every table beneath it, so the cascade's reach stays enumerable.
+    # every namespace and every table beneath it, so a publisher's reach stays enumerable.
     define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define publisher_effective: publisher or owner_effective
     # The decision scope ([[LH-563]], see `project`), granted on this warehouse alone by whoever manages its grants.
@@ -475,7 +475,7 @@ type namespace
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define reader_effective: reader or writer_effective or reader_effective from parent
     # The validator rung is SEPARATE from writer — a writer is NOT a validator. Inherits from the parent
-    # so a warehouse/parent validator validates this stage. This is what gates promotion INTO the stage.
+    # so a warehouse/parent validator validates this namespace.
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define validator_effective: validator or owner_effective or validator_effective from parent
     # The maintainer rung is SEPARATE from writer IN BOTH DIRECTIONS, which is the whole point of it.
@@ -493,16 +493,16 @@ type namespace
     # Labelling a table this namespace holds; asked where the table is not made yet, a create carrying a label ([[LH-207]]).
     define can_classify: classifier_effective
     # Publication, inherited — see the `warehouse` rung. A publisher here may bless a version of any
-    # table in this stage without being able to destroy one.
+    # table in this namespace without being able to destroy one.
     define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define publisher_effective: publisher or owner_effective or publisher_effective from parent
     # ---- the GRANT axis ---- (see `warehouse` for why it is separate from the rungs above)
-    # Managed access, inherited: setting the flag on the warehouse governs every stage beneath it, and
-    # a stage may also set it for itself. The recursion is what makes "manage this collection centrally"
+    # Managed access, inherited: setting the flag on the warehouse governs every namespace beneath it, and
+    # a namespace may also set it for itself. The recursion is what makes "manage this collection centrally"
     # one act rather than one act per object.
     define managed_access: [user:*, role:*]
     define managed_access_inheritance: managed_access or managed_access_inheritance from parent
-    # Cascades like every other rung: a warehouse grant-manager manages grants on every stage beneath
+    # Cascades like every other rung: a warehouse grant-manager manages grants on every namespace beneath
     # it, so access administration is delegated once at the top rather than re-granted per namespace.
     # `(ownership but not managed_access_inheritance from parent)` — an owner grants here UNLESS the
     # enclosing scope is managed, in which case only a manager from above can.
@@ -599,7 +599,7 @@ type table
     define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define classifier_effective: classifier or owner_effective or classifier_effective from parent
     # See the `warehouse` rung. Separate from `writer` in both directions for the same reason
-    # `maintainer` is: writing a version and BLESSING one are different authorities, and the cascade
+    # `maintainer` is: writing a version and BLESSING one are different authorities, and a pipeline
     # needs the second without the destructive half of the first's container.
     define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant]
     define publisher_effective: publisher or owner_effective or publisher_effective from parent

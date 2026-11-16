@@ -172,7 +172,7 @@ async def test_fatal_True_refuses_to_run_without_the_model_its_image_carries(mon
     monkeypatch.setattr(fga_mod, "resolve", resolve)
 
     with pytest.raises(fga_mod.OpenFgaModelAbsentError, match=r"holds no model carrying this image's model\.json"):
-        await build_fga_client(_Settings(), service="cascade-backfill", provision=False, fatal=True)
+        await build_fga_client(_Settings(), service="warehouse-grant-backfill", provision=False, fatal=True)
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
 
 

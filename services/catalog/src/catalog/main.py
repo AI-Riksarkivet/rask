@@ -94,19 +94,19 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
         delay = min(delay * 2, _PROVENANCE_RETRY_MAX_SECONDS)
 
 
-async def _backfill_cascade_grants(app: FastAPI) -> None:
-    """Run the cascade-grant backfill, reporting rather than raising. See its call site for why."""
-    from catalog.services.cascade_backfill import backfill
+async def _backfill_warehouse_grants(app: FastAPI) -> None:
+    """Run the warehouse-grant backfill, reporting rather than raising. See its call site for why."""
+    from catalog.services.warehouse_grant_backfill import backfill
 
     try:
         seen, written, failures = await backfill(app.state.settings)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        log.warning("cascade_backfill_error", extra={"error": str(exc)})
+        log.warning("warehouse_grant_backfill_error", extra={"error": str(exc)})
         return
     if seen:
-        log.info("cascade_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
+        log.info("warehouse_grant_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
 
 
 def bound_lance_scans(settings: Settings) -> None:
@@ -339,7 +339,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     #     exactly as it was, which is the state this repairs, not a worse one.
     #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
     #     one-by-one past a duplicate), so replicas racing land the same tuples.
-    loops.start("cascade-backfill", partial(_backfill_cascade_grants, app))
+    loops.start("warehouse-grant-backfill", partial(_backfill_warehouse_grants, app))
     # The estate's own warehouse row and the namespace lineage keeps its tables in, in the background for the
     # backfill's reasons: lineage retries its tables until the namespace exists, so a slow OpenFGA or store must not
     # delay this catalog's readiness. A name under the estate's warehouse is absent until the row is there.

@@ -301,7 +301,7 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers
     """The catalog revokes a table's grants in the request that drops it, so a drop delivered after the revoke asks FGA about a
     table nobody may write. A drop whose signature verifies as a delegator is the catalog's attestation that it enforced `can_drop`,
     and is admitted without the grant; a drop any other listed signer signed still needs it."""
-    other = event_signer("service-bronze-to-silver")
+    other = event_signer("service-pipeline-a")
     secret_store.hold(f"signing-public-{other.identity}", {"keys": other.public})
     settings = _settings(tmp_path, fga_enabled=True, signers=frozenset({_CATALOG, other.identity}))
     author = _AUTHOR if by_the_catalog else other.identity
@@ -468,7 +468,7 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
     delete failed) is a redelivery, even when its author has since lost the grant. It is signed by a listed signer that
     is no delegator, which the gate checks in full, so the refusal it meets is what the replay answers. The feed keys a
     static change by its derived id, never by a run id it does not have."""
-    other = event_signer("service-bronze-to-silver")
+    other = event_signer("service-pipeline-a")
     secret_store.hold(f"signing-public-{other.identity}", {"keys": other.public})
     settings = _settings(tmp_path, fga_enabled=True, signers=frozenset({_CATALOG, other.identity}))
     _, staged_json = _stage_a_create(settings, other, author=other.identity)

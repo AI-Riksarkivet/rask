@@ -1,6 +1,6 @@
 """The backfill's own decisions: what it skips, what it reports, and what it refuses to guess.
 
-The tuple SET is pinned next door in test_cascade_writers_seeded.py, shared with the create path so
+The tuple SET is pinned next door in test_a_new_warehouse_is_granted_to_its_project_and_maintainers.py, shared with the create path so
 the two cannot drift. What is tested here is the part only the backfill has — walking a registry that
 may contain records it cannot act on, and being honest about it. A repair that half-ran and reported
 success is how an estate ends up believing it is repaired.
@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from catalog.core.config import Settings
-from catalog.services import cascade_backfill
+from catalog.services import warehouse_grant_backfill
 
 
 def _settings(**overrides: object) -> Settings:
@@ -34,14 +34,14 @@ def _fga_settings(**overrides: object) -> Settings:
 @pytest.mark.asyncio
 async def test_fga_off_is_a_no_op_not_a_failure() -> None:
     """An estate without authorization has nothing to grant — and must not report a failure for it."""
-    assert await cascade_backfill.backfill(_settings()) == (0, 0, [])
+    assert await warehouse_grant_backfill.backfill(_settings()) == (0, 0, [])
 
 
 @pytest.mark.asyncio
 async def test_no_declared_maintainers_is_a_no_op() -> None:
     """Empty by default. An estate that declares no maintenance identity and names no account of its own has no rung to
     grant or take back."""
-    assert await cascade_backfill.backfill(_fga_settings()) == (0, 0, [])
+    assert await warehouse_grant_backfill.backfill(_fga_settings()) == (0, 0, [])
 
 
 @pytest.mark.asyncio
@@ -54,18 +54,18 @@ async def test_an_estate_that_declares_only_its_own_accounts_still_runs_the_back
     skipped: list[str] = []
 
     def _log_info(event: str, **kw: object) -> None:
-        if event == "cascade_backfill_skipped":
+        if event == "warehouse_grant_backfill_skipped":
             skipped.append(str(kw.get("extra") or {}))
 
-    monkeypatch.setattr(cascade_backfill.log, "info", lambda event, **kw: _log_info(event, **kw))
+    monkeypatch.setattr(warehouse_grant_backfill.log, "info", lambda event, **kw: _log_info(event, **kw))
 
     async def _no_client(*_a: object, **_kw: object) -> None:
         raise RuntimeError("reached the client build, so the guard did not skip")
 
-    monkeypatch.setattr(cascade_backfill, "build_fga_client", _no_client)
+    monkeypatch.setattr(warehouse_grant_backfill, "build_fga_client", _no_client)
 
     with pytest.raises(RuntimeError, match="did not skip"):
-        await cascade_backfill.backfill(settings)
+        await warehouse_grant_backfill.backfill(settings)
 
     assert skipped == [], f"an estate naming only its own accounts was skipped: {skipped}"
 
@@ -82,13 +82,13 @@ async def test_a_record_without_a_project_is_REPORTED_not_guessed(monkeypatch) -
     async def _grant(_c, _s, *, warehouse_id: str, project: str, actor: str) -> int:
         return 2
 
-    monkeypatch.setattr(cascade_backfill.fga_deps, "converge_cascade_grants", _grant)
+    monkeypatch.setattr(warehouse_grant_backfill.fga_deps, "converge_warehouse_grants", _grant)
     monkeypatch.setattr(
-        cascade_backfill.warehouses,
+        warehouse_grant_backfill.warehouses,
         "list_warehouses",
         lambda *a, **k: [{"id": "orphan"}, {"id": "wh1", "project": "acme"}],
     )
-    seen, written, failures = await cascade_backfill.backfill(
+    seen, written, failures = await warehouse_grant_backfill.backfill(
         _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
     )
     assert seen == 2
@@ -108,13 +108,13 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
             raise RuntimeError("openfga said no")
         return 2
 
-    monkeypatch.setattr(cascade_backfill.fga_deps, "converge_cascade_grants", _flaky)
+    monkeypatch.setattr(warehouse_grant_backfill.fga_deps, "converge_warehouse_grants", _flaky)
     monkeypatch.setattr(
-        cascade_backfill.warehouses,
+        warehouse_grant_backfill.warehouses,
         "list_warehouses",
         lambda *a, **k: [{"id": "a", "project": "p"}, {"id": "boom", "project": "p"}, {"id": "z", "project": "p"}],
     )
-    seen, written, failures = await cascade_backfill.backfill(
+    seen, written, failures = await warehouse_grant_backfill.backfill(
         _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
     )
     assert calls == ["a", "boom", "z"], "the walk stopped at the failure"
@@ -128,18 +128,18 @@ def test_main_exits_NONZERO_when_a_warehouse_failed(monkeypatch) -> None:
     async def _one_failure(_settings):
         return (1, 0, ["wh1: openfga said no"])
 
-    monkeypatch.setattr(cascade_backfill, "backfill", _one_failure)
-    monkeypatch.setattr(cascade_backfill, "get_settings", lambda: _fga_settings())
-    assert cascade_backfill.main() == 1
+    monkeypatch.setattr(warehouse_grant_backfill, "backfill", _one_failure)
+    monkeypatch.setattr(warehouse_grant_backfill, "get_settings", lambda: _fga_settings())
+    assert warehouse_grant_backfill.main() == 1
 
 
 def test_main_exits_zero_on_a_clean_run(monkeypatch) -> None:
     async def _clean(_settings):
         return (4, 20, [])
 
-    monkeypatch.setattr(cascade_backfill, "backfill", _clean)
-    monkeypatch.setattr(cascade_backfill, "get_settings", lambda: _fga_settings())
-    assert cascade_backfill.main() == 0
+    monkeypatch.setattr(warehouse_grant_backfill, "backfill", _clean)
+    monkeypatch.setattr(warehouse_grant_backfill, "get_settings", lambda: _fga_settings())
+    assert warehouse_grant_backfill.main() == 0
 
 
 def _stub_client(monkeypatch) -> None:

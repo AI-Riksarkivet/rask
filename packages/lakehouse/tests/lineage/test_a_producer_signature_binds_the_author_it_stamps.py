@@ -54,7 +54,7 @@ from lakehouse.lineage import (
 from lakehouse.lineage.signing import MAX_NESTING
 
 
-STAGE, CATALOG, OTHER_DELEGATOR, ROGUE = "service-bronze-to-silver", "service-catalog", "service-other-delegator", "service-trainer"
+STAGE, CATALOG, OTHER_DELEGATOR, ROGUE = "service-pipeline-a", "service-catalog", "service-other-delegator", "service-trainer"
 PERSON = "CgVhbGljZRIFbG9jYWw"
 PERSON_ACTOR = f"user:{PERSON}"
 SIGNERS = frozenset({STAGE, CATALOG, OTHER_DELEGATOR})
@@ -69,7 +69,7 @@ _BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
 def _event(author: str = STAGE) -> dict[str, Any]:
-    """A medallion COMPLETE: its `rask_lance` facet carries a float that happens to be integral."""
+    """A pipeline's COMPLETE: its `rask_lance` facet carries a float that happens to be integral."""
     return {
         "eventType": "COMPLETE",
         "eventTime": "2026-10-02T12:00:00+00:00",

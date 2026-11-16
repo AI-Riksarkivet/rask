@@ -9,7 +9,7 @@ and every surface built to explore relationships has essentially nothing to show
 explorer renders that faithfully, which reads as a broken view rather than an empty estate.
 
 Meanwhile the model already ships a rich, deliberately-shaped fixture set in ``model.fga.yaml``: three
-teams, three projects, three warehouses, a bronze/silver/gold cascade, a `role:validators` persona,
+teams, three projects, three warehouses, bronze, silver and gold namespaces, a `role:validators` persona,
 plus users who exercise the interesting cases (a plain writer who is NOT a validator, a validator who
 reaches gold only through a role). Those are CI fixtures and have
 never been loadable into a running store. This script is that missing half — it reads the SAME file

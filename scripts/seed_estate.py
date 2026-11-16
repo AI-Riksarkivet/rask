@@ -27,7 +27,7 @@ writing it is precisely how a ghost is made.
 
 THE ESTATE MIRRORS THE FGA FIXTURES (``lakehouse/governed/auth/model.fga.yaml``), the same set
 ``fga_seed_demo.py`` loads and CI asserts against, so this is a replacement rather than a toy: three
-projects, three warehouses, the bronze/silver/gold cascade under acme, each project's admins as a role of
+projects, three warehouses, the bronze, silver and gold namespaces under acme, each project's admins as a role of
 that project, a validators persona,
 and the users that exercise the interesting cases (a writer who is NOT a validator, a validator who
 reaches gold only through a role, a tenant member who is not an admin). Three deliberate differences:
@@ -238,7 +238,7 @@ DEMO_ESTATE = Estate(
         Grant("role:acme/admins#assignee", "admin", "project:acme"),
         Grant("role:research/admins#assignee", "admin", "project:research"),
         Grant("role:beta/admins#assignee", "admin", "project:beta"),
-        # dave: a plain WRITER on the bucket — writes any stage, but is NOT a validator.
+        # dave: a plain WRITER on the bucket — writes any namespace, but is NOT a validator.
         Grant("user:dave", "writer", "warehouse:acme"),
         # NO READ GRANT FOR A CLIENT'S OWN SERVICE ACCOUNT, and its absence is the control (Q17-8 / §F2-2 F2-4).
         # A client that sends its own identity when there is no session makes it the ANONYMOUS principal —
@@ -252,14 +252,14 @@ DEMO_ESTATE = Estate(
         Grant("user:gina", "member", "project:acme"),
         # ---- UPWARD VISIBILITY (C1) --------------------------------------------------------------
         # ivan holds ONE grant, on ONE table. The containers above it become VISIBLE — the breadcrumb
-        # to his own data resolves instead of 403ing — while a SIBLING stage stays invisible. This is
+        # to his own data resolves instead of 403ing — while a SIBLING namespace stays invisible. This is
         # the only persona whose object is a table.
         Grant("user:ivan", "reader", "table:acme$gold$catalog"),
         # ---- THE GRANT AXIS (C2) — administering access is not the same as holding it -------------
         # judy: grant authority on the bucket and NO data rung — the access-review persona that was
         # unexpressible while granting was welded to `owner`.
         Grant("user:judy", "manage_grants", "warehouse:acme"),
-        # kevin: a DELEGATE on the silver stage — a writer who may hand on exactly what he holds, and
+        # kevin: a DELEGATE on the silver namespace — a writer who may hand on exactly what he holds, and
         # no more.
         Grant("user:kevin", "writer", "namespace:acme$silver"),
         Grant("user:kevin", "pass_grants", "namespace:acme$silver"),
@@ -274,7 +274,7 @@ DEMO_ESTATE = Estate(
         # not a seed's; the raw tuple editor is where every other grant here goes and it accepts the
         # flag as the directly-assignable relation it is.
         Grant("user:*", "managed_access", "warehouse:beta"),
-        # mona OWNS the stage inside the managed scope — which would normally carry the right to grant,
+        # mona OWNS the namespace inside the managed scope — which would normally carry the right to grant,
         # and under the flag does not. She keeps every data power.
         Grant("user:mona", "owner", "namespace:beta$locked"),
         # nora is the records manager: grant authority at the warehouse, which the flag centralizes on her.

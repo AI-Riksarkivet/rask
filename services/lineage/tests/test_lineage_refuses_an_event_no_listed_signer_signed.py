@@ -29,7 +29,7 @@ from lineage.core.config import get_settings
 from tests.secret_store_double import SecretStoreDouble
 
 
-SIGNER = "service-bronze-to-silver"
+SIGNER = "service-pipeline-a"
 
 
 @pytest.fixture

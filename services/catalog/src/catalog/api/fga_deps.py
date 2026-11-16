@@ -166,7 +166,7 @@ _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
 # ref-plane and are privileged too — above the writer rung, since moving a named pointer is no data
 # write — but they resolve through ``owner or publisher`` rather than
 # ``owner`` alone (owner ruling 2026-09-10). A tag is a NAMED POINTER at a version that already exists,
-# so blessing one destroys nothing, and welding that to ownership is what forced every cascade identity
+# so blessing one destroys nothing, and welding that to ownership is what forced every pipeline identity
 # to hold ``owner`` on every tenant. Their ``*/list`` / ``*/version`` siblings are reads, resolved on the
 # trailing segment below; ``tags/delete`` is mapped explicitly just below.
 _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
@@ -3042,8 +3042,8 @@ async def seed_warehouse(
     if not (settings.fga_enabled and token is not None and client is not None):
         return
     obj = f"warehouse:{warehouse_id}"
-    # The project edge and the sweep's grant, granted here and not per tier, at the WAREHOUSE because
-    # `namespace` and `table` both define `... or ... from parent`: one tuple reaches every tier and every
+    # The project edge and the sweep's grant, granted here and not per namespace, at the WAREHOUSE because
+    # `namespace` and `table` both define `... or ... from parent`: one tuple reaches every namespace and every
     # table under it. Written in the SAME call as the creator's grant so there is no window in which the
     # warehouse exists and is unreachable from its project or unmaintained.
     await fga.write_tuples(  # noqa: TID251
@@ -3064,8 +3064,8 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
     from the one creates write leaves the estate with two populations of warehouse that differ in a way
     nothing reports.
 
-    Granted at the WAREHOUSE, not per tier: `namespace` and `table` both define `maintainer` as
-    `... or maintainer from parent`, so one tuple at the container reaches every tier and every table
+    Granted at the WAREHOUSE, not per namespace: `namespace` and `table` both define `maintainer` as
+    `... or maintainer from parent`, so one tuple at the container reaches every namespace and every table
     under it (`optimize-tuples.md`), and the sweep's reach stays enumerable.
 
     The creator's own grant is deliberately NOT here. It is the one tuple a backfill must never write
@@ -3093,7 +3093,7 @@ def own_users(settings: Settings) -> set[str]:
     return {fga.user_object(account) for account in settings.own_accounts}
 
 
-async def converge_cascade_grants(
+async def converge_warehouse_grants(
     client: OpenFgaClient | None,
     settings: Settings,
     *,
@@ -3116,9 +3116,9 @@ async def converge_cascade_grants(
     if not (settings.fga_enabled and client is not None):
         return 0
     tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
-    await fga.write_tuples(client, tuples, actor=actor, origin="cascade_backfill")  # noqa: TID251
+    await fga.write_tuples(client, tuples, actor=actor, origin="warehouse_grant_backfill")  # noqa: TID251
     own = own_users(settings)
-    revoked = await fga.revoke_undeclared(  # noqa: TID251 — the cascade's revoking site
-        client, tuples, obj=f"warehouse:{warehouse_id}", relation="maintenance", own=own, actor=actor, origin="cascade_backfill"
+    revoked = await fga.revoke_undeclared(  # noqa: TID251 — the converge's revoking site
+        client, tuples, obj=f"warehouse:{warehouse_id}", relation="maintenance", own=own, actor=actor, origin="warehouse_grant_backfill"
     )
     return len(tuples) + len(revoked)

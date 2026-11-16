@@ -291,7 +291,7 @@ def commit_lane(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], 
     def _lane(mode: str) -> tuple[Arrivals, _RecordingQueue]:
         for key, value in {
             "RASK_SIGNATURE_DOORS": mode,
-            "RASK_EVENT_SIGNERS": json.dumps([SIGNER, "service-bronze-to-silver"]),
+            "RASK_EVENT_SIGNERS": json.dumps([SIGNER, "service-pipeline-a"]),
             "RASK_EVENT_DELEGATORS": json.dumps([SIGNER]),
         }.items():
             monkeypatch.setenv(key, value)
