@@ -36,8 +36,8 @@ commit-event shape are LH-472 (#598).
 | **Publish-time** | The project's quality gate, declared on the catalog's gates door and run by the publish door | the DATA is good enough to publish: `row_count_positive` + `not_null(key_column)` + `blob_resolves` per blob column (one real byte read from the first and last rows' payloads, so a dangling external pointer is caught at publish rather than at first read) + `column_declared` per column the gate declares a consumer depends on | `catalog/services/publication.py`, `packages/lakehouse/src/lakehouse/quality.py` |
 | **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion, checked at every catalog door | `packages/lakehouse/src/lakehouse/governed/fga.py`, `catalog/api/fga_deps.py` |
 
-Plus the provenance guard: a writer cannot drop, rename or rewrite the provenance columns (`stage`, `lineage`,
-`source_rowid`) or the `lineage.*` / `rask.*` schema-metadata keys (`catalog/core/provenance_guard.py`).
+Plus the provenance guard: a writer cannot drop, rename or rewrite the provenance column `source_rowid` or the
+`lineage.*` / `rask.*` schema-metadata keys (`catalog/core/provenance_guard.py`); every other column is the writer's.
 
 ## 4 · Is it prod-ready? The honest split
 

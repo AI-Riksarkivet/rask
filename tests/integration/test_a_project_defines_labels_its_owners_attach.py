@@ -53,6 +53,7 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
             "oidc_audience": "lance",
             "fga_enabled": True,
             "fga_api_url": "http://openfga:8080",
+            "trash_grace_days": 7,
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
         }
@@ -193,7 +194,8 @@ def test_an_owner_attaches_a_label_the_project_defines_with_a_value_it_allows(re
 
 def test_a_member_finds_the_objects_carrying_a_label_among_those_it_may_see(real_ns_client: TestClient, estate: Grants) -> None:
     """alice labels both tables and the namespace ``pii``. carol, who sees only ``refunds``, is listed only it; alice is
-    listed all three, and filtering by ``domain`` narrows to the table carrying it."""
+    listed all three, and filtering by ``domain`` narrows to the table carrying it. A table dropped to the trash leaves
+    the list."""
     client = real_ns_client
     act_as(client, "alice")
     assert _define(client, DOMAIN).status_code == 200
@@ -212,23 +214,43 @@ def test_a_member_finds_the_objects_carrying_a_label_among_those_it_may_see(real
     assert listed("alice") == [("namespace", SALES), ("table", ORDERS), ("table", REFUNDS)]
     assert listed("alice", "?label=domain") == [("table", ORDERS)]
 
+    # A table in the trash is addressed by nobody, so it is listed to nobody.
+    act_as(client, "alice")
+    estate.grant("alice", ("can_drop", _object(client, "table", REFUNDS)))
+    assert client.post(f"/v1/table/{REFUNDS}/drop", json={}, headers=AUTH).status_code == 200
+    assert listed("carol") == []
+    assert listed("alice") == [("namespace", SALES), ("table", ORDERS)]
 
-def test_a_label_carried_by_an_object_is_not_deleted_until_it_is_removed(real_ns_client: TestClient, estate: Grants) -> None:
-    """Deleting ``pii`` while ``orders`` carries it is refused NamespaceNotEmpty (409, 3) naming the table; once bob
-    removes it the delete lands, and a member is refused the delete (15)."""
+
+def test_a_label_is_deleted_once_no_standing_object_carries_it_and_never_comes_back(real_ns_client: TestClient, estate: Grants) -> None:
+    """Deleting ``pii`` while a table carries it is refused NamespaceNotEmpty (409, 3) naming the table as it is named
+    now, and a member is refused the delete (15). A table in the trash does not hold the definition: once the standing
+    table's label is removed the delete lands, and the trashed table, restored after ``pii`` is defined again, shows no
+    label, since the one it kept was attached under the definition that is gone."""
     client = real_ns_client
     act_as(client, "alice")
     assert _define(client, PII).status_code == 200
+    assert _set(client, "table", REFUNDS, "pii").status_code == 200
     act_as(client, "bob")
     assert _set(client, "table", ORDERS, "pii").status_code == 200
     assert _code(client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH)) == (403, 15)
 
     act_as(client, "alice")
+    estate.grant("alice", ("can_drop", _object(client, "table", ORDERS)), ("can_drop", _object(client, "table", REFUNDS)))
+    renamed = client.post(f"/v1/table/{ORDERS}/rename", json={"new_table_name": "ledger", "new_namespace_id": [WAREHOUSE, "sales"]}, headers=AUTH)
+    assert renamed.status_code == 200, renamed.text
+    assert client.post(f"/v1/table/{REFUNDS}/drop", json={}, headers=AUTH).status_code == 200
     refused = client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH)
-    assert _code(refused) == (409, 3) and ORDERS in refused.json()["detail"]
+    assert _code(refused) == (409, 3)
+    assert refused.json()["detail"] == f"label 'pii' is attached to 1 object(s) ({SALES}$ledger); remove it from each first"
+
     act_as(client, "bob")
-    removed = client.post(f"/management/v1/table/{ORDERS}/labels/remove", json={"name": "pii"}, headers=AUTH)
+    removed = client.post(f"/management/v1/table/{SALES}$ledger/labels/remove", json={"name": "pii"}, headers=AUTH)
     assert removed.json()["labels"] == {}
     act_as(client, "alice")
     assert client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH).status_code == 200
     assert client.get(f"/management/v1/projects/{PROJECT}/labels", headers=AUTH).json() == []
+
+    assert _define(client, PII).status_code == 200
+    assert client.post(f"/management/v1/table/{REFUNDS}/undrop", json={}, headers=AUTH).status_code == 200
+    assert client.post(f"/management/v1/table/{REFUNDS}/labels/describe", json={}, headers=AUTH).json()["labels"] == {}

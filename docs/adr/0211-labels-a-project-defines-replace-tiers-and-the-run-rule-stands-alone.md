@@ -93,9 +93,12 @@ The reference answers:
   object's ending finds them without knowing its project; a project's listing and a definition's delete therefore read
   every project's attachment records. Labels change at admin frequency, so the read is bounded by the estate's labelled
   objects, not its tables.
-- **The race between a definition's delete and a concurrent attachment.** The delete reads the attachments before it
-  deletes. An attachment made in between outlives its definition, and every read shows only labels whose definition
-  stands, so it classifies nothing.
+- **An attachment names the definition it was judged against.** Each label on an object records its definition's uuid.
+  A read shows a label only while that definition stands, and only a standing object (not gone, not in the trash) holds
+  a definition against its delete. So an attachment that outlives its definition, made while the delete read them or
+  kept by a trashed object, classifies nothing, never blocks a delete, and is not revived when the name is defined
+  again. An attach re-resolves its object's name after the write and takes the record back where the object ended
+  meanwhile; a window of one read remains, in which an ended object's record stays, shown by no read.
 
 ## Consequences
 

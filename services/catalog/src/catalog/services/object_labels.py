@@ -16,8 +16,10 @@ Two records:
   labels, the object's ending ends them (`lakehouse.object_records`), and an object made again under the name carries
   none.
 
-A definition is deleted only while no object of its project carries it; an attachment made while the delete reads them
-can outlive its definition, and a label whose definition is gone is shown by no read (:func:`labels_shown`).
+An attachment records the uuid of the definition it was judged against. A definition is deleted only while no standing
+object of its project carries it; an attachment that outlives its definition (made while the delete read them, or kept
+by an object in the trash) names a uuid no definition holds, so no read shows it (:func:`labels_shown`), a name defined
+again never revives it, and it never blocks a delete.
 
 All IO here is blocking; callers threadpool it.
 """
@@ -32,12 +34,12 @@ from datetime import UTC, datetime
 from hashlib import blake2s
 from typing import Any, Final, Literal
 
-from lance_namespace import InternalError, InvalidInputError, NamespaceNotEmptyError, TableNotFoundError
+from lance_namespace import InternalError, InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse import control_prefixes
 from lakehouse.record_store import delete_record, get_record, list_records, record_key
-from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
+from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage_options import StorageOptions
 
 
@@ -51,6 +53,8 @@ type LabelScope = Literal["namespace", "table"]
 NAME_RE: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}(\.[a-z0-9][a-z0-9_-]{0,62}){0,3}$")
 #: The longest value a free-text or enumerated label holds.
 VALUE_MAX: Final = 256
+#: How often a write is tried again when the record it found went missing under it.
+_ROUNDS: Final = 3
 
 
 class LabelDefinition(BaseModel):
@@ -86,6 +90,8 @@ class Attachment(BaseModel):
     location: str | None = None
     #: Each label's value, ``None`` for a marker.
     labels: dict[str, str | None]
+    #: The uuid of the definition each label was judged against.
+    definitions: dict[str, str] = Field(default_factory=dict)
     set_by: str | None = None
 
 
@@ -181,14 +187,22 @@ def define(control_root: str, storage_options: StorageOptions, asked: LabelDefin
         lakehouse.records.RecordChangedError: The definition kept changing under the evolution.
     """
     key = _definition_key(asked.project, asked.name)
-    try:
-        create_json(control_root, storage_options, key, asked.model_dump(mode="json"))
-    except RecordExistsError:
-        pass
-    else:
-        return asked, True
-    replaced, written = exchange_json(control_root, storage_options, key, lambda current: _evolved(_parsed(current, key=key), asked).model_dump(mode="json"))
-    return _parsed(written, key=key), written != replaced
+    # A definition deleted between the refused create and the evolution is created on the next round.
+    for _ in range(_ROUNDS):
+        try:
+            create_json(control_root, storage_options, key, asked.model_dump(mode="json"))
+        except RecordExistsError:
+            pass
+        else:
+            return asked, True
+        try:
+            replaced, written = exchange_json(
+                control_root, storage_options, key, lambda current: _evolved(_parsed(current, key=key), asked).model_dump(mode="json")
+            )
+        except RecordMissingError:
+            continue
+        return _parsed(written, key=key), written != replaced
+    raise RecordChangedError(key)
 
 
 def _parsed(record: Mapping[str, Any], *, key: str) -> LabelDefinition:
@@ -234,21 +248,19 @@ def attachments(control_root: str, storage_options: StorageOptions, *, project: 
     return found
 
 
-def delete_definition(control_root: str, storage_options: StorageOptions, project: str, name: str) -> LabelDefinition:
-    """Delete the definition ``project`` holds under ``name``; the definition deleted.
+def carriers(control_root: str, storage_options: StorageOptions, defined: LabelDefinition) -> list[Attachment]:
+    """Every attachment record of the project that carries the label ``defined``, judged against that definition."""
+    return [attachment for attachment in attachments(control_root, storage_options, project=defined.project) if carries(attachment, defined)]
 
-    Raises:
-        TableNotFoundError: The project defines no such label.
-        NamespaceNotEmptyError: An object of the project carries it (409): remove it from each first.
-    """
-    found = definition(control_root, storage_options, project, name)
-    if found is None:
-        raise TableNotFoundError(f"label not found: {name}")
-    carried = sorted(attachment.id for attachment in attachments(control_root, storage_options, project=project) if name in attachment.labels)
-    if carried:
-        raise NamespaceNotEmptyError(f"label {name!r} is attached to {len(carried)} object(s) ({', '.join(carried[:5])}); remove it from each first")
-    delete_record(control_root, storage_options, _definition_key(project, name))
-    return found
+
+def carries(attachment: Attachment, defined: LabelDefinition) -> bool:
+    """Whether ``attachment`` carries the label ``defined``, attached under that very definition."""
+    return defined.name in attachment.labels and attachment.definitions.get(defined.name) == defined.uuid
+
+
+def delete_definition(control_root: str, storage_options: StorageOptions, defined: LabelDefinition) -> None:
+    """Delete the definition ``defined``. Its caller has found no standing object carrying it (:func:`carriers`)."""
+    delete_record(control_root, storage_options, _definition_key(defined.project, defined.name))
 
 
 def end_definitions(control_root: str, storage_options: StorageOptions, project: str) -> int:
@@ -271,15 +283,15 @@ def _attachment(record: Mapping[str, Any], *, key: str) -> Attachment:
         raise InternalError(f"the labels record at {key} cannot be read as one; write the labels again") from exc
 
 
-def labels_of(control_root: str, storage_options: StorageOptions, kind: LabelScope, object_uuid: str) -> dict[str, str | None]:
-    """Every label the object ``object_uuid`` carries, with its value.
+def attachment_of(control_root: str, storage_options: StorageOptions, kind: LabelScope, object_uuid: str) -> Attachment | None:
+    """The attachment record of the object ``object_uuid``, or ``None`` when it was never labelled.
 
     Raises:
         InternalError: Its record cannot be read as one.
     """
     key = _attachment_key(kind, object_uuid)
     record = get_record(control_root, storage_options, key, event="labels")
-    return {} if record is None else _attachment(record, key=key).labels
+    return None if record is None else _attachment(record, key=key)
 
 
 def judged_value(defined: LabelDefinition, *, kind: LabelScope, value: str | None) -> str | None:
@@ -306,24 +318,42 @@ def attach(
     storage_options: StorageOptions,
     base: Attachment,
     *,
-    name: str,
+    defined: LabelDefinition,
     value: str | None,
 ) -> None:
-    """Attach the label ``name`` with ``value`` to the object ``base`` names, replacing the value it carried.
+    """Attach the label ``defined`` with ``value`` to the object ``base`` names, replacing the value it carried.
 
     ``base`` names the object (its kind, uuid, name, project and a table's location), as the door resolved it now.
+
+    Raises:
+        lakehouse.records.RecordChangedError: The record kept changing under the write.
     """
     key = _attachment_key(base.kind, base.uuid)
 
     def _with(current: dict[str, Any]) -> dict[str, Any]:
-        labels = dict(_attachment(current, key=key).labels) if current else {}
-        labels[name] = value
-        return base.model_copy(update={"labels": dict(sorted(labels.items()))}).model_dump(mode="json")
+        stored = _attachment(current, key=key) if current else None
+        labels = {**(stored.labels if stored else {}), defined.name: value}
+        judged = {**(stored.definitions if stored else {}), defined.name: defined.uuid}
+        return base.model_copy(update={"labels": dict(sorted(labels.items())), "definitions": dict(sorted(judged.items()))}).model_dump(mode="json")
 
-    try:
-        create_json(control_root, storage_options, key, _with({}))
-    except RecordExistsError:
-        mutate_json(control_root, storage_options, key, _with)
+    # A record ended between the refused create and the write is created on the next round.
+    for _ in range(_ROUNDS):
+        try:
+            create_json(control_root, storage_options, key, _with({}))
+            return
+        except RecordExistsError:
+            pass
+        try:
+            mutate_json(control_root, storage_options, key, _with)
+            return
+        except RecordMissingError:
+            continue
+    raise RecordChangedError(key)
+
+
+def forget(control_root: str, storage_options: StorageOptions, kind: LabelScope, object_uuid: str) -> None:
+    """Delete the attachment record of an object that ended while a label was being attached to it."""
+    delete_record(control_root, storage_options, _attachment_key(kind, object_uuid))
 
 
 def detach(control_root: str, storage_options: StorageOptions, kind: LabelScope, object_uuid: str, *, name: str, actor: str | None) -> bool:
@@ -339,7 +369,11 @@ def detach(control_root: str, storage_options: StorageOptions, kind: LabelScope,
 
     def _without(stored: dict[str, Any]) -> dict[str, Any]:
         attachment = _attachment(stored, key=key)
-        return attachment.model_copy(update={"labels": {k: v for k, v in attachment.labels.items() if k != name}, "set_by": actor}).model_dump(mode="json")
+        kept = {
+            "labels": {k: v for k, v in attachment.labels.items() if k != name},
+            "definitions": {k: v for k, v in attachment.definitions.items() if k != name},
+        }
+        return attachment.model_copy(update={**kept, "set_by": actor}).model_dump(mode="json")
 
     try:
         mutate_json(control_root, storage_options, key, _without)
@@ -348,7 +382,8 @@ def detach(control_root: str, storage_options: StorageOptions, kind: LabelScope,
     return True
 
 
-def labels_shown(labels: Mapping[str, str | None], defined: Mapping[str, LabelDefinition]) -> dict[str, str | None]:
-    """The labels a read shows: those whose definition stands. A label whose definition was deleted while it was being
-    attached classifies nothing."""
-    return {name: value for name, value in labels.items() if name in defined}
+def labels_shown(attachment: Attachment | None, defined: Mapping[str, LabelDefinition]) -> dict[str, str | None]:
+    """The labels a read shows: those attached under the definition that stands under their name."""
+    if attachment is None:
+        return {}
+    return {name: value for name, value in attachment.labels.items() if name in defined and carries(attachment, defined[name])}

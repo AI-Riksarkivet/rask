@@ -1402,8 +1402,8 @@ export interface paths {
         /**
          * List Labelled Objects
          * @description The project's labelled tables and namespaces the caller may see (``can_get_metadata`` on each, judged on its
-         *     uuid), each named as it is named now, with the labels whose definition stands. A table that is gone is listed to
-         *     nobody. Paged in the order of the objects' kinds and uuids.
+         *     uuid), each named as it is named now, with the labels whose definition stands. An object that is gone or in the
+         *     trash is listed to nobody. Paged in the order of the objects' kinds and uuids.
          */
         get: operations["list_labelled_objects_management_v1_projects__id__labels_objects_get"];
         put?: never;
@@ -1425,8 +1425,9 @@ export interface paths {
         put?: never;
         /**
          * Delete Label Definition
-         * @description Delete a label the project defines, once no object of the project carries it (409 otherwise). The project's
-         *     admin's act.
+         * @description Delete a label the project defines, once no standing object of the project carries it (409 otherwise, naming
+         *     each as it is named now). An object in the trash does not hold the definition: restored after the delete, it shows
+         *     no such label. The project's admin's act.
          */
         post: operations["delete_label_definition_management_v1_projects__id__labels__name__delete_post"];
         delete?: never;

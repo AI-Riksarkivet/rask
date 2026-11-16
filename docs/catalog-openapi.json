@@ -17429,7 +17429,7 @@
     },
     "/management/v1/projects/{id}/labels/objects": {
       "get": {
-        "description": "The project's labelled tables and namespaces the caller may see (``can_get_metadata`` on each, judged on its\nuuid), each named as it is named now, with the labels whose definition stands. A table that is gone is listed to\nnobody. Paged in the order of the objects' kinds and uuids.",
+        "description": "The project's labelled tables and namespaces the caller may see (``can_get_metadata`` on each, judged on its\nuuid), each named as it is named now, with the labels whose definition stands. An object that is gone or in the\ntrash is listed to nobody. Paged in the order of the objects' kinds and uuids.",
         "operationId": "list_labelled_objects_management_v1_projects__id__labels_objects_get",
         "parameters": [
           {
@@ -17543,7 +17543,7 @@
     },
     "/management/v1/projects/{id}/labels/{name}/delete": {
       "post": {
-        "description": "Delete a label the project defines, once no object of the project carries it (409 otherwise). The project's\nadmin's act.",
+        "description": "Delete a label the project defines, once no standing object of the project carries it (409 otherwise, naming\neach as it is named now). An object in the trash does not hold the definition: restored after the delete, it shows\nno such label. The project's admin's act.",
         "operationId": "delete_label_definition_management_v1_projects__id__labels__name__delete_post",
         "parameters": [
           {
