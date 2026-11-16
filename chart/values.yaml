@@ -1064,19 +1064,14 @@ podDisruptionBudget:
   # -- minAvailable of every rendered PodDisruptionBudget.
   minAvailable: 1
 autoscaling:
-  # CPU IS THE FALLBACK SIGNAL HERE, NOT THE INTENDED ONE — and that sentence is the decision this
-  # block was missing. kubernetes.md is explicit that CPU is a lagging signal for a request-driven
-  # API ("by the time CPU is high, latency is already bad") and lists "HPA on CPU for an I/O-bound
-  # API" among the things not to do. Both targets are exactly that: catalog buffers Arrow-IPC bodies
-  # and runs its S3/Lance calls in a threadpool, lineage waits on an AGE psycopg pool. They spend
-  # their time BLOCKED, which CPU cannot see.
-  #
-  # The reference's preferred shape is a Pods-type p95 target, and it was costed rather than waved
-  # at: `opentelemetry-instrument`'s FastAPI instrumentor already exports `http.server.*`, and KEDA's prometheus scaler would
-  # query the telemetry store's PromQL endpoint (`/v1/prometheus`) — the
-  # endpoint the platform's alert evaluator uses, so the query path is proven, not speculative. Declined 2026-08-28 (owner): it is a twelfth
-  # subchart, its CRDs, and a new silent failure mode (scaler cannot reach GreptimeDB → no scaling,
-  # no error) for an object no profile enables. Revisit when something actually turns this on.
+  # CPU IS THE SIGNAL, measured (owner, 2026-11-16, XC-207; it settles the ruling of 2026-08-28 that asked for requests
+  # in flight). A closed-loop load of 80% reads and 20% appends on the dev estate (helm rev 27, one node, host load
+  # about 13): one catalog pod reached its 1-CPU limit at 8 clients, serving about 6 requests a second, and from there
+  # latency grew with the client count (read p95 1.7 s at 8 clients, 5.9 s at 32, 10.6 s at 64) while CPU stayed at the
+  # limit. CPU saturates before requests queue, so it does not lag for this service, and no requests-in-flight scaler
+  # (KEDA, a metrics adapter) is added for it. MEASURED IN THE SAME RUN: replicas added little (5.1 requests a second at
+  # one replica, at most 9.6 at four, through the edge), one replica staying at its limit while the others sat at 0.2
+  # to 0.4 CPU, so an autoscaler of either kind buys little until that is understood.
   # -- Renders CPU-based HPAs for catalog and lineage, whose Deployments then render no `replicas` (the HPA owns the count). Needs metrics-server; off by default.
   enabled: false # opt-in; needs metrics-server. Targets catalog + lineage.
   # -- HPA minimum replicas for catalog and lineage.
