@@ -2519,6 +2519,11 @@ def caller_query(action: str) -> Generator[None]:
 #: mismatch, "…: fields did not match, missing=[], unexpected=[zz]" for a column the table lacks.
 _WRITE_SCHEMA_MARKER = "append with different schema:"
 
+#: Lance giving up on a write it kept rebasing: "Too many concurrent writers. Attempted N times, but failed on
+#: retry_timeout of 30.000 seconds." (pylance 13.0.0, `io/commit.rs`; measured 2026-11-16 with 32 clients appending to one
+#: table). Nothing was committed, so the write is safe to send again.
+_WRITE_GAVE_UP_MARKER = "too many concurrent writers"
+
 
 @contextmanager
 def _write_schema_errors() -> Generator[None]:
@@ -2534,11 +2539,21 @@ def _write_schema_errors() -> Generator[None]:
     So this is PARITY with a correct implementation next door, not a fresh judgement about which code
     a schema failure deserves: the branchless door already decided, and a caller must not get a
     different answer for the same mistake because they staged it on a branch.
+
+    A write Lance gives up on because the table is too busy (`_WRITE_GAVE_UP_MARKER`) is answered here too, as
+    `ConcurrentModificationError` (14 -> 409): it committed nothing and is safe to send again.
     """
     try:
         yield
     except OSError as exc:
-        if _WRITE_SCHEMA_MARKER not in str(exc).lower():
+        message = str(exc).lower()
+        if _WRITE_GAVE_UP_MARKER in message:
+            # Contention, not a fault of the server or the request: the caller's next attempt lands once the table is
+            # less busy, and 500 would have a client stop and an operator paged.
+            raise ConcurrentModificationError(
+                "the table took too many concurrent writes for this one to commit; nothing was written, so send the write again"
+            ) from exc
+        if _WRITE_SCHEMA_MARKER not in message:
             raise  # a storage / IO failure: a real 5xx, and it stays one
         raise TableSchemaValidationError(clean_lance_message(str(exc))) from exc
 
