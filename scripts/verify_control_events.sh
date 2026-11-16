@@ -8,9 +8,8 @@
 export RASK_EXPECT_CONTEXT
 
 # Live proof (kind `lance`) of the control-plane change-event pipeline, end to end:
-#   a governance mutation → best-effort emit → the subject catalog.control.v1 on the stream CATALOG_CONTROL, which every
-#   catalog replica follows on its own bus connection → that replica's ring buffer → GET /management/v1/events → the
-#   admin console's query.live feed.
+#   a governance mutation → best-effort emit → the subject catalog.control.v1 on the stream CATALOG_CONTROL, which
+#   GET /management/v1/events reads by sequence on any catalog replica → the admin console's query.live feed.
 # Asserts the whole chain by driving the REAL catalog with real OIDC tokens + FGA tuples:
 #   - alice (ESTATE admin = owner of the root warehouse, fga_root_object) → GET /management/v1/events 200, and after she
 #     creates a namespace the poll returns a namespace_created event whose actor is her verified subject;
@@ -144,5 +143,5 @@ for i in $(seq 1 10); do
 done
 
 echo
-echo "PASS: control-plane change-events proven live — mutation → catalog.control.v1 → ring buffer → GET /management/v1/events,"
+echo "PASS: control-plane change-events proven live — mutation → catalog.control.v1 → CATALOG_CONTROL → GET /management/v1/events,"
 echo "      estate-admin gated (alice 200 / project-admin bob 403 / anon 401), actor = the verified subject."

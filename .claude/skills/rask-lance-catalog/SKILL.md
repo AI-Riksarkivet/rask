@@ -1545,8 +1545,9 @@ governing their data. The project-scoped surface is the console's project page, 
 - **A warehouse's root is read once per request and never cached across requests**
   (`dependencies._resolve_warehouse_root` keeps it on `request.state`): its record and status are read live, so a
   deactivation or a delete is in force from the next request on every replica, and no control event evicts anything.
-  The chart couples no catalog replica count to `catalog.controlEmit`. (`GET /management/v1/events`' ring buffer stays
-  per-replica by design — the poll endpoint serves each replica's own buffer.)
+  The chart couples no catalog replica count to `catalog.controlEmit`. `GET /management/v1/events` reads the control
+  topic's stream by sequence (`lakehouse.bus.Bus.read`), its cursor the stream's sequence, so any replica answers any
+  poller and the Service balances every request (ADR 0216).
 - The `\Z`-anchored `CONTROL_ID_RE` (`catalog/core/identifiers.py`) is the ONE id-shape rule. It was
   three copies that had already drifted: Python's `$` also matches before a trailing newline, so
   `"acme\n"` was refused by one door and accepted by another.

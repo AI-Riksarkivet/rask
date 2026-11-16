@@ -167,6 +167,35 @@ _NO_MESSAGE_FOUND: Final = 10037
 type Follow = Callable[[Delivery], Awaitable[None]]
 
 
+class StreamPage(BaseModel):
+    """What a stream holds on a subject after a place in it (:meth:`Bus.read`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: The messages after the place, in the stream's order, at most the page's limit.
+    messages: list[Delivery]
+    #: The sequence of the last message the stream holds on the subject; 0 for one that holds none.
+    end: int
+    #: Whether a message after the place may be gone: the stream's first message after it is not the next sequence, it
+    #: holds none after it though its end is past it, or the place is past its end (a stream made again).
+    gap: bool
+
+    @staticmethod
+    def first_place(after: int, end: int, limit: int) -> int | None:
+        """Where a read after ``after`` begins on a subject whose last sequence is ``end``: at ``after``, at the last
+        ``limit`` messages for a new reader (``after`` 0), and nowhere for a place past the end."""
+        if after > end:
+            return None
+        return after if after > 0 else max(0, end - limit)
+
+    @classmethod
+    def of(cls, after: int, end: int, messages: list[Delivery]) -> StreamPage:
+        """The page a read after ``after`` found: ``messages``, read on a subject whose last sequence is ``end``."""
+        first = messages[0].sequence if messages else None
+        gap = after > end or (after > 0 and ((first is None and end > after) or (first is not None and first > after + 1)))
+        return cls(messages=messages, end=end, gap=gap)
+
+
 class BusUnavailableError(RuntimeError):
     """The bus did not take a publish: nothing counts as delivered, and the caller's event stays where it staged it."""
 
@@ -460,6 +489,40 @@ class Bus:
             raise
         except NatsError as exc:
             raise BusUnavailableError(f"the bus did not take {message_id} on {topic}: {type(exc).__name__}: {exc}"[:500]) from exc
+
+    async def read(self, stream: str, subject: str, *, after: int, limit: int) -> StreamPage:
+        """What ``stream`` holds on ``subject`` after the sequence ``after``, read by sequence as a follow reads it: at most
+        ``limit`` messages, and from ``after`` 0 the last ``limit`` the stream holds. Every process reading one stream reads
+        the same messages under the same sequences, so a reader's place is good with any of them.
+
+        Raises:
+            BusUnavailableError: No connection is up, or the bus did not answer the read.
+        """
+        client = await self._up()
+        if client is None:
+            raise BusUnavailableError(f"this process is not connected to the bus: {subject} was not read")
+        stream_reads = client.jetstream()
+        messages: list[Delivery] = []
+        try:
+            try:
+                end = (await stream_reads.get_last_msg(stream, subject)).seq or 0
+            except NotFoundError as exc:
+                if exc.err_code != _NO_MESSAGE_FOUND:
+                    raise  # the stream itself is missing: a read the bus cannot answer, not an empty one
+                end = 0
+            place = StreamPage.first_place(after, end, limit)
+            while place is not None and len(messages) < limit and place < end:
+                try:
+                    stored = await stream_reads.get_msg(stream, seq=place + 1, subject=subject, next=True)
+                except NotFoundError as exc:
+                    if exc.err_code != _NO_MESSAGE_FOUND:
+                        raise
+                    break
+                place = stored.seq or place + 1
+                messages.append(Delivery(subject=stored.subject or subject, body=stored.data or b"", sequence=place, attempt=1))
+        except NatsError as exc:
+            raise BusUnavailableError(f"the bus did not answer the read of {subject}: {type(exc).__name__}: {exc}"[:500]) from exc
+        return StreamPage.of(after, end, messages)
 
     async def consume(self, lane: Lane, handle: Handle, *, park: Park) -> None:
         """Hand every message of ``lane``'s consumer to ``handle`` until cancelled, at most ``lane.in_flight`` at once,

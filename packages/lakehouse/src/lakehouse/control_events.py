@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 #: The topic control-plane events are published on. Versioned (a breaking schema change → a new `.vN`),
 #: mirroring `lineage.events.v1`. Each catalog replica follows it by reading its stream by sequence
-#: (`catalog.api.control_lane`), so every replica receives every event and each replica's ring buffer stays complete.
+#: (`catalog.api.control_lane`), and the events poll reads the same stream (ADR 0216).
 CONTROL_TOPIC = "catalog.control.v1"
 
 #: The mutation that occurred. A `Literal` union (house style — no runtime enum) whose members double as the

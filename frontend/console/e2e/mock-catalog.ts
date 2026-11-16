@@ -174,7 +174,7 @@ Bun.serve({
 
 		// ── the control-plane cursor + the audit gate probe ──
 		// `since=N` is a cursor == "events already seen"; hand back everything after it plus the new head
-		// (== count), matching ControlEventBuffer.since semantics. `feeds.api.ts`'s generator polls with
+		// (== count), as the catalog reads its control stream. `feeds.api.ts`'s generator polls with
 		// the signed-in session's bearer, which selects the bucket. The audit trail's estate-admin gate
 		// probes the SAME endpoint with a past-any-head cursor, so an unknown bearer must 403 here or the
 		// gate would default open.

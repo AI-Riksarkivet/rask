@@ -29,8 +29,8 @@ action has a signer (:func:`lakehouse.control_events.control_signer_role`).
 
 **One seam to the broker.** Publishing goes over this process's own connection to the bus
 (:func:`lakehouse.bus.publish_event`): one bounded attempt, and the outbox's relay is the retry. Each catalog
-replica follows the topic by reading its stream by sequence (`catalog.api.control_lane`), so every replica receives every
-event and each replica's ring buffer stays complete.
+replica follows the topic by reading its stream by sequence (`catalog.api.control_lane`), and the events poll reads the
+same stream (ADR 0216).
 
 Two ways this fails SILENTLY in-cluster, named because "best-effort" hides them:
 

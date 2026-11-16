@@ -637,16 +637,13 @@ catalog:
     dataBases: []
   # Control-plane change-events: every governance/metadata mutation (grants/warehouses/policies/tables)
   # publishes a CatalogControlEvent on catalog.control.v1 over the catalog's own connection to the bus, and
-  # EVERY catalog replica follows the topic on that same connection, by reading the stream by sequence, and buffers
-  # each event, so the admin console live-refreshes via
-  # GET /management/v1/events. A replica whose connection the bus lost takes the topic up again at the
-  # event after the last it buffered. ON declares the CATALOG_CONTROL stream and turns emission on. On by default
+  # EVERY catalog replica follows the topic on that same connection, by reading the stream by sequence, judging and
+  # counting each event, and the admin console live-refreshes via GET /management/v1/events, which reads the same
+  # stream (ADR 0216). ON declares the CATALOG_CONTROL stream and turns emission on. On by default
   # (parity with lineage emit) — best-effort + fail-open, so a bus outage degrades to "no live refresh + the audit
   # trail still records it", never a failed mutation.
-  # BOUNDARY: the ring buffer + its cursor are PER-REPLICA (each replica buffers what it follows independently).
-  # Correct at services.catalog.replicas=1 (the default). Scaling the catalog past one replica needs session
-  # affinity (so a client's polls stick to one replica) or a shared buffer — else a load-balanced poll gets
-  # inconsistent cursors and degrades to noisy `reset`s (safe, since events are hints, but wasteful).
+  # The poll's cursor is the stream's sequence, the same on every replica, so any replica answers any poller and the
+  # catalog Service balances every request across its replicas.
   # -- Publish catalog control events (catalog.control.v1) on the catalog's own bus connection, where every replica follows them; declares the CATALOG_CONTROL stream. Best-effort.
   controlEmit: true
   # #4 transactional outbox on the CONTROL lane, and the RELAY that drains it — one switch for both,

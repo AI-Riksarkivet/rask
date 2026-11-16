@@ -1147,8 +1147,9 @@ class RoleDeleted(BaseModel):
 
 
 class EventsResponse(BaseModel):
-    """A poll response: control events strictly after the caller's cursor, the new head cursor, and a reset
-    flag (``True`` when the client's cursor fell off the bounded buffer → the console should re-read all)."""
+    """A poll response: control events strictly after the caller's cursor, read off the control stream, the cursor after
+    them (the stream's sequence, the same on every replica), and a reset flag (``True`` when the stream no longer holds
+    what came after the caller's cursor → the console should re-read all)."""
 
     events: list[CatalogControlEvent]
     cursor: int

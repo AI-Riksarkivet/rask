@@ -107,7 +107,7 @@ Bun.serve({
 		}
 
 		// The endpoint the query.live generator polls. since=N is a cursor == "events already seen"; we hand
-		// back everything after it + the new head (== count), matching ControlEventBuffer.since semantics.
+		// back everything after it + the new cursor (== count), as the catalog reads its control stream.
 		// The generator polls with the signed-in session's bearer, which selects the bucket.
 		if (url.pathname === '/management/v1/events') {
 			if ((modeByBearer.get(bearer) ?? 'ok') === 'forbidden') {

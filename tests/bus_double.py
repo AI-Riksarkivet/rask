@@ -8,6 +8,9 @@ real `Bus` takes a message from nats-py: the service's own handling is handed it
 connection (its permission table, a session it ends, a duplicate it stores once, a message it delivers again after a
 delay) is driven on the seam's own tests and the nats-auth lane; a test that takes this double is about what a
 publisher sends and what a consumer does with what it is handed.
+
+What was taken is also the stream a reader reads by sequence (`read`): the n-th message taken, on any topic, is sequence
+n, and `expire_through` drops the front as a stream's retention does.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from typing import Any, Final, override
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.bus import Bus, BusSettings, Follow
+from lakehouse.bus import Bus, BusSettings, Follow, StreamPage
 from lakehouse.bus_delivery import Delivery, Handle, Lane, Park, Settlement, judged
 from lakehouse.supervision import Supervisor
 
@@ -56,6 +59,7 @@ class BusDouble(Bus):
         self._consumers: dict[str, tuple[Lane, Handle, Park]] = {}
         self._follows: dict[str, Follow] = {}
         self._handed_count = 0
+        self._expired_through = 0
 
     @property
     def events(self) -> list[Any]:
@@ -67,6 +71,25 @@ class BusDouble(Bus):
         if self.failing is not None:
             raise self.failing
         self.sent.append(Sent(topic=topic, message_id=message_id, envelope=json.loads(body)))
+
+    def take(self, topic: str, envelope: Mapping[str, Any]) -> None:
+        """Take ``envelope`` on ``topic`` as another process's publish would be taken: it becomes the stream's next message."""
+        self.sent.append(Sent(topic=topic, message_id=f"sent-{len(self.sent) + 1}", envelope=dict(envelope)))
+
+    def expire_through(self, sequence: int) -> None:
+        """Drop every message up to ``sequence`` from the stream, as its retention would."""
+        self._expired_through = max(self._expired_through, sequence)
+
+    @override
+    async def read(self, stream: str, subject: str, *, after: int, limit: int) -> StreamPage:
+        """What the stream of what was taken holds on ``subject`` after ``after``, paged by `lakehouse.bus.StreamPage`'s
+        own rules: the subject's end is its last message the stream still holds, as the bus answers it."""
+        held = [(n, sent) for n, sent in enumerate(self.sent, start=1) if sent.topic == subject and n > self._expired_through]
+        end = held[-1][0] if held else 0
+        place = StreamPage.first_place(after, end, limit)
+        page = [] if place is None else [(n, sent) for n, sent in held if n > place][:limit]
+        messages = [Delivery(subject=subject, body=json.dumps(sent.envelope).encode(), sequence=n, attempt=1) for n, sent in page]
+        return StreamPage.of(after, end, messages)
 
     @property
     @override

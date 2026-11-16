@@ -1,30 +1,25 @@
-"""The catalog's own control-plane change events, followed by each replica into its ring buffer.
+"""The catalog's own control-plane change events: each replica judges every one it follows, and counts what it refuses.
 
 The catalog publishes ``CatalogControlEvent``s on ``catalog.control.v1`` over its own connection to the bus
 (``lakehouse.control_emit``), and each replica **follows** that topic here on the same connection, by reading its
-stream by sequence (`lakehouse.bus.Bus.follow`). So **every** catalog replica receives
-**every** event, in the stream's order, and none takes one from another; each appends it to its own per-replica ring
-buffer (``core/control_buffer.py``). The poll endpoint (``GET /management/v1/events``) then serves each replica's
-buffer to the console. The lane runs **only** when control eventing is enabled (``control_emit_enabled``, matching the
-emitter gate in ``main.py``), so a control-off deployment follows nothing.
+stream by sequence (`lakehouse.bus.Bus.follow`). The lane runs **only** when control eventing is enabled
+(``control_emit_enabled``, matching the emitter gate in ``main.py``), so a control-off deployment follows nothing. What
+the console reads is served from the same stream at its poll (``GET /management/v1/events``,
+``api/v1/endpoints/events.py``), judged by the same rule (:func:`judge`), so no replica holds what another must serve.
 
-**It acts only on what a control signer signed** ([[CTL-32]], ADR 0171). Every user the bus lets publish on the topic
-reaches this lane, so the actor an event names is a claim until its ``rask_signature`` proves it. The event is
-verified with the control doors' own rule, against the identities of the role ``control_signer_role`` names for its
-action (``RASK_CONTROL_SIGNER_ROLES``), under ``RASK_SIGNATURE_DOORS``: ``enforce`` buffers nothing for a refusal and
-evicts nothing for it, ``observe`` acts as ``off`` and counts what it would refuse. A refusal is counted in
-``catalog.signature.refused``.
+**The lane is the refusals' alarm** ([[CTL-32]], ADR 0171). Every user the bus lets publish on the topic reaches the
+stream, so the actor an event names is a claim until its ``rask_signature`` proves it. The lane judges each event with
+the control doors' own rule, against the identities of the role ``control_signer_role`` names for its action
+(``RASK_CONTROL_SIGNER_ROLES``), under ``RASK_SIGNATURE_DOORS``, and counts a refusal in ``catalog.signature.refused``
+(``observe`` counts what it would refuse in ``catalog.signature.would_refuse``), whether or not a console polls.
 
-**A followed event is handed on once**, so an event this replica cannot judge is not delivered again: while the secret
-store does not serve the keys a signature is checked against, the event is judged again here a few times, and then
-given up as not handled (`KeysUnavailableError`), which the lane counts (``bus.deliveries`` at ``failed``). The buffer
-is a hint (drop-oldest, and ``reset`` on a cursor gap), and the audit trail is the durable record: what a lost hint
-costs a client is a read it did not know to repeat.
-
-**The lane waits for keys once, not once per event.** The follow hands on one event at a time, so a wait holds back
-every event behind it, on every replica, and any publisher on the topic can send an event whose keys cannot be read at
-once (`ControlLane._judged_once_keys_answer`). After a wait, an event whose keys cannot be read is given up on its one
-judgement until `_WAIT_AGAIN_SECONDS` have passed.
+**The lane waits for keys once, not once per event.** Keys cannot be read while the store does not answer, and also
+when an event names a key id the list read moments ago does not hold: the reader reads again for such an id once per
+interval (`lakehouse.lineage.keys.KEY_REFRESH_INTERVAL_SECONDS`), so a made-up key id is refused, and counted, only once
+the lane has waited for that read. The follow hands on one event at a time, so a wait holds back every event behind it:
+an event whose keys still cannot be read after ``_KEY_READS`` judgements is given up as not handled
+(`KeysUnavailableError`, counted by the follow as ``bus.deliveries`` at ``failed``), and after a wait, one is given up on
+its one judgement until ``_WAIT_AGAIN_SECONDS`` have passed.
 """
 
 from __future__ import annotations
@@ -40,7 +35,8 @@ from pydantic import ValidationError
 from catalog.api.control_relay import bounded, published_keys
 from lakehouse.bus_delivery import Delivery
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
-from lakehouse.lineage.door import DoorMode, DoorVerdict, judge
+from lakehouse.lineage.door import DoorMode, DoorVerdict
+from lakehouse.lineage.door import judge as judge_door
 from lakehouse.lineage.signing import RefusalReason, control_signature_of, verify_control_signature
 
 
@@ -56,7 +52,8 @@ log = logging.getLogger(__name__)
 STREAM: Final = "CATALOG_CONTROL"
 #: The topic each replica follows.
 TOPIC: Final = CONTROL_TOPIC
-#: How many times an event is judged while the keys its signature is checked against cannot be read, and how far apart.
+#: How many times an event is judged while the keys its signature is checked against cannot be read, and how far apart:
+#: past the key reader's own interval, so the last judgement reads the list again.
 _KEY_READS: Final = 5
 _KEY_READ_SECONDS: Final = 15.0
 #: How long after the lane has waited for keys it does not wait again. Its waits then hold the follow at most one part
@@ -91,8 +88,36 @@ def create_signature_refused_series() -> None:
         _signature_refused.add(0, {"lance.catalog.reason": reason})
 
 
+def control_event_in(delivery: Delivery) -> tuple[dict[str, Any], CatalogControlEvent] | None:
+    """The control event ``delivery`` carries, with its data exactly as delivered (what a signature is checked over), or
+    None for a message that carries none (logged): a malformed event is passed over. Data that is not a mapping carries
+    no signature, so it is judged unsigned."""
+    data = (delivery.envelope() or {}).get("data")
+    try:
+        event = CatalogControlEvent.model_validate(data)
+    except (ValidationError, TypeError, ValueError) as exc:
+        log.warning("control_event_invalid", extra={"error": str(exc)})
+        return None
+    return (data if isinstance(data, dict) else {}), event
+
+
+async def judge(app: FastAPI, settings: Settings, arrived: dict[str, Any], event: CatalogControlEvent) -> DoorVerdict:
+    """The control doors' verdict on ``event``, judged over ``arrived``: the event's data exactly as delivered, since a
+    model dump grows the fields a schema defaults, and the signer signed what it wrote. ``retry`` when the keys the
+    signature is checked against could not be read."""
+    mode = settings.signature_doors
+    if mode is DoorMode.OFF:
+        return DoorVerdict(act=True)
+    signers = settings.control_signer_roles.get(control_signer_role(event.action), frozenset())
+    claim = control_signature_of(arrived)
+    source = published_keys(app).for_event(claim.kid if claim else None)
+    return await run_in_threadpool(
+        judge_door, lambda: verify_control_signature(arrived, source=source, signers=signers, delegators=settings.event_delegators), mode
+    )
+
+
 class ControlLane:
-    """What a catalog replica does with each control event it follows: buffers the ones a control signer signed."""
+    """What a catalog replica does with each control event it follows: judges it, and counts what it refuses."""
 
     def __init__(self, app: FastAPI, settings: Settings) -> None:
         self._app = app
@@ -101,50 +126,24 @@ class ControlLane:
         self._waited_at: float | None = None
 
     async def handle(self, delivery: Delivery) -> None:
-        """Buffer the control event ``delivery`` carries into this replica's ring buffer.
-
-        The envelope's ``data`` is the ``CatalogControlEvent``, as its publisher built it (`lakehouse.cloud_events`). A
-        malformed event is **dropped**: events are hints and the audit trail is the durable record. A valid one is
-        appended (``event_id`` dedupes a repeat), so a drop only costs the client a read it did not know to repeat.
-
-        Raises:
-            KeysUnavailableError: The keys the event's signature is checked against could not be read; it is buffered
-                nowhere.
-        """
-        data = (delivery.envelope() or {}).get("data")
-        try:
-            event = CatalogControlEvent.model_validate(data)
-        except (ValidationError, TypeError, ValueError) as exc:
-            log.warning("control_event_invalid", extra={"error": str(exc)})
-            return
-        # Screened whatever its shape: a payload that is not a mapping carries no signature, so it is judged unsigned.
-        if await self._admitted(data if isinstance(data, dict) else {}, event):
-            self._app.state.control_buffer.append(event)
-
-    async def _admitted(self, arrived: dict[str, Any], event: CatalogControlEvent) -> bool:
-        """Whether the lane may act on ``event``, judged over ``arrived``: the event's data exactly as delivered, since a
-        model dump grows the fields a schema defaults, and the signer signed what it wrote.
+        """Judge the control event ``delivery`` carries and count what the door refuses or would refuse.
 
         Raises:
             KeysUnavailableError: The keys could not be read: on any of ``_KEY_READS`` tries, or on the one judgement an
                 event gets while the lane waited for keys moments ago.
         """
+        carried = control_event_in(delivery)
+        if carried is None:
+            return
+        arrived, event = carried
         logged = {"event_id": bounded(event.event_id), "action": event.action}
-        verdict = await self._judged(arrived, event)
+        verdict = await judge(self._app, self._settings, arrived, event)
         if verdict.retry:
             verdict = await self._judged_once_keys_answer(arrived, event, logged)
-        return self._counted(verdict, arrived, logged)
+        self._counted(verdict, arrived, logged)
 
     async def _judged_once_keys_answer(self, arrived: dict[str, Any], event: CatalogControlEvent, logged: dict[str, Any]) -> DoorVerdict:
         """The verdict on an event whose keys could not be read, judged again every ``_KEY_READ_SECONDS`` until they are.
-
-        A WAIT HERE HOLDS BACK EVERY EVENT BEHIND THIS ONE. Keys cannot be read while the store does not answer, and
-        also when an event names a key id the list read moments ago does not hold: the reader reads again for such an id
-        once per interval (`lakehouse.lineage.keys.KEY_REFRESH_INTERVAL_SECONDS`), and a publisher can name an id it
-        made up in every event it sends. One wait rides out a store away for a moment, and a key its signer began to use
-        moments ago, after which the list read holds it for every event behind. A wait for each such event would hold
-        the lane for as long as a run of them lasts, so once the lane has waited, an event whose keys cannot be read is
-        given up at once until ``_WAIT_AGAIN_SECONDS`` have passed.
 
         Raises:
             KeysUnavailableError: The keys could not be read on any try, or the lane waited for keys moments ago.
@@ -157,27 +156,16 @@ class ControlLane:
         try:
             for _ in range(_KEY_READS - 1):
                 await asyncio.sleep(_KEY_READ_SECONDS)
-                verdict = await self._judged(arrived, event)
+                verdict = await judge(self._app, self._settings, arrived, event)
                 if not verdict.retry:
                     return verdict
         finally:
             self._waited_at = clock()
         raise KeysUnavailableError(f"the keys control event {named} is checked against could not be read on {_KEY_READS} tries")
 
-    async def _judged(self, arrived: dict[str, Any], event: CatalogControlEvent) -> DoorVerdict:
-        mode = self._settings.signature_doors
-        if mode is DoorMode.OFF:
-            return DoorVerdict(act=True)
-        signers = self._settings.control_signer_roles.get(control_signer_role(event.action), frozenset())
-        claim = control_signature_of(arrived)
-        source = published_keys(self._app).for_event(claim.kid if claim else None)
-        return await run_in_threadpool(
-            judge, lambda: verify_control_signature(arrived, source=source, signers=signers, delegators=self._settings.event_delegators), mode
-        )
-
     @staticmethod
-    def _counted(verdict: DoorVerdict, arrived: dict[str, Any], logged: dict[str, Any]) -> bool:
-        """Count and say what ``verdict`` refuses or would refuse; whether the lane acts on the event."""
+    def _counted(verdict: DoorVerdict, arrived: dict[str, Any], logged: dict[str, Any]) -> None:
+        """Count and say what ``verdict`` refuses or would refuse."""
         claim = control_signature_of(arrived)
         named = {**logged, "identity": bounded(claim.identity) if claim else None}
         if verdict.observed is not None:
@@ -186,7 +174,6 @@ class ControlLane:
         if verdict.refused is not None:
             _signature_refused.add(1, {"lance.catalog.reason": verdict.refused})
             log.warning("catalog_signature_refused", extra={**named, "reason": verdict.refused})
-        return verdict.act
 
 
-__all__ = ["STREAM", "TOPIC", "ControlLane", "KeysUnavailableError", "create_signature_refused_series"]
+__all__ = ["STREAM", "TOPIC", "ControlLane", "KeysUnavailableError", "control_event_in", "create_signature_refused_series", "judge"]

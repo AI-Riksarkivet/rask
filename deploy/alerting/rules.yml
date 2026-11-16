@@ -594,9 +594,9 @@ groups:
 
   - name: lance-catalog
     rules:
-      # [[LH-559]] The catalog's control lane hands each event it follows on once: one a replica cannot buffer (the signers'
-      # keys unread on every try, or a handling that raised) is given up, and nothing delivers it to that replica again
-      # (the ring buffer is a hint). The bus seam counts it (`bus.deliveries`, outcome `failed`, under the subject the
+      # [[LH-559]] The catalog's control lane hands each event it follows on once: one a replica cannot judge (the signers'
+      # keys unread, or a handling that raised) is given up, and nothing judges it on that replica again, so a forgery
+      # among them goes uncounted. The bus seam counts it (`bus.deliveries`, outcome `failed`, under the subject the
       # replica follows), per replica, and creates the series at 0 when the lane starts, so the first one is an increase.
       - alert: CatalogControlLaneDroppingEvents
         expr: sum by (lance_bus_consumer) (increase(bus_deliveries_total{lance_bus_outcome="failed"}[10m])) > 0
@@ -604,11 +604,11 @@ groups:
           severity: warning
           service: catalog
         annotations:
-          summary: "The catalog gave up control events ({{ $labels.lance_bus_consumer }}) — its feed missed them"
+          summary: "The catalog gave up judging control events ({{ $labels.lance_bus_consumer }})"
           description: >-
-            A catalog replica could not buffer a control event it followed: the keys its signature is checked against
-            could not be read on any try, or its handling raised. That replica's change-event feed lacks the event;
-            the audit trail still records the change. Read the replica's `bus_followed_message_not_handled` log for
+            A catalog replica could not judge a control event it followed: the keys its signature is checked against
+            could not be read, or its handling raised. A forged event among them was not counted in
+            catalog_signature_refused. The change-event feed is unaffected: it serves the event once its keys are read. Read the replica's `bus_followed_message_not_handled` log for
             the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       - alert: CatalogWritesShedSustained

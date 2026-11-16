@@ -1,15 +1,15 @@
-"""[[CTL-32]] The catalog's own `catalog.control.v1` lane acts only on what a control signer signed (ADR 0171).
+"""[[CTL-32]] Each catalog replica judges every control event it follows, and counts what no control signer signed (ADR 0171).
 
-Every catalog replica follows the lane and, for each event it is handed, appends the event to the change feed
-`GET /management/v1/events` serves the console. Every user the bus lets publish on the topic reaches that lane, so the
-actor an event names is a claim until its signature proves it. Under an enforcing door a forgery reaches no feed, while
-the signed event handed on after it reaches it. An event whose signers' keys cannot be read is judged again a
-bounded number of times, then given up as not handled, so a secret store that is away for longer buffers nothing; and
-the lane waits that way once in a while, not for every event, since a wait holds back every event behind it.
+Every user the bus lets publish on `catalog.control.v1` reaches the stream, so the actor an event names is a claim until
+its signature proves it. The console's feed serves only what the enforcing door admits
+(`test_any_replica_answers_the_events_poll.py`); the lane is the alarm: each replica judges each event it follows and
+counts a refusal in `catalog.signature.refused`, which pages whether or not a console polls. A message that is no
+control event is passed over. An event whose signers' keys cannot be read is judged again a bounded number of times,
+then given up as not handled; and the lane waits that way once in a while, not for every event, since a wait holds back
+every event behind it.
 
 Driven through the catalog's own handling of one followed event (`catalog.api.control_lane.ControlLane.handle`) on the
-app's loop, and the feed's poll door over HTTP. The keys are read from the secret store, which the suite's double
-answers.
+app's loop. The keys are read from the secret store, which the suite's double answers.
 """
 
 from __future__ import annotations
@@ -23,12 +23,13 @@ import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from catalog.api import control_lane
 from catalog.api.control_lane import TOPIC, ControlLane, KeysUnavailableError
 from catalog.api.control_relay import attach_published_keys
 from catalog.core.config import Settings, get_settings
-from catalog.core.control_buffer import ControlEventBuffer
 from lakehouse.bus_delivery import Delivery
 from lakehouse.governed.signing_key import signing_public_secret
 from tests.secret_store_double import SecretStoreDouble
@@ -62,13 +63,14 @@ GENUINE_DROP: dict[str, Any] = {
 
 
 class _Lane:
-    """A catalog app carrying the feed, the lane that fills it, and both signers."""
+    """A catalog app's lane, both signers, and what the lane counts."""
 
-    def __init__(self, client: TestClient, lane: ControlLane, catalog: Any, maintenance: Any) -> None:
+    def __init__(self, client: TestClient, lane: ControlLane, catalog: Any, maintenance: Any, reader: InMemoryMetricReader) -> None:
         self.client = client
         self.catalog = catalog
         self.maintenance = maintenance
         self._lane = lane
+        self._reader = reader
         self._handed = 0
 
     def hand(self, event: dict[str, Any]) -> None:
@@ -79,9 +81,18 @@ class _Lane:
         assert portal is not None, "the client was never entered, so the app has no loop to hand the event on"
         portal.call(self._lane.handle, delivery)
 
-    def feed(self) -> list[str]:
-        """The ids of the events the poll door serves."""
-        return [event["event_id"] for event in self.client.get("/management/v1/events").json()["events"]]
+    def refused(self) -> dict[str, int]:
+        """`catalog.signature.refused` by reason, as the lane counted it."""
+        counted: dict[str, int] = {}
+        data = self._reader.get_metrics_data()
+        for resource in getattr(data, "resource_metrics", []) or []:
+            for scope in resource.scope_metrics:
+                for metric in scope.metrics:
+                    if metric.name == "catalog.signature.refused":
+                        for point in metric.data.data_points:
+                            if point.value:
+                                counted[str(point.attributes["lance.catalog.reason"])] = int(point.value)
+        return counted
 
 
 def _unsigned(_catalog: Any, _maintenance: Any) -> dict[str, Any]:
@@ -96,8 +107,8 @@ def _signed_by_a_signer_whose_role_is_not_this_actions(_catalog: Any, maintenanc
 
 @pytest.fixture
 def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: SecretStoreDouble, respx_allows_unused_routes: None) -> Iterator[_Lane]:
-    """A catalog app carrying the lane and the feed, and both signers, each one's key list held by the store: a test reads
-    only the lists of the signers its events name, and replaces the answer of a list it reads."""
+    """A catalog app carrying the lane, both signers, each one's key list held by the store, and a reader of what the lane
+    counts."""
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "s")
     monkeypatch.setenv("LANCE_CONTROL_EMIT_ENABLED", "true")
@@ -117,34 +128,35 @@ def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Secre
             "RASK_CONTROL_SIGNER_ROLES": {"catalog": [CATALOG], "maintenance": [MAINTENANCE]},
         }
     )
-    from catalog.api.v1.endpoints import events
-
+    reader = InMemoryMetricReader()
+    meter = MeterProvider(metric_readers=[reader]).get_meter("lance.catalog")
+    monkeypatch.setattr(control_lane, "_signature_refused", meter.create_counter("catalog.signature.refused"))
     app = FastAPI()
-    app.include_router(events.router)
     app.dependency_overrides[get_settings] = lambda: settings
-    app.state.control_buffer = ControlEventBuffer(maxsize=16)
     attach_published_keys(app)
     for signer in (catalog, maintenance):
         secret_store.hold(signing_public_secret(signer.identity), {"keys": signer.public})
     try:
         with TestClient(app) as client:
-            yield _Lane(client, ControlLane(app, settings), catalog, maintenance)
+            yield _Lane(client, ControlLane(app, settings), catalog, maintenance, reader)
     finally:
         get_settings.cache_clear()
 
 
 @pytest.mark.parametrize(
-    "forge",
+    ("forge", "reason"),
     [
-        pytest.param(_unsigned, id="unsigned"),
-        pytest.param(_signed_by_a_signer_whose_role_is_not_this_actions, id="signed-by-another-role"),
+        pytest.param(_unsigned, "unsigned", id="unsigned"),
+        pytest.param(_signed_by_a_signer_whose_role_is_not_this_actions, "signer", id="signed-by-another-role"),
     ],
 )
-def test_a_control_event_no_signer_of_its_action_signed_never_reaches_the_feed(lane: _Lane, forge: Callable[[Any, Any], dict[str, Any]]) -> None:
+def test_a_control_event_no_signer_of_its_action_signed_is_counted_and_a_signed_one_is_not(
+    lane: _Lane, forge: Callable[[Any, Any], dict[str, Any]], reason: str
+) -> None:
     lane.hand(forge(lane.catalog, lane.maintenance))
     lane.hand(lane.catalog.sign_control(GENUINE_DROP, on_behalf_of=GENUINE_DROP["actor"]))
 
-    assert lane.feed() == ["genuine-drop"], "the change feed holds an event the catalog never signed"
+    assert lane.refused() == {reason: 1}
 
 
 def test_a_message_that_is_no_control_event_is_passed_over(lane: _Lane) -> None:
@@ -152,7 +164,7 @@ def test_a_message_that_is_no_control_event_is_passed_over(lane: _Lane) -> None:
     lane.hand({"event_id": "not-an-event", "action": "no_such_action"})
     lane.hand(lane.catalog.sign_control(GENUINE_DROP, on_behalf_of=GENUINE_DROP["actor"]))
 
-    assert lane.feed() == ["genuine-drop"]
+    assert lane.refused() == {}
 
 
 @pytest.fixture
@@ -169,23 +181,34 @@ def keys_unread_for(lane: _Lane, secret_store: SecretStoreDouble, monkeypatch: p
     return _unread
 
 
-def test_a_control_event_whose_keys_are_read_on_the_lanes_last_try_reaches_the_feed(lane: _Lane, keys_unread_for: Callable[[int], respx.Route]) -> None:
-    """A store that is away says nothing about the signature, so the event is judged again until its keys are read."""
+@pytest.mark.parametrize(
+    ("forge", "reason"),
+    [
+        pytest.param(_unsigned, "unsigned", id="unsigned"),
+        pytest.param(_signed_by_a_signer_whose_role_is_not_this_actions, "signer", id="signed-by-another-role"),
+    ],
+)
+def test_an_event_whose_keys_are_read_on_the_lanes_last_try_is_judged_and_counted(
+    lane: _Lane, keys_unread_for: Callable[[int], respx.Route], forge: Callable[[Any, Any], dict[str, Any]], reason: str
+) -> None:
+    """A store that is away says nothing about the signature, so the event is judged again until its keys are read: a
+    made-up key id is refused only on a read of the list after the one that did not hold it."""
     keys_unread_for(control_lane._KEY_READS - 1)
 
     lane.hand(lane.catalog.sign_control(GENUINE_DROP, on_behalf_of=GENUINE_DROP["actor"]))
+    lane.hand(forge(lane.catalog, lane.maintenance))
 
-    assert lane.feed() == ["genuine-drop"]
+    assert lane.refused() == {reason: 1}
 
 
-def test_a_control_event_whose_keys_are_never_read_is_given_up_and_buffered_nowhere(lane: _Lane, keys_unread_for: Callable[[int], respx.Route]) -> None:
-    """Past the lane's bound the event is given up as not handled, rather than buffered unjudged."""
+def test_an_event_whose_keys_are_never_read_is_given_up_uncounted(lane: _Lane, keys_unread_for: Callable[[int], respx.Route]) -> None:
+    """Past the lane's bound the event is given up as not handled: neither counted refused nor passed as signed."""
     keys = keys_unread_for(control_lane._KEY_READS)
 
     with pytest.raises(KeysUnavailableError, match="could not be read on 5 tries"):
         lane.hand(lane.catalog.sign_control(GENUINE_DROP, on_behalf_of=GENUINE_DROP["actor"]))
 
-    assert (lane.feed(), keys.call_count) == ([], control_lane._KEY_READS)
+    assert (lane.refused(), keys.call_count) == ({}, control_lane._KEY_READS)
 
 
 @pytest.mark.parametrize(
@@ -208,4 +231,4 @@ def test_the_lane_waits_for_keys_once_in_a_while_not_for_every_event(  # noqa: P
     with pytest.raises(KeysUnavailableError, match=given_up):
         lane.hand(lane.catalog.sign_control({**GENUINE_DROP, "event_id": "genuine-drop-behind"}, on_behalf_of=GENUINE_DROP["actor"]))
 
-    assert (lane.feed(), keys.call_count) == ([], reads)
+    assert (lane.refused(), keys.call_count) == ({}, reads)

@@ -264,7 +264,7 @@ class Drills:
 
     def granted_in_the_control_feed(self, principal: str, relation: str) -> bool:
         """Whether the catalog's control feed (`GET /management/v1/events`, read by the tenant's admin, the estate's) holds
-        the grant of ``relation`` on the namespace to ``principal``: the catalog took it off its control lane."""
+        the grant of ``relation`` on the namespace to ``principal``: the catalog read it off the control stream."""
         try:
             answer = self.tenant.admin.http.get(f"{CATALOG}/management/v1/events", params={"since": 0}, timeout=30)
         except requests.ConnectionError:

@@ -1,6 +1,6 @@
 # 0027. control-events — broadcast + ring buffer
 
-**Status:** accepted, amended by [ADR 0182](0182-each-catalog-replica-hears-the-control-broadcast-through-a-durable-of-its-own.md) (how each replica follows the stream) and reopened by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md).
+**Status:** superseded by [ADR 0216](0216-the-events-poll-reads-the-control-stream.md) (the poll reads the control stream by sequence; no replica buffers). Was: accepted, amended by [ADR 0182](0182-each-catalog-replica-hears-the-control-broadcast-through-a-durable-of-its-own.md) (how each replica follows the stream) and reopened by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md).
 
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the per-replica ring buffer loses to cloud native; the poll is to read the durable stream by sequence, decided in the row that implements it.
 

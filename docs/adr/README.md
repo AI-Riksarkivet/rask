@@ -47,8 +47,8 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0023](0023-workflow-history-has-no-browser-surface-the-alert-is-the.md) |  | Workflow history has no browser surface — the ALERT is the surface (2026-08-26, owner ruling) | retired |
 | [0024](0024-team-role-administration-wontfix-until-the-keycloak-sync.md) |  | Team/role administration — WONTFIX until the Keycloak sync (2026-07-23) | retired |
 | [0026](0026-catalog-control-wildcard-masking-accepted-at-replicas-1.md) |  | CATALOG_CONTROL wildcard masking — accepted at replicas:1 (2026-07-23) | retired |
-| [0027](0027-control-events-broadcast-ring-buffer.md) |  | control-events — broadcast + ring buffer (reopened by 0199, amended 2026-11-14, XC-199) | amended |
-| [0028](0028-control-events-per-replica-cursor-boundary.md) |  | control-events — per-replica cursor boundary (reopened by 0199) | accepted |
+| [0027](0027-control-events-broadcast-ring-buffer.md) |  | control-events — broadcast + ring buffer (reopened by 0199, amended 2026-11-14, XC-199) | superseded |
+| [0028](0028-control-events-per-replica-cursor-boundary.md) |  | control-events — per-replica cursor boundary (reopened by 0199) | superseded |
 | [0029](0029-control-events-estate-admin-scope.md) |  | control-events — estate-admin scope | accepted |
 | [0031](0031-control-events-fail-open-emit-contract.md) |  | control-events — fail-open emit contract | amended |
 | [0032](0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md) | P3b | alerting: rule logic proven hermetically; the live transport is a drill | amended |
@@ -222,3 +222,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0213](0213-a-projects-administrators-are-everyone-its-admin-reaches-through-its-roles.md) | LH-597 | A project's administrators are everyone its admin reaches through its roles (2026-11-16) | accepted |
 | [0214](0214-the-e2e-lane-runs-the-telemetry-chain.md) | XC-208 | The e2e lane runs the telemetry chain and reads rask's signals behind the Collector (2026-11-16) | amended |
 | [0215](0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md) | XC-207 | Each service exports its telemetry to the platform's gateway as itself; the product chart renders no Collector (2026-11-16) | accepted |
+| [0216](0216-the-events-poll-reads-the-control-stream.md) | LH-601 | The events poll reads the control stream by sequence, and any catalog replica answers it (2026-11-16) | accepted |

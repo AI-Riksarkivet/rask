@@ -204,13 +204,13 @@ class CatalogControlBusSettings(BaseSettings):
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream, distinct from the
     # OpenLineage data events above). When on, mutations publish a `CatalogControlEvent` on the
     # `catalog.control.v1` topic over this process's own connection to the bus, and each replica follows it on that
-    # connection by reading its stream by sequence (`api/control_lane.py`), so every replica buffers every event for the
-    # poll endpoint. Off by default, like lineage.
+    # connection by reading its stream by sequence (`api/control_lane.py`), and the poll endpoint reads the same stream.
+    # Off by default, like lineage.
     control_emit_enabled: bool = Field(default=False, alias="LANCE_CONTROL_EMIT_ENABLED")
     control_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_CONTROL_EMIT_TIMEOUT_SECONDS")
-    # The bounded per-replica ring buffer size (events retained for `GET /management/v1/events`); a client whose cursor
-    # fell off the end (overflow) gets `reset: true` → the console `invalidateAll()`s.
-    control_buffer_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_BUFFER_SIZE")
+    #: The most events one `GET /management/v1/events` answer reads off the stream, and the window a new poller is
+    #: answered (the last this many). Each is one read by sequence on the bus.
+    control_page_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_PAGE_SIZE")
     #: The CONTROL lane's outbox prefix — and it must NOT be the lineage one. Each prefix is drained
     #: by a lane-specific relay that re-ingests what it finds, so sharing would feed each relay the
     #: other lane's events.

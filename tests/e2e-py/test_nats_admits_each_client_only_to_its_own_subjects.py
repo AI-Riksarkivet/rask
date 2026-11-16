@@ -1274,7 +1274,9 @@ async def _the_catalogs_control_lane(bus: Rig, publisher: Bus, rig: Client, capl
     in the stream's order, and none it began after; an event whose handling fails, or is cancelled from within while
     nobody asked the follower to stop, is said and the events behind it are handed on; a message whose publisher gave
     it the headers of a bus status is handed on like any other, and the events behind it too; a burst is handed on
-    whole; the followers leave no consumer on the stream; and each takes its place again on a stream made again."""
+    whole; the followers leave no consumer on the stream; each takes its place again on a stream made again; and two
+    replicas reading the topic by sequence read the same messages under the same sequences, a place past a stream made
+    again read as a gap."""
     findings: list[str] = []
     followed = _Followed()
     held = await _publish_control(publisher, 2, "held-before")
@@ -1325,6 +1327,15 @@ async def _the_catalogs_control_lane(bus: Rig, publisher: Bus, rig: Client, capl
                 findings.append(f"control lane, burst: {replica} was not handed the burst whole and in order")
         if consumers := await _control_consumers(rig):
             findings.append(f"control lane: the followers left {sorted(consumers)} on {CONTROL_STREAM}, where a follower holds no consumer")
+        # Two replicas read the topic by sequence (`Bus.read`, the events poll): the last messages for a new reader, then
+        # onward from a place the other replica gave, the same messages under the same sequences.
+        readers = [await stack.enter_async_context(_connected_as(bus, "catalog")) for _ in range(2)]
+        recent = await readers[0].read(CONTROL_STREAM, CONTROL_TOPIC, after=0, limit=5)
+        onward = await readers[1].read(CONTROL_STREAM, CONTROL_TOPIC, after=recent.messages[1].sequence, limit=5) if len(recent.messages) > 1 else None
+        if [_id_of(m) for m in recent.messages] != burst[-5:] or recent.gap or recent.end != recent.messages[-1].sequence:
+            findings.append(f"control lane, a read: a new reader was answered {[_id_of(m) for m in recent.messages]} (gap {recent.gap}), not the last five")
+        elif onward is None or [_id_of(m) for m in onward.messages] != burst[-3:] or onward.gap:
+            findings.append(f"control lane, a read: another replica read on from the first's place as {onward}, not the last three")
         # The stream is removed and made again as it was, as an operator does for a setting no edit changes: it numbers
         # its messages from 1 again, behind every follower's place.
         config = (await rig.request(f"$JS.API.STREAM.INFO.{CONTROL_STREAM}") or {}).get("config")
@@ -1337,6 +1348,9 @@ async def _the_catalogs_control_lane(bus: Rig, publisher: Bus, rig: Client, capl
         for replica in following:
             if not await _until(lambda r=replica: since(r)[handed[r] :] == again, 30):
                 findings.append(f"control lane, a stream made again: {replica} was handed {since(replica)[handed[replica] :]} on it, not {again}")
+        stale = await readers[0].read(CONTROL_STREAM, CONTROL_TOPIC, after=recent.end, limit=5)
+        if not stale.gap or stale.messages or stale.end >= recent.end:
+            findings.append(f"control lane, a read on a stream made again: a place past its end was answered {stale}, not a gap")
         for task in following.values():
             task.cancel()
         await asyncio.gather(*following.values(), return_exceptions=True)

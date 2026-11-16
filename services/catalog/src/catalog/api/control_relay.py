@@ -178,8 +178,7 @@ async def _republish(publisher: Bus, settings: Settings, envelope: CloudEvent) -
 
     The staged ``event_id`` is what makes the redelivery IDEMPOTENT, twice over. It is the envelope's ``id``, so the
     stream stores a copy of an event it already holds once, inside its duplicate window. And every subscriber on this
-    topic keys on it: the catalog's own ring buffer dedupes on ``event_id``, and a notifier keys what it delivers on it
-    too (a ledger on ``<event_id>@<ACTION>``).
+    topic keys on it: a notifier keys what it delivers on it (a ledger on ``<event_id>@<ACTION>``).
     """
     await publish_event(publisher, envelope, topic=CONTROL_TOPIC, timeout_seconds=settings.control_emit_timeout_seconds)
 

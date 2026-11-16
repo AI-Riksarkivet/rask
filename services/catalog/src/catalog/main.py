@@ -35,7 +35,6 @@ from catalog.core import base_judge
 from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
 from catalog.core.commit_ids import CommitIdKeyHolder, commit_ids_ready_check, make_commit_ids
 from catalog.core.config import Settings, get_settings
-from catalog.core.control_buffer import ControlEventBuffer
 from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
@@ -295,14 +294,12 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         commit_ids=commit_ids,
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes on
-    # the same connection to the bus. The per-replica ring buffer is ALWAYS
-    # built (plain memory, fed by the control lane, api/control_lane.py); the emitter is a no-op when off.
+    # the same connection to the bus, from whose stream the poll endpoint reads; the emitter is a no-op when off.
     # The connection itself, published for callers that are not the emitter. The control relay
     # (api/control_relay.py) re-publishes the STAGED event, never a re-serialization of the model, so it
     # cannot go through `control_emitter`, which would rebuild the event from the model and stage it
     # again. `None` when the chart names this process no bus.
     app.state.bus = bus
-    app.state.control_buffer = ControlEventBuffer(settings.control_buffer_size)
     app.state.control_emitter = make_control_emitter(
         enabled=settings.control_emit_enabled,
         bus=bus,
@@ -362,9 +359,9 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
 
 
 def _follow_control_events(app: FastAPI, settings: Settings, bus: Bus | None, loops: Supervisor) -> None:
-    """Follow the control topic into this replica's ring buffer on a loop of ``loops``, where control eventing is on
+    """Follow the control topic on a loop of ``loops``, judging and counting each event, where control eventing is on
     (`catalog.api.control_lane`): the lane runs under the emitter's own gate, so a control-off deployment follows
-    nothing. Started once the buffer is on ``app.state``, and stopped with the other loops."""
+    nothing. Stopped with the other loops."""
     if bus is None or not settings.control_emit_enabled:
         return
     create_signature_refused_series()

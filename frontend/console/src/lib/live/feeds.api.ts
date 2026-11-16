@@ -52,11 +52,11 @@ export interface ControlFeed {
  * by every surface that re-reads on a governance change (`controlTick`) and by the events page, which
  * renders the window it keeps. Estate-admin gated at the catalog, so it polls only for an estate admin.
  *
- * What it yields as `generation` is a counter of our own, not the buffer head. A `reset` (the
- * caller's cursor fell off the bounded, drop-oldest buffer) is a change the console must re-read on,
- * but it can hand back the very same head number. The window dedups by `event_id` and empties on a
- * reset, so a multi-replica catalog degrades noisily, never wrongly
- * (docs/adr/0028-control-events-per-replica-cursor-boundary.md).
+ * What it yields as `generation` is a counter of our own, not the cursor. The cursor is the control
+ * stream's sequence, the same on every catalog replica, so any replica answers the next poll
+ * (docs/adr/0216-the-events-poll-reads-the-control-stream.md). A `reset` (the stream no longer
+ * holds what came after the cursor) is a change the console must re-read on, but it can hand back
+ * the very same cursor. The window dedups by `event_id` and empties on a reset.
  *
  * A failed poll is yielded as `failure` and the next poll is still made: the events page says what
  * went wrong, and every `controlTick` holder keeps its last answer and its own read's state. Only a

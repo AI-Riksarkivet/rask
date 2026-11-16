@@ -540,10 +540,7 @@ export interface paths {
          * @description Return control-plane change-events after ``since`` for a platform (estate) administrator.
          *
          *     Fail-closed via FGA: a non-estate-admin gets 403, an OpenFGA outage 503, and the gate is a no-op only
-         *     when FGA is off (parity with every other ``require_*`` site). The ring buffer is per-replica + in-memory,
-         *     so ``cursor`` is a per-replica monotonic counter and ``reset`` means the client missed the buffer window
-         *     (scaling the catalog past one replica needs session affinity or a shared buffer — see
-         *     docs/adr/0028-control-events-per-replica-cursor-boundary.md).
+         *     when FGA is off (parity with every other ``require_*`` site). A bus this process cannot read answers 503.
          */
         get: operations["poll_control_events_management_v1_events_get"];
         put?: never;
@@ -7421,8 +7418,9 @@ export interface components {
         };
         /**
          * EventsResponse
-         * @description A poll response: control events strictly after the caller's cursor, the new head cursor, and a reset
-         *     flag (``True`` when the client's cursor fell off the bounded buffer → the console should re-read all).
+         * @description A poll response: control events strictly after the caller's cursor, read off the control stream, the cursor after
+         *     them (the stream's sequence, the same on every replica), and a reset flag (``True`` when the stream no longer holds
+         *     what came after the caller's cursor → the console should re-read all).
          */
         EventsResponse: {
             /** Cursor */

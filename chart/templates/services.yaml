@@ -168,10 +168,6 @@ metadata:
   name: {{ include "lance.fullname" . }}-catalog
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
-  sessionAffinity: ClientIP
-  sessionAffinityConfig:
-    clientIP:
-      timeoutSeconds: 10800
   ports: [{ name: http, port: {{ .Values.services.catalog.port }}, targetPort: http }]
   selector: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
 ---
