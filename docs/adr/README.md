@@ -234,3 +234,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0226](0226-lineage-is-authorized-in-rust-as-in-python.md) |  | Lineage is authorized in Rust as in Python (2026-11-17) | accepted |
 | [0227](0227-the-table-lifecycle-is-modelled-in-tla-before-the-catalog-is-ported.md) |  | The table lifecycle is modelled in TLA+ before the catalog is ported; six races found (2026-11-17) | accepted |
 | [0229](0229-a-committed-write-and-its-announcement-are-modelled-in-tla.md) |  | A committed write and its announcement are modelled in TLA+ (2026-11-17) | accepted |
+| [0231](0231-the-relay-drains-a-staged-event-in-rust-by-the-models-steps.md) |  | The relay drains a staged event in Rust by the model's steps (2026-11-17) | accepted |

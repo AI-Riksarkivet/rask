@@ -33,6 +33,14 @@ sha2 = "0.10"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "v5"] }
 
+# Debug builds keep line tables for this workspace's own code and no debug info for dependencies: a test binary links
+# every dependency, and with full debug info the build directory ran past 13 GB.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

@@ -5,6 +5,7 @@ pub mod feed;
 pub mod intake;
 pub mod model;
 pub mod paging;
+pub mod relay;
 pub mod signature;
 pub mod targeting;
 
