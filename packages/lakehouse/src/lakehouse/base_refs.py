@@ -44,11 +44,14 @@ _normalise = normalise
 #: refused with it because a comparison on the spelling cannot say where they resolve either.
 _NON_LOCATION_SEGMENTS = frozenset({"", ".", ".."})
 
-#: Characters that can divide a path into segments: `/` in every store, and `\\` in a ``file://`` URL or
-#: on a Windows filesystem. A decode that adds one to a segment can give the opened path a boundary the
-#: spelling does not show. pylance 12.0.0 on Linux opens a decoded `\\` as a name character
-#: (lh279 r5 escape: ``x/..%5C..%5Cvictim`` reads nothing), so refusing it is the conservative half.
-_SEPARATORS = ("/", "\\")
+#: The character besides `/` that can divide a path into segments: in a ``file://`` URL and on a Windows filesystem.
+#: A segment holding one names no location, spelled as itself or percent-encoded. Measured on pylance 13.0.0
+#: (2026-11-17, a local root): ``file://<root>/own/x\\..\\..\\victim`` reads the victim's rows, a spelling whose
+#: ``/``-separated segments all lie under ``own``. Decoded from ``%5C`` it is a name character there (lh279 r5 escape:
+#: ``x/..%5C..%5Cvictim`` reads nothing), and is refused with the literal because a comparison on the spelling cannot
+#: say which store reads it which way. No location the catalog mints holds one: a table lives under its uuid
+#: (ADR 0173 §5).
+_BACKSLASH = "\\"
 
 #: A URI's query delimiter. The store does not keep a segment holding one under the name it decodes to: measured on
 #: pylance 13.0.0 over the dir backend ([[LH-435]]), a register at ``x?y`` or ``x%3Fy`` keeps the location re-encoded,
@@ -82,7 +85,7 @@ def decoded_segments(uri: str) -> list[str] | None:
             return None
         if any(ord(char) < 0x20 or ord(char) == 0x7F for char in segment):
             return None
-        if any(segment.count(separator) > spelled.count(separator) for separator in _SEPARATORS):
+        if _BACKSLASH in segment or segment.count("/") > spelled.count("/"):
             return None
         segments.append(segment)
     return segments
@@ -113,7 +116,7 @@ def names_a_location(uri: str) -> bool:
     that leaves, and drops a tab, line feed or carriage return (measured over moto and a local root, lh279
     r3 a_escape). So each ``/``-separated segment is judged as it reads after one decode, and the spelling
     names no location when any decoded segment is empty, ``.`` or ``..``, holds an ASCII control
-    character, is not UTF-8, holds a ``?`` (:data:`_QUERY_DELIMITER`), or holds a ``/`` or ``\\`` the decode added. That refuses
+    character, is not UTF-8, holds a ``?`` (:data:`_QUERY_DELIMITER`) or a ``\\`` (:data:`_BACKSLASH`), or holds a ``/`` the decode added. That refuses
     ``<own>/%2e%2e/<victim>``, ``<own>/.%2e/<victim>``, ``<own>/.\\t./<victim>`` and a configured
     ``<models>/%2e%2e/<victim>``, each spelled inside a sanctioned prefix while opening another table.
 

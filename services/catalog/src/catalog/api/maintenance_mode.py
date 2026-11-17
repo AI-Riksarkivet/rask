@@ -27,6 +27,7 @@ from starlette.routing import Match
 from catalog.core import vending
 from catalog.core.config import Settings
 from lakehouse.ns_errors import problem_body
+from lakehouse.route_path import route_path
 
 
 PROBLEM_JSON = "application/problem+json"
@@ -95,7 +96,7 @@ def is_mutating(request: Request) -> bool:
     alone, which rides its query. A POST matching no route writes: classification fails closed.
 
     Args:
-        request: The request, its path as routing reads it (``scope["path"]``, [[LH-526]]).
+        request: The request, its path as routing reads it (``lakehouse.route_path``, [[LH-526]]).
 
     Returns:
         True when the request writes, or when nothing shows that it only reads.
@@ -157,7 +158,7 @@ async def maintenance_middleware(
         return await call_next(request)
     # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
     # would end the path there ([[LH-526]]).
-    path: str = request.scope["path"]
+    path = route_path(request.scope)
     if path.startswith(GATED_MOUNTS) and is_mutating(request):
         return maintenance_response()
     return await call_next(request)

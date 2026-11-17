@@ -455,19 +455,35 @@ def test_a_ref_the_job_leaves_keeps_its_tags_and_history_and_names_no_branch(tmp
     assert (kept, "snap" in lance.dataset(uri).tags.list()) == (expected, True)
 
 
+#: Twelve branches, each cut from version 2 of the one before it, the first from main's.
+_NESTED: dict[str, tuple[str | None, int]] = {f"b{depth:02}": (f"b{depth - 1:02}" if depth > 1 else None, 2) for depth in range(1, 13)}
+
+
 @pytest.mark.timeout(10)
-def test_the_holder_walk_ends_on_a_cyclic_fork_map() -> None:
-    """Each version is walked once: a malformed ``_refs`` whose fork points loop must not recurse until
-    the interpreter gives up, which would escape the erasure after every destructive step had run."""
+@pytest.mark.parametrize(
+    ("start", "forks", "branches"),
+    [
+        pytest.param(("x", 2), {"x": ("y", 2), "y": ("x", 2)}, {"x", "y"}, id="fork-points-that-loop"),
+        pytest.param((None, 2), _NESTED, set(_NESTED), id="branches-nested-twelve-deep"),
+    ],
+)
+def test_the_holder_walk_asks_each_version_once(start: tuple[str | None, int], forks: dict[str, tuple[str | None, int]], branches: set[str]) -> None:
+    """A malformed ``_refs`` whose fork points loop must not recurse until the interpreter gives up, which would escape
+    the erasure after every destructive step had run; and a version reached through several branches of a nest is asked
+    once, since asking it once per path doubles the store reads with every level."""
     import catalog.services.erasure as module
 
     class _Everywhere:
         """Every version of every ref retained, outside the window, and standing on one shared file."""
 
+        def __init__(self) -> None:
+            self.asked: list[tuple[str | None, int]] = []
+
         def reclaimed(self, ref: str | None) -> bool:
             return True
 
         def inside_window(self, reference: tuple[str | None, int]) -> bool:
+            self.asked.append(reference)
             return False
 
         def files(self, reference: tuple[str | None, int]) -> frozenset[str]:
@@ -476,9 +492,11 @@ def test_the_holder_walk_ends_on_a_cyclic_fork_map() -> None:
         def versions(self, ref: str | None) -> dict[int, None]:
             return {1: None, 2: None, 3: None}
 
-    held = module._holders(("x", 2), cast("Any", _Everywhere()), {"x": ("y", 2), "y": ("x", 2)}, {})
+    history = _Everywhere()
 
-    assert held.branches == {"x", "y"}
+    held = module._holders(start, cast("Any", history), forks, {})
+
+    assert (held.branches, len(history.asked)) == (branches, len(set(history.asked)))
 
 
 def test_a_child_sorts_before_a_parent_whose_fork_point_cannot_be_read() -> None:

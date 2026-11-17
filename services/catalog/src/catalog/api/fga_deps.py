@@ -70,6 +70,7 @@ from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import store_refusal
+from lakehouse.route_path import route_path
 from lakehouse.storage_options import StorageOptions
 
 
@@ -1078,7 +1079,7 @@ async def _write_door(request: Request, settings: Settings) -> write_judge.Write
     reads, the grant doors (authorized from the body), the root, and a door no map declares, which that path
     refuses and audits.
     """
-    path: str = request.scope["path"]
+    path = route_path(request.scope)
     object_id = request.path_params.get("id")
     resource = _resource_for(path)
     if object_id is None or resource not in _JUDGED_RESOURCES:
@@ -1400,7 +1401,7 @@ def _require_a_name_inside_a_warehouse(request: Request) -> None:
         InvalidInputError: The id is a warehouse's on a door that does not read one, or a table's or view's with no
             namespace above it.
     """
-    path: str = request.scope["path"]
+    path = route_path(request.scope)
     object_id = request.path_params.get("id")
     resource = _resource_for(path)
     if object_id is None or resource not in ("namespace", "table", "materialized_view"):
@@ -1429,7 +1430,7 @@ MOST_TABLES_IN_A_BATCH: Final = 100
 
 async def _identifiers_given(request: Request) -> list[list[str]]:
     """The identifiers ``request`` asks a door to give an object: a making door's path id, a rename's destination, a batch's ids."""
-    path: str = request.scope["path"]
+    path = route_path(request.scope)
     if path.rstrip("/") in _BATCH_PATHS:
         body = await _json_body_or_none(request)
         named = [segments for _kind, segments in _batch_ids(body)] if isinstance(body, dict) else []
@@ -1462,7 +1463,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     await _decide(request, settings, token, injected, resolver)
     object_id = request.path_params.get("id")
     # A classification's id is a label, in no warehouse.
-    if object_id is None or _resource_for(request.scope["path"]) in (None, "classification"):
+    if object_id is None or _resource_for(route_path(request.scope)) in (None, "classification"):
         return
     if segments := parse_identifier(object_id):
         await resolver.require_active_warehouse(segments[0])
@@ -1486,10 +1487,10 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, in
     if token is None:
         raise UnauthenticatedError("authentication required")
 
-    # The raw ASGI path (what routing actually matched) — NOT request.url.path, which re-parses the
+    # The path routing matches (`lakehouse.route_path`), never `request.url.path`: that re-parses the
     # decoded path as a URL string and truncates at a decoded '#'/'?' inside an id, so for an
     # exotically-named table the suffix would stop naming the route that matched.
-    path: str = request.scope["path"]
+    path = route_path(request.scope)
     object_id = request.path_params.get("id")
 
     # Body-keyed batch routes have no {id} path param — authorize by reading the body.

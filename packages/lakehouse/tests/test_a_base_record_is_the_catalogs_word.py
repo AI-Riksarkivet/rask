@@ -14,7 +14,9 @@ into its location (``räksmörgås`` -> ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``growth%
 branch of that table declares the root spelled so (lh279 r3b names), and ``%252e%252e`` decodes once to
 the literal ``%2e%2e`` that pylance opens as a name (lh279 r5 escape). A decode that adds a ``/`` or ``\\`` to a segment
 changes where the segments fall, and escapes that decode to bytes that are not UTF-8 are a path pylance
-refuses to open (lh279 r5 not_utf8), so neither names a location.
+refuses to open (lh279 r5 not_utf8), so neither names a location. A ``\\`` spelled as itself names none either: in a
+``file://`` URL it divides the path as a ``/`` does, so ``<own>/x\\..\\..\\victim`` opens the victim (measured on pylance
+13.0.0, 2026-11-17: 3 of the victim's rows read through that spelling).
 A base resolves in the store its OWN spelling names, not the table's: on an S3 table ``file://`` and a
 bare ``/path`` read the process's local filesystem and ``S3://`` reads the same store as ``s3://``
 (lh279fx probe_scheme_resolve), so a path is own, configured or recorded only in the same store.
@@ -32,6 +34,8 @@ _TABLE = "s3://lance-catalog/aa11bb22_ns$t"
 #: Tables named ``räksmörgås`` and ``growth%``, at the locations the catalog's create door gives them.
 _SWEDISH = "s3://lance-catalog/0e387b68_ns$r%C3%A4ksm%C3%B6rg%C3%A5s"
 _PERCENT = "s3://lance-catalog/27e373bc_ns$growth%25"
+#: A table on a local root, where a ``\\`` divides a path as a ``/`` does.
+_LOCAL = "file:///roots/own"
 _CONFIGURED = ["s3://lance-catalog/models/"]
 _RECORD = base_registry.BaseRecord(
     location=_TABLE,
@@ -69,6 +73,7 @@ _UNRECORDED = base_registry.BaseStanding.UNRECORDED
         pytest.param(_TABLE, f"{_TABLE}/a%2Fb", True, _UNRECORDED, id="own-encoded-slash"),
         pytest.param(_TABLE, f"{_TABLE}/a%5Cb", True, _UNRECORDED, id="own-encoded-backslash"),
         pytest.param(_TABLE, f"{_TABLE}/t%FF", True, _UNRECORDED, id="own-escapes-not-utf8"),
+        pytest.param(_LOCAL, f"{_LOCAL}/x\\..\\..\\victim", True, _UNRECORDED, id="own-backslash-dotdot-on-a-local-root"),
     ],
 )
 def test_a_declared_base_has_the_standing_its_location_earns(table: str, path: str, is_dataset_root: bool, standing: base_registry.BaseStanding) -> None:

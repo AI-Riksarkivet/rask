@@ -35,6 +35,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from lakehouse.problem import send_problem
 from lakehouse.read_refusal import ReadRefusal
+from lakehouse.route_path import route_path
 
 
 #: The three bulk table writes, ``POST /v1/table/<one id segment>/{create,insert,merge_insert}``, the routes that buffer a
@@ -46,7 +47,7 @@ _BULK_WRITE = re.compile(r"/v1/table/[^/]+/(?:create|insert|merge_insert)")
 
 def _is_bulk_write(scope: Scope) -> bool:
     """A POST to a bulk table write's route, the large buffer to shed, whatever its Content-Type."""
-    return scope.get("method") == "POST" and _BULK_WRITE.fullmatch(scope.get("path", "")) is not None
+    return scope.get("method") == "POST" and _BULK_WRITE.fullmatch(route_path(scope)) is not None
 
 
 _meter = metrics.get_meter("lance.catalog")

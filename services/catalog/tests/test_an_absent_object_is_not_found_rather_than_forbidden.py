@@ -33,6 +33,7 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from fastapi.testclient import TestClient
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
@@ -156,3 +157,17 @@ def test_a_caller_holding_nothing_on_a_warehouse_learns_neither_its_names_nor_wh
         "code": PERMISSION_DENIED,
         "error": f"can_get_metadata required on namespace:{name}",
     }
+
+
+def test_a_door_served_under_a_root_path_is_decided_like_any_other(estate: Any) -> None:  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    """A server that mounts the catalog under a prefix (uvicorn's ``--root-path``) hands every request a path that begins
+    with it. The route is matched with the prefix taken off, so the guard reads the path the same way: carol, who holds
+    nothing, is refused the count of a table she cannot see, as she is with no prefix."""
+    prefixed = TestClient(estate.client.app, root_path="/api/catalog")
+    # On the loop the app's lifespan built its OpenFGA client on.
+    prefixed.portal = estate.client.portal
+
+    answered = prefixed.post("/api/catalog/v1/table/lance_catalog$db1$real/count_rows", json={}, headers=estate.bearer("carol"))
+
+    assert answered.status_code == 403, answered.text
+    assert answered.json()["code"] == PERMISSION_DENIED

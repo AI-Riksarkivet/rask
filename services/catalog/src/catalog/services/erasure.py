@@ -1036,7 +1036,7 @@ class _Holders(BaseModel):
 
 
 def _holders(
-    reference: _Reference, history: _History, forks: Mapping[str, _Reference], tags: Mapping[str, _Reference | None], seen: frozenset[_Reference] = frozenset()
+    reference: _Reference, history: _History, forks: Mapping[str, _Reference], tags: Mapping[str, _Reference | None], walked: set[_Reference] | None = None
 ) -> _Holders:
     """What keeps ``reference`` listed: the retention window, a tag, or a branch cut from it that still
     references its data files.
@@ -1053,7 +1053,13 @@ def _holders(
     A version whose ref was not reclaimed is kept by that alone, and nothing is attributed past it: what
     would pin it once a reclaim runs is the next erasure's to measure, and naming a tag or a branch here
     would ask for a deletion that cannot finish the erasure.
+
+    ``walked`` is the walk's own record of the versions it has asked, shared by every level: a version reached through
+    several branches of a nest holds the same things each time, and asking it once per path doubles the reads with every
+    level of nesting. It also ends the walk on fork points that loop.
     """
+    walked = set() if walked is None else walked
+    walked.add(reference)
     if not history.reclaimed(reference[0]):
         return _Holders(unreclaimed={_label(reference[0])})
     held = _Holders(tags={name for name, named in tags.items() if named == reference})
@@ -1076,8 +1082,8 @@ def _holders(
         for step in standing:
             if step == head:
                 held.branches.add(child)
-            elif (child, step) not in seen:
-                held.absorb(_holders((child, step), history, forks, tags, seen | {reference}))
+            elif (child, step) not in walked:
+                held.absorb(_holders((child, step), history, forks, tags, walked))
     return held
 
 

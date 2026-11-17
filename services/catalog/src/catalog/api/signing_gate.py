@@ -32,6 +32,7 @@ from catalog.services.provenance_namespace import is_provenance
 from lakehouse.governed import fga
 from lakehouse.governed.signing_key import signing_of
 from lakehouse.ns_errors import problem_body
+from lakehouse.route_path import route_path
 
 
 #: The data doors that announce through the lineage emitter alone, so a write through one under the provenance namespace
@@ -75,7 +76,7 @@ async def signing_gate_middleware(request: Request, call_next: Callable[[Request
     unready = (holder is not None and not holder.ready) or not commit_ids_of(request.app).ready
     # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
     # would end the path there and the action read would be a segment of the name ([[LH-526]]).
-    path: str = request.scope["path"]
+    path = route_path(request.scope)
     settings: Settings | None = getattr(request.app.state, "settings", None)
     if unready and path.startswith(GATED_MOUNTS) and is_mutating(request) and announces(path, settings):
         return unsigned_response()
