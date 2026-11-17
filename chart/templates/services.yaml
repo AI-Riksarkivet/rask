@@ -201,26 +201,37 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
+        {{- /* services.lineage.runtime (ADR 0239): the Rust binary's image has no shell, so its preStop is the kubelet's own
+        sleep; its environment leaves out what only the Python process reads. Everything else is one rendering. */}}
+        {{- $rust := eq .Values.services.lineage.runtime "rust" }}
         - name: lineage
-          image: "{{ include "lance.catalogImage" . }}"
+          image: "{{ if $rust }}{{ include "lance.lineageRustImage" . }}{{ else }}{{ include "lance.catalogImage" . }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.securityContext" . | nindent 10 }}
+          {{- if $rust }}
+          {{- include "lance.preStopSleep" . | nindent 10 }}
+          {{- else }}
           {{- include "lance.preStop" . | nindent 10 }}
+          {{- end }}
           args:
+            {{- if $rust }}
+            - "serve"
+            {{- else }}
             {{- if include "lance.otelEnabled" $root }}
             - "opentelemetry-instrument"
             {{- end }}
             - "uvicorn"
             - {{ .Values.services.lineage.module | quote }}
+            {{- end }}
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.lineage.port }}"
             {{- include "rask.shutdownArg" (list . (include "lance.deadlineGrace" (list . .Values.services.lineage.requestDeadlineSeconds) | int)) | nindent 12 }}
             {{- include "rask.proxyHeaderArgs" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.lineage.port }} }]
           env:
-            {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
+            {{- include "lance.allocatorEnv" (list $root .Values.services.lineage.runtime) | nindent 12 }}
             {{- if include "lance.otelEnabled" $root }}
-            {{- include "lance.otelEnv" (list $root "lineage") | nindent 12 }}
+            {{- include "lance.otelEnv" (list $root "lineage" .Values.services.lineage.runtime) | nindent 12 }}
             {{- end }}
             {{- include "lance.busEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}
             - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
@@ -271,7 +282,7 @@ spec:
             {{- end }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
-          resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" (ternary "lineageRust" "lineage" $rust)) | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 12 }}

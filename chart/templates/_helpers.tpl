@@ -466,11 +466,14 @@ spec:
 {{- define "lance.otelEnv" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}
+{{- $python := not (and (gt (len .) 2) (eq (index . 2) "rust")) -}}
 {{- $o := $root.Values.observability -}}
 - { name: OTEL_SERVICE_NAME, value: {{ $svc | quote }} }
 - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "{{ include "lance.otlpEndpoint" $root }}" }
 - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "http/protobuf" }
+{{- if $python }}
 - { name: OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER, value: "rask_service_account" }
+{{- end }}
 - { name: RASK_OTLP_TOKEN_FILE, value: {{ include "lance.otlpTokenFile" $root | quote }} }
 - { name: OTEL_TRACES_EXPORTER, value: "otlp" }
 - { name: OTEL_METRICS_EXPORTER, value: "otlp" }
@@ -478,10 +481,12 @@ spec:
 - { name: OTEL_LOGS_EXPORTER, value: "otlp" }
 
 - { name: OTEL_METRIC_EXPORT_INTERVAL, value: "5000" }
+{{- if $python }}
 - { name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED, value: "true" }
 {{/**/}}
 - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }
 - { name: OTEL_SEMCONV_STABILITY_OPT_IN, value: "http" }
+{{- end }}
 - { name: OTEL_RESOURCE_ATTRIBUTES, value: "{{ include "rask.otelResourceAttrs" $root }}" }
 {{- end -}}
 
@@ -490,6 +495,22 @@ lifecycle:
   preStop:
     exec:
       command: ["sh", "-c", "sleep {{ .Values.lifecycle.preStopSeconds }}"]
+{{- end -}}
+
+{{- define "lance.preStopSleep" -}}
+lifecycle:
+  preStop:
+    sleep:
+      seconds: {{ .Values.lifecycle.preStopSeconds }}
+{{- end -}}
+
+{{- define "lance.lineageRustImage" -}}
+{{- $name := .Values.image.lineage.repository -}}
+{{- $i := .Values.image -}}
+{{- if not (or $i.localImages (index ($i.tags | default dict) $name) (index ($i.digests | default dict) $name)) -}}
+{{- fail (printf "services.lineage.runtime=rust runs the image %s, which no release publishes: name its build with image.tags.%s or image.digests.%s (make k3s-pins TAGS=\"%s=<tag>\"), or side-load it with image.localImages" $name $name $name $name) -}}
+{{- end -}}
+{{- include "rask.image" (list . $name) -}}
 {{- end -}}
 
 {{- define "lance.deadlineGrace" -}}
@@ -1232,7 +1253,9 @@ activeDeadlineSeconds: 1800
 {{- define "lance.allocatorEnv" -}}
 {{- $root := index . 0 -}}
 - { name: MALLOC_ARENA_MAX, value: {{ $root.Values.allocator.arenaMax | quote }} }
+{{- if not (and (gt (len .) 1) (eq (index . 1) "rust")) }}
 - { name: ARROW_DEFAULT_MEMORY_POOL, value: {{ $root.Values.allocator.arrowMemoryPool | quote }} }
+{{- end }}
 {{- end -}}
 
 {{- define "lance.fileAuditEnv" -}}

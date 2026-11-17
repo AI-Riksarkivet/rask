@@ -222,13 +222,14 @@ git commit deploy/values-live-pins.yaml                             # the estate
 
 With `K3S_REGISTRY` set, `make k3s-up` refuses a pins file that names no tag for `lance-rest-catalog` or
 `web-console`, which would otherwise pull `:dev` and wait out `--wait`, and the values schema admits `image.tags` and
-`image.digests` only for those two. `make k3s-pins` takes the builds by name only (it refuses a run with no `TAGS`: the
+`image.digests` only for those two and `lance-lineage-rust`, whose pin the chart itself requires once
+`services.lineage.runtime` is `rust` (§ The Rust lineage). `make k3s-pins` takes the builds by name only (it refuses a run with no `TAGS`: the
 file is git's declaration, never a read of the cluster), and `make k3s-converge STEM=<stem> TAG=<tag>` sets one stem's
 tag and upgrades past the split-stem check.
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
-`lance-rest-catalog` (the lakehouse image that serves catalog, lineage and maintenance) and `web-console` (the console's
-static-file image, from `frontend.dockerfile`). `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
+`lance-rest-catalog` (the lakehouse image that serves catalog, lineage and maintenance), `lance-lineage-rust` (the Rust
+lineage, from `lineage-rust.dockerfile`) and `web-console` (the console's static-file image, from `frontend.dockerfile`). `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
 `default`, the fixtures' namespace), and `deploy/values-live-pins.yaml` is committed: it is the development estate's image
 declaration, so a reconciler re-applying git deploys the images the estate runs ([[XC-164]]). Its tags name builds in
@@ -248,10 +249,118 @@ locally and in CI.
 | Image | Dockerfile | Notes |
 |---|---|---|
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
+| `lance-lineage-rust` | `lineage-rust.dockerfile` | The Rust lineage (ADR 0238), run by the lineage Deployment only under `services.lineage.runtime: rust` (ADR 0239): the one `lineage` binary, built `cargo build --release --locked -p lineage` from `rust/` and stripped, on `gcr.io/distroless/cc-debian13` (glibc, libgcc_s, the CA bundle; no shell, no Python), non-root `USER 10001`, the binary as PID 1. No release publishes it yet. |
 | `web-console` | `frontend.dockerfile` | The console: the single-page app built to static files, served by its own small Bun server (`frontend/console/serve.ts`) with the runtime `config.json` the product chart mounts (`chart/templates/console.yaml`). No server-side rendering, no backend of its own; tini as PID 1, non-root `USER 10001`. |
 
 The console's topology (one route tree, the shared `@rask/ui` shell, browser sign-in with PKCE) is documented in the
 `rask-frontend` project skill (`.claude/skills/rask-frontend`).
+
+## The Rust lineage (`services.lineage.runtime`)
+
+One value selects which lineage the Deployment `rask-lineage` runs (ADR 0239): `python` (the default, `lineage.main:app`
+under uvicorn from `lance-rest-catalog`) or `rust` (`lineage serve` from `lance-lineage-rust`). The pod keeps its
+ServiceAccount, environment, mounts, probes, ports, securityContext, NetworkPolicy and Service; the container changes its
+image, its command, its preStop (the kubelet's `sleep`, since the image has no shell), its resources
+(`resources.lineageRust`), and leaves out the five variables only the Python process reads. `rust` is unproven on a live
+estate until the read-back below has passed on it. On the development estate, with a Dagger engine and the k3s release
+up, in order.
+
+Build the image and push it to the dev registry under a tag naming the commit (`make dagger-engine` once per host):
+
+```bash
+make dagger-engine
+```
+
+```bash
+scripts/dagger-image.sh --name lineage-rust --push 172.17.0.1:5000/lance-lineage-rust:$(git rev-parse --short=9 HEAD)
+```
+
+Pin the build, so the release pulls what git names:
+
+```bash
+make k3s-pins TAGS="lance-lineage-rust=$(git rev-parse --short=9 HEAD)"
+```
+
+Switch the value: change `services.lineage.runtime` from `python` to `rust` in `deploy/values-local.yaml`, and commit it
+with the pins file. Then deploy, as every change reaches the estate:
+
+```bash
+make k3s-up
+```
+
+```bash
+kubectl rollout status deploy/rask-lineage --timeout=300s
+```
+
+```bash
+kubectl get deploy rask-lineage -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].args}'
+```
+
+Read it back, each of ADR 0217 point 8's criteria on the estate:
+
+- **The ten operations and the bus.** The live suites speak HTTP and the bus, so they run unchanged against either
+  runtime: `/events` and `/tables/{t}/derived` (`test_events_are_correct.py`, `test_provenance_is_correct.py`, the
+  bring-your-own scenario), `POST /api/v1/lineage` (`test_governance_e2e.py`,
+  `test_a_process_judges_a_request_before_it_reads_the_body.py`), `/admin/dlq` (`correctness.py`, which every criterion
+  reads), an event recorded from the bus (every criterion's drive: the catalog announces each commit and lineage records
+  it), a staged event drained by the relay (`test_outbox_crash_e2e.py`, and criterion 5's bus outage), and `/livez` and
+  `/readyz` (the probes). `/events/projection`, `/admin/dlq/parked` and the two replay doors are driven by no live
+  suite; the doors' corpus put them to both services off the estate (ADR 0236, ADR 0238).
+
+```bash
+bash scripts/e2e_live.sh
+```
+
+```bash
+bash scripts/e2e_live.sh -m phase1 --require-live --chaos
+```
+
+- **`/readyz`** answers 200 `ready`, read through the API server's proxy to the Service:
+
+```bash
+kubectl get --raw "/api/v1/namespaces/default/services/rask-lineage:http/proxy/readyz"
+```
+
+- **The forwarder's cursor** moves: the graph backend (the marquez fixture) receives what the feed records, and a stall
+  or a cursor ahead of the feed is a `lineage_forward_*` line in the pod's log:
+
+```bash
+kubectl logs deploy/rask-lineage --since=10m
+```
+
+- **The metrics at the gateway, under the same names.** `test_observability_e2e.py` reads
+  `lineage_events_processed_total` and the `process lineage.events.v1` span off GreptimeDB (`bash scripts/e2e_live.sh`
+  runs it), and the alert rules read `outbox_*`, `timer_*` and `http_server_request_duration_seconds_*` under
+  `service_name="lineage"`; list the names it exports, to compare with the same list taken on `python`:
+
+```bash
+curl -sG "http://$(kubectl -n observability get svc greptimedb -o jsonpath='{.spec.clusterIP}'):4000/v1/prometheus/api/v1/query" --data-urlencode 'query=count by (__name__) ({service_name="lineage"})'
+```
+
+- **Memory and latency against the Python deployment.** Read each on `python` before the switch and on `rust` after it,
+  under the same drive: the pod's resident memory, and each door's p95 from the gateway's histogram.
+
+```bash
+kubectl top pod -l app.kubernetes.io/component=lineage --containers
+```
+
+```bash
+curl -sG "http://$(kubectl -n observability get svc greptimedb -o jsonpath='{.spec.clusterIP}'):4000/v1/prometheus/api/v1/query" --data-urlencode 'query=histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{service_name="lineage"}[15m])))'
+```
+
+**Switching back** is the same path: change `services.lineage.runtime` back to `python` in `deploy/values-local.yaml`,
+commit, and deploy:
+
+```bash
+make k3s-up
+```
+
+The kind lane runs every suite against the Rust lineage when `RASK_LINEAGE_RUNTIME=rust` (`scripts/stack_values.sh`),
+and builds and side-loads its image as it does the others:
+
+```bash
+RASK_LINEAGE_RUNTIME=rust make e2e-ci
+```
 
 ## The engine is the user's
 

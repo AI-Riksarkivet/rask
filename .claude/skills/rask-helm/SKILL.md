@@ -185,6 +185,10 @@ provisioned by its operator and attested by `signing.provisioned`).
   commit, it did not.
 - The release stores image tags. A chart apply after a `kubectl set image` roll **reverts the roll**
   unless the tag is pinned on the command: `--set image.tags.lance-rest-catalog=<tag>`.
+- The chart renders three first-party images: `lance-rest-catalog` (catalog, lineage, maintenance, the Jobs and hooks),
+  `web-console`, and `lance-lineage-rust`, which the lineage Deployment runs only under `services.lineage.runtime: rust`
+  (ADR 0239). That one is in no release, so the render refuses `rust` unless `image.tags`/`image.digests` names its
+  build or `image.localImages` is set; the rest of the pod (ServiceAccount, env, mounts, probes) is the same rendering.
 - Every helm call goes through `scripts/helm.sh`.
 - **The estate's tenants are chart values too** ([[XC-213]], ADR 0206). `catalog.declared` (`projects`, `warehouses`,
   `grants` to principals that are not people; the default declares the project `default`, administered by

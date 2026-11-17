@@ -22,8 +22,8 @@ gave `image.tag`.
 
 Emits `<image> <stem>` so the caller needs to know neither rule: the stem is what
 `scripts/dagger-image.sh --name` takes, and the two names the product chart renders that differ from
-their `.docker/<stem>.dockerfile` are `lance-rest-catalog` (`rest-catalog`) and the console's `web-console`
-(`frontend`).
+their `.docker/<stem>.dockerfile` are `lance-rest-catalog` (`rest-catalog`), the console's `web-console`
+(`frontend`) and the Rust lineage's `lance-lineage-rust` (`lineage-rust`).
 
 Usage:  helm template ... | uv run python scripts/side_loaded_images.py --tag dev
 Pinned by `tests/unit/test_a_stack_builds_every_image_it_side_loads.py`, which imports the two
@@ -44,7 +44,7 @@ import yaml
 _BARE = re.compile(r"^[a-z0-9][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 #: The rendered image names whose dockerfile stem is another name.
-_STEMS = {"lance-rest-catalog": "rest-catalog", "web-console": "frontend"}
+_STEMS = {"lance-rest-catalog": "rest-catalog", "web-console": "frontend", "lance-lineage-rust": "lineage-rust"}
 
 
 def dockerfile_stem(image: str) -> str:

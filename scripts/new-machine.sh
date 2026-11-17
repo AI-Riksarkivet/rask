@@ -344,6 +344,7 @@ if confirm "Build every pinned image and install? (a long run, once)"; then
     case "$name" in
       lance-rest-catalog) push --name rest-catalog --push "172.17.0.1:5000/$name:$tag" ;;
       web-console)        push --name frontend --push "172.17.0.1:5000/$name:$tag" ;;
+      lance-lineage-rust) push --name lineage-rust --push "172.17.0.1:5000/$name:$tag" ;;
       *) if [[ -f ".docker/$name.dockerfile" ]]; then push --name "$name" --push "172.17.0.1:5000/$name:$tag"; else note "$name: public image, pulled as-is"; fi ;;
     esac
   done < <(pins deploy/values-live-pins.yaml)

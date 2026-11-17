@@ -181,14 +181,15 @@ jobs:
   # because the language dependencies inside the image are the same ones the lockfiles pinned. What it
   # DOES add is the layer no lockfile describes: Debian CVEs in the trixie/bun base images.
   #
-  # The two deployables: the lakehouse (rest-catalog) and the console (frontend). The development fixtures'
+  # The deployables: the lakehouse (rest-catalog), the console (frontend) and the Rust lineage (lineage-rust, which the
+  # chart runs under `services.lineage.runtime: rust`, ADR 0239). The development fixtures'
   # images, cnpg-age-ext and marquez, are NOT scanned by this job. Widening it is a matter of adding matrix rows and
   # paying the build minutes.
   #
-  # BLOCKING ([[XC-184]]): a fixable HIGH or CRITICAL finding in either image fails the nightly run, so a base image that
+  # BLOCKING ([[XC-184]]): a fixable HIGH or CRITICAL finding in any of them fails the nightly run, so a base image that
   # falls behind is reported the night its fix ships. Both images scanned clean of them on 2026-11-07 (run 42332264184:
   # Debian 13.7 and every Python package of rest-catalog, Debian 13.7 of frontend); an unfixed CVE does not gate
-  # (`--ignore-unfixed`, .dagger/scan.go).
+  # (`--ignore-unfixed`, .dagger/scan.go). lineage-rust has not been built or scanned yet.
   supply-chain-images:
     name: supply-chain-image-${{ matrix.image }}
     if: github.event_name == 'schedule'
@@ -196,7 +197,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [rest-catalog, frontend]
+        image: [rest-catalog, frontend, lineage-rust]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger

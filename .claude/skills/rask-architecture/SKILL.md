@@ -63,7 +63,9 @@ hierarchy (`console/src/lib/flow`) and the workbench's dock (`console/src/lib/do
 
 **Deployables** (each = a member + a `.docker/<name>.dockerfile`): `rest-catalog` (image `lance-rest-catalog`, the
 three lakehouse services) and `frontend` (image `web-console`, the console's static-file server), both deployed by the
-product chart; plus `cnpg-age-ext` and `marquez` for the
+product chart; `lineage-rust` (image `lance-lineage-rust`, the Rust plane's `lineage` binary on distroless, built from
+`rust/` and no uv member), which the chart's lineage Deployment runs in place of `lineage.main:app` only under
+`services.lineage.runtime: rust` (ADR 0239); plus `cnpg-age-ext` and `marquez` for the
 development stand-ins. The lakehouse runs no ingest service (ADR 0154) and no stage, training or engine (ADR 0155): data
 enters through the catalog's namespace doors, and moving data between tables is the user's pipeline on their own compute.
 

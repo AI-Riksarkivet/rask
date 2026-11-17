@@ -108,6 +108,9 @@ nats:
 
 services:
   lineage:
+    # Which lineage the estate runs (ADR 0239). `rust` needs its build pinned in deploy/values-live-pins.yaml first:
+    # docs/architecture/deployment.md, The Rust lineage.
+    runtime: python
     forward:
       # The development graph backend, the marquez fixture (deploy/fixtures/marquez): lineage forwards every event it
       # records there, as it would to a platform's own (ADR 0158).

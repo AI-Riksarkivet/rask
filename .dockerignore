@@ -49,6 +49,10 @@ build
 storybook-static
 test-results
 
+# The Rust plane's build directory (rust/target, tens of GB in a working tree): the image builds its own in a cache
+# mount (.docker/lineage-rust.dockerfile).
+rust/target
+
 # Test/coverage outputs
 coverage/
 htmlcov/

@@ -347,7 +347,9 @@ workspace; a new JS package under `frontend/packages/` must ship a `package.json
 
 Deployables are workspace members with a dockerfile: `.docker/rest-catalog.dockerfile` installs and serves the
 lakehouse's `catalog`, `lineage` and `maintenance` and no client (its import gate refuses `lancedb`),
-and `.docker/frontend.dockerfile` the console's image (`web-console`, the static build and `serve.ts`); `.docker/cnpg-age-ext.dockerfile` and `.docker/marquez.dockerfile` build development
+and `.docker/frontend.dockerfile` the console's image (`web-console`, the static build and `serve.ts`);
+`.docker/lineage-rust.dockerfile` builds the Rust lineage's (`lance-lineage-rust`, the one binary on distroless), which the
+lineage Deployment runs only under `services.lineage.runtime: rust` (default `python`, ADR 0239); `.docker/cnpg-age-ext.dockerfile` and `.docker/marquez.dockerfile` build development
 fixtures' images.
 
 ## Architecture

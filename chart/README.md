@@ -121,11 +121,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | image.console | object | `{"repository":"web-console"}` | Console image: `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one. |
 | image.digest | string | `""` | Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags. |
 | image.digests | object | `{}` | Per-component digest map keyed by component name; beats `tags` and the global tag. |
+| image.lineage | object | `{"repository":"lance-lineage-rust"}` | Rust lineage image (`services.lineage.runtime: rust`): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, which the render requires unless localImages. |
 | image.localImages | bool | `false` | Renders bare `<component>:<tag>` references for images side-loaded into the node (k3s-import). Never for a remote cluster. |
 | image.pullPolicy | string | `"IfNotPresent"` | imagePullPolicy for first-party containers. |
 | image.repository | string | `""` | Registry prefix for every first-party image (e.g. ghcr.io/<org>/<repo>). Required unless localImages is true. |
 | image.tag | string | `"dev"` | Default tag for every first-party image when no per-component tag or digest is set. |
-| image.tags | object | `{}` | Per-component tag map keyed by component name (lance-rest-catalog, web-console); beats the global tag. |
+| image.tags | object | `{}` | Per-component tag map keyed by component name (lance-rest-catalog, web-console, lance-lineage-rust); beats the global tag. |
 | imagePullSecrets | list | `[]` | List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously. |
 | lifecycle.maintenanceTerminationGracePeriodSeconds | int | `120` | Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed. |
 | lifecycle.preStopSeconds | int | `5` | Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first. |
@@ -246,6 +247,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | resources.catalog | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful. |
 | resources.default | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources). |
 | resources.lineage | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful. |
+| resources.lineageRust | object | `{"limits":{"cpu":"1","memory":"256Mi"},"requests":{"cpu":"250m","memory":"64Mi"}}` | CPU/memory requests and limits for lineage under `services.lineage.runtime: rust`, in place of `lineage`; memory from the pilot's 32 MiB after load (ADR 0238) with headroom. |
 | resources.maintenanceWorker | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"256Mi"}}` | CPU/memory requests and limits for maintenance's queue worker pods (`maintenance.worker`); the web pods keep the default tier. |
 | route.enabled | bool | `true` | Renders the HTTPRoutes publishing each `/api/*` prefix, and `/dex` with the development Dex, on the Gateway `parentRefs` names. |
 | route.hostnames | list | `[]` | Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts. |
@@ -270,7 +272,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.forward.endpoint | string | `"api/v1/lineage"` | Path the events are POSTed to under `url` (the transport's `endpoint`). |
 | services.lineage.forward.url | string | `""` | Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. https on a real deployment: the render refuses an http one. |
 | services.lineage.maxBodyBytes | int | `8388608` | Maximum request-body bytes on any lineage route (LINEAGE_MAX_BODY_BYTES), one OpenLineage event; larger bodies get 413 before a byte is read. |
-| services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs (templates/services.yaml). |
+| services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs under `runtime: python` (templates/services.yaml). |
 | services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<objectStore.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
 | services.lineage.provenanceNamespace | string | `"lance_catalog$provenance"` | Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`): `lance_catalog$<namespace>`, a namespace of the estate's own warehouse; the render refuses any other. |
@@ -279,6 +281,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.relay.periodSeconds | int | `30` | Seconds between two relay ticks (`LINEAGE_RELAY_PERIOD_SECONDS`); one replica runs each tick. |
 | services.lineage.replicas | int | `1` | Replica count of lineage; its replicas share one durable consumer, so it scales freely. |
 | services.lineage.requestDeadlineSeconds | int | `300` | Seconds a lineage request may run before its caller is answered 503 (code 17) while it runs on to its end (LINEAGE_REQUEST_DEADLINE_SECONDS, ADR 0203). |
+| services.lineage.runtime | string | `"python"` | Lineage's implementation: `python` (`module` under uvicorn, the lakehouse image) or `rust` (`lineage serve`, image.lineage; unproven on a live estate until read back, ADR 0239). |
 | signing.doors | string | `"enforce"` | Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted. |
 | signing.enforce | bool | `true` | Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |

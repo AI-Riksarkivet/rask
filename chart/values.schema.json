@@ -588,7 +588,17 @@
                     "description": "Per-component digest map keyed by component name; beats `tags` and the global tag.",
                     "type": "object",
                     "patternProperties": {
-                        "^(lance-rest-catalog|web-console)$": {
+                        "^(lance-rest-catalog|web-console|lance-lineage-rust)$": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "lineage": {
+                    "description": "Rust lineage image (`services.lineage.runtime: rust`): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, which the render requires unless localImages.",
+                    "type": "object",
+                    "properties": {
+                        "repository": {
                             "type": "string"
                         }
                     },
@@ -611,10 +621,10 @@
                     "type": "string"
                 },
                 "tags": {
-                    "description": "Per-component tag map keyed by component name (lance-rest-catalog, web-console); beats the global tag.",
+                    "description": "Per-component tag map keyed by component name (lance-rest-catalog, web-console, lance-lineage-rust); beats the global tag.",
                     "type": "object",
                     "patternProperties": {
-                        "^(lance-rest-catalog|web-console)$": {
+                        "^(lance-rest-catalog|web-console|lance-lineage-rust)$": {
                             "type": "string"
                         }
                     },
@@ -1428,6 +1438,37 @@
                     },
                     "additionalProperties": false
                 },
+                "lineageRust": {
+                    "description": "CPU/memory requests and limits for lineage under `services.lineage.runtime: rust`, in place of `lineage`; memory from the pilot's 32 MiB after load (ADR 0238) with headroom.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "maintenanceWorker": {
                     "description": "CPU/memory requests and limits for maintenance's queue worker pods (`maintenance.worker`); the web pods keep the default tier.",
                     "type": "object",
@@ -1617,7 +1658,7 @@
                             "minimum": 1
                         },
                         "module": {
-                            "description": "uvicorn import path the lineage Deployment runs (templates/services.yaml).",
+                            "description": "uvicorn import path the lineage Deployment runs under `runtime: python` (templates/services.yaml).",
                             "type": "string"
                         },
                         "outbox": {
@@ -1665,6 +1706,14 @@
                             "description": "Seconds a lineage request may run before its caller is answered 503 (code 17) while it runs on to its end (LINEAGE_REQUEST_DEADLINE_SECONDS, ADR 0203).",
                             "type": "integer",
                             "minimum": 1
+                        },
+                        "runtime": {
+                            "description": "Lineage's implementation: `python` (`module` under uvicorn, the lakehouse image) or `rust` (`lineage serve`, image.lineage; unproven on a live estate until read back, ADR 0239).",
+                            "type": "string",
+                            "enum": [
+                                "python",
+                                "rust"
+                            ]
                         }
                     },
                     "additionalProperties": false

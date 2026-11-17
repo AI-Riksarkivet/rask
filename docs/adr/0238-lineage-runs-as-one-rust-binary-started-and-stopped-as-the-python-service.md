@@ -265,8 +265,9 @@ eighth after the load. What they do NOT show:
 
 ## Not done
 
-- **No image is built and nothing on the estate runs the binary.** A dockerfile and its Dagger target, the chart value
-  that selects the Rust container (its `args` the flags above), and a live read-back are the next slice.
+- **Nothing on the estate runs the binary.** Its image (`.docker/lineage-rust.dockerfile`) and the chart value that
+  selects it (`services.lineage.runtime: rust`, its `args` the flags above) are ADR 0239's; the image has not been built,
+  and the live read-back (`docs/architecture/deployment.md` § The Rust lineage) has not run.
 - The binary was run against the catalog's decision door for the doors' corpus only (ADR 0236), by a second catalog
   process with authorization on over the first one's tables; checks (b) to (g) still decide at OpenFGA. It was not run
   with the ServiceAccount verifier, nor with the docs pages (`LINEAGE_DOCS`), which are not ported.

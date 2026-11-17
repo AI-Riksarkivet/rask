@@ -13,6 +13,7 @@
 //	dagger call image --name=rest-catalog
 //	dagger call image --name=rest-catalog publish --address=172.17.0.1:5000/lance-rest-catalog:dev
 //	dagger call image --name=frontend publish --address=172.17.0.1:5000/web-console:dev
+//	dagger call image --name=lineage-rust publish --address=172.17.0.1:5000/lance-lineage-rust:dev
 //
 // ── The one host requirement ────────────────────────────────────────────────────────────────────
 // Dagger's engine runs in a container, so `localhost:5000` inside it is the ENGINE, not the host
@@ -80,12 +81,13 @@ func extraArgs(kv []string) []dagger.BuildArg {
 
 // Image builds ANY deployable from its own dockerfile under .docker/.
 //
-// `name` is the dockerfile stem: rest-catalog, frontend (the console), cnpg-age-ext, marquez, bus-signer.
+// `name` is the dockerfile stem: rest-catalog, frontend (the console), lineage-rust (the Rust lineage), cnpg-age-ext,
+// marquez, bus-signer.
 func (m *Rask) Image(
 	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
 	//          "**/coverage", "**/storybook-static", "**/build",
-	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache", "rust/target"]
 	// +defaultPath="/"
 	src *dagger.Directory,
 	// Dockerfile stem under .docker/.

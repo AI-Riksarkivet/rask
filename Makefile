@@ -356,7 +356,7 @@ scan-secrets:
 	$(DAGGER) call scan-secrets
 
 scan-image:
-	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=rest-catalog"; exit 1; }
+	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=rest-catalog (or frontend, lineage-rust)"; exit 1; }
 	$(DAGGER) call scan-image --name=$(NAME)
 
 # THE INVENTORY, not a gate. `scan-image` answers "is this image clean today"; this answers "what is
@@ -508,7 +508,12 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod. web-console is the
 # console's static-file image (chart `image.console`, from .docker/frontend.dockerfile), which the release waits on too.
 # The object store fixture runs the upstream RustFS image by digest, which the node pulls; nothing here builds it.
-K3S_IMAGES = web-console lance-rest-catalog
+# lance-lineage-rust is the Rust lineage (.docker/lineage-rust.dockerfile), which the render runs only under
+# `services.lineage.runtime: rust` (ADR 0239). It is built and side-loaded with the others, and left out of the pins
+# check: a release on the default runtime renders no reference to it, and under `rust` the chart itself refuses a render
+# whose values name no build of it.
+K3S_IMAGES = web-console lance-rest-catalog lance-lineage-rust
+K3S_PINNED_IMAGES = $(filter-out lance-lineage-rust,$(K3S_IMAGES))
 # Where k3s-build leaves each image as an OCI tarball and k3s-import reads it: no docker daemon on either side.
 K3S_IMAGE_DIR ?= build/k3s-images
 
@@ -528,11 +533,12 @@ k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/, 
 	helm dependency build ./chart
 	./scripts/fixtures.sh --vendor
 
-k3s-build: ## Build the lakehouse and console images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
+k3s-build: ## Build the lakehouse, Rust lineage and console images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
 	@# Each dockerfile stem differs from its image name (frontend -> web-console, rest-catalog ->
-	@# lance-rest-catalog), so each is one line. Same builds scripts/e2e_stack.sh does.
+	@# lance-rest-catalog, lineage-rust -> lance-lineage-rust), so each is one line. Same builds scripts/e2e_stack.sh does.
 	bash scripts/dagger-image.sh --name frontend --out $(K3S_IMAGE_DIR)/web-console.tar
 	bash scripts/dagger-image.sh --name rest-catalog --out $(K3S_IMAGE_DIR)/lance-rest-catalog.tar
+	bash scripts/dagger-image.sh --name lineage-rust --out $(K3S_IMAGE_DIR)/lance-lineage-rust.tar
 
 k3s-import: ## Side-load the k3s-build tarballs into k3s containerd as <image>:dev (sudo, no docker)
 	@for s in $(K3S_IMAGES); do \
@@ -590,7 +596,7 @@ K3S_REGISTRY ?= localhost:5000
 # back to the chart's `dev` and wait out `--wait` in ImagePullBackOff; side-loaded images run at `dev` when it is absent.
 K3S_PINS = deploy/values-live-pins.yaml
 K3S_PINS_ARG = $(if $(K3S_REGISTRY),-f $(K3S_PINS),$(if $(wildcard $(K3S_PINS)),-f $(K3S_PINS)))
-K3S_PINS_CHECK = $(if $(K3S_REGISTRY),for s in $(K3S_IMAGES); do grep -q "^    $$s: " $(K3S_PINS) 2>/dev/null || { echo "!! $(K3S_PINS) pins no tag for $$s: the release would pull $(K3S_REGISTRY)/$$s:dev. Name the build with make k3s-pins TAGS=\"$$s=<tag>\" (or K3S_REGISTRY= for side-loaded images)" >&2; exit 1; }; done,:)
+K3S_PINS_CHECK = $(if $(K3S_REGISTRY),for s in $(K3S_PINNED_IMAGES); do grep -q "^    $$s: " $(K3S_PINS) 2>/dev/null || { echo "!! $(K3S_PINS) pins no tag for $$s: the release would pull $(K3S_REGISTRY)/$$s:dev. Name the build with make k3s-pins TAGS=\"$$s=<tag>\" (or K3S_REGISTRY= for side-loaded images)" >&2; exit 1; }; done,:)
 # The estate admin is the Dex fixture's alice, whose principal is derived from the fixture's own values as the live
 # lanes derive theirs (scripts/stack_values.sh). The catalog's declaration grants it `admin` on estate:rask; without it
 # nobody can mint a project. Expanded once, and only by a target that composes the values.

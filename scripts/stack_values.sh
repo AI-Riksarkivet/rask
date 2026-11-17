@@ -25,6 +25,11 @@ HELM_SET=(
   --set-string auth.oidc.issuer=http://rask-dex:5556/dex
   --set-string "auth.bootstrapAdmin=$ADMIN_PRINCIPAL"
   --set-json "catalog.multibase.dataBases=[\"$BASE_A\",\"$BASE_B\"]"
+  # Which lineage the lane runs (ADR 0239): RASK_LINEAGE_RUNTIME=rust runs every suite against the Rust binary, whose
+  # side-loaded image the lane then builds from .docker/lineage-rust.dockerfile like the others. One `--flag=value` token:
+  # the render gates read this file's `--set` pairs with every shell variable replaced by a placeholder, which the schema
+  # refuses here, and the default is the chart's own, so they render the default lane as it deploys.
+  "--set-string=services.lineage.runtime=${RASK_LINEAGE_RUNTIME:-python}"
   --set services.lineage.outbox.enabled=true
   --set services.lineage.relay.enabled=true
   --set observability.enabled=false

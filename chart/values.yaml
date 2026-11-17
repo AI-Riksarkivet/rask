@@ -77,7 +77,16 @@ services:
     # -- Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.
     replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
   lineage:
-    # -- uvicorn import path the lineage Deployment runs (templates/services.yaml).
+    # WHICH IMPLEMENTATION THE LINEAGE DEPLOYMENT RUNS (ADR 0239). `python` runs `module` under uvicorn from the lakehouse
+    # image. `rust` runs `lineage serve` from the image `.docker/lineage-rust.dockerfile` builds (`image.lineage`), with
+    # the same ServiceAccount, environment, mounts, probes, ports, securityContext and NetworkPolicy; what differs is the
+    # image, the command, a preStop that needs no shell, the Python-only variables left out and `resources.lineageRust`.
+    # The binary was proven against the Python service off the estate (ADR 0238); `rust` is unproven on a live estate
+    # until it is read back there (docs/architecture/deployment.md, The Rust lineage). No release publishes its image, so
+    # the render refuses `rust` unless `image.tags` or `image.digests` names its build, or the images are side-loaded.
+    # -- Lineage's implementation: `python` (`module` under uvicorn, the lakehouse image) or `rust` (`lineage serve`, image.lineage; unproven on a live estate until read back, ADR 0239).
+    runtime: python # @schema enum: [python, rust]
+    # -- uvicorn import path the lineage Deployment runs under `runtime: python` (templates/services.yaml).
     module: lineage.main:app
     # -- Container and Service port of the lineage service.
     port: 8000
@@ -194,17 +203,17 @@ image:
   # overwrites every image with a tag that is not on the node — observed twice on 2026-08-06, once taking the
   # whole release to ImagePullBackOff.
   #
-  # Keys are the COMPONENT name the template passes to `rask.image` (`lance-rest-catalog`, `web-console`) — the same
-  # string that appears in the rendered reference, and the only two the schema admits, so a pin for an image the chart
+  # Keys are the COMPONENT name the template passes to `rask.image` (`lance-rest-catalog`, `web-console`,
+  # `lance-lineage-rust`) — the same string that appears in the rendered reference, and the only ones the schema admits, so a pin for an image the chart
   # does not render fails the render instead of riding along unread ([[XC-194]]). `digests` beats `tags`, exactly as
   # the global `digest` beats the global `tag`.
   #
   #   tags:    { lance-rest-catalog: be-256ca0da }
   #   digests: { lance-rest-catalog: "sha256:834d2e23…" }
-  # -- Per-component tag map keyed by component name (lance-rest-catalog, web-console); beats the global tag.
-  tags: {} # @schema additionalProperties: false; patternProperties: {"^(lance-rest-catalog|web-console)$": {"type": "string"}}
+  # -- Per-component tag map keyed by component name (lance-rest-catalog, web-console, lance-lineage-rust); beats the global tag.
+  tags: {} # @schema additionalProperties: false; patternProperties: {"^(lance-rest-catalog|web-console|lance-lineage-rust)$": {"type": "string"}}
   # -- Per-component digest map keyed by component name; beats `tags` and the global tag.
-  digests: {} # @schema additionalProperties: false; patternProperties: {"^(lance-rest-catalog|web-console)$": {"type": "string"}}
+  digests: {} # @schema additionalProperties: false; patternProperties: {"^(lance-rest-catalog|web-console|lance-lineage-rust)$": {"type": "string"}}
   # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
   # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
   # -- Renders bare `<component>:<tag>` references for images side-loaded into the node (k3s-import). Never for a remote cluster.
@@ -218,6 +227,10 @@ image:
   # The console's image, `.docker/frontend.dockerfile`: the single-page app's static build and its static server.
   # -- Console image: `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one.
   console: { repository: web-console }
+  # The Rust lineage's image, `.docker/lineage-rust.dockerfile`: the one binary on a distroless base, run only under
+  # `services.lineage.runtime: rust`.
+  # -- Rust lineage image (`services.lineage.runtime: rust`): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, which the render requires unless localImages.
+  lineage: { repository: lance-lineage-rust }
 
 resources:
   # AGE is a DATABASE and was sized as a stateless app container, which is a different thing. It asks
@@ -272,6 +285,14 @@ resources:
   lineage:
     requests: { cpu: 250m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # The Rust lineage's container (`services.lineage.runtime: rust`), which replaces the tier above. Memory from the pilot
+  # (ADR 0238, 2026-11-17, off the estate): 14.4 MiB resident idle, 32.3 MiB (25.8 to 34.5) after 1,000 bus events, 600
+  # requests and a 3,000-row feed. The request is twice the highest reading and the limit eight times it, because no
+  # production-sized feed or burst has been measured; the CPU is the Python tier's, so the HPA's target means the same.
+  # -- CPU/memory requests and limits for lineage under `services.lineage.runtime: rust`, in place of `lineage`; memory from the pilot's 32 MiB after load (ADR 0238) with headroom.
+  lineageRust:
+    requests: { cpu: 250m, memory: 64Mi }
+    limits: { cpu: "1", memory: 256Mi }
 
 # === Graceful rollouts =============================================================================
 # preStop sleep: endpoint removal must propagate to kube-proxy and the Gateway BEFORE the app receives
