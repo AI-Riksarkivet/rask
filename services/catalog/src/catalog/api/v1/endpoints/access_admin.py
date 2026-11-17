@@ -463,7 +463,7 @@ async def get_access_model(client: EstateFgaClient, settings: SettingsDep) -> Ac
     Read-only and estate-admin gated: the model reveals the whole privilege topology (which rungs derive
     which actions), the same platform-tier disclosure as the tuple listing.
     """
-    model_id = client.get_authorization_model_id() or settings.fga_model_id or ""
+    model_id = client.get_authorization_model_id() or ""
     return AccessModelResponse(
         # OFF THE LOOP: the first call still touches the filesystem, and this route is `async def`.
         dsl=await run_in_threadpool(_model_dsl),

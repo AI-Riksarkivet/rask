@@ -94,7 +94,6 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
         "RASK_FGA_ENABLED": "true",
         "RASK_FGA_API_URL": openfga_store.url,
         "RASK_FGA_STORE_ID": openfga_store.store_id,
-        "RASK_FGA_MODEL_ID": openfga_store.model_id,
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "LANCE_PROVENANCE_WRITERS": json.dumps([_LINEAGE]),
     }

@@ -99,7 +99,6 @@ _FULL_AUTH = {
     "oidc_connectors": {"local": "dex"},
     "fga_enabled": True,
     "fga_store_id": "store",
-    "fga_model_id": "model",
 }
 
 

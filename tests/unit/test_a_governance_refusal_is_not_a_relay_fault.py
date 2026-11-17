@@ -106,7 +106,6 @@ def _governed_settings(outbox_uri: str) -> LineageSettings:
         "oidc_idp_id": "dex",
         "oidc_connectors": {"local": "dex"},
         "fga_store_id": "s",
-        "fga_model_id": "m",
     }
     return LineageSettings.model_validate({"outbox_uri": outbox_uri, "fga_enabled": True, **auth})
 

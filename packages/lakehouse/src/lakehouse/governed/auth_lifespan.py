@@ -78,8 +78,6 @@ class _FgaSettings(Protocol):
     @property
     def fga_store_id(self) -> str | None: ...
     @property
-    def fga_model_id(self) -> str | None: ...
-    @property
     def fga_timeout_seconds(self) -> float: ...
     @property
     def fga_token_file(self) -> str | None: ...
@@ -152,28 +150,18 @@ async def build_fga_client(
     from lakehouse.governed import fga
 
     try:
-        store_id, model_id = settings.fga_store_id, settings.fga_model_id
-        pinned = bool(store_id and model_id)
-        if not pinned:
-            if provision:
-                store_id, model_id = await fga.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=store_id)  # noqa: TID251
-                # Structured, not a printf: `openfga_provisioned` is a documented INFO audit-tier event
-                # (`lakehouse.obs`), and its fields are what the audit reads.
-                log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
-            else:
-                store_id, model_id = await fga.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=store_id)
-                log.info("openfga_resolved_by_name", extra={"service": service, "store_id": store_id, "model_id": model_id})
+        # THE MODEL IS NEVER A SETTING: every service checks against the model its own image carries, found in the store
+        # by its body ([[LH-201]]), so a `model.fga` edit takes effect with the image that ships it. A store id may be
+        # named (a per-cluster id, never a committed default); the model's id is read from that store.
+        if provision:
+            store_id, model_id = await fga.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)  # noqa: TID251
+            # Structured, not a printf: `openfga_provisioned` is a documented INFO audit-tier event
+            # (`lakehouse.obs`), and its fields are what the audit reads.
+            log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
+        else:
+            store_id, model_id = await fga.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)
+            log.info("openfga_resolved_by_name", extra={"service": service, "store_id": store_id, "model_id": model_id})
         client = fga.make_client(settings.fga_api_url, store_id, model_id, token_file=settings.fga_token_file, timeout_seconds=settings.fga_timeout_seconds)
-        if pinned and provision:
-            # A PIN SKIPS `provision`, WHICH IS THE POINT AND ALSO THE BLIND SPOT. Nothing above reads
-            # `load_model()`, so a `model.fga` edit shipped in this image takes effect nowhere and says
-            # so nowhere — the same "object relation does not exist" outage the unpinned rollback
-            # produced, from the other direction. The audit only REPORTS; it never refuses, because a
-            # pin is a deployment decision and crash-looping on one helps nobody.
-            #
-            # Gated on `provision` rather than on the pin alone: every service ships the same bundled
-            # model, and the gate that decides who may publish it decides who speaks about it.
-            await fga.audit_pinned_model(client, store_id=store_id, model_id=model_id)
         log.info("%s: FGA client ready (%s)", service, settings.fga_api_url)
     except fga.OpenFgaModelAbsentError as exc:
         # Fails CLOSED, and never by provisioning: the service that noticed must not be the one that decides

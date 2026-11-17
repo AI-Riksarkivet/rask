@@ -92,7 +92,7 @@ and 3.08 s with a 1 s cap).
 
 Copy `services/catalog/tests/conftest.py::governed_catalog`. The app's own lifespan builds the deployed verifier
 against the root conftest's `dex_issuer` and the deployed OpenFGA client against `openfga_store`
-(`RASK_FGA_STORE_ID`/`RASK_FGA_MODEL_ID` pinned to it), so nothing is overridden. `bearer("alice")` signs alice in
+(`RASK_FGA_STORE_ID` names it; the catalog finds its own model there), so nothing is overridden. `bearer("alice")` signs alice in
 through the `local` connector, mapped to idp `dex`, and `person("alice")` is the OpenFGA user her tuples name. Arrange
 through the doors (a create seeds the creator's tuples, `/management/v1/<type>/{id}/access/grant` grants), and seed
 only what no door writes with `store.write(...)`. Assert the outcome a caller sees, a status and the spec's `code`,

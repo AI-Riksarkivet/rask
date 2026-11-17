@@ -54,7 +54,6 @@ class _Settings(BaseModel):
     fga_enabled: bool = True
     fga_api_url: str = "http://fga.test:8080"
     fga_store_id: str | None = None
-    fga_model_id: str | None = None
     fga_timeout_seconds: float = 5.0
     fga_token_file: str | None = None
     fga_decider_url: str | None = None

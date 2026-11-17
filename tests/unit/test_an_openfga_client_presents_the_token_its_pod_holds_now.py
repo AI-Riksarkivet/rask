@@ -34,7 +34,6 @@ def _environment(monkeypatch: pytest.MonkeyPatch, url: str, token: Path) -> _Ser
     monkeypatch.setenv("RASK_FGA_API_URL", url)
     monkeypatch.setenv("RASK_FGA_TOKEN_FILE", str(token))
     monkeypatch.delenv("RASK_FGA_STORE_ID", raising=False)
-    monkeypatch.delenv("RASK_FGA_MODEL_ID", raising=False)
     return _ServiceSettings()
 
 

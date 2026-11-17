@@ -92,7 +92,6 @@ def _settings(signers: set[str], delegators: set[str], *, fga_enabled: bool = Fa
         "oidc_issuer": "https://dex.example",
         "oidc_audience": "lance",
         "fga_store_id": "s",
-        "fga_model_id": "m",
     }
     return LineageSettings.model_validate(
         {"signing": Signing(signers=frozenset(signers), delegators=frozenset(delegators)), "fga_enabled": fga_enabled, **(auth if fga_enabled else {})}

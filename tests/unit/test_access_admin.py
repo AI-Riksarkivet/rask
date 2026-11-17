@@ -58,7 +58,7 @@ def unnamed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _settings(*, fga_enabled: bool = True) -> Any:
-    return SimpleNamespace(fga_enabled=fga_enabled, fga_root_object="warehouse:lance_catalog", fga_model_id=None)
+    return SimpleNamespace(fga_enabled=fga_enabled, fga_root_object="warehouse:lance_catalog")
 
 
 def _fga_client(stub: Any = None) -> Any:

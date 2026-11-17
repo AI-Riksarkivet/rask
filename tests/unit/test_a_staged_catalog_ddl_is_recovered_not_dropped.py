@@ -118,7 +118,6 @@ def _settings(tmp_path: Path, *, fga_enabled: bool, signers: frozenset[str] = fr
         "oidc_idp_id": "dex",
         "oidc_connectors": {"local": "dex"},
         "fga_store_id": "s",
-        "fga_model_id": "m",
     }
     settings = LineageSettings.model_validate(
         {

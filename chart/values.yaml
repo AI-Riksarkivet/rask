@@ -11,7 +11,7 @@
 # fullname helpers resolve to the release name and the release is `rask`.
 #
 # Helm hard rules for this chart: numeric knobs use `(hasKey $parent "key") | ternary` — NEVER
-# `| default <n>`, which swallows an explicit 0 (tests/unit/test_invariants.py enforces it).
+# `| default <n>`, which swallows an explicit 0 (tests/chart/test_invariants.py enforces it).
 
 # Pinned so in-cluster service names are rask-<component> (release name is also rask).
 # -- Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`.
@@ -302,7 +302,7 @@ resources:
 # inside the pod never reaches a PID 1.
 # `teardownSeconds` is a budget, not a measurement of any lifespan. `rask.shutdownArg` renders the
 # bound into every uvicorn whose command line the chart sets and refuses to render a bound that is not positive or a negative teardownSeconds, whose bound would end
-# after the SIGKILL. Pinned by tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py.
+# after the SIGKILL. Pinned by tests/chart/test_uvicorn_drains_inside_its_pods_grace_period.py.
 lifecycle:
   # -- Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first.
   preStopSeconds: 5
@@ -315,7 +315,7 @@ lifecycle:
 
 # === Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --
 # services.yaml and maintenance.yaml call the helper for every lakehouse workload, and
-# tests/unit/test_every_first_party_workload_is_hardened.py derives its subject list from the render, so a new
+# tests/chart/test_every_first_party_workload_is_hardened.py derives its subject list from the render, so a new
 # first-party workload is covered by default rather than by memory.
 # INFRA pods are a separate, deliberately staged decision — see security.infraContexts below.
 # runAsNonRoot + drop-ALL-caps + RuntimeDefault seccomp are unconditional (the restricted PodSecurity
@@ -343,7 +343,7 @@ security:
   # token only when its SA carries a grant it uses: the RBAC-bound Collector and snapshot pods.
   # `default` is the identity every unnamed pod in the namespace shares, and a subchart or platform chart
   # may bind `secrets: get` to it. Pinned by
-  # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
+  # tests/chart/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
   # securityContexts for the INFRA pods (app tier is already hardened via lance.securityContext)
   # + PSA-restricted compliance for the root busybox wait-age init containers (the audit's
   # sequencing footgun: label the namespace `pod-security.kubernetes.io/enforce=restricted` ONLY
@@ -512,13 +512,10 @@ auth:
   # OpenFGA restart.
   #
   # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services and the openfga-model hook) uses that
-  # store; empty (default) = the newest store named `lance-catalog`. A
-  # MODEL pin makes every service check against that one model whatever its image carries; no deployment
-  # sets it, and removing the knob is parked as LH-309.
+  # store; empty (default) = the newest store named `lance-catalog`. The model is never a value: each service checks
+  # against the model its own image carries, which it finds in that store by its body ([[LH-309]]).
   # -- Pin the OpenFGA store id used by every service and the openfga-model hook. Empty = the newest store named `lance-catalog`.
   fgaStoreId: ""
-  # -- Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model.
-  fgaModelId: ""
   # The estate's administrator, declared in git ([[XC-011]]): a person's principal, `<idp-id>~<user id>` (the idp id
   # `auth.oidc.connectors` gives their connector; `dex~<userID>` for a development Dex user), which the render
   # refuses when it is a bare name, a `user:` id or a service account's. The chart renders it into the catalog's
@@ -1327,7 +1324,7 @@ nats:
   # and subscribe lists must not be empty: nsc issues an empty list as unrestricted. A missing allowance fails closed and
   # quietly (a refused pull is asked again for as long as the pod runs while the pod stays Ready: the bus's refusal of the
   # request is logged once an outage as `bus_error`, and a consumer the bus does not hold as `bus_pull_failed`), so a changed consumer or topic changes this table in the same commit:
-  # tests/unit/test_every_bus_user_may_do_what_its_service_is_configured_to.py fails a render whose declared consumers
+  # tests/chart/test_every_bus_user_may_do_what_its_service_is_configured_to.py fails a render whose declared consumers
   # or configured topics a user does not cover.
   #
   # THE DEV MINT (openbao-seed.yaml; owner ruling R1: the NATS fixture and the dev OpenBao are dev stand-ins, and their

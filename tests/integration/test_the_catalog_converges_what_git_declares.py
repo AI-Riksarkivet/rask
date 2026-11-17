@@ -119,7 +119,6 @@ def estate(store_url: str, openfga_store: Any, dex_issuer: Any, tmp_path: Path, 
         "RASK_FGA_ENABLED": "true",
         "RASK_FGA_API_URL": openfga_store.url,
         "RASK_FGA_STORE_ID": openfga_store.store_id,
-        "RASK_FGA_MODEL_ID": openfga_store.model_id,
         "LANCE_OWN_ACCOUNTS": json.dumps([MAINTENANCE]),
     }
     declaration = tmp_path / "declaration.json"

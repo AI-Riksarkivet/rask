@@ -91,10 +91,6 @@
                     "description": "NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the catalog and the openfga-model hook) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.",
                     "type": "array"
                 },
-                "fgaModelId": {
-                    "description": "Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model.",
-                    "type": "string"
-                },
                 "fgaStoreId": {
                     "description": "Pin the OpenFGA store id used by every service and the openfga-model hook. Empty = the newest store named `lance-catalog`.",
                     "type": "string"

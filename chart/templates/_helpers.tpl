@@ -1065,9 +1065,6 @@ catalog
 {{- with $root.Values.auth.fgaStoreId }}
 - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
 {{- end }}
-{{- with $root.Values.auth.fgaModelId }}
-- { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
-{{- end }}
 {{- end -}}
 
 {{- define "lance.bootstrapJobDeadline" -}}

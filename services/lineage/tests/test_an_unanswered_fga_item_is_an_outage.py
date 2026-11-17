@@ -152,7 +152,6 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
             "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_store_id": "s",
-            "fga_model_id": "m",
         }
     )
     request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast(OpenFgaClient, fga_client))))))
