@@ -4,6 +4,7 @@ pub mod feed;
 pub mod intake;
 pub mod model;
 pub mod paging;
+pub mod signature;
 pub mod targeting;
 
 /// The operations this crate serves, as `(method, path)` of `docs/operations.json`.

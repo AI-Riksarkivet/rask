@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
+ed25519-dalek = "2"
 http-body-util = "0.1"
 jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto"] }
 percent-encoding = "2"
