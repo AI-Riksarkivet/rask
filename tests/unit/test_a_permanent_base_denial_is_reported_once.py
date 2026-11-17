@@ -60,9 +60,9 @@ class _Carrier:
 
 
 @pytest.fixture(autouse=True)
-def _a_cold_process() -> None:
+def _a_cold_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """Each test starts having reported nothing — the set is process-scoped by design."""
-    features.forget_reported_base_denials()
+    monkeypatch.setattr(features, "_REPORTED_BASE_DENIALS", set())
 
 
 def _probe_denied(_path: str) -> bool:

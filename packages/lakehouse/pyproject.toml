@@ -8,7 +8,6 @@ dependencies = [
     "fastapi>=0.115",
     "pydantic>=2.13",
     "pydantic-settings>=2.14",
-    "python-dotenv>=1.0",
     # The bus client (`lakehouse.bus`); `nkeys` signs the server's nonce with the user's seed.
     "nats-py[nkeys]>=2.16",
     # The auth plane (`lakehouse.governed`): the OpenFGA client and its async transport, token verification, the

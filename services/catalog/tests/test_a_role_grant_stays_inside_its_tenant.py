@@ -38,6 +38,7 @@ import pytest
 
 from catalog.services import warehouses
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 #: Each target's grant door and the door dave reads it through: a namespace's describe, a warehouse's own self-view.
@@ -84,7 +85,7 @@ def test_a_role_is_granted_only_inside_its_own_tenant(
     name = "house$bronze" if tenant is not None else "lance_catalog$bronze"
     if tenant is not None:
         root = tmp_path / "house"
-        warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "house", "project": tenant, "bucket": tenant, "root_uri": str(root)})
+        seeding.put_warehouse(str(tmp_path), StorageOptions(), {"id": "house", "project": tenant, "bucket": tenant, "root_uri": str(root)})
         warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": str(root)}), "house")
         catalog.store.write((catalog.person("alice"), "admin", f"project:{tenant}"), (f"project:{tenant}", "project", "warehouse:house"))
     if target == "namespace":

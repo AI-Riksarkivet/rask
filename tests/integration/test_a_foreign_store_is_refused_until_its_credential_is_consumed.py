@@ -25,9 +25,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from catalog.services import projects, warehouses
+from catalog.services import warehouses
 from lakehouse.storage import s3_client
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 _ESTATE_KEY_ID = "estate-key-id"
@@ -105,7 +106,7 @@ def _control(tmp_path: Path) -> str:
 
 
 def _seed_project(tmp_path: Path) -> None:
-    projects.put_project(_control(tmp_path), StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x"})
+    seeding.put_project(_control(tmp_path), StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x"})
 
 
 def _estate_buckets(moto_url: str) -> set[str]:
@@ -174,7 +175,7 @@ def test_a_record_naming_another_store_is_refused_at_every_door(
 ) -> None:
     control = _control(tmp_path)
     _seed_project(tmp_path)
-    warehouses.put_warehouse(
+    seeding.put_warehouse(
         control,
         StorageOptions(),
         {

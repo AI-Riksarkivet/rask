@@ -29,6 +29,7 @@ from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse import maintenance_policies
 from lakehouse.governed import fga
+from tests import seeding
 
 
 #: Lineage's service-account principal, the namespace's writer, as the chart names it.
@@ -121,7 +122,7 @@ def test_a_boot_that_declares_a_retention_keeps_a_hold_set_through_the_policy_do
     declared = _settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="30")
     root, options = declared.registry_root, declared.storage_options()
     held = {**(maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) or {}), "cleanup_enabled": False}
-    maintenance_policies.put_policy(root, options, held)
+    seeding.put_policy(root, options, held)
 
     _booted(declared, openfga_store)
 
@@ -147,7 +148,7 @@ def test_a_boot_that_declares_no_retention_removes_only_the_policy_it_wrote(
     root, options = declared.registry_root, declared.storage_options()
     # The policy door merges what its caller sets into the record it finds (`policies._record`), as this does.
     record = {**(maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) or {}), **changed_through_the_door}
-    maintenance_policies.put_policy(root, options, record)
+    seeding.put_policy(root, options, record)
 
     _booted(_settings(tmp_path, monkeypatch), openfga_store)
 

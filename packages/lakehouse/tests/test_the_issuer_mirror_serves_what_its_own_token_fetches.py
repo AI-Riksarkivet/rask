@@ -103,3 +103,16 @@ def test_the_mirror_is_ready_while_the_issuer_answers_it_and_never_once_it_drain
     assert (ready.status_code, ready.json()) == (200, {"status": "ready", "components": {"issuer": "healthy"}})
     assert (out_of_rotation.status_code, out_of_rotation.json()["status"]) == (503, "unhealthy"), out_of_rotation.text
     assert (draining.status_code, draining.json()["status"], len(seen)) == (503, "shutting_down", asked)
+
+
+def test_an_issuer_that_refuses_the_mirror_is_answered_as_a_bad_gateway_problem(issuer: tuple[str, Path, list[str]], tmp_path: Path) -> None:
+    url, _token, _seen = issuer
+    refused = tmp_path / "refused"
+    refused.write_text("a token the issuer does not admit\n")
+    settings = IssuerMirrorSettings(issuer=url, public_url="http://rask-issuer-mirror:8080", token_file=str(refused))
+
+    with TestClient(create_app(settings)) as verifier:
+        answer = verifier.get("/.well-known/openid-configuration")
+
+    assert (answer.status_code, answer.headers["content-type"]) == (502, "application/problem+json")
+    assert answer.json()["detail"] == f"the issuer answered 401 to {url}/.well-known/openid-configuration"

@@ -21,13 +21,8 @@ this and only the instrumented ones pay anything.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 from opentelemetry import metrics as _otel_metrics
-
-
-if TYPE_CHECKING:  # pragma: no cover — typing only
-    from opentelemetry.sdk.metrics import MeterProvider
 
 
 class DropReason(StrEnum):
@@ -44,16 +39,6 @@ _METRIC_DESCRIPTION = "Lineage events this process authored and then threw away,
 
 _meter = _otel_metrics.get_meter("lance.lineage")
 _dropped = _meter.create_counter(_METRIC_NAME, unit="{event}", description=_METRIC_DESCRIPTION)
-
-
-def bind_meter_provider(provider: MeterProvider | None) -> None:
-    """Rebind this module's instrument to ``provider`` — for tests, which need an in-memory reader.
-
-    ``None`` restores the module-level proxy meter, so a test cannot leak its provider into the next.
-    """
-    global _meter, _dropped
-    _meter = provider.get_meter("lance.lineage") if provider is not None else _otel_metrics.get_meter("lance.lineage")
-    _dropped = _meter.create_counter(_METRIC_NAME, unit="{event}", description=_METRIC_DESCRIPTION)
 
 
 def record_drop(reason: DropReason, state: str) -> None:

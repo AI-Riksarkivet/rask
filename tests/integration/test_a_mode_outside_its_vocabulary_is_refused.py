@@ -35,10 +35,10 @@ import pyarrow.ipc as ipc
 import pytest
 from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, InvalidInputError, connect
 
-from catalog.services import table_claims
 from catalog.services.dataplane import create_table, insert_into_table
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
+from tests.door_tables import door_table
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -199,7 +199,7 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
     ns = connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(ns, StorageOptions(), ["db", "t"], _id_table(), root=str(tmp_path / "data"), mode="create", registry=None)
-    table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
+    table = door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
     if branch is not None:
         table.open(StorageOptions()).create_branch(branch, None)
 

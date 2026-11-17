@@ -19,11 +19,12 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, connect
 
-from catalog.services import dataplane, table_claims
+from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
 from lakehouse import base_registry
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
+from tests.door_tables import door_table
 
 
 lance = pytest.importorskip("lance")
@@ -50,7 +51,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
         holder="$".join(TABLE_ID),
     )
     dataplane.update_schema_metadata(
-        table_claims.door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True),
+        door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True),
         StorageOptions(),
         {INTERNAL: "r-123"},
         transaction_properties=STAMP,
@@ -61,7 +62,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
 @pytest.fixture
 def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     """The table as a door acts on it, resolved on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
+    return door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
 
 def test_the_write_answers_the_map_without_the_internal_key(table: DoorTable) -> None:

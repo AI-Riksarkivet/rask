@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from catalog.core.config import get_settings
-from catalog.services import warehouses
+from tests import seeding
 
 
 def test_the_census_counts_each_objects_grants_and_leaves_out_the_deployments_own(governed_catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
@@ -48,7 +48,7 @@ def test_the_tenancy_rebuild_writes_the_edge_a_warehouses_record_names_and_none_
     catalog = governed_catalog
     settings = get_settings()
     catalog.store.write((catalog.person("mx"), "reconciler", settings.fga_root_object))
-    warehouses.put_warehouse(
+    seeding.put_warehouse(
         settings.registry_root,
         settings.storage_options(),
         {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "2026-11-08T00:00:00Z"},

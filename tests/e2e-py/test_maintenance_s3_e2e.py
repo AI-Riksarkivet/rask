@@ -68,13 +68,13 @@ from throwaway_rustfs import ThrowawayStore
 from catalog.services.warehouses import ensure_catalog_row
 from lakehouse import location_claims
 from lakehouse.base_refs import normalise
-from lakehouse.maintenance_due import read_due
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import s3_filesystem
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans
 from maintenance.services.orphans import OrphanFile
 from maintenance.services.table_pass import PassOutcome, TableTask, run_table_pass
+from tests import seeding
 
 
 pytestmark = [pytest.mark.e2e, pytest.mark.rustfs_provisioning]
@@ -292,7 +292,7 @@ def test_a_pass_lists_the_compaction_it_does_not_run_on_object_storage(estate: E
     seconds ago is ever eligible for reclamation. Its fragments are unchanged: maintenance rewrites nothing.
     """
     (plain,) = passed[estate.plain_uri].results
-    record = read_due(settings.resolved_control_root, settings.storage_options(), estate.uuids[estate.plain_uri])
+    record = seeding.read_due(settings.resolved_control_root, settings.storage_options(), estate.uuids[estate.plain_uri])
     assert (plain.error, plain.due) == (None, "due"), f"three appends should have been listed for compaction, got {plain.model_dump()}"
     assert record is not None and record.compaction is not None and record.compaction.fragments == 3, record
     assert len(lance.dataset(estate.plain_uri, storage_options=settings.storage_options().in_clear()).get_fragments()) == 3, "the pass rewrote the table"

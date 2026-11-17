@@ -19,10 +19,11 @@ from fastapi.testclient import TestClient
 
 from catalog.api.dependencies import get_control_emitter, get_namespace
 from catalog.core.config import Settings, get_settings
-from catalog.services import object_uuids, projects, table_claims, warehouses
+from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 from tests.integration.openfga_grants import Grants, act_as
 
 
@@ -63,8 +64,8 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
     client.app.state.oidc = MagicMock()
     store = Grants()
     client.app.state.fga = store
-    projects.put_project(root, StorageOptions(), {"id": PROJECT, "created_at": "t"})
-    warehouses.put_warehouse(
+    seeding.put_project(root, StorageOptions(), {"id": PROJECT, "created_at": "t"})
+    seeding.put_warehouse(
         root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
     )
     warehouses.ensure_catalog_row(client.app.dependency_overrides[get_namespace](), WAREHOUSE)

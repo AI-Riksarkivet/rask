@@ -38,10 +38,10 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest, Regist
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from lakehouse import location_claims, maintenance_policies
+from lakehouse import location_claims
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lineage_events import DatasetUuids, dataset_uuids
-from lakehouse.maintenance_due import DueRecord, read_due, write_due
+from lakehouse.maintenance_due import DueRecord, write_due
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
 from lakehouse.supervision import Supervisor
@@ -49,6 +49,7 @@ from maintenance.core.config import get_settings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.table_pass import TableTask, run_table_pass
 from maintenance.services.tasks import run_task
+from tests import seeding
 from tests.bus_double import BusDouble, session_holding
 
 
@@ -108,8 +109,8 @@ def estate(moto_url: str) -> Iterator[StorageOptions]:
     namespace.register_table(RegisterTableRequest(id=[WAREHOUSE, "db", "b"], location=BRANCHED_UUID))
     location_claims.take(claims, BRANCHED, f"{WAREHOUSE}$db$b", [WAREHOUSE, "db", "b"], is_gone=lambda _claim: False, uuid=BRANCHED_UUID)
     policy = {"kind": "table", "id": TABLE, "uuid": LOCATION, "compact_enabled": True, "retain_versions": 2, "target_rows_per_fragment": 1000}
-    maintenance_policies.put_policy(ROOT, options, policy)
-    maintenance_policies.put_policy(ROOT, options, {"kind": "project", "id": "acme", "buckets": [BUCKET], "retain_versions": 1})
+    seeding.put_policy(ROOT, options, policy)
+    seeding.put_policy(ROOT, options, {"kind": "project", "id": "acme", "buckets": [BUCKET], "retain_versions": 1})
     yield options
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET):
@@ -213,7 +214,7 @@ def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and
     assert (after.version, [fragment.fragment_id for fragment in after.get_fragments()]) == (before.version, fragments), "the pass rewrote the table"
     assert [version["version"] for version in after.versions()] == [before.version - 1, before.version]
     assert asked == [TABLE], f"the vend door was asked about {asked}"
-    record = read_due(ROOT, estate, LOCATION)
+    record = seeding.read_due(ROOT, estate, LOCATION)
     assert record is not None, f"no due record for {TABLE}"
     assert (record.table, record.uuid, record.location, record.version, record.policy) == (TABLE, LOCATION, URI, before.version, TABLE)
     assert record.compaction is not None and record.compaction.model_dump() == {
@@ -260,4 +261,4 @@ def test_a_table_its_claim_no_longer_names_gets_no_pass_and_its_due_record_goes(
 
     outcome = run_table_pass(TableTask(uuid=DROPPED_UUID, location=f"{ROOT}/{DROPPED_UUID}"), get_settings())
 
-    assert (outcome.ended, outcome.next_due, read_due(ROOT, estate, DROPPED_UUID)) == ("gone", None, None)
+    assert (outcome.ended, outcome.next_due, seeding.read_due(ROOT, estate, DROPPED_UUID)) == ("gone", None, None)

@@ -56,6 +56,11 @@ _VISIBLE = ("lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog"
 _TABLES = (*_VISIBLE, "lance_catalog$acme-silver$hidden", "lance_catalog$globex-silver$orders")
 
 
+async def _bounds(store: ProvenanceStore) -> tuple[int, int] | None:
+    """The oldest and the newest seq the feed holds now, read through the window a page is read through."""
+    return await (await store.window()).bounds()
+
+
 def _rows(start: int, stop: int) -> bytes:
     table = pa.table({"id": pa.array(range(start, stop), pa.int64())})
     sink = pa.BufferOutputStream()
@@ -341,7 +346,7 @@ def test_every_cursor_pages_the_rows_a_pruned_feed_with_holes_holds(tmp_path: Pa
 
         answered = {
             "newest": page(),
-            "bounds": asyncio.run(store.feed_bounds()),
+            "bounds": asyncio.run(_bounds(store)),
             "since": {cursor: page(since=cursor) for cursor in range(seqs[-1] + 2)},
             "after": {cursor: page(after=cursor) for cursor in range(1, seqs[-1] + 3)},
         }

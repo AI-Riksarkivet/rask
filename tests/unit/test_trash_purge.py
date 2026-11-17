@@ -55,6 +55,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod
 from maintenance.services import trash_release
 from maintenance.services.reconcile import CATEGORIES, CategoryUnavailable, IncompleteScan, ReconcileReport
+from tests import seeding
 from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
 
@@ -429,13 +430,12 @@ def test_a_deactivated_warehouses_bucket_is_outside_the_maintained_estate(tmp_pa
     nobody may touch — and unlike the orphan REPORT (which deliberately still scans a quarantined
     warehouse, because naming findings changes nothing on disk), this one deletes.
     """
-    from catalog.services import warehouses as wh_svc
 
     control_root = f"file://{tmp_path / 'control'}"
-    wh_svc.put_warehouse(
+    seeding.put_warehouse(
         control_root, StorageOptions(), {"id": "wh-live", "bucket": "bkt-live", "root_uri": "s3://bkt-live", "project": "acme", "created_at": "t"}
     )
-    wh_svc.put_warehouse(
+    seeding.put_warehouse(
         control_root,
         StorageOptions(),
         {"id": "wh-gone", "bucket": "bkt-quarantined", "root_uri": "s3://bkt-quarantined", "project": "acme", "created_at": "t", "status": "deactivated"},
@@ -504,10 +504,9 @@ def test_a_reclaimer_whose_warehouse_registry_holds_an_unreadable_record_does_no
     cannot read may name the bucket a live table's location is under: a root left out reads every live table under it
     as gone. So one unreadable record stops the step with its reason, before a record is judged, rather than leaving
     that warehouse out of the map."""
-    from catalog.services import warehouses as wh_svc
 
     estate = _Estate(tmp_path)
-    wh_svc.put_warehouse(
+    seeding.put_warehouse(
         estate.control_root, StorageOptions(), {"id": "wh-live", "bucket": "bkt-live", "root_uri": "s3://bkt-live", "project": "acme", "created_at": "t"}
     )
     (tmp_path / "control" / "_warehouses" / "wh-torn.json").write_text('{"id": "wh-torn", "bucket": "bkt-')

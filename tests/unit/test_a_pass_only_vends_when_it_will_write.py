@@ -3,7 +3,7 @@
 MEASURED, which is why this exists: the store accumulates one STS identity record per vend and prunes
 none — 280 per minute on the live estate, and the previous store became unable to restart at 107,485
 of them (its IAM bootstrap walks the whole prefix inside a 5-second disk timeout and then gives up
-permanently). The sweep vended `tier=write` for every PLANNED dataset, before anything had decided the
+permanently). Maintenance vended `tier=write` for every PLANNED dataset, before anything had decided the
 dataset needed rewriting, against an estate whose own history is that almost nothing is ever rewritten
 (`fragments_removed_total=0` across 785 ticks).
 
@@ -16,7 +16,7 @@ far worse than a wasted credential. So every uncertain answer, including an unre
 say "may write".
 
 The probe carries a second answer now — the dataset's declared id, read off the same open ([[LH-141]]).
-That half is asserted in `test_the_sweep_vends_for_the_dataset_it_is_holding`; this module stays about
+That half is asserted where the vend's own tests are (`services/maintenance/tests`); this module stays about
 the saving, so a change to either question fails the file that argues for it.
 
 A file no version references in the table's own data directory is a write too ([[LH-286]]): Lance's cleanup leaves

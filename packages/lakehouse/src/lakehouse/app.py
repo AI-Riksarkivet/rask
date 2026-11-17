@@ -16,7 +16,7 @@ def setup_logging() -> None:
 
     This used to attach the handler to two logger names, ``core`` and ``backends``, and its docstring
     said why: it "mirrors core.main". That monolith is gone. Every module in every service now uses
-    ``logging.getLogger(__name__)`` — ``lineage.services.consumer``, ``maintenance.services.sweep``,
+    ``logging.getLogger(__name__)`` — ``lineage.services.consumer``, ``maintenance.services.table_pass``,
     ``catalog.api.v1.endpoints.tables`` — and NONE of those names sit under ``core.*`` or
     ``backends.*``. So the handler decorated two trees nobody logs to, every record propagated to a
     root logger with no handlers, and was discarded. Only uvicorn's own logs (which carry their own

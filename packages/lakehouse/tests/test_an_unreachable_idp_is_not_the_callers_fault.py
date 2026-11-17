@@ -11,7 +11,7 @@ fetches) BEFORE the try block. So an unreachable issuer (`httpx.ConnectError`), 
 answers non-2xx (`raise_for_status`) and a discovery document whose `issuer` disagrees with the
 configured one all escape as something the door never classified.
 
-WHAT THAT PRODUCED, on both doors (`authenticate` and `optional_subject`), whose handler is
+WHAT THAT PRODUCED at the door (`door_caller.caller_of`), whose handler is
 ``except Exception: audit("authn", FAILURE, reason="invalid_token"); raise``:
 
   * the AUDIT TRAIL records `invalid_token` against a real subject — the estate's evidence of who was
@@ -22,7 +22,7 @@ Both are wrong in the same direction: an outage in the estate's own configuratio
 user's mistake, which hides the outage and slanders the user. N failed requests during an IdP blip
 write N false `invalid_token` records.
 
-THE VOCABULARY ALREADY EXISTED ONE BRANCH ABOVE. `deps.py` audits a MISSING verifier as
+THE VOCABULARY ALREADY EXISTED ONE BRANCH ABOVE. `door_caller.py` audits a MISSING verifier as
 `verifier_unavailable` and answers `ServiceUnavailableError` (503). A verifier that exists but cannot
 reach its issuer is the same fact arriving later, so it gets the same reason and the same status —
 this adds no vocabulary, it stops one path from bypassing it.

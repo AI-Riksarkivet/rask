@@ -2,7 +2,7 @@
 
 WHY THIS EXISTS. `seed_warehouse` writes the project edge and the maintainer tuples exactly once, when a
 warehouse is created, from `LANCE_FGA_MAINTAINERS` — a value that CHANGES — so every warehouse created
-before a change is missing the new subject, and the sweep cannot maintain it; and one of the release's own accounts the
+before a change is missing the new subject, and maintenance cannot maintain it; and one of the release's own accounts the
 change dropped keeps its rung until the backfill takes it back ([[XC-164]]).
 
 WHY AT BOOT, IN THE BACKGROUND. The catalog runs it beside its lifespan (`main.py::_backfill_warehouse_grants`), not
@@ -25,11 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 from typing import TYPE_CHECKING
 
 from catalog.api import fga_deps
-from catalog.core.config import get_settings
 from catalog.services import warehouses
 from lakehouse.governed.auth_lifespan import build_fga_client
 
@@ -104,17 +102,3 @@ async def _reconcile(client: OpenFgaClient, settings: Settings) -> tuple[int, in
             failures.append(f"{warehouse_id}: {exc}")
             log.warning("warehouse_grant_backfill_failed", extra={"warehouse": warehouse_id, "error": str(exc)})
     return (seen, written, failures)
-
-
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    seen, written, failures = asyncio.run(backfill(get_settings()))
-    log.info("warehouse_grant_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
-    print(f"warehouse-grant-backfill: {seen} warehouses, {written} tuples written or revoked, {len(failures)} failed")
-    for line in failures:
-        print(f"  FAILED {line}", file=sys.stderr)
-    return 1 if failures else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

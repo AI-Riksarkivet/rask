@@ -172,7 +172,7 @@ def test_set_warehouse_status_flips_and_preserves_other_fields(tmp_path: Path) -
     assert out is not None
     assert out["status"] == "deactivated"
     assert out["bucket"] == "b-acme"
-    assert warehouses.warehouse_status(_root(tmp_path), StorageOptions(), "acme-wh") == "deactivated"
+    assert (warehouses.get_warehouse(_root(tmp_path), StorageOptions(), "acme-wh") or {})["status"] == "deactivated"
 
 
 def test_set_warehouse_status_returns_none_for_an_unknown_warehouse(tmp_path: Path) -> None:

@@ -28,6 +28,7 @@ from catalog.schemas import RoleRecord
 from catalog.services import roles, warehouses
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`lance_docs/ns_catalog/spec.yaml`).
@@ -48,7 +49,7 @@ def test_a_project_admin_manages_a_role_and_its_grant_reaches_its_assignees(gove
     catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")), 200)
     _status(catalog.client.put("/management/v1/projects/acme/members", json={"user": "dex~alice", "relation": "admin"}, headers=catalog.bearer("root")), 200)
-    warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "acme-wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path)})
+    seeding.put_warehouse(str(tmp_path), StorageOptions(), {"id": "acme-wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path)})
     warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": str(tmp_path)}), "acme-wh")
     catalog.store.write(("project:acme", "project", "warehouse:acme-wh"))
     _status(catalog.client.post("/v1/namespace/acme-wh$lake/create", json={}, headers=alice), 200)

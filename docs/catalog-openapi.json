@@ -14668,7 +14668,7 @@
     },
     "/management/v1/maintenance/due": {
       "get": {
-        "description": "The tables a compaction or an index optimize is due on, listed to a caller holding ``can_maintain`` on each: what\nmade each due, the policy record that governed it, and how many datasets resolve their files through it. A record\nnames its table as the table is named now, which a rename since the sweep changed; one whose table is gone is listed\nto nobody, and the next sweep clears it.\n\nPaged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and\njudges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads\neach record a few times at most, where reading every record for every page grew with the square of the list.",
+        "description": "The tables a compaction or an index optimize is due on, listed to a caller holding ``can_maintain`` on each: what\nmade each due and the policy record that governed it. A record names its table as the table is named now, which a\nrename since its pass changed; one whose table is gone is listed to nobody, and its next pass clears it.\n\nPaged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and\njudges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads\neach record a few times at most, where reading every record for every page grew with the square of the list.",
         "operationId": "list_due_maintenance_management_v1_maintenance_due_get",
         "parameters": [
           {
@@ -19684,7 +19684,7 @@
     },
     "/management/v1/table/{id}/maintenance/preview": {
       "post": {
-        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that\nneeds no containment argument: it calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with\nwhat ``/run`` deletes on that ref rather than asserting which ref the door opened.",
+        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that\nneeds no containment argument: it mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with\nwhat ``/run`` deletes on that ref rather than asserting which ref the door opened.",
         "operationId": "preview_maintenance_management_v1_table__id__maintenance_preview_post",
         "parameters": [
           {
@@ -19778,7 +19778,7 @@
     },
     "/management/v1/table/{id}/maintenance/run": {
       "post": {
-        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.",
+        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.",
         "operationId": "run_maintenance_management_v1_table__id__maintenance_run_post",
         "parameters": [
           {

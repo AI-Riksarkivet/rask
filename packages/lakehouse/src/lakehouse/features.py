@@ -353,30 +353,6 @@ def manifest_base_path_refs(ds: ManifestCarrier) -> list[BasePathRef]:
     ]
 
 
-def manifest_base_paths(ds: ManifestCarrier) -> list[str]:
-    """Every ``BasePath.path`` this dataset's manifest declares — the roots its files may live under.
-
-    WHY THIS IS NEEDED AT ALL, and why the feature flag is not enough. Flag 16 tells you that THIS
-    dataset spans bases, and that is what stops a scan subtracting a prefix listing from a clone. It
-    says nothing about the opposite direction, which is the destructive one: the SOURCE of a shallow
-    clone carries NO flag and looks completely ordinary, while its data files are the only copy the
-    clone's manifest resolves through. Delete or compact the source and the clone breaks — a defect
-    reproduced as 8 data files becoming 1, after which the clone fails to open in a fresh process.
-
-    So the paths have to be read from the referring side and collected across the estate, which is
-    what `lakehouse.base_refs` does with this. A per-dataset check cannot see it, because
-    the endangered dataset is not the one carrying the evidence.
-
-    Returns absolute paths as the manifest states them (the format calls them "interpretable by the
-    object store"). An empty list is the overwhelmingly common case and means exactly what it says:
-    this dataset resolves everything under its own root.
-
-    The PATHS view of :func:`manifest_base_path_refs`, and derived from it rather than read a second
-    time — one source, so a pylance change cannot fix one reader and leave the other misreading.
-    """
-    return [ref.path for ref in manifest_base_path_refs(ds)]
-
-
 def unsupported_features(ds: ManifestCarrier) -> str | None:
     """Why this dataset must be REFUSED, or ``None`` when every flag it sets is understood.
 
@@ -584,15 +560,6 @@ class CompactionBases(BaseModel):
 #: Bases already reported as permission-denied, so the same permanent refusal is announced once rather
 #: than once per dataset that declares it. Process-scoped deliberately — see the branch that fills it.
 _REPORTED_BASE_DENIALS: set[str] = set()
-
-
-def forget_reported_base_denials() -> None:
-    """Drop the record of which denials have been announced — for tests, which need a cold process.
-
-    Exported rather than reached into, because a test poking a module-level set is a test that breaks
-    when the de-duplication changes shape, and this one is meant to survive that.
-    """
-    _REPORTED_BASE_DENIALS.clear()
 
 
 def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> CompactionBases:

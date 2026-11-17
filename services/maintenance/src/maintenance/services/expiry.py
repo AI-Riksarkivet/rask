@@ -132,7 +132,7 @@ class ExpiryPolicy(BaseModel):
 
 
 class ExpiryTarget(BaseModel):
-    """The dataset an expiry pass runs on, and what the sweep already knows about it."""
+    """The dataset an expiry pass runs on, and what maintenance already knows about it."""
 
     uri: str
     #: What the pass reads with: maintenance's own session, which reads every table's history, none of its data, and
@@ -517,7 +517,7 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: Datas
         result.skipped = HISTORY_FENCED
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
         # A pyo3 panic derives from BaseException; measured on the live estate 2026-08-16, one escaping panic answered
-        # the entire sweep HTTP 500 and every other dataset lost its reclamation.
+        # the entire pass HTTP 500 and every other dataset lost its reclamation.
         if isinstance(exc, KeyboardInterrupt | SystemExit):
             raise
         _record_failure(result, exc)

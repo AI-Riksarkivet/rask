@@ -302,7 +302,10 @@ expiry the platform owns and sets past the time it takes to answer a page, becau
 committed file and the noncurrent version is what restores it ([[LH-419]]: maintenance's pass of the table names such a file, reading every file
 the table's commits recorded against one listing of its root, and `CommittedFileOverwritten` pages); no Object Lock default retention, no expiration lifecycle on rask prefixes beyond
 AbortIncompleteMultipartUpload and that noncurrent-version expiry; one writable site per table (async replication cannot
-arbitrate a Lance commit); conditional writes proven exclusive across nodes. Nothing in rask checks that a store keeps
+arbitrate a Lance commit); conditional writes proven exclusive across nodes; with `objectStore.events` on, every
+governed bucket sending its `s3:ObjectCreated:*` events to the bus subject `store.events`, which is what holds a
+table's pass off while a write's files are still arriving (the hourly audit reads each bucket's event configuration
+back and `MaintenanceBucketWithoutStoreEvents` pages on one that sends none). Nothing in rask checks that a store keeps
 versions: the dev fixture's buckets are unversioned, so a tampered file there is found and not restorable.
 
 ## Routing

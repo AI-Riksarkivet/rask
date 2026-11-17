@@ -7,7 +7,7 @@ credential of its own: a key pair is passed per client or comes from the standar
 
 from typing import Any, Final
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,17 +29,15 @@ _TRUE_FLAGS = ("1", "true", "yes")
 class S3EnvSettings(BaseSettings):
     """The deployment's own S3 endpoint and TLS posture, as the environment states them.
 
-    Each family is read canonical-first (`RASK_S3_*`, then `S3_*`, then the `HCP_*` names `.env.example` and
-    `scripts/smoke_s3.py` use). With `env_ignore_empty`, a name set to the empty string counts as unset and
-    `AliasChoices` goes on to the next name. Built per client, so a client reads the environment as it is when the
-    client is made.
+    With `env_ignore_empty`, a name set to the empty string counts as unset. Built per client, so a client reads the
+    environment as it is when the client is made.
     """
 
     model_config = SettingsConfigDict(case_sensitive=True, extra="ignore", env_ignore_empty=True)
 
-    endpoint: str | None = Field(default=None, validation_alias=AliasChoices("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT"))
-    insecure: bool = Field(default=False, validation_alias=AliasChoices("RASK_S3_INSECURE", "S3_INSECURE", "HCP_INSECURE"))
-    ca_bundle: str | None = Field(default=None, validation_alias=AliasChoices("RASK_S3_CA_BUNDLE", "S3_CA_BUNDLE"))
+    endpoint: str | None = Field(default=None, validation_alias="RASK_S3_ENDPOINT_URL")
+    insecure: bool = Field(default=False, validation_alias="RASK_S3_INSECURE")
+    ca_bundle: str | None = Field(default=None, validation_alias="RASK_S3_CA_BUNDLE")
 
     @field_validator("insecure", mode="before")
     @classmethod
@@ -81,7 +79,7 @@ def s3_client(
 ) -> Any:  # noqa: ANN401 — boto3 client has no public stub
     """Build a boto3 S3 client for any S3-compatible backend (RustFS / AWS / any S3).
 
-    Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, then the HCP_* aliases). Path-style + s3v4 are the RustFS-safe, AWS-accepted defaults.
+    Endpoint/CA/insecure flags resolve from env (`RASK_S3_*`). Path-style + s3v4 are the RustFS-safe, AWS-accepted defaults.
 
     ``access_key``/``secret_key``/``session_token``/``region``/``insecure`` override the env for THIS
     client only. Env-only credentials are a single global pair, so one process could address exactly

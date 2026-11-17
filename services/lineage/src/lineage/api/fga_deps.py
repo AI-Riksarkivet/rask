@@ -187,8 +187,7 @@ async def _none_are_governed(decider: AccessDecider, *, objects: list[str]) -> b
 
     Decides which verdict a refusal earns ([[LH-166]]): a grant needs an object, so a denial naming only
     objects FGA has no record of can never be repaired, and parking it would keep a copy nothing can
-    repair. One targeted read per denied object, on the refusal path only — `governed_objects`
-    pages the whole store and is a per-SWEEP cost, not a per-event one.
+    repair. One targeted read per denied object, on the refusal path only.
 
     FAIL-CLOSED TO THE REPAIRABLE ARM. An unreadable store answers False, so the caller parks: parking
     a repairable event costs a kept copy, taking an unreadable one deletes provenance, and only the

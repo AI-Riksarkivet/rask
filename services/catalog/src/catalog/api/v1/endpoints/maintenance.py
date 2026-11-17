@@ -2,13 +2,13 @@
 
 ``maintenance/preview`` and ``maintenance/run`` are owner-gated by the router (``can_drop`` in ``fga_deps``: reclaiming
 version history is the drop rung, like the retention policy that schedules it). The preview never mutates; the run
-reclaims old versions with the sweep's tag exemption. Both honour ``branch``: a branch keeps its own ``_versions``,
+reclaims old versions with maintenance's tag exemption. Both honour ``branch``: a branch keeps its own ``_versions``,
 ``_transactions`` and ``data`` under ``tree/{branch}/`` (``lance_docs/lance/format/table/branch_tag.md``), so a reclaim through a branch
 handle deletes only the branch's own files (measured on pylance 11.0.0: the parent's ``data/`` stayed byte-identical
 and still time-travelled), and an answer about one ref is never reported as another's.
 
 ``GET /management/v1/maintenance/due`` lists the tables a compaction or an index optimize is due on, as the
-maintenance sweep wrote them (ADR 0162), to the callers that may maintain each. A bring-your-own job pulls it,
+maintenance's passes wrote them (ADR 0162), to the callers that may maintain each. A bring-your-own job pulls it,
 rewrites on its own compute, and commits through ``version/create``, which judges the result.
 
 ``maintenance/disarm`` and ``maintenance/floor`` make the two commits maintenance's passes need, under the catalog's own
@@ -57,7 +57,7 @@ async def preview_maintenance(
     gated (``can_drop``); never mutates.
 
     ``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that
-    needs no containment argument: it calls ``_base_refs`` zero times and mutates nothing —
+    needs no containment argument: it mutates nothing —
     ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.
 
     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
@@ -80,10 +80,7 @@ async def run_maintenance(
     id: str,
     body: GcRequest,
     table: DoorTableDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
     branch: Annotated[
         str | None, Query(description="The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files.")
     ] = None,
@@ -92,8 +89,7 @@ async def run_maintenance(
     (``can_drop``) — the same bar as scheduling it via the retention policy.
 
     ``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's — see the
-    module header for the measurement. The pre-pass below runs on both paths and is the same listing
-    either way, because a branch handle's ``uri`` is the dataset root.
+    module header for the measurement.
 
     Reclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is
     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
@@ -150,9 +146,8 @@ async def list_due_maintenance(
     page_token: Annotated[str | None, Query(description="Continue after this record (the previous page's `page_token`).")] = None,
 ) -> MaintenanceDueResponse:
     """The tables a compaction or an index optimize is due on, listed to a caller holding ``can_maintain`` on each: what
-    made each due, the policy record that governed it, and how many datasets resolve their files through it. A record
-    names its table as the table is named now, which a rename since the sweep changed; one whose table is gone is listed
-    to nobody, and the next sweep clears it.
+    made each due and the policy record that governed it. A record names its table as the table is named now, which a
+    rename since its pass changed; one whose table is gone is listed to nobody, and its next pass clears it.
 
     Paged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and
     judges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads

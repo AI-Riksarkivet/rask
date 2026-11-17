@@ -52,7 +52,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: IT DID NOT EXIST UNTIL 2026-09-09, and the sweep is where that cost most: this is the component
     #: that REWRITES BYTES, and with no field there was nothing for `build_lance_service_app` to arm,
     #: so the `lance.audit` logger sat at NOTSET and followed `RASK_LOG_LEVEL` (§ Q17-27). Arming it is
-    #: the precondition for § Q17-36 — the sweep's per-object outcome becoming a governed record rather
+    #: the precondition for § Q17-36 — maintenance's per-object outcome becoming a governed record rather
     #: than telemetry on a 14-day trace TTL.
     audit_enabled: bool = Field(default=True, alias="MAINTENANCE_AUDIT_ENABLED")
     # Datasets whose newest version is older than this are eligible for version GC (keep recent history).
@@ -127,9 +127,9 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
     # were reclaimed, on the bus, over this process's own connection (`lakehouse.bus`). Publishes on the SAME topic
     # the catalog publishes to and the lineage service subscribes to, so an expiry run shows up in producers()
-    # next to the writes. Off by default; a publish the bus did not take stays staged and never fails a sweep.
+    # next to the writes. Off by default; a publish the bus did not take stays staged and never fails a pass.
     lineage_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_LINEAGE_EMIT_ENABLED")
-    # Bound each publish so a bus that does not answer can't stall a sweep (best-effort → the outage is swallowed).
+    # Bound each publish so a bus that does not answer can't stall a pass (best-effort → the outage is swallowed).
     publish_timeout_seconds: float = Field(default=5.0, gt=0, alias="MAINTENANCE_PUBLISH_TIMEOUT_SECONDS")
     lineage_topic: str = Field(default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC")
     # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
@@ -184,7 +184,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
 
     @property
     def sweep_buckets(self) -> list[str]:
-        """Every bucket the sweep must cover: the primary lakehouse bucket + the extras. De-duplicated and
+        """Every bucket maintenance must cover: the primary lakehouse bucket + the extras. De-duplicated and
         order-stable so a bucket listed twice is swept once (and the report stays deterministic)."""
         extras = [b.strip().removeprefix("s3://").strip("/") for b in self.s3_extra_buckets.split(",")]
         return list(dict.fromkeys([self.s3_bucket, *[b for b in extras if b]]))
@@ -429,7 +429,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
         return self
 
     def s3_key_pair(self) -> S3KeyPair:
-        """What the sweep's own reads and records sign with: the session its token was exchanged for, or the environment's pair.
+        """What maintenance's own reads and records sign with: the session its token was exchanged for, or the environment's pair.
 
         Raises:
             StoreCredentialUnavailableError: The service projects a token and holds no unexpired session (503).

@@ -6,9 +6,7 @@ one switch, and the copies drift: measured before 2026-08-30, one copy declared 
 where the rest declared `str | None`, dropped the `ge=0.1` floor on `fga_timeout_seconds`, and never grew
 the HTTPS-issuer validator, so an `http://` issuer booted there and answered 401 on every VALID bearer.
 
-One declaration, one `RASK_*` name each. The old prefixed names are DELETED, with no alias list and no
-precedence chain: `_refuse_retired_names` turns a deployment that still sets one into a startup error,
-because the failure it replaces — half an estate authenticating and half not — is silent.
+One declaration, one `RASK_*` name each, with no alias and no precedence chain.
 
 THREE CLASSES, because the estate really does have three postures:
 
@@ -26,40 +24,11 @@ Mix into a `pydantic-settings` `BaseSettings` subclass. Deliberately plain mixin
 
 from __future__ import annotations
 
-import os
-from contextlib import suppress
-from pathlib import Path
 from typing import Self
 
-from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, is_machine_idp, require_idp_id
-
-
-#: The names the 2026-08-30 hard rename deleted. Kept as a REFUSAL list, never as an alias list: an
-#: operator who upgrades without re-templating must be stopped at boot, not silently unauthenticated.
-#: Service-specific FGA knobs (`LINEAGE_FGA_OBJECT_TYPE`) are
-#: absent on purpose — each is declared once already and keeps its owning service's namespace.
-RETIRED_AUTH_ENV_NAMES: tuple[str, ...] = tuple(
-    f"{prefix}_{suffix}"
-    for prefix in ("LANCE", "LINEAGE", "MAINTENANCE")
-    for suffix in (
-        "OIDC_ENABLED",
-        "OIDC_ISSUER",
-        "OIDC_AUDIENCE",
-        "OIDC_DISCOVERY_URL",
-        "OIDC_CACHE_TTL",
-        "OIDC_LEEWAY",
-        "OIDC_ALLOW_INSECURE",
-        "FGA_ENABLED",
-        "FGA_API_URL",
-        "FGA_STORE_ID",
-        "FGA_MODEL_ID",
-        "FGA_TIMEOUT_SECONDS",
-        "FGA_ROOT_OBJECT",
-    )
-)
 
 
 class FgaSettings:
@@ -111,66 +80,6 @@ class FgaSettings:
     def estate_warehouse(self) -> str:
         """The id of the estate's own warehouse: the first segment of every name served from the estate's own root."""
         return self.fga_default_warehouse_object.partition(":")[2]
-
-    @model_validator(mode="before")
-    @classmethod
-    def _refuse_retired_names(cls, data: object) -> object:
-        """A retired variable is an ERROR, not a no-op.
-
-        Every one of these classes sets `populate_by_name` with a service `env_prefix`, which teaches
-        pydantic-settings the bare FIELD NAME as a second lookup. So a service-prefixed spelling of
-        one of these switches would still BIND on the class carrying that prefix — and bind nothing
-        anywhere else. That is the pre-rename estate wearing new names: one switch set under four
-        spellings, disagreeing pod by pod. Refusing the name outright is the only version of
-        "deleted" that a running deployment can observe.
-
-        (The retired spellings are deliberately not written out here. `RETIRED_AUTH_ENV_NAMES` builds
-        them from prefix-by-suffix precisely so no literal survives in the tree.)
-
-        SCANS BOTH SOURCES pydantic-settings would read: the process environment AND the configured
-        `env_file`. It checked only `os.environ` at first, justified by "every deployment path in this
-        estate sets real env vars" — but settings classes DO set `env_file=".env"`
-        (the shared `Settings` among them). A retired name in a dotenv therefore bound silently while the guard
-        stayed quiet, which is the one outcome a hard rename exists to prevent. Sources, not
-        assembled values: by the time pydantic-settings hands over a dict, the NAME that supplied a
-        value is gone.
-        """
-        if retired := cls._retired_names_in_scope():
-            raise ValueError(
-                f"{', '.join(retired)} no longer exist — the auth settings were unified onto one "
-                f"RASK_* name each (RASK_OIDC_*, RASK_FGA_*). Re-template the deployment; there is no "
-                f"alias and no fallback, so leaving these set would authenticate some pods and not others."
-            )
-        return data
-
-    @classmethod
-    def _retired_names_in_scope(cls) -> list[str]:
-        """Every retired name set on any source this class would actually read.
-
-        Case-insensitive, because several of these classes set `case_sensitive=False` and a dotenv
-        written in lower case binds exactly the same — a guard that missed it would be precisely as
-        silent as no guard.
-        """
-        retired_by_upper = {name.upper(): name for name in RETIRED_AUTH_ENV_NAMES}
-        found = {retired_by_upper[key.upper()] for key in os.environ if key.upper() in retired_by_upper}
-        for path in _configured_env_files(cls):
-            with suppress(OSError):
-                found |= {retired_by_upper[key.upper()] for key in dotenv_values(path) if key.upper() in retired_by_upper}
-        return sorted(found)
-
-
-def _configured_env_files(cls: type) -> list[Path]:
-    """The dotenv paths a settings class declares, normalised. Empty for a class that declares none.
-
-    `env_file` accepts a str, a Path, or a sequence of either, so all three shapes are handled here
-    rather than at the one call site — the alternative is a guard that works on three of the four
-    classes and reads as if it works on all of them.
-    """
-    declared = getattr(cls, "model_config", {}).get("env_file")
-    if declared is None:
-        return []
-    candidates = [declared] if isinstance(declared, str | Path) else list(declared)
-    return [Path(entry) for entry in candidates if entry]
 
 
 def _require_a_persons_idp_id(setting: str, idp_id: str) -> None:

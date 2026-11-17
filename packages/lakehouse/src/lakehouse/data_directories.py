@@ -5,7 +5,8 @@ A table spreading its fragments over approved data bases keeps them in a directo
 no other table writes or reads there. Those bytes are the table's storage as much as its root is, and once the record
 is forgotten no maintenance pass and no purge finds them again: both read a table's directories off its record. So
 every path that ends a table with its bytes, the catalog's destructive drops and purging cascades and maintenance's
-purge, deletes the table's directories before the record goes (:func:`end_base_record`).
+purge, deletes the table's directories before the record goes (:func:`delete_table_directories`, then
+:func:`lakehouse.base_registry.forget_base_record`).
 
 ONLY A DIRECTORY THE TABLE'S CLAIM NAMES IS DELETED: a ``data`` entry on a plain base whose claim records the table's
 uuid, held or released by it (:func:`last_claimed_by`). A claim recording another table's uuid, or none, as an approved
@@ -22,7 +23,7 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse import location_claims
 from lakehouse.base_refs import key_uri
-from lakehouse.base_registry import BaseRecord, BaseRegistry, BaseRole, RecordedBase, forget_base_record, read_base_record
+from lakehouse.base_registry import BaseRecord, BaseRegistry, BaseRole, RecordedBase, read_base_record
 from lakehouse.storage_options import StorageOptions
 from lakehouse.stored_objects import delete_objects, list_under
 
@@ -119,18 +120,3 @@ def delete_table_directories(registry: BaseRegistry, location: str, *, uuid: str
         botocore.exceptions.ClientError: The store refused a read.
     """
     return delete_directories(directories_to_end(registry, location, uuid=uuid), storage_options)
-
-
-def end_base_record(registry: BaseRegistry, location: str, *, uuid: str, storage_options: StorageOptions) -> Deleted:
-    """Delete the data directories the table ``uuid`` at ``location`` holds, then forget its base record and their claims.
-
-    The record goes last: it is what names the directories, so a failure part-way leaves it for the next attempt.
-
-    Raises:
-        UnreadableBaseRecordError: The record exists and cannot be read.
-        OSError: The store refused a delete; the record stands.
-        botocore.exceptions.ClientError: The store refused a read.
-    """
-    deleted = delete_table_directories(registry, location, uuid=uuid, storage_options=storage_options)
-    forget_base_record(registry, location, uuid=uuid)
-    return deleted

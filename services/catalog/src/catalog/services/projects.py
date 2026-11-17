@@ -29,7 +29,6 @@ from catalog.services.control_records import (
     validated_or_refuse,
     with_manager,
     with_protection,
-    write_json,
 )
 from lakehouse import control_prefixes
 from lakehouse.objectfs import fs_and_base
@@ -49,21 +48,6 @@ DELETING_BY = "deleting_by"
 
 class ProjectBeingDeletedError(Exception):
     """The project's record names a delete that has not finished, so its id is not yet free for another tenant."""
-
-
-def put_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Unconditionally overwrite ``_projects/<id>.json``. **A SEEDING primitive — no production caller.**
-
-    It had two, and both were the diff2 F1(c) defect: an unconditional put of a record assembled from
-    an earlier read silently discards whatever landed in between — on ``protected`` that disarms
-    deletion protection with no `/protection` call and no audit signal. Those paths now go through
-    :func:`upsert_project`, conditional on the record's ETag; the tenant MINT goes through
-    :func:`create_project_record`, conditional on absence (F1).
-
-    What is left is fixture setup, which has no concurrency to lose to. Do not reach for it in service
-    or endpoint code; there is a conditional door for every real mutation.
-    """
-    write_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
 
 
 #: The fields an idempotent re-POST OWNS. Everything else belongs to the record's own lifecycle and

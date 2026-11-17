@@ -8,7 +8,7 @@ last-writer-wins, invisibly). Mirrors that suite's tier-2 shape through the REGI
 barrier-gated threads race ``records.create_json`` on one key; exactly one must win per round.
 
 Run: the e2e-stack lane runs it on every push; elsewhere port-forward the store + set ``LANCE_E2E_S3_*`` (same env
-as its sibling). Writes under ``__cas_stress/`` — the compaction sweep skips ``__`` prefixes, so this never collides
+as its sibling). Writes under ``__cas_stress/`` — maintenance's discovery skips ``__`` prefixes, so this never collides
 with the lakehouse or gets GC'd.
 """
 

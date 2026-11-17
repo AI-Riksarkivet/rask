@@ -21,11 +21,11 @@ import pytest
 from lance_namespace import ConcurrentModificationError, CreateNamespaceRequest, InsertIntoTableRequest, connect
 from tables_by_name import open_by_name
 
-from catalog.services import table_claims
 from catalog.services.dataplane import create_table, insert_into_table
 from lakehouse import base_registry
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
+from tests.door_tables import door_table
 
 
 TABLE_ID = ["wh", "busy"]
@@ -53,7 +53,7 @@ def test_an_append_lance_gives_up_on_is_answered_as_a_conflict_to_retry(tmp_path
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
         holder="$".join(TABLE_ID),
     )
-    table = table_claims.door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
+    table = door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
     def gives_up(*_args: object, **_kwargs: object) -> None:
         raise OSError(_GAVE_UP)

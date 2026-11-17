@@ -49,7 +49,7 @@ groups:
           summary: "Lineage outbox not draining (depth > 0, nothing drained or refused for 15m)"
           description: >-
             Durable lineage events are staged and the relay is moving none of them — neither ingesting nor
-            being refused. Provenance is not reaching the AGE graph and the relay, lineage, or the NATS bus
+            being refused. Provenance is not reaching lineage's feed and the relay, lineage, or the NATS bus
             is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       # VISIBLE WITHOUT PAGING. The estate should know that N events need a human; it should not be woken

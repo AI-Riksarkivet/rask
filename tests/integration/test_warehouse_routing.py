@@ -19,8 +19,8 @@ from lance_namespace import CreateNamespaceRequest, connect
 from moto.server import ThreadedMotoServer
 
 from catalog.core.identifiers import with_minted_uuid
-from catalog.services import warehouses as wh_svc
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 from tests.integration import store_requests
 
 
@@ -73,7 +73,7 @@ def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-
     record goes to ``registry``, or to the control root ``control`` read with ``options``."""
     control = control or f"file://{registry}"
     options = options or StorageOptions()
-    wh_svc.put_warehouse(control, options, {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
+    seeding.put_warehouse(control, options, {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
     wh_ns = connect("dir", {"root": str(warehouse_root)})
     wh_ns.create_namespace(CreateNamespaceRequest(id=[wid], properties=with_minted_uuid(None)))
     wh_ns.create_namespace(CreateNamespaceRequest(id=[wid, "bronze"], properties=with_minted_uuid(None)))

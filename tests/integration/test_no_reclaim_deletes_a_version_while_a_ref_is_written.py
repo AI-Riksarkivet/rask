@@ -42,6 +42,7 @@ from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.naming import claim_store, policy_owners
 from maintenance.services.plan import PlanContext
+from tests import seeding
 from tests.integration.maintenance_vend_doors import CATALOG_URL, described_by, maintain_tier_door
 
 
@@ -199,4 +200,4 @@ def test_a_table_dropped_after_its_pass_read_the_trash_is_not_reclaimed(estate: 
 
     assert (result.trashed, result.error, result.old_versions_removed, estate.versions()) == (estate.table_uuid, None, 0, versions)
     stamped = maintenance_policies.read_state(estate.root, estate.key, policy, table_uuid=estate.table_uuid, uri=estate.location)
-    assert (maintenance_due.read_due(estate.root, estate.key, estate.table_uuid), stamped) == (None, None)
+    assert (seeding.read_due(estate.root, estate.key, estate.table_uuid), stamped) == (None, None)

@@ -3,12 +3,12 @@
 THE PLANT is the confused-deputy write the row closes: with the table's own write credential (here the
 estate key, as a write vend could), ``add_bases`` lands an ``UpdateBases`` commit naming another table's
 root or the bucket root. Measured on pylance 12.0.0 (lh279 m2/m4/p1/p3): the planting table answered a
-query with the victim's rows, ``/commit`` accepted a fragment spliced through the base, and the sweep and
+query with the victim's rows, ``/commit`` accepted a fragment spliced through the base, and maintenance and
 the purge refused the victim as a "shallow-clone source".
 
 ONE ESTATE, ON MOTO: a fresh bucket per test holding the catalog's ``dir`` namespace, its control root
 (the shipped chart roots both at the bucket) and the configured external blob base ``models/``; the
-real catalog app over its HTTP doors; the real sweep and purge pre-pass over the same bucket. Every table below is created through the catalog's create door, so its base record is written by
+real catalog app over its HTTP doors; the real pass and purge pre-pass over the same bucket. Every table below is created through the catalog's create door, so its base record is written by
 the production writer. Each plant is asserted to be in the manifest before anything is judged, because a
 fixture that fails to plant proves nothing.
 
@@ -16,7 +16,7 @@ The clauses (design.md §3), each one test:
 
 (1) ``/commit`` of a fragment spliced through the planted base is refused and the table is unchanged;
 (2) ``/credentials``, ``describe(vend)`` and ``query_table`` refuse the planting table 409;
-(3) the victim is compacted by the sweep and at the catalog's compact door, and deletable by the purge;
+(3) the victim is compacted by maintenance and at the catalog's compact door, and deletable by the purge;
 (4) the maintenance pass names the plant: the tip's base is reported as unrecorded;
 (5) a shallow clone registered through the door keeps the source version it reads by a tag (ADR 0198 §1);
 and, from the row's How, register location-exclusivity.

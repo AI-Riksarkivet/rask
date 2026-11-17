@@ -761,14 +761,6 @@ class ProvenanceStore:
         """Feed rows: newest first, older than ``after``, or oldest first after ``since`` (the follower's read)."""
         return await (await self.window(after=after, since=since, summary=summary)).take(limit)
 
-    async def feed_bounds(self) -> tuple[int, int] | None:
-        """The oldest and the newest seq the feed holds, or ``None`` when it holds nothing.
-
-        ``None`` rather than a floor of ``0`` on an empty feed: zero would read as "everything since the
-        beginning is still here", the opposite of what an empty feed means after retention.
-        """
-        return await (await self.window()).bounds()
-
     async def recorded_event(self, key: str) -> dict[str, Any] | None:
         """The payload the feed holds under the row key ``key`` (:func:`feed_key`); ``None`` when it holds none."""
         rows = await self._run(lambda: self._reader(FEED).to_table(columns=["event"], filter=f"event_key = {sql_literal(key)}"))

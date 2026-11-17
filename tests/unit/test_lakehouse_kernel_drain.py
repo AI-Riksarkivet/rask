@@ -14,8 +14,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lakehouse.maintenance_policies import get_policy, put_policy
+from lakehouse.maintenance_policies import get_policy
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 _TABLE_UUID = "7c0e2f4a-5b1d-4e8f-9a3c-2d6b8e1f0a47"
@@ -29,7 +30,7 @@ _NAMESPACE_UUID = "3f9d1c2e-8a4b-4c6d-b5e7-1a2b3c4d5e6f"
 
 def test_a_malformed_policy_record_is_refused_like_its_two_siblings(tmp_path: Path) -> None:
     """`get_protection` and `trash.get` both return None on a non-dict record. `get_policy` did not."""
-    put_policy(str(tmp_path), StorageOptions(), {"kind": "table", "id": "db$t", "uuid": _TABLE_UUID})
+    seeding.put_policy(str(tmp_path), StorageOptions(), {"kind": "table", "id": "db$t", "uuid": _TABLE_UUID})
     key = next(p for p in (tmp_path / "_policies").iterdir() if p.suffix == ".json")
     key.write_text(json.dumps(["not", "a", "record"]))
 

@@ -342,10 +342,7 @@ async def batch_delete_table_versions(
     id: str,
     body: BatchDeleteTableVersionsRequest,
     table: DoorTableDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
 ) -> BatchDeleteTableVersionsResponse:
     """Delete old versions of this table — never the current one, and never one a tag or a branch pins.
 

@@ -52,6 +52,7 @@ from maintenance.services.orphan_check import OrphanCheckIncompleteError
 from maintenance.services.orphans import OrphanFile
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.tasks import run_task
+from tests import seeding
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 from tests.integration.store_requests import StoreRequest, counted
 
@@ -473,7 +474,7 @@ def test_a_stamped_table_is_raised_again_only_once_its_floor_has_moved(
     The cleaning is the table's own pass, which cleans beneath a standing raise from the first reclaimable version: this
     table has one, far under `MAINTENANCE_MIN_VERSIONS_TO_EXPIRE`, as a table that commits seldom has."""
     task = _table(bucket=bucket, options=store)
-    maintenance_policies.put_policy(f"s3://{bucket}", store, {"kind": "table", "id": TABLE, "uuid": task.uuid, "retain_versions": 1})
+    seeding.put_policy(f"s3://{bucket}", store, {"kind": "table", "id": TABLE, "uuid": task.uuid, "retain_versions": 1})
     lance.dataset(task.location, storage_options=store.in_clear()).update_config({FLOOR_KEY: str(time.time())})
     if cleaned:
         _check(Task(kind="table", uuid=task.uuid, location=task.location), settings())

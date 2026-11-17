@@ -5,7 +5,7 @@ per-service copy of the format would drift).
 Stateless-over-object-store, the same shape as the warehouse registry, written once in
 :mod:`lakehouse.record_store`; this module is the policy vocabulary over it. Each policy is one
 JSON record under ``<control_root>/_policies/``, written by the catalog (owner-gated) and read directly off
-the bucket by the maintenance sweep on every tick (it has no catalog client by design):
+the bucket by maintenance:
 
 * table policy — keyed by the table's ``uuid`` (ADR 0173 §8, [[LH-523]]), so a rename keeps it and a table
   created later under the same name holds none of it;
@@ -16,7 +16,7 @@ the bucket by the maintenance sweep on every tick (it has no catalog client by d
 
 A table or namespace record also keeps the object's name under ``id``, as it was when the policy was set, for
 display. Resolution order (:func:`resolve_policy`): a table policy wins over the nearest namespace policy wins
-over a project policy wins over the sweep's global defaults.
+over a project policy wins over maintenance's global defaults.
 
 Trust boundary: like the warehouse registry, who wrote a record is trusted — the write path is the catalog's
 owner-gated API, and a principal with direct write access to the control bucket is already inside the storage trust
@@ -26,8 +26,8 @@ it. A drop or deregister ends a table's record through :mod:`lakehouse.object_re
 
 Fields: ``retention_days`` / ``retain_versions`` (old-version cleanup overrides — Lance itself exempts
 tag-pinned versions from cleanup, so every tagged version survives any policy), ``compact_enabled``
-(opt a dataset out of maintenance entirely), ``compact_interval_hours`` (cadence — the sweep skips the
-dataset until the interval has elapsed since its last maintenance; the sweep records that stamp under
+(opt a dataset out of maintenance entirely), ``compact_interval_hours`` (cadence — maintenance skips the
+dataset until the interval has elapsed since its last maintenance; maintenance records that stamp under
 ``_policies/state/<table uuid>/``, a separate prefix so the two writers never contend, which the table's ending ends). All IO is blocking; callers
 threadpool it.
 """
@@ -62,12 +62,6 @@ _UUID_KEYED_KINDS: Final = frozenset({"table", "namespace"})
 def policy_key(record: dict[str, Any]) -> str:
     """What a record is stored under: its object's ``uuid`` for a table or namespace, its ``id`` for a project."""
     return str(record["uuid"] if record.get("kind") in _UUID_KEYED_KINDS else record["id"])
-
-
-def put_policy(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
-    """Persist one policy record, an overwrite: a seeding write. A door merging onto what is stored sets through
-    :func:`set_policy`."""
-    put_record(control_root, storage_options, record_key(PREFIX, record["kind"], policy_key(record)), record)
 
 
 #: How many read, merge and conditional-write rounds a set runs before refusing: contention is admins setting one
@@ -114,7 +108,7 @@ def set_policy(
 
 def get_policy(control_root: str, storage_options: StorageOptions, kind: str, key: str) -> dict[str, Any] | None:
     """The policy record stored under ``key`` (:func:`policy_key`), or ``None`` when unset — or when what is stored
-    is not a record: a malformed one reads as absent, and the sweep falls back to its global defaults.
+    is not a record: a malformed one reads as absent, and maintenance falls back to its global defaults.
     """
     return get_record(control_root, storage_options, record_key(PREFIX, kind, key), event=_EVENT)
 
@@ -125,7 +119,7 @@ def delete_policy(control_root: str, storage_options: StorageOptions, kind: str,
 
 
 def list_policies(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
-    """Every readable policy record (unordered) — the sweep's per-tick load. Absent prefix yields ``[]``.
+    """Every readable policy record (unordered). Absent prefix yields ``[]``.
 
     State stamps live under ``_policies/state/`` and are excluded (non-recursive listing). One corrupt
     or unreadable record is SKIPPED with a warning, never allowed to void the others — a tick that
@@ -161,7 +155,7 @@ def resolve_policy(records: list[dict[str, Any]], uri: str, *, table_uuid: str, 
 
     The table's own record wins, else the record of the nearest namespace in ``namespace_uuids`` (the table's
     ancestors, outermost first), else a project record (#84) whose ``buckets`` contain the dataset's bucket,
-    else ``None`` (the sweep's global defaults apply). A branch is its table's dataset too, so its table's
+    else ``None`` (maintenance's global defaults apply). A branch is its table's dataset too, so its table's
     record governs it.
 
     The project record is strictly the LAST fallback. A bucket belongs to one project, so DISTINCT project
@@ -307,7 +301,7 @@ def _project_policy(records: list[dict[str, Any]], uri: str) -> dict[str, Any] |
     return hits[0] if hits else None
 
 
-#: The sweep's and the event lane's stamps, one directory per table uuid ([[LH-562]]), so a table's ending ends them all
+#: Maintenance's and the event lane's stamps, one directory per table uuid ([[LH-562]]), so a table's ending ends them all
 #: (:func:`end_table_state`, at the control root, which is the policy root the stamps are written at, as the policy
 #: records the catalog writes there already require) and none outlives the table it paced. A table registered later at
 #: the same location holds another uuid and starts unstamped.

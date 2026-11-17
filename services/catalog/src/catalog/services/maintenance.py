@@ -1,14 +1,14 @@
-"""#75 on-demand garbage collection — the operator's per-table analog of the maintenance sweep's version expiry.
+"""#75 on-demand garbage collection — the operator's per-table analog of maintenance's version expiry.
 
 ``preview_gc`` is a DRY RUN: which old versions ``cleanup_old_versions`` would reclaim, honouring the
 current version, the pins on THIS ref (a version tagged on this branch, or one a child branch was cut
 from, is NEVER collected), the retain-last-N window, and the age cutoff — it never mutates. ``run_gc``
-performs the reclaim with the SAME tag exemption the sweep uses (``error_if_tagged_old_versions=False``),
+performs the reclaim with the SAME tag exemption maintenance uses (``error_if_tagged_old_versions=False``),
 so a long-lived tag can't stall GC. ``delete_versions`` backs the spec's version-delete door
 with the same reclaim, for named versions, and refuses a pinned one instead of skipping it. Pure over a
 Lance dataset handle, so these are unit-testable with a fake ``ds``.
 
-The reclaims are gated by :func:`require_reclaimable`, the sweep's own root-scoped gate. :func:`require_compactable`
+The reclaims are gated by :func:`require_reclaimable`, maintenance's own root-scoped gate. :func:`require_compactable`
 is the layout gate a compaction a client stages is judged against at ``version/create``, the one maintenance asks before
 it lists a table as due for compaction.
 """
@@ -113,7 +113,7 @@ def require_compactable(ds: FragmentCarrier, table_location: str, storage_option
 def require_reclaimable(ds: ManifestCarrier) -> None:
     """#121 for the GC door: refuse a dataset whose versions this button must not reclaim.
 
-    **THE GATE IS THE SWEEP'S, per verb** — :func:`~lakehouse.features.describe_gc_unsupported_flags`,
+    **THE GATE IS MAINTENANCE'S, per verb** — :func:`~lakehouse.features.describe_gc_unsupported_flags`,
     which is what ``maintenance.services.expiry`` asks before its own ``cleanup_old_versions``.
     Version reclamation and index maintenance are ROOT-SCOPED, so ``base_paths`` (16) does not
     endanger them: measured on pylance 9.0.0 across six cleanup shapes and ten repeat cycles, one
@@ -128,7 +128,7 @@ def require_reclaimable(ds: ManifestCarrier) -> None:
     if (reason := describe_gc_unsupported_flags(reader, writer)) is not None:
         raise UnsupportedOperationError(
             f"maintenance refused: {reason}. Reclaiming versions here would act on a layout this pass cannot correctly rewrite — "
-            "the sweep's version-reclamation gate refuses it too."
+            "maintenance's version-reclamation gate refuses it too."
         )
 
 

@@ -1,14 +1,8 @@
-"""Read/write ONE JSON document on the control root — the primitive under every catalog registry.
+"""Read ONE JSON document on the control root — the primitive under every catalog registry.
 
-The warehouse registry and the project registry are the same shape: one JSON object per record, at a plain (unhashed) key under the control root, no DB. The two
-IO halves lived as ``warehouses._read_json`` / ``warehouses._write_json``, and the project registry
-imported both across the module boundary (CAT-CORE-14) — which made "private" a lie and welded the two
-registries together over a helper that is about neither of them.
-
-They are here because they are about neither: "one JSON document on the control root" is the shared
-concept, and both registries now import it under a public name. Conditional writes (mint-iff-absent,
-ETag-guarded mutate) stay in ``lakehouse.records``; these two are the unconditional pair
-those build on.
+The warehouse registry and the project registry are the same shape: one JSON object per record, at a plain (unhashed)
+key under the control root, no DB. Reading one is about neither registry, so both import it from here. Every write is
+conditional (mint-iff-absent, ETag-guarded mutate) and lives in ``lakehouse.records``.
 
 All IO here is BLOCKING; callers threadpool it.
 """
@@ -29,20 +23,6 @@ from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
-
-
-def write_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, str]) -> None:
-    """Unconditionally write ``record`` at ``key``, creating the prefix first.
-
-    UNCONDITIONAL, which is why the registries only reach for it on paths with no concurrency to lose
-    to (seeding, fixtures): a put assembled from an earlier read silently discards whatever landed in
-    between. Every real mutation goes through ``lakehouse.records``' conditional doors.
-    """
-    fs, base = fs_and_base(root_uri, storage_options)
-    parent = f"{base}/{key}".rsplit("/", 1)[0]
-    fs.create_dir(parent, recursive=True)  # local FS needs the parent dir; an S3 prefix marker is harmless
-    with fs.open_output_stream(f"{base}/{key}") as stream:
-        stream.write(json.dumps(record).encode("utf-8"))
 
 
 def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict[str, str] | None:

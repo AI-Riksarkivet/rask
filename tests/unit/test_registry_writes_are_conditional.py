@@ -31,6 +31,7 @@ from catalog.services import warehouses
 from catalog.services.control_records import ProtectionChange
 from lakehouse.records import RecordChangedError, RecordMissingError
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 @pytest.fixture
@@ -47,7 +48,7 @@ def _seed(control_root: str, **overrides: str) -> dict[str, str]:
         "status": "active",
         "created_at": "t0",
     } | overrides
-    warehouses.put_warehouse(control_root, StorageOptions(), record)
+    seeding.put_warehouse(control_root, StorageOptions(), record)
     return record
 
 
@@ -136,7 +137,7 @@ def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_wri
     def always_moves(record: dict[str, str]) -> dict[str, str]:
         # Write a different record behind our own back on every attempt, so the ETag never matches.
         calls["n"] += 1
-        warehouses.put_warehouse(control_root, StorageOptions(), {**record, "bucket": f"moved-{calls['n']}"})
+        seeding.put_warehouse(control_root, StorageOptions(), {**record, "bucket": f"moved-{calls['n']}"})
         return {**record, "status": "active"}
 
     with pytest.raises(RecordChangedError):
@@ -150,9 +151,8 @@ def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_wri
 
 
 def _seed_project(control_root: str) -> None:
-    from catalog.services import projects
 
-    projects.put_project(control_root, StorageOptions(), {"id": "acme", "created_at": "t0", "created_by": "user:anna"})
+    seeding.put_project(control_root, StorageOptions(), {"id": "acme", "created_at": "t0", "created_by": "user:anna"})
 
 
 def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: str, monkeypatch: pytest.MonkeyPatch) -> None:

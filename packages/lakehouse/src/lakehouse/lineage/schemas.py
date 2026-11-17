@@ -3,7 +3,7 @@
 A producer authors its lineage through these models instead of hand-building wire dicts, and names its own engine
 where the spec asks for one (``JobTypeJobFacet.integration``). The models convert to the
 official ``openlineage-python`` ``event_v2`` classes (:meth:`RunEvent.to_openlineage`),
-and the wire form (:meth:`RunEvent.to_wire`) is produced BY the official serializer —
+and the wire form is produced BY the official client's serializer from those —
 spec fidelity is by construction, not by mirroring.
 
 The facet ``_schemaURL`` constants below are asserted EQUAL to the installed client's
@@ -28,7 +28,6 @@ from openlineage.client.facet_v2 import (
     parent_run,
     schema_dataset,
 )
-from openlineage.client.serde import Serde
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -348,8 +347,7 @@ class RunEvent(WireModel):
     """The standard emission shape: one OpenLineage ``RunEvent``, authored in pydantic.
 
     ``to_openlineage()`` yields the official client's ``event_v2.RunEvent`` (what the
-    transports consume); ``to_wire()`` is the official serializer's dict of exactly that —
-    the wire form can never drift from the client we pin.
+    transports consume and serialize), so the wire form can never drift from the client we pin.
     """
 
     event_type: RunState = Field(alias="eventType")
@@ -371,6 +369,3 @@ class RunEvent(WireModel):
             inputs=[d.to_openlineage_input() for d in self.inputs],
             outputs=[d.to_openlineage_output() for d in self.outputs],
         )
-
-    def to_wire(self) -> dict[str, Any]:
-        return Serde.to_dict(self.to_openlineage())

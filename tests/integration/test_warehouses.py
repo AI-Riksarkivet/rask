@@ -23,7 +23,6 @@ from catalog.api.dependencies import get_vendor
 from catalog.api.v1.endpoints import warehouses as wh_ep
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import EncryptionAtRest, SessionTier, VendedSession, build_session_policy, split_s3_location
-from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -32,6 +31,7 @@ from lakehouse.governed.principal import Principal
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 def _settings(tmp_path: Any, store: str, *, fga: bool = False, reserved: str = "") -> Settings:
@@ -493,8 +493,8 @@ def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_p
     client.app.dependency_overrides[get_settings] = lambda: s
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
     # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
-    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
-    wh_svc.put_warehouse(
+    seeding.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
+    seeding.put_warehouse(
         s.registry_root,
         s.storage_options(),
         {
@@ -524,7 +524,7 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, stor
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store, fga=True)
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
     # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
-    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
+    seeding.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(
         principal=Principal(idp_id="dex", subject="mallory"), claims=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)

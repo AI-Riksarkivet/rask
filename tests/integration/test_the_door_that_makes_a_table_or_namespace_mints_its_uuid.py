@@ -29,6 +29,7 @@ from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 WAREHOUSE = "acme-bucket"
@@ -44,7 +45,7 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> tuple[TestClient, Sett
     """The catalog with warehouse ``WAREHOUSE`` at its root, its row there, and the namespace ``acme`` in it."""
     settings = Settings.model_validate({"root": str(tmp_path), "s3_access_key_id": "x", "s3_secret_access_key": "x"})
     real_ns_client.app.dependency_overrides[get_settings] = lambda: settings
-    warehouses.put_warehouse(
+    seeding.put_warehouse(
         str(tmp_path),
         StorageOptions(),
         {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": str(tmp_path), "project": "acme", "status": "active", "created_at": "t"},

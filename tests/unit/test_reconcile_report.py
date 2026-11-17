@@ -24,13 +24,13 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, ServiceUnavailableError, connect
 from pydantic import SecretStr
 
-from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from lakehouse.governed import fga as fga_module
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
 from maintenance.services.purge import report_is_clean
+from tests import seeding
 
 
 _PRIMARY_BUCKET = "lance-catalog"
@@ -121,8 +121,8 @@ class _Estate:
         # `bucket` stays `bkt-a` — that is the field the bucket-claim and orphan-bucket categories use.
         self.warehouse_root = f"file://{tmp_path / 'wh-a'}"
         (tmp_path / "wh-a").mkdir(parents=True, exist_ok=True)
-        proj_svc.put_project(self.control_root, StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "alice"})
-        wh_svc.put_warehouse(
+        seeding.put_project(self.control_root, StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "alice"})
+        seeding.put_warehouse(
             self.control_root,
             StorageOptions(),
             {"id": "wh-a", "bucket": "bkt-a", "root_uri": self.warehouse_root, "project": "acme", "created_at": "t"},
@@ -225,7 +225,7 @@ def test_unreferenced_projects_fires_on_a_record_with_no_tuples(tmp_path: Path, 
 
     Its admin revision ([[LH-434]]) is bookkeeping and grants no one anything, so it does not count."""
     estate = _Estate(tmp_path)
-    proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
+    seeding.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
     estate.fga.tuples["project:orphaned"] = [("revision:3", "admin_revision")]
     report = estate.run(monkeypatch)
     assert [p.id for p in report.unreferenced_projects] == ["orphaned"]
@@ -428,7 +428,7 @@ def test_a_full_run_leaves_every_store_byte_identical(tmp_path: Path, monkeypatc
     estate = _Estate(tmp_path)
     estate.fga.tuples["project:phantom"] = [("user:mallory", "admin")]
     _Estate.top_level_row(tmp_path / "data", "legacy_ns")
-    proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
+    seeding.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
     estate.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a", "bkt-orphan"])
 
     before = {name: _tree_fingerprint(tmp_path / name) for name in ("control", "data")}
@@ -539,7 +539,7 @@ def test_one_unreadable_warehouse_root_does_not_blind_the_whole_scan(tmp_path: P
     the rule the storage walk follows.
     """
     estate = _Estate(tmp_path)
-    wh_svc.put_warehouse(
+    seeding.put_warehouse(
         estate.control_root,
         StorageOptions(),
         {"id": "wh-gone", "bucket": "bkt-gone", "root_uri": "s3://bkt-gone", "project": "acme", "created_at": "t"},

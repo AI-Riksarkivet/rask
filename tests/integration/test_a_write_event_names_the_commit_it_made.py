@@ -45,6 +45,7 @@ from lakehouse.storage_options import StorageOptions
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
 from tests.bus_double import BusDouble
+from tests.door_tables import door_table
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -289,7 +290,7 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     from catalog.core.config import get_settings
     from catalog.services import table_claims
 
-    table = table_claims.door_table(ns, table_claims.claim_store(get_settings()), ["lance_catalog", "lh214", "t"], announces=lambda _operation: True)
+    table = door_table(ns, table_claims.claim_store(get_settings()), ["lance_catalog", "lh214", "t"], announces=lambda _operation: True)
     assert dataplane.committed_version(table, StorageOptions(), "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
 
 

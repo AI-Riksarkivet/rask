@@ -21,10 +21,8 @@ It derives no credential: a key pair (and a vended session token) is passed per 
 supplies one. A lone `session_token` without its key pair is refused, because botocore would drop it and sign with the
 env chain.
 
-**TLS precedence:** a custom CA (`RASK_S3_CA_BUNDLE`, else `S3_CA_BUNDLE`) wins;
-else insecure (`RASK_S3_INSECURE`, `S3_INSECURE` or `HCP_INSECURE` set to
-`1`/`true`/`yes`) sets `verify=False` and silences urllib3 warnings; else system
-trust.
+**TLS precedence:** a custom CA (`RASK_S3_CA_BUNDLE`) wins; else insecure (`RASK_S3_INSECURE` set to
+`1`/`true`/`yes`) sets `verify=False` and silences urllib3 warnings; else system trust.
 
 ## Listing and errors
 

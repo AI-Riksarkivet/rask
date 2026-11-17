@@ -80,13 +80,12 @@ def _as_client(stub: object) -> OpenLineageClient:
 
 
 @pytest.fixture
-def metrics_reader():
+def metrics_reader(monkeypatch: pytest.MonkeyPatch) -> Any:
     from lakehouse.lineage import metrics
 
     reader, provider = _reader()
-    metrics.bind_meter_provider(provider)
-    yield reader
-    metrics.bind_meter_provider(None)
+    monkeypatch.setattr(metrics, "_dropped", provider.get_meter("lance.lineage").create_counter("lineage.events.dropped"))
+    return reader
 
 
 def test_a_transport_failure_leaves_a_series_not_only_a_log_line(metrics_reader: Any) -> None:

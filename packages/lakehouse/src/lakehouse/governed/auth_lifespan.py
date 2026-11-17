@@ -134,8 +134,8 @@ async def build_fga_client(
 ) -> OpenFgaClient | None:
     """The FGA client for this service, or `None` when it is off or could not be built.
 
-    It returns the client rather than assigning it, because `maintenance` builds its client outside a FastAPI
-    lifespan: its sweep runs from a cron route and stores the result as `app.state.fga_client`.
+    It returns the client rather than assigning it, because one caller builds its client outside a FastAPI
+    lifespan: the catalog's warehouse-grant backfill holds the client for its own run and closes it.
 
     `provision=False` takes the read-only half: `fga.resolve` finds the store the estate already uses and the model
     this image carries, and can never create either. When either is still absent at its deadline it raises
@@ -241,8 +241,7 @@ async def attach_auth(
             # user's failed request minutes later.
             #
             # OFF THE EVENT LOOP: `refresh` performs bounded but blocking HTTP, and this runs inside the
-            # lifespan of an async app. Awaiting it inline would stall the worker, which is the exact
-            # reason `verify_off_loop` exists one module over.
+            # lifespan of an async app. Awaiting it inline would stall the worker.
             failures = await run_in_threadpool(app.state.oidc.refresh)
             loops.keep("oidc-keys", app.state.oidc.refresh_forever)
             if failures:

@@ -109,8 +109,7 @@ def _group_by_project(records: list[dict[str, str]]) -> dict[str, list[ProjectWa
 
     Per-record corruption tolerance, same posture as ``warehouses.list_warehouses``: a record missing its
     ``project`` or ``id`` is SKIPPED with a warning — one tenant's registry corruption must not void the
-    whole estate listing. ``status`` defaults to ``"active"`` for pre-lifecycle records (the
-    ``warehouse_status`` backward-compat rule).
+    whole estate listing. ``status`` defaults to ``"active"`` for a record that carries none.
     """
     grouped: dict[str, list[ProjectWarehouse]] = {}
     for record in records:

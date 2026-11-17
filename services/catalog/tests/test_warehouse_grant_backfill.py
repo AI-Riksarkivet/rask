@@ -122,26 +122,6 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
     assert len(failures) == 1 and "openfga said no" in failures[0]
 
 
-def test_main_exits_NONZERO_when_a_warehouse_failed(monkeypatch) -> None:
-    """A hook that half-ran and exited 0 is indistinguishable from one with nothing to do."""
-
-    async def _one_failure(_settings):
-        return (1, 0, ["wh1: openfga said no"])
-
-    monkeypatch.setattr(warehouse_grant_backfill, "backfill", _one_failure)
-    monkeypatch.setattr(warehouse_grant_backfill, "get_settings", lambda: _fga_settings())
-    assert warehouse_grant_backfill.main() == 1
-
-
-def test_main_exits_zero_on_a_clean_run(monkeypatch) -> None:
-    async def _clean(_settings):
-        return (4, 20, [])
-
-    monkeypatch.setattr(warehouse_grant_backfill, "backfill", _clean)
-    monkeypatch.setattr(warehouse_grant_backfill, "get_settings", lambda: _fga_settings())
-    assert warehouse_grant_backfill.main() == 0
-
-
 def _stub_client(monkeypatch) -> None:
     """Replace the OpenFGA client construction — these tests are about the WALK, not the transport.
 

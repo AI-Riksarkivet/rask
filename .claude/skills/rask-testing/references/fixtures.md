@@ -72,16 +72,16 @@ only claims about routing, identifier parsing and error mapping.
   `services/maintenance/tests/conftest.py::catalog` does. Env left set leaks into every other testpath,
   because pytest collects all of them before it runs any test, and nothing checks for the leak: the
   suite stays green while a later module builds its app from the wrong values.
-- A test that needs another value sets it with `monkeypatch.setenv`, clears the `lru_cache`d getter and calls
-  `importlib.reload(<module>)`, clearing the getter again at teardown
-  (`tests/integration/test_a_commit_expires_its_table_once_enough_versions_are_reclaimable.py::maintenance`).
+- A test that needs another value sets it with `monkeypatch.setenv` and builds the settings again after it
+  (`tests/integration/test_a_commit_expires_its_table_once_enough_versions_are_reclaimable.py::settings`); where a
+  module read the value at import, it clears the `lru_cache`d getter and calls `importlib.reload(<module>)`, clearing
+  the getter again at teardown.
 - Code in `lakehouse` itself builds a bare `FastAPI()` carrying the piece under test
   (`packages/lakehouse/tests/test_shared_body_cap.py`).
 
-**Authorization.** `lakehouse.governed.deps.make_auth_deps` builds each service's `current_subject`
-and `get_checker`. Override those callables: `security._deps.current_subject` and
-`security._deps.get_checker` on the service's security module
-(`tests/unit/test_auth_deps_resolve.py` resolves them).
+**Authorization.** Each service's security module builds its own `authenticate` on
+`lakehouse.governed.door_caller.caller_of` (`catalog.api.security`, which also names `current_subject`, and
+`lineage.api.security`). Override the function a route depends on, as `app.dependency_overrides[security.authenticate]`.
 
 **Real OTLP exporters.** No suite builds one. A suite that does caps `OTEL_EXPORTER_OTLP_TIMEOUT` with a
 function-scoped `monkeypatch` from the ambient value (so a developer's own setting still wins): an exporter aimed at an

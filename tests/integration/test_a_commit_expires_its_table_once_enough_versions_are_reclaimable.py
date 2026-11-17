@@ -46,6 +46,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import expiry, table_pass
 from maintenance.services.expiry import HISTORY_FENCED, DatasetResult
 from maintenance.services.table_pass import TableTask, held_location, run_table_pass
+from tests import seeding
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 from tests.integration.store_requests import counted
 
@@ -109,7 +110,7 @@ def _table_with(
     claims = location_claims.ClaimStore(control_root=root, storage_options=options)
     location_claims.take(claims, described, TABLE, list[str](TABLE.split("$")), is_gone=lambda _claim: False, uuid=table_uuid)
     if policy is not None:
-        maintenance_policies.put_policy(root, options, {"kind": "table", "id": TABLE, "uuid": table_uuid, **policy})
+        seeding.put_policy(root, options, {"kind": "table", "id": TABLE, "uuid": table_uuid, **policy})
     return TableTask(uuid=table_uuid, location=described)
 
 
@@ -386,7 +387,7 @@ def test_a_pass_that_cannot_read_its_tables_policy_as_written_reclaims_nothing(
     store does not answer decides nothing and is retried."""
     namespace_uuid = str(uuid.uuid4())
     task = _table_with(THRESHOLD + 1, bucket=bucket, options=store, namespace_uuid=namespace_uuid)
-    maintenance_policies.put_policy(f"s3://{bucket}", store, {"kind": "namespace", "id": f"{WAREHOUSE}$db", "uuid": namespace_uuid, "retain_versions": 1})
+    seeding.put_policy(f"s3://{bucket}", store, {"kind": "namespace", "id": f"{WAREHOUSE}$db", "uuid": namespace_uuid, "retain_versions": 1})
     key = record_key(maintenance_policies.PREFIX, "table", task.uuid)
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     s3.put_object(Bucket=bucket, Key=key, Body=record(task.uuid))
@@ -444,7 +445,7 @@ def test_a_projects_hold_governs_its_buckets_table_where_the_policies_are_kept_a
     s3.create_bucket(Bucket=apart)
     monkeypatch.setenv("MAINTENANCE_POLICY_ROOT", f"s3://{apart}")
     hold = {"kind": "project", "id": "acme", "buckets": [bucket], "cleanup_enabled": False}
-    maintenance_policies.put_policy(f"s3://{apart}", store, hold)
+    seeding.put_policy(f"s3://{apart}", store, hold)
     s3.put_object(Bucket=bucket, Key=f"_warehouses/bucket-claims/{bucket}.json", Body=b'{"project": "acme"}')
     held = location_claims.holder(location_claims.ClaimStore(control_root=f"s3://{bucket}", storage_options=store), task.location)
     assert held is not None

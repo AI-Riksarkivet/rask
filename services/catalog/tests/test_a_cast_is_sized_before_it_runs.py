@@ -14,12 +14,12 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, InvalidInputError, connect
 
-from catalog.services import table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.dataplane import coerce_insert_arrow, create_table
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
+from tests.door_tables import door_table
 
 
 if TYPE_CHECKING:
@@ -86,7 +86,7 @@ def test_the_coerced_body_is_held_to_the_cap_where_the_estimate_leaves_off(tmp_p
     cap = (max(len(body), estimate) + encoded) // 2
     assert max(len(body), estimate) < cap < encoded, "no cap separates the estimate from the encoded body, so this tests nothing"
 
-    table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "w"], announces=lambda _operation: True)
+    table = door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "w"], announces=lambda _operation: True)
 
     with pytest.raises(InvalidInputError, match="as the table's column types"):
         coerce_insert_arrow(table, StorageOptions(), body, max_bytes=cap)

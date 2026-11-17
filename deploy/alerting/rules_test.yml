@@ -26,7 +26,7 @@ tests:
               service: lineage
             exp_annotations:
               summary: "Lineage outbox not draining (depth > 0, nothing drained or refused for 15m)"
-              description: "Durable lineage events are staged and the relay is moving none of them — neither ingesting nor being refused. Provenance is not reaching the AGE graph and the relay, lineage, or the NATS bus is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+              description: "Durable lineage events are staged and the relay is moving none of them — neither ingesting nor being refused. Provenance is not reaching lineage's feed and the relay, lineage, or the NATS bus is unhealthy. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
   # 1b. THE REGRESSION THIS GUARD EXISTS FOR. Depth is stuck at 6 AND the graph is refusing events —
   #     measured on the live estate 2026-09-16 as depth 6 / oldest 2.1 days, on a relay that was healthy.

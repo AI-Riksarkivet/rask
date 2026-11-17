@@ -32,6 +32,7 @@ from catalog.services import warehouses
 from lakehouse import maintenance_policies
 from lakehouse.control_emit import CatalogControlEvent
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 from tests.integration.openfga_grants import act_as
 
 
@@ -106,7 +107,7 @@ def governed(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_TupleStore
     store = _TupleStore()
     real_ns_client.app.state.fga = store
     record = {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": "acme", "status": "active", "created_at": "t"}
-    warehouses.put_warehouse(root, StorageOptions(), record)
+    seeding.put_warehouse(root, StorageOptions(), record)
     warehouses.ensure_catalog_row(_ns(real_ns_client), WAREHOUSE)
     yield store
 

@@ -3,12 +3,12 @@
 Drives the async emit with stdlib ``asyncio.run`` (the project convention). Covers:
 * the OpenLineage maintenance-event shapes (COMPLETE and FAIL) **round-tripped through the lineage
   ``RunEvent`` model** — the cross-service wire contract,
-* which datasets in a sweep get which event (material work → COMPLETE; ``maintain:``-errored → FAIL;
+* which datasets in a pass get which event (material work → COMPLETE; ``maintain:``-errored → FAIL;
   ``open:``-errored / no-op / unnamed → nothing) and the location each names its table at,
 * the FAIL flood guard (deterministic per-dataset run id; COMPLETE keeps uuid4), the per-tick FAIL cap
   (logged, never silent) and the concurrent (bounded) FAIL fan-out,
 * the emitter factory (no-op when off or with no bus to publish on) and the best-effort publish (a bus
-  outage must never fail a sweep).
+  outage must never fail a pass).
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from tests.unit.no_store_session import no_store_session
 def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
     # The wire contract: the lineage service must parse a compaction event as a successful, input-less run on
     # the dataset — so it records the run and asserts no edge (nothing was derived from anything). Its run carries no
-    # `nominalTime`: a sweep tick is no schedule time of the table's run (ADR 0180).
+    # `nominalTime`: a pass is no schedule time of the table's run (ADR 0180).
     event = build_maintenance_event(
         table_id="silver$features",
         namespace="silver",
@@ -119,7 +119,7 @@ def test_fail_event_retryable_is_best_effort() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# per-sweep emit selection
+# per-pass emit selection
 # --------------------------------------------------------------------------- #
 
 
@@ -138,12 +138,12 @@ class _RecordingEmitter:
 
 
 def _result(uri: str, **kw: Any) -> DatasetResult:
-    """A dataset no ``__manifest`` row named, as the sweep reports one: no table id."""
+    """A dataset no ``__manifest`` row named, as maintenance reports one: no table id."""
     return DatasetResult(uri=uri, **kw)
 
 
 def _named(table: str, **kw: Any) -> DatasetResult:
-    """A dataset the sweep named ``table`` through ``__manifest`` ([[LH-520]])."""
+    """A dataset maintenance named ``table`` through ``__manifest`` ([[LH-520]])."""
     return DatasetResult(uri=f"s3://b/{table}", table_id=table, **kw)
 
 
@@ -183,7 +183,7 @@ def test_emit_pass_lineage_fails_only_for_maintain_errors() -> None:
 
 
 def test_emit_pass_lineage_never_raises_even_for_a_broken_emitter() -> None:
-    # The guardrail is structural: "a publish failure must never fail the sweep" holds even for an
+    # The guardrail is structural: "a publish failure must never fail maintenance" holds even for an
     # emitter that predates the FAIL protocol (AttributeError while building the coros) or one whose
     # coroutine raises — either way the cron handler must never see it.
     class _OldProtocolEmitter:
@@ -249,7 +249,7 @@ def test_the_emitter_publishes_on_its_configured_topic() -> None:
 def test_the_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, outbox_at: str, storage_options: Callable[[], StorageOptions] | None, staged: bool
 ) -> None:
-    """A bus outage never fails a maintenance sweep, and the line it logs says whether the relay can still
+    """A bus outage never fails a maintenance pass, and the line it logs says whether the relay can still
     deliver the event ([[LH-573]])."""
     (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
     emitter = BusMaintenanceEmitter(
@@ -306,14 +306,14 @@ def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
     assert metadata["lineage.run_id"] == "r-1" and metadata["owner"] == "data_eng", "the stamp destroyed existing metadata"
 
 
-def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> None:
+def test_a_pass_is_named_only_by_the_table_its_manifest_row_named(tmp_path: Any) -> None:
     """[[LH-208]] [[LH-520]]: a maintenance pass names the table ``__manifest`` named its dataset, and a stamp names nothing.
 
     `lineage.dataset_id` is schema metadata, so a writer could re-point it at another table, and a pass named by it
-    would file its RunEvents and audit records against that table. A dataset the sweep named nothing for emits nothing,
+    would file its RunEvents and audit records against that table. A dataset maintenance named nothing for emits nothing,
     whatever its stamp says.
 
-    Driven through expiry on real pylance into the sweep's own emit, because the name is carried by one and spent in
+    Driven through expiry on real pylance into maintenance's own emit, because the name is carried by one and spent in
     the other.
     """
     import lance

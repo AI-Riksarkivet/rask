@@ -2922,7 +2922,7 @@ def refuse_a_restore_carrying_refused_config(target: lance.LanceDataset, *, vers
     if armed := auto_cleanup.armed_keys(config):
         raise InvalidInputError(
             f"restore refused: version {version} carries commit-path auto-cleanup config {armed}, and restoring it would delete "
-            "table versions inside the restore's own commit. Version reclamation belongs to the maintenance sweep; restore a version without these keys"
+            "table versions inside the restore's own commit. Version reclamation belongs to maintenance; restore a version without these keys"
         )
     if steering := formats.compaction_config_keys(config):
         raise InvalidInputError(

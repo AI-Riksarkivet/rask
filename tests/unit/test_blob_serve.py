@@ -23,12 +23,13 @@ from lance_namespace import (
 )
 
 from catalog.api.v1.endpoints.data import _parse_range
-from catalog.services import blob_serving, table_claims
+from catalog.services import blob_serving
 from catalog.services.blob_serving import BlobStream, read_blob
 from catalog.services.dataplane import create_table
 from catalog.services.table_claims import DoorTable
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
+from tests.door_tables import door_table
 
 
 def _blob_schema() -> pa.Schema:
@@ -62,7 +63,7 @@ def ns(tmp_path: Path):
 
 def _door(ns, tmp_path: Path, table_id: list[str]) -> DoorTable:  # noqa: ANN001
     """``table_id`` as the blob door resolves it on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), table_id, announces=lambda _operation: True)
+    return door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), table_id, announces=lambda _operation: True)
 
 
 @pytest.fixture

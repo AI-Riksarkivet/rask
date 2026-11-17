@@ -56,7 +56,7 @@ category it did not deliberately skip, and completed every scan it started.
 
 **Not proven against real object storage yet.** The suite below drives a real local-filesystem control
 root and real Lance datasets through the real backend, which is what makes the refusal ladder honest —
-but #80 (the sweep vs a live RustFS estate) is still open, so "tests green" is not "reclamation
+but #80 (maintenance vs a live RustFS estate) is still open, so "tests green" is not "reclamation
 witnessed". The flag ships OFF.
 """
 
@@ -201,7 +201,7 @@ def due_records(control_root: str, storage_options: StorageOptions) -> list[dict
     the release waits out the settle an undrop admitted at the deadline needs, and tells each person who loses access.
     The reconcile tick releases before it purges, so a record is purged on the tick that releases it.
 
-    One rule for "what is expired", shared with the sweep's report-only log, so the thing that gets
+    One rule for "what is expired", shared with maintenance's report-only log, so the thing that gets
     reported and the thing that gets deleted can never be two different sets. ``trash.expired`` refuses
     an undated or unparseable record, which is the fail-toward-not-deleting direction.
 
@@ -215,7 +215,7 @@ def due_records(control_root: str, storage_options: StorageOptions) -> list[dict
 def due_from(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """:func:`due_records` without the read — the expiry rule applied to records already in hand.
 
-    Split out for F6(d): the sweep now reads the trash index ONCE and derives two sets from it (the
+    Split out for F6(d): maintenance now reads the trash index ONCE and derives two sets from it (the
     datasets it must not rewrite, and this report-only due list). Before the split it called
     `due_records`, which re-listed the whole index — a second full read per tick for a log line.
 
@@ -285,9 +285,9 @@ def maintained_roots(settings: MaintenanceSettings, storage_options: StorageOpti
     """Every root URI whose bytes this service is allowed to reclaim.
 
     The configured sweep buckets UNION every bucket the warehouse registry names — the same runtime-read
-    the sweep does (#81), because a warehouse bucket is created by an API call and a config-time list is
+    maintenance does (#81), because a warehouse bucket is created by an API call and a config-time list is
     stale by construction. ``maintainable_buckets`` already drops DEACTIVATED warehouses, and that
-    exclusion matters more here than it does for the sweep: deactivate is offboarding step one, and
+    exclusion matters more here than it does for maintenance: deactivate is offboarding step one, and
     destroying a quarantined tenant's dropped tables is not a maintenance decision to make on their
     behalf.
 
@@ -538,7 +538,7 @@ def held_by(finding: OrphanedTrash, *, storage_options: StorageOptions, registry
     """How many objects the trashed table ``finding`` names still holds: the tombstone sweep's proof that its record's
     bytes are gone ([[LH-061]]).
 
-    Counted where the catalog's end door counts them, so a record the sweep plans is one the door ends: the location in
+    Counted where the catalog's end door counts them, so a record the tombstone sweep plans is one the door ends: the location in
     both spellings, and each data directory its claim names on the table (:func:`lakehouse.data_directories
     .directories_to_end`, [[LH-286]]). A table whose fragments sit on a data base keeps them there once its root is
     empty, and a sweep judging the root alone planned the record the door then refused.
@@ -645,7 +645,7 @@ def _remove_emptied_directories(location: str, storage_options: StorageOptions, 
 #: is correct either way, because an event is a refresh hint and never data — is true and is not the
 #: whole job. These events are also the estate's governance FEED, read by humans at
 #: ``/lakehouse/admin/events``, and there the two facts are not interchangeable: "someone decided to
-#: remove this" and "the grace period ran out and the sweep collected it" differ in cause, in
+#: remove this" and "the grace period ran out and maintenance collected it" differ in cause, in
 #: appealability, and in finality (a purge is the last event an object ever emits). The distinguishing
 #: `reason` lived in ``extra``, which that feed does not read — so a reclamation rendered as a person's
 #: deletion, with ``ACTOR`` (a service identity) in the actor column.

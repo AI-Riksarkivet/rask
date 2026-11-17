@@ -654,9 +654,8 @@ export interface paths {
         /**
          * List Due Maintenance
          * @description The tables a compaction or an index optimize is due on, listed to a caller holding ``can_maintain`` on each: what
-         *     made each due, the policy record that governed it, and how many datasets resolve their files through it. A record
-         *     names its table as the table is named now, which a rename since the sweep changed; one whose table is gone is listed
-         *     to nobody, and the next sweep clears it.
+         *     made each due and the policy record that governed it. A record names its table as the table is named now, which a
+         *     rename since its pass changed; one whose table is gone is listed to nobody, and its next pass clears it.
          *
          *     Paged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and
          *     judges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads
@@ -2173,7 +2172,7 @@ export interface paths {
          *     gated (``can_drop``); never mutates.
          *
          *     ``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that
-         *     needs no containment argument: it calls ``_base_refs`` zero times and mutates nothing —
+         *     needs no containment argument: it mutates nothing —
          *     ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.
          *
          *     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
@@ -2203,8 +2202,7 @@ export interface paths {
          *     (``can_drop``) — the same bar as scheduling it via the retention policy.
          *
          *     ``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's — see the
-         *     module header for the measurement. The pre-pass below runs on both paths and is the same listing
-         *     either way, because a branch handle's ``uri`` is the dataset root.
+         *     module header for the measurement.
          *
          *     Reclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is
          *     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the

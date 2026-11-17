@@ -28,14 +28,16 @@ from __future__ import annotations
 import ssl
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from typing import Annotated, Any, Final
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Request
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.draining import arm_drain_on_sigterm
+from lakehouse.exceptions import DomainError, ServiceUnavailableError, register_handlers
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from lakehouse.lifecycle import mark_draining, mark_started
 from lakehouse.probes import make_probes_router
@@ -66,16 +68,28 @@ def _upstream(request: Request) -> httpx.AsyncClient:
 UpstreamDep = Annotated[httpx.AsyncClient, Depends(_upstream)]
 
 
+class IssuerUnansweredError(DomainError):
+    """The issuer did not answer the mirror's own fetch with the document: the fault is upstream of the mirror."""
+
+    status_code = HTTPStatus.BAD_GATEWAY
+    title = "Bad Gateway"
+
+
 async def _fetch(client: httpx.AsyncClient, url: str, token_file: str) -> dict[str, Any]:
-    """One upstream GET carrying the mirror's token, read now; an upstream that does not answer is a 502."""
+    """One upstream GET carrying the mirror's token, read now.
+
+    Raises:
+        ServiceUnavailableError: The mirror's own token cannot be read.
+        IssuerUnansweredError: The issuer did not answer, or answered another status than 200.
+    """
     try:
         response = await client.get(url, headers=identity_bearer(token_file))
     except IdentityTokenUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise ServiceUnavailableError(str(exc)) from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"the issuer did not answer {url}: {exc}") from exc
+        raise IssuerUnansweredError(f"the issuer did not answer {url}: {exc}") from exc
     if response.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"the issuer answered {response.status_code} to {url}")
+        raise IssuerUnansweredError(f"the issuer answered {response.status_code} to {url}")
     return response.json()
 
 
@@ -101,11 +115,12 @@ def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
     async def ready(request: Request) -> Readiness:
         try:
             await _fetch(request.app.state.upstream, f"{issuer}{DISCOVERY_PATH}", resolved.token_file)
-        except HTTPException as exc:
-            return Readiness(status=ReadinessStatus.unhealthy, components={"issuer": str(exc.detail)})
+        except DomainError as exc:
+            return Readiness(status=ReadinessStatus.unhealthy, components={"issuer": exc.detail})
         return Readiness(status=ReadinessStatus.ready, components={"issuer": "healthy"})
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    register_handlers(app)
     app.include_router(make_probes_router(ready))
 
     @app.get(DISCOVERY_PATH)

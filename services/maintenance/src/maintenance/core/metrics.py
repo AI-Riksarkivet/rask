@@ -25,8 +25,8 @@ _versions_removed = _meter.create_counter(
     unit="{version}",
     description="Superseded Lance manifest versions GC'd.",
 )
-#: THE NUMBER THE SWEEP EXISTS TO PRODUCE, and until [[LH-099]] it reached three log sites and no
-#: series — measured on the deployed estate 2026-09-19 under the names of that day, `compaction_bytes_reclaimed_total`
+#: THE NUMBER MAINTENANCE EXISTS TO PRODUCE, kept as a series and not only a log line ([[LH-099]]) — measured on the
+#: deployed estate 2026-09-19 under the names of that day, `compaction_bytes_reclaimed_total`
 #: returned ZERO series from GreptimeDB while `compaction_runs_total` returned one. Distinct from
 #: `maintenance.trash.bytes_reclaimed`, which the PURGE feeds: the two answer different questions (what
 #: superseded versions cost versus what dropped tables cost) and summing them would answer neither.
@@ -38,7 +38,7 @@ _bytes_reclaimed = _meter.create_counter(
 #: #64 — datasets the pass REFUSED, labelled by the gate that refused them (`record_refused` names each).
 #: Its own series, not a sub-case of an error counter: nothing failed, and the number that matters is the
 #: TREND. The supported-flag set is a whitelist, so a pylance upgrade that adds a legitimate flag shows up
-#: here as a step change in `manifest_flags` — and nowhere else — while the sweep still reports a clean run.
+#: here as a step change in `manifest_flags` — and nowhere else — while maintenance still reports a clean run.
 _refused = _meter.create_counter(
     "maintenance.datasets.refused",
     unit="{dataset}",
@@ -69,7 +69,7 @@ _unrecorded_bases = _meter.create_counter(
 _mixed_file_versions = _meter.create_counter(
     "maintenance.datasets.mixed_file_versions",
     unit="{dataset}",
-    description="Datasets whose data files are at more than one Lance file version (reader flag 256), counted each time the sweep opens one.",
+    description="Datasets whose data files are at more than one Lance file version (reader flag 256), counted each time maintenance opens one.",
 )
 #: [[LH-419]] Files a commit added that the store no longer holds as the catalog recorded them: overwritten in place,
 #: which a writer's vend can do and no session policy refuses. Its own series because nothing was refused: the table is
@@ -77,7 +77,7 @@ _mixed_file_versions = _meter.create_counter(
 _overwritten_files = _meter.create_counter(
     "maintenance.files.overwritten",
     unit="{file}",
-    description="Committed files the sweep found changed from what the catalog recorded at their commit, counted each tick they are seen.",
+    description="Committed files maintenance found changed from what the catalog recorded at their commit, counted each tick they are seen.",
 )
 #: [[LH-286]] Fragments whose data file sits in their table's own data directory under a deletion vector: the deleted
 #: rows' bytes stay there until a compaction rewrites the fragment, which the compaction gate refuses for such a table.
@@ -85,11 +85,11 @@ _overwritten_files = _meter.create_counter(
 _base_fragments_holding_deleted_rows = _meter.create_counter(
     "maintenance.base_fragments.holding_deleted_rows",
     unit="{fragment}",
-    description="Fragments keeping deleted rows' bytes in their table's data directory on a data base, counted each time the sweep expires their table.",
+    description="Fragments keeping deleted rows' bytes in their table's data directory on a data base, counted each time maintenance expires their table.",
 )
 
 
-#: THE FAILURE SERIES, and its absence was the gap. Seven instruments here counted what the sweep
+#: THE FAILURE SERIES, and its absence was the gap. Seven instruments here counted what maintenance
 #: ACHIEVED and not one counted what it could not do, so a dataset failing every tick forever was
 #: indistinguishable from a healthy estate on every surface that can raise an alarm. The error reached
 #: OTel as a span status and one aggregate `maintenance_sweep` log line — and vmalert evaluates PromQL,
@@ -106,7 +106,7 @@ _failed = _meter.create_counter(
 )
 
 
-#: #79 reclamation. Separate series from the sweep counters above because they answer a different
+#: #79 reclamation. Separate series from the pass counters above because they answer a different
 #: question: those say how much history was folded away, these say how many DROPPED objects had their
 #: bytes destroyed — the only irreversible thing this service does.
 _trash_purged = _meter.create_counter(
@@ -267,7 +267,7 @@ def record_refused(datasets: int, refused_by: str | None = None) -> None:
     id the catalog governs no table by (`table_not_governed`), an id the catalog governs at another
     location (`governed_elsewhere`) or maintenance's own service credential rejected with a 401
     (`unauthenticated`). `DatasetResult.refused_by`
-    already carried the answer and `summarize_refusals` already counted by it — it reached the sweep's
+    already carried the answer and `summarize_refusals` already counted by it — it reached maintenance's
     WARNING and the response body and stopped there, which is the same shape as
     `maintenance.bytes.reclaimed` before [[LH-099]].
 
@@ -551,7 +551,7 @@ def record_mixed_file_versions(datasets: int) -> None:
 
 
 def record_overwritten_files(files: int) -> None:
-    """Record how many committed files the sweep found overwritten in place ([[LH-419]]).
+    """Record how many committed files maintenance found overwritten in place ([[LH-419]]).
 
     Always emits, including zero, for `record_mixed_file_versions`' reason.
     """

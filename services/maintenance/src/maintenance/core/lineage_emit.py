@@ -1,6 +1,6 @@
 """Best-effort OpenLineage emission from the maintenance service to lineage's commit feed (#7b).
 
-A maintenance sweep expires each Lance dataset's superseded versions; when ``lineage_emit_enabled`` is on it records
+A maintenance pass expires each Lance dataset's superseded versions; when ``lineage_emit_enabled`` is on it records
 each dataset whose versions it reclaimed as an OpenLineage ``RunEvent`` (output = the dataset,
 ``operation=expire_versions``) — and each ``maintain:``-FAILED dataset as a ``FAIL`` event with the standard
 ``errorMessage`` facet (§4 failure visibility; deterministic per-dataset run id as the flood guard) — published on
@@ -18,9 +18,9 @@ Two deliberate choices:
 * **Versionless.** Expiry is *maintenance*, not a data write, so the event asserts no data version, and with no
   inputs it asserts no edge (``lineage.services.provenance.edges_of``): the feed records the run, and the edge list
   stays the record of what derives from what.
-* **Best-effort.** A bus outage logs and leaves the event staged; auditing must never fail a maintenance sweep.
+* **Best-effort.** A bus outage logs and leaves the event staged; auditing must never fail a maintenance pass.
 
-This layer is **pure** (builders + emitter transports only); the per-sweep orchestration that needs the
+This layer is **pure** (builders + emitter transports only); the per-pass orchestration that needs the
 :class:`~maintenance.services.expiry.DatasetResult` type lives in ``maintenance.services.table_pass`` so ``core``
 never imports up into ``services``.
 """
@@ -230,7 +230,7 @@ class BusMaintenanceEmitter:
     One bounded publish per event (`lakehouse.bus.publish_event`): the stream's acknowledgement is the delivery, and
     an event it did not acknowledge stays in the outbox for lineage's relay. Each event rides the envelope derived
     from it (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context.
-    Best-effort: a bus outage logs and leaves the event staged rather than failing the sweep.
+    Best-effort: a bus outage logs and leaves the event staged rather than failing maintenance.
     """
 
     def __init__(
@@ -320,13 +320,13 @@ class BusMaintenanceEmitter:
     async def _publish(self, event: dict[str, Any], table_id: str) -> None:
         try:
             # SIGNED INSIDE THE TRY: an emit is best-effort, so a signature that cannot be made is a withheld event,
-            # logged, and never a failed sweep.
+            # logged, and never a failed pass.
             event = self._signed(event)
             # STAGED, then published, then dropped on ack (#4) — the twin of the catalog's emit. A
-            # sweep's lineage event describes a committed reclamation, so losing one leaves the feed
+            # pass's lineage event describes a committed reclamation, so losing one leaves the feed
             # under-reporting work that really happened. Degrades to exactly the previous plain publish
             # when `outbox_uri` is unset, which is the default, and stays bounded either way so a bus that
-            # does not answer cannot stall the sweep.
+            # does not answer cannot stall maintenance.
             await outbox.publish_with_outbox(
                 self._bus,
                 lineage_envelope(event),

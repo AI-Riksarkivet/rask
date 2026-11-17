@@ -1,11 +1,10 @@
 """The number a reclaimer exists to produce must be a metric, not only a log line.
 
-[[LH-099]]. `bytes_removed` reaches three places — the per-dataset outcome, the audit line and the sweep
-summary (`sweep.py:699,1010,1159`) — and no instrument. The only bytes series the maintenance service
-exports is `maintenance.trash.bytes_reclaimed`, fed solely by the PURGE, so "how much did the sweep get
-back" has no answer that outlives a log rotation. Measured on the deployed estate 2026-09-19, under the names of that
-day: `compaction_bytes_reclaimed_total` returns ZERO series from GreptimeDB while `compaction_runs_total`
-returns one — the sweep is observable except in the dimension it is for.
+[[LH-099]]. With `bytes_removed` only on the per-dataset outcome and the audit line, and no instrument, the only bytes
+series the maintenance service exports is `maintenance.trash.bytes_reclaimed`, fed solely by the PURGE, so "how much did
+a pass get back" has no answer that outlives a log rotation. Measured on the deployed estate 2026-09-19, under the names
+of that day: `compaction_bytes_reclaimed_total` returns ZERO series from GreptimeDB while `compaction_runs_total`
+returns one, so a pass is observable except in the dimension it is for.
 
 It is also [[LH-102]]'s closing condition, which asks for "a recorded reclaimed-bytes figure". A figure
 recorded only in a log line is recorded for as long as the log lives.
@@ -14,7 +13,7 @@ THIS HALF NEEDS NO DECISION, and the row says so. The control-EVENT question bes
 person should be TOLD a table was compacted — is a separate owner call and is not touched here.
 
 ZERO IS EMITTED, which is the rule `record_reclaimed` already states for its sibling and which
-matters more for bytes than for any of them: "nothing was reclaimed this tick" and "the sweep never
+matters more for bytes than for any of them: "nothing was reclaimed this pass" and "no pass ever
 ran" must not look identical on a dashboard, and the second is what a broken reclaimer looks like.
 """
 
@@ -42,7 +41,7 @@ def bytes_counter(monkeypatch: pytest.MonkeyPatch) -> _Spy:
     return spy
 
 
-def test_a_reclaiming_sweep_records_its_bytes(bytes_counter: _Spy) -> None:
+def test_a_reclaiming_pass_records_its_bytes(bytes_counter: _Spy) -> None:
     """The defect: 71,295 bytes reclaimed on the deployed estate reached no series at all."""
     metrics.record_reclaimed(versions_removed=97, bytes_removed=71_295)
 

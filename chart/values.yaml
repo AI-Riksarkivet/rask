@@ -276,8 +276,8 @@ resources:
 # === Graceful rollouts =============================================================================
 # preStop sleep: endpoint removal must propagate to kube-proxy and the Gateway BEFORE the app receives
 # SIGTERM, else every rollout connection-refuses in-flight requests (and the apps' /readyz shutting_down
-# branch is dead code). terminationGracePeriodSeconds bounds preStop + the app's own drain; compaction
-# gets a longer budget so an in-flight sweep/Lance write is never SIGKILLed mid-transaction.
+# branch is dead code). terminationGracePeriodSeconds bounds preStop + the app's own drain; maintenance
+# gets a longer grace so a pass in flight is never SIGKILLed mid-commit.
 #
 # THE APP'S OWN BOUND, stated rather than implied, because the numbers here have to agree and nothing
 # else forces them to:
@@ -288,12 +288,13 @@ resources:
 # requests in flight, and only after that runs the lifespan's `finally`. Its wait is unbounded by
 # default, so one slow request holds the process until SIGKILL and the teardown never runs. At the
 # bound uvicorn cancels the ASYNC work still running and runs the teardown, which keeps
-# `teardownSeconds` before the kubelet's SIGKILL: 40 - 5 - 10 = 25s for the 40s pods,
-# 120 - 5 - 10 = 105s for maintenance. The catalog and lineage answer every door by `requestDeadlineSeconds`
+# `teardownSeconds` before the kubelet's SIGKILL: 40 - 5 - 10 = 25s for the 40s pods. Maintenance runs no uvicorn: its
+# worker stops pulling at SIGTERM and drains for `maintenance.queue.drainSeconds`, which the render requires to fit in
+# the same remainder of its grace. The catalog and lineage answer every door by `requestDeadlineSeconds`
 # (ADR 0203), so their grace is derived from that deadline (`lance.deadlineGrace`): 5 + 300 + 10 = 315s, a drain as long
 # as the deadline, in which every request in flight at SIGTERM is answered. A door still working past its deadline is
-# ended by SIGKILL at the grace like any other thread. Work in a THREAD (Starlette's run_in_threadpool, which runs
-# maintenance's sweep) is not interrupted by the bound: it ends by returning, or by that
+# ended by SIGKILL at the grace like any other thread. Work in a THREAD (Starlette's run_in_threadpool)
+# is not interrupted by the bound: it ends by returning, or by that
 # SIGKILL at the pod's grace. No container the chart renders sets `command`, so each image's tini,
 # its ENTRYPOINT, runs uvicorn's command line from `args` and uvicorn is never PID 1 ([[LH-313]]):
 # the kernel drops a PID 1's closing re-raise of SIGTERM, so the process waited for the thread
@@ -817,8 +818,8 @@ maintenance:
   # add notification noise. `maintenance/core/lineage_emit.py` stamps a `rask_lance` facet and outputs, and
   # NO `rask_author` facet and no `rask_lance.project`; per the events' targeting contract (docs/COMMIT-EVENTS.md), a
   # notifier addresses a run's author by `rask_author.sub` and nothing else, and its project's watchers by
-  # `rask_lance.project` — so a sweep addresses nobody.
-  # That is correct rather than a gap: a cron tick has no human to name.
+  # `rask_lance.project` — so a pass addresses nobody.
+  # That is correct rather than a gap: a scheduled pass has no human to name.
   #
   # What it buys is the FAILURE surface named below. Left off, a persistently failing dataset was
   # visible only in OTel spans and the cron response body — and this estate spent 2026-08-16 proving
@@ -826,7 +827,7 @@ maintenance:
   # service). Enabling it also grants maintenance's bus user its subjects (`nats.auth.flagged`), conditioned on this same value, so there is no second switch to forget.
   #
   # COVERAGE IS EVERY TABLE THE CATALOG'S `__manifest` NAMES, its branches included, and nothing else ([[LH-520]]): the
-  # sweep names a dataset by the row whose location it is, so the Dataset name is the catalog's table name. A dataset no
+  # pass names a dataset by the row whose location it is, so the Dataset name is the catalog's table name. A dataset no
   # row names is refused unexpired and emits nothing: an output name that does not match the catalog's table counts every
   # recipient as hidden, so guessing one would be worse than staying quiet.
   #
@@ -995,11 +996,6 @@ maintenance:
   # -- How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge.
   discoveryMaxDepth: 3
 
-  # LH-101: wall-clock ceiling for ONE sweep tick, checked BETWEEN datasets — never inside a compaction.
-  # 0 = unlimited, which is today's behaviour and stays the default: the right value depends on the
-  # estate's dataset count and the tick interval, and inferring one would be guessing. Set it and the
-  # tick logs `sweep_budget_exhausted` with what it executed and what it did not reach, which is the
-  # starvation this exists to make visible.
   # Announce each reclamation on the catalog's control topic (catalog.control.v1), over the worker's own connection
   # to the bus as `maintenance`: the flag also issues that user the topic and the read-back of its stream
   # (`nats.auth.flagged`). Emission is best-effort by design.
@@ -1137,7 +1133,7 @@ objectStore:
     # -- Store identities of the release's namespace outside the lakehouse's own workloads, as `{<ServiceAccount name>: [<policy statement>, ...]}`: each ServiceAccount is rendered with no token mounted, and on the development store the provisioning hook writes its statements as the canned policy its token's subject names, beside the workloads' own, so the hook's prune keeps it. Empty: no other identity holds a store session.
     extra: {} # @schema additionalProperties: true
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
-  # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
+  # name in the vending and lineage tests — do not rename casually.
   # -- The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox).
   bucket: lance-catalog
   # The PLATFORM buckets no feature owns: buckets the estate makes for itself, which no warehouse record

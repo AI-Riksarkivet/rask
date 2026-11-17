@@ -108,7 +108,7 @@ class MaintenanceUnauthenticated(MaintenanceDenied):
 class GovernedElsewhere(MaintenanceDenied):
     """The catalog vended a credential for this dataset's table id at a location that does not cover the dataset.
 
-    [[LH-141]]: the ``__manifest`` the sweep read named the table at this location, and by the vend it lives elsewhere: a
+    [[LH-141]]: the ``__manifest`` maintenance read named the table at this location, and by the vend it lives elsewhere: a
     rename or a re-registration landed between the two reads. The vend door answered 200 and the table it names is
     healthy, so this is maintenance's own refusal of the DATASET, never counted under the table's id.
     """
@@ -136,7 +136,7 @@ class TableNotGoverned(RuntimeError):
 
 
 def denial_remedy(*, asked_for: str, identity: str) -> str:
-    """The sentence a maintenance 403 ends with, naming BOTH causes, because the sweep cannot tell them apart.
+    """The sentence a maintenance 403 ends with, naming BOTH causes, because maintenance cannot tell them apart.
 
     The catalog's authorization gate runs BEFORE existence resolution, so "this identity holds no `can_maintain`" and
     "no such table exists" are the SAME 403 on the wire. Measured 2026-09-15: a refusal advised *"Grant can_maintain on
@@ -231,7 +231,7 @@ class Vended(BaseModel):
     `location` — the catalog's authoritative answer for the table id it was asked about — and this
     module read only `credentials.storage_options`. Keeping it is what makes [[LH-141]]'s crossing
     check cost nothing: the question "does this credential cover the dataset I am holding" is answered
-    by a field already on the wire, not by a second round trip the sweep cannot afford (the tick walks
+    by a field already on the wire, not by a second round trip maintenance cannot afford (the tick walks
     552 datasets).
 
     ``None`` where the door named none. A catalog that does not say is not a catalog that disagrees.
@@ -344,13 +344,13 @@ def _at_own_store(options: StorageOptions, settings: MaintenanceSettings) -> Sto
 def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, location: str | None) -> None:
     """Stop the dataset when the catalog's location for ``table_id`` is not the dataset being maintained.
 
-    [[LH-141]]. The sweep names a dataset by the ``__manifest`` it read when the tick planned, and a rename or a
+    [[LH-141]]. Maintenance names a dataset by the ``__manifest`` it read when the tick planned, and a rename or a
     re-registration landing before the vend can leave that name on another table's location. The vend door answers
     200 to such a request, correctly, because it is asked about a table and not about the dataset the caller holds.
 
     CONTAINMENT, NOT EQUALITY, and getting that backwards would refuse the healthy majority: a branch
-    dataset is swept at ``<root>/tree/<branch>`` while the catalog answers with the root, and the live
-    sweep holds several. The catalog answers the URL ``describe_table`` does, which percent-encodes a registered
+    dataset is maintained at ``<root>/tree/<branch>`` while the catalog answers with the root, and the live
+    estate holds several. The catalog answers the URL ``describe_table`` does, which percent-encodes a registered
     location's non-ASCII characters (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``), so it is read as the key it decodes to
     (``base_refs.decoded_path``), while ``uri`` is the key discovery lists and every lane holds
     (``…/räksmörgås``): a compare of the spellings would refuse every such table on every tick ([[LH-319]]).
@@ -359,7 +359,7 @@ def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, locatio
 
     AN UNVERIFIABLE VEND PROCEEDS, loudly. A missing location means the catalog did not say, not that
     it disagrees, and refusing on absence would stop maintaining the estate the day the response shape
-    changed — the same asymmetry ``sweep._probe_before_vending`` argues for uncertainty.
+    changed — the same asymmetry ``table_pass._probe_before_vending`` argues for uncertainty.
     """
     if location is None:
         logger.warning(

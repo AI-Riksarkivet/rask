@@ -24,6 +24,7 @@ from lance_namespace import CreateNamespaceRequest, DropNamespaceRequest, connec
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 if TYPE_CHECKING:
@@ -58,7 +59,7 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Catalog
     get_settings.cache_clear()
     from catalog.main import app
 
-    warehouses.put_warehouse(str(estate), StorageOptions(), {"id": "tenant", "bucket": "tenant", "project": "p", "root_uri": str(warehouse)})
+    seeding.put_warehouse(str(estate), StorageOptions(), {"id": "tenant", "bucket": "tenant", "project": "p", "root_uri": str(warehouse)})
     warehouses.ensure_catalog_row(connect("dir", {"root": str(warehouse)}), "tenant")
     with TestClient(app) as client:
         yield Catalog(client=client, estate=str(estate), warehouse=str(warehouse))
@@ -144,12 +145,11 @@ def test_the_reclaim_keeps_each_roots_history_bounded_and_the_catalog_reads_the_
 def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(failed_roots: Callable[[], list[int]], catalog: Catalog, tmp_path: Path) -> None:
     """A root whose index Lance cannot open fails alone: the tick still completes, reclaims every other root, and counts
     the failure on a series the catalog created at 0 when it started, so the first failure is an increase."""
-    from catalog.services import warehouses
 
     broken = tmp_path / "broken"
     (broken / "__manifest" / "_versions").mkdir(parents=True)
     (broken / "__manifest" / "_versions" / "1.manifest").write_bytes(b"not a Lance manifest")
-    warehouses.put_warehouse(catalog.estate, StorageOptions(), {"id": "broken", "bucket": "broken", "project": "p", "root_uri": str(broken)})
+    seeding.put_warehouse(catalog.estate, StorageOptions(), {"id": "broken", "bucket": "broken", "project": "p", "root_uri": str(broken)})
     tenant = connect("dir", {"root": catalog.warehouse})
     for name in ("one", "two"):
         tenant.create_namespace(CreateNamespaceRequest(id=["tenant", name]))

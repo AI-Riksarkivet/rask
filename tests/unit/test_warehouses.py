@@ -35,6 +35,7 @@ from lakehouse.governed.principal import Principal
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 from tests.integration.store_requests import counted
 
 
@@ -306,7 +307,7 @@ def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> Non
         asyncio.run(fga_deps.require_project_exists(settings, "ghost"))
     assert "POST /management/v1/projects" in str(exc.value)
     # …and an existing record passes untouched.
-    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x"})
+    seeding.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x"})
     asyncio.run(fga_deps.require_project_exists(settings, "acme"))
 
 
@@ -475,7 +476,7 @@ def test_a_warehouse_record_the_store_does_not_serve_is_an_outage_never_a_record
         boto3.client("s3", endpoint_url=moto, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
         with counted(moto) as store:
             so = lance_storage_options(store.url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
-            warehouses.put_warehouse(f"s3://{bucket}", so, {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"})
+            seeding.put_warehouse(f"s3://{bucket}", so, {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"})
             with (
                 store.answering_unavailable(lambda request: request.method == "GET" and request.path.endswith("/_warehouses/wh-a.json")),
                 pytest.raises(ServiceUnavailableError, match="did not answer"),

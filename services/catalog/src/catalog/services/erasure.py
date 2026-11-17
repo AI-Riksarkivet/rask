@@ -34,10 +34,10 @@ reclamation LAST is not tidiness — run it before the branches' rewrites and it
 erasure that reclaimed nothing — and the refs are reclaimed DEEPEST FIRST, main last, so each parent is
 reclaimed after the branches standing on it have let go.
 
-**A TABLE ANOTHER DATASET RESOLVES ITS FILES THROUGH IS NOT RECLAIMED** (#114, the GC door asks): its reclaim would delete the only copy a shallow clone reads, and the clone's own copy of the subject
-is its own surface ([[LH-263]]). Every ref's `history:` surface then fails, and the residuals are reported as not
-reclaimed rather than attributed to a ref whose deletion could not finish the erasure. A compaction of such a table
-is not refused: the tag the catalog takes when it registers the clone keeps the version the clone reads (ADR 0198).
+**A VERSION A REGISTERED CLONE READS IS KEPT BY THE CLONE'S TAG** (ADR 0198 §1): the tag the catalog takes when it
+registers the clone pins the version the clone reads through this table's files, so no reclaim and no compaction here
+takes them. The tag is reported `held`, a residual it keeps is attributed to it, and only the clone's own end releases
+it. The clone's own copy of the subject is its own surface ([[LH-263]]).
 
 **THE GC FLAG GATE RUNS PER REF** before its reclaim, and a refusal fails that ref's `history:` surface: a flag no
 reclaim here has been checked against is not cleaned.

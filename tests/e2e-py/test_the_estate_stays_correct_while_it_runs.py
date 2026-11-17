@@ -1,7 +1,7 @@
 """Phase 1's soak: a day after the acceptance, the estate still reads its drive as the criteria did (XC-090).
 
 The acceptance holds one drive of the bring-your-own scenario to the criteria the moment it ends. An estate left running
-goes on acting on what that drive made: maintenance sweeps its tables, the outbox relays deliver what the catalog
+goes on acting on what that drive made: maintenance runs its tables' passes, the outbox relays deliver what the catalog
 staged, each service's bus connection is rebuilt, secrets are re-read. An acceptance run keeps its drive with `--keep-drive PATH`
 (`kept_drive`), and a day later this module reads that drive again and holds the estate to three claims, reported
 together:

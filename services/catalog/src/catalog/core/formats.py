@@ -125,7 +125,7 @@ def reject_unsupported_properties(properties: object) -> None:
     if armed := auto_cleanup.armed_keys(properties):
         raise InvalidInputError(
             f"properties {armed} are not accepted: Lance's commit-path auto-cleanup deletes versions past every legal hold, "
-            "so version reclamation belongs to the maintenance sweep and its retention policy alone"
+            "so version reclamation belongs to maintenance and its retention policy alone"
         )
     if steering := compaction_config_keys(properties):
         raise InvalidInputError(

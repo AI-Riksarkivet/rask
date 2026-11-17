@@ -22,8 +22,8 @@ from lance_namespace import LanceNamespace, ListNamespacesRequest, ListNamespace
 from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
-from catalog.services import warehouses
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 from tests.unit.named_resolver import NamedResolver
 
 
@@ -65,7 +65,7 @@ def _list(monkeypatch: pytest.MonkeyPatch, tmp_path: object, catalogs: dict[str,
     for warehouse_id in catalogs:
         if warehouse_id != settings.estate_warehouse:
             record = {"id": warehouse_id, "bucket": f"{warehouse_id}-bkt", "root_uri": f"s3://{warehouse_id}-bkt", "project": "acme", "created_at": "t"}
-            warehouses.put_warehouse(settings.registry_root, StorageOptions(), record)
+            seeding.put_warehouse(settings.registry_root, StorageOptions(), record)
 
     async def _resolve(request: Request, settings: Settings, warehouse_id: str) -> LanceNamespace:
         del request, settings

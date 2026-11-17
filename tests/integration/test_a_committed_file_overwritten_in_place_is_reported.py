@@ -57,6 +57,7 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask
+from tests import seeding
 from tests.integration.maintenance_vend_doors import CATALOG_URL, MAINTAIN_TIER_DOOR, VENDED, described_by, maintain_tier_door
 
 
@@ -167,7 +168,7 @@ class _Estate:
         result."""
         table_uuid = self.table_uuid()
         if reclaiming:
-            maintenance_policies.put_policy(f"s3://{self.bucket}", self.key, {"kind": "table", "id": _TABLE, "uuid": table_uuid, "retain_versions": 1})
+            seeding.put_policy(f"s3://{self.bucket}", self.key, {"kind": "table", "id": _TABLE, "uuid": table_uuid, "retain_versions": 1})
         settings = self.settings(**({"min_versions_to_expire": 1} if reclaiming else {}))
         with door or maintain_tier_door(described_by(self.client)):
             outcome = table_pass.run_table_pass(TableTask(uuid=table_uuid, location=location), settings)
@@ -374,7 +375,7 @@ def _no_policy(estate: _Estate, location: str) -> None:
 def _a_cadence_that_skips_the_pass(estate: _Estate, location: str) -> None:
     """The table's own policy, its cadence stamped a minute ago, so its next pass is cut short by it."""
     policy: dict[str, object] = {"kind": "table", "id": _TABLE, "uuid": estate.table_uuid(), "compact_enabled": True, "compact_interval_hours": 24}
-    maintenance_policies.put_policy(f"s3://{estate.bucket}", estate.key, policy)
+    seeding.put_policy(f"s3://{estate.bucket}", estate.key, policy)
     stamped = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
     maintenance_policies.write_state(f"s3://{estate.bucket}", estate.key, policy, table_uuid=estate.table_uuid(), uri=location, at=stamped)
 

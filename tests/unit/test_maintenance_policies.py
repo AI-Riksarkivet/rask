@@ -21,6 +21,7 @@ from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import cadence_skip
+from tests import seeding
 
 
 TABLE_UUID = "0b1e5c1a-0000-4000-8000-000000000001"
@@ -43,8 +44,8 @@ def _project_policy(id_: str = "acme", buckets: list[str] | None = None, **field
 
 def test_registry_round_trips_and_lists(tmp_path: Path) -> None:
     root = str(tmp_path)
-    mp.put_policy(root, StorageOptions(), _policy(retention_days=7))
-    mp.put_policy(root, StorageOptions(), _policy(kind="namespace", id_="silver", uuid="ns-silver"))
+    seeding.put_policy(root, StorageOptions(), _policy(retention_days=7))
+    seeding.put_policy(root, StorageOptions(), _policy(kind="namespace", id_="silver", uuid="ns-silver"))
 
     stored = mp.get_policy(root, StorageOptions(), "table", TABLE_UUID)
     assert stored is not None and stored["retention_days"] == 7
@@ -61,7 +62,7 @@ def test_state_stamps_live_apart_from_policies(tmp_path: Path) -> None:
     root = str(tmp_path)
     record = _policy(compact_interval_hours=6)
     uri = "s3://bkt/u1_db$t"
-    mp.put_policy(root, StorageOptions(), record)
+    seeding.put_policy(root, StorageOptions(), record)
     assert mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri) is None
     mp.write_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri, at="2026-07-16T00:00:00+00:00")
     assert mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri) == "2026-07-16T00:00:00+00:00"
@@ -89,7 +90,7 @@ def test_list_policies_skips_a_corrupt_record(tmp_path: Path) -> None:
     # CONTRACT (audit 2026-07-16): one corrupt/malformed record must never void the others — the sweep
     # would otherwise maintain opted-out datasets and GC past protective retention.
     root = str(tmp_path)
-    mp.put_policy(root, StorageOptions(), _policy(retention_days=365))
+    seeding.put_policy(root, StorageOptions(), _policy(retention_days=365))
     (tmp_path / "_policies" / "table-corrupt.json").write_text("{truncated")
     (tmp_path / "_policies" / "table-nouuid.json").write_text('{"kind": "table"}')
     records = mp.list_policies(root, StorageOptions())
@@ -116,7 +117,7 @@ def test_project_policy_round_trips_and_lists(tmp_path: Path) -> None:
     # CONTRACT (#84): a UUID-LESS project record (it matches by buckets, keyed by its id) must survive the
     # registry round-trip AND list_policies' validation — the sweep only ever sees what list returns.
     root = str(tmp_path)
-    mp.put_policy(root, StorageOptions(), _project_policy(retention_days=90))
+    seeding.put_policy(root, StorageOptions(), _project_policy(retention_days=90))
     stored = mp.get_policy(root, StorageOptions(), "project", "acme")
     assert stored is not None and stored["buckets"] == ["acme-wh"]
     listed = mp.list_policies(root, StorageOptions())
@@ -129,8 +130,8 @@ def test_list_policies_rejects_a_bucketless_project_record(tmp_path: Path) -> No
     # A project record with no buckets could never match a dataset — malformed, skipped with a warning,
     # and it must not void the well-formed records next to it.
     root = str(tmp_path)
-    mp.put_policy(root, StorageOptions(), _project_policy())
-    mp.put_policy(root, StorageOptions(), {"kind": "project", "id": "ghost", "buckets": []})
+    seeding.put_policy(root, StorageOptions(), _project_policy())
+    seeding.put_policy(root, StorageOptions(), {"kind": "project", "id": "ghost", "buckets": []})
     (tmp_path / "_policies" / "project-nolist.json").write_text('{"kind": "project", "id": "x"}')
     records = mp.list_policies(root, StorageOptions())
     assert len(records) == 1 and records[0]["id"] == "acme"
@@ -208,7 +209,7 @@ def test_the_cadence_skips_inside_the_interval(tmp_path: Path) -> None:
     uri = "s3://bkt/u1_db$t"
 
     cadenced = _policy(compact_interval_hours=6)
-    mp.put_policy(str(tmp_path), StorageOptions(), cadenced)
+    seeding.put_policy(str(tmp_path), StorageOptions(), cadenced)
     # No stamp yet → maintain (an absent/lost stamp must never silence maintenance).
     assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
     # Fresh stamp → skip; stale stamp → maintain.

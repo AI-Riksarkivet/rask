@@ -478,12 +478,6 @@ def _etag(claim: ClaimRead | None) -> str | None:
     return claim.etag if claim is not None else None
 
 
-def door_table(ns: LanceNamespace, store: ClaimStore, segments: list[str], *, announces: Callable[[str], bool]) -> DoorTable:
-    """The table ``segments`` names now, for a reader that resolves it outside a request's door (a tick acting on a record),
-    whose writes the emitter judges by ``announces``."""
-    return DoorTable(ns, store, resolve(ns, store, segments), announces=announces)
-
-
 def uuid_at(store: ClaimStore, location: str, segments: list[str]) -> str:
     """The uuid the claim on ``location`` records, for the table ``segments`` resolved to there.
 

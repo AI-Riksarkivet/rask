@@ -9,14 +9,11 @@ Each test names the finding it closes and fails for that finding's own reason wi
   derivation a reader came for is silently missing.
 * ``SKG-04`` — a truncated ``read_object_tuples`` must not return a short list that reads as complete;
   a revoke built on it would leave live grants behind while reporting success.
-* ``SKG-05`` — the 401 leaves on the SAME taxonomy as this door's other refusals, so a missing bearer
-  and an invalid one are described the same way; the 503 deliberately does not (see the test).
 * ``SKG-12`` — the JWKS fetch carries an explicit timeout, like the discovery fetch beside it.
 * ``SKG-15`` — a secret-store fetch failure is an ERROR, and a non-transport fault is NOT swallowed
   into an empty bundle that reads as "the store holds nothing".
 * ``SKG-10`` — the environment this kernel reads is DECLARED (a settings class), not four bare ``os.environ`` calls
   three of which name the same variable.
-* ``SKG-16`` — ``_retrying`` is annotated, and ``AuthDeps`` names callables rather than ``Any``.
 
 Uses stdlib ``asyncio.run`` so no pytest-asyncio dependency is needed (matches its sibling suites).
 """
@@ -26,23 +23,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import SimpleNamespace
-from typing import Annotated, Any, cast
+from typing import Any, cast
 
 import aiohttp
 import httpx
 import pytest
-from fastapi import Depends, FastAPI
-from fastapi.testclient import TestClient
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
-from pydantic import BaseModel
 
-from lakehouse.exceptions import register_handlers
 from lakehouse.governed import fga, oidc
 from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
-from lakehouse.governed.deps import make_auth_deps
-from lakehouse.ns_errors import install_problem_handlers
 
 
 def _client(c: object) -> OpenFgaClient:
@@ -230,87 +221,6 @@ def test_read_object_tuples_refuses_to_return_a_truncated_set() -> None:
                 retry_max_backoff_seconds=0.0,
             )
         )
-
-
-# --------------------------------------------------------------------------- #
-# SKG-05 — the auth dependencies speak the taxonomy both planes map
-# --------------------------------------------------------------------------- #
-
-
-class _AuthSettings(BaseModel):
-    oidc_enabled: bool = True
-    fga_enabled: bool = False
-
-
-def _auth_settings() -> _AuthSettings:
-    return _AuthSettings()
-
-
-# MODULE level, not inside the app factory: this file carries `from __future__ import annotations`, so
-# a `Depends(_deps.…)` referencing a LOCAL name resolves to nothing and FastAPI silently demotes the
-# parameter to a query param (a 422, never the refusal under test). `test_auth_deps_resolve.py` records
-# the same trap — it is the reason endpoint modules bind their deps at module scope.
-_AuthSettingsDep = Annotated[_AuthSettings, Depends(_auth_settings)]
-_auth_deps = make_auth_deps(_AuthSettingsDep)
-_Subject = Annotated[str, Depends(_auth_deps.current_subject)]
-_OptionalSubject = Annotated[str, Depends(_auth_deps.optional_subject)]
-
-
-def _governed_app() -> FastAPI:
-    """An app wired the way every consumer of `make_auth_deps` actually wires one: BOTH installers.
-
-    Verified rather than assumed — `lakehouse.lance_app` calls `register_handlers` then
-    `install_problem_handlers`. Building this with only
-    one of them would prove a defect in a configuration nothing ships.
-    """
-    app = FastAPI()
-    register_handlers(app)
-    install_problem_handlers(app, logging.getLogger(__name__))
-
-    @app.get("/gated")
-    def _gated(subject: _Subject) -> dict[str, str]:
-        return {"subject": subject}
-
-    @app.get("/soft")
-    def _soft(subject: _OptionalSubject) -> dict[str, str]:
-        return {"subject": subject}
-
-    return app
-
-
-def test_a_missing_bearer_is_refused_in_the_spec_taxonomy() -> None:
-    """A missing bearer is answered in the envelope a bad one is (SKG-05).
-
-    A bad bearer leaves `authenticate` as a `lance_namespace.UnauthenticatedError` raised inside `verify`, which renders
-    with the numeric `code` a Lance-Namespace client parses. The missing one is the same refusal, so it carries the same
-    code: a door describes "you are not authenticated" one way, whichever half failed.
-    """
-    with TestClient(_governed_app(), raise_server_exceptions=False) as client:
-        client.app.state.oidc = object()
-        refusal = client.get("/gated")
-
-    assert refusal.status_code == 401
-    assert refusal.headers["content-type"].startswith("application/problem+json")
-    body = refusal.json()
-    assert (body.get("code"), body["detail"]) == (int(UnauthenticatedError("x").code), "Missing bearer token")
-
-
-def test_the_unwired_verifier_503_still_names_the_knob() -> None:
-    """The DELIBERATE other half of the split — see `deps.py`'s import comment.
-
-    `ns_errors.problem_detail` redacts every 5xx detail but 501, so moving this refusal to the lance
-    taxonomy would answer "Internal Server Error" and delete the only string that says which knob is
-    unwired. This pins the message so the split cannot be quietly completed in the wrong direction.
-    """
-    with TestClient(_governed_app(), raise_server_exceptions=False) as client:
-        unavailable = client.get("/gated")
-        assert unavailable.status_code == 503
-        assert unavailable.headers["content-type"].startswith("application/problem+json")
-        assert "unavailable" in unavailable.json()["detail"].lower()
-
-        soft = client.get("/soft")
-        assert soft.status_code == 503
-        assert "unavailable" in soft.json()["detail"].lower()
 
 
 # --------------------------------------------------------------------------- #

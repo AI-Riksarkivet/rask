@@ -34,6 +34,7 @@ from maintenance.services import table_pass
 from maintenance.services.expiry import ExpiryPolicy
 from maintenance.services.naming import TableIds
 from maintenance.services.table_pass import TableTask, run_table_pass
+from tests import seeding
 
 
 def _dataset(path: Path) -> str:
@@ -123,4 +124,4 @@ def test_a_task_naming_a_table_at_anothers_location_leaves_that_tables_due_recor
 
     misaddressed = run_table_pass(TableTask(uuid=standing.uuid, location=elsewhere.location), settings)
 
-    assert (misaddressed.ended, maintenance_due.read_due(control, StorageOptions(), standing.uuid)) == ("gone", due)
+    assert (misaddressed.ended, seeding.read_due(control, StorageOptions(), standing.uuid)) == ("gone", due)

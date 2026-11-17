@@ -26,6 +26,7 @@ from pathlib import Path
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 
 
 def _root(tmp_path: Path) -> str:
@@ -40,7 +41,7 @@ def _write(tmp_path: Path, prefix: str, name: str, payload: object) -> None:
 
 def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_path: Path) -> None:
     good = {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"}
-    wh_svc.put_warehouse(_root(tmp_path), StorageOptions(), good)
+    seeding.put_warehouse(_root(tmp_path), StorageOptions(), good)
     # Present and truthy on every identity field, and structurally useless: `bucket` can never equal
     # the string a claim guard compares it to, and `project` reaches `str(...)` as a dict repr.
     _write(tmp_path, "_warehouses", "zz-typed", {"id": 5, "bucket": ["bkt-a"], "project": {"name": "acme"}})
@@ -49,6 +50,6 @@ def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_pat
 
 def test_a_project_record_with_a_WRONG_TYPED_id_is_skipped(tmp_path: Path) -> None:
     good = {"id": "acme", "created_at": "t", "created_by": "root"}
-    proj_svc.put_project(_root(tmp_path), StorageOptions(), good)
+    seeding.put_project(_root(tmp_path), StorageOptions(), good)
     _write(tmp_path, "_projects", "zz-typed", {"id": ["acme"]})
     assert proj_svc.list_projects(_root(tmp_path), StorageOptions()) == [good]

@@ -3,7 +3,7 @@
 RUN: `write_model.main()`, the hook's whole entrypoint, against `openfga_stub`, which admits only the bearer its
 token file holds. Admitted, the hook reads the store and finds this checkout's model already held. Refused, it
 exits 1 at once rather than retrying for two minutes and exiting 0, which would record the hook as succeeded
-with the model unwritten.
+with the model unwritten. A token file the Job cannot read fails the hook the same way: no wait mends it either.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from lakehouse.governed.auth import write_model
+from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
 from tests.unit.openfga_stub import BY_NAME, Recorded, openfga
 
 
@@ -34,3 +35,19 @@ def test_the_model_hook_presents_its_token_and_fails_when_refused(
         code = write_model.main()
 
     assert (code, recorded.refused) == outcome, capsys.readouterr()
+
+
+def test_the_model_hook_fails_when_it_cannot_read_its_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    admitted = tmp_path / "admitted"
+    admitted.write_text("the-jobs-projected-token\n")
+    recorded = Recorded()
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    with openfga(BY_NAME, recorded, token_file=admitted) as url:
+        monkeypatch.setenv("FGA_API_URL", url)
+        monkeypatch.setenv("RASK_FGA_TOKEN_FILE", str(tmp_path / "never-projected"))
+        monkeypatch.delenv("RASK_FGA_STORE_ID", raising=False)
+        with pytest.raises(IdentityTokenUnavailableError, match="never-projected"):
+            write_model.main()
+
+    assert recorded.refused == 0

@@ -16,6 +16,7 @@ import pytest
 from openlineage.client.facet_v2 import (
     parent_run,
 )
+from openlineage.client.serde import Serde
 
 from lakehouse.lineage import (
     BASE_FACET_SCHEMA_URL,
@@ -47,6 +48,11 @@ from lakehouse.lineage.schemas import DatasetFacets, JobRef, OutputDatasetFacets
 _JOB_RUN_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
 _STAGE_RUN_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3302"
 _EVENT_TIME = "2026-07-27T09:00:00+00:00"
+
+
+def _wire(event: RunEvent) -> dict[str, Any]:
+    """The event as the official client's serializer writes it, which is what a transport sends."""
+    return Serde.to_dict(event.to_openlineage())
 
 
 def _full_event() -> RunEvent:
@@ -90,7 +96,7 @@ def test_facet_schema_urls_match_the_installed_client(constant: str, official: A
 
 
 def test_wire_facets_carry_producer_and_schema_url() -> None:
-    wire = _full_event().to_wire()
+    wire = _wire(_full_event())
     run_facets = wire["run"]["facets"]
     out_facets = wire["outputs"][0]["facets"]
     for facet, url in [
@@ -111,7 +117,7 @@ def test_round_trip_through_the_official_serializer() -> None:
     # every field must survive, so THE standard emission shape and the official client
     # can never silently disagree about a key spelling or a facet placement.
     event = _full_event()
-    back = RunEvent.model_validate(event.to_wire())
+    back = RunEvent.model_validate(_wire(event))
     assert back == event
 
 
@@ -125,7 +131,7 @@ def test_job_facets_survive_to_wire_and_back() -> None:
         run=Run(run_id=_STAGE_RUN_ID),
         job=Job(namespace="rask", name="promote", facets={"sourceCodeLocation": source}),
     )
-    wire = event.to_wire()
+    wire = _wire(event)
     assert wire["job"]["facets"]["sourceCodeLocation"] == source
     assert RunEvent.model_validate(wire).job.facets["sourceCodeLocation"] == source
 

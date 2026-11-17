@@ -93,16 +93,12 @@ def write_due(control_root: str, storage_options: StorageOptions, record: DueRec
     put_record(control_root, storage_options, due_key(record.uuid), record.model_dump(mode="json"))
 
 
-def read_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> DueRecord | None:
-    return _parsed(get_record(control_root, storage_options, due_key(table_uuid), event="maintenance_due"))
-
-
 def delete_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
     return delete_record(control_root, storage_options, due_key(table_uuid))
 
 
 def due_record_names(control_root: str, storage_options: StorageOptions) -> frozenset[str]:
-    """The file name of every due record held now, reading none of them: what a sweep tick may judge at its end."""
+    """The file name of every due record held now, reading none of them: what a pass may judge at its end."""
     listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{DUE_PREFIX}", storage_options)
     names = (stored.path.rsplit("/", 1)[-1] for stored in listed)
     return frozenset(name for name in names if _is_a_record(name))

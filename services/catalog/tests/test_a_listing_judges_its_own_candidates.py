@@ -25,9 +25,9 @@ import pytest
 from lance_namespace import RegisterTableRequest, connect
 
 from catalog.core.config import get_settings
-from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER
+from tests import seeding
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
@@ -106,7 +106,7 @@ def test_the_root_lists_exactly_the_warehouses_its_caller_may_see(estate: Any, c
     settings = get_settings()
     for warehouse in ("acme-wh", "beta-wh"):
         record = {"id": warehouse, "bucket": warehouse, "project": "acme", "root_uri": f"{settings.root}/{warehouse}"}
-        warehouses.put_warehouse(settings.registry_root, settings.storage_options(), record)
+        seeding.put_warehouse(settings.registry_root, settings.storage_options(), record)
     estate.store.write((estate.person("dave"), "reader", "warehouse:acme-wh"))
 
     listed = _ok(estate, "/v1/namespace/$/list", caller=caller)

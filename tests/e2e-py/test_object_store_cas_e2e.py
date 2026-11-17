@@ -14,8 +14,8 @@ name is contractual:
   3. 8-process Lance ``append`` stress — Append⊥Append never logically conflicts, so ALL writers must land
      (800/800 rows) — proving Lance's real manifest-CAS commit path survives contention on this store.
 
-Run: ``make e2e-cas`` (port-forwards RustFS + sets LANCE_E2E_S3_*). Writes under ``__cas_stress/`` — the
-compaction sweep skips ``__`` prefixes, so this never collides with the lakehouse or gets GC'd.
+Run: ``make e2e-cas`` (port-forwards RustFS + sets LANCE_E2E_S3_*). Writes under ``__cas_stress/``:
+maintenance's discovery skips ``__`` prefixes, so this never collides with the lakehouse or gets GC'd.
 """
 
 from __future__ import annotations

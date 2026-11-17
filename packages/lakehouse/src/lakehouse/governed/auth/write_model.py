@@ -14,15 +14,24 @@ and versioned, so writing unconditionally mints a new id on every upgrade — th
 
 from __future__ import annotations
 
+import http.client
 import json
+import logging
+import time
 import urllib.error
 import urllib.parse
 from importlib.resources import files
 from typing import Any, Final
 
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from lakehouse.app import setup_logging
 from lakehouse.governed.fga import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, ModelHistoryTooLongError, canonical_model, newest_store
 from lakehouse.governed.machine_identity import identity_bearer
 
+
+log = logging.getLogger(__name__)
 
 #: The store the estate uses, found the way every service finds it: `fga.newest_store`.
 STORE_NAME: Final = "lance-catalog"
@@ -80,29 +89,23 @@ def history(api: str, store: str, desired: dict[str, Any], *, token_file: str | 
     raise ModelHistoryTooLongError(f"store {store}'s model history exceeded {MODEL_MAX_PAGES} pages; refusing to read it as absent")
 
 
-def carried_model(api: str, *, token_file: str | None, pinned: str = "") -> tuple[str, str]:
-    """``(store, model)`` for a tool that checks or writes tuples: the estate's store, and this code's model in it.
+class ModelHookSettings(BaseSettings):
+    """What the chart's `openfga-model` Job is told: where OpenFGA is, the token it presents, and the store when one is pinned."""
 
-    A tuple request naming no ``authorization_model_id``, or naming the store's newest, is validated against
-    whichever image wrote last ([[LH-201]]). In the LH-201 review (OpenFGA v1.18.3) a legacy image's narrower
-    newest model refused every ``estate`` tuple on ``type 'estate' not found``. So the rule is the one the hook and every
-    service share: the ``pinned`` store (``RASK_FGA_STORE_ID``) when given, else
-    the newest named ``STORE_NAME``, and in it the model whose canonical body is this package's ``model.json``.
+    model_config = SettingsConfigDict(frozen=True)
 
-    Raises:
-        LookupError: there is no such store, or it holds no model carrying this body. No id is right to send
-            then, and the store's newest is the one wrong answer.
-    """
-    store = pinned
-    if not store:
-        named = newest_store(_call(api, "/stores", token_file=token_file).get("stores") or [], STORE_NAME)
-        if named is None:
-            raise LookupError(f"OpenFGA at {api} holds no store named {STORE_NAME!r} and none is pinned")
-        store = str(named["id"])
-    carrying = history(api, store, model_document(), token_file=token_file).carrying
-    if carrying is None:
-        raise LookupError(f"store {store} at {api} holds no model carrying this code's model.json: neither the openfga-model hook nor the catalog wrote it")
-    return store, str(carrying["id"])
+    api_url: str = Field(alias="FGA_API_URL")
+    token_file: str = Field(alias="RASK_FGA_TOKEN_FILE")
+    store_id: str = Field(default="", alias="RASK_FGA_STORE_ID")
+
+
+#: What a store still coming up answers a request with: a refused or reset connection, a timeout, a status that is not
+#: 200, a connection closed before the status line, or a body that is not JSON yet. Anything else is not "not ready".
+_NOT_READY: Final = (OSError, http.client.HTTPException, json.JSONDecodeError)
+
+#: How many times the hook asks for the stores, and the seconds between two asks.
+_ATTEMPTS: Final = 60
+_ATTEMPT_SECONDS: Final = 2
 
 
 def main() -> int:
@@ -112,56 +115,55 @@ def main() -> int:
     newest one named `lance-catalog` unless `RASK_FGA_STORE_ID` pins one, and a held body is not written
     again wherever it sits in the history. Nothing to pre-write exits 0 rather than failing the upgrade:
     with no store yet, or OpenFGA unreachable, the catalog writes its image's model when it boots, and a
-    failed pre-upgrade hook would refuse the very upgrade that repairs OpenFGA. Run as a module rather
-    than a heredoc in the Job's `args` so :func:`history` is covered by tests. Every request presents the
-    Job's projected `rask-openfga` token from `RASK_FGA_TOKEN_FILE` ([[XC-077]]), which the chart always sets,
-    and a 401 or 403 exits 1: a refused credential is a misconfiguration no later boot repairs.
-    """
-    import os
-    import sys
-    import time
+    failed pre-upgrade hook would refuse the very upgrade that repairs OpenFGA. Every request presents the
+    Job's projected `rask-openfga` token from `RASK_FGA_TOKEN_FILE` ([[XC-077]]), which the chart always sets.
+    A 401 or 403 exits 1, and a token file the Job cannot read raises: neither is a store still coming up, and
+    no later boot repairs either.
 
-    api = os.environ["FGA_API_URL"]
-    token_file = os.environ["RASK_FGA_TOKEN_FILE"]
-    # The store may still be coming up behind the migrate hook, which is the ordering this hook sits
-    # in the middle of. Any transport error here means "not ready yet" rather than "broken".
+    Raises:
+        IdentityTokenUnavailableError: The Job's token file cannot be read.
+    """
+    setup_logging()
+    settings = ModelHookSettings()
+    api, token_file = settings.api_url, settings.token_file
+    # The store may still be coming up behind the migrate hook, which is the ordering this hook sits in the middle of.
     stores: list[dict[str, Any]] = []
-    for attempt in range(60):
+    for attempt in range(_ATTEMPTS):
         try:
             stores = _call(api, "/stores", token_file=token_file).get("stores") or []
             break
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
-                # A refused credential is not "not ready yet": no wait mends it, and exiting 0 would record the
-                # hook as succeeded with the model unwritten ([[XC-077]]).
-                print(f"OpenFGA at {api} refused this Job's token from {token_file} (HTTP {exc.code})", file=sys.stderr)
+                log.error("openfga_model_hook_token_refused", extra={"api": api, "token_file": token_file, "status": exc.code})
                 return 1
-            if attempt == 59:
-                print(f"OpenFGA unreachable ({exc}); nothing pre-written, the catalog writes this image's model when it boots", file=sys.stderr)
+            if attempt == _ATTEMPTS - 1:
+                log.warning("openfga_model_hook_openfga_unreachable", extra={"api": api, "error": str(exc)})
                 return 0
-            time.sleep(2)
-        except Exception as exc:  # any transport error here means "not ready yet"
-            if attempt == 59:
-                print(f"OpenFGA unreachable ({exc}); nothing pre-written, the catalog writes this image's model when it boots", file=sys.stderr)
+            time.sleep(_ATTEMPT_SECONDS)
+        except _NOT_READY as exc:
+            if attempt == _ATTEMPTS - 1:
+                log.warning("openfga_model_hook_openfga_unreachable", extra={"api": api, "error": str(exc)})
                 return 0
-            time.sleep(2)
+            time.sleep(_ATTEMPT_SECONDS)
 
     named = newest_store(stores, STORE_NAME)
-    store = os.environ.get("RASK_FGA_STORE_ID", "") or (str(named["id"]) if named else "")
+    store = settings.store_id or (str(named["id"]) if named else "")
     if not store:
-        print("no OpenFGA store yet and none pinned; nothing pre-written, the catalog creates it and writes this image's model when it boots")
+        log.info("openfga_model_hook_no_store", extra={"api": api})
         return 0
 
     desired = model_document()
     desired.pop("id", None)
     held = history(api, store, desired, token_file=token_file)
     if held.carrying is not None:
-        where = f"below the store's newest {held.newest['id']}" if held.held_below_newest else "as the store's newest"
-        print(f"store {store} already holds this image's model {held.carrying['id']} ({len(shape(desired))} types) {where}; nothing written")
+        log.info(
+            "openfga_model_hook_model_already_held",
+            extra={"store": store, "model": held.carrying["id"], "types": len(shape(desired)), "below_newest": held.held_below_newest},
+        )
         return 0
 
     written = _call(api, f"/stores/{store}/authorization-models", desired, token_file=token_file, timeout=60)
-    print(f"wrote authorization model {written.get('authorization_model_id')} to store {store}")
+    log.info("openfga_model_hook_model_written", extra={"store": store, "model": written.get("authorization_model_id")})
     return 0
 
 

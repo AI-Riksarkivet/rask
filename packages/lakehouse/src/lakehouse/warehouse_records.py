@@ -2,12 +2,12 @@
 
 The catalog owns the registry and its writes (`catalog/services/warehouses.py` — provisioning,
 CAS, delete). Nothing else may import that: services share only cross-cutting libraries,
-never each other. But the maintenance sweep genuinely needs to know WHICH buckets exist, and the
+never each other. But maintenance genuinely needs to know WHICH buckets exist, and the
 answer changes at runtime — a warehouse is provisioned by an API call, not by a config edit.
 
 So the reader lives here, in the shared lakehouse library, deliberately narrow: it reads records and
 nothing else. It cannot write or delete, which keeps the catalog the only writer while giving
-the sweep a truthful answer. Same store shape as its siblings (one JSON per record under a prefix),
+maintenance a truthful answer. Same store shape as its siblings (one JSON per record under a prefix),
 and that primitive now exists: :mod:`lakehouse.record_store`.
 """
 
@@ -34,7 +34,7 @@ def list_warehouse_records(control_root: str, storage_options: StorageOptions) -
     """Every readable warehouse record (unordered). An absent prefix yields ``[]``.
 
     One unreadable record is skipped with a warning rather than blinding the whole listing: this
-    feeds a maintenance sweep, and one bad record must not stop every other tenant being maintained.
+    feeds a maintenance pass, and one bad record must not stop every other tenant being maintained.
     A caller making a DESTRUCTIVE decision must not use this — it is deliberately tolerant — and reads
     :func:`read_warehouse_records` instead.
 
@@ -60,7 +60,7 @@ def read_warehouse_records(control_root: str, storage_options: StorageOptions) -
 
 
 def maintainable_buckets(records: list[dict[str, Any]]) -> list[str]:
-    """The buckets whose datasets the sweep should maintain, sorted and de-duplicated.
+    """The buckets whose datasets are maintained, sorted and de-duplicated.
 
     DEACTIVATED warehouses are excluded, and that is a decision rather than an oversight. Deactivate
     is offboarding step one — the resolver already 403s every operation on a quarantined tenant's

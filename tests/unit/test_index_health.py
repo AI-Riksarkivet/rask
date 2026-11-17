@@ -17,11 +17,12 @@ import pyarrow as pa
 import pytest
 from pydantic import SecretStr
 
-from lakehouse.maintenance_due import IndexDue, read_due
+from lakehouse.maintenance_due import IndexDue
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import DueQuestion, refresh_due
 from maintenance.services.index_health import due_indices
+from tests import seeding
 
 
 def _indexed(tmp_path: Path, *, rows: int = 200) -> str:
@@ -86,7 +87,7 @@ def test_an_index_whose_describe_fails_decides_nothing_and_its_due_record_stays(
     monkeypatch.setattr(lance.LanceDataset, "describe_indices", unanswered)
     verdict = refresh_due(question, settings, now=datetime.now(UTC))
 
-    kept = read_due(control, StorageOptions(), question.uuid)
+    kept = seeding.read_due(control, StorageOptions(), question.uuid)
     assert (verdict, kept.indices if kept is not None else None) == ("failed", [IndexDue(name="id_btree", unindexed_rows=60, deltas=1)])
 
 

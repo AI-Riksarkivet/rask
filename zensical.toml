@@ -180,6 +180,7 @@ nav = [
           "adr/0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md",
           "adr/0216-the-events-poll-reads-the-control-stream.md",
           "adr/0217-four-behaviours-stand-as-the-spec-the-format-and-the-load-leave-them.md",
+          "adr/0218-a-table-carries-no-lance-compaction-config.md",
         ]},
         { "Superseded and retired" = [
           "adr/0005-p2-1-single-base-cascade-write.md",

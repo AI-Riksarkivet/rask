@@ -1,7 +1,6 @@
 """Trash records for the drop→undrop path (#75, open_lakehouse_diff §1.2).
 
-`docs/COVERAGE.md` recorded soft-delete/undrop as N/A, "replaced by Lance version time-travel +
-`restore_table`". That argument does not hold and is corrected there: **time-travel does not survive
+Lance version time-travel and `restore_table` do not stand in for an undrop: **time-travel does not survive
 `drop_table`** — `restore_table` rewinds a LIVE table; a drop deletes the bytes and leaves no version
 to rewind to. Time-travel covers bad-WRITE recovery, never bad-DROP recovery.
 

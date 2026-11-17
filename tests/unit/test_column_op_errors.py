@@ -24,11 +24,11 @@ from lance_namespace import (
     connect,
 )
 
-from catalog.services import table_claims
 from catalog.services.dataplane import create_table, drop_columns
 from catalog.services.table_claims import DoorTable
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
+from tests.door_tables import door_table
 
 
 #: The stamp a door commits with ([[LH-497]]).
@@ -40,7 +40,7 @@ def table(tmp_path: Path) -> DoorTable:
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(ns, StorageOptions(), ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
+    return door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
 
 
 def test_a_storage_failure_on_a_column_op_is_not_blamed_on_the_caller(table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:

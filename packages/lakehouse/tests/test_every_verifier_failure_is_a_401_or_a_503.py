@@ -1,11 +1,11 @@
-"""A bearer the verifier cannot use is answered 401 or 503 at the governed doors, and never 500.
+"""A bearer the verifier cannot use is answered 401 or 503 at the governed door, and never 500.
 
-`OIDCVerifier.verify` has exactly two refusal types, and both doors (`authenticate`, `optional_subject`) are built
-around them: `UnauthenticatedError` when the PRESENTED TOKEN is at fault (401, audited `invalid_token`), and
-`ProviderUnavailableError` when the IdP, or this deployment's view of it, is at fault (503, audited
-`verifier_unavailable`). Any third type — the fleet's `ServiceUnavailableError` included — reaches their `except
-Exception` branch and is recorded as `invalid_token` against the caller, so each 503 case below also pins that its
-raise site uses the subclass the Lance-taxonomy doors catch.
+`OIDCVerifier.verify` has exactly two refusal types, and the door every governed service authenticates at
+(`lakehouse.governed.door_caller.caller_of`) is built around them: `UnauthenticatedError` when the PRESENTED TOKEN is
+at fault (401, audited `invalid_token`), and `ProviderUnavailableError` when the IdP, or this deployment's view of it,
+is at fault (503, audited `verifier_unavailable`, the fault itself in the service's log and not in the answer). Any
+third type reaches the door's `except Exception` branch and is recorded as `invalid_token` against the caller, so each
+503 case below also pins that its raise site uses the subclass the door catches.
 
 Measured 2026-11-06 on PyJWT 2.15.1 / httpx 0.28.1, these paths reach the door as a type outside PyJWT's own
 taxonomy unless `oidc.py` classifies them:
@@ -50,13 +50,14 @@ from typing import Annotated
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import AUDIT_LOGGER
-from lakehouse.governed.deps import make_auth_deps
+from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
@@ -65,7 +66,6 @@ from lakehouse.ns_errors import install_problem_handlers
 
 AUDIENCE = "rask"
 KID = "signing-1"
-DOORS = ["/gated", "/soft"]
 DISCOVERY_PATH = "/.well-known/openid-configuration"
 JWKS_PATH = "/jwks"
 
@@ -75,20 +75,22 @@ SLOW_ANSWER_SECONDS = 0.3
 SIGN_IN_PAGE = b"<!doctype html><title>Sign in</title>"
 
 
-class _AuthSettings(BaseModel):
+class _DoorSettings(BaseModel):
     oidc_enabled: bool = True
-    fga_enabled: bool = False
+    sa_issuer: str | None = None
 
 
-def _auth_settings() -> _AuthSettings:
-    return _AuthSettings()
+_bearer = HTTPBearer(auto_error=False)
 
 
-# Module scope: `make_auth_deps` must be bound where FastAPI can resolve the route annotations
-# (`test_auth_deps_resolve.py` records why a local binding silently degrades to a query parameter).
-_deps = make_auth_deps(Annotated[_AuthSettings, Depends(_auth_settings)])
-_Subject = Annotated[str, Depends(_deps.current_subject)]
-_OptionalSubject = Annotated[str, Depends(_deps.optional_subject)]
+def _subject(request: Request, credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]) -> str:
+    """The subject the door every governed service authenticates at (`door_caller.caller_of`) reads off the bearer."""
+    caller = caller_of(request.app.state, _DoorSettings(), credentials.credentials if credentials is not None else None)
+    assert caller is not None
+    return caller.subject
+
+
+_Subject = Annotated[str, Depends(_subject)]
 
 
 class _Fault(StrEnum):
@@ -234,15 +236,11 @@ def _client(idp: _IdP, *, clock: Callable[[], float] = time.monotonic) -> TestCl
     def _gated(subject: _Subject) -> dict[str, str]:
         return {"subject": subject}
 
-    @app.get("/soft")
-    def _soft(subject: _OptionalSubject) -> dict[str, str]:
-        return {"subject": subject}
-
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _call(idp: _IdP, door: str, token: str, *, client: TestClient | None = None) -> tuple[int, str]:
-    response = (client or _client(idp)).get(door, headers={"Authorization": f"Bearer {token}"})
+def _call(idp: _IdP, token: str, *, client: TestClient | None = None) -> tuple[int, str]:
+    response = (client or _client(idp)).get("/gated", headers={"Authorization": f"Bearer {token}"})
     return response.status_code, response.text
 
 
@@ -256,52 +254,54 @@ def _audited_reasons(caplog: pytest.LogCaptureFixture) -> list[object]:
     return [getattr(record, "audit.reason", None) for record in caplog.records if record.name == AUDIT_LOGGER]
 
 
+def _logged_fault(caplog: pytest.LogCaptureFixture) -> str:
+    """What the verifier said was wrong, as the service's own log carries it: the door answers a 503 that names no
+    cause, and logs the refusal with the verifier's fault as its cause."""
+    [fault] = [record.exc_info[1].__cause__ for record in caplog.records if record.name == __name__ and record.exc_info and record.exc_info[1]]
+    return str(fault)
+
+
 # ── the controls: the fix must not blur the line between the two refusals ─────────────────────────────
 
 
-@pytest.mark.parametrize("door", DOORS)
-def test_a_token_the_key_set_signed_is_accepted(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+def test_a_token_the_key_set_signed_is_accepted(idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
 
     assert status == 200, body
     assert json.loads(body) == {"subject": "corp~gina"}
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_burst_of_novel_kids_costs_one_key_set_fetch(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+def test_a_burst_of_novel_kids_costs_one_key_set_fetch(idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
     """A `kid` is the caller's to write, unverified. Each novel one earns a refetch only while no other began within the
     interval, so a flood of them, anonymous and concurrent, costs the IdP one fetch rather than one per request, and the
     requests behind it are refused at once rather than each holding a worker for the fetch budget ([[LH-431]]). The IdP
     answers slowly so that the whole burst meets the verifier while the first refetch is in flight: a pace claimed only
     once its fetch returns lets every request in the burst through."""
     client = _client(idp)
-    assert _call(idp, door, _token(idp, rsa_key, "RS256"), client=client)[0] == 200
+    assert _call(idp, _token(idp, rsa_key, "RS256"), client=client)[0] == 200
     idp.slow.add(JWKS_PATH)
     tokens = [_token(idp, rsa_key, "RS256", kid=f"forged-{n}") for n in range(8)]
 
     with ThreadPoolExecutor(max_workers=len(tokens)) as pool:
-        statuses = list(pool.map(lambda token: _call(idp, door, token, client=client)[0], tokens))
+        statuses = list(pool.map(lambda token: _call(idp, token, client=client)[0], tokens))
 
     assert statuses == [401] * len(tokens)
     assert idp.fetches[JWKS_PATH] == 2
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_key_rotated_in_during_a_flood_is_found_once_the_interval_passes(
-    door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey
-) -> None:
+def test_a_key_rotated_in_during_a_flood_is_found_once_the_interval_passes(idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey) -> None:
     """A key the provider rotates in after the cached set is found by a refetch, which a forged kid met first may delay by
     at most one interval and never lock out: refusing a rotated token from the cache would lock every caller out for
     the cache lifetime after each rotation. Three fetches in all: the first request's, the forged kid's, and the
     rotated token's once the interval has passed."""
     clock = _Clock()
     client = _client(idp, clock=clock)
-    assert _call(idp, door, _token(idp, rsa_key, "RS256"), client=client)[0] == 200
-    assert _call(idp, door, _token(idp, rsa_key, "RS256", kid="forged"), client=client)[0] == 401
+    assert _call(idp, _token(idp, rsa_key, "RS256"), client=client)[0] == 200
+    assert _call(idp, _token(idp, rsa_key, "RS256", kid="forged"), client=client)[0] == 401
     idp.documents[JWKS_PATH] = _key_set(stranger_key, "signing-2")
     clock.now += UNKNOWN_KID_REFRESH_INTERVAL_SECONDS
 
-    status, body = _call(idp, door, _token(idp, stranger_key, "RS256", kid="signing-2"), client=client)
+    status, body = _call(idp, _token(idp, stranger_key, "RS256", kid="signing-2"), client=client)
 
     assert status == 200, body
     assert idp.fetches[JWKS_PATH] == 3
@@ -310,28 +310,25 @@ def test_a_key_rotated_in_during_a_flood_is_found_once_the_interval_passes(
 # ── the caller's fault ──────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("door", DOORS)
-def test_a_token_signed_by_another_key_is_the_callers(door: str, idp: _IdP, stranger_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
-    status, body = _call(idp, door, _token(idp, stranger_key, "RS256"))
+def test_a_token_signed_by_another_key_is_the_callers(idp: _IdP, stranger_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+    status, body = _call(idp, _token(idp, stranger_key, "RS256"))
 
     assert status == 401, body
     assert _audited_reasons(audit_trail) == ["invalid_token"]
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_token_that_names_no_kid_is_the_callers(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+def test_a_token_that_names_no_kid_is_the_callers(idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
     """The key set is fine; the token names no key at all."""
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256", kid=None))
+    status, body = _call(idp, _token(idp, rsa_key, "RS256", kid=None))
 
     assert status == 401, body
     assert _audited_reasons(audit_trail) == ["invalid_token"]
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_token_whose_alg_names_another_key_family_is_the_callers(door: str, idp: _IdP, audit_trail: pytest.LogCaptureFixture) -> None:
+def test_a_token_whose_alg_names_another_key_family_is_the_callers(idp: _IdP, audit_trail: pytest.LogCaptureFixture) -> None:
     """ES256 in the header, the RSA key's `kid` beside it. Both values are the caller's to write, and RFC 8725 §3.1
     requires each key to be used with exactly one algorithm — so this is a refused token, not a fault."""
-    status, body = _call(idp, door, _token(idp, ec.generate_private_key(ec.SECP256R1()), "ES256"))
+    status, body = _call(idp, _token(idp, ec.generate_private_key(ec.SECP256R1()), "ES256"))
 
     assert status == 401, body
     assert _audited_reasons(audit_trail) == ["invalid_token"]
@@ -340,54 +337,49 @@ def test_a_token_whose_alg_names_another_key_family_is_the_callers(door: str, id
 # ── the IdP's fault, which is ours ──────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("door", DOORS)
-def test_a_discovery_url_that_answers_404_is_ours(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+def test_a_discovery_url_that_answers_404_is_ours(idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
     del idp.documents[DISCOVERY_PATH]
 
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
-    assert "could not be reached" in json.loads(body)["detail"]
+    assert "could not be reached" in _logged_fault(audit_trail)
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_discovery_document_naming_another_issuer_is_ours(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+def test_a_discovery_document_naming_another_issuer_is_ours(idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
     """The document disagrees with this deployment's configuration; the token is never read."""
     idp.documents[DISCOVERY_PATH] = _discovery("https://another-issuer.example.test")
 
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
-    assert "different issuer" in json.loads(body)["detail"]
+    assert "different issuer" in _logged_fault(audit_trail)
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_provider_advertising_no_algorithm_we_accept_is_ours(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+def test_a_provider_advertising_no_algorithm_we_accept_is_ours(idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
     """The provider's advertised list against this deployment's allowlist; the token's own `alg` plays no part."""
     idp.documents[DISCOVERY_PATH] = _discovery(idp.issuer, algorithms=("PS256",))
 
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
-    assert "signing algorithm" in json.loads(body)["detail"]
+    assert "signing algorithm" in _logged_fault(audit_trail)
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_discovery_document_that_is_not_json_is_ours(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+def test_a_discovery_document_that_is_not_json_is_ours(idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
     idp.documents[DISCOVERY_PATH] = SIGN_IN_PAGE
 
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
-@pytest.mark.parametrize("door", ["/gated"])
 def test_a_key_set_url_that_redirects_is_ours_and_the_redirect_is_not_followed(
-    door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture
 ) -> None:
     """A key-set fetch follows no redirect, so the bearer it carries reaches no host but the one the key-set URL names.
 
@@ -397,26 +389,23 @@ def test_a_key_set_url_that_redirects_is_ours_and_the_redirect_is_not_followed(
     idp.documents[DISCOVERY_PATH] = _discovery(idp.issuer, jwks_path="/moved")
     idp.redirects["/moved"] = f"{idp.issuer}{JWKS_PATH}"
 
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
-    assert json.loads(body)["detail"] == f"The OIDC key set could not be reached at {idp.issuer}/moved"
+    assert _logged_fault(audit_trail) == f"The OIDC key set could not be reached at {idp.issuer}/moved"
     assert JWKS_PATH not in idp.fetches
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
 @pytest.mark.parametrize("fault", [_Fault.BODY_CUT_SHORT, _Fault.RESET_MID_BODY])
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_key_set_the_idp_drops_mid_answer_is_ours(
-    door: str, fault: _Fault, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture
-) -> None:
+def test_a_key_set_the_idp_drops_mid_answer_is_ours(fault: _Fault, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
     """Named unreachable, not unusable: the set never arrived, so nothing is known about its keys."""
     idp.faults[JWKS_PATH] = fault
 
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
-    assert "could not be reached" in json.loads(body)["detail"]
+    assert "could not be reached" in _logged_fault(audit_trail)
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
@@ -435,19 +424,17 @@ UNUSABLE_KEY_SETS = {
 
 
 @pytest.mark.parametrize("key_set", UNUSABLE_KEY_SETS.values(), ids=UNUSABLE_KEY_SETS.keys())
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_key_set_with_no_usable_key_is_ours(door: str, key_set: bytes, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+def test_a_key_set_with_no_usable_key_is_ours(key_set: bytes, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
     idp.documents[JWKS_PATH] = key_set
 
-    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
-    assert "holds no usable signing key" in json.loads(body)["detail"]
+    assert "holds no usable signing key" in _logged_fault(audit_trail)
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_key_set_the_idp_has_since_fixed_is_believed_at_once(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+def test_a_key_set_the_idp_has_since_fixed_is_believed_at_once(idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
     """A set the cache holds that has no signing key would otherwise be served for the cache's whole lifespan (300 s)
     after the provider replaced it: every caller refused for an outage that is over. The set's one key is for
     encryption, so PyJWT parses and caches it; the unusable bodies above never reach the cache, since `fetch_data`
@@ -456,21 +443,20 @@ def test_a_key_set_the_idp_has_since_fixed_is_believed_at_once(door: str, idp: _
     token = _token(idp, rsa_key, "RS256")
     usable = idp.documents[JWKS_PATH]
     idp.documents[JWKS_PATH] = _key_set(rsa_key, KID, use="enc")
-    assert _call(idp, door, token, client=client)[0] == 503
+    assert _call(idp, token, client=client)[0] == 503
 
     idp.documents[JWKS_PATH] = usable
-    status, body = _call(idp, door, token, client=client)
+    status, body = _call(idp, token, client=client)
 
     assert status == 200, body
     # Two fetches in all: the first request's, and the second request's refetch for the set the cache kept.
     assert idp.fetches[JWKS_PATH] == 2
 
 
-@pytest.mark.parametrize("door", ["/gated"])
-def test_a_key_set_that_cannot_be_reached_is_asked_for_once(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+def test_a_key_set_that_cannot_be_reached_is_asked_for_once(idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
     """The refetch above is for a set that ARRIVED unusable. One that never arrived is not asked for twice: against a
     hung IdP each attempt waits out the fetch timeout, so a second would double the time a request is held."""
     idp.faults[JWKS_PATH] = _Fault.CLOSED_BEFORE_ANSWERING
 
-    assert _call(idp, door, _token(idp, rsa_key, "RS256"))[0] == 503
+    assert _call(idp, _token(idp, rsa_key, "RS256"))[0] == 503
     assert idp.fetches[JWKS_PATH] == 1

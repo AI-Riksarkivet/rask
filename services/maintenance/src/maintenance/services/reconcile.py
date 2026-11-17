@@ -1,4 +1,4 @@
-"""The cross-store drift reconciler — a REPORT, beside the sweep (`open_hierarchy_lifecycle.md` Decision 4).
+"""The cross-store drift reconciler — a REPORT, beside the passes (`open_hierarchy_lifecycle.md` Decision 4).
 
 **NOTHING DELETES. NOTHING MUTATES.** Every path in this module is read-only, and that is the point:
 a reclaimer that deletes on its first run against an unvalidated rule eats live data. The output is a
@@ -207,7 +207,7 @@ class UngovernedTable(BaseModel):
     `X from parent`, so a table carrying none denies EVERY principal, including the identity that
     created it. Nothing in the product reports that: the reconciler compares the registry against
     storage and against FGA at the project/warehouse rungs, and was blind at the table rung — so the
-    first door that ever asked such a table a permission question was the maintenance sweep's
+    first door that ever asked such a table a permission question was maintenance's
     `can_maintain`, and a governance hole surfaced as a compaction statistic.
 
     NO TUPLES AT ALL is the test, deliberately narrower than "missing its parent edge". That is the
@@ -241,7 +241,7 @@ class OrphanedTrash(BaseModel):
     worth a number rather than a silence."""
 
     id: str
-    #: The uuid the record is filed under ([[LH-525]]): what a sweep clears it by.
+    #: The uuid the record is filed under ([[LH-525]]): what the tombstone sweep clears it by.
     uuid: str
     kind: TrashKind
     location: str
@@ -327,7 +327,7 @@ async def _read_async[T](source: str, awaitable: Awaitable[T]) -> tuple[T | None
 
 async def _read_blocking[T](source: str, fn: Callable[..., T], *args: Any, **kwargs: Any) -> tuple[T | None, str | None]:
     """The blocking twin of :func:`_read_async` — the registry/bucket listings are blocking IO, so they
-    run in the threadpool exactly like the sweep's.
+    run in the threadpool exactly like a pass's.
 
     Forwards keywords as well as positionals so the readers it drives can declare their ambiguous
     parameters keyword-only (MAINT-16) instead of being forced positional by this seam."""
@@ -723,11 +723,9 @@ class Sources(BaseModel):
         if any(scan.source.startswith("catalog:tables") for scan in self.incomplete):
             return None
         return {
-            uuid: _resolved(root, location)
+            uuid: _resolved(found[0], location)
             for table, uuid in self.table_uuids.items()
-            if (found := self.table_locations.get(table)) is not None
-            for root, location in [found]
-            if location
+            if (found := self.table_locations.get(table)) is not None and (location := found[1])
         }
 
 
@@ -1055,7 +1053,7 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, s
     were computed from, and a report whose categories disagree about which warehouses exist is worse
     than one that is merely incomplete.
 
-    The FAILURE posture differs from the sweep's deliberately. The sweep logs a warning and degrades
+    The FAILURE posture differs from a pass's deliberately. A pass logs a warning and degrades
     to the configured list, which is exactly its old behaviour and costs only a maintenance cycle. A
     REPORT may not do that: an unreadable registry means buckets nobody looked at, so it is recorded
     as an IncompleteScan. "A 0 that means 'we did not look' is the one number this report must never
@@ -1197,9 +1195,9 @@ async def reconcile(
 
     ``grants`` reads the store's grant census through the catalog (``None`` → the two ghost categories and
     ``unreferenced_projects`` report unavailable rather than silently empty). ``bucket_client`` is an S3 client (``None`` → same,
-    for ``orphan_buckets``); when omitted one is built from the sweep's own credentials.
+    for ``orphan_buckets``); when omitted one is built from maintenance's own credentials.
 
-    ``control_root`` defaults to the root the sweep already reads the maintenance-policy registry from
+    ``control_root`` defaults to the root maintenance already reads the maintenance-policy registry from
     (``MAINTENANCE_POLICY_ROOT``, else the primary bucket) — the catalog's control root, and the one
     place the project and warehouse records live. ``namespace_root`` defaults to the primary lakehouse
     bucket: the estate's own root, which serves the estate's own warehouse (``settings.estate_warehouse``).
@@ -1219,7 +1217,7 @@ async def reconcile(
     storage_options = settings.storage_options()
     own_client: S3Client | None = None
     if bucket_client is None and on_s3(resolved_namespace_root):
-        # The storage seam's client for the sweep's own options: signed by the whole credential in force (a session's
+        # The storage seam's client for maintenance's own options: signed by the whole credential in force (a session's
         # access key signs only beside its token), at the options' endpoint and region, never by the ambient chain.
         bucket_client = own_client = object_client(storage_options)
 

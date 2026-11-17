@@ -154,8 +154,10 @@ newer one replacing it, and a schedules stream may not discard new. Both are wor
 consumer reads a held schedule. A schedules stream is served with `allow_rollup_hdrs` on and `deny_purge` off whatever
 its config asks (asking otherwise is overridden, and `deny_purge` beside rollups is refused, 10052), so it is declared
 that way, and the worker asserts the audit's and the scan's schedules at its start and every 15 minutes
-(`maintenance.services.tasks`), which brings them back after a purge. Measured on nats-server 2.15.2 with file storage
-(2026-11-09).
+(`maintenance.services.tasks`), which brings them back after a purge. One publish carrying `Nats-Rollup: all` on any of
+the stream's subjects therefore drops every held schedule, each table's included (`maintenance.due.>`): the audit's and
+the scan's return within those 15 minutes, and a table's when the next hourly audit queues it again
+(`maintenance.services.audit.run_audit`). Measured on nats-server 2.15.2 with file storage (2026-11-09).
 
 The Job then reads MAINTENANCE_SCHEDULES back with a raw `$JS.API.STREAM.INFO` request and fails unless its config says
 `allow_msg_schedules: true`. A server older than 2.12 drops the field it does not know and reports the stream created:

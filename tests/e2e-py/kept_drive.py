@@ -2,7 +2,7 @@
 
 The acceptance (`-m phase1`) holds one drive of the bring-your-own scenario to the criteria once it has ended. The soak
 (`test_the_estate_stays_correct_while_it_runs.py`) asks the same of the estate a day on: left running, with its
-maintenance sweeps, outbox relays and reconcilers acting on what the drive made, does it still read the drive the way
+maintenance passes, outbox relays and reconcilers acting on what the drive made, does it still read the drive the way
 the criteria did? So a run passed `--keep-drive PATH` keeps the scenario's tenant when every test it ran passed, and
 records at PATH what the soak needs to read the drive again: the tenant, the run, who played each part, and what lineage's
 feed held of the drive once the session ended. A run passed `--soak PATH` resumes that tenant, signed in again, and

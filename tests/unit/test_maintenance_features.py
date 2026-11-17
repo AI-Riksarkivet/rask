@@ -242,9 +242,6 @@ def test_the_manifest_says_WHICH_kind_of_base_a_dataset_declares(tmp_path: pathl
     base_refs = features.manifest_base_path_refs(lance.dataset(based))
     assert [(ref.path, ref.is_dataset_root) for ref in base_refs] == [(str(external), False)]
 
-    # …and the paths-only view every caller already uses stays exactly what it was.
-    assert features.manifest_base_paths(lance.dataset(clone)) == [source]
-
 
 def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a_clone(tmp_path: pathlib.Path) -> None:
     """The cost refusal must land on the case it was measured on, and on no other.

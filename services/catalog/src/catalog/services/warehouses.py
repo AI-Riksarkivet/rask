@@ -38,7 +38,6 @@ from catalog.services.control_records import (
     validated_or_refuse,
     with_manager,
     with_protection,
-    write_json,
 )
 from lakehouse import control_prefixes, trash
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
@@ -116,25 +115,6 @@ def _warehouse_key(warehouse_id: str) -> str:
     """The registry key for one warehouse. One definition because three call sites now build it —
     and a conditional write that targeted a different key from the read would silently do nothing."""
     return f"{_REGISTRY_PREFIX}/{warehouse_id}.json"
-
-
-def put_warehouse(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Unconditionally overwrite ``_warehouses/<id>.json``. **A SEEDING primitive — no production caller.**
-
-    It had two, and both were the diff2 F4 defect: an unconditional put of a record assembled from an
-    earlier read silently discards whatever landed in between, which is how a quarantine could be
-    lifted without anyone calling ``/activate``. Those paths now go through :func:`upsert_warehouse`
-    (idempotent re-create) and :func:`set_warehouse_status` (lifecycle flip), both conditional on the
-    record's ETag. The id-MINT goes through :func:`create_warehouse_record`, conditional on absence (F1).
-
-    What is left is fixture setup — ~25 test sites that need a record to EXIST and have no concurrency
-    to lose to. Kept for them, and pinned by ``tests/unit/test_registry_writes_are_conditional.py``:
-    if this appears in a production path again, that test names it. Do not reach for it in service or
-    endpoint code; there is a conditional door for every real mutation.
-
-    The caller stamps ``created_at`` (kept out of here so unit tests stay deterministic).
-    """
-    write_json(control_root, storage_options, _warehouse_key(record["id"]), record)
 
 
 #: The fields an idempotent re-create OWNS. Everything else on the live record belongs to the
@@ -455,16 +435,6 @@ def project_of(control_root: str, storage_options: StorageOptions, warehouse_id:
     record = get_warehouse(control_root, storage_options, warehouse_id)
     project = record.get("project") if record else None
     return str(project) if project else None
-
-
-def warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> str | None:
-    """A warehouse's lifecycle status: ``"active"`` / ``"deactivated"``. Returns ``"active"`` when the field
-    is ABSENT (backward compat — records written before the lifecycle feature have no status and are live),
-    and ``None`` only when the warehouse record does not exist. Read live, never cached: status is mutable."""
-    record = get_warehouse(control_root, storage_options, warehouse_id)
-    if record is None:
-        return None
-    return record.get("status") or "active"
 
 
 def set_warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str, status: str) -> dict[str, str] | None:

@@ -27,6 +27,7 @@ from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
+from tests import seeding
 
 
 PROJECT = "acme"
@@ -135,9 +136,7 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
     """A delete that retires the project ends its maintenance policy too ([[LH-562]]): a project created again under the
     id is another tenant, which a policy kept for the id would govern as soon as it named a bucket."""
     settings = get_settings()
-    maintenance_policies.put_policy(
-        settings.registry_root, settings.storage_options(), {"kind": "project", "id": PROJECT, "buckets": ["acme-lake"], "retain_versions": 1}
-    )
+    seeding.put_policy(settings.registry_root, settings.storage_options(), {"kind": "project", "id": PROJECT, "buckets": ["acme-lake"], "retain_versions": 1})
     armed = estate.client.post(f"/management/v1/projects/{PROJECT}/protection", json={"protected": True}, headers=estate.bearer(CO_ADMIN))
     assert armed.status_code == 200, armed.text
 

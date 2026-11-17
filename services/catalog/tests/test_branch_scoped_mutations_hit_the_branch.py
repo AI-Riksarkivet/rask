@@ -27,12 +27,12 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, ServiceUnavailableError, connect
 from tables_by_name import open_by_name
 
-from catalog.services import table_claims
 from catalog.services.dataplane import create_table, update_table
 from catalog.services.table_claims import DoorTable
 from lakehouse import base_registry
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
+from tests.door_tables import door_table
 
 
 lance = pytest.importorskip("lance")
@@ -67,7 +67,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
 @pytest.fixture
 def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     """The table as a door acts on it, resolved on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
+    return door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
 
 def test_a_branch_commit_the_store_cannot_key_is_refused_before_it_lands(ns, table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001

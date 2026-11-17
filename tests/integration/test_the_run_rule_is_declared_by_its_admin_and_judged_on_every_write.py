@@ -26,6 +26,7 @@ from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 from tests.integration.openfga_grants import Grants, act_as
 
 
@@ -64,7 +65,7 @@ def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
     real_ns_client.app.state.oidc = MagicMock()
     store = Grants()
     real_ns_client.app.state.fga = store
-    warehouses.put_warehouse(
+    seeding.put_warehouse(
         root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
     )
     warehouses.ensure_catalog_row(real_ns_client.app.dependency_overrides[get_namespace](), WAREHOUSE)

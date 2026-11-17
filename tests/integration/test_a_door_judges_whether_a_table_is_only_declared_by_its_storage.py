@@ -50,6 +50,7 @@ from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage_options import StorageOptions
 from lineage.services.provenance import ProvenanceStore
+from tests import seeding
 from tests.integration import store_requests
 from tests.integration.lineage_app import ensure_tables, serve
 
@@ -157,7 +158,7 @@ def held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Held]:
 
     with TestClient(app) as client:
         # The warehouse with its own row in its root, as the create door leaves it, and a namespace in it.
-        warehouses.put_warehouse(f"file://{registry}", StorageOptions(), {"id": "wh-a", "bucket": "wh-a", "root_uri": str(root), "project": "acme"})
+        seeding.put_warehouse(f"file://{registry}", StorageOptions(), {"id": "wh-a", "bucket": "wh-a", "root_uri": str(root), "project": "acme"})
         warehouses.ensure_catalog_row(connect("dir", {"root": str(root)}), "wh-a")
         connect("dir", {"root": str(root)}).create_namespace(CreateNamespaceRequest(id=["wh-a", "db"], properties=with_minted_uuid(None)))
         for location in (_NESTED, "twin"):

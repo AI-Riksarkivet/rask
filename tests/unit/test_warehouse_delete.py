@@ -42,6 +42,7 @@ from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
+from tests import seeding
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -141,7 +142,7 @@ def _seed(
     }
     if protected:
         record["protected"] = "true"
-    warehouses.put_warehouse(settings.registry_root, so, record)
+    seeding.put_warehouse(settings.registry_root, so, record)
     return record
 
 
