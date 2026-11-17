@@ -30,6 +30,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from lance.file import LanceFileReader
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
 
@@ -133,6 +134,7 @@ def test_a_version_whose_subject_file_is_gone_is_not_a_residual(tmp_path: Path, 
     uri = str(tmp_path / "subjects")
     build(uri)
     shared = lance.Session(metadata_cache_size_bytes=64 << 20, index_cache_size_bytes=64 << 20)
+    assert _holding(uri), "the byte oracle must find the subject before the erasure, or finding nothing after it says nothing"
 
     report = erase(uri, dataset=lance.dataset(uri, session=shared))
 
@@ -852,6 +854,8 @@ def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names
     base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
     try:
         namespace = build(root)
+        # Finding nothing after the erasure is evidence only where the oracle found the identifier before it.
+        assert _stored_under(root), "the byte oracle must find the identifier before the erasure"
         with _door(namespace, settings) as client:
             recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": predicate})
             assert recorded.status_code == 202, recorded.text
@@ -866,11 +870,37 @@ def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names
 
     assert response.status_code == 200, response.text
     report = response.json()["report"]
-    holders = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file() and _IDENTIFIER.encode() in path.read_bytes())
+    holders = _stored_under(root)
     named = [field for field in ("held_by_retention", "pinned_by") if report[field]]
     named += sorted({s["surface"].split(":", 1)[0] for s in report["surfaces"] if s["outcome"] == "held"})
     unclean = sorted(s["surface"] for s in report["surfaces"] if s["outcome"] in ("failed", "skipped"))
     assert (holders == [], report["complete"], named, unclean) == expected, (holders, report)
+
+
+def _stored_under(root: Path) -> list[str]:
+    """The objects under ``root`` that hold the identifier, as written or inside a Lance file's encoded pages.
+
+    A raw read finds an identifier Lance stored as written (a manifest, a transaction, a small page). Lance compresses a
+    large string page (measured on pylance 13.0.0: the identifier among 20,000 values is in no object's raw bytes), so
+    every ``.lance`` file is also decoded and its values searched.
+    """
+    return sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file() and _holds_identifier(path))
+
+
+def _holds_identifier(path: Path) -> bool:
+    if _IDENTIFIER.encode() in path.read_bytes():
+        return True
+    if path.suffix != ".lance":
+        return False
+    try:
+        decoded = LanceFileReader(str(path)).read_all().to_table()
+    except ValueError as refused:
+        # A file holding a blob-v2 column refuses the reader's projection (measured on pylance 13.0.0), so it is judged on
+        # its raw bytes alone. Any other refusal is a file this oracle could not read, which is no evidence of absence.
+        if "projection specified the column index" not in str(refused):
+            raise
+        return False
+    return any(_IDENTIFIER in str(value) for column in decoded.columns for value in column.to_pylist())
 
 
 def _history(location: str) -> tuple[dict[str, Any], list[int], list[int], int]:

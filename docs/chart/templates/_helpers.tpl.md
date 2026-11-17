@@ -34,8 +34,7 @@ guarantee a rask selector can never adopt a lance pod inside the shared release.
 =====================================================================================================
 
 ---------------------------------------------------------------------------------------------------
-rask — the base chart's helpers (the cluster route —
-the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
+rask: the base chart's helpers (names, labels and the cluster route).
 ---------------------------------------------------------------------------------------------------
 
 ## `{{- define "rask.componentLabels" -}}`

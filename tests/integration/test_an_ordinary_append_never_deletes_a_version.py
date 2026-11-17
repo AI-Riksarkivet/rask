@@ -68,21 +68,26 @@ def test_door_commits_on_an_armed_table_keep_every_version(
     lance.dataset(location).update_config(_ARMED)
     kept = {v["version"] for v in lance.dataset(location).versions()}
 
+    # The two doors that disarm every ref are given an armed branch as well.
+    disarms_every_ref = door != "insert"
+    if disarms_every_ref:
+        lance.dataset(location).create_branch("work", lance.dataset(location).version)
+        lance.dataset(location).checkout_version(("work", None)).update_config(_ARMED)
     if door == "erasure":
         erased = real_ns_client.post(f"/management/v1/table/{TABLE}/erasure", json={"predicate": "id = 2", "retain_days": 30})
         assert erased.status_code == 202, erased.text
     elif door == "maintenance/disarm":
-        lance.dataset(location).create_branch("work", lance.dataset(location).version)
-        lance.dataset(location).checkout_version(("work", None)).update_config(_ARMED)
         monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
         settings = MaintenanceSettings.model_validate({"s3_bucket": "unused", "catalog_url": CATALOG_URL})
         with maintain_tier_door(lambda _table: location, catalog=real_ns_client):
             answered = [credentials.disarm_cleanup(TABLE, settings, branch=ref).disarmed for ref in (None, "work")]
-        work = lance.dataset(location).checkout_version(("work", None)).config()
-        assert (answered, [key for key in work if key.startswith("lance.auto_cleanup.")]) == ([sorted(_ARMED), sorted(_ARMED)], [])
+        assert answered == [sorted(_ARMED), sorted(_ARMED)]
     else:
         for marker in (10, 11, 12):
             _append(real_ns_client, marker)
+    if disarms_every_ref:
+        work = lance.dataset(location).checkout_version(("work", None)).config()
+        assert not [key for key in work if key.startswith("lance.auto_cleanup.")], f"/{door} left the branch armed: {work}"
 
     after = lance.dataset(location)
     assert kept <= {v["version"] for v in after.versions()}, (

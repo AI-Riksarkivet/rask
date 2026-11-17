@@ -4,7 +4,7 @@
 published, not the producer, so a publisher the bus admits could otherwise record provenance as anyone. Enforced, an
 unsigned event and one whose signature does not verify are refused: taken, so the bus neither delivers them again nor
 has them parked, and not recorded. A public-key source lineage cannot read is an outage, so the delivery is asked for
-again rather than refused.
+again rather than refused. Each refusal is counted once under its reason and each verified event once under its signer.
 
 Driven through lineage's own app and lifespan, each event delivered to its ingest lane, FGA off so only the signature
 decides. The signer's public keys are read from the secret store, which the suite's double answers; the signatures are
@@ -33,14 +33,16 @@ SIGNER = "service-pipeline-a"
 
 
 @pytest.fixture
-def refusals(monkeypatch: pytest.MonkeyPatch) -> Callable[[], dict[str, int]]:
-    """`lineage.signature.refused` by reason, read through a real in-memory reader."""
-    counts = measured(monkeypatch, "_signature_refused")
+def signature_counts(monkeypatch: pytest.MonkeyPatch) -> Callable[[], dict[tuple[str, str], int]]:
+    """Both signature counters read through a real in-memory reader: ``("refused", reason)`` and ``("verified", identity)``."""
+    counts = measured(monkeypatch, "_signature_refused", "_signature_verified")
 
-    def by_reason() -> dict[str, int]:
-        return {dict(attributes)["lance.lineage.reason"]: count for attributes, count in counts("lineage.signature.refused").items()}
+    def by_series() -> dict[tuple[str, str], int]:
+        refused = {("refused", dict(attributes)["lance.lineage.reason"]): count for attributes, count in counts("lineage.signature.refused").items()}
+        verified = {("verified", dict(attributes)["lance.lineage.identity"]): count for attributes, count in counts("lineage.signature.verified").items()}
+        return refused | verified
 
-    return by_reason
+    return by_series
 
 
 def _event() -> dict[str, Any]:
@@ -56,9 +58,9 @@ def _event() -> dict[str, Any]:
 
 
 @pytest.fixture
-def lane(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]], secret_store: SecretStoreDouble) -> Iterator[Lineage]:
-    """Lineage started after `refusals`, as a pod starts its lane after its MeterProvider is installed."""
-    del refusals, secret_store
+def lane(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], dict[tuple[str, str], int]], secret_store: SecretStoreDouble) -> Iterator[Lineage]:
+    """Lineage started after `signature_counts`, as a pod starts its lane after its MeterProvider is installed."""
+    del signature_counts, secret_store
     monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([SIGNER, "service-catalog"]))
     monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps(["service-catalog"]))
     with started(monkeypatch, Feed()) as lineage:
@@ -66,29 +68,31 @@ def lane(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]]
 
 
 @pytest.mark.parametrize(
-    ("case", "again", "recorded"),
+    ("case", "again", "recorded", "counted"),
     [
-        pytest.param("unsigned", False, False, id="an-unsigned-event"),
-        pytest.param("tampered", False, False, id="an-event-changed-after-its-signer-signed-it"),
-        pytest.param("store-down", True, False, id="a-public-key-source-lineage-cannot-read"),
+        pytest.param("signed", False, True, ("verified", SIGNER), id="an-event-its-listed-signer-signed"),
+        pytest.param("unsigned", False, False, ("refused", "unsigned"), id="an-unsigned-event"),
+        pytest.param("tampered", False, False, ("refused", "signature"), id="an-event-changed-after-its-signer-signed-it"),
+        pytest.param("store-down", True, False, None, id="a-public-key-source-lineage-cannot-read"),
     ],
 )
 def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
     lane: Lineage,
-    refusals: Callable[[], dict[str, int]],
+    signature_counts: Callable[[], dict[tuple[str, str], int]],
     event_signer: Any,
     secret_store: SecretStoreDouble,
     respx_allows_unused_routes: None,
     case: str,
     again: bool,
     recorded: bool,
+    counted: tuple[str, str] | None,
 ) -> None:
     signer = event_signer(SIGNER)
     secret_store.hold(f"signing-public-{SIGNER}", httpx.Response(500) if case == "store-down" else secret_store.held({"keys": signer.public}))
     event = _event() if case == "unsigned" else signer.sign(_event())
     if case == "tampered":
         event["outputs"] = [{"namespace": "gold", "name": "acme-gold$events"}]
-    assert refusals() == dict.fromkeys(get_args(RefusalReason.__value__), 0), (
+    assert signature_counts() == {("refused", reason): 0 for reason in get_args(RefusalReason.__value__)}, (
         "starting the lane must create every refusal series at 0, or a first refusal is no increase"
     )
 
@@ -97,3 +101,5 @@ def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
     expected = Settlement(outcome=Outcome.AGAIN, delay_seconds=get_settings().delivery_retry_seconds) if again else Settlement(outcome=Outcome.TAKEN)
     assert settled == expected, f"{case}: the lane settled {settled}"
     assert bool(lane.feed.recorded) is recorded, f"{case}: recorded {lane.feed.recorded}"
+    # A refusal is taken off the bus, so its count is the only trace it leaves; an outage is asked for again and counts nothing.
+    assert {series: count for series, count in signature_counts().items() if count} == ({counted: 1} if counted else {})

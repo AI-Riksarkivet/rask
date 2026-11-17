@@ -107,6 +107,7 @@ def _capture_policy(client: TestClient) -> dict[str, Any]:
     [
         "created",
         "created-and-maintained",
+        "created-and-described",
         "registered-over-its-directory",
         "registered-over-a-renamed-tables-directory",
         "registered-under-a-dropped-tables-name-over-its-directory",
@@ -139,15 +140,22 @@ def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
     sent = _capture_policy(two_store_catalog)
 
     if second_table.startswith("created"):
-        tier = "maintain" if second_table == "created-and-maintained" else "read"
         sibling, sibling_location = _create(two_store_catalog, plain_base, _ids(3, 4))
-        vended = two_store_catalog.post(f"/management/v1/table/{sibling}/credentials", params={"tier": tier})
-
-        assert vended.status_code == 200, vended.text
-        assert vended.json()["mode"] == "direct", vended.text
+        if second_table == "created-and-described":
+            # The spec door mints through its own call of the vendor, so its credential is held to the same scope. It
+            # vends the caller's highest tier, which deletes nothing.
+            deletes = False
+            vended = two_store_catalog.post(f"/v1/table/{sibling}/describe", params={"vend_credentials": "true"})
+            assert vended.status_code == 200, vended.text
+            assert "aws_session_token" in (vended.json().get("storage_options") or {}), vended.text
+        else:
+            deletes = second_table == "created-and-maintained"
+            vended = two_store_catalog.post(f"/management/v1/table/{sibling}/credentials", params={"tier": "maintain" if deletes else "read"})
+            assert vended.status_code == 200, vended.text
+            assert vended.json()["mode"] == "direct", vended.text
         sibling_keys = _fragment_keys(two_stores, _directory(two_stores, sibling_location))
         granted = {action: [_permits(sent["policy"], action, *key) for key in sibling_keys] for action in ("s3:GetObject", "s3:DeleteObject")}
-        assert granted == {"s3:GetObject": [True] * len(sibling_keys), "s3:DeleteObject": [tier == "maintain"] * len(sibling_keys)}, sent["policy"]
+        assert granted == {"s3:GetObject": [True] * len(sibling_keys), "s3:DeleteObject": [deletes] * len(sibling_keys)}, sent["policy"]
         reached = [(action, key) for action in ("s3:GetObject", "s3:DeleteObject") for key in owner_keys if _permits(sent["policy"], action, *key)]
         assert reached == [], f"the sibling's vend reaches the owner's fragments: {sent['policy']}"
     else:
