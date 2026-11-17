@@ -10,7 +10,7 @@
 # and prints the environment a test run needs.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-port="${RASK_LIFECYCLE_STORE_PORT:-9411}"
+port="${RASK_LIFECYCLE_STORE_PORT:-$("$root/scripts/free_port.sh")}"
 endpoint="http://127.0.0.1:$port"
 work="$(mktemp -d)"
 store="$(bash "$root/scripts/rustfs_server.sh")"
