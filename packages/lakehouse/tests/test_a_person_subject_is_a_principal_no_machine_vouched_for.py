@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from lakehouse.governed.principal import Principal
 from lakehouse.governed.subjects import is_person_subject
 
 
@@ -38,3 +39,11 @@ def test_a_value_that_addresses_no_one_is_refused_by_the_shared_rule(value: str)
 @pytest.mark.parametrize("value", _ADDRESSES)
 def test_a_persons_subject_passes(value: str) -> None:
     assert is_person_subject(value), f"{value!r} is a person and was refused"
+
+
+@pytest.mark.parametrize("subject", [pytest.param("", id="empty"), pytest.param("   ", id="only-spaces"), pytest.param("a\x00b", id="a-control-character")])
+def test_a_subject_that_names_nobody_is_no_principal(subject: str) -> None:
+    """A principal is the key of every grant, so a subject no person could be told apart by is refused where the
+    principal is built, whichever issuer vouched for it."""
+    with pytest.raises(ValueError, match="a principal's subject"):
+        Principal(idp_id="corp", subject=subject)

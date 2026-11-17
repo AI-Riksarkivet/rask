@@ -68,6 +68,9 @@ def test_the_check_is_skipped_when_oidc_is_off() -> None:
         pytest.param({"RASK_OIDC_CONNECTORS": {}, "RASK_OIDC_IDP_ID": "corp-client"}, "a machine identity's idp id", id="the-issuer-claims-a-clients-idp-id"),
         pytest.param({"RASK_OIDC_SUBJECT_CLAIMS": ["oid"]}, "never read beside a Dex connector map", id="subject-claims-a-dex-connector-map-never-reads"),
         pytest.param({"RASK_OIDC_CONNECTORS": {}, "RASK_OIDC_SUBJECT_CLAIMS": []}, "name no claim", id="subject-claims-naming-none"),
+        pytest.param({"RASK_OIDC_CONNECTORS": {}, "RASK_OIDC_SUBJECT_CLAIMS": ["  "]}, "name no claim", id="a-subject-claim-of-spaces"),
+        pytest.param({"RASK_OIDC_LEEWAY": 3600}, "less than or equal to 300", id="a-leeway-that-revives-an-expired-token"),
+        pytest.param({"RASK_OIDC_LEEWAY": -1}, "greater than or equal to 0", id="a-negative-leeway"),
         pytest.param({"RASK_OIDC_CONNECTORS": {"local": "kubernetes"}}, "a machine identity's idp id", id="a-connector-claims-the-clusters-idp-id"),
         pytest.param({"RASK_OIDC_CONNECTORS": {"local": "Corp~1"}}, "no principal can carry", id="an-idp-id-outside-the-grammar"),
         pytest.param({"RASK_OIDC_PROVIDERS": [{"issuer": "https://issuer.test/", "idp_id": "corp"}]}, "named as an issuer twice", id="one-issuer-named-twice"),
@@ -89,8 +92,9 @@ def test_settings_no_bearer_could_pass_are_refused_at_construction(over: dict[st
     the one their Dex connector maps to. No idp id, or one no principal can carry, answers 401 to every person; subject
     claims the connector rule never reads leave which one names a person to the reader; an idp id a machine carries
     (`kubernetes`, any `-client`) makes people machines; one issuer named twice, or one idp id named by two issuers, puts
-    two rules or two issuers' people in one namespace; and one issuer named for both people and the cluster routes every
-    person's token as a service account's."""
+    two rules or two issuers' people in one namespace; one issuer named for both people and the cluster routes every
+    person's token as a service account's; and a leeway is clock skew, minutes at most, since every second of it is a
+    second an expired token still signs in."""
     with pytest.raises(ValueError, match=refusal):
         _settings(**over)
 

@@ -194,3 +194,24 @@ def test_a_window_is_answered_only_where_the_version_columns_describe_it(
         assert resp.json()["code"] == 19 and "begin_version=0" in resp.json()["detail"], resp.json()
     else:
         assert _ids(resp, uri) == answer
+
+
+def test_a_window_wider_than_the_feed_reads_in_one_request_is_refused_naming_the_next_window(
+    catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The feed reads one transaction per version of its window before it answers, so a window is bounded: any reader
+    could otherwise have the catalog make a store read per version a table ever had. The refusal names the window that
+    fits, so a consumer resynchronising from version 0 follows it in steps."""
+    from catalog.services import dataplane
+
+    monkeypatch.setattr(dataplane, "MOST_VERSIONS_IN_A_CHANGE_WINDOW", 2)
+    uri = _governed(catalog, root)
+    for added in (4, 5, 6):
+        lance.dataset(uri).insert(_valued([added]))
+
+    wide = catalog.post("/management/v1/table/lance_catalog$db$t/changes", json={"begin_version": 1, "kind": "inserted"})
+    fits = catalog.post("/management/v1/table/lance_catalog$db$t/changes", json={"begin_version": 1, "end_version": 3, "kind": "inserted"})
+
+    assert (wide.status_code, wide.json().get("code")) == (400, 13), wide.text
+    assert "end_version=3" in wide.json()["detail"], wide.text
+    assert _ids(fits, uri) == [4, 5]

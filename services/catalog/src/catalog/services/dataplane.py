@@ -3301,7 +3301,8 @@ def read_changes(
     and the native backend's scans share one bound an operator can move in one place.
 
     Raises:
-        InvalidInputError: an invalid window, or a predicate or projection Lance rejects.
+        InvalidInputError: an invalid window, one wider than :data:`MOST_VERSIONS_IN_A_CHANGE_WINDOW`, or a predicate
+            or projection Lance rejects.
         TableVersionNotFoundError: ``end_version`` is not a version of the ref.
         InvalidTableStateError: the table has no stable row ids, or the window spans a transaction the
             version columns cannot describe or whose record cannot be read.
@@ -3311,6 +3312,11 @@ def read_changes(
     dataset = table.open(so, version=end_version, branch=branch)
     changes.require_row_versions(dataset.has_stable_row_ids, table=label)
     end = int(dataset.version)
+    if begin_version > 0 and end - begin_version > MOST_VERSIONS_IN_A_CHANGE_WINDOW:
+        raise InvalidInputError(
+            f"the change window on table {label} spans {end - begin_version} versions and one request follows at most "
+            f"{MOST_VERSIONS_IN_A_CHANGE_WINDOW}: ask with end_version={begin_version + MOST_VERSIONS_IN_A_CHANGE_WINDOW}, then from there"
+        )
     spans = _window_spans(dataset, begin_version, end, branch)
     if begin_version > 0:
         _require_followable_window(spans, table=label)
@@ -3330,6 +3336,12 @@ def read_changes(
         batches = scanner.to_batches()
         first = next(batches, None)
     return end, _arrow_file_chunks(scanner.projected_schema, first, batches)
+
+
+#: The most versions one change-feed request follows. The feed reads one transaction per version of its window before
+#: it answers (:func:`_require_followable_window`), a store read each, so an unbounded window lets any reader have the
+#: catalog make one read per version a table ever had. A window from version 0 reads none and is not bounded.
+MOST_VERSIONS_IN_A_CHANGE_WINDOW: Final = 1000
 
 
 class _WindowSpan(BaseModel):

@@ -222,7 +222,7 @@ class OidcProvider(BaseModel):
         if self.subject_claims is not None:
             if self.connectors:
                 raise ValueError("subject claims are never read beside a Dex connector map, which reports its user id in federated_claims")
-            if not self.subject_claims or not all(self.subject_claims):
+            if not self.subject_claims or not all(claim.strip() for claim in self.subject_claims):
                 raise ValueError("the subject claims name no claim, or an empty one")
         if "" in self.connectors:
             raise ValueError("the connector map names an empty connector id")
@@ -249,7 +249,9 @@ class OidcSettings:
     #: How long an issuer's discovery document and key set are served before they are fetched again, in the background
     #: (`lakehouse.governed.oidc`): a key the issuer drops stops verifying within this. A request never waits on it.
     oidc_cache_ttl: int = Field(default=300, gt=0, alias="RASK_OIDC_CACHE_TTL")
-    oidc_leeway: int = Field(default=60, alias="RASK_OIDC_LEEWAY")
+    #: Clock skew a token's ``exp`` and ``nbf`` are read with, in seconds. Bounded at five minutes: every second of it
+    #: is a second an expired token still signs in.
+    oidc_leeway: int = Field(default=60, ge=0, le=300, alias="RASK_OIDC_LEEWAY")
     oidc_allow_insecure: bool = Field(default=False, alias="RASK_OIDC_ALLOW_INSECURE")
     #: The idp id of the issuer's people and clients ([[XC-214]], `lakehouse.governed.idp_identity`), required with OIDC:
     #: `corp` makes the person the issuer names `s` the principal `corp~s`, and its client `etl` signed in for itself

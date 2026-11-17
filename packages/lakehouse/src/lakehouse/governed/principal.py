@@ -60,7 +60,7 @@ class Principal(BaseModel):
 
     @model_validator(mode="after")
     def _well_formed(self) -> Self:
-        if not self.subject:
+        if not self.subject.strip():
             raise ValueError("a principal's subject is empty")
         if any(unicodedata.category(char) == "Cc" for char in self.subject):
             raise ValueError("a principal's subject carries a control character")
