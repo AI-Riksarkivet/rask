@@ -1,0 +1,29 @@
+[package]
+name = "lakehouse-tables"
+version = "0.1.0"
+description = "A table the catalog holds, read and written through the catalog's Lance Namespace doors as the caller's own identity."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+arrow-array = { workspace = true }
+arrow-ipc = { workspace = true }
+arrow-schema = { workspace = true }
+lakehouse-core = { path = "../lakehouse-core" }
+percent-encoding = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

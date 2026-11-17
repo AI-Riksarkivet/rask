@@ -169,6 +169,14 @@ rust-check: rust-vectors rust-port
 	  || { echo "!! The port's vectors or ledger drifted: a Python function or a crate changed. Commit the diff above."; exit 1; }
 	@echo "The Rust plane agrees with the Python it replaces"
 
+# The Rust table client against the REAL catalog (ADR 0222): scripts/port_catalog_check.sh starts the Python catalog
+# app on real pylance over a local directory, runs the client's tests against it and stops it. Under `rust-check`
+# those tests skip, so this target is what runs them.
+.PHONY: rust-catalog-check
+rust-catalog-check:
+	uv sync --all-packages
+	bash scripts/port_catalog_check.sh
+
 # ---- the models (specs/, ADR 0221) -------------------------------------------
 # TLC checks every TLA+ model under specs/ in every interleaving its config bounds. The jar is fetched once, held to
 # its digest (scripts/toolchain.sha256), and needs a Java runtime. `tla-check-full` adds the configs too large for

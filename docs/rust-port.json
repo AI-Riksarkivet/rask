@@ -4,6 +4,10 @@
       "lines": 2607,
       "budget": 11234
     },
+    "lakehouse-tables": {
+      "lines": 471,
+      "budget": 480
+    },
     "lineage": {
       "lines": 737,
       "budget": 2621

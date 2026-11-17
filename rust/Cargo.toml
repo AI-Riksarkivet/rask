@@ -9,14 +9,18 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# The Arrow major lance 13 builds on, so a crate that later reads a table through `lance` shares its arrays.
+arrow-array = "58"
+arrow-ipc = "58"
+arrow-schema = "58"
+axum ={ version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
 ed25519-dalek = "2"
 http-body-util = "0.1"
 jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto"] }
 percent-encoding = "2"
 # rustls over the platform's trust store; a private issuer's CA replaces that store for its own fetches.
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["catch-panic"] }
