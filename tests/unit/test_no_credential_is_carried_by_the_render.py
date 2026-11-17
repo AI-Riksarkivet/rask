@@ -14,6 +14,7 @@ authentication off, and a platform address a credential or the estate's data wou
 
 from __future__ import annotations
 
+import re
 import subprocess
 
 import pytest
@@ -50,10 +51,11 @@ def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
     with pytest.raises(subprocess.CalledProcessError) as refused:
         render_text(*DEFAULT_ARGS, "--set-string", "age.password=a-password", "--set-string", "objectStore.secretKey=a-root-secret")
 
-    assert sorted(line for line in refused.value.stderr.splitlines() if "additional properties" in line) == [
-        "- at '/age': additional properties 'password' not allowed",
-        "- at '/objectStore': additional properties 'secretKey' not allowed",
-    ]
+    # Helm words the schema's refusal by its JSON-schema library: "- at '/age': additional properties 'password' not
+    # allowed" or "- age: Additional property password is not allowed" (3.16.4, the one Dagger pins; measured
+    # 2026-11-17). Both name the section and the key, which is what is asserted.
+    refusals = re.findall(r"^- (?:at '/)?(\w+)'?: [Aa]dditional propert(?:y|ies) '?(\w+)'? (?:is )?not allowed$", refused.value.stderr, re.MULTILINE)
+    assert sorted(refusals) == [("age", "password"), ("objectStore", "secretKey")]
 
 
 @pytest.mark.parametrize(
