@@ -38,7 +38,7 @@ from lance_namespace import InvalidInputError, InvalidTableStateError
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.erasure import OPEN_OUTCOMES, ErasureReport, PinRelease, SurfaceResult, shown
-from lakehouse import control_prefixes
+from lakehouse import clone_sources, control_prefixes
 from lakehouse.record_store import list_records
 from lakehouse.records import RecordMissingError, create_json, mutate_json, read_json
 from lakehouse.storage_options import StorageOptions
@@ -82,7 +82,8 @@ class ErasureObligationView(BaseModel):
     open_surfaces: list[SurfaceResult] = Field(
         description=(
             "Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites, "
-            "a derived table no obligation follows this one on. Derived tables the reader may not see are counted, never named."
+            "a derived table no obligation follows this one on. Once released, each registered clone's tag that holds its release (`held`): "
+            "the release runs once that clone ends. Derived tables the reader may not see are counted, never named."
         )
     )
     released_at: datetime | None = Field(description="When a verification released it; null while open.")
@@ -304,3 +305,24 @@ def _settling(report: ErasureReport, now: datetime) -> Callable[[dict[str, Any]]
         return standing.model_copy(update={"verified_at": now, "open_surfaces": opened}).model_dump(mode="json")
 
     return apply
+
+
+def release_held(control_root: str, storage_options: StorageOptions, obligation_id: str, *, surfaces: Sequence[SurfaceResult]) -> None:
+    """Record on the obligation what holds its release (ADR 0233): each registered clone's tag on a residual, named as a
+    verification names one (:func:`catalog.services.erasure.held_by_a_clone`), or nothing once the release runs. A released
+    obligation stays released: what it lists open is what its release still waits on.
+
+    Raises:
+        RecordMissingError: The obligation is no longer recorded.
+    """
+
+    def apply(current: dict[str, Any]) -> dict[str, Any]:
+        standing = ErasureObligation.model_validate(current)
+        kept = [surface for surface in standing.open_surfaces if not _held_by_a_clone(surface)]
+        return standing.model_copy(update={"open_surfaces": [*kept, *surfaces]}).model_dump(mode="json")
+
+    mutate_json(control_root, storage_options, record_key(obligation_id), apply)
+
+
+def _held_by_a_clone(surface: SurfaceResult) -> bool:
+    return surface.outcome == "held" and surface.surface.startswith(f"tag:{clone_sources.TAG_PREFIX}")

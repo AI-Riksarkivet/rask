@@ -109,12 +109,19 @@ class RecordGone(BaseModel):
 
 
 class RecordHeld(BaseModel):
-    """A control record stands: a principal's offboarding landed when its deletion is recorded."""
+    """A control record stands, holding each of ``fields`` at its value: a principal's offboarding landed when its deletion
+    is recorded, an erasure release's notice when the release it describes is (its ``due_at``, ADR 0233)."""
 
     model_config = ConfigDict(frozen=True)
 
     kind: Literal["record_held"] = "record_held"
     key: str
+    #: Top-level fields of the record, each as its JSON form spells it, that the record standing must hold.
+    fields: dict[str, str] = Field(default_factory=dict)
+
+    def holds(self, record: dict[str, object]) -> bool:
+        """Whether ``record``, standing at :attr:`key`, is the one this evidence names."""
+        return all(record.get(name) == value for name, value in self.fields.items())
 
 
 class TagGone(BaseModel):

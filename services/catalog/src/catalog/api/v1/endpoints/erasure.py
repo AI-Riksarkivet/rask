@@ -351,14 +351,17 @@ async def _schedule_release(
     """ADR 0138: record the release of what ``pinned_by`` names under the obligation's id, then tell its requester and
     the table's owners.
 
-    The notices are FILED first, then the record written, then the notices sent (ADR 0233): each lands only while the
-    record stands, so a person is never told of a release nothing will perform, and one a verification that ended
-    part-way did not send is sent by the finish, while the release tick waits for it. A record the store refuses is a
-    failed `release` surface, nobody is told, and the obligation stays open. A release already recorded under that id was
-    scheduled by an earlier verification that did not get to settle the obligation; it is taken as it stands, and its
-    people are told again under the ids the first telling used (``erasure_release.notice``), so whoever the earlier
-    verification did not reach is told and nobody hears it twice. Owners that cannot be read are a failed `notice`
-    surface, and the requester is still told.
+    THE RELEASE THAT STANDS IS READ FIRST (ADR 0233). One already recorded under that id was scheduled by an earlier
+    verification that did not get to settle the obligation: it is taken as it stands, while it names every pin, and the
+    notices filed and sent are ITS notices, naming its deadline, to its people and to whoever must be told now (an owner
+    added since), under the ids the first telling used (``erasure_release.notice``), so nobody hears it twice and nobody
+    hears another deadline. None standing, the notices of the record this verification writes are FILED first, then the
+    record written, then the notices sent: each lands only while that very record stands (its ``due_at``), so a person is
+    never told of a release nothing will perform, nor of the deadline of a record that lost its create to another
+    verification's, and one a verification that ended part-way did not send is sent by the finish, while the release tick
+    waits for it. A verification that loses the create tells the people of the record that won. A record the store refuses
+    is a failed `release` surface, nobody is told, and the obligation stays open. Owners that cannot be read are a failed
+    `notice` surface, and the requester is still told.
     """
     try:
         holders = [subject for subject in await owners(obligation.object_id) if subject.startswith("user:")]
@@ -373,38 +376,51 @@ async def _schedule_release(
     # subject as the OpenFGA user, the form the owners are listed in, so the requester is encoded to be told ([[LH-063]]).
     told = [fga.user_object(requester.removeprefix("user:"))] if requester else []
     notified = list(dict.fromkeys([*told, *sorted(holders)]))
-    record = erasure_release.new_release(
-        report.pinned_by,
-        release_id=obligation.obligation_id,
-        table=report.table,
-        table_uuid=obligation.table_uuid,
-        location=obligation.location,
-        requested_by=requester,
-        notified=notified,
-        due_at=now + timedelta(days=settings.erasure_release_grace_days),
-        residual=report.residual_versions,
-        retain_days=obligation.retain_days,
-    )
     control_root, control_options = settings.registry_root, settings.storage_options()
-    told = [erasure_release.notice(record, subject, object_id=obligation.object_id) for subject in notified]
-    async with announcer.announcing(door="erasure_release", target=erasure_release.notice_target(record.release_id), announcements=told) as filing:
-        try:
-            await run_in_threadpool(erasure_release.schedule, control_root, control_options, record)
-        except RecordExistsError:
-            earlier = await run_in_threadpool(erasure_release.scheduled, control_root, control_options, record.release_id)
-            if _take_the_earlier_release(report, earlier, settings) and earlier is not None:
-                for subject in earlier.notified:
-                    await filing.send(erasure_release.notice(earlier, subject, object_id=obligation.object_id))
-            return
-        except Exception as exc:  # noqa: BLE001 — the report still answers with what the verification found
-            log.error("erasure_release_unscheduled", extra={"table": report.table, "error": str(exc)})
-            report.surfaces.append(
-                SurfaceResult(surface="release", outcome="failed", detail=f"the release of {record.refs} could not be recorded, so nobody was told: {exc}")
-            )
-            report.settled = False
-            return
-        report.release = _pin_release(record, settings)
-        for notice in told:
+    target = erasure_release.notice_target(obligation.obligation_id)
+    standing = await run_in_threadpool(erasure_release.scheduled, control_root, control_options, obligation.obligation_id)
+    if standing is None:
+        record = erasure_release.new_release(
+            report.pinned_by,
+            release_id=obligation.obligation_id,
+            table=report.table,
+            table_uuid=obligation.table_uuid,
+            location=obligation.location,
+            requested_by=requester,
+            notified=notified,
+            due_at=now + timedelta(days=settings.erasure_release_grace_days),
+            residual=report.residual_versions,
+            retain_days=obligation.retain_days,
+        )
+        notices = [erasure_release.notice(record, subject, object_id=obligation.object_id) for subject in notified]
+        async with announcer.announcing(door="erasure_release", target=target, announcements=notices) as filing:
+            try:
+                await run_in_threadpool(erasure_release.schedule, control_root, control_options, record)
+            except RecordExistsError:
+                # Another verification recorded the release since the read: what this one filed names a record that never
+                # stood, so none of it lands, and the people are told of the record that did.
+                pass
+            except Exception as exc:  # noqa: BLE001 — the report still answers with what the verification found
+                log.error("erasure_release_unscheduled", extra={"table": report.table, "error": str(exc)})
+                report.surfaces.append(
+                    SurfaceResult(surface="release", outcome="failed", detail=f"the release of {record.refs} could not be recorded, so nobody was told: {exc}")
+                )
+                report.settled = False
+                return
+            else:
+                report.release = _pin_release(record, settings)
+                for notice in notices:
+                    await filing.send(notice)
+                return
+        standing = await run_in_threadpool(erasure_release.scheduled, control_root, control_options, obligation.obligation_id)
+    if not _take_the_earlier_release(report, standing, settings) or standing is None:
+        return
+    # Its own people and whoever must be told now, each told of the record that stands, its deadline included.
+    everyone = list(dict.fromkeys([*standing.notified, *notified]))
+    report.release = _pin_release(standing, settings, notified=everyone)
+    notices = [erasure_release.notice(standing, subject, object_id=obligation.object_id) for subject in everyone]
+    async with announcer.announcing(door="erasure_release", target=target, announcements=notices) as filing:
+        for notice in notices:
             await filing.send(notice)
 
 
@@ -433,12 +449,12 @@ def _untag_target(obligation_id: str) -> str:
     return f"erasure:{obligation_id}"
 
 
-def _pin_release(record: erasure_release.ReleaseRecord, settings: Settings) -> PinRelease:
+def _pin_release(record: erasure_release.ReleaseRecord, settings: Settings, *, notified: list[str] | None = None) -> PinRelease:
     return PinRelease(
         release_id=record.release_id,
         due_at=record.due_at,
         refs=record.refs,
-        notified=record.notified,
+        notified=record.notified if notified is None else notified,
         bound=erasure_release.completion_bound(record.due_at, settings.erasure_cleanup_window_days),
     )
 

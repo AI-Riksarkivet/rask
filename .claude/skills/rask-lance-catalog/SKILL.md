@@ -634,8 +634,12 @@ governing their data. The project-scoped surface is the console's project page, 
   table). So every request's backend connection is fenced (`catalog.core.fenced_namespace`, `NamespaceDep` through
   `get_fenced_namespace`): each add (create, declare, register, rename in, undrop) holds the fence of the namespace it
   adds into for an add, each `drop_namespace` its namespace's for a drop; adds share, drops share, an add and a drop
-  refuse each other 409 code 14 (`NamespaceFencedError`, a `ConcurrentModificationError`). One record per namespace NAME
-  under `_namespace_fences/`, a hold of 2 minutes renewed while its work runs. The namespace drop door holds its
+  refuse each other 409 code 14 (`NamespaceFencedError`, a `ConcurrentModificationError`). One object per HOLDER under
+  the namespace NAME's directory in `_namespace_fences/` (`fences.HolderFence`, `specs/catalog/Fence.tla`): a take writes
+  its own object and lists the others, so adds never contend and never refuse adds (with one shared record, 39 of 64
+  concurrent creates into one namespace answered 409 on RustFS 1.0.3), a hold of 2 minutes renewed while its work runs.
+  The warehouse delete renews its hold once more before its record goes (`Hold.confirm`), refusing 409 once it lapsed.
+  The namespace drop door holds its
   namespace's fence for a drop over its whole run, the namespace undrop for an add, so the two never run together; the
   warehouse delete holds the warehouse's for a drop from before it reads its trash until its record goes, and
   `trash.put` files a record only while it holds its warehouse's for an add, so no trash outlives its warehouse.
@@ -1226,7 +1230,10 @@ governing their data. The project-scoped surface is the console's project page, 
   20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
   `tags/update`, `branches/create`) holds the fence,
-  one record per table uuid under `_history_fences/`; holders of one kind share it, the other kind is refused 409 code
+  one record per table uuid under `_history_fences/`, naming it under `uuid` (a record that does not parse raises
+  `fences.FenceUnreadableError`, naming it; one a release emptied stays until its table's records end, since the store
+  offers no conditional delete); holders of one kind share it, though many ref writes at once can lose every round to each
+  other (43 of 64 measured, ADR 0233 §9), the other kind is refused 409 code
   14 (`DoorTable.history_held`), and a fenced expiry is `skipped="history_fenced"`, its table's pass tried again after
   `retrySeconds` (`table_pass._dataset_due_at`). A branch create holds the kind `branch`, which also excludes another
   branch create, so two creates of nesting names on one table take turns and each judges a listing no other create
@@ -1281,9 +1288,14 @@ governing their data. The project-scoped surface is the console's project page, 
   settles an obligation and `ErasureReport.pinned_by` is non-empty, the verification door writes a release record
   under the obligation's id (`catalog.services.erasure_release`, `_erasure_releases/<id>.json` on the control root)
   BEFORE it tells anyone, then emits one targeted `erasure_release_scheduled` per person (the obligation's requester,
-  table owners). The notices are filed before the record (`announcement_intents`, on `erasure_release.notice_target`)
-  under an `event_id` fixed by the release and the person, a verification that meets an earlier record tells them
-  again under those ids, and the tick leaves a release whose notices are filed alone (ADR 0233). The tick claims a due
+  table owners). The verification reads the release that stands first; none standing, it files the notices of the
+  record it writes before writing it (`announcement_intents`, on `erasure_release.notice_target`), each landed only while
+  that record, its `due_at`, stands; one standing (or winning the create), it files and sends THAT record's notices, its
+  deadline, to its people and whoever must be told now, under an `event_id` fixed by the release and the person; and the
+  tick leaves a release whose notices are filed alone (ADR 0233). The release never takes a registered clone's tag
+  (`rask.clone.*`): while one stands on a residual, or on a branch it would delete, the tick changes nothing, records it
+  (`held_by_clones`), lists it `held` on the obligation and tells the release's people again (`held_notice`,
+  `extra.held_by_clones`), until the clone ends (ADR 0233 §8.1, §9). The tick claims a due
   record by an ETag-guarded lease, RECORDS each branch's recreate reference before deleting any, deletes the tags and
   the branch subtree leaf-first (re-read live, so a branch cut during the grace period goes too), and every tag on and
   branch cut from a version the record's `residual` names, whoever made it, recreates the branches top-down from main's

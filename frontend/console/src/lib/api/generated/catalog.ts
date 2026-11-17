@@ -7249,7 +7249,7 @@ export interface components {
             obligation_id: string;
             /**
              * Open Surfaces
-             * @description Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites, a derived table no obligation follows this one on. Derived tables the reader may not see are counted, never named.
+             * @description Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites, a derived table no obligation follows this one on. Once released, each registered clone's tag that holds its release (`held`): the release runs once that clone ends. Derived tables the reader may not see are counted, never named.
              */
             open_surfaces: components["schemas"]["SurfaceResult"][];
             /**

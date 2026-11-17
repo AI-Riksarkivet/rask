@@ -23,6 +23,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespace
 
 from catalog.core.namespace import NoWarehouse
+from lakehouse.fences import Hold
 from lakehouse.governed import fga
 from lakehouse.namespace_fences import NamespaceFence, NamespaceWork
 from lakehouse.storage_options import StorageOptions
@@ -93,15 +94,26 @@ def unfenced(ns: LanceNamespace) -> LanceNamespace:
 @asynccontextmanager
 async def holding(control_root: str, storage_options: StorageOptions, segments: list[str], work: NamespaceWork) -> AsyncGenerator[None]:
     """The fence of the namespace ``segments`` names held for ``work`` while the block runs, renewed for as long as it runs:
-    a door's own hold over its whole run (a drop's, an undrop's, a warehouse delete's), beside the ones its backend calls
-    take.
+    a door's own hold over its whole run (a drop's, an undrop's), beside the ones its backend calls take.
 
     Raises:
         NamespaceFencedError: Work that excludes ``work`` holds it (409); the block did not run.
     """
-    hold = NamespaceFence(control_root=control_root, storage_options=storage_options, name=fga.canonical_object_id(segments)).held(work)
-    await run_in_threadpool(hold.__enter__)
-    try:
+    async with holding_to_confirm(control_root, storage_options, segments, work):
         yield
+
+
+@asynccontextmanager
+async def holding_to_confirm(control_root: str, storage_options: StorageOptions, segments: list[str], work: NamespaceWork) -> AsyncGenerator[Hold]:
+    """:func:`holding`, handing the block its hold, which it confirms (:meth:`lakehouse.fences.Hold.confirm`) before a last
+    step that must not land once the hold has lapsed: the warehouse delete's record.
+
+    Raises:
+        NamespaceFencedError: Work that excludes ``work`` holds it (409); the block did not run.
+    """
+    hold = NamespaceFence(control_root=control_root, storage_options=storage_options, name=fga.canonical_object_id(segments)).hold_for(work)
+    taken = await run_in_threadpool(hold.__enter__)
+    try:
+        yield taken
     finally:
         await run_in_threadpool(hold.__exit__, None, None, None)

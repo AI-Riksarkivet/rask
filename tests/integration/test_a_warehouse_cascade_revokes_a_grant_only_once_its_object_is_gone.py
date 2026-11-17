@@ -40,7 +40,18 @@ from openfga_sdk.client.models import ClientWriteRequest
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import native, warehouses
-from lakehouse import base_registry, clone_endings, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
+from lakehouse import (
+    base_registry,
+    clone_endings,
+    clone_sources,
+    data_directories,
+    location_claims,
+    maintenance_policies,
+    namespace_fences,
+    object_records,
+    stored_objects,
+    trash,
+)
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.naming import UUID_PROPERTY
@@ -622,18 +633,25 @@ def test_a_cascade_releases_only_the_claim_of_the_table_it_identified(tenant: _T
     assert (len(taken), held.uuid if held is not None else None) == (1, taken[0] if taken else None)
 
 
-def test_a_warehouse_deleted_beside_a_recoverable_drop_leaves_none_of_its_trash(tenant: _Tenant) -> None:
+@pytest.mark.parametrize("lapsed", [pytest.param(False, id="its-fence-held"), pytest.param(True, id="its-fence-lapsed-meanwhile")])
+def test_a_warehouse_deleted_beside_a_recoverable_drop_leaves_none_of_its_trash(tenant: _Tenant, lapsed: bool) -> None:
     """The delete reads the warehouse's trash once, before its cascade (`specs/catalog/Cascade.tla`, guard G4). A
     recoverable cascade of one of its namespaces sent right after that read files no record under the warehouse while the
-    delete holds its fence: it is refused 409, or, had it filed before, the read found it. No record is left for a
-    warehouse no door routes to."""
+    delete holds its fence: it is refused 409, or, had it filed before, the read found it. A delete whose hold lapsed after
+    the read (its renewals failed, and a take swept it) lets the drop file its records, so it keeps the warehouse's record
+    for its re-issue (`specs/catalog/Fence.tla`, guard F2). No record is left for a warehouse no door routes to."""
     tenant.create_namespace("acme-wh$bronze")
     tenant.create_table("acme-wh$bronze$a")
     real_read = warehouses.trash_owned_by
     dropped: list[int] = []
+    settings = get_settings()
 
     def _read_then_a_recoverable_drop_lands(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[dict[str, Any]]:
         read = real_read(control_root, storage_options, warehouse_id)
+        if lapsed:
+            fence = f"{settings.registry_root.rstrip('/')}/{namespace_fences.fence_directory(warehouse_id)}"
+            for holder in stored_objects.list_under(fence, settings.storage_options()):
+                stored_objects.remove_object(settings.registry_root, settings.storage_options(), holder.path.split("/", 1)[1])
         dropped.append(tenant.client.post("/v1/namespace/acme-wh$bronze/drop", json={"behavior": "Cascade"}).status_code)
         return read
 
@@ -644,4 +662,5 @@ def test_a_warehouse_deleted_beside_a_recoverable_drop_leaves_none_of_its_trash(
     if len(dropped) != 1:
         pytest.fail(f"no recoverable drop was sent beside the delete: {dropped}")
     left = tenant.trashed([("table", "acme-wh$bronze$a"), ("namespace", "acme-wh$bronze")])
-    assert (ended.status_code, left) == (200, []), f"the delete answered {ended.status_code} and left {left}: {ended.text}"
+    stands = warehouses.get_warehouse(settings.registry_root, settings.storage_options(), tenant.warehouse) is not None
+    assert (ended.status_code == 200, not left or stands) == (not lapsed, True), f"the delete answered {ended.status_code} and left {left}: {ended.text}"

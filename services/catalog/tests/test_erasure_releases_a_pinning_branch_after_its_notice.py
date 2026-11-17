@@ -222,9 +222,10 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
     settles: bool,
 ) -> None:
     """A verification that scheduled the release under the obligation's id and did not get to settle it leaves the
-    record for the next one, which tells its people again under the ids the first telling used, so whoever it did not
-    reach is told and a reader keeps one notice each (ADR 0233). A pin the record does not name would stay pinned with
-    the obligation released, so that verification leaves it open, names the pin and tells nobody."""
+    record for the next one, which tells its people again under the ids the first telling used, and tells whoever must be
+    told now of that record too (here the requester as this verification names them), so whoever it did not reach is told
+    and a reader keeps one notice each (ADR 0233). A pin the record does not name would stay pinned with the obligation
+    released, so that verification leaves it open, names the pin and tells nobody."""
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
     emitter, clock = _Recorder(), _Clock()
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as (client, _run_release):
@@ -247,7 +248,7 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
 
     release = [s["detail"] for s in verified["report"]["surfaces"] if s["surface"] == "release"]
     told = [(event.action, event.extra["subject"], event.event_id) for event in emitter.events]
-    again = [("erasure_release_scheduled", subject, _notice_id(earlier, subject)) for subject in earlier.notified]
+    again = [("erasure_release_scheduled", subject, _notice_id(earlier, subject)) for subject in [*earlier.notified, "user:dex~alice%40corp"]]
     assert (verified["obligation"]["state"], told) == (("released", again) if settles else ("open", []))
     assert (verified["report"]["release"] is not None, bool(release and "tag:trained" in release[0])) == (settles, not settles), release
 

@@ -11,14 +11,19 @@ other, from two connections, each read the other's commit and refused (``Namespa
 SO THE TWO NEVER OVERLAP. Each holds the fence of the namespace they meet at first (:class:`NamespaceFence`): an add the
 fence of the namespace it adds into, a drop the fence of the namespace it drops. Adds share it, and drops share it; an add
 and a drop refuse each other (:class:`NamespaceFencedError`, answered 409 as the spec's ConcurrentModification). One
-record per namespace NAME, not uuid: it fences the row a name holds in ``__manifest``, whichever namespace that is.
+fence per namespace NAME, not uuid: it fences the row a name holds in ``__manifest``, whichever namespace that is.
+
+ADDS NEVER REFUSE ADDS. Every create beneath a namespace takes its fence, so the fence keeps one object per holder
+(:class:`lakehouse.fences.HolderFence`): an add writes its own and never contends with another add for a write. Measured
+on RustFS 1.0.3 with one shared record: 8 of 16, and 39 of 64, concurrent creates into one namespace answered 409 with
+no drop anywhere, each take having lost its eight rounds to the other adds (ADR 0233).
 
 The same fence holds a namespace's other writes against its drop: the namespace undrop holds it for an add while it
 restores the subtree, a recoverable cascade and the warehouse delete hold it for a drop for their whole run, and a trash
 record is filed under a warehouse only while its fence is held for an add (:func:`lakehouse.trash.put`), so the warehouse
 delete, which reads its trash once, cannot miss one.
 
-The holding is :class:`lakehouse.fences.Fence`'s. Every method is BLOCKING IO; callers threadpool it.
+The holding is :class:`lakehouse.fences.HolderFence`'s. Every method is BLOCKING IO; callers threadpool it.
 """
 
 from __future__ import annotations
@@ -31,8 +36,7 @@ from typing import ClassVar, Final
 from lance_namespace import ConcurrentModificationError
 
 from lakehouse import control_prefixes
-from lakehouse.fences import Fence
-from lakehouse.record_store import record_key
+from lakehouse.fences import HolderFence, HolderRecord
 
 
 PREFIX: Final = control_prefixes.NAMESPACE_FENCES
@@ -53,25 +57,34 @@ class NamespaceWork(StrEnum):
 
 
 class NamespaceFencedError(ConcurrentModificationError):
-    """The namespace is held by work that excludes this take's, or by too many writers at once to join: the spec's
-    ConcurrentModification, which a door answers 409 and its caller retries."""
+    """The namespace is held by work that excludes this take's: the spec's ConcurrentModification, which a door answers 409
+    and its caller retries."""
 
 
-def fence_key(name: str) -> str:
-    """The key of the fence of the namespace named ``name`` (the canonical ``$``-joined id), under a digest of the name."""
-    return record_key(PREFIX, "namespace", hashlib.sha256(name.encode()).hexdigest()[:32])
+class NamespaceHolder(HolderRecord):
+    """One holder's object, naming the namespace it fences."""
+
+    name: str
 
 
-class NamespaceFence(Fence):
+def fence_directory(name: str) -> str:
+    """The key of the directory of the fence of the namespace named ``name`` (the canonical ``$``-joined id), under a digest
+    of the name: one object per holder beneath it."""
+    return f"{PREFIX}/namespace-{hashlib.sha256(name.encode()).hexdigest()[:32]}"
+
+
+class NamespaceFence(HolderFence):
     """Where one namespace name's fence is kept: the control root, the credential that writes there, and the name."""
 
     log_name: ClassVar[str] = "namespace_fence"
+    stored_field: ClassVar[str] = "name"
+    holder_model: ClassVar[type[HolderRecord]] = NamespaceHolder
 
     name: str
 
     @property
-    def key(self) -> str:
-        return fence_key(self.name)
+    def directory(self) -> str:
+        return fence_directory(self.name)
 
     @property
     def subject(self) -> str:

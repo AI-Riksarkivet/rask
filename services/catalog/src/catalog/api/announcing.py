@@ -244,7 +244,8 @@ class Announcer:
             case RecordGone(key=key):
                 return await self._absent(lambda root, so: records.read_json(root, so, key))
             case RecordHeld(key=key):
-                return not await self._absent(lambda root, so: records.read_json(root, so, key))
+                found = await self._read(lambda root, so: records.read_json(root, so, key))
+                return found is not None and evidence.holds(found[0])
             case RoleEnded(project=project, role=role):
                 return await self._absent(lambda root, so: roles.find_role(root, so, project, role))
             case TagGone(location=location, tag=tag):
@@ -254,8 +255,11 @@ class Announcer:
                     raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
 
     async def _absent(self, read: Callable[[str, StorageOptions], object]) -> bool:
+        return await self._read(read) is None
+
+    async def _read[T](self, read: Callable[[str, StorageOptions], T]) -> T:
         try:
-            return await run_in_threadpool(read, self._settings.registry_root, self._settings.storage_options()) is None
+            return await run_in_threadpool(read, self._settings.registry_root, self._settings.storage_options())
         except OSError as exc:
             raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
 

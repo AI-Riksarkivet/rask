@@ -148,6 +148,11 @@ _HELD_BY_A_CLONE: Final = (
 )
 
 
+def held_by_a_clone(tag: str) -> SurfaceResult:
+    """The surface a registered clone's tag on a residual is reported as, by a verification or by the release it holds."""
+    return SurfaceResult(surface=f"tag:{tag}", outcome="held", detail=_HELD_BY_A_CLONE)
+
+
 class SurfaceResult(BaseModel):
     """What happened on one surface. NAMED, never counted — an erasure that half-succeeded has to say
     which half, because the remainder is a legal obligation and not a retry."""
@@ -522,7 +527,7 @@ def _drop_subject_tags(
         if name.startswith(clone_sources.TAG_PREFIX):
             # A registered clone reads this version through the table's files (ADR 0198 §1): dropping the tag would let a
             # cleanup take files the clone has no other copy of, so the clone's own end releases it.
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="held", detail=_HELD_BY_A_CLONE))
+            report.surfaces.append(held_by_a_clone(name))
             continue
         if not every_head_clean:
             detail = "kept: not every head is clean, so dropping it could destroy a reproducibility pointer while the subject stays"

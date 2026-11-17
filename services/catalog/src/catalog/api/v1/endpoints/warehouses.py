@@ -67,7 +67,7 @@ from catalog.api.pagination import ListLimit
 from catalog.api.security import Caller, CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core.config import Settings
-from catalog.core.fenced_namespace import fenced, holding
+from catalog.core.fenced_namespace import fenced, holding_to_confirm
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import DEREGISTER_TABLE
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
@@ -1084,7 +1084,7 @@ async def delete_warehouse(
     # A trash record is filed under the warehouse only while that fence is held for an add (`trash.put`), so a recoverable
     # drop landing beside this delete files before the read below, which finds it, or is refused 409: none outlives the
     # warehouse. Its adds directly beneath the warehouse are held off the same way.
-    async with holding(settings.registry_root, so, [warehouse_id], NamespaceWork.DROP):
+    async with holding_to_confirm(settings.registry_root, so, [warehouse_id], NamespaceWork.DROP) as fence:
         # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
         # this warehouse's namespaces and report a clean delete having removed nothing.
         subtrees = await _cascade_subtrees(ns_conn, settings, held, force=force) if ns_conn is not None else []
@@ -1183,6 +1183,10 @@ async def delete_warehouse(
                     purged = await run_in_threadpool(warehouses.purge_bucket, bucket, so)
                     bucket_purged = True
                     await run_in_threadpool(partial(warehouses.release_bucket_claim, settings.registry_root, so, bucket=bucket, warehouse_id=warehouse_id))
+                # F2 (ADR 0233, Fence.tla): a hold whose renewals failed twice lapsed while the delete worked, and a trash record
+                # may have been filed under the warehouse since its read. The record goes only while the hold still stands; a
+                # lapsed one refuses here (409), the record kept for the re-issue, which reads the trash again.
+                await run_in_threadpool(fence.confirm)
                 await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, so, warehouse_id)
             except Exception as exc:
                 # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first

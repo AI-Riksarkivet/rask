@@ -42,9 +42,10 @@ def _open(location: str, storage_options: StorageOptions) -> lance.LanceDataset:
 
 
 async def tick(ctx: Tick) -> ErasureReleaseTick:
-    """Release every due release, then announce each ref it changed."""
+    """Release every due release, then announce each ref it changed, and tell the people of each release a registered
+    clone holds."""
     settings = ctx.settings
-    changes = await run_in_threadpool(
+    released = await run_in_threadpool(
         erasure_release.release_due,
         settings.registry_root,
         settings.storage_options(),
@@ -53,6 +54,7 @@ async def tick(ctx: Tick) -> ErasureReleaseTick:
         table_options=ctx.storage_options,
     )
     claims = table_claims.claim_store(settings)
+    changes = released.changes
     for change in changes:
         table = await run_in_threadpool(_named_now, claims, change)
         await emit_control(
@@ -64,7 +66,11 @@ async def tick(ctx: Tick) -> ErasureReleaseTick:
             actor=None,
             extra=change.extra,
         )
-    log.info("erasure_release_tick", extra={"changed": len(changes)})
+    # A release a clone holds is told on every tick that finds it held, under one id per person and clones, so a reader
+    # keeps one notice and a tick cut short before it is followed by one that tells.
+    for notice in released.notices:
+        await ctx.control.emit(notice)
+    log.info("erasure_release_tick", extra={"changed": len(changes), "held_notices": len(released.notices)})
     return ErasureReleaseTick(changed=len(changes))
 
 

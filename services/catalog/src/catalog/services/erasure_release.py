@@ -29,6 +29,15 @@ during the grace period, or a branch cut from one, would keep the subject for go
 are gone, so each is taken with them: the tag deleted, the branch deleted and recreated at main's head with its subtree.
 A tick resumed after its deletes takes only what stands on a residual since, which a branch it recreated never does.
 
+**BUT NEVER A REGISTERED CLONE'S TAG** (ADR 0198 §1, ADR 0233). A clone registered during the grace period reads its
+version through this table's files, held by the catalog's own tag (:data:`lakehouse.clone_sources.TAG_PREFIX`), which only
+the clone's end releases. While one stands on a residual, or on a branch the release would delete, the tick changes
+nothing: it records the clones on the release (``held_by_clones``), names each on the obligation as a verification names
+one (:func:`catalog.services.erasure.held_by_a_clone`), and tells the release's people again, each notice naming the
+clones, under an id fixed by the release, the person and the clones (:func:`held_notice`). The release runs on the first
+tick after the last such clone ends, however long past its due time: the subject stays readable through the clone's
+version until then, and a clone is never broken in silence (owner, 2026-11-17: "Wait and report", ADR 0233 §9).
+
 **THEN THE RELEASE RECLAIMS WHAT THE REFS KEPT, under the same hold** (ADR 0233). Once nothing pins a residual, main's
 cleanup at the obligation's retention (``retain_days``, whose window the verification already found the residuals
 outside) deletes it, as the verification's own reclaim does. The table's history is held as a release from the plan to
@@ -39,7 +48,8 @@ reclaim finds no residual left to name.
 **NOBODY IS TOLD TWICE AND NOBODY IS LEFT UNTOLD** (ADR 0233). The verification files the release's notices before it
 writes the record (:mod:`catalog.services.announcement_intents`, on :func:`notice_target`), each notice under an id fixed
 by the release and the person (:func:`notice`), so whoever sends it again sends one event: the verification itself, the
-next verification that meets the record, or the catalog's finish, which maintenance's hourly audit asks for. A tick
+next verification that meets the record, or the catalog's finish, which maintenance's hourly audit asks for. Each lands
+only while the record it was built from stands, its ``due_at`` included, so no copy of an id names another deadline. A tick
 leaves a release alone while a filing of its notices stands, so it never runs before everyone it costs is told.
 
 **ONE CLAIM PER RELEASE ACROSS REPLICAS.** A tick that outlasts its window can overlap the next on another replica, so
@@ -60,12 +70,13 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.services import announcement_intents
+from catalog.services import announcement_intents, erasure_obligations
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld
 from catalog.services.dataplane import recorded_branch
-from catalog.services.erasure import ErasureReport, Pin, reclaim_refs
-from lakehouse import control_prefixes
+from catalog.services.erasure import ErasureReport, Pin, SurfaceResult, held_by_a_clone, reclaim_refs
+from lakehouse import clone_sources, control_prefixes
 from lakehouse.control_events import CatalogControlEvent
+from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.record_store import delete_record, list_records
 from lakehouse.records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
@@ -123,6 +134,8 @@ class ReleaseRecord(BaseModel):
     #: Recorded by the claiming tick before any delete: the tags it deletes, and the branches top-down.
     tags: list[str] = Field(default_factory=list)
     plan: list[Recreate] = Field(default_factory=list)
+    #: The registered clones' tags the last tick found on a residual, which hold the release until each clone ends.
+    held_by_clones: list[str] = Field(default_factory=list)
     last_error: str = ""
 
     def change(self, action: RefAction, extra: dict[str, Any]) -> RefChange:
@@ -200,9 +213,27 @@ def notice_target(release_id: str) -> str:
 
 
 def notice(record: ReleaseRecord, subject: str, *, object_id: str) -> Announcement:
-    """The notice telling ``subject`` of ``record``, landed while the record stands: under an id fixed by the release and
-    the person, so every request that sends it sends one event."""
-    event = CatalogControlEvent(
+    """The notice telling ``subject`` of ``record``, under an id fixed by the release and the person, so every request that
+    sends it sends one event, and landed only while ``record`` itself stands: a record under the release's id naming another
+    deadline (one a verification that lost the record's create meant to write) lands none of it (ADR 0233)."""
+    stood = RecordHeld(key=record_key(record.release_id), fields={"due_at": record.model_dump(mode="json")["due_at"]})
+    return Announcement(evidence=stood, message=ControlMessage(event=_scheduled(record, subject, object_id=object_id)))
+
+
+def held_notice(record: ReleaseRecord, subject: str, clones: Sequence[str]) -> CatalogControlEvent:
+    """The notice telling ``subject`` that ``record`` is held by the registered clones ``clones`` read through: under an id
+    fixed by the release, the person and the clones, so every tick that finds them holding it sends one event."""
+    event = _scheduled(record, subject, object_id=fga.table_object(record.table_uuid))
+    return event.model_copy(
+        update={
+            "event_id": uuid5(NAMESPACE_URL, f"erasure_release_held/{record.release_id}/{subject}/{','.join(sorted(clones))}").hex,
+            "extra": {**event.extra, "held_by_clones": sorted(clones)},
+        }
+    )
+
+
+def _scheduled(record: ReleaseRecord, subject: str, *, object_id: str) -> CatalogControlEvent:
+    return CatalogControlEvent(
         event_id=uuid5(NAMESPACE_URL, f"erasure_release_scheduled/{record.release_id}/{subject}").hex,
         action="erasure_release_scheduled",
         object_type="table",
@@ -211,7 +242,6 @@ def notice(record: ReleaseRecord, subject: str, *, object_id: str) -> Announceme
         actor=record.requested_by,
         extra={"subject": subject, "release_id": record.release_id, "refs": record.refs, "due_at": record.due_at.isoformat()},
     )
-    return Announcement(evidence=RecordHeld(key=record_key(record.release_id)), message=ControlMessage(event=event))
 
 
 def schedule(control_root: str, storage_options: StorageOptions, record: ReleaseRecord) -> None:
@@ -241,16 +271,25 @@ def completion_bound(due_at: datetime, cleanup_window_days: int) -> str:
     )
 
 
+class Released(BaseModel):
+    """What one tick did: the refs it changed, and the notices of each release a registered clone holds."""
+
+    changes: list[RefChange] = Field(default_factory=list)
+    notices: list[CatalogControlEvent] = Field(default_factory=list)
+
+
 def release_due(
     control_root: str, storage_options: StorageOptions, *, now: datetime, open_location: Callable[[str], _Dataset], table_options: StorageOptions
-) -> list[RefChange]:
-    """Release every scheduled release that is due and not held by another tick; the refs it changed.
+) -> Released:
+    """Release every scheduled release that is due and not held by another tick; the refs it changed, and the notices of
+    the releases registered clones hold.
 
     One release failing records its error, hands its lease back and leaves the others to run. One a reclaim of its table
     holds off ([[LH-308]]) is left unclaimed for a later tick, as is one whose notices are still filed (ADR 0233): its
-    people are told first. ``table_options`` reach the tables' store, where the reclaim records what it removes.
+    people are told first; and one a registered clone holds changes nothing, and is told again. ``table_options`` reach
+    the tables' store, where the reclaim records what it removes.
     """
-    changes: list[RefChange] = []
+    done = Released()
     for raw in list_records(control_root, storage_options, RELEASE_PREFIX, event="erasure_release"):
         try:
             record = ReleaseRecord.model_validate(raw)
@@ -263,7 +302,8 @@ def release_due(
             if announcement_intents.standing(control_root, storage_options, target=notice_target(record.release_id))[0]:
                 log.info("erasure_release_waits_for_its_notices", extra={"release": record.release_id, "table": record.table})
                 continue
-            changes += _release(control_root, storage_options, record, now=now, open_location=open_location, table_options=table_options)
+            if clones := _release(control_root, storage_options, record, now=now, open_location=open_location, table_options=table_options, done=done):
+                done.notices += [held_notice(record, subject, clones) for subject in record.notified]
         except _Lost:
             log.info("erasure_release_claimed_elsewhere", extra={"release": record.release_id})
         except HistoryFencedError as exc:
@@ -271,7 +311,7 @@ def release_due(
         except Exception as exc:  # noqa: BLE001 — one release's failure must not hold up the others
             log.warning("erasure_release_failed", extra={"release": record.release_id, "table": record.table, "error": str(exc)})
             _hand_back(control_root, storage_options, record.release_id, now=now, error=str(exc))
-    return changes
+    return done
 
 
 class _Lost(Exception):
@@ -290,7 +330,10 @@ def _release(
     now: datetime,
     open_location: Callable[[str], _Dataset],
     table_options: StorageOptions,
-) -> list[RefChange]:
+    done: Released,
+) -> list[str]:
+    """Run ``record``'s release, adding the refs it changed to ``done``; the registered clones' tags that hold it, which
+    leave everything as it was."""
     dataset = open_location(record.location)
     # [[LH-308]] Held before the release is claimed, so a tick a reclaim holds off leaves it as it was: a branch is
     # recreated at the version the release recorded, which a reclaim reading the refs before it would delete. Held as a
@@ -298,30 +341,55 @@ def _release(
     # of the refs and its reclaim, and no create through the door lands a name nesting with one this recreates ([[LH-413]]).
     history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=record.table_uuid)
     with history.held(HistoryWork.RELEASE):
-        tags, plan = _plan(dataset, record)
+        tags, plan, clones = _plan(dataset, record)
+        if clones:
+            # G4: a registered clone reads a version this release would let go of; only its own end releases its tag.
+            _held_by_clones(control_root, storage_options, record, clones)
+            return clones
         claimed = _mutate(control_root, storage_options, record.release_id, lambda current: _claim(current, now=now, tags=tags, plan=plan))
-        changes: list[RefChange] = []
         if claimed.phase == "deleting":
-            changes += _delete(dataset, claimed, tags=claimed.tags, plan=claimed.plan)
+            done.changes += _delete(dataset, claimed, tags=claimed.tags, plan=claimed.plan)
             claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
         else:
             # Resumed once its deletes were done: only what stands on a residual since goes, which the plan read just now
             # names, and which the claim recorded where to recreate before this delete.
             tainted = {step.branch for step in plan}
-            changes += _delete(dataset, claimed, tags=tags, plan=[step for step in claimed.plan if step.branch in tainted])
-        changes += _recreate(dataset, claimed)
+            done.changes += _delete(dataset, claimed, tags=tags, plan=[step for step in claimed.plan if step.branch in tainted])
+        done.changes += _recreate(dataset, claimed)
         _reclaim(dataset, claimed, storage_options=table_options)
+    if record.held_by_clones:
+        _report_held(control_root, storage_options, record.release_id, [])
     _finish(control_root, storage_options, record.release_id)
     log.info(
         "erasure_release_done",
         extra={"release": record.release_id, "table": record.table, "tags": claimed.tags, "branches": [step.branch for step in claimed.plan]},
     )
-    return changes
+    return []
 
 
-def _plan(dataset: _Dataset, record: ReleaseRecord) -> tuple[list[str], list[Recreate]]:
+def _held_by_clones(control_root: str, storage_options: StorageOptions, record: ReleaseRecord, clones: list[str]) -> None:
+    """Record on the release, and on its obligation, the registered clones that hold it; the release keeps its phase and
+    no lease, so the next tick reads the table again."""
+    detail = f"held by the registered clones' tags {clones}: each clone reads its version through this table's files, so the release waits for their ends"
+    log.warning("erasure_release_held_by_clones", extra={"release": record.release_id, "table": record.table, "clones": clones})
+    _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "held_by_clones": clones, "last_error": detail})
+    _report_held(control_root, storage_options, record.release_id, [held_by_a_clone(tag) for tag in clones])
+
+
+def _report_held(control_root: str, storage_options: StorageOptions, release_id: str, surfaces: list[SurfaceResult]) -> None:
+    """Name what holds the release on its obligation, the release's own id; an obligation no longer recorded names
+    nothing, and the release goes on as recorded."""
+    try:
+        erasure_obligations.release_held(control_root, storage_options, release_id, surfaces=surfaces)
+    except RecordMissingError:
+        log.warning("erasure_release_obligation_unrecorded", extra={"release": release_id})
+
+
+def _plan(dataset: _Dataset, record: ReleaseRecord) -> tuple[list[str], list[Recreate], list[str]]:
     """The tags to delete and the branches to recreate top-down, read from the table as it stands now: before the deletes,
-    what the record names and every ref standing on a residual; once they are done, only what stands on a residual."""
+    what the record names and every ref standing on a residual; once they are done, only what stands on a residual. And
+    the registered clones' tags among them, which no release deletes: one on a residual, or on a branch this would delete,
+    holds the release."""
     listed_branches = dataset.branches.list() or {}
     forks = {str(name): recorded_branch(meta.get("parent_branch")) for name, meta in listed_branches.items()}
     residual = {_reference(name) for name in record.residual}
@@ -341,16 +409,16 @@ def _plan(dataset: _Dataset, record: ReleaseRecord) -> tuple[list[str], list[Rec
         frontier.extend(children)
     listed = dataset.tags.list() or {}
     recorded = set() if record.phase == "recreating" else {ref.split(":", 1)[1] for ref in record.refs if ref.startswith("tag:")} | set(record.tags)
-    tags = sorted(
-        recorded
-        | {str(name) for name, meta in listed.items() if recorded_branch(meta.get("branch")) in subtree}
-        | {str(name) for name, meta in listed.items() if (recorded_branch(meta.get("branch")), meta.get("version")) in residual}
-    )
+    standing = {
+        str(name)
+        for name, meta in listed.items()
+        if recorded_branch(meta.get("branch")) in subtree or (recorded_branch(meta.get("branch")), meta.get("version")) in residual
+    }
+    clones = sorted(tag for tag in standing if tag.startswith(clone_sources.TAG_PREFIX))
+    tags = sorted(tag for tag in recorded | standing if tag in listed and not tag.startswith(clone_sources.TAG_PREFIX))
     head = int(dataset.version)
     top_down = sorted(subtree, key=lambda name: (_depth(name, forks, subtree), name))
-    return [tag for tag in tags if tag in listed], [
-        Recreate(branch=name, parent=forks[name] if forks[name] in subtree else None, version=head) for name in top_down
-    ]
+    return tags, [Recreate(branch=name, parent=forks[name] if forks[name] in subtree else None, version=head) for name in top_down], clones
 
 
 def _depth(name: str, forks: dict[str, str | None], subtree: set[str]) -> int:

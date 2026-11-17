@@ -50,7 +50,7 @@ from enum import StrEnum
 from typing import ClassVar, Final
 
 from lakehouse import control_prefixes
-from lakehouse.fences import Fence, FenceRecord, Holder
+from lakehouse.fences import FenceRecord, Holder, RecordFence
 from lakehouse.record_store import record_key
 
 
@@ -92,18 +92,27 @@ def _excludes(held: HistoryWork, work: HistoryWork) -> bool:
     return HistoryWork.RECLAIM in (held, work)
 
 
-#: The fence's record, under its table's uuid.
-HistoryFence = FenceRecord
+class HistoryFence(FenceRecord):
+    """The fence's record, naming its table by uuid: the record every take, renewal and release reads and writes."""
+
+    uuid: str
 
 
 class HistoryFencedError(Exception):
     """The table's history is held by work that excludes this take's, or by too many writers at once to join."""
 
 
-class TableHistory(Fence):
-    """Where one table's history fence is kept: the control root, the credential that writes there, and the table's uuid."""
+class TableHistory(RecordFence):
+    """Where one table's history fence is kept: the control root, the credential that writes there, and the table's uuid.
+
+    One record per table, since a maintain-tier vend may write that key of the control root and no other
+    (``catalog.core.vending.TableRecords``): ref writes on one table contend for it, and a take that loses every round to
+    them is refused. It ends with the table's other records (:mod:`lakehouse.object_records`).
+    """
 
     log_name: ClassVar[str] = "history_fence"
+    stored_field: ClassVar[str] = "uuid"
+    record_model: ClassVar[type[FenceRecord]] = HistoryFence
 
     table_uuid: str
 
