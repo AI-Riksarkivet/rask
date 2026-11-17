@@ -6,5 +6,6 @@ pub mod delivery;
 pub mod events;
 pub mod naming;
 pub mod pyjson;
+pub mod secrets;
 pub mod service;
 pub mod signing;

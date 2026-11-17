@@ -465,6 +465,7 @@ def main() -> None:
     from _port_authz_vectors import authz_vectors
     from _port_delivery_vectors import delivery_vectors
     from _port_relay_vectors import relay_vectors
+    from _port_secrets_vectors import secrets_vectors
     from _port_signing_vectors import signing_vectors
     from _port_store_vectors import store_vectors
     from _port_tables_vectors import tables_vectors
@@ -479,6 +480,7 @@ def main() -> None:
         ("authz", authz_vectors()),
         ("delivery", delivery_vectors()),
         ("relay", relay_vectors()),
+        ("secrets", secrets_vectors()),
         ("signing", signing_vectors()),
         ("tables", tables_vectors()),
         ("store", store_vectors()),
