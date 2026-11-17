@@ -30,6 +30,7 @@ func (m *Rask) OpenapiGenerate(
 ) *dagger.Directory {
 	return m.base(src).
 		WithExec([]string{"uv", "run", "--no-sync", "scripts/gen_openapi.py"}).
+		WithExec([]string{"uv", "run", "--no-sync", "scripts/gen_operations.py"}).
 		Directory("docs")
 }
 
@@ -43,11 +44,15 @@ func (m *Rask) Openapi(
 		// Snapshot the committed specs before regenerating over them.
 		WithExec([]string{"cp", "docs/catalog-openapi.json", "/tmp/catalog.orig.json"}).
 		WithExec([]string{"cp", "docs/lineage-openapi.json", "/tmp/lineage.orig.json"}).
+		WithExec([]string{"cp", "docs/operations.json", "/tmp/operations.orig.json"}).
 		// Regenerate from the live FastAPI apps (== `make openapi`); base() already synced, so --no-sync.
 		WithExec([]string{"uv", "run", "--no-sync", "scripts/gen_openapi.py"}).
+		// The operation table: each operation with the gate the catalog's rung maps put in front of it.
+		WithExec([]string{"uv", "run", "--no-sync", "scripts/gen_operations.py"}).
 		// Fail on any drift between the committed spec and what the code now serves.
 		WithExec([]string{"diff", "-u", "/tmp/catalog.orig.json", "docs/catalog-openapi.json"}).
 		WithExec([]string{"diff", "-u", "/tmp/lineage.orig.json", "docs/lineage-openapi.json"}).
+		WithExec([]string{"diff", "-u", "/tmp/operations.orig.json", "docs/operations.json"}).
 		Stdout(ctx)
 	if err != nil {
 		return out, err

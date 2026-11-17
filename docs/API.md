@@ -7,6 +7,11 @@ FastAPI apps by `make openapi` and drift-guarded in CI by `dagger call openapi` 
 - [`catalog-openapi.json`](./catalog-openapi.json) — the catalog service
 - [`lineage-openapi.json`](./lineage-openapi.json) — the lineage service
 
+[`operations.json`](./operations.json) is generated beside them (`scripts/gen_operations.py`, the same two targets): one
+row per operation of either service, with whether the Lance Namespace spec defines it and the gate in front of it (the
+relation the catalog's router asks and on what, or that the request body or the handler decides), read from the
+catalog's own rung maps.
+
 !!! tip "Add a route, refresh the spec"
 
     `make openapi` regenerates both specs; `make openapi-check` regenerates and fails on any diff, which

@@ -130,18 +130,22 @@ typecheck:
 # openapi-typescript derives from it. Regenerating only the JSON leaves the client naming a value set
 # the bus no longer sends — which is unobservable to every Python gate, so the target does both and
 # the check diffs all four files.
+#
+# docs/operations.json is the third artefact: one row per operation with the gate in front of it, read from the
+# catalog's own rung maps (scripts/gen_operations.py), so a door whose rung moved shows in the same diff.
 openapi:
 	uv sync --all-packages
 	uv run --no-sync scripts/gen_openapi.py
+	uv run --no-sync scripts/gen_operations.py
 	bun --cwd=frontend run gen:types
 
 # Diffs against HEAD, not the index: `git diff` alone compares to the index, so a *staged*
 # drifted spec would pass falsely. CI's dagger function snapshots the committed files and
 # diffs the regenerated output back, which is what `git diff HEAD` reproduces.
 openapi-check: openapi
-	@git diff HEAD --exit-code -- docs/catalog-openapi.json docs/lineage-openapi.json \
+	@git diff HEAD --exit-code -- docs/catalog-openapi.json docs/lineage-openapi.json docs/operations.json \
 	  frontend/console/src/lib/api/generated/catalog.ts frontend/console/src/lib/api/generated/lineage.ts \
-	  || { echo "!! OpenAPI drift: a route changed without refreshing the spec or its client. Commit the diff above."; exit 1; }
+	  || { echo "!! OpenAPI drift: a route or its rung changed without refreshing the spec, the operation table or the client. Commit the diff above."; exit 1; }
 	@echo "OpenAPI specs match the committed contract"
 
 # ---- the console image -----------------------------------------------------
