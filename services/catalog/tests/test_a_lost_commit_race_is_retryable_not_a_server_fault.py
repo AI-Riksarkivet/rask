@@ -135,11 +135,11 @@ def test_a_restore_whose_attempt_loses_deletes_only_its_transaction_file(table: 
     finalize = table_claims.DoorTable.finalize_version
     lost: list[str] = []
 
-    def loses_once(door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None) -> object:
+    def loses_once(door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None, before_write: Callable[[], None] | None = None) -> object:
         if not lost:
             lost.append(request.manifest_path)
             raise ConcurrentModificationError("another commit took the version first")
-        return finalize(door, request, turn=turn)
+        return finalize(door, request, turn=turn, before_write=before_write)
 
     monkeypatch.setattr(table_claims.DoorTable, "finalize_version", loses_once)
 
@@ -158,11 +158,11 @@ def test_a_lost_finalize_whose_version_is_ambiguous_keeps_what_it_wrote(table: D
     finalize = table_claims.DoorTable.finalize_version
     lost: list[int] = []
 
-    def loses_once(door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None) -> object:
+    def loses_once(door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None, before_write: Callable[[], None] | None = None) -> object:
         if not lost:
             lost.append(request.version)
             raise ConcurrentModificationError("another commit took the version first")
-        return finalize(door, request, turn=turn)
+        return finalize(door, request, turn=turn, before_write=before_write)
 
     def ambiguous(location: str, so: StorageOptions, version: int) -> str | None:
         return "" if version in lost else committed_manifest_digest(location, so, version)
@@ -208,8 +208,10 @@ def test_a_finalize_refused_after_its_version_landed_keeps_that_commits_record(
     finalize = table_claims.DoorTable.finalize_version
     refused_after: list[int] = []
 
-    def landed_then_refused(door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None) -> object:
-        landed = finalize(door, request, turn=turn)
+    def landed_then_refused(
+        door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None, before_write: Callable[[], None] | None = None
+    ) -> object:
+        landed = finalize(door, request, turn=turn, before_write=before_write)
         if not refused_after:
             refused_after.append(request.version)
             raise refusal

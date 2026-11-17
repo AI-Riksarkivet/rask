@@ -1568,6 +1568,12 @@ def _turn_for_the_next_attempt(table: table_claims.DoorTable, ref: str | None, h
         return None
 
 
+class SupersededError(ConcurrentModificationError):
+    """A commit refused before its finalize because the request it serves was superseded: another attempt under the
+    request's Idempotency-Key took the key over (the spec's code 14, ADR 0240). Apart from a lost race, it is not planned
+    again: the attempt holding the key commits the write, or answers what it found."""
+
+
 def commit_stamped[T](
     table: table_claims.DoorTable,
     so: StorageOptions,
@@ -1577,6 +1583,7 @@ def commit_stamped[T](
     branch: str | None = None,
     opened: lance.LanceDataset | None = None,
     keeps_labels: bool = False,
+    before_finalize: Callable[[], None] | None = None,
 ) -> tuple[int, T]:
     """Commit the transaction ``plan`` builds on the latest version of ``branch`` (``None`` = main) with ``properties``;
     return the version.
@@ -1613,8 +1620,13 @@ def commit_stamped[T](
     door already opened it (:meth:`table_claims.DoorTable.open`), which the first attempt plans on rather than opening it
     again.
 
+    ``before_finalize`` runs right before each attempt's put, after its turn wait (``DoorTable.finalize_version``): a
+    keyed door renews its Idempotency-Key's claim there (ADR 0240), and a :class:`SupersededError` it raises ends the
+    commit with nothing finalized.
+
     Raises:
         ConcurrentModificationError: Every attempt lost its race.
+        SupersededError: ``before_finalize`` found the request superseded.
         TableChangedError: The table changed since the door's resolution.
         InvalidInputError: ``keeps_labels`` and the commit loses or changes a field's ``rask.*`` metadata.
         InvalidInputError: The commit adds or changes a field's encoding knob to one Lance cannot honour ([[LH-246]]).
@@ -1677,8 +1689,8 @@ def commit_stamped[T](
                     table.record_author(stamped.uuid, version=version, ref=ref_key, author=author, manifest=judged)
                 finalizing = True
                 try:
-                    table.finalize_version(request, turn=turn)
-                except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError):
+                    table.finalize_version(request, turn=turn, before_write=before_finalize)
+                except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError, SupersededError):
                     if author is not None:
                         _forget_unlanded_author(table, so, stamped.uuid, location=location, version=version, judged=judged)
                     raise
@@ -2850,9 +2862,18 @@ def committed_under_key(table: table_claims.DoorTable, so: StorageOptions, *, br
         transaction = dataset.read_transaction(version)
         if transaction is None or (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) != mark:
             continue
-        added = getattr(transaction.operation, "fragments", None) or []
-        return InsertIntoTableResponse(version=version, num_inserted_rows=sum(int(fragment.physical_rows or 0) for fragment in added))
+        return InsertIntoTableResponse(version=version, num_inserted_rows=sum(int(fragment.physical_rows or 0) for fragment in _added_fragments(transaction)))
     return None
+
+
+def _added_fragments(transaction: Transaction) -> list[lance.FragmentMetadata]:
+    """The fragments an append's commit added, by the operation it committed as: an ``Append`` or an ``Overwrite`` names
+    them ``fragments``; a keyed append to a table declaring a primary key commits Lance's ``when_matched_fail`` merge, an
+    ``Update`` that writes every row it inserts to ``new_fragments`` and updates none (measured on pylance 13.0.0)."""
+    operation = transaction.operation
+    if isinstance(operation, lance.LanceOperation.Update):
+        return list(operation.new_fragments or [])
+    return list(getattr(operation, "fragments", None) or [])
 
 
 def insert_into_table(
@@ -2863,6 +2884,7 @@ def insert_into_table(
     *,
     max_bytes: int,
     transaction_properties: dict[str, str],
+    before_commit: Callable[[], None] | None = None,
 ) -> InsertIntoTableResponse:
     """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES, and report the commit it made.
 
@@ -2881,10 +2903,17 @@ def insert_into_table(
 
     On a table declaring a primary key, rows repeating a key among themselves are refused, and an append
     lands through Lance's `merge_insert(...).when_matched_fail().when_not_matched_insert_all()`, refused
-    when the table holds one of its keys as it commits ([[LH-243]], :mod:`catalog.services.primary_keys`).
+    when the table holds one of its keys as it commits ([[LH-243]], :mod:`catalog.services.primary_keys`). A key on a
+    field inside a struct, which that merge cannot join on, is appended by Lance's own insert, planned and finalized as
+    every stamped commit is, so :func:`commit_stamped` judges its rows against those the version it lands on carries
+    (ADR 0240, AppendJudged).
 
-    ``transaction_properties`` (the door's stamp, :mod:`catalog.core.run_context`) ride the commit, on any ref: a keyed
-    append is finalized on the ref it planned on (:func:`commit_stamped`), and Lance's own insert takes them.
+    ``before_commit`` is the keyed door's renewal of its Idempotency-Key (ADR 0240, KeyRenews): with it, the write is a
+    stamped commit too, whatever the table declares, so the renewal is the last write before the version's put and a
+    resend that took the key over meanwhile keeps this attempt from landing.
+
+    ``transaction_properties`` (the door's stamp, :mod:`catalog.core.run_context`) ride the commit, on any ref: a stamped
+    commit is finalized on the ref it planned on (:func:`commit_stamped`), and Lance's own insert takes them.
     """
     # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
     # and Lance writes whatever an unvalidated offset points at.
@@ -2898,12 +2927,29 @@ def insert_into_table(
     keys = primary_keys.key_columns(dataset.lance_schema)
     primary_keys.refuse_repeats_within(rows, keys, door="insert")
     with _write_schema_errors():
-        keyed_append = mode is InsertMode.APPEND and primary_keys.joinable(rows, keys)
-        if keyed_append:
+        if mode is InsertMode.APPEND and primary_keys.joinable(rows, keys):
             # Planned on the latest version and finalized as exactly the next, so a racing insert of the same key is
             # planned again and refused ([[LH-243]]).
             version, _ = commit_stamped(
-                table, so, transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"), branch=req.branch
+                table,
+                so,
+                transaction_properties,
+                lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"),
+                branch=req.branch,
+                before_finalize=before_commit,
+            )
+        elif (mode is InsertMode.APPEND and keys) or before_commit is not None:
+            # Lance's own insert, captured and finalized as exactly the next version: its rows are judged against the
+            # version they land on (a key Lance's merge cannot join on), and a keyed request renews its key right before
+            # the put.
+            version, _ = commit_stamped(
+                table,
+                so,
+                transaction_properties,
+                captured(table, so, lambda handle: handle.insert(rows, mode=mode.value), branch=req.branch),
+                branch=req.branch,
+                opened=dataset,
+                before_finalize=before_commit,
             )
         else:
             # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole. Lance commits it

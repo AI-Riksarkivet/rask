@@ -19,9 +19,14 @@ STORE picks, and the takeover of an abandoned claim is a replace under the ETag 
 ([[LH-576]]): of two retries arriving after the lease, one takes the key and the other's write is refused, re-reads,
 and finds the key held. Nothing here holds a lock and nothing here is in-memory, so it works across replicas.
 
-A KEY IS ONE OPERATION ON ONE OBJECT (:class:`KeyBinding`): its door and the canonical id of the object the door acts
-on. The same key on another door, or on the same door for another object, is the caller's mistake, refused rather than
-answered with an operation that did not touch the object named.
+A KEY IS ONE REQUEST OF ONE OPERATION ON ONE OBJECT (:class:`KeyBinding`): its door, the canonical id of the object the
+door acts on, and a digest of the request's query and body. The same key on another door, on the same door for another
+object, or with another body, is the caller's mistake, refused rather than answered with an operation that did not do
+what this request asks.
+
+A CLAIM IS RENEWED BEFORE THE COMMIT IT GUARDS (:func:`renew`). A door runs on past its request's deadline, so a resend
+can take the key over from an attempt that is still running; the renewal, a conditional write of the attempt's own claim
+right before its commit, is what keeps that attempt from committing once the resend took the key (ADR 0240).
 
 A LEASE IS TIMED ON THE STORE'S CLOCK (ADR 0179): a claim is stamped with the clock of the read it follows and judged
 against the clock of the read that finds it, so two pods' clocks are never compared.
@@ -71,7 +76,7 @@ _ROUNDS = 8
 
 
 class KeyBinding(BaseModel):
-    """What a key is bound to: one door, acting on one object."""
+    """What a key is bound to: one door, acting on one object, asked one request."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -80,6 +85,10 @@ class KeyBinding(BaseModel):
     #: The canonical id of the object the door acts on; a door that names a second object (a rename's destination)
     #: binds both.
     target: str
+    #: A digest of the request the key was sent with, its query and its body: a resend under the key carries the same
+    #: bytes, and one carrying others is another operation, which no answer of the first may stand for
+    #: (ADR 0240, KeyBindsBody).
+    request: str
 
 
 class _Claimed(BaseModel):
@@ -119,7 +128,8 @@ _STORED: TypeAdapter[_Claimed | _Answered | _Reclaiming] = TypeAdapter(Annotated
 
 
 class KeyReusedError(Exception):
-    """The key is already bound to a DIFFERENT operation, or to the same door acting on another object.
+    """The key is already bound to a DIFFERENT operation, to the same door acting on another object, or to the same door
+    and object asked another request.
 
     Replaying here would hand the caller another operation's response body — a wrong answer rather than
     a slow one — so this is refused instead. The door maps it to a 400: the caller made a mistake and
@@ -137,6 +147,14 @@ class InFlightError(Exception):
 
 class KeyRecordUnreadableError(Exception):
     """The key's record is there and cannot be read as one, so neither a replay nor a new attempt can be judged."""
+
+
+class KeyTakenOverError(Exception):
+    """The attempt's claim is no longer its own: another attempt took the key over once its lease ran out, or answered.
+
+    The attempt must not commit: the attempt holding the key looked for its commit when it took over, and a commit
+    landing after that look would apply the write a second time.
+    """
 
 
 class Replay(BaseModel):
@@ -241,6 +259,8 @@ def claim(
             raise InFlightError(f"idempotency key {key!r} outlived its lifetime and is being reclaimed: retry, or send a new key")
         if current.binding != binding:
             bound = current.binding
+            if (bound.endpoint, bound.target) == (binding.endpoint, binding.target):
+                raise KeyReusedError(f"idempotency key {key!r} was sent with another request to {bound.endpoint} on {bound.target}: send a new key")
             raise KeyReusedError(f"idempotency key {key!r} is bound to {bound.endpoint} on {bound.target}, not {binding.endpoint} on {binding.target}")
         if isinstance(current, _Answered):
             return Replay(status=current.status, body=current.body)
@@ -255,26 +275,66 @@ def claim(
     raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
-def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str) -> None:
-    """Give back the claim ``attempt`` holds, for an attempt refused before it wrote anything.
+def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str) -> bool:
+    """Give back the claim ``attempt`` holds, for an attempt refused before it wrote anything; whether the claim was still
+    its own.
 
     Its caller's corrected retry under the same key then runs at once instead of meeting :class:`InFlightError` for
     the rest of the lease. Only that claim is released: the record is replaced under the ETag it was read with, and
     left alone when another attempt has taken the key over or an outcome has been recorded since, so a release never
     frees a key another attempt holds. The record is kept, stamped ``released``, never deleted, as a location claim
     is released.
+
+    ``False`` says the key was no longer this attempt's when it was refused: another attempt took it over, and its write
+    may have landed under the key, so the refusal is no answer for the key (ADR 0240, RefusalHoldsKey).
     """
     record_key = _record_key(scope, key)
-    stored = records.read_json_at(root_uri, storage_options, record_key).stored
-    if stored is None:
+    for _ in range(_ROUNDS):
+        stored = records.read_json_at(root_uri, storage_options, record_key).stored
+        if stored is None:
+            return False
+        current = _stored(stored, key)
+        if not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
+            return False
+        try:
+            records.replace_json(
+                root_uri, storage_options, record_key, current.model_copy(update={"state": "released"}).model_dump(mode="json"), etag=stored.etag
+            )
+        except records.RecordChangedError:
+            continue
+        return True
+    return False
+
+
+def renew(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str) -> None:
+    """Renew the claim ``attempt`` holds, right before the commit it cannot take back: its lease starts again at the
+    store's clock, under the ETag of the read that found the claim its own.
+
+    A request's door runs on past its deadline (:mod:`lakehouse.deadline`), as long as the key's lease and longer, so a
+    resend can take the key over while the first attempt still runs. The resend then looks for the first attempt's
+    commit and, finding none, commits its own; the renewal is what keeps the first from committing after that look. Of
+    the two writes, the renewal and the takeover, the store admits one: a takeover finds the lease renewed, or the renewal
+    finds the claim another attempt's. The commit after a renewal is assumed to end within the lease (ADR 0240 A2).
+
+    Raises:
+        KeyTakenOverError: The claim is another attempt's, released, answered, or gone.
+        KeyRecordUnreadableError: The key's record cannot be read as one.
+        records.RecordChangedError: The record kept changing across every round.
+    """
+    record_key = _record_key(scope, key)
+    for _ in range(_ROUNDS):
+        found = records.read_json_at(root_uri, storage_options, record_key)
+        stored = found.stored
+        current = _stored(stored, key) if stored is not None else None
+        if stored is None or not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
+            raise KeyTakenOverError(f"idempotency key {key!r} is no longer held by this attempt: another attempt under the key took it over")
+        renewed = current.model_copy(update={"claimed_at": found.at}).model_dump(mode="json")
+        try:
+            records.replace_json(root_uri, storage_options, record_key, renewed, etag=stored.etag)
+        except records.RecordChangedError:
+            continue
         return
-    current = _stored(stored, key)
-    if not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
-        return
-    try:
-        records.replace_json(root_uri, storage_options, record_key, current.model_copy(update={"state": "released"}).model_dump(mode="json"), etag=stored.etag)
-    except records.RecordChangedError:
-        return
+    raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
 def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, status: int, body: JsonValue) -> None:
@@ -376,6 +436,7 @@ __all__ = [
     "KeyBinding",
     "KeyRecordUnreadableError",
     "KeyReusedError",
+    "KeyTakenOverError",
     "Reclaimed",
     "Replay",
     "TakenOver",
@@ -383,4 +444,5 @@ __all__ = [
     "reclaim",
     "record_outcome",
     "release",
+    "renew",
 ]

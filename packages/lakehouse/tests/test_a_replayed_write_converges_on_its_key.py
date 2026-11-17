@@ -38,7 +38,7 @@ from lakehouse.storage_options import StorageOptions
 SO = StorageOptions()
 SCOPE = "acme"
 KEY = "0b6f3f0e-5c7a-4a43-9d6e-2f1c8a9b7e10"
-CREATE = KeyBinding(endpoint="POST /v1/table/{id}/create", target="db$t")
+CREATE = KeyBinding(endpoint="POST /v1/table/{id}/create", target="db$t", request="rows-1")
 LIFETIME = timedelta(days=1)
 
 

@@ -146,9 +146,11 @@ def test_a_write_repeating_the_primary_key_is_refused_and_the_table_keeps_each_k
         assert _files_no_version_names(location) == ([], []), "a refused write left files no version of the table names ([[LH-564]])"
 
 
-def test_a_merge_inserting_a_held_key_nested_in_a_struct_is_refused(real_ns_client: TestClient) -> None:
+@pytest.mark.parametrize("door", ["merge_insert", "insert"])
+def test_a_write_landing_a_held_key_nested_in_a_struct_is_refused(real_ns_client: TestClient, door: str) -> None:
     """A key on a field inside a struct is judged against the rows the commit carries too: Lance's merge cannot key on a
-    nested field, and the judge reads it through the scanner instead."""
+    nested field, and the judge reads it through the scanner instead. An ``/insert`` of such rows is Lance's own append,
+    planned and finalized as a stamped commit so that judge reads it (ADR 0240, AppendJudged)."""
     key = pa.field("id", pa.int64(), nullable=False, metadata={"lance-schema:unenforced-primary-key": "true"})
     schema = pa.schema([pa.field("s", pa.struct([key]), nullable=False), pa.field("v", pa.string())])
 
@@ -161,9 +163,8 @@ def test_a_merge_inserting_a_held_key_nested_in_a_struct_is_refused(real_ns_clie
     location = str(created.json()["location"])
     before = lance.dataset(location).version
 
-    answer = real_ns_client.post(
-        f"/v1/table/{TABLE}/merge_insert", params={"on": "v", "when_not_matched_insert_all": "true"}, content=rows((1, "x")), headers=ARROW
-    )
+    params = {"on": "v", "when_not_matched_insert_all": "true"} if door == "merge_insert" else {}
+    answer = real_ns_client.post(f"/v1/table/{TABLE}/{door}", params=params, content=rows((1, "x")), headers=ARROW)
 
     assert (answer.status_code, answer.json().get("code")) == (400, 13), answer.text
     assert lance.dataset(location).version == before

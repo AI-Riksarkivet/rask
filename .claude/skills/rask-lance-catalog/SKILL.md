@@ -956,13 +956,19 @@ governing their data. The project-scoped surface is the console's project page, 
 ## Gotchas
 
 - **An `Idempotency-Key` converges a resent write; it is optional on every keyed door** (`catalog.api.idempotency`,
-  `lakehouse.idempotency`): create, drop, rename, deregister, register, restore and insert. A key is one operation on one
-  object (the door, and for an insert its mode and ref, and the object's canonical id), answered with its first response.
-  A claim unanswered past `LEASE` (300 s) is taken over, and the claim says so (`TakenOver`): an append run again would
-  land twice, so the insert door stamps the key on its commit (`rask.idempotency_key`, by the caller's scope, a property
-  no stock commit may carry) and a takeover reads the ref's versions since that claim for it, answering with the commit
-  it finds ([[LH-577]], `dataplane.committed_under_key`). The insert records its answer right after its commit, before
-  the lineage emit, so a failure after the commit is answered on resend rather than run again.
+  `lakehouse.idempotency`): create, drop, rename, deregister, register, restore and insert. A key is one request of one
+  operation on one object (the door, and for an insert its mode and ref, the object's canonical id, and a digest of the
+  request's query and body, `api.idempotency.fingerprint`), answered with its first response; the same key with another
+  body is refused 400 code 13 (ADR 0240). A claim unanswered past `LEASE` (300 s) is taken over, and the claim says so
+  (`TakenOver`): an append run again would land twice, so the insert door stamps the key on its commit
+  (`rask.idempotency_key`, by the caller's scope, a property no stock commit may carry) and a takeover reads the ref's
+  versions since that claim for it, answering with the commit it finds and the rows it added, whatever operation committed
+  them ([[LH-577]], `dataplane.committed_under_key`). The request deadline (also 300 s) lets a door run on, so a resend can
+  take the key over from an attempt still running: every keyed insert is a stamped commit, and renews its claim right
+  before its put (`idempotency.renew`, `DoorTable.finalize_version`'s `before_write`); an attempt whose key another took
+  over answers 409 code 14 and commits nothing, and one refused (4xx) after its key was taken over answers 409 code 14
+  too, not its refusal (`keyed_door`). The insert records its answer right after its commit, before the lineage emit, so
+  a failure after the commit is answered on resend rather than run again. `specs/catalog/CommitPath.tla` models it.
 
 - **`update_table_schema_metadata` MERGES — the spec text ("Replace schema metadata") is wrong about
   every backend.** Probed against a real `dir` backend: posting `{owner}` over `{owner, tier}` leaves

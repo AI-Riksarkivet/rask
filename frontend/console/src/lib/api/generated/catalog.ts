@@ -3794,9 +3794,11 @@ export interface paths {
          *
          *     An ``Idempotency-Key`` makes a resent append converge ([[LH-577]]): a caller that gave up on a slow append, which may
          *     have committed, sends it again under the same key and is answered the first attempt's response, nothing appended a
-         *     second time. The key names one append, its mode and its ref included. Its commit carries the key, so a resend that
-         *     takes the key over from an attempt lost unanswered past its lease finds that attempt's commit and answers with it
-         *     rather than appending again. Optional, as on every keyed door (:mod:`catalog.api.idempotency`).
+         *     second time. The key names one append, its mode, its ref and its rows included: the same key with other rows is
+         *     refused 400. Its commit carries the key, so a resend that takes the key over from an attempt lost unanswered past its
+         *     lease finds that attempt's commit and answers with it rather than appending again; the attempt renews its claim right
+         *     before its commit, so one that a resend took the key over from while it still ran answers 409 and commits nothing
+         *     (ADR 0240). Optional, as on every keyed door (:mod:`catalog.api.idempotency`).
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;

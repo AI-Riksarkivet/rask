@@ -1535,7 +1535,10 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
         writer.join(timeout=120)
 
     held_reads = [at for at in reads if held_from <= at < released]
-    assert slowest < 2, f"a describe of another table took {slowest:.1f} s while 50 writers waited on a held turn"
+    # A describe starved of request threads waits for a waiter to hand one back, which a waiter does only when its wait
+    # ends: the turn is released after this loop, so not before the hold (30 s), as the 26.8 s measured above did. A third
+    # of the hold tells that apart from a busy machine's slow describe (2.7 s measured at load 10 on four cores).
+    assert slowest < commit_turns.HOLD.total_seconds() / 3, f"a describe of another table took {slowest:.1f} s while 50 writers waited on a held turn"
     assert len(held_reads) <= 20 * (released - held_from), f"50 waiters read the turn record {len(held_reads)} times in {released - held_from:.1f} s"
     assert [at for at, exc in finished if exc is None and at < released] == []
     assert [exc for _, exc in finished if exc is not None and not isinstance(exc, may_fail_with)] == []

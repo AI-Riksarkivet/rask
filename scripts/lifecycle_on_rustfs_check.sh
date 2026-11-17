@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# lifecycle_on_rustfs_check.sh: run the table lifecycle's, the namespace cascade's, the stock create's and the history
-# fence's race tests (ADR 0227, ADR 0233), and the store's refusal of a vended write credential's put over a committed
-# file (ADR 0242),
+# lifecycle_on_rustfs_check.sh: run the table lifecycle's, the namespace cascade's, the stock create's, the history
+# fence's and the keyed commit's race tests (ADR 0227, ADR 0233, ADR 0240), and the store's refusal of a vended write
+# credential's put over a committed file (ADR 0242),
 # with the catalog's root and control root on a REAL S3 store, so every fence, claim and record is arbitrated by the
 # store's own conditional writes (put-if-not-exists, If-Match) rather than the local root's file lock.
 #
@@ -60,6 +60,7 @@ uv run --no-sync pytest \
   tests/integration/test_a_tables_ref_writes_share_its_history.py \
   tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py \
   packages/lakehouse/tests/test_a_tables_history_is_held_by_one_kind_of_work_at_a_time.py \
+  tests/integration/test_a_keyed_write_lands_once_beside_its_resend.py \
   -k s3 -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"
 # The maintain vend's own credential, which only this lane's store can mint (ADR 0233 §9): every case is the store's.
 uv run --no-sync pytest tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py -p no:cacheprovider -rA "$@"

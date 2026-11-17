@@ -230,18 +230,23 @@ class DoorTable:
         self.require_named()
         return native.call(via if via is not None else self._ns, method, *args)
 
-    def finalize_version(self, request: CreateTableVersionRequest, *, turn: str | None = None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
+    def finalize_version(self, request: CreateTableVersionRequest, *, turn: str | None = None, before_write: Callable[[], None] | None = None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
         """Finalize a catalog door's version through the backend's put-if-not-exists (:meth:`write_natively`), once no commit
         but the one holding ``turn`` holds the commit turn of the ref it names ([[LH-259]],
         :mod:`lakehouse.commit_turns`).
 
+        ``before_write`` runs after the wait and right before the put, so what it asks of the store (a keyed attempt
+        renewing its claim, ADR 0240) is the last write before the version lands; what it raises stops the finalize.
+
         Raises:
-            ConcurrentModificationError: Another writer took the version first.
+            ConcurrentModificationError: Another writer took the version first, or ``before_write`` refused.
             TableChangedError: The table changed since the request's resolution.
             TurnWaitRefusedError: Every seat a thread waits in was taken.
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
         self.wait_for_turn(recorded_branch(request.branch), mine=turn)
+        if before_write is not None:
+            before_write()
         return self.write_natively("create_table_version", request)
 
     def finalize_staged_version(self, request: CreateTableVersionRequest, *, writer: commit_turns.Writer | None, kept: bool) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it

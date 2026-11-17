@@ -24,18 +24,20 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from typing import Annotated, Any
+from urllib.parse import parse_qsl, urlencode
 from uuid import uuid4
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError, InternalError, InvalidInputError, LanceNamespaceError
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
+from catalog.services.dataplane import SupersededError
 from lakehouse import idempotency
 from lakehouse.ns_errors import status_for
 from lakehouse.records import RecordChangedError
@@ -93,14 +95,17 @@ class Converge(BaseModel):
         """What a door stamps on its commit under this key, so a takeover can find the commit (``None`` without a key)."""
         return None if self.key is None else f"{self.scope}/{self.key}"
 
-    async def release_if_refused(self, exc: BaseException) -> None:
+    async def release_if_refused(self, exc: BaseException) -> bool:
         """Give the claim back when ``exc`` is a refusal (a 4xx of the spec's taxonomy), which the keyed doors raise
         before any write: the caller's corrected retry under the key then runs rather than meeting 409 for the
         lease ([[LH-487]]). A fault (5xx), or anything else, keeps the lease, since the write may have landed.
+
+        Whether the refusal stands as the key's answer: ``False`` when the key was no longer this attempt's, so another
+        attempt under it may have landed the write (ADR 0240, RefusalHoldsKey).
         """
         if self.key is None or not isinstance(exc, LanceNamespaceError) or status_for(int(exc.code)) >= 500:
-            return
-        await run_in_threadpool(
+            return True
+        return await run_in_threadpool(
             idempotency.release,
             self.registry_root,
             self.storage_options,
@@ -108,6 +113,27 @@ class Converge(BaseModel):
             key=self.key,
             attempt=self.attempt,
         )
+
+    def renewal(self) -> Callable[[], None] | None:
+        """What the door calls right before its commit, in the thread that commits (:func:`idempotency.renew`); ``None``
+        without a key.
+
+        The callable raises :class:`SupersededError` (409, code 14) when another attempt under the key took it over:
+        nothing is committed, and a resend under the key is answered with what that attempt did.
+        """
+        if self.key is None:
+            return None
+        key = self.key
+
+        def renew() -> None:
+            try:
+                idempotency.renew(self.registry_root, self.storage_options, scope=self.scope, key=key, attempt=self.attempt)
+            except (idempotency.KeyTakenOverError, RecordChangedError) as exc:
+                raise SupersededError(f"{exc}; nothing was committed: send the request again under its key for its answer") from exc
+            except idempotency.KeyRecordUnreadableError as exc:
+                raise InternalError(str(exc)) from exc
+
+        return renew
 
     async def remember(self, status: int, response: Any) -> None:  # noqa: ANN401 — the door's own response model
         """Store what this attempt answered. A no-op without a key, so a door calls it unconditionally.
@@ -135,7 +161,7 @@ async def begin(registry_root: str, storage_options: StorageOptions, scope: str,
     """Claim `key` for the operation `binding` names, or return the no-op when the caller sent none.
 
     The failures are translated to the spec's own vocabulary rather than a hand-picked status, per
-    `rask-lance-catalog`: a key bound to another door or another object is the CALLER's mistake and correctable, so
+    `rask-lance-catalog`: a key bound to another door, another object or another request is the CALLER's mistake and correctable, so
     `InvalidInput` (400); an attempt still running is a conflict about the world, so `ConcurrentModification` (409),
     which is what a retrying client should see; a record that is there and cannot be read as one is `Internal` (500,
     code 18), which only writing it again clears.
@@ -181,37 +207,61 @@ class KeyedDoor(BaseModel):
     #: The caller the key belongs to (:func:`_scope`).
     scope: str
     key: str | None
+    #: The digest of the request's query and body (:func:`fingerprint`); empty without a key.
+    request: str = ""
     converge: Converge | None = None
 
     async def begin(self, *, endpoint: str, target: str) -> Converge:
         """Claim the request's key for ``endpoint`` acting on ``target`` (:func:`begin`), after the door's shape refusals.
 
         ``target`` is the canonical id of the object the door acts on (``fga.canonical_object_id``), so the same key on
-        another object is refused rather than answered with this one's response ([[LH-576]]).
+        another object is refused rather than answered with this one's response ([[LH-576]]); the request's digest is
+        bound beside them, so the same key with another body is refused too (ADR 0240, KeyBindsBody).
         """
-        binding = idempotency.KeyBinding(endpoint=endpoint, target=target)
+        binding = idempotency.KeyBinding(endpoint=endpoint, target=target, request=self.request)
         self.converge = await begin(self.registry_root, self.storage_options, self.scope, self.key, binding=binding)
         return self.converge
 
 
+def fingerprint(query: str, body: bytes) -> str:
+    """A digest of a request's query parameters, in the order of their names, and its body: what a resend under a key
+    carries unchanged, and a request reusing the key with other parameters or other rows does not."""
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(urlencode(sorted(parse_qsl(query, keep_blank_values=True))).encode())
+    digest.update(b"\0")
+    digest.update(body)
+    return digest.hexdigest()
+
+
 async def keyed_door(
-    settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken, idempotency_key: IdempotencyKeyHeader = None
+    request: Request, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken, idempotency_key: IdempotencyKeyHeader = None
 ) -> AsyncIterator[KeyedDoor]:
     """The door's :class:`KeyedDoor`; a refusal the door raises after its claim gives the claim back ([[LH-487]]).
 
     A dependency with ``yield`` is handed the endpoint's exception at the ``yield`` (FastAPI 0.140.13), before the
-    problem handlers answer it, so every keyed door releases through this one place.
+    problem handlers answer it, so every keyed door releases through this one place. A refusal of an attempt whose key
+    another attempt took over meanwhile is answered 409 instead: that attempt may have landed the write the key names,
+    and a resend under the key is answered with what it did (ADR 0240, RefusalHoldsKey).
+
+    The body is read once per request (Starlette keeps it), so the digest costs the read the door's own body parameter
+    makes anyway.
     """
-    door = KeyedDoor(registry_root=settings.registry_root, storage_options=so, scope=_scope(token), key=idempotency_key)
+    digest = fingerprint(request.url.query, await request.body()) if idempotency_key is not None else ""
+    door = KeyedDoor(registry_root=settings.registry_root, storage_options=so, scope=_scope(token), key=idempotency_key, request=digest)
     try:
         yield door
     except Exception as exc:
         if door.converge is not None:
             # The door's own refusal is what the caller is told; a release the store fails leaves the claim to its lease.
             try:
-                await door.converge.release_if_refused(exc)
+                stands = await door.converge.release_if_refused(exc)
             except Exception as release_exc:  # noqa: BLE001 — never answered over the door's refusal
                 log.warning("idempotency_release_failed", extra={"key": door.key, "error": str(release_exc)[:300]})
+                stands = True
+            if not stands:
+                raise ConcurrentModificationError(
+                    f"another attempt under idempotency key {door.key!r} took it over while this one ran; send the request again under its key for its answer"
+                ) from exc
         raise
 
 

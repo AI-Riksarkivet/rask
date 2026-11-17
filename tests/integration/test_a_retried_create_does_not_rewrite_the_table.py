@@ -67,8 +67,15 @@ def _keyed_post_paths(app: Any) -> tuple[set[str], set[str]]:
 
 
 class TestAReplayIsAnsweredNotReExecuted:
-    def test_the_same_key_returns_the_first_answer_and_leaves_the_table_alone(self, real_ns_client: TestClient) -> None:
-        """The defect this closes: the second call must not re-enter the create path at all."""
+    @pytest.mark.parametrize(
+        ("query", "rows", "answered"),
+        [pytest.param("", 3, (200, None), id="the-same-request"), pytest.param("?mode=Overwrite", 99, (400, 13), id="another-request")],
+    )
+    def test_the_same_key_never_runs_the_create_again(self, real_ns_client: TestClient, query: str, rows: int, answered: tuple[int, int | None]) -> None:
+        """The second call under the key must not re-enter the create path at all. The same request is answered with the
+        first attempt's response; another one under the key (other bytes, another mode) is refused 400, since an answer
+        of the first would say a create the caller did not ask for is what happened (ADR 0240, KeyBindsBody), and
+        honouring its body would let a retry silently overwrite the table with something else."""
         assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         headers = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f60"}
 
@@ -76,13 +83,12 @@ class TestAReplayIsAnsweredNotReExecuted:
         assert first.status_code == 200, first.text
         after_first = _versions(real_ns_client, "lance_catalog$db$keyed")
 
-        # A REPLAY CARRYING DIFFERENT BYTES. The key says "this is the same request"; honouring the
-        # body instead would let a retry silently overwrite the table with something else.
-        second = real_ns_client.post("/v1/table/lance_catalog$db$keyed/create?mode=Overwrite", content=_rows(99), headers=headers)
+        second = real_ns_client.post(f"/v1/table/lance_catalog$db$keyed/create{query}", content=_rows(rows), headers=headers)
 
-        assert second.status_code == 200, second.text
-        assert second.json() == first.json(), "a replay must answer with the first attempt's response"
-        assert _versions(real_ns_client, "lance_catalog$db$keyed") == after_first, "the replay re-executed the create"
+        assert (second.status_code, second.json().get("code")) == answered, second.text
+        if second.status_code == 200:
+            assert second.json() == first.json(), "a replay must answer with the first attempt's response"
+        assert _versions(real_ns_client, "lance_catalog$db$keyed") == after_first, "the second call re-executed the create"
 
     def test_a_DIFFERENT_key_is_a_different_request(self, real_ns_client: TestClient) -> None:
         """Convergence must not become deduplication of unrelated calls."""
@@ -190,9 +196,11 @@ class TestTheDestructiveDoorsConvergeToo:
 class TestARetriedAppendLandsOnce:
     """[[LH-577]] An append is the write a caller most often gives up on and sends again: the console aborts a slow one,
     and the catalog may have committed it. Under one key the second send answers the first's response and appends
-    nothing, whatever bytes it carries; a key the append has not used is another append."""
+    nothing; one carrying other rows is refused 400 and appends nothing either (ADR 0240, KeyBindsBody); a key the append
+    has not used is another append."""
 
-    def test_the_same_key_appends_once_and_answers_the_first_response(self, real_ns_client: TestClient) -> None:
+    @pytest.mark.parametrize(("rows", "answered"), [pytest.param(2, 200, id="the-same-rows"), pytest.param(5, 400, id="other-rows")])
+    def test_the_same_key_appends_once_and_answers_the_first_response(self, real_ns_client: TestClient, rows: int, answered: int) -> None:
         assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert real_ns_client.post("/v1/table/lance_catalog$db$grown/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
         before = _version(real_ns_client, "lance_catalog$db$grown")
@@ -200,27 +208,39 @@ class TestARetriedAppendLandsOnce:
 
         first = real_ns_client.post("/v1/table/lance_catalog$db$grown/insert?mode=append", content=_rows(2), headers=keyed)
         assert first.status_code == 200, first.text
-        again = real_ns_client.post("/v1/table/lance_catalog$db$grown/insert?mode=append", content=_rows(5), headers=keyed)
+        again = real_ns_client.post("/v1/table/lance_catalog$db$grown/insert?mode=append", content=_rows(rows), headers=keyed)
         other = real_ns_client.post(
             "/v1/table/lance_catalog$db$grown/insert?mode=append",
             content=_rows(1),
             headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f68"},
         )
 
-        assert (again.status_code, again.json()) == (200, first.json()), again.text
+        assert (again.status_code, again.json() if answered == 200 else again.json().get("code")) == (answered, first.json() if answered == 200 else 13), (
+            again.text
+        )
         assert other.status_code == 200, other.text
         counted = real_ns_client.post("/v1/table/lance_catalog$db$grown/count_rows", json={})
         assert (_version(real_ns_client, "lance_catalog$db$grown"), counted.text) == (before + 2, "6"), "a replayed append appended again"
 
-    def test_an_append_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize("keyed_table", [pytest.param(False, id="no-key"), pytest.param(True, id="primary-key")])
+    def test_an_append_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
+        self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, keyed_table: bool
+    ) -> None:
         """The answer of an append can be lost after it committed (its pod ended, or a fault after the commit), and a resend
         past the claim's lease takes the key over. Run again, the append would land twice: the commit carries the key,
-        so the takeover finds it there and answers with it."""
+        so the takeover finds it there and answers with it, the rows it added counted whatever operation committed them:
+        an append to a table declaring a primary key commits as Lance's merge, an ``Update`` (ADR 0240, TakeoverCounts)."""
         from catalog.api import idempotency as keyed_doors
         from lakehouse import idempotency
 
+        metadata = {"lance-schema:unenforced-primary-key": "true"} if keyed_table else None
+        schema = pa.schema([pa.field("id", pa.int64(), nullable=False, metadata=metadata)])
+
+        def rows(*ids: int) -> bytes:
+            return _ipc(pa.table({"id": pa.array(ids, pa.int64())}, schema=schema))
+
         assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/lance_catalog$db$lost/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$db$lost/create", content=rows(0, 1, 2), headers=ARROW_STREAM).status_code == 200
         before = _version(real_ns_client, "lance_catalog$db$lost")
         keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f69"}
 
@@ -230,9 +250,9 @@ class TestARetriedAppendLandsOnce:
         with monkeypatch.context() as during:
             during.setattr(keyed_doors.Converge, "remember", lost)
             with pytest.raises(RuntimeError, match="the pod ended"):
-                real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=_rows(2), headers=keyed)
+                real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=rows(7, 8), headers=keyed)
         monkeypatch.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
-        again = real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=_rows(2), headers=keyed)
+        again = real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=rows(7, 8), headers=keyed)
 
         assert (again.status_code, again.json()) == (200, {"num_inserted_rows": 2, "version": before + 1}), again.text
         counted = real_ns_client.post("/v1/table/lance_catalog$db$lost/count_rows", json={})

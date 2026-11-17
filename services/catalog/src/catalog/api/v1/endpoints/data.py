@@ -245,9 +245,11 @@ async def insert_into_table(
 
     An ``Idempotency-Key`` makes a resent append converge ([[LH-577]]): a caller that gave up on a slow append, which may
     have committed, sends it again under the same key and is answered the first attempt's response, nothing appended a
-    second time. The key names one append, its mode and its ref included. Its commit carries the key, so a resend that
-    takes the key over from an attempt lost unanswered past its lease finds that attempt's commit and answers with it
-    rather than appending again. Optional, as on every keyed door (:mod:`catalog.api.idempotency`)."""
+    second time. The key names one append, its mode, its ref and its rows included: the same key with other rows is
+    refused 400. Its commit carries the key, so a resend that takes the key over from an attempt lost unanswered past its
+    lease finds that attempt's commit and answers with it rather than appending again; the attempt renews its claim right
+    before its commit, so one that a resend took the key over from while it still ran answers 409 and commits nothing
+    (ADR 0240). Optional, as on every keyed door (:mod:`catalog.api.idempotency`)."""
     segments = parse_identifier(id)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
@@ -291,6 +293,9 @@ async def insert_into_table(
                 **lineage_deps.door_stamp(token, OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT, run),
                 **({IDEMPOTENCY_KEY_PROPERTY: converge.mark} if converge.mark is not None else {}),
             },
+            # The key's claim is renewed right before the put, so an attempt a resend took the key over from while it ran
+            # (past the request's deadline, the door running on) commits nothing (ADR 0240).
+            before_commit=converge.renewal(),
         )
     )
     # Recorded as soon as the append has committed: a failure after this line (the lineage emit) answers the caller an
