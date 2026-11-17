@@ -4,6 +4,7 @@
 //! refusal names what was refused by the caller's own names; an authority that does not answer is an outage, never an
 //! allow and never a deny.
 
+use super::names::Resolution;
 use super::scope::{
     Aliases, Governed, READ, WRITE_RELATIONS, alias_questions, governed_refs, named_by, names_of, output_refs, relations_for_operation, scoped,
     upstreams_named_as_tables, upstreams_named_by_a_location,
@@ -34,6 +35,8 @@ pub enum Kind {
     Unauthored,
     /// No listed signer's key verifies the event.
     Unverified,
+    /// The catalog refused a name the caller gave as none it can resolve (`super::names::Unresolved::NoName`).
+    InvalidInput,
 }
 
 impl Kind {
@@ -46,12 +49,13 @@ impl Kind {
             Kind::Ungoverned => "UngovernedOutputError",
             Kind::Unauthored => "UnauthoredRunError",
             Kind::Unverified => "UnverifiedEventError",
+            Kind::InvalidInput => "InvalidInputError",
         }
     }
 
     /// Whether a redelivery of an event the feed already holds is admitted instead: every class a grant or a stamp decides.
     fn is_a_permission(self) -> bool {
-        !matches!(self, Kind::Unavailable | Kind::Unauthenticated)
+        !matches!(self, Kind::Unavailable | Kind::Unauthenticated | Kind::InvalidInput)
     }
 }
 
@@ -80,18 +84,20 @@ impl Denial {
         let code = match self.kind {
             Kind::Unavailable => ErrorCode::ServiceUnavailable,
             Kind::Unauthenticated => ErrorCode::Unauthenticated,
+            Kind::InvalidInput => ErrorCode::InvalidInput,
             _ => ErrorCode::PermissionDenied,
         };
         NsError::new(code, self.message.clone()).named(self.kind.name())
     }
 
     /// What the bus and outbox routes do with the refusal: an outage, or a missing caller nothing on the bus has, is
-    /// asked about again.
+    /// asked about again. Those routes resolve no name by describing it, so meet no refused name; one would be a verdict
+    /// on the event that no grant repairs, as an output naming no table is.
     pub fn refusal(&self) -> Result<Refusal, Unavailable> {
         match self.kind {
             Kind::PermissionDenied => Ok(Refusal::Denied),
             Kind::ForeignRun => Ok(Refusal::ForeignRun),
-            Kind::Ungoverned => Ok(Refusal::Ungoverned),
+            Kind::Ungoverned | Kind::InvalidInput => Ok(Refusal::Ungoverned),
             Kind::Unauthored => Ok(Refusal::Unauthored),
             Kind::Unverified => Ok(Refusal::Unverified),
             Kind::Unavailable | Kind::Unauthenticated => Err(Unavailable(self.message.clone())),
@@ -146,7 +152,7 @@ pub trait Feed: Send + Sync {
 
 /// Where a table's name is resolved to its uuids as the caller.
 pub trait Names: Send + Sync {
-    fn table<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Answer<'a, DatasetUuids>;
+    fn table<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Resolution<'a, DatasetUuids>;
 }
 
 /// A refusal: who was refused on the audit trail, one record per object as the catalog's doors write them, then a line.
@@ -350,7 +356,7 @@ pub async fn ingest_authz(event: &Event, subject: Option<&str>, authority: &Auth
 }
 
 /// A text as Python's `repr` writes it, for a refusal that quotes what an event claimed.
-fn py_repr(text: &str) -> String {
+pub(crate) fn py_repr(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
     let mut written = String::from(quote);
     for character in text.chars() {

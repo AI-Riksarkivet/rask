@@ -8,7 +8,10 @@ The ``list_objects_v2`` pagination lives once, in :func:`_paginate_keys`, and ev
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import datetime
 from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, ConfigDict
 
 from lakehouse.storage.errors import s3_errors
 
@@ -28,6 +31,31 @@ def _paginate_keys(client: S3Client, bucket: str, prefix: str = "") -> Iterator[
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 yield obj["Key"]
+
+
+class ListedObject(BaseModel):
+    """One object a listing names: its key, and when the store last wrote it, at the store's own precision."""
+
+    model_config = ConfigDict(frozen=True)
+
+    key: str
+    last_modified: datetime
+
+
+def iter_listed(client: S3Client, bucket: str, prefix: str = "") -> Iterator[ListedObject]:
+    """The objects directly under ``bucket``/``prefix``, page by page, in listing order; a deeper key is a common prefix,
+    which is not listed.
+
+    Each carries ``LastModified`` as the store wrote it: RustFS answers milliseconds, AWS S3 whole seconds. pyarrow's
+    ``S3FileSystem`` reads it in whole seconds whatever the store answers (measured on RustFS 1.0.3 and pyarrow, 2026-11-17:
+    four objects put 30 ms apart read as one second there, ``.657``, ``.689``, ``.717`` and ``.750`` here), so an order
+    by time within one second is this listing's to give.
+    """
+    with s3_errors(bucket=bucket):
+        paginator = client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+            for obj in page.get("Contents", []):
+                yield ListedObject(key=obj["Key"], last_modified=obj["LastModified"])
 
 
 def iter_keys(client: S3Client, bucket: str, prefix: str = "", suffix: str = "") -> Iterator[str]:

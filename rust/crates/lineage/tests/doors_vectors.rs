@@ -23,6 +23,7 @@ use lakehouse_tables::Catalog;
 use lakehouse_tables::bearer::anonymous;
 use lineage::app::router;
 use lineage::authz::gates::Names;
+use lineage::authz::names::{Resolution, Unresolved};
 use lineage::gate::Gate;
 use lineage::signature::Signing;
 use lineage::state::{Resolver, State};
@@ -90,20 +91,32 @@ impl AccessDecider for Grants {
 /// The catalog's names, from the recorded tables and namespaces.
 struct Catalogued(Value);
 
+impl Catalogued {
+    /// The describe door's 400 for a name it refuses as none.
+    fn refuse(&self, name: &str) -> Result<(), Unresolved> {
+        let mut refused = self.0["refused"].as_array().into_iter().flatten();
+        if refused.any(|refused| refused.as_str() == Some(name)) {
+            Err(Unresolved::refused(name))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl Names for Catalogued {
-    fn table<'a>(&'a self, name: &'a str, _: Option<&'a str>) -> Answer<'a, DatasetUuids> {
+    fn table<'a>(&'a self, name: &'a str, _: Option<&'a str>) -> Resolution<'a, DatasetUuids> {
         let held = &self.0["tables"][name];
         let uuids = DatasetUuids {
             table_uuid: held[0].as_str().map(str::to_owned),
             namespace_uuid: held[1].as_str().map(str::to_owned),
         };
-        Box::pin(async move { Ok(uuids) })
+        Box::pin(async move { self.refuse(name).map(|()| uuids) })
     }
 }
 
 impl Resolver for Catalogued {
-    fn namespace<'a>(&'a self, name: &'a str, _: Option<&'a str>) -> Answer<'a, Option<String>> {
-        Box::pin(async move { Ok(self.0["namespaces"][name].as_str().map(str::to_owned)) })
+    fn namespace<'a>(&'a self, name: &'a str, _: Option<&'a str>) -> Resolution<'a, Option<String>> {
+        Box::pin(async move { self.refuse(name).map(|()| self.0["namespaces"][name].as_str().map(str::to_owned)) })
     }
 }
 

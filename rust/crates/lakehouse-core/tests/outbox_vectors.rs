@@ -12,7 +12,7 @@ use lakehouse_core::auth::issuer::Clock;
 use lakehouse_core::outbox::{Location, Producing, Staging, backlog, in_order, publish_with_outbox};
 use lakehouse_core::storage::session::{BOOT_ATTEMPTS, BOOT_DELAY, Refreshed, Unissued};
 use lakehouse_core::storage::sigv4::{Request, encode_key, sign};
-use lakehouse_core::storage::{KeyPair, Listed, Said, StorageError, StoreSession, StoreSettings, classify};
+use lakehouse_core::storage::{KeyPair, Listed, S3, Said, StorageError, StoreSession, StoreSettings, classify};
 use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};
@@ -78,7 +78,7 @@ fn the_relay_lists_the_staged_events_oldest_first_as_python_does() {
             case["name"]
         );
     }
-    assert_eq!(cases.len(), 7);
+    assert_eq!(cases.len(), 8);
 }
 
 struct Producer<'a> {
@@ -386,4 +386,58 @@ async fn a_session_is_held_renewed_and_said_as_python_s() {
         }
     }
     assert_eq!(cases.len(), 8);
+}
+
+/// A store that answers each object's first `busy` calls 503 SlowDown, as RustFS answers a burst it cannot take, and
+/// issues sessions at `/` as its STS does.
+async fn busy_store(busy: usize) -> (String, Arc<Mutex<Vec<String>>>) {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&calls);
+    let sts = "<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials><AccessKeyId>ASIA1</AccessKeyId>\
+               <SecretAccessKey>secret</SecretAccessKey><SessionToken>token</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration>\
+               </Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>";
+    let store = move |method: axum::http::Method, uri: axum::http::Uri| {
+        let seen = Arc::clone(&seen);
+        async move {
+            let call = format!("{method} {}", uri.path());
+            let earlier = seen.lock().unwrap().iter().filter(|made| **made == call).count();
+            seen.lock().unwrap().push(call);
+            if earlier < busy {
+                let slow = "<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>";
+                (StatusCode::SERVICE_UNAVAILABLE, slow)
+            } else {
+                (StatusCode::NO_CONTENT, "")
+            }
+        }
+    };
+    let app = Router::new().route("/", post(move || async move { sts })).fallback(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{address}"), calls)
+}
+
+#[tokio::test]
+async fn a_store_that_answers_busy_is_asked_again_within_three_attempts_as_pythons_client_asks() {
+    for (busy, dropped) in [(2, true), (3, false)] {
+        let (endpoint, calls) = busy_store(busy).await;
+        let token_file = scratch(&format!("busy-{busy}"));
+        std::fs::write(&token_file, "projected").unwrap();
+        let environment = [
+            ("LINEAGE_S3_WEB_IDENTITY_TOKEN_FILE", token_file.to_str().unwrap().to_owned()),
+            ("LINEAGE_S3_STS_ENDPOINT", endpoint.clone()),
+            ("LINEAGE_S3_ENDPOINT", endpoint.clone()),
+        ];
+        let settings = StoreSettings::from_environment("LINEAGE", environment.map(|(name, value)| (name.to_owned(), value))).unwrap();
+        let session = Arc::new(StoreSession::new(&settings, "lineage").unwrap());
+        assert_eq!(session.exchange_at_boot().await, Ok(1));
+        let s3 = S3::new(&settings, session).unwrap();
+        let outcome = s3.delete("rask-control", "_lineage_outbox/run@COMPLETE.json").await;
+        let busy_answer = Err(StorageError::Refused {
+            status: 503,
+            code: "SlowDown".to_owned(),
+        });
+        assert_eq!(outcome, if dropped { Ok(()) } else { busy_answer }, "{busy} busy answers");
+        assert_eq!(calls.lock().unwrap().len(), 3, "{busy} busy answers: three attempts at most");
+    }
 }

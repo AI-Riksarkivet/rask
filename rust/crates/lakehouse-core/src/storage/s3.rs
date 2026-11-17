@@ -1,6 +1,12 @@
 //! An S3 client for any S3-compatible store, signed with the session its [`StoreSession`] holds when each request is
 //! made, path-style (RustFS refuses virtual-hosted signing), and carrying only the calls the outbox and a timer's claim
 //! make: put (plain, or conditioned on the key's absence), get, delete, and a listing one level deep.
+//!
+//! Every request is made again where the store answers it busy or failing (429, 500, 502, 503, 504) or does not answer,
+//! as the Python's client (`lakehouse.storage.s3_client`, botocore's adaptive mode with `max_attempts` 3) makes it again:
+//! three attempts in all, each signed afresh. A timer's conditional write ([`super::records`]) is made again alike, as
+//! botocore makes `lakehouse.records`' put again: a busy store did not take it, and one that took it unanswered makes the
+//! second attempt find the claim held, which is a window lost, never a window run twice.
 
 use super::session::{StoreSession, StoreSettings, client};
 use super::sigv4::{self, Request, encode, encode_key};
@@ -15,6 +21,15 @@ use std::time::Duration;
 /// A connect and read bound, so a store that takes a connection and never answers fails the call.
 const CONNECT: Duration = Duration::from_secs(10);
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// How many times a request is made, the first included, and the wait before the second; each later wait doubles.
+const ATTEMPTS: u32 = 3;
+const FIRST_WAIT: Duration = Duration::from_millis(200);
+
+/// Whether the store answered that it is busy or failing, as botocore's transient and throttling statuses: an answer to
+/// the request itself is the same on every attempt.
+fn is_transient(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+}
 
 /// One object a listing names: its key and when it was last written, in nanoseconds since the epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,8 +82,35 @@ impl S3 {
         })
     }
 
-    /// Sign and send one request, and answer the store's response whatever its status.
+    /// Sign and send one request, made again while the store answers it busy or failing or does not answer and attempts
+    /// remain, and answer the store's last response whatever its status.
     pub(super) async fn signed(
+        &self,
+        method: Method,
+        bucket: &str,
+        key: Option<&str>,
+        query: &[(&str, &str)],
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+    ) -> Result<reqwest::Response, StorageError> {
+        let mut wait = FIRST_WAIT;
+        for attempt in 1.. {
+            let answered = self.once(method.clone(), bucket, key, query, headers, body.clone()).await;
+            let transient = match &answered {
+                Ok(answer) => is_transient(answer.status()),
+                Err(error) => matches!(error, StorageError::NoAnswer(_)),
+            };
+            if !transient || attempt >= ATTEMPTS {
+                return answered;
+            }
+            tracing::debug!(attempt, "store_request_retried");
+            tokio::time::sleep(wait).await;
+            wait *= 2;
+        }
+        Err(StorageError::NoAnswer("no attempt was made".to_owned()))
+    }
+
+    async fn once(
         &self,
         method: Method,
         bucket: &str,

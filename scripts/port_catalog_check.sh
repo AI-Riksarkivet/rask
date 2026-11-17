@@ -6,7 +6,7 @@
 # Without the fixture those tests skip, so this is what runs them.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-port="${RASK_PORT_CATALOG_PORT:-8765}"
+port="${RASK_PORT_CATALOG_PORT:-$("$root/scripts/free_port.sh")}"
 log="$(mktemp)"
 
 cd "$root"

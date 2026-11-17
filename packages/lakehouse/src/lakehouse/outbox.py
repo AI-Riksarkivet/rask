@@ -28,8 +28,11 @@ import logging
 import time
 from collections.abc import Iterator
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
+from typing import Final
 
 import pyarrow.fs as pafs
+from pydantic import BaseModel, ConfigDict
 
 from lakehouse import outbox_metrics
 from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the outbox is a registered publish site
@@ -41,6 +44,10 @@ from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
 
 log = logging.getLogger(__name__)
+
+_EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
+#: The smallest step a ``datetime`` holds, so a listing's time divides by it exactly.
+_MICROSECOND: Final = timedelta(microseconds=1)
 
 
 class UnpublishedEventError(RuntimeError):
@@ -212,20 +219,47 @@ def read_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> by
         return None
 
 
-def _staged_infos(outbox_uri: str, storage_options: StorageOptions) -> list[pafs.FileInfo]:
-    """Every staged `.json` object under the prefix, OLDEST FIRST.
+class _Listed(BaseModel):
+    """A staged object as a listing names it: the path the outbox's filesystem reads it at, and when it was written, in
+    nanoseconds since the epoch at the store's own precision."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    mtime_ns: int
+
+
+def _staged_infos(outbox_uri: str, storage_options: StorageOptions) -> list[_Listed]:
+    """Every staged `.json` object under the prefix, OLDEST FIRST, by the store's own clock; objects written in one
+    instant keep the listing's order.
 
     Oldest-first matters for the bounded drain: when a backlog exceeds the per-tick cap, the events that
     have been at risk LONGEST must drain first, and `outbox.oldest_age` must fall monotonically as the relay
     catches up. A newest-first (or arbitrary) order would let the oldest event starve indefinitely behind a
     steady arrival rate — the backlog would "drain" while the thing you are actually alerting on never moves.
+
+    An S3 outbox is listed through the storage seam (:func:`~lakehouse.storage.iter_listed`), which keeps the store's
+    milliseconds where pyarrow's listing reads whole seconds and would order one second's events by key. The key is the
+    envelope's id, which sorts by no time, and the order needs no more than the store gives: the relay's drain is safe in
+    any order (``specs/lineage/EventPath.tla``, Pick), so the order is the drain's fairness and the age's accuracy, to
+    the store's precision (AWS S3 answers whole seconds).
     """
-    fs, base = fs_and_base(outbox_uri, storage_options)
-    infos = [
-        i for i in fs.get_file_info(pafs.FileSelector(base, allow_not_found=True, recursive=False)) if i.type == pafs.FileType.File and i.path.endswith(".json")
-    ]
-    infos.sort(key=lambda i: i.mtime_ns or 0)
-    return infos
+    if on_s3(outbox_uri):
+        from lakehouse.storage import iter_listed
+
+        bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
+        under = f"{prefix.rstrip('/')}/" if prefix else ""
+        listed = [
+            _Listed(path=f"{bucket}/{obj.key}", mtime_ns=(obj.last_modified - _EPOCH) // _MICROSECOND * 1000)
+            for obj in iter_listed(object_client(storage_options), bucket, under)
+            if obj.key.endswith(".json")
+        ]
+    else:
+        fs, base = fs_and_base(outbox_uri, storage_options)
+        selector = pafs.FileSelector(base, allow_not_found=True, recursive=False)
+        files = [i for i in fs.get_file_info(selector) if i.type == pafs.FileType.File and i.path.endswith(".json")]
+        listed = [_Listed(path=i.path, mtime_ns=i.mtime_ns or 0) for i in files]
+    return sorted(listed, key=lambda staged: staged.mtime_ns)
 
 
 def backlog(outbox_uri: str, storage_options: StorageOptions) -> tuple[int, float]:

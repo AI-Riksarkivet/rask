@@ -149,7 +149,13 @@ async fn a_timer_turns_as_pythons_does() {
             case,
             writes: Mutex::default(),
         };
-        let timer = Timer::new("lineage-relay", case["period"].as_f64().unwrap(), &store, "replica-a").unwrap();
+        let forgot = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let counted = std::sync::Arc::clone(&forgot);
+        let timer = Timer::new("lineage-relay", case["period"].as_f64().unwrap(), &store, "replica-a")
+            .unwrap()
+            .on_elsewhere(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            });
         let mut worked = false;
         let work = async {
             worked = true;
@@ -168,6 +174,12 @@ async fn a_timer_turns_as_pythons_does() {
         let wait = case["wait"].as_f64().unwrap();
         assert!((turn.wait.as_secs_f64() - wait).abs() < 0.01, "{label}: waits {:?}, Python {wait}", turn.wait);
         assert_eq!(worked, case["worked"].as_bool().unwrap(), "{label}: whether it worked");
+        let forgotten = forgot.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            json!(forgotten),
+            case["forgot"],
+            "{label}: how often what only the window's runner knows was forgotten"
+        );
         assert_eq!(Value::Array(store.writes.lock().unwrap().clone()), case["writes"], "{label}: the writes");
     }
     assert!(cases.len() >= 20);

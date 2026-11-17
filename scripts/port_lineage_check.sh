@@ -13,9 +13,14 @@
 # how to run the checks against them. Exits non-zero when any check fails.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-base="${RASK_PORT_LINEAGE_BASE_PORT:-9440}"
-catalog_port=$base fga_port=$((base + 1)) grpc_port=$((base + 2)) issuer_port=$((base + 3)) nats_port=$((base + 4))
-store_port=$((base + 6)) store_issuer_port=$((base + 7))
+# Seven ports: from RASK_PORT_LINEAGE_BASE_PORT up where it is named, else seven free ones.
+if [ -n "${RASK_PORT_LINEAGE_BASE_PORT:-}" ]; then
+  ports=($(seq "$RASK_PORT_LINEAGE_BASE_PORT" $((RASK_PORT_LINEAGE_BASE_PORT + 6))))
+else
+  ports=($("$root/scripts/free_port.sh" 7))
+fi
+catalog_port=${ports[0]} fga_port=${ports[1]} grpc_port=${ports[2]} issuer_port=${ports[3]} nats_port=${ports[4]}
+store_port=${ports[5]} store_issuer_port=${ports[6]}
 work="$(mktemp -d)"
 key="lineage-check-$RANDOM$RANDOM"
 nats_token="lineage-check-bus-$RANDOM$RANDOM"

@@ -11,9 +11,10 @@
 # call the real Python producer and lane (scripts/port_lanes_fixture.py), and stops every server.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-catalog_port="${RASK_PORT_CATALOG_PORT:-8766}"
-store_port="${RASK_PORT_STORE_PORT:-9321}"
-issuer_port="${RASK_PORT_ISSUER_PORT:-9322}"
+{ read -r free_catalog; read -r free_store; read -r free_issuer; } < <("$root/scripts/free_port.sh" 3)
+catalog_port="${RASK_PORT_CATALOG_PORT:-$free_catalog}"
+store_port="${RASK_PORT_STORE_PORT:-$free_store}"
+issuer_port="${RASK_PORT_ISSUER_PORT:-$free_issuer}"
 bucket=rask-control
 work="$(mktemp -d)"
 endpoint="http://127.0.0.1:$store_port"

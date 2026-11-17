@@ -112,12 +112,14 @@ catalog away), a stand-in secret store speaking the store's API and holding the 
 sink that decodes every export, and a graph backend; it starts the binary and the Python service (`opentelemetry-instrument
 uvicorn lineage.main:app`) from one environment shaped like the chart's. Two departures from the chart's shape, each
 because the fixture is not the estate: authorization is OpenFGA's own API at the pinned store and model, since the
-catalog fixture runs without authorization and so serves no decision door; and no ServiceAccount verifier is
-configured. Result on 2026-11-17, every check against the binary:
+catalog fixture runs without authorization and so serves no decision door (the doors' corpus is put to both with the
+catalog deciding by `DECIDER=catalog scripts/port_doors_check.sh`, ADR 0236); and no ServiceAccount verifier is
+configured. Every check script takes free ports of its own unless one is named (`scripts/free_port.sh`), so two runs
+on one machine do not share a store. Result on 2026-11-17, every check against the binary:
 
 | Check | Count | Result |
 | --- | --- | --- |
-| (a) the doors' corpus (ADR 0236) and the signed cases, Python and binary side by side, signing enforced, the bus present | 398 requests, 199 to each; 4 signed staged events replayed on each side (listed signer, a signer nobody lists, a tampered signature, none) and a signed ingest | 0 differences; 9 kept on purpose: ADR 0236's seven, the unlisted signer's refusal message (ADR 0223) and the order of events staged within one second (below) |
+| (a) the doors' corpus (ADR 0236) and the signed cases, Python and binary side by side, signing enforced, the bus present | 406 requests, 203 to each; 4 signed staged events replayed on each side (listed signer, a signer nobody lists, a tampered signature, none) and a signed ingest | 0 differences; 6 kept on purpose: ADR 0236's five and the unlisted signer's refusal message (ADR 0223) |
 | (a) a signed replay republished on the bus by each | 2 replays | each republished |
 | (a) both stop on SIGTERM | 2 | the binary exits 0; the Python ends by the signal (below) |
 | (b) the lanes' nine cases, the model's five ways among them, OpenFGA deciding, the relay on a 2 s timer and the forwarder on | 9, with the start | each passed: one feed row, whole (its run's binding and its edge), nothing left staged, a refusal kept; two replicas ran 4 ticks in 8 s at a 2 s period; the forwarder sent the event after a restart once and nothing before it again |
@@ -126,9 +128,10 @@ configured. Result on 2026-11-17, every check against the binary:
 | (d) SIGTERM during an ingest held 3 s at the catalog | 1 | answered 201, recorded once, exit 0 after 5.9 s |
 | (d) SIGTERM during a delivery held 3 s at the catalog | 1 | settled before the exit, recorded once, exit 0 after 4.6 s |
 | (e) a handling that panics | 1 | `background_work_ended loop_name='lineage-ingest'`, exit 70 |
+| (g) two replicas on one relay timer: A reports a backlog it cannot record (the catalog failing every feed write) and is stopped; B drains it once the catalog is let through; A resumes early in a window B claimed | 1, run three times | A reported no backlog from 0.5 s after it resumed until it next ran a window, 10 or more exports at 250 ms each time; with the hook planted out, every one of them reported the event B drained (two runs) |
 | (f) the same traffic through each alone: 9 requests to the doors, 2 per reader, a replay, 3 bus events, 2 staged events, the relay and the forwarder | every export decoded | every export of both presented the pod's token; the 29 metric names, 11 span names and 4 audit action:outcome pairs the binary exported are the Python's; the 7 door:outcome pairs `lineage.events.processed` counted are the same; what only the Python exported is kept on purpose (below) |
 
-28 checks, all passed.
+30 checks, all passed.
 
 The (b) cases are the nine of `lanes_live.rs` and the model's five ways (`specs/lineage/EventPath.tla`), now through the
 binary and with OpenFGA deciding where the slice's test had a decider that denied everything: an event refused is one
@@ -146,6 +149,7 @@ signed by a signer that is no delegator, so its writer's grants are asked rather
 | an audit record missing on a refusal (the gates' `authz` `deny` not emitted) | (f) the audit sets differ |
 | a setting read under the wrong name (`LINEAGE_DELIVERY_ATTEMPT`) | (c) `LINEAGE_DELIVERY_ATTEMPTS=0` did not refuse the start |
 | the drain order reversed (the listener stops before `/readyz` turns) | (c) `/readyz` read 200 `ready` after SIGTERM |
+| the relay's `elsewhere` hook forgetting nothing | (g) the replica that lost the window reported the drained event's backlog |
 
 ## The pilot measured (ADR 0217 point 8)
 
@@ -222,13 +226,26 @@ eighth after the load. What they do NOT show:
   delivery again at once. Both record it once.
 - **A refusal's message quotes nothing from the event** (ADR 0223): a replay refused for a signer nobody lists answers
   "the signer is not an identity that may sign", where the Python quotes the claimed identity.
-- **Staged events written within one second are listed oldest first**, by the store's milliseconds: the Python's
-  listing (pyarrow's S3 filesystem) reads `LastModified` in whole seconds and lists the same second's events by key.
-  Measured on RustFS 1.0.3 and pyarrow, 2026-11-17: four objects staged 30 ms apart read `1794927770000000000` four
-  times in Python, `.657`, `.689`, `.717` and `.750` from the listing itself. The Python drains them in key order, and
-  its `outbox.oldest_age` is up to a second short. A defect of the Python, reported, not copied.
 - **The debug build takes the CloudEvent type `rask.check.handling-panics` as a handling that panics**, which the
   check of the supervision (e) needs in place of a native library's panic; a release build has no such type.
+
+## The outbox's order, and the backlog a replica did not measure
+
+- **Staged events are drained oldest first by the store's own clock, in both.** The Python listed the outbox through
+  pyarrow's S3 filesystem, which reads `LastModified` in whole seconds (measured on RustFS 1.0.3, 2026-11-17: four
+  objects staged 30 ms apart read as one second there, `.657`, `.689`, `.717` and `.750` from the store's own listing),
+  so it drained one second's events in key order and its `outbox.oldest_age` was up to a second short. It now lists
+  through the storage seam (`lakehouse.storage.iter_listed`, boto3's ListObjectsV2), which keeps the store's precision,
+  as the Rust's listing does; events written in one instant keep the listing's order, by key. Shown by
+  `test_a_tick_drains_events_staged_within_one_second_in_the_order_they_were_staged` on the pinned RustFS
+  (`scripts/port_outbox_check.sh`; the suite's S3 stand-in answers whole seconds itself) and by the outbox vectors' new
+  listing. No finer order is stamped: the key is the envelope's id, which the drop and the replay address, and no
+  consumer's safety rests on the order, since the model's relay picks any staged event (`specs/lineage/EventPath.tla`,
+  Pick). The order is the bounded drain's fairness, the age's accuracy and the replay's choice of a run's newest
+  staged event, each to the store's precision: milliseconds on RustFS, whole seconds on AWS S3.
+- **A replica that did not run the relay's window forgets the backlog it measured** (`Timer::on_elsewhere`, the
+  Python's `elsewhere` hook): another replica drained the outbox, and the last reading says nothing of it. Shown by the
+  timer's turn vectors, which record each time the hook runs, and by check (g).
 
 ## The four facts
 
@@ -236,20 +253,23 @@ eighth after the load. What they do NOT show:
   the chart passes the server today. No variable was added; the port, address and grace stay the chart's flags.
 - **Cloud native:** every platform service is named by address (the catalog, the decider, the bus, the secret store,
   the object store, the OTLP gateway); the binary bundles none, and one that is away degrades readiness or retries,
-  never ends the process. A loop that dies ends the process for Kubernetes to restart.
+  never ends the process. A loop that dies ends the process for Kubernetes to restart. A store that answers busy is
+  asked again within three attempts, as the Python's client asks (ADR 0234), so a burst is absorbed rather than counted
+  as a failed tick; a gauge reports only what this replica measured, so a backend summing replicas reads the outbox as
+  it is.
 - **Lance-namespace/table-idiomatic:** every table is reached through the catalog's doors; the crate links no Lance.
 - **Zero trust:** no secret through the environment, only file paths: the bus, catalog, decider, secret-store,
   object-store and OTLP tokens are files read at each use; every request is authenticated by the service itself before
-  its body is read; the one gate decides every write.
+  its body is read; the one gate decides every write. The outbox's listing asks for nothing beyond the relay's own
+  prefix, which its policy already grants (`s3:ListBucket` under `_lineage_outbox/`).
 
 ## Not done
 
 - **No image is built and nothing on the estate runs the binary.** A dockerfile and its Dagger target, the chart value
   that selects the Rust container (its `args` the flags above), and a live read-back are the next slice.
-- The binary was not run against the catalog's decision door (the fixture's catalog has authorization off), nor with
-  the ServiceAccount verifier, nor with the docs pages (`LINEAGE_DOCS`), which are not ported.
-- The timer's `elsewhere` hook (forgetting the outbox's backlog gauge where another replica ran the window) is not
-  ported.
+- The binary was run against the catalog's decision door for the doors' corpus only (ADR 0236), by a second catalog
+  process with authorization on over the first one's tables; checks (b) to (g) still decide at OpenFGA. It was not run
+  with the ServiceAccount verifier, nor with the docs pages (`LINEAGE_DOCS`), which are not ported.
 - Lance's own metrics belong to a crate that links Lance (ADR 0237).
 
 ## Consequences
@@ -263,6 +283,8 @@ eighth after the load. What they do NOT show:
 - `lakehouse-core` grows by 170 lines for what every service runs on (the supervisor 64, the timer's metrics 73 across
   `timers.rs` and `instruments.rs`, the process's audit trail 9, the remote parent and the deadline's span 28, the
   shell's grace 14), and `lakehouse-bus` by 96 (the bus's metrics and spans).
+- The follow-ups (a name the catalog refuses answered as the Python answers it, ADR 0226; the timer's `elsewhere` hook;
+  the store asked again when busy, ADR 0234) bring `lineage` to 4,882 lines (+50) and `lakehouse-core` to 6,379 (+39).
 
 - `scripts/port_lineage_check.sh` replaces the doors check's example server: `scripts/port_doors_check.sh` runs the
   binary, and `rust/crates/lineage/examples/doors_serve.rs` is deleted.

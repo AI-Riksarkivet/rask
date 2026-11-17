@@ -4,7 +4,7 @@
   and an envelope id, through a client that records its calls.
 - ``urls``: the request URL the real boto3 S3 client makes for a bucket and key.
 - ``listings``: what ``list_events`` yields, oldest first and bounded, and what ``backlog`` measures, over a listing a
-  stand-in filesystem gives.
+  stand-in S3 client gives, at the store's own precision.
 - ``publishes``: ``publish_with_outbox`` with its stage, publish and drop each succeeding or failing: the effects in
   order, what it raised and whether the event stayed staged, and what it counted.
 - ``errors``: how ``lakehouse.storage.s3_errors`` and ``lakehouse.records.create_json`` classify a store's refusal.
@@ -28,7 +28,7 @@ import os
 import tempfile
 from collections.abc import Callable, Generator, Iterator
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -102,8 +102,6 @@ def _urls() -> list[dict[str, Any]]:
 
 
 def _listings() -> list[dict[str, Any]]:
-    import pyarrow.fs as pafs
-
     from lakehouse import outbox
 
     base = "bucket/_lineage_outbox"
@@ -112,21 +110,29 @@ def _listings() -> list[dict[str, Any]]:
         ("oldest first", [("a.json", 3_000_000_000, False), ("b.json", 1_000_000_000, False), ("c.json", 2_000_000_000, False)], None),
         ("ties keep the listing's order", [("a.json", 5_000_000_000, False), ("b.json", 5_000_000_000, False), ("c.json", 4_000_000_000, False)], None),
         ("bounded by the limit", [(f"e{n}.json", (10 - n) * 1_000_000_000, False) for n in range(6)], 4),
-        ("a limit of zero takes none", [("a.json", 1, False)], 0),
+        ("a limit of zero takes none", [("a.json", 1_000_000, False)], 0),
         (
             "only staged objects are listed",
-            [("a.txt", 1, False), ("b.JSON", 2, False), ("c.json", 3, True), ("d.json.tmp", 4, False), (".json", 5, False), ("e.json.json", 6, False)],
+            [(name, n * 1_000_000, n == 3) for n, name in enumerate(("a.txt", "b.JSON", "c.json", "d.json.tmp", ".json", "e.json.json"), start=1)],
             None,
         ),
-        ("keys a run names", [("r1@COMPLETE.json", 7_000_000_001, False), ("r1@FAIL.json", 7_000_000_000, False)], None),
+        ("keys a run names", [("r1@COMPLETE.json", 7_001_000_000, False), ("r1@FAIL.json", 7_000_000_000, False)], None),
+        (
+            "within one second, by the store's milliseconds",
+            [("a.json", 8_750_000_000, False), ("b.json", 8_717_000_000, False), ("c.json", 8_689_000_000, False), ("d.json", 8_657_000_000, False)],
+            None,
+        ),
     ]
     now = 10_000_000_000
     cases: list[dict[str, Any]] = []
     for name, entries, limit in listings:
-        infos = [_Info(f"{base}/{entry}", pafs.FileType.Directory if is_dir else pafs.FileType.File, mtime) for entry, mtime, is_dir in entries]
-
-        fs = _Fs(infos)
-        with patch.object(outbox, "fs_and_base", lambda *_, fs=fs: (fs, base)), patch.object(outbox.time, "time_ns", lambda: now):
+        # A common prefix is no object of a listing's contents, which is all the store's listing answers.
+        client = _Listing([(f"_lineage_outbox/{entry}", mtime) for entry, mtime, is_dir in entries if not is_dir])
+        with (
+            patch.object(outbox, "object_client", lambda _options, client=client: client),
+            patch.object(outbox, "fs_and_base", lambda *_: (_Fs(), base)),
+            patch.object(outbox.time, "time_ns", lambda: now),
+        ):
             listed = list(outbox.list_events("s3://bucket/_lineage_outbox", _NO_OPTIONS, limit=limit))
             depth, age = outbox.backlog("s3://bucket/_lineage_outbox", _NO_OPTIONS)
         cases.append(
@@ -143,21 +149,25 @@ def _listings() -> list[dict[str, Any]]:
     return cases
 
 
-class _Info:
-    """A ``pyarrow.fs.FileInfo`` as the outbox reads one: its path, its type and its modification time in nanoseconds."""
+class _Listing:
+    """An S3 client whose ``list_objects_v2`` answers ``objects`` (key, nanoseconds since the epoch) in one page, in the
+    order given, each ``LastModified`` a ``datetime`` as botocore parses the store's answer."""
 
-    def __init__(self, path: str, type_: Any, mtime_ns: int) -> None:  # noqa: ANN401 - pyarrow's enum
-        self.path, self.type, self.mtime_ns = path, type_, mtime_ns
+    def __init__(self, objects: list[tuple[str, int]]) -> None:
+        self._objects = objects
+
+    def get_paginator(self, operation: str) -> _Listing:
+        assert operation == "list_objects_v2"
+        return self
+
+    def paginate(self, **asked: str) -> list[dict[str, Any]]:
+        assert asked == {"Bucket": "bucket", "Prefix": "_lineage_outbox/", "Delimiter": "/"}, asked
+        contents = [{"Key": key, "LastModified": datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=ns // 1000)} for key, ns in self._objects]
+        return [{"Contents": contents}]
 
 
 class _Fs:
-    """A filesystem that lists ``infos`` and reads each object as a text naming it."""
-
-    def __init__(self, infos: list[_Info]) -> None:
-        self._infos = infos
-
-    def get_file_info(self, _selector: object) -> list[_Info]:
-        return self._infos
+    """A filesystem that reads each object as a text naming it."""
 
     def open_input_stream(self, path: str) -> _Stream:
         return _Stream(f"body of {path.rsplit('/', 1)[-1]}".encode())

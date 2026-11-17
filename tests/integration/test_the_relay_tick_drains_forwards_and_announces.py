@@ -21,11 +21,13 @@ from outside the process.
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import cast, override
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -243,6 +245,34 @@ def s3_outbox(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, Callable[[
         yield "s3://outbox/_lineage_outbox", put
     finally:
         server.stop()
+
+
+#: The real S3 store the outbox's order is checked on, named by the lane that stands it up (`scripts/port_outbox_check.sh`):
+#: the suite's stand-in answers ``LastModified`` in whole seconds, so it cannot order two writes within one.
+_ORDER_STORE = os.environ.get("RASK_PORT_STORE_ENDPOINT", "")
+
+
+@pytest.mark.skipif(not _ORDER_STORE, reason="needs a store that keeps milliseconds: scripts/port_outbox_check.sh names one")
+def test_a_tick_drains_events_staged_within_one_second_in_the_order_they_were_staged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Oldest first, by the store's own clock, though the events' keys sort the other way: the events at risk longest
+    drain first, and ``outbox.oldest_age`` is the oldest event's age."""
+    access, secret = os.environ["RASK_PORT_STORE_ACCESS_KEY"], Path(os.environ["RASK_PORT_STORE_SECRET_FILE"]).read_text().strip()
+    options = {"aws_endpoint": _ORDER_STORE, "aws_access_key_id": access, "aws_secret_access_key": secret, "aws_region": "us-east-1", "allow_http": "true"}
+    for name, value in {"LINEAGE_S3_ENDPOINT": _ORDER_STORE, "LINEAGE_S3_ACCESS_KEY_ID": access, "LINEAGE_S3_SECRET_ACCESS_KEY": secret}.items():
+        monkeypatch.setenv(name, value)
+    outbox_uri = f"s3://{os.environ['RASK_PORT_STORE_BUCKET']}/_order_{uuid4().hex[:12]}"
+    runs = [f"1d3c5a07-0000-4000-8000-00000000079{n}" for n in (4, 3, 2, 1)]
+    time.sleep(1 - time.time() % 1)  # at the start of a second, so the four writes share it
+    for run in runs:
+        outbox.stage_envelope(
+            outbox_uri, StorageOptions.from_flat(options), lineage_envelope(run_event(run, "COMPLETE", "2026-11-17T10:00:00+00:00", outputs=[_TABLE]))
+        )
+        time.sleep(0.03)
+    bus = BusDouble()
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, _lineage_as_its_pod_starts_it(catalog_url, outbox_uri, bus, monkeypatch) as lineage:
+        tick = relay_tick(lineage)
+
+    assert (tick.outbox_drained, [taken.message_id for taken in bus.sent]) == (4, [f"{run}@COMPLETE" for run in runs])
 
 
 @pytest.mark.parametrize(

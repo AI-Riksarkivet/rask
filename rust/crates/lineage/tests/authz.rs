@@ -9,7 +9,7 @@ use lineage::authz::gates::{
     Authority, DatasetFilter, Denial, Feed, Names, authorizing, bus_authz, output_authz, require_event_feed_reader, require_metadata_access,
     require_parks_reader, require_parks_replayer,
 };
-use lineage::authz::names::{enforce_author, stamp_resolved_uuids};
+use lineage::authz::names::{Resolution, Unresolved, enforce_author, stamp_resolved_uuids};
 use lineage::authz::scope::{Governed, governed_refs, output_refs, relations_for_operation};
 use lineage::intake::{Authorizing, Refusal};
 use lineage::model::{Dataset, Event, parse_event};
@@ -147,9 +147,13 @@ impl Feed for Lookups<'_> {
 }
 
 impl Names for Lookups<'_> {
-    fn table<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Answer<'a, DatasetUuids> {
+    fn table<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Resolution<'a, DatasetUuids> {
         Box::pin(async move {
             self.stub.asked.lock().unwrap().push(json!({"ask": "describe", "name": name, "bearer": bearer}));
+            let mut refused = self.case["answers"]["refused"].as_array().into_iter().flatten();
+            if refused.any(|refused| refused.as_str() == Some(name)) {
+                return Err(Unresolved::refused(name));
+            }
             let uuid = self.case["answers"]["described"][name].as_str().map(str::to_owned);
             Ok(DatasetUuids {
                 namespace_uuid: uuid.as_ref().map(|_| UNS.to_owned()),
@@ -416,16 +420,19 @@ async fn names_are_resolved_and_stamped_as_python_stamps_them() {
         };
         let mut event = parse_event(&case["event"]).unwrap();
         let decider = case["decider"].as_bool().unwrap_or(true).then_some(&stub as &dyn AccessDecider);
-        stamp_resolved_uuids(&mut event, &lookups, Some("bearer-of-ada"), decider, case["subject"].as_str(), &estate.catalog)
-            .await
-            .unwrap();
-        let ours = json!({"asked": *stub.asked.lock().unwrap(), "stamped": event.to_json()});
-        compare(
-            &mut failures,
-            case["name"].as_str().unwrap(),
-            ours,
-            json!({"asked": case["asked"], "stamped": case["stamped"]}),
-        );
+        let stamped = stamp_resolved_uuids(&mut event, &lookups, Some("bearer-of-ada"), decider, case["subject"].as_str(), &estate.catalog).await;
+        let asked = stub.asked.lock().unwrap().clone();
+        let (ours, python) = match stamped {
+            Ok(()) => (
+                json!({"asked": asked, "stamped": event.to_json()}),
+                json!({"asked": case["asked"], "stamped": case["stamped"]}),
+            ),
+            Err(denial) => (
+                json!({"asked": asked, "refused": denial.kind.name(), "message": denial.message}),
+                json!({"asked": case["asked"], "refused": case["refused"], "message": case["message"]}),
+            ),
+        };
+        compare(&mut failures, case["name"].as_str().unwrap(), ours, python);
     }
     report(&failures, cases.len());
 }

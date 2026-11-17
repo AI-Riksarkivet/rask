@@ -12,7 +12,9 @@ from lakehouse.storage.errors import BucketNotFoundError as BucketNotFoundError
 from lakehouse.storage.errors import ObjectNotFoundError as ObjectNotFoundError
 from lakehouse.storage.errors import StorageError as StorageError
 from lakehouse.storage.errors import s3_errors as s3_errors
+from lakehouse.storage.s3 import ListedObject as ListedObject
 from lakehouse.storage.s3 import iter_keys as iter_keys
+from lakehouse.storage.s3 import iter_listed as iter_listed
 from lakehouse.storage.s3 import prune_timestamped_prefixes as prune_timestamped_prefixes
 from lakehouse.storage.sts import STSClient as STSClient
 from lakehouse.storage.sts import sts_client as sts_client

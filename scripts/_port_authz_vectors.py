@@ -474,6 +474,9 @@ def _gate_cases() -> list[dict[str, Any]]:
         {"gate": "metadata", "name": "no caller", "subject": None, "bearer": None, "table": "wh$raw$pages", "answers": granted},
         {"gate": "metadata", "name": "no caller, an unseen name", "subject": None, "bearer": None, "table": "wh$x", "answers": granted},
         {"gate": "metadata", "name": "the decider is down", "table": "wh$raw$pages", "answers": granted | {"unavailable": ["check"]}},
+        {"gate": "metadata", "name": "a name the catalog refuses", "table": "wh$$pages", "answers": granted | {"refused": ["wh$$pages"]}},
+        {"gate": "metadata", "name": "a long refused name is quoted cut", "table": _LONG_NAME, "answers": granted | {"refused": [_LONG_NAME]}},
+        {"gate": "metadata", "name": "authorization off, a refused name", "fga": False, "table": "wh$$pages", "answers": {"refused": ["wh$$pages"]}},
     ]
     for case in cases:
         case.setdefault("subject", _ADA)
@@ -481,17 +484,29 @@ def _gate_cases() -> list[dict[str, Any]]:
     return cases
 
 
+#: A name past the most a refusal quotes, holding a quote, so its quoting picks the other one.
+_LONG_NAME = "wh$raw$" + "it's" * 80
+
+
 class _Names:
-    """The catalog's describe doors, answering from the case and recording each name asked about."""
+    """The catalog's describe doors, answering from the case and recording each name asked about. A name the case lists
+    under ``refused`` is answered 400, as the catalog answers a name that is no identifier, through the real translation
+    of that answer (`lineage.services.names`)."""
 
     def __init__(self, answers: Answers, asked: list[dict[str, Any]]) -> None:
         self._answers = answers
         self._asked = asked
 
     async def table(self, name: str, *, bearer: str | None) -> Any:  # noqa: ANN401 - the real DatasetUuids
+        from lance_namespace_urllib3_client.exceptions import BadRequestException
+
         from lakehouse.lineage_events import DatasetUuids
+        from lineage.services import names
 
         self._asked.append({"ask": "describe", "name": name, "bearer": bearer})
+        if name in self._answers.get("refused", []):
+            with names._described_as_the_callers(name):
+                raise BadRequestException(status=400, reason="Bad Request", body='{"error": "the catalog\'s own words", "trace": "t-1"}')
         uuid = self._answers.get("described", {}).get(name)
         return DatasetUuids(table_uuid=uuid, namespace_uuid=_UNS if uuid else None)
 
@@ -639,6 +654,17 @@ def _stamp_cases() -> list[dict[str, Any]]:
         {"name": "no caller", "subject": None, "event": event, "answers": {"tables": tables, "described": described}},
         {"name": "a dataset event", "event": _dataset_event("create_table", uuid="claimed"), "answers": {"tables": tables}},
         {"name": "nothing to resolve asks nothing", "event": _run([{"namespace": "file", "name": "/d"}], []), "answers": {}},
+        {
+            "name": "the store decides, and the catalog refuses a name",
+            "event": event,
+            "answers": {"resolves_names": False, "described": described, "refused": ["wh$clean$pages"]},
+        },
+        {
+            "name": "no decider, and the catalog refuses a name",
+            "decider": False,
+            "event": event,
+            "answers": {"described": described, "refused": ["wh$raw$pages"]},
+        },
     ]
 
 
@@ -651,7 +677,12 @@ async def _stamp_outcome(case: dict[str, Any]) -> dict[str, Any]:
     event = parse_event(case["event"])
     decider = _Decider(answers, asked) if case.get("decider", True) else None
     subject = case.get("subject", _ADA)
-    await stamp_resolved_uuids(event, _names(answers, asked), bearer="bearer-of-ada", decider=decider, subject=subject)
+    from lance_namespace import LanceNamespaceError
+
+    try:
+        await stamp_resolved_uuids(event, _names(answers, asked), bearer="bearer-of-ada", decider=decider, subject=subject)
+    except LanceNamespaceError as exc:
+        return case | {"subject": subject, "asked": asked, "refused": type(exc).__name__, "message": str(exc)}
     return case | {"subject": subject, "asked": asked, "stamped": event.model_dump_json(by_alias=True)}
 
 

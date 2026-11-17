@@ -8,6 +8,11 @@ their tables in, prints ``RASK_PORT_CATALOG_URL=<url>``, and serves until it is 
 
     uv run scripts/port_catalog_fixture.py --port 8765
     cd rust && RASK_PORT_CATALOG_URL=http://127.0.0.1:8765 cargo test -p lakehouse-tables --test catalog
+
+``--root <dir>`` serves the tables under ``<dir>`` rather than a directory of its own, so a second catalog can serve the
+same tables. ``--decider`` serves them with authentication and authorization on, from the ``RASK_OIDC_*`` and
+``RASK_FGA_*`` variables the caller exports, and creates nothing: the decision door (``/management/v1/decisions``) a
+service given ``RASK_FGA_DECIDER_URL`` asks, resolving names on the tables the other catalog made.
 """
 
 from __future__ import annotations
@@ -29,21 +34,23 @@ NAMESPACE = "lance_catalog$port"
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=0, help="the port to serve on; 0 takes a free one")
-    port = parser.parse_args().port
+    parser.add_argument("--root", default="", help="the directory the tables are under; a temporary one of its own by default")
+    parser.add_argument("--decider", action="store_true", help="authorization on, from the environment, and nothing created")
+    arguments = parser.parse_args()
+    port, decider = arguments.port, arguments.decider
     sys.path.insert(0, str(_ROOT / "services"))  # `uv run` doesn't apply the pytest pythonpath
-    with tempfile.TemporaryDirectory(prefix="port-catalog-") as root:
+    with tempfile.TemporaryDirectory(prefix="port-catalog-") as own:
+        root = arguments.root or own
         os.environ.update(
             {
                 "LANCE_REST_IMPL": "dir",
                 "LANCE_REST_ROOT": root,
                 "LANCE_S3_ACCESS_KEY_ID": "test",
                 "LANCE_S3_SECRET_ACCESS_KEY": "test",
-                "RASK_OIDC_ENABLED": "false",
-                "RASK_INSECURE_ALLOW_UNAUTHENTICATED": "true",
                 "RASK_INSECURE_ALLOW_STATIC_STORE_KEY": "true",
                 "LANCE_AUTO_MIGRATION": "false",
-                "RASK_FGA_ENABLED": "false",
             }
+            | ({} if decider else {"RASK_OIDC_ENABLED": "false", "RASK_INSECURE_ALLOW_UNAUTHENTICATED": "true", "RASK_FGA_ENABLED": "false"})
         )
         import httpx
         import uvicorn
@@ -59,8 +66,8 @@ def main() -> None:
                 raise SystemExit("the catalog did not start")
             time.sleep(0.05)
         url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
-        created = httpx.post(f"{url}/v1/namespace/{NAMESPACE}/create", json={}, timeout=30)
-        if created.status_code != 200:
+        created = httpx.post(f"{url}/v1/namespace/{NAMESPACE}/create", json={}, timeout=30) if not decider else None
+        if created is not None and created.status_code != 200:
             raise SystemExit(f"the namespace {NAMESPACE} was not created: {created.status_code} {created.text}")
         print(f"RASK_PORT_CATALOG_URL={url}", flush=True)
         try:

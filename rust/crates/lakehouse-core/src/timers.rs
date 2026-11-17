@@ -139,6 +139,7 @@ pub struct Timer<C> {
     claims: C,
     holder: String,
     metrics: Option<TimerMetrics>,
+    elsewhere: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 /// What one read of the claim and the write after it settled: whether the window is this replica's, which, and the
@@ -161,7 +162,15 @@ impl<C: Claims> Timer<C> {
             claims,
             holder: holder.to_owned(),
             metrics: None,
+            elsewhere: None,
         })
+    }
+
+    /// This timer, running `hook` on each turn that finds the window another replica's: where a replica drops what only
+    /// the replica that ran the work knows, as a gauge the work measured.
+    pub fn on_elsewhere(mut self, hook: impl Fn() + Send + Sync + 'static) -> Self {
+        self.elsewhere = Some(Box::new(hook));
+        self
     }
 
     /// This timer, counting its turns and the windows it sees claimed in `metrics`.
@@ -201,6 +210,9 @@ impl<C: Claims> Timer<C> {
         };
         let until_next = Duration::try_from_secs_f64(asked.until_next).unwrap_or_default();
         if !asked.mine {
+            if let Some(elsewhere) = &self.elsewhere {
+                elsewhere();
+            }
             return self.ended(Outcome::Elsewhere, Some(asked.window), until_next);
         }
         let outcome = match work.await {

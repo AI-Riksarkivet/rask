@@ -2,11 +2,10 @@
 //! state against real ones or stand-ins.
 
 use crate::authz::gates::Names;
-use crate::authz::names::CatalogNames;
+use crate::authz::names::{CatalogNames, Resolution};
 use crate::gate::Gate;
 use lakehouse_bus::Bus;
 use lakehouse_core::auth::verifier::Authenticator;
-use lakehouse_core::authz::Answer;
 use lakehouse_core::outbox::Outbox;
 use serde_json::json;
 use std::sync::Arc;
@@ -14,11 +13,11 @@ use std::time::Duration;
 
 /// The catalog's names as the doors resolve them: a table's uuids, and a namespace's uuid, as the caller sees them.
 pub trait Resolver: Names {
-    fn namespace<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Answer<'a, Option<String>>;
+    fn namespace<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Resolution<'a, Option<String>>;
 }
 
 impl Resolver for CatalogNames {
-    fn namespace<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Answer<'a, Option<String>> {
+    fn namespace<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Resolution<'a, Option<String>> {
         Box::pin(self.describe("namespace", name, json!({}), bearer))
     }
 }

@@ -45,6 +45,8 @@ GRANTS: dict[str, list[str]] = {
 #: The tables and namespaces the catalog names, by name: a table's uuid and its namespace's.
 TABLES: dict[str, list[str]] = {"wh$ns$a": [_UA, _UNS], "wh$ns$b": [_UB, _UNS]}
 NAMESPACES: dict[str, str] = {"wh$ns": _UNS}
+#: The names the catalog's describe doors refuse 400, as it refuses a name with a segment that is no name.
+REFUSED: list[str] = ["wh$$a", "wh$"]
 
 ENV = {
     "RASK_OIDC_ENABLED": "true",
@@ -149,6 +151,8 @@ def requests() -> list[dict[str, Any]]:
         case("GET /events: a reader reaches the feed", "GET", "/events"),
         case("GET /events: scoped to a table the catalog names", "GET", "/events?table=wh$ns$a&summary=true"),
         case("GET /events: scoped to a namespace", "GET", "/events?namespace=wh$ns"),
+        case("GET /events: scoped to a table the catalog refuses as no name", "GET", "/events?table=wh%24%24a"),
+        case("GET /events: scoped to a namespace the catalog refuses as no name", "GET", "/events?namespace=wh%24"),
     ]
     tables = [
         case("GET derived: a table the caller may read", "GET", "/tables/wh$ns$a/derived"),
@@ -158,6 +162,7 @@ def requests() -> list[dict[str, Any]]:
         case("GET derived: a name the catalog does not know", "GET", "/tables/wh$ns$zz/derived"),
         case("GET derived: a name with an encoded slash", "GET", "/tables/wh%2Fns/derived"),
         case("GET derived: a percent-encoded name", "GET", "/tables/wh%24ns%24a/derived?depth=1"),
+        case("GET derived: a name the catalog refuses as no name", "GET", "/tables/wh$$a/derived"),
     ]
     dlq = [
         case("GET /admin/dlq: no outbox", "GET", "/admin/dlq"),
@@ -201,6 +206,7 @@ def requests() -> list[dict[str, Any]]:
         case("ingest: a static change the caller may write reaches the store", "POST", "/api/v1/lineage", ada | as_json, _static("wh$ns$b")),
         case("ingest: a run reaches the store for its run's author", "POST", "/api/v1/lineage", ada | as_json, _event(["wh$ns$b"], ["wh$ns$a"])),
         case("ingest: an external output", "POST", "/api/v1/lineage", ada | as_json, _static("s3://bucket/raw")),
+        case("ingest: an output the catalog refuses as no name", "POST", "/api/v1/lineage", ada | as_json, _event(["wh$$a"], ["wh$ns$a"])),
     ]
     framework = [
         case("no door at the path", "GET", "/events/nope"),
@@ -227,6 +233,7 @@ def _app(settings: Any) -> Any:  # noqa: ANN401 - the FastAPI app
     import jwt
     from fastapi import FastAPI, Request
     from lance_namespace import ServiceUnavailableError
+    from lance_namespace_urllib3_client.exceptions import BadRequestException
 
     from lakehouse.admission import judge_before_the_body
     from lakehouse.governed import idp_identity, oidc
@@ -237,6 +244,7 @@ def _app(settings: Any) -> Any:  # noqa: ANN401 - the FastAPI app
     from lineage.api.security import authenticate, judge
     from lineage.api.v1.router import api_router
     from lineage.core.config import get_settings
+    from lineage.services import names
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
@@ -288,12 +296,20 @@ def _app(settings: Any) -> Any:  # noqa: ANN401 - the FastAPI app
         async def locate(self, locations: list[str]) -> dict[str, str | None]:
             return dict.fromkeys(locations)
 
+    def refuse(name: str) -> None:
+        """The catalog's 400 for ``name``, through lineage's own translation of it."""
+        if name in REFUSED:
+            with names._described_as_the_callers(name):
+                raise BadRequestException(status=400, reason="Bad Request", body='{"error": "the catalog\'s own words", "trace": "t-1"}')
+
     class Names:
         async def table(self, name: str, *, bearer: str | None) -> DatasetUuids:
+            refuse(name)
             table, namespace = TABLES.get(name, [None, None])
             return DatasetUuids(table_uuid=table, namespace_uuid=namespace)
 
         async def namespace(self, name: str, *, bearer: str | None) -> str | None:
+            refuse(name)
             return NAMESPACES.get(name)
 
     class Unanswered:
@@ -366,5 +382,5 @@ def doors_vectors() -> dict[str, list[Any]]:
         exchanges = asyncio.run(_answers())
     finally:
         logging.disable(logging.NOTSET)
-    stand_ins = {"secret": TOKEN_SECRET, "kid": KID, "env": ENV, "grants": GRANTS, "tables": TABLES, "namespaces": NAMESPACES}
+    stand_ins = {"secret": TOKEN_SECRET, "kid": KID, "env": ENV, "grants": GRANTS, "tables": TABLES, "namespaces": NAMESPACES, "refused": REFUSED}
     return {"stand_ins": [stand_ins], "exchanges": exchanges}

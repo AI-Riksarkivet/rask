@@ -6,7 +6,7 @@
 # scripts/port_store_cross.py, which has both stores write and read the same tables, and stops the catalog.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-port="${RASK_PORT_CATALOG_PORT:-8765}"
+port="${RASK_PORT_CATALOG_PORT:-$("$root/scripts/free_port.sh")}"
 log="$(mktemp)"
 
 cd "$root"

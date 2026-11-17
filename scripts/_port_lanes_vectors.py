@@ -202,6 +202,7 @@ async def _turned(case: dict[str, Any]) -> dict[str, Any]:
     at = _at(case["at"])
     writes: list[dict[str, Any]] = []
     worked: list[bool] = []
+    forgot: list[bool] = []
 
     def read_json_at(_root: str, _options: object, key: str) -> records.StoreRead:
         assert key == "_timers/lineage-relay.json"
@@ -230,7 +231,14 @@ async def _turned(case: dict[str, Any]) -> dict[str, Any]:
             raise RuntimeError("the tick failed")
 
     timer = timers.Timer(
-        "lineage-relay", period=case["period"], work=work, root="s3://b", storage_options=lambda: cast("Any", {}), held=lambda: case["held"], holder="replica-a"
+        "lineage-relay",
+        period=case["period"],
+        work=work,
+        root="s3://b",
+        storage_options=lambda: cast("Any", {}),
+        held=lambda: case["held"],
+        elsewhere=lambda: forgot.append(True),
+        holder="replica-a",
     )
     with ExitStack() as stack:
         stack.enter_context(patch.object(timers.records, "read_json_at", read_json_at))
@@ -240,7 +248,7 @@ async def _turned(case: dict[str, Any]) -> dict[str, Any]:
         stack.enter_context(patch.object(timers, "monotonic", lambda: 0.0))
         turn = await timer.turn()
     window = None if turn.window is None else turn.window.isoformat()
-    return case | {"outcome": turn.outcome.value, "window": window, "wait": turn.wait, "writes": writes, "worked": bool(worked)}
+    return case | {"outcome": turn.outcome.value, "window": window, "wait": turn.wait, "writes": writes, "worked": bool(worked), "forgot": len(forgot)}
 
 
 # --- relay ticks ----------------------------------------------------------------------------------------------------

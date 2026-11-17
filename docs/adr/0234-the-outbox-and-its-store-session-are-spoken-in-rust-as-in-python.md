@@ -117,9 +117,11 @@ Each is outside the corpus:
 - **A staged object is handed over as bytes.** Python decodes each as UTF-8 inside the listing, so one object that is
   not UTF-8 fails the whole listing and every tick after it; the Rust hands it to `CloudEvent::parse`, which refuses it
   as poison, and the relay drops it.
-- **No retry inside a call.** botocore retries a call three times (adaptive for S3, standard for STS); the Rust makes
-  one request, and the next pass, tick or boot attempt is the retry. A 404 on a delete is taken as done, as
-  `drop_event`'s contract says; S3 and RustFS answer 204 there.
+- **A retry waits without jitter, and STS's exchange is made once.** An S3 request the store answers 429, 500, 502,
+  503 or 504, or does not answer, is made again, three attempts in all, as botocore's adaptive mode makes it, waiting
+  0.2 s and then 0.4 s where botocore draws its waits at random; a timer's conditional write is made again alike. The
+  STS exchange, which botocore's standard mode also retries, is made once, and the next pass or boot attempt is its
+  retry. A 404 on a delete is taken as done, as `drop_event`'s contract says; S3 and RustFS answer 204 there.
 - **The endpoint is `<PREFIX>_S3_ENDPOINT`, then `RASK_S3_ENDPOINT_URL`, then the region's own.** The `S3_*` and
   `HCP_*` aliases are not read, nor `RASK_S3_INSECURE`: a store's certificate is always checked.
 - **A session is held from STS's answer whole or not at all.** Python required `Expiration` and read it for its log

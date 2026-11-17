@@ -182,7 +182,10 @@ impl Relay {
         let timer = if settings.relay_period_seconds > 0.0 {
             gate.signals.outbox.create_series(LANE);
             let claims = Records::new(&settings.timer_root, s3_for("LINEAGE_TIMER_ROOT")?)?;
-            Some(Timer::new(RELAY_TIMER, settings.relay_period_seconds, claims, &host_name())?.instrumented(gate.signals.timer()))
+            // A replica that did not run the window knows nothing of the backlog the one that ran it measured.
+            let measured = Arc::clone(&gate);
+            let timer = Timer::new(RELAY_TIMER, settings.relay_period_seconds, claims, &host_name())?.instrumented(gate.signals.timer());
+            Some(timer.on_elsewhere(move || measured.signals.outbox.forget_backlog(LANE)))
         } else {
             None
         };

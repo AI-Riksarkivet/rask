@@ -53,6 +53,9 @@ GRANTS = [
     *[("admin", "writer", table) for table in TABLES],
     ("ada", "reader", "a"),
     ("ada", "writer", "b"),
+    # Lineage's own rungs at the catalog's decision door, where the catalog decides (`RASK_FGA_DECIDER_URL`).
+    ("lineage", "decider", ROOT),
+    ("lineage", "governance_prober", ROOT),
 ]
 PRODUCER = "system:serviceaccount:rask:rask-sa-catalog"
 OUTBOX = "_lineage_outbox"
@@ -63,7 +66,6 @@ KEPT = {
     "HEAD on a GET door": "a GET door answers HEAD (ADR 0219)",
     "ingest: a body no event model takes": "the errors list of an event the model refuses is the port's own (ADR 0218)",
     "ingest: a run event with no job": "the errors list of an event the model refuses is the port's own (ADR 0218)",
-    "ingest: admin names a governed table with a slash": "a name the catalog refuses to describe is an outage here (ADR 0226); Python answers 400",
     "ingest: nested deeper than the reader reads": "a body nested deeper than 512 levels is refused before it is read (ADR 0223)",
     "ingest: nested far deeper": "a body nested deeper than 512 levels is refused before it is read (ADR 0223)",
 }
@@ -282,7 +284,8 @@ class Corpus:
             (self.kept if name in KEPT else self.differences).append(line)
         self.statuses[f"{seen['python']['status']}"] += 1
         if os.environ.get("DOORS_VERBOSE"):
-            print(f"  {seen['python']['status']} {name}", flush=True)
+            detail = seen["python"]["body"].get("detail") if isinstance(seen["python"]["body"], dict) else None
+            print(f"  {seen['python']['status']} {name}{f': {detail}' if detail else ''}", flush=True)
         return seen["python"]
 
     def both(
@@ -355,6 +358,10 @@ def corpus(corpus: Corpus, runs: dict[str, str]) -> None:
     corpus.both("derived of a table the caller may not read", "GET", f"/tables/{table('c')}/derived", "ada")
     corpus.both("derived of a table the catalog does not know", "GET", f"/tables/{table('zz')}/derived", "ada")
     corpus.both("derived of a name with an encoded slash", "GET", "/tables/a%2Fb/derived", "ada")
+    # Names the catalog refuses as none (a segment holding a slash, an empty segment): the caller's own input, refused 400.
+    corpus.both("derived of a name with an empty segment", "GET", f"/tables/{table('')}/derived", "ada")
+    corpus.both("events of a table with a slash", "GET", f"/events?table={urllib.parse.quote(table('x/y'), safe='')}", "ada")
+    corpus.both("events of a namespace with an empty segment", "GET", f"/events?namespace={urllib.parse.quote(DATA + '$', safe='')}", "ada")
     corpus.both("no door at the path", "GET", "/events/nope", "ada")
     corpus.both("no door for the method", "DELETE", "/events", "ada")
     corpus.both("a trailing slash", "GET", "/admin/dlq/", "ada")
@@ -399,6 +406,7 @@ def corpus(corpus: Corpus, runs: dict[str, str]) -> None:
         ("admin sends a claimed signature", "admin", _run("r-9", ["a"]) | {"run": {"runId": "r-9", "facets": {"rask_signature": {"kid": "x"}}}}),
         ("admin writes a table the catalog does not know", "admin", _run("r-10", ["zz"])),
         ("admin names a governed table with a slash", "admin", _run("r-11", ["a"], ["x/y"])),
+        ("admin writes a governed table with a slash", "admin", _run("r-12", ["x/y"])),
     ]
     writes += [(f"admin writes run {n} into a", "admin", _run(f"p-{n}", ["a"])) for n in range(14)]
     for index, (name, who, event) in enumerate(writes):

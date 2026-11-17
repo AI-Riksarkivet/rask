@@ -21,7 +21,9 @@ environment shaped like the chart's (``environment``), and runs:
 (d) SIGTERM during an ingest and during a delivery;
 (e) a handling that panics taking the process down non-zero;
 (f) the same traffic through each service, and the sets of metric names, audit actions and span names each exported,
-    every export presenting the pod's token.
+    every export presenting the pod's token;
+(g) two replicas of the binary on one relay timer: the one that lost the window stops reporting the backlog the other
+    drained.
 
 Every check prints ``PASS``/``FAIL`` with its counts; the process exits non-zero when any fails.
 """
@@ -66,7 +68,6 @@ RESULTS: list[tuple[str, bool, str]] = []
 RUNNING: list[subprocess.Popen[bytes]] = []
 #: What the Rust answers on purpose where the Python answers otherwise, beyond the doors' own (ADR 0236).
 doors.KEPT["replay of a staged event with a signer nobody lists"] = "a refusal's message quotes nothing from the event (ADR 0223)"
-doors.KEPT["dlq after the signed replays"] = "events staged within one second: the Python lists them by key, its S3 listing's times whole seconds (ADR 0238)"
 #: How a stopped service may exit: uvicorn raises the SIGTERM it caught again once it has drained, so Python ends by it.
 STOPPED = {"python": (0, -signal.SIGTERM), "rust": (0,)}
 
@@ -190,7 +191,7 @@ class Sink:
                 body = self.body()
                 presented = self.headers.get("Authorization") == f"Bearer {OTLP_TOKEN}"
                 with contextlib.suppress(Exception):
-                    sink.exports.append({"presented": presented, **_decoded(self.path, body)})
+                    sink.exports.append({"presented": presented, "at": time.monotonic(), **_decoded(self.path, body)})
                 self.answer(200, b"", "application/x-protobuf")
 
         self.url = _serve(Handler)
@@ -207,21 +208,33 @@ def _decoded(path: str, body: bytes) -> dict[str, Any]:
     from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
     from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
-    def service(resource: Any) -> str:  # noqa: ANN401 - a protobuf message
-        return next((kv.value.string_value for kv in resource.attributes if kv.key == "service.name"), "")
+    def service(resource: Any, key: str = "service.name") -> str:  # noqa: ANN401 - a protobuf message
+        return next((kv.value.string_value for kv in resource.attributes if kv.key == key), "")
 
     if path.endswith("/v1/metrics"):
         metrics = ExportMetricsServiceRequest.FromString(body)
         found = [(service(rm.resource), m) for rm in metrics.resource_metrics for sm in rm.scope_metrics for m in sm.metrics]
-        processed = []
+        processed, depth = [], None
         for _, metric in found:
+            if metric.name == "outbox.depth":
+                lanes = {
+                    kv.value.string_value: point.as_double for point in metric.gauge.data_points for kv in point.attributes if kv.key == "lance.outbox.lane"
+                }
+                depth = lanes.get("lineage", depth)
             if metric.name != "lineage.events.processed":
                 continue
             for point in metric.sum.data_points:
                 labels = {kv.key: kv.value.string_value for kv in point.attributes}
                 if point.as_int > 0:
                     processed.append(f"{labels.get('lance.lineage.door')}:{labels.get('lance.lineage.outcome')}")
-        return {"service": found[0][0] if found else "", "metrics": [metric.name for _, metric in found], "processed": processed}
+        instance = service(metrics.resource_metrics[0].resource, "service.instance.id") if metrics.resource_metrics else ""
+        return {
+            "service": found[0][0] if found else "",
+            "instance": instance,
+            "metrics": [metric.name for _, metric in found],
+            "processed": processed,
+            "depth": depth,
+        }
     if path.endswith("/v1/traces"):
         traces = ExportTraceServiceRequest.FromString(body)
         found = [(service(rs.resource), s.name) for rs in traces.resource_spans for ss in rs.scope_spans for s in ss.spans]
@@ -693,18 +706,83 @@ def check_lanes(estate: Estate) -> None:
     restarted.stop()
 
 
-def _listing(estate: Estate) -> list[str]:
-    import boto3
+def check_backlog_forgotten(estate: Estate) -> None:
+    """(g): replica A reports a backlog it cannot record (the catalog fails every feed write); A is stopped, the catalog is
+    let through and replica B drains the outbox and reads it empty; A resumes once B has claimed the window, early in it,
+    and loses it. Until A next runs a window, A reports no backlog (the timer's ``elsewhere`` hook, `lakehouse.timers`),
+    where one that kept its last reading would report the event B drained."""
+    env = estate.environment(
+        estate.namespace("backlog"),
+        LINEAGE_RELAY_PERIOD_SECONDS="2",
+        LINEAGE_TIMER_ROOT=f"s3://{os.environ['CHECK_BUCKET']}",
+        OTEL_METRIC_EXPORT_INTERVAL="250",
+    )
+    name = "(g) a replica that lost the window stops reporting the backlog another drained"
+
+    def depths(since: float, of: str | None = None) -> list[tuple[float, str, float | None]]:
+        exported = [(e["at"], e["instance"], e["depth"]) for e in list(estate.sink.exports) if e.get("instance") and e["at"] > since and "metrics" in e]
+        return [(at, i, d) for at, i, d in exported if of is None or i == of]
+
+    a = Service("rust", _port(), env, estate.work)
+    if not verdict("(g) replica A starts", a.ready()):
+        return
+    eventually(lambda: not _listing(estate), 60)
+    estate.proxy.fail_feed = 10**6
+    began = time.monotonic()
+    estate.stage(signed(_run(f"backlog-{uuid.uuid4().hex[:6]}", ["b"], ["a"]), on_behalf_of="idp~admin"))
+    reported = eventually(lambda: any(d is not None and d >= 1 for _, _, d in depths(began)), 60)
+    a_instance = next((i for _, i, d in depths(began) if d is not None and d >= 1), "")
+    b = Service("rust", _port(), env, estate.work)
+    if not (reported and b.ready()):
+        verdict(name, False, f"A reported the backlog: {reported}")
+        a.stop()
+        b.stop()
+        return
+    a.process.send_signal(signal.SIGSTOP)
+    estate.proxy.fail_feed = 0
+    stopped = time.monotonic()
+    drained = eventually(lambda: not _listing(estate) and any(d == 0 for _, i, d in depths(stopped) if i != a_instance), 60)
+    # Resume A once B has claimed the window it is early in, so A's first turn finds it held and A's next turn is a
+    # second or more away: what A reports until then is what it knows of the outbox.
+    claimed = eventually(lambda: abs(_claimed_window(estate) - (time.time() - time.time() % 2)) < 1e-3 and time.time() % 2 < 1, 30, 0.05)
+    resumed = time.monotonic()
+    a.process.send_signal(signal.SIGCONT)
+    time.sleep(4)
+    after = [(round(at - resumed, 2), d) for at, _, d in depths(resumed + 0.5, a_instance)]
+    until_it_runs = after[: next((n for n, (_, d) in enumerate(after) if d == 0), len(after))]
+    stale = [d for _, d in until_it_runs if d is not None]
+    passed = drained and claimed and bool(until_it_runs) and not stale
+    verdict(name, passed, f"B drained it: {drained}; A's exports after it resumed (s, depth), until it ran a window: {until_it_runs}")
+    a.stop()
+    b.stop()
+
+
+def _claimed_window(estate: Estate) -> float:
+    """The start of the relay's window the claim record names, in seconds since the epoch."""
+    from datetime import datetime
 
     env = os.environ
     root = Path(env["CHECK_STORE_WORK"]) / "root"
-    client = boto3.client(
+    client = _root_client(root)
+    record = json.loads(client.get_object(Bucket=env["CHECK_BUCKET"], Key="_timers/lineage-relay.json")["Body"].read())
+    return datetime.fromisoformat(record["window"]).timestamp()
+
+
+def _root_client(root: Path) -> Any:  # noqa: ANN401 - boto3's client
+    import boto3
+
+    return boto3.client(
         "s3",
-        endpoint_url=env["CHECK_STORE_ENDPOINT"],
+        endpoint_url=os.environ["CHECK_STORE_ENDPOINT"],
         aws_access_key_id=(root / "access_key").read_text().strip(),
         aws_secret_access_key=(root / "secret_key").read_text().strip(),
         region_name="us-east-1",
     )
+
+
+def _listing(estate: Estate) -> list[str]:
+    env = os.environ
+    client = _root_client(Path(env["CHECK_STORE_WORK"]) / "root")
     listed = client.list_objects_v2(Bucket=env["CHECK_BUCKET"], Prefix=f"{doors.OUTBOX}/")
     return [entry["Key"] for entry in listed.get("Contents", [])]
 
@@ -972,6 +1050,7 @@ def main() -> None:
         ("c", lambda: check_start(estate)),
         ("d", lambda: check_drain(estate)),
         ("f", lambda: check_telemetry(estate)),
+        ("g", lambda: check_backlog_forgotten(estate)),
     ):
         if not only or name in only:
             try:

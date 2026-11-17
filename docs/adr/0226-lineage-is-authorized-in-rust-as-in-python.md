@@ -36,10 +36,18 @@ destroys an honest event.
    maintenance (`relations_for_operation`), the names a refusal quotes, and what a staged event names for a reader.
    `gates` asks: `require_event_feed_reader`, `require_parks_reader`, `require_parks_replayer` and
    `require_metadata_access` for the read doors, `ingest_authz` for the HTTP ingest door, `bus_authz` for the bus, the
-   outbox and the replay of a park, and `DatasetFilter` for a reader's pages. A refusal is a `Denial` of one of seven
+   outbox and the replay of a park, and `DatasetFilter` for a reader's pages. A refusal is a `Denial` of one of eight
    classes, named as the Python names them; `Denial::ns_error` is the HTTP door's answer and `authorizing` the bus
    route's `intake::Authorizing`. `names` resolves an outside producer's names through the catalog's DescribeTable and
    DescribeNamespace under the caller's own bearer, or in one question at the decision door, and stamps the answer.
+   A describe has three outcomes (`names::Unresolved`): a uuid or none (200, and 401, 403 or 404, which name nothing
+   the caller may see); the name refused (400 or 422), which is a verdict on the caller's own input, since lineage fixes
+   every other part of the request, answered as the Python's `_described_as_the_callers` answers it, an
+   `InvalidInputError` (400, code 13) whose detail quotes the caller's name, cut at 256 characters, and nothing of the
+   catalog's answer, at every door that resolves a name this way (the ingest, `GET /events?table=` and `?namespace=`,
+   `/tables/{name}/derived`, the metadata gate); or an outage, for any other answer or none. The bus lane and the relay
+   describe no name: they resolve names at the decider (`check_tables`), as the Python's do, so a name the catalog
+   cannot resolve reaches them as one with no uuid, refused by the class an unresolved output or input has.
 
 3. **Whose authority an event is judged under is the bus gate's first decision**: the signature verdict of ADR 0223
    comes in as an `Admission`; a refused one is final, keys that could not be read are asked about again, a drop the
@@ -54,9 +62,10 @@ destroys an honest event.
    external sources, another catalog's names, unresolved names, outputs and inputs named by a location, symlinks the
    caller sees and may not see, column upstreams, the maintenance rule both ways, attested events, each question's
    outage), 31 bus cases (unsigned, keys unavailable, attested and unattested drops, no author, a blank author, one that
-   is no principal, replays, foreign runs, each maintenance operation, delegated signatures), 26 gate cases, 9 page
-   filters (hidden, visible, unresolved and empty items, the per-request cache, ids OpenFGA refuses), 6 staged-event
-   scopes, 6 stamps, 10 author stamps, 7 governed-reference cases, 8 operations, and 37 catalog-decider exchanges over
+   is no principal, replays, foreign runs, each maintenance operation, delegated signatures), 29 gate cases (a name the
+   catalog refuses among them, one cut where it is quoted), 9 page filters (hidden, visible, unresolved and empty items,
+   the per-request cache, ids OpenFGA refuses), 6 staged-event scopes, 8 stamps (two with a name the catalog refuses),
+   10 author stamps, 7 governed-reference cases, 8 operations, and 37 catalog-decider exchanges over
    httpx's mock transport (2,105 objects in three questions, every way the door can fail). The Rust asks the same
    questions in the same order and comes to the same class and message for every case; a 5xx's message, which a client
    never reads, and a signature refusal's (ADR 0223) are left out of the comparison. The generator writes the same file
@@ -88,8 +97,9 @@ Each is outside the corpus:
   caller or a stamped author already checked to be a principal reaches a decider.
 - **`governed` reads one tuple per object**, where Python reads them all; the answer is the same. A batch sends each
   object once.
-- **The catalog's describe doors**: an answer other than 200, 401, 403 or 404 is an outage, where Python answered a 400
-  with a 400; a connection that does not open is not tried again, where Python's client tried three times.
+- **The catalog's describe doors**: a connection that does not open is not tried again, where Python's client tried
+  three times. Each name of an event is described in turn, where Python describes them at once; both answer the first
+  refusal in name order.
 - **An unprintable character an author claim quotes** is escaped as Python's `repr` escapes it only for the ASCII and
   Latin-1 controls, the no-break space and the soft hyphen; other unprintable code points are written as themselves.
 - **An operation that is no string is no operation.** Python's maintenance check skips it and its drop check fails with
@@ -97,6 +107,16 @@ Each is outside the corpus:
 - **The catalog decider may run without a bearer**, as the store's client may, for an estate with authentication off.
 - **The producer URIs stamped on an author and on resolved uuids are the Python modules'**, so a record does not change
   with the implementation that wrote it.
+
+## The four facts
+
+- **GitOps:** nothing here is configured outside what the chart renders: the decider is the catalog's door or OpenFGA's,
+  by the variables the chart sets.
+- **Cloud native:** the catalog and OpenFGA are named services; an outage of either is a 503, never a verdict.
+- **Lance-namespace/table-idiomatic:** a name is resolved by the catalog's own DescribeTable and DescribeNamespace, and
+  its refusal is answered with the spec's InvalidInput code.
+- **Zero trust:** every question is asked as the caller; a refusal of the caller's name quotes the caller's own input
+  and nothing of the catalog's answer, and a verdict is never answered as an outage, nor an outage as a verdict.
 
 ## Not ported yet
 

@@ -78,7 +78,7 @@ checks, their validation and their answers, member for member.
 
 ## How parity was shown
 
-- **Vectors through the real Python app** (`scripts/_port_doors_vectors.py` → `rust/vectors/doors.json`, 121
+- **Vectors through the real Python app** (`scripts/_port_doors_vectors.py` → `rust/vectors/doors.json`, 125
   exchanges; the generator writes the same file on every run). The app is assembled as `lineage.main` assembles it, with
   authentication and authorization on; only its collaborators are stand-ins: a recorded HS256 key for the identity
   provider, a decider answering from recorded grants, the catalog's names from a recorded table, no outbox or bus, and a
@@ -87,7 +87,9 @@ checks, their validation and their answers, member for member.
   declared order, the last value winning, `+`, underscores, fractions, 4,301 digits, a name with no value); the
   projection's, the derived door's and the dlq door's refusals and gates; 20 ingest bodies (missing, empty, three JSON
   errors, a list, `null`, a string, five content types, a byte-order mark, at and over the cap declared and not, with
-  and without a bearer); six ingests the gates refuse or admit; 404, 405 and a trailing slash.
+  and without a bearer); six ingests the gates refuse or admit; a name the catalog refuses as none at the four places
+  a door describes one (`/events?table=`, `?namespace=`, the derived door, an ingest's output), each answered through
+  the Python's own translation of the catalog's 400; 404, 405 and a trailing slash.
   `cargo test -p lineage --test doors_vectors` replays every exchange through the Rust router behind the shell and
   compares the status, the `content-type`, `cache-control`, `vary`, `allow` and `location` headers, whether an
   instance is named, and the body as text, so the members' order counts.
@@ -97,14 +99,28 @@ checks, their validation and their answers, member for member.
   tuple set written on the catalog's own table uuids, and an identity provider the tokens are signed by; then the
   Python lineage app under uvicorn and the Rust doors on one environment, each logging in to the store as lineage's
   own ServiceAccount. It stages outbox events as the catalog's identity, parks deliveries in the refusals table, and
-  puts 193 requests to each: GET `/events` 58, POST `/api/v1/lineage` 45, GET `/events/projection` 26, GET
-  `/tables/{name}/derived` 16, GET `/admin/dlq` 14, POST `/admin/dlq/parked/{run_id}/replay` 11, POST
-  `/admin/dlq/{run_id}/replay` 10, GET `/admin/dlq/parked` 9, and 4 to no door. Every door is asked as the admin, a
-  reader with some grants, a subject with none and the feed's reader; 28 writes are put to both, each implementation
-  going first in turn, so each reads what the other wrote; the feed is paged to its end older and forward on each
-  side's own cursors; a replay that consumes its object is put to each with its own staged event or parked run and
-  compared with the run id read as the same. Result on 2026-11-17: **0 differences**; 6 cases differ on purpose,
-  under the first four entries below (a seventh, the trailing slash, ended when the Python stopped redirecting it).
+  puts about 197 requests to each (how many pages the feed takes varies by run): GET `/events` about 60, POST
+  `/api/v1/lineage` 46, GET `/events/projection` 26, GET `/tables/{name}/derived` 17, GET `/admin/dlq` 14, POST
+  `/admin/dlq/parked/{run_id}/replay` 11, POST `/admin/dlq/{run_id}/replay` 10, GET `/admin/dlq/parked` 9, and 4 to
+  no door. Every door is asked as the admin, a reader with some grants, a subject with none and the feed's reader; 29
+  writes are put to both, each implementation going first in turn, so each reads what the other wrote; the feed is
+  paged to its end older and forward on each side's own cursors; a replay that consumes its object is put to each with
+  its own staged event or parked run and compared with the run id read as the same. Result on 2026-11-17: **0
+  differences**; 5 cases differ on purpose, under the first three entries below (a sixth, the trailing slash, ended
+  when the Python stopped redirecting it; a seventh, a name the catalog refuses, when the Rust answered it as the
+  Python does, ADR 0226).
+- **The same corpus with the catalog deciding** (`DECIDER=catalog scripts/port_doors_check.sh`): both lineages ask the
+  catalog's decision door (`RASK_FGA_DECIDER_URL`), as the chart deploys them, served by a second catalog process with
+  authentication and authorization on over the same tables (`scripts/port_catalog_fixture.py --decider`), to which
+  each presents a token the identity provider signs for `lineage`, holding the decider's and the governance prober's
+  rungs on the estate. The tables, the outbox and the feed stay on the first catalog, with authorization off, so
+  lineage's own store needs no grant there: a departure from the chart, which gives lineage its ServiceAccount token
+  and the provenance namespace's grants. Result on 2026-11-17, 198 requests to each: **0 differences**, the same 5 kept.
+  The decider changes what both answer alike: a name an event names is resolved at the decision door, which answers a
+  name that is no identifier as naming no table, so an ingest naming `…$x/y` is refused 403 (an output:
+  `UngovernedOutputError`; an input: `PermissionDeniedError`) where the describe path answers 400, while
+  `GET /events?table=…$x/y` describes the name on either path and answers 400; and an outside location an event names
+  is located by the catalog (201 and 403 where OpenFGA, which holds no locations, makes both an outage, 503).
 - **Nine planted defects**, each restored after, each failed a test:
 
   | Defect | Vectors (121) | Side by side |
@@ -126,13 +142,8 @@ checks, their validation and their answers, member for member.
   message, where pydantic lists each field (ADR 0218 keeps the messages). The status, type and code are the same.
 - **A body nested deeper than 512 levels is refused** with the framework's 400 ("There was an error parsing the
   body"), before any value is built (ADR 0223's reader bound). CPython reads far deeper.
-- **A governed name the catalog refuses to describe is an outage** (503, ADR 0226). The Python answers the caller
-  400 with code 13 and a detail naming the caller's own input: the catalog's refusal is a verdict on the name, which
-  no retry cures. The Rust is to follow it; until it does, this case differs.
 - **A record the store fails for any reason but another author's run is a 503**: `Recording::Failed` carries no class
   (ADR 0228). The Python answers the catalog's class. Outside the corpus.
-- **An outbox object that is no UTF-8 is listed as poison.** The Python decodes it strictly and answers the whole
-  listing 500: a defect, found by reading `lakehouse.outbox.list_events`, outside the corpus.
 - **The body is read as UTF-8 only.** CPython's `json.loads` of bytes also reads UTF-16 and UTF-32. Outside the corpus.
 
 ## The four facts
@@ -144,8 +155,10 @@ checks, their validation and their answers, member for member.
   crate links no Lance.
 - **Zero trust:** every request is authenticated by the service from its bearer before its body is read, and every
   door asks its gate before it reads a row; no header but the bearer is believed; a refusal discloses nothing the
-  caller could not list (the 404-versus-403 choices are the Python's, and planted defects of both directions fail); the
-  body is bounded in bytes by the shell and in depth before a value is built.
+  caller could not list (the 404-versus-403 choices are the Python's, and planted defects of both directions fail); a
+  name the catalog refuses is answered 400 in lineage's words, quoting the caller's own input and nothing of the
+  catalog's answer, and never as an outage; the body is bounded in bytes by the shell and in depth before a value is
+  built.
 
 ## Not ported yet
 

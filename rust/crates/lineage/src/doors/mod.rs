@@ -7,6 +7,7 @@ pub mod ingest;
 pub mod tables;
 
 use crate::authz::gates::Denial;
+use crate::authz::names::Unresolved;
 use crate::state::State;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, StatusCode, Uri};
@@ -46,6 +47,12 @@ impl From<Denial> for Refusal {
 impl From<CatalogError> for Refusal {
     fn from(error: CatalogError) -> Self {
         Refusal::Ns(error.error)
+    }
+}
+
+impl From<Unresolved> for Refusal {
+    fn from(unresolved: Unresolved) -> Self {
+        Refusal::from(Denial::from(unresolved))
     }
 }
 

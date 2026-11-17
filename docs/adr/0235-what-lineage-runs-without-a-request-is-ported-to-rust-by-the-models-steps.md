@@ -101,7 +101,7 @@ Each is outside the corpus:
   `inf`). Pydantic's lax forms outside the corpus (`5.`, digits of other scripts) are not promised.
 - **Counts are the OpenTelemetry metrics the Python records** (ADR 0238): the processed counter by door and outcome,
   the timer's turns, last claim and period, the outbox's backlog and drained, stranded and refused counts, and the
-  forwarder's. The timer's `elsewhere` hook, which only forgot the backlog gauge, is not ported.
+  forwarder's. The timer's `elsewhere` hook forgets the backlog gauge where another replica ran the window (ADR 0238).
 - **One listing a tick.** Python lists the outbox for its backlog and again for the events; the Rust lists once and logs
   the backlog from that listing.
 - **The key id that paces reads of published keys** is read from the arrived event's facet without validating the rest of

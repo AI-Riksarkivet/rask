@@ -9,11 +9,22 @@
 # app (uvicorn, lineage.main:app) and the Rust binary (`lineage serve`) start on one environment,
 # each logging in to the store as lineage's own ServiceAccount, and `corpus` stages outbox events, parks deliveries and
 # puts every request to both. Exits non-zero when any difference is not one ADR 0236 keeps.
+#
+# DECIDER=catalog has both lineages decide at the catalog's decision door (`RASK_FGA_DECIDER_URL`), as the chart deploys
+# them, rather than at OpenFGA: a second catalog serves the same tables with authentication and authorization on
+# (scripts/port_catalog_fixture.py --decider), and each lineage presents it a token the identity provider signs for
+# `lineage`, which holds the decider's and the governance prober's rungs on the estate. The tables, the outbox and the
+# feed stay on the first catalog, which runs with authorization off as lineage's own store needs no grant there.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-base="${RASK_PORT_DOORS_BASE_PORT:-9340}"
-catalog_port=$base fga_port=$((base + 1)) grpc_port=$((base + 2)) issuer_port=$((base + 3))
-python_port=$((base + 4)) rust_port=$((base + 5)) store_port=$((base + 6)) store_issuer_port=$((base + 7))
+# Nine ports: from RASK_PORT_DOORS_BASE_PORT up where it is named, else nine free ones.
+if [ -n "${RASK_PORT_DOORS_BASE_PORT:-}" ]; then
+  ports=($(seq "$RASK_PORT_DOORS_BASE_PORT" $((RASK_PORT_DOORS_BASE_PORT + 8))))
+else
+  ports=($("$root/scripts/free_port.sh" 9))
+fi
+catalog_port=${ports[0]} fga_port=${ports[1]} grpc_port=${ports[2]} issuer_port=${ports[3]}
+python_port=${ports[4]} rust_port=${ports[5]} store_port=${ports[6]} store_issuer_port=${ports[7]} decider_port=${ports[8]}
 work="$(mktemp -d)"
 key="doors-check-$RANDOM$RANDOM"
 pids=()
@@ -33,7 +44,8 @@ up() {
 
 cd "$root"
 (cd rust && cargo build --locked --quiet -p lineage --bin lineage)
-uv run --no-sync scripts/port_catalog_fixture.py --port "$catalog_port" >"$work/catalog.log" 2>&1 &
+mkdir -p "$work/tables"
+uv run --no-sync scripts/port_catalog_fixture.py --port "$catalog_port" --root "$work/tables" >"$work/catalog.log" 2>&1 &
 pids+=($!)
 "$(bash scripts/openfga_server.sh)" run --datastore-engine memory --playground-enabled=false --metrics-enabled=false --log-level error \
   --http-addr "127.0.0.1:$fga_port" --grpc-addr "127.0.0.1:$grpc_port" --authn-method preshared --authn-preshared-keys "$key" \
@@ -58,6 +70,14 @@ export ${ids?} RASK_FGA_ROOT_OBJECT=estate:rask LANCE_AUDIT_ENABLED=false
 export LINEAGE_CATALOG_URL="http://127.0.0.1:$catalog_port" LINEAGE_PROVENANCE_NAMESPACE='lance_catalog$port$doors' LINEAGE_MAX_BODY_BYTES=65536
 export LINEAGE_OUTBOX_URI="s3://$bucket/_lineage_outbox" LINEAGE_S3_ENDPOINT="$store_endpoint" LINEAGE_S3_STS_ENDPOINT="$store_endpoint"
 export LINEAGE_S3_WEB_IDENTITY_TOKEN_FILE="$work/store-token" LINEAGE_S3_SESSION_SECONDS=900
+if [ "${DECIDER:-}" = catalog ]; then
+  uv run --no-sync scripts/port_catalog_fixture.py --port "$decider_port" --root "$work/tables" --decider >"$work/decider.log" 2>&1 &
+  pids+=($!)
+  up "http://127.0.0.1:$decider_port/livez" decider
+  curl -sf "http://127.0.0.1:$issuer_port/token?sub=lineage" >"$work/decider-token"
+  unset RASK_FGA_API_URL RASK_FGA_TOKEN_FILE RASK_FGA_STORE_ID RASK_FGA_MODEL_ID
+  export RASK_FGA_DECIDER_URL="http://127.0.0.1:$decider_port" RASK_FGA_DECIDER_TOKEN_FILE="$work/decider-token"
+fi
 
 uv run --no-sync uvicorn lineage.main:app --host 127.0.0.1 --port "$python_port" --log-level warning >"$work/python.log" 2>&1 &
 pids+=($!)

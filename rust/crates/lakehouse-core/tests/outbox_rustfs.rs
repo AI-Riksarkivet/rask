@@ -169,15 +169,23 @@ async fn a_conditional_create_is_refused_by_the_store_once_the_key_exists() {
     relay.s3.delete(&store.bucket, &key).await.unwrap();
 }
 
+/// The most calls the page test has in flight at once: the Python client's connection pool
+/// (`lakehouse.storage.client.MAX_POOL_CONNECTIONS`). A relay drops what it drained one at a time; 1,005 deletes at once
+/// were answered 503 by RustFS on a loaded machine (load average 14, 2026-11-17).
+const AT_ONCE: usize = 16;
+
 #[tokio::test]
 async fn a_listing_of_more_than_a_page_is_read_to_its_end() {
     let Some(store) = store() else { return };
     let (producer, relay) = (identity(&store, PRODUCER).await, identity(&store, RELAY).await);
     let run = run_id();
     let producer = Arc::new(producer);
-    let mut staging = tokio::task::JoinSet::new();
+    let mut staging: tokio::task::JoinSet<Result<(), StorageError>> = tokio::task::JoinSet::new();
     for n in 0..1005 {
         let (producer, key) = (Arc::clone(&producer), format!("{run}-page-{n:04}"));
+        if staging.len() == AT_ONCE {
+            staging.join_next().await.unwrap().unwrap().unwrap();
+        }
         staging.spawn(async move { producer.outbox.stage(&key, "{}").await });
     }
     while let Some(staged) = staging.join_next().await {
@@ -193,9 +201,12 @@ async fn a_listing_of_more_than_a_page_is_read_to_its_end() {
         .collect();
     assert_eq!(ours.len(), 1005, "a store lists at most 1000 keys a page");
     let relay = Arc::new(relay);
-    let mut dropping = tokio::task::JoinSet::new();
+    let mut dropping: tokio::task::JoinSet<Result<(), StorageError>> = tokio::task::JoinSet::new();
     for (key, _) in in_order(&ours, None) {
         let relay = Arc::clone(&relay);
+        if dropping.len() == AT_ONCE {
+            dropping.join_next().await.unwrap().unwrap().unwrap();
+        }
         dropping.spawn(async move { relay.outbox.drop_staged(&key).await });
     }
     while let Some(dropped) = dropping.join_next().await {

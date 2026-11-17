@@ -7,12 +7,14 @@
 # this run and read from files, and provisions the bucket and two identities' canned policies with the provisioning
 # hook's own tool (scripts/rustfs_admin.py): the producer's, which stages, and the relay's, as the chart renders it for
 # lineage (`lance.objectStorePolicy.lineage`). Then runs `cargo test -p lakehouse-core --test outbox_rustfs` and the
-# Python-and-Rust check (scripts/port_outbox_fixture.py cross), and stops both servers. With KEEP_UP=1 it leaves them
-# running and prints the environment a test run needs.
+# Python-and-Rust check (scripts/port_outbox_fixture.py cross), then the Python relay's drain order on this store's own
+# clock (one pytest test, under the root pair), and stops both servers. With KEEP_UP=1 it leaves them running and prints
+# the environment a test run needs.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-store_port="${RASK_PORT_STORE_PORT:-9311}"
-issuer_port="${RASK_PORT_ISSUER_PORT:-9312}"
+{ read -r free_store; read -r free_issuer; } < <("$root/scripts/free_port.sh" 2)
+store_port="${RASK_PORT_STORE_PORT:-$free_store}"
+issuer_port="${RASK_PORT_ISSUER_PORT:-$free_issuer}"
 bucket=rask-control
 work="$(mktemp -d)"
 endpoint="http://127.0.0.1:$store_port"
@@ -61,9 +63,13 @@ uv run --no-sync scripts/rustfs_admin.py --endpoint "$endpoint" --root-access-ke
   { echo "!! provisioning failed; the store's log:" >&2; tail -20 "$work/store.log" >&2; exit 1; }
 
 export RASK_PORT_STORE_ENDPOINT="$endpoint" RASK_PORT_STORE_BUCKET="$bucket" RASK_PORT_STORE_ISSUER="$issuer"
+export RASK_PORT_STORE_ACCESS_KEY=rask-check-root RASK_PORT_STORE_SECRET_FILE="$work/root/secret_key"
 if [ "${KEEP_UP:-}" = 1 ]; then
   echo "RASK_PORT_STORE_ENDPOINT=$endpoint RASK_PORT_STORE_BUCKET=$bucket RASK_PORT_STORE_ISSUER=$issuer (pids $issuer_pid $store_pid, $work)"
   exit 0
 fi
 (cd "$root/rust" && cargo test --locked -p lakehouse-core --test outbox_rustfs -- --nocapture)
 uv run --no-sync scripts/port_outbox_fixture.py cross "$endpoint" "$bucket" "$issuer"
+# The Python relay drains by the store's own clock, which the suite's stand-in keeps in whole seconds.
+uv run --no-sync pytest -p no:cacheprovider -q -n 0 \
+  "tests/integration/test_the_relay_tick_drains_forwards_and_announces.py::test_a_tick_drains_events_staged_within_one_second_in_the_order_they_were_staged"
