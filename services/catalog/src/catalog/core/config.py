@@ -664,6 +664,12 @@ class Settings(
             # describe 6 instead of 3: the unindexed table is one data file, read in one GET. Set, not left to the
             # backend's default, so a default that changes does not change this.
             "inline_optimization_enabled": "false",
+            # A table is a row of this root's `__manifest`, and nothing else. Left on, the backend's compatibility mode
+            # also reads every `<name>.lance` directory at the root as a table of the root namespace
+            # (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md` § ListTables; measured on pylance
+            # 13.0.0: the root listing named such a directory, and describe opened it), bytes the catalog holds no record,
+            # claim or grant for ([[LH-295]]).
+            "dir_listing_enabled": "false",
             **{f"{_STORAGE_PREFIX}{key}": value for key, value in self.storage_options(plane=plane).in_clear().items()},
         }
 

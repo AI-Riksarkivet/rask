@@ -7,6 +7,9 @@ first exchange, so either is refused at render rather than at a pod's boot.
 
 A service logs in to the secret store with a token projected for one audience, which every app's role is bound to
 ([[XC-165]]): a role with no audience admits any token of its ServiceAccount, so a blank audience is refused too.
+
+Every door verifies a service's token against `auth.serviceAccountIssuer`. With none, a service builds no verifier and
+refuses every service account, and nothing it logs says the issuer is missing, so a blank one is refused as well.
 """
 
 from __future__ import annotations
@@ -19,8 +22,9 @@ from tests.unit.chart_render import REPO, render_chart_text
 
 
 #: Each identity the render refuses blank, by the value that names it: the store audience every workload's token is
-#: projected for, a workload's role, and the audience every pod's secret-store login is bound to.
-_IDENTITIES = ("objectStore.identity.audience", "objectStore.identity.roleArns.maintenance", "openbao.identity.audience")
+#: projected for, a workload's role, the audience every pod's secret-store login is bound to, and the issuer every door
+#: verifies a service's token against.
+_IDENTITIES = ("objectStore.identity.audience", "objectStore.identity.roleArns.maintenance", "openbao.identity.audience", "auth.serviceAccountIssuer")
 
 _BASE = ("--set", "image.localImages=true")
 

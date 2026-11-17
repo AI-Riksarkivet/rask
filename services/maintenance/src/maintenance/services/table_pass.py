@@ -900,9 +900,9 @@ def versions_due_at(ds: lance.LanceDataset, policy: ExpiryPolicy, *, now: dateti
 
 
 def staged_due_at(ds: lance.LanceDataset, uri: str, *, policy: ExpiryPolicy, options: StorageOptions, now: datetime) -> datetime | None:
-    """When, on the pass's clock ``now``, the oldest manifest a stock writer staged for a version this ref already holds
-    passes its grace ([[LH-529]]), or ``None`` when there is none, or the table's policy keeps its whole history, under
-    which no pass removes one. The time left is the store's reading (:meth:`LostManifests.due_in`), so a pod whose clock
+    """When, on the pass's clock ``now``, the first manifest no commit can land passes its grace: one a stock writer
+    staged for a version this ref already holds ([[LH-529]]) or a detached one a catalog commit left ([[LH-401]]). ``None``
+    when there is none, or the table's policy keeps its whole history, under which no pass removes one. The time left is the store's reading (:meth:`LostManifests.due_in`), so a pod whose clock
     differs from the store's schedules the pass that removes it neither early nor late ([[LH-575]])."""
     if not policy.cleanup_enabled:
         return None

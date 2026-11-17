@@ -790,7 +790,7 @@ buckets as the estate's reads already are. */ -}}
 {{- $root := index . 0 -}}{{- $part := index . 1 -}}{{- $door := index . 2 -}}
 {{- if $root.Values.auth.enabled -}}
 {{- if eq $part "env" }}
-- { name: RASK_SA_ISSUER, value: {{ $root.Values.auth.serviceAccountIssuer | quote }} }
+- { name: RASK_SA_ISSUER, value: {{ required "auth.serviceAccountIssuer names the issuer of the cluster's ServiceAccount tokens, which every door verifies a service's token against; with none, no service account is admitted and no refusal says why" $root.Values.auth.serviceAccountIssuer | quote }} }
 - { name: RASK_SA_AUDIENCE, value: {{ printf "rask-%s" $door }} }
 - { name: RASK_SA_MAX_TOKEN_SECONDS, value: {{ $root.Values.auth.serviceAccountMaxTokenSeconds | quote }} }
 - { name: RASK_SA_FETCH_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }

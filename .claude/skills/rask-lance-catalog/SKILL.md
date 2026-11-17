@@ -841,7 +841,7 @@ governing their data. The project-scoped surface is the console's project page, 
   and trash record that holds neither a schedule nor a queued task, which bounds a lost announcement or schedule to one
   firing (`maintenance.services.audit.run_audit`); a trash record already released, or carrying no deadline, gets no task,
   which would end holding nothing. The chart's stream Job reads MAINTENANCE_SCHEDULES back and fails unless it allows
-  message schedules, which nats-server older than 2.12 drops without a word. A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
+  message schedules, which nats-server older than 2.12 drops without a word. A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]). The same step deletes a detached manifest (`_versions/d<id>.manifest`) past that grace: every catalog commit writes one to judge its version and deletes it, so one still there belongs to a commit that died between the two, and Lance's cleanup keeps it (measured on pylance 13.0.0, [[LH-401]]).
   The pass's pre-vend probe and its next-pass time count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes, the time asking with the age a version will then have (`table_pass.versions_due_at`, [[LH-562]]); the catalog's GC preview names the versions by `lakehouse.version_retention`, since Lance's explanation counts them only.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
@@ -1563,7 +1563,9 @@ governing their data. The project-scoped surface is the console's project page, 
   probing only the version after the one it holds (lance v13.0.0 `DatasetConsistencyWrapper::reload`), so a reclaim
   that removed that successor would leave the connection answering `InternalError` for good (measured); that is why
   `NamespaceConnections` builds a connection again once it is a quarter of the retention old. Never run a cleanup on an
-  index with a shorter `older_than` than the chart's retention, and never by hand on a live root. The catalog sets
+  index with a shorter `older_than` than the chart's retention, and never by hand on a live root. The catalog sets `dir_listing_enabled=false`, so a table is a row of its root's
+  `__manifest` and nothing else: left on, the backend also reads every `<name>.lance` directory at a root as a table of
+  the root namespace (measured on pylance 13.0.0, [[LH-295]]). It sets
   `inline_optimization_enabled=false`: the spec's three indexes cost store requests on every create and describe at
   estate scale (measured over moto).
 - **A warehouse's root is read once per request and never cached across requests**

@@ -265,3 +265,16 @@ def test_a_name_whose_first_segment_is_no_warehouse_reaches_nothing_the_estate_r
     )
 
     assert [(answer.status_code, answer.json()["code"]) for answer in answers] == [(404, 1), (404, 1), (404, 1)], [a.text for a in answers]
+
+
+def test_a_dataset_directory_no_row_names_is_no_table(routing: tuple[TestClient, Path, Path, Path]) -> None:
+    """A table is a row of its root's catalog. The `dir` backend also reads any `<name>.lance` directory at a root as a
+    table of the root namespace unless told not to (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md`
+    § ListTables, compatibility mode; measured on pylance 13.0.0, 2026-11-17), which would have the root listing name
+    bytes the catalog holds no record, claim or grant for ([[LH-295]])."""
+    client, estate_root, _warehouse_root, _registry = routing
+    lance.write_dataset(pa.table({"id": pa.array([1], pa.int64())}), str(estate_root / "stray.lance"))
+
+    listed = client.get("/v1/namespace/$/table/list")
+
+    assert (listed.status_code, listed.json()["tables"]) == (200, [])

@@ -43,7 +43,7 @@ from lakehouse.record_store import record_key
 from lakehouse.storage_options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import table_pass
+from maintenance.services import expiry, table_pass
 from maintenance.services.expiry import HISTORY_FENCED, DatasetResult
 from maintenance.services.table_pass import TableTask, held_location, run_table_pass
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
@@ -175,20 +175,46 @@ def test_a_pass_expiring_a_table_and_its_branch_asks_the_catalog_for_one_vend(
 
 def _staged(bucket: str, moto_url: str, location: str, version: int) -> str:
     """A manifest staged for ``version`` as a stock writer stages one (`<inverted version>.manifest-<uuid>`); its name."""
-    name = f"{(1 << 64) - 1 - version:020d}.manifest-{uuid.uuid4()}"
+    return _left_in_versions(bucket, moto_url, location, f"{(1 << 64) - 1 - version:020d}.manifest-{uuid.uuid4()}")
+
+
+def _detached(bucket: str, moto_url: str, location: str) -> str:
+    """A detached manifest as the catalog's commit writes one to judge it (`d<id>.manifest`, the id's top bit set); its name."""
+    return _left_in_versions(bucket, moto_url, location, f"d{(1 << 63) + 7}.manifest")
+
+
+def _left_in_versions(bucket: str, moto_url: str, location: str, name: str) -> str:
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     s3.put_object(Bucket=bucket, Key=f"{location}/_versions/{name}", Body=b"")
     return name
 
 
 @pytest.mark.parametrize(
-    ("grace_seconds", "policy", "pod_ahead", "lost_stays", "next_pass"),
+    ("grace_seconds", "detached_grace", "policy", "pod_ahead", "kept", "next_pass"),
     [
-        pytest.param("0", KEEP_ONE, timedelta(0), False, timedelta(hours=24), id="a-manifest-staged-for-a-committed-version-goes"),
+        pytest.param("0", timedelta(0), KEEP_ONE, timedelta(0), set(), timedelta(hours=24), id="a-manifest-no-commit-can-land-goes"),
+        # A detached manifest may belong to a commit still at work, so it is kept an hour at least whatever the grace.
+        pytest.param("0", None, KEEP_ONE, timedelta(0), {"detached"}, timedelta(hours=1), id="a-detached-one-stays-inside-its-own-grace"),
         # The grace is the store's clock against the store's own stamp: a pod's clock running ahead removes nothing early,
         # and the next pass still comes when the grace ends.
-        pytest.param("3600", KEEP_ONE, timedelta(hours=2), True, timedelta(hours=1), id="one-inside-its-grace-by-the-stores-clock-stays-until-it-ends"),
-        pytest.param("0", {"cleanup_enabled": False}, timedelta(0), True, timedelta(hours=24), id="one-whose-table-keeps-its-whole-history-stays"),
+        pytest.param(
+            "3600",
+            None,
+            KEEP_ONE,
+            timedelta(hours=2),
+            {"staged", "detached"},
+            timedelta(hours=1),
+            id="one-inside-its-grace-by-the-stores-clock-stays-until-it-ends",
+        ),
+        pytest.param(
+            "0",
+            timedelta(0),
+            {"cleanup_enabled": False},
+            timedelta(0),
+            {"staged", "detached"},
+            timedelta(hours=24),
+            id="one-whose-table-keeps-its-whole-history-stays",
+        ),
     ],
 )
 def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
@@ -199,20 +225,26 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
     settings: Callable[[], MaintenanceSettings],
     monkeypatch: pytest.MonkeyPatch,
     grace_seconds: str,
+    detached_grace: timedelta | None,
     policy: dict[str, Any],
     pod_ahead: timedelta,
-    lost_stays: bool,
+    kept: set[str],
     next_pass: timedelta,
 ) -> None:
     """A commit that lost its version to another leaves the manifest it staged, which Lance's listing skips and so
     ``cleanup_old_versions`` never reclaims ([[LH-529]]); a pass removes it once past its grace, on a table no version of
-    which is due yet, and next passes the table at its recheck. One staged for the version after the latest is a commit
-    still in flight and stays. The table's next pass comes when what it holds next comes due: the grace's end, or its
+    which is due yet, and next passes the table at its recheck. So does the detached manifest a catalog commit wrote to
+    judge and died before deleting, which Lance's cleanup leaves as well ([[LH-401]]; measured on pylance 13.0.0,
+    2026-11-17: `cleanup_old_versions(older_than=0, delete_unverified=True)` kept both a `d5.manifest` and one with the
+    top bit set). A detached one is kept an hour at least, since a commit at work still reads its own. One staged for the
+    version after the latest is a commit still in flight and stays. The table's next pass comes when what it holds next comes due: the grace's end, or its
     recheck (a day, `MAINTENANCE_RECHECK_HOURS`). The grace is judged on the store's clock, which stamped the manifest,
     never on the pod's ([[LH-575]], ADR 0179)."""
     monkeypatch.setenv("MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS", grace_seconds)
+    if detached_grace is not None:
+        monkeypatch.setattr(expiry, "DETACHED_MANIFEST_GRACE", detached_grace)
     task = _table_with(THRESHOLD, bucket=bucket, options=store, policy=policy)
-    lost = _staged(bucket, moto_url, LOCATION, 2)
+    lost = {"staged": _staged(bucket, moto_url, LOCATION, 2), "detached": _detached(bucket, moto_url, LOCATION)}
     in_flight = _staged(bucket, moto_url, LOCATION, THRESHOLD + 1)
     now = datetime.now(UTC) + pod_ahead
 
@@ -221,7 +253,8 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
 
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     held = {entry["Key"].rsplit("/", 1)[-1] for entry in s3.list_objects_v2(Bucket=bucket, Prefix=f"{LOCATION}/_versions/").get("Contents", [])}
-    assert {name for name in (lost, in_flight) if name in held} == ({lost, in_flight} if lost_stays else {in_flight})
+    assert {kind for kind, name in lost.items() if name in held} == kept
+    assert in_flight in held
     due = outcome.next_due
     assert due is not None, "the pass scheduled no next pass"
     # The store stamps a put to the second, so the grace's end comes up to a second before the pass's clock adds it up.

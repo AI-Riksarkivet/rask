@@ -74,7 +74,9 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     min_versions_to_expire: int = Field(default=20, ge=1, alias="MAINTENANCE_MIN_VERSIONS_TO_EXPIRE")
     #: How old a manifest a stock writer staged for a version its table already holds must be before expiry removes it
     #: ([[LH-529]]): one whose commit lost its version is garbage Lance's own cleanup never lists, and the grace outlasts any
-    #: commit still deciding its outcome.
+    #: commit still deciding its outcome. A detached manifest a catalog commit left is removed past this grace too, and
+    #: never sooner than an hour (`expiry.DETACHED_MANIFEST_GRACE`), since a commit at work still reads its own
+    #: ([[LH-401]]).
     staged_manifest_grace_seconds: int = Field(default=600, ge=0, alias="MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS")
     # --- The work queue (ADR 0198 §2). Each table's pass, each trash record's release and the hourly audit are tasks on
     # NATS JetStream, which every replica's worker pulls from; the streams and their durable consumers are the chart's

@@ -126,7 +126,8 @@ class ExpiryPolicy(BaseModel):
     #: Reclaim only once at least this many versions are reclaimable (``MAINTENANCE_MIN_VERSIONS_TO_EXPIRE``).
     min_reclaimable: int = Field(default=1, ge=1)
     #: How long a manifest staged for a version the ref already holds is kept before the pass removes it
-    #: (``MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS``): past any commit still deciding its outcome.
+    #: (``MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS``): past any commit still deciding its outcome. A detached manifest a
+    #: catalog commit left is kept that long and :data:`DETACHED_MANIFEST_GRACE` at least.
     staged_grace: timedelta = timedelta(minutes=10)
 
 
@@ -308,26 +309,46 @@ def count_reclaimable(ds: lance.LanceDataset, policy: ExpiryPolicy) -> int:
 #: one.
 _STAGED_MANIFEST: Final = re.compile(r"^(?P<inverted>\d{20})\.manifest-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _U64_MAX: Final = (1 << 64) - 1
+#: A detached manifest, `d<id>.manifest`: every catalog commit writes one to judge the version before it finalizes it,
+#: and deletes it (`catalog.services.dataplane.discard_detached_manifest`). One still there past the grace is a commit
+#: that died, or whose delete the store refused, between the two. Lance's cleanup keeps it: measured on pylance 13.0.0
+#: (2026-11-17), `cleanup_old_versions(older_than=0, delete_unverified=True)` left a `d5.manifest` and one whose id has
+#: the top bit set ([[LH-401]]).
+_DETACHED_MANIFEST: Final = re.compile(r"^d\d+\.manifest$")
+#: How long a detached manifest is kept at least, whatever the staged grace is set to. Unlike a manifest staged for a
+#: version the ref already holds, a detached one may belong to a commit still at work: it is read from when the catalog
+#: judges the version until the backend finalizes it, across the judgement, the commit's records and a wait for the
+#: ref's commit turn. An hour is far past the catalog's request deadline (300 s by default) and its turn hold, so no
+#: request that wrote one is still reading it.
+DETACHED_MANIFEST_GRACE: Final = timedelta(hours=1)
 
 
 class LostManifests(BaseModel):
-    """The manifests stock writers staged under a ref for versions it already holds (:func:`lost_staged_manifests`),
-    each with when the store put it, and the store's clock when it listed them."""
+    """The manifests under a ref that no commit can land (:func:`lost_staged_manifests`): those stock writers staged for
+    versions it already holds and the detached ones catalog commits left, each with when the store put it, and the store's
+    clock when it listed them."""
 
     model_config = ConfigDict(frozen=True)
 
     #: Each one's store path, and the time the store stamped on it.
     put_at: dict[str, datetime]
+    #: The detached ones among them, which are kept :data:`DETACHED_MANIFEST_GRACE` at least.
+    detached: frozenset[str] = frozenset()
     #: The store's clock at the listing (:attr:`lakehouse.stored_objects.StoreListing.at`).
     at: datetime
 
+    def _due(self, path: str, grace: timedelta) -> datetime:
+        """When the store's clock passes the grace of the manifest at ``path``."""
+        return self.put_at[path] + (max(grace, DETACHED_MANIFEST_GRACE) if path in self.detached else grace)
+
     def past(self, grace: timedelta) -> list[str]:
-        """The ones the store put at least ``grace`` before it listed them."""
-        return [path for path, put in self.put_at.items() if put <= self.at - grace]
+        """The ones the store put at least their grace before it listed them: ``grace`` for a staged one, and no less
+        than :data:`DETACHED_MANIFEST_GRACE` for a detached one."""
+        return [path for path in self.put_at if self._due(path, grace) <= self.at]
 
     def due_in(self, grace: timedelta) -> timedelta | None:
-        """How long after the listing the oldest one passes ``grace``, by the store's clock; ``None`` when there is none."""
-        return min(self.put_at.values()) + grace - self.at if self.put_at else None
+        """How long after the listing the first one passes its grace, by the store's clock; ``None`` when there is none."""
+        return min(self._due(path, grace) for path in self.put_at) - self.at if self.put_at else None
 
 
 def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version: int) -> LostManifests:
@@ -340,21 +361,30 @@ def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version:
     commit holds its version, and each is one more key every open of the table lists. One staged for a later version is
     a commit still in flight, and is not one of these.
 
+    A detached manifest (:data:`_DETACHED_MANIFEST`) is one of these whatever the version: the commit that wrote it
+    deletes it within the request, so one past :data:`DETACHED_MANIFEST_GRACE` belongs to a commit that ended without
+    doing so.
+
     Its age is the store's reading alone ([[LH-575]], ADR 0179): the listing's ``Date`` against the stamp the store put
     on it, so a pod whose clock runs ahead removes nothing a commit may still be deciding on.
     """
     listing = list_under_at(f"{uri.rstrip('/')}/_versions", storage_options)
     lost: dict[str, datetime] = {}
+    detached: set[str] = set()
     for listed in listing.objects:
-        match = _STAGED_MANIFEST.match(listed.path.rsplit("/", 1)[-1])
-        if match is not None and _U64_MAX - int(match["inverted"]) <= version:
+        name = listed.path.rsplit("/", 1)[-1]
+        match = _STAGED_MANIFEST.match(name)
+        if _DETACHED_MANIFEST.match(name):
+            detached.add(listed.path)
             lost[listed.path] = listed.modified
-    return LostManifests(put_at=lost, at=listing.at)
+        elif match is not None and _U64_MAX - int(match["inverted"]) <= version:
+            lost[listed.path] = listed.modified
+    return LostManifests(put_at=lost, detached=frozenset(detached), at=listing.at)
 
 
 def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
-    """Remove each lost staged manifest (:func:`lost_staged_manifests`) once past ``policy.staged_grace`` by the store's
-    clock: the grace keeps a commit still deciding its outcome from losing the file."""
+    """Remove each manifest no commit can land (:func:`lost_staged_manifests`) once past its grace by the store's clock
+    (:meth:`LostManifests.past`): the grace keeps a commit still deciding its outcome from losing the file."""
     lost = lost_staged_manifests(target.uri, target.storage_options, version=ds.version).past(policy.staged_grace)
     delete_objects(target.uri, vend, lost)
     result.staged_manifests_removed = len(lost)
