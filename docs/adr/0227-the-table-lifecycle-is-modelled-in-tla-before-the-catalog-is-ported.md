@@ -80,7 +80,14 @@ handful of races in tests; nothing checks the doors against each other.
    handing over without its ETag or another request's fence (`LiveHasData` on `TableLifecycleRename.cfg`, which was
    added because the first two gate configs missed it).
 
-5. **Six findings, each kept as a config whose first line reads `FINDING` and `EXPECT VIOLATION`:**
+5. **Six candidate findings, each kept as a config whose first line reads `FINDING` and `EXPECT VIOLATION`.** A
+   finding here is a behaviour of the MODEL. It is a defect of the catalog only once the same steps are shown against
+   the running catalog, and none has been yet. The first was tried, 2026-11-17, against the real catalog app on real
+   pylance (`scripts/port_catalog_fixture.py`): 28 pairs of concurrent creates of one name with a 20 MB body each. In
+   every pair the table stood afterwards with the rows of the create that answered 200, including the 11 pairs where
+   the other create lost at the same location (409 ConcurrentModificationError), which is the modelled path. So either
+   the model is not faithful at that step or the window was not hit; a test that holds each caller at the modelled
+   step decides it. The other five are untried:
    - `TableLifecycleCreateRace.cfg` (`AnsweredCreateStands`, 14 steps, no failure): two creates of one name. The second
      probes while the first is only declared (`dataplane.create_table` 788-789), takes the declared path
      (832-836), and both write `mode="create"` at the first's location. Lance commits one; the other raises "Dataset
@@ -120,7 +127,8 @@ name refuses here, where the code lets a gone holder's be taken past `LEASE`), a
 
 ## Consequences
 
-- The findings are the catalog's to fix before it is ported, and each config turns into a plain gate config once its
+- A finding shown against the running catalog is the catalog's to fix before it is ported; one that cannot be shown
+  is a place where the model is corrected. The findings so shown are the catalog's to fix before it is ported, and each config turns into a plain gate config once its
   fix lands in the model and the code. The catalog's port follows this model's steps.
 - The settle (A3) is a timing argument, not a write the store arbitrates: a request that outlives
   `RELEASE_SETTLE` breaks it.
