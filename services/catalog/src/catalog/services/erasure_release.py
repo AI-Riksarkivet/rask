@@ -29,6 +29,14 @@ during the grace period, or a branch cut from one, would keep the subject for go
 are gone, so each is taken with them: the tag deleted, the branch deleted and recreated at main's head with its subtree.
 A tick resumed after its deletes takes only what stands on a residual since, which a branch it recreated never does.
 
+**WHAT IS TAKEN IS WHAT STILL PINS, BY ONE PREDICATE** (:func:`_taken`, G8 of ``specs/catalog/Erasure.tla``). A ref is
+taken while it stands on a residual, or where the verification found a pin (``pinned_at``), or in a taken subtree, at the
+tick's own read of the table, whatever its name: the tick's plan, its deletes and every ref door (:func:`takes`) ask the
+same question, so a door never tells its caller less than the tick takes. A tag the release named, moved by its owner
+onto a clean version in the grace, or a branch deleted and cut again from clean history after a tick that died recorded
+it, pins nothing and stays; the residual it no longer holds is reclaimed all the same. Taking a recorded name wherever it
+stands would take that ref from a caller no door told (ErasureNameTaking, ADR 0233 §9).
+
 **BUT NEVER A REGISTERED CLONE'S TAG** (ADR 0198 §1, ADR 0233). A clone registered during the grace period reads its
 version through this table's files, held by the catalog's own tag (:data:`lakehouse.clone_sources.TAG_PREFIX`), which only
 the clone's end releases. While one stands on a residual, or on a branch the release would delete, the tick changes
@@ -78,7 +86,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal, Protocol
 from uuid import NAMESPACE_URL, uuid5
 
@@ -107,8 +115,8 @@ RELEASE_PREFIX = control_prefixes.ERASURE_RELEASES
 #: back at once, so this bounds only a replica that died holding one.
 LEASE = timedelta(minutes=15)
 
-#: The kind of a release's mark in its table's history fence (:func:`lakehouse.fences.mark_name`).
-MARK_KIND: Final = "erasure-release"
+#: The kind of a release's mark in its table's history fence (:func:`lakehouse.fences.mark_name`), the one the fence hands.
+MARK_KIND: Final = history_fences.RELEASE_MARK
 
 #: How many takes of the table's history a scheduling makes, a short wait between each, before it answers the release
 #: unrecorded: a ref write holds it for the seconds its write takes.
@@ -152,6 +160,9 @@ class ReleaseRecord(BaseModel):
     #: The versions the verification found holding the subject, as ``ErasureReport.residual_versions`` names them
     #: (``<ref>@<version>``, ``main`` for main): every ref standing on one goes with the release.
     residual: list[str] = Field(default_factory=list)
+    #: Where each of ``refs`` stood when the verification named it (``Pin.holds``, ``<ref>@<version>``): until the deletes
+    #: are done a ref still standing on one of these is taken with the residual's, a recorded name standing elsewhere not.
+    pinned_at: list[str] = Field(default_factory=list)
     #: The obligation's retention, in days: the reclaim after the deletes keeps what is younger.
     retain_days: int = 0
     #: Recorded by the claiming tick before any delete: the tags it deletes, and the branches top-down.
@@ -224,6 +235,7 @@ def new_release(
         requested_by=requested_by,
         notified=notified,
         refs=[pin.ref for pin in pins],
+        pinned_at=sorted({pin.holds for pin in pins}),
         due_at=due_at,
         residual=list(residual),
         retain_days=retain_days,
@@ -303,19 +315,20 @@ def scheduled(control_root: str, storage_options: StorageOptions, release_id: st
 
 
 def takes(record: ReleaseRecord, dataset: _Dataset, ref: PlacedRef) -> bool:
-    """Whether ``record``'s release takes ``ref`` once it stands on ``dataset``'s table, as its next tick reads the table
-    (:func:`_plan`): a tag on a residual version or on a branch the release takes, or a branch cut from either. Never a
-    registered clone's tag, which only the clone's end releases."""
+    """Whether ``record``'s release takes ``ref`` once it stands on ``dataset``'s table, as its next tick reads the table:
+    :func:`_taken` over the table with ``ref`` put where the door puts it, the one predicate the tick's plan and deletes run
+    (G8 of ``specs/catalog/Erasure.tla``). Never a registered clone's tag, which only the clone's end releases."""
     if ref.kind == "tag" and ref.name.startswith(clone_sources.TAG_PREFIX):
         return False
-    subtree, residual, _forks = _taken_branches(dataset, record)
-    return (ref.branch, ref.version) in residual or (ref.branch is not None and ref.branch in subtree)
+    taken = _taken(dataset, record, placing=ref)
+    return ref.name in (taken.tags if ref.kind == "tag" else taken.branches)
 
 
-def creator_notice(record: ReleaseRecord, subject: str, ref: PlacedRef, *, location: str, object_id: str) -> Announcement:
+def creator_notice(record: ReleaseRecord, subject: str, ref: PlacedRef, *, location: str, object_id: str, not_before: datetime) -> Announcement:
     """The notice telling ``subject``, who puts ``ref`` on the table, that ``record``'s release will take it: under an id fixed
     by the release, the person and the ref, so a retry, the door and the finish send one event, and landed once the ref
-    stands where it was put and ``record`` itself stands, its ``due_at`` included (ADR 0233 §9)."""
+    stands where it was put, written no earlier than ``not_before`` (the door's clock as it files), and ``record`` itself
+    stands, its ``due_at`` included (ADR 0233 §9)."""
     event = _scheduled(record, subject, object_id=object_id)
     told = event.model_copy(
         update={
@@ -326,11 +339,13 @@ def creator_notice(record: ReleaseRecord, subject: str, ref: PlacedRef, *, locat
     landed = RefOnARelease(
         key=record_key(record.release_id),
         due_at=record.model_dump(mode="json")["due_at"],
+        table_uuid=record.table_uuid,
         location=location,
         ref=ref.kind,
         name=ref.name,
         branch=ref.branch,
         version=ref.version,
+        not_before=not_before,
     )
     return Announcement(evidence=landed, message=ControlMessage(event=told))
 
@@ -369,7 +384,8 @@ class RefNotices:
                 continue
             if record.table_uuid != self._table_uuid or not takes(record, dataset, ref):
                 continue
-            told = [creator_notice(record, self._subject, ref, location=str(dataset.uri), object_id=self._object_id)]
+            filed_at = datetime.now(UTC)
+            told = [creator_notice(record, self._subject, ref, location=str(dataset.uri), object_id=self._object_id, not_before=filed_at)]
             key = announcement_intents.file(
                 self._control_root, self._storage_options, door="erasure_release_creator", target=notice_target(release_id), announcements=told
             )
@@ -465,19 +481,19 @@ def _release(
             _held_by_clones(control_root, storage_options, record, clones)
             return clones
         claimed = _mutate(control_root, storage_options, record.release_id, lambda current: _claim(current, now=now, tags=tags, plan=plan))
+        # G8: only what the plan read just now takes is deleted, of what the claim recorded where to recreate, so a ref its
+        # owner moved off the residual, or cut again from clean history, since a tick that died recorded it stays.
+        taken_now = {step.branch for step in plan}
+        done.changes += _delete(dataset, claimed, tags=tags, plan=[step for step in claimed.plan if step.branch in taken_now])
         if claimed.phase == "deleting":
-            done.changes += _delete(dataset, claimed, tags=claimed.tags, plan=claimed.plan)
             claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
-        else:
-            # Resumed once its deletes were done: only what stands on a residual since goes, which the plan read just now
-            # names, and which the claim recorded where to recreate before this delete.
-            tainted = {step.branch for step in plan}
-            done.changes += _delete(dataset, claimed, tags=tags, plan=[step for step in claimed.plan if step.branch in tainted])
         done.changes += _recreate(dataset, claimed)
         _reclaim(dataset, claimed, storage_options=table_options)
-    if record.held_by_clones:
-        _report_held(control_root, storage_options, record.release_id, [])
-    _finish(control_root, storage_options, record)
+        if record.held_by_clones:
+            _report_held(control_root, storage_options, record.release_id, [])
+        # G9: the end inside the hold, which a scheduling shares with nothing: a verification recording the release
+        # again cannot land between the record's delete and the mark's, which would remove its new mark.
+        _finish(control_root, storage_options, record)
     log.info(
         "erasure_release_done",
         extra={"release": record.release_id, "table": record.table, "tags": claimed.tags, "branches": [step.branch for step in claimed.plan]},
@@ -503,48 +519,65 @@ def _report_held(control_root: str, storage_options: StorageOptions, release_id:
         log.warning("erasure_release_obligation_unrecorded", extra={"release": release_id})
 
 
-def _taken_branches(dataset: _Dataset, record: ReleaseRecord) -> tuple[set[str], set[tuple[str | None, int | None]], dict[str, str | None]]:
-    """The branches ``record``'s release takes, read from the table as it stands now: before the deletes, what the record
-    names and every branch cut from a residual, with their subtrees; once they are done, only what stands on a residual.
-    With the residual versions as ``(branch, version)``, and each branch's parent."""
-    listed_branches = dataset.branches.list() or {}
+class _Taken(BaseModel):
+    """What a release takes of a table as it stands (:func:`_taken`)."""
+
+    #: The tags it deletes, never a registered clone's.
+    tags: set[str]
+    #: The registered clones' tags standing where it would take a tag, which hold it.
+    clones: set[str]
+    #: The branches it deletes and recreates.
+    branches: set[str]
+    #: Each listed branch's parent, ``None`` for main.
+    forks: dict[str, str | None]
+
+
+def _taken(dataset: _Dataset, record: ReleaseRecord, *, placing: PlacedRef | None = None) -> _Taken:
+    """THE ONE PREDICATE of what ``record``'s release takes of the table as it stands now, with ``placing`` put where its
+    door puts it: the tick's plan and its deletes (:func:`_plan`) and every ref door (:func:`takes`) ask this, so the door
+    and the tick never disagree (G8 of ``specs/catalog/Erasure.tla``).
+
+    A ref is taken while it still pins what the erasure left, whatever its name: a tag on one of the release's places, a
+    branch cut from one, with every branch cut from a branch it takes, and a tag on any of those. The places are the
+    residual versions and, until the release's deletes are done, the versions its pins stood on when the verification named
+    them (``pinned_at``); once they are done a recreated branch stands at main's head, which pins nothing. A name the
+    release recorded, its pins' or its claim's, is taken only where it still stands so: a tag its owner moved onto a clean
+    version, or a branch deleted and cut again from clean history, pins nothing and is left alone.
+    """
+    listed_tags = dict(dataset.tags.list() or {})
+    listed_branches = dict(dataset.branches.list() or {})
+    if placing is not None and placing.kind == "tag":
+        listed_tags[placing.name] = {"branch": placing.branch, "version": placing.version}
+    elif placing is not None:
+        listed_branches[placing.name] = {"parent_branch": placing.branch, "parent_version": placing.version}
+    places = {_reference(name) for name in record.residual}
+    if record.phase != "recreating":
+        places |= {_reference(name) for name in record.pinned_at}
     forks = {str(name): recorded_branch(meta.get("parent_branch")) for name, meta in listed_branches.items()}
-    residual = {_reference(name) for name in record.residual}
-    cut_from = {str(name): (recorded_branch(meta.get("parent_branch")), meta.get("parent_version")) for name, meta in listed_branches.items()}
-    on_residual = {name for name, reference in cut_from.items() if reference in residual}
-    named = (
-        set()
-        if record.phase == "recreating"
-        else {ref.split(":", 1)[1] for ref in record.refs if ref.startswith("branch:")} | {step.branch for step in record.plan}
-    )
-    subtree = {name for name in named | on_residual if name in forks}
-    frontier = list(subtree)
+    branches = {str(name) for name, meta in listed_branches.items() if (recorded_branch(meta.get("parent_branch")), meta.get("parent_version")) in places}
+    frontier = list(branches)
     while frontier:
         parent = frontier.pop()
-        children = {name for name, fork in forks.items() if fork == parent} - subtree
-        subtree |= children
+        children = {name for name, fork in forks.items() if fork == parent} - branches
+        branches |= children
         frontier.extend(children)
-    return subtree, residual, forks
+    on = {
+        str(name)
+        for name, meta in listed_tags.items()
+        if recorded_branch(meta.get("branch")) in branches or (recorded_branch(meta.get("branch")), meta.get("version")) in places
+    }
+    clones = {tag for tag in on if tag.startswith(clone_sources.TAG_PREFIX)}
+    return _Taken(tags=on - clones, clones=clones, branches=branches, forks=forks)
 
 
 def _plan(dataset: _Dataset, record: ReleaseRecord) -> tuple[list[str], list[Recreate], list[str]]:
-    """The tags to delete and the branches to recreate top-down, read from the table as it stands now: before the deletes,
-    what the record names and every ref standing on a residual; once they are done, only what stands on a residual. And
-    the registered clones' tags among them, which no release deletes: one on a residual, or on a branch this would delete,
-    holds the release."""
-    subtree, residual, forks = _taken_branches(dataset, record)
-    listed = dataset.tags.list() or {}
-    recorded = set() if record.phase == "recreating" else {ref.split(":", 1)[1] for ref in record.refs if ref.startswith("tag:")} | set(record.tags)
-    standing = {
-        str(name)
-        for name, meta in listed.items()
-        if recorded_branch(meta.get("branch")) in subtree or (recorded_branch(meta.get("branch")), meta.get("version")) in residual
-    }
-    clones = sorted(tag for tag in standing if tag.startswith(clone_sources.TAG_PREFIX))
-    tags = sorted(tag for tag in recorded | standing if tag in listed and not tag.startswith(clone_sources.TAG_PREFIX))
+    """The tags to delete and the branches to recreate top-down, as :func:`_taken` reads the table now, and the registered
+    clones' tags among what it would take, which no release deletes: one standing there holds the release."""
+    taken = _taken(dataset, record)
     head = int(dataset.version)
-    top_down = sorted(subtree, key=lambda name: (_depth(name, forks, subtree), name))
-    return tags, [Recreate(branch=name, parent=forks[name] if forks[name] in subtree else None, version=head) for name in top_down], clones
+    top_down = sorted(taken.branches, key=lambda name: (_depth(name, taken.forks, taken.branches), name))
+    plan = [Recreate(branch=name, parent=taken.forks[name] if taken.forks[name] in taken.branches else None, version=head) for name in top_down]
+    return sorted(taken.tags), plan, sorted(taken.clones)
 
 
 def _depth(name: str, forks: dict[str, str | None], subtree: set[str]) -> int:
@@ -646,6 +679,8 @@ def _hand_back(control_root: str, storage_options: StorageOptions, release_id: s
 
 
 def _finish(control_root: str, storage_options: StorageOptions, record: ReleaseRecord) -> None:
-    """End the release: its record, then its mark, so no ref door reads a mark whose record it could find again."""
+    """End the release, inside its hold: its record, then its mark, so no state has a record whose mark is gone (G9 of
+    ``specs/catalog/Erasure.tla``: the mark first, and a tick that died between, left a record no ref door finds). A mark
+    left by a tick that died between is removed by the next ref door that finds its record gone."""
     delete_record(control_root, storage_options, record_key(record.release_id))
     stored_objects.remove_object(control_root, storage_options, mark_key(record.table_uuid, record.release_id))

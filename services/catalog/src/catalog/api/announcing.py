@@ -49,6 +49,7 @@ from lakehouse import records
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
+from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.outage import store_refusal
 from lakehouse.storage_options import StorageOptions
@@ -57,6 +58,13 @@ from lakehouse.storage_options import StorageOptions
 log = logging.getLogger(__name__)
 
 type GrantAction = Literal["grant_added", "grant_revoked"]
+
+
+class LandingUndecided(Exception):  # noqa: N818 — an outcome the judgement could not reach, not a failure of it
+    """Whether a filed change landed cannot be judged now: the door that filed it may still be at work (it holds what the
+    change is fenced by). The filing stands, for its door or a later finish."""
+
+
 #: A tuple's place in what a door filed: its object, relation and user.
 type TupleKey = tuple[str, str, str]
 
@@ -156,12 +164,16 @@ class Announcer:
                 if (key := announcement_intents.identity(announcement)) in wanted:
                     reused.setdefault(key, announcement)
             if not filing.young:
-                left.append((filing, [a for a in filing.intent.announcements if await self.landed(a.evidence)]))
+                try:
+                    left.append((filing, [a for a in filing.intent.announcements if await self.landed(a.evidence)]))
+                except LandingUndecided:
+                    continue
         return reused, left
 
     async def finish(self, *, limit: int) -> AnnouncementIntentsFinishResponse:
         """Send what each filing older than :data:`announcement_intents.LEASE` names wherever the store shows its change
-        landed, and remove the filing, at most ``limit`` filings, oldest first.
+        landed, and remove the filing, at most ``limit`` filings, oldest first. A ref door's filing whose door may still write
+        its ref (it holds the table's history, stalled past the lease) is left, and counted young (:class:`LandingUndecided`).
 
         Raises:
             ServiceUnavailableError: The store or OpenFGA did not answer a read; the filing being judged stands for the next.
@@ -176,8 +188,13 @@ class Announcer:
             if filing.young:
                 done.young += 1
                 continue
-            for announcement in filing.intent.announcements:
-                if not await self.landed(announcement.evidence):
+            try:
+                judged = [(announcement, await self.landed(announcement.evidence)) for announcement in filing.intent.announcements]
+            except LandingUndecided:
+                done.young += 1
+                continue
+            for announcement, landed in judged:
+                if not landed:
                     done.unlanded += 1
                     continue
                 await self._send(announcement.message, authorization=None)
@@ -208,7 +225,10 @@ class Announcer:
             raise store_refusal(exc, reading=f"what was filed on {target}", so="nothing was sent") from exc
         sent = 0
         for filing in filings:
-            landed = [a for a in filing.intent.announcements if await self.landed(a.evidence)]
+            try:
+                landed = [a for a in filing.intent.announcements if await self.landed(a.evidence)]
+            except LandingUndecided:
+                continue
             for announcement in landed:
                 await self._send(announcement.message, authorization=None)
                 sent += 1
@@ -236,11 +256,17 @@ class Announcer:
                 await self._send(announcement.message, authorization=self._authorization)
         await self._settle(key)
 
+    async def drop_filed(self, key: str) -> None:
+        """Remove what this request filed under ``key`` without sending it: its change was refused, so nothing it names
+        landed."""
+        await self._settle(key)
+
     async def landed(self, evidence: Evidence) -> bool:
         """Whether the store shows the change ``evidence`` names landed.
 
         Raises:
             ServiceUnavailableError: The store or OpenFGA did not answer.
+            LandingUndecided: A ref door may still be writing the ref ``evidence`` names.
         """
         match evidence:
             case TupleGone() | TupleHeld():
@@ -272,7 +298,9 @@ class Announcer:
                 if found is None or found[0].get("due_at") != evidence.due_at:
                     return False
                 try:
-                    return await run_in_threadpool(_ref_stands, evidence, self._settings.storage_options(plane="data"))
+                    return await run_in_threadpool(_ref_stands_held, evidence, self._settings)
+                except HistoryFencedError as exc:
+                    raise LandingUndecided(str(exc)) from exc
                 except OSError as exc:
                     raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
 
@@ -354,6 +382,22 @@ def _tag_stands(location: str, so: StorageOptions, tag: str) -> bool:
     return tag in (dataset.tags.list() or {})
 
 
+def _ref_stands_held(evidence: RefOnARelease, settings: Settings) -> bool:
+    """:func:`_ref_stands`, judged while the table's history is held as a scheduling, which every ref door's hold refuses
+    (G10 of ``specs/catalog/Erasure.tla``). A door files inside its hold and writes its ref before its hold ends, so a
+    filing judged here belongs to a door that has ended or whose hold lapsed, which writes nothing more (it confirms its
+    hold before the ref): a ref not standing now never will, and the filing may go. A door stalled past the filings' lease
+    with its hold standing refuses this take, and its filing stays for it.
+
+    Raises:
+        HistoryFencedError: A ref door holds the table's history; nothing was judged.
+        OSError: The store did not answer.
+    """
+    history = TableHistory(control_root=settings.registry_root, storage_options=settings.storage_options(), table_uuid=evidence.table_uuid)
+    with history.held(HistoryWork.SCHEDULE, renewed=False):
+        return _ref_stands(evidence, settings.storage_options(plane="data"))
+
+
 def _ref_stands(evidence: RefOnARelease, so: StorageOptions) -> bool:
     """Whether the tag or branch ``evidence`` names stands at its table, where it was put: a tag naming its version on its
     branch, a branch cut from its parent at its version. None does once the dataset is gone from there.
@@ -368,9 +412,18 @@ def _ref_stands(evidence: RefOnARelease, so: StorageOptions) -> bool:
         return False
     if evidence.ref == "tag":
         entry = (dataset.tags.list() or {}).get(evidence.name)
-        return entry is not None and (recorded_branch(entry.get("branch")), entry.get("version")) == (evidence.branch, evidence.version)
+        if entry is None or (recorded_branch(entry.get("branch")), entry.get("version")) != (evidence.branch, evidence.version):
+            return False
+        # A tag file records when it was last written (`updatedAt`, read back as `updated_at` on pylance 13.0.0); one written
+        # before the door filed is another writer's. A tag that records no time is taken for the door's.
+        written = entry.get("updated_at")
+        return not isinstance(written, datetime) or written >= evidence.not_before
     meta = (dataset.branches.list() or {}).get(evidence.name)
-    return meta is not None and (recorded_branch(meta.get("parent_branch")), meta.get("parent_version")) == (evidence.branch, evidence.version)
+    if meta is None or (recorded_branch(meta.get("parent_branch")), meta.get("parent_version")) != (evidence.branch, evidence.version):
+        return False
+    # A branch file records its creation in whole seconds (`createAt`, read back as `create_at` on pylance 13.0.0).
+    created = meta.get("create_at")
+    return not isinstance(created, int) or created >= int(evidence.not_before.timestamp())
 
 
 def _as_filed(announcement: Announcement, reused: Mapping[str, Announcement]) -> Announcement:

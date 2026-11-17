@@ -182,19 +182,30 @@ named the table by its id.
   whoever must be told now (an owner added since), each notice naming that release's own deadline: each notice's
   `event_id` is fixed by the release and the person, so a reader that keeps the first copy of an id is told once, and
   every copy of an id names the same `extra.due_at`. The release itself announces each tag and branch it deletes or
-  recreates (`table_tag_deleted`, `table_branch_deleted`, `table_branch_created`, `extra.release_id`): the refs the
-  verification named and every ref standing on a version that held the subject, made by anyone, during the grace period,
-  never a registered clone's tag. While a clone's tag stands on such a version the release waits, past `extra.due_at` if
+  recreates (`table_tag_deleted`, `table_branch_deleted`, `table_branch_created`, `extra.release_id`): every ref that
+  still stands, when the release runs, on a version that held the subject or where the verification found a pin, or on a
+  branch cut from one, made by anyone, whatever its name, never a registered clone's tag. A ref the verification named and
+  its owner moved onto a clean version (`tags/update`), or deleted and cut again from clean history, is not taken: it no
+  longer keeps the subject, and the version it left is reclaimed all the same. While a clone's tag stands on such a version the release waits, past `extra.due_at` if
   need be, and each tick that finds it waiting tells its people again: `erasure_release_scheduled` with
   `extra.held_by_clones` naming the clones' tags, under an `event_id` fixed by the release, the person and those tags.
   Whoever puts a ref the release will take while it is scheduled (`tags/create`, `tags/update` or `branches/create`: a
   tag on a version that held the subject or on a branch the release recreates, a branch cut from either) is told at that
   write: `erasure_release_scheduled` with `extra.subject` the caller, `extra.ref` (`tag:<name>` or `branch:<name>`) and
   `extra.on` (`<branch or main>@<version>`) beside the release's `extra.due_at`, under an `event_id` fixed by the release,
-  the person and the ref. The door files it before the ref and sends it once the ref is written; one a door that ended
-  did not send is sent by the catalog's finish while the ref and the release stand, and the release does not run while
-  it is filed. A caller no token names is told nothing; a registered clone's tag is never taken, so a clone's register
-  files nothing ([ADR 0233](adr/0233-erasure-and-the-namespace-cascade-are-modelled-in-tla.md) §9).
+  the person and the ref. The door asks the same question the release asks when it runs, of the table as it will stand
+  with the ref, so whoever's ref the release takes was told, and a ref the release does not take tells nobody. The door
+  files the notice before the ref and sends it once the ref is written. A write the store or Lance refused (409: the name
+  is taken, the version or branch is missing, the history is held) sends nothing, even where another caller's ref of
+  that name stands at that place. A write whose outcome is unknown (a 500 or a store that did not answer) is judged by
+  what stands: the ref where the door put it, written since the door filed (a Lance tag records only when it was last
+  written, a branch when it was created, in whole seconds, each on the writer's clock, and nothing that names the
+  writer), and the caller is told when it does. That is the one case a caller may be told of a ref another caller wrote
+  meanwhile: telling a person who lost nothing is preferred to leaving one who did untold. One a door that ended did not
+  send is sent by the catalog's finish while the ref and the release stand; the finish judges it only while it holds the
+  table's history, so never while its door may still write, and the release does not run while it is filed. A caller no
+  token names is told nothing; a registered clone's tag is never taken, so a clone's register files nothing
+  ([ADR 0233](adr/0233-erasure-and-the-namespace-cascade-are-modelled-in-tla.md) §9).
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
   commits. Order the writes of one table by `rask_lance.version`, not by `seq`.
 - The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), and longer for a row the

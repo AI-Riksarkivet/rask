@@ -124,6 +124,36 @@
 (*       the record stood or read it. ErasureCreatorRace removes it: a door *)
 (*       reads no release, the record is written, its ref lands, and its   *)
 (*       creator is never told (ACreatorIsToldBeforeTheRelease).           *)
+(*   G8. ONE predicate decides which refs the release takes, shared by its *)
+(*       claim, its deletes and every ref door: a ref stands on a residual *)
+(*       version or in a taken subtree at the tick's own re-read, whatever *)
+(*       its name (erasure_release._taken, under _plan and takes). A tag   *)
+(*       its owner moved onto a clean version, or a branch deleted and cut *)
+(*       again from clean history, pins nothing and is left alone.         *)
+(*       ErasureNameTaking removes it: the release also takes the names it *)
+(*       recorded, wherever they stand now, while the door judges by       *)
+(*       placement, so the tag moved off the residual in the grace is       *)
+(*       taken from a creator nobody told (ACreatorIsToldBeforeTheRelease). *)
+(*   G9. The release ends inside its hold, deleting its record first and    *)
+(*       its mark after (erasure_release._release, _finish): no state has a *)
+(*       record without its mark. ErasureFinishOutsideHold moves the finish  *)
+(*       out of the hold: a verification records the release again between  *)
+(*       the two deletes and the second removes its new mark; and            *)
+(*       ErasureFinishMarkFirst deletes the mark first and dies between       *)
+(*       (ARecordHasItsMark).                                                *)
+(*   G10. The catalog's finish judges a ref door's filing while it holds the *)
+(*       table's history as a scheduling, which no ref write shares          *)
+(*       (announcing.Announcer.landed, RefOnARelease): a door stalled past   *)
+(*       the filings' lease while it holds the table's history keeps its      *)
+(*       filing. ErasureCreatorStalled removes it: the finish removes the    *)
+(*       filing of a door that has not yet written its ref, the door writes  *)
+(*       it, and the tick takes it before the door sends (ACreatorIsTold...). *)
+(*   G11. A ref door confirms its hold just before its ref (Hold.confirm):   *)
+(*       one whose hold lapsed while it stalled writes nothing and removes  *)
+(*       its filing. ErasureCreatorLapsed removes it: a door that read no    *)
+(*       release lapses, the release is recorded beside it, the door writes  *)
+(*       its ref under the record, and the release takes it from a creator   *)
+(*       nobody told (ACreatorIsToldBeforeTheRelease).                       *)
 (*   ErasureRestore is a limit, not a guard: a restore of a residual made  *)
 (*   once the obligation is released brings the subject back to main's     *)
 (*   head (the release's `bound` names it in words).                       *)
@@ -159,12 +189,21 @@ CONSTANTS Verifiers,     \* the verification requests that may run at once
           CloneWaits,    \* G4
           NoticeOfTheStanding, \* G5
           CreatorTold,   \* G6
-          ScheduleHeld   \* G7
+          ScheduleHeld,  \* G7
+          Moves,         \* another caller may move tag t1, which the release names, or delete B and cut it again
+          StalledDoors,  \* a ref door may stall past the filings' lease, its hold renewed or lapsed meanwhile
+          PlacedOnly,    \* G8
+          FinishHeld,    \* G9: the finish inside the release's hold
+          MarkFirst,     \* G9 removed the other way: the finish deletes the mark before the record
+          FinishFenced,  \* G10
+          RefConfirmed   \* G11
 
 Versions == 1..4
 Tags     == {"t0", "t1", "t2", "tc"}
 UserTags == Tags \ {"tc"}
 Branches == {"B", "C"}
+\* The refs a door may put: tag t2, branch C, and the release's own recorded names t1 (moved) and B (cut again).
+CRefs    == {"t2", "C", "t1", "B"}
 NoRel    == [on |-> FALSE, refs |-> {}, res |-> {}, phase |-> "pending", tags |-> {}, plan |-> {}, at |-> 0, dl |-> "none"]
 
 VARIABLES retained,   \* main's versions with their files on storage
@@ -191,19 +230,22 @@ VARIABLES retained,   \* main's versions with their files on storage
           cut, copied, restored, dropDone,
           badDrop, releasedOn, reopened,  \* history: a tag dropped wrongly; the evidence a release was made on; a released obligation written open
           faults,
-          cpc, ckind, cver, cdl, \* the ref door another caller runs: its step, the ref it makes and where, the deadline it read
-          cfiled,                \* the creators' notices filed: by the door, or "left" once it ended (G6)
+          cpc, ckind, cver, cdl, \* the ref door another caller runs: its step, the ref it puts and where, the deadline it read
+          chold,                 \* the door's hold of the table's history stands (it lapses only where a door stalls)
+          cfiled,                \* the creators' notices filed: by the door, or "left" once it ended (G6), each with where its ref goes
           ctold,                 \* the creators told, each with the deadline told
-          cowed,                 \* the creators owed a notice: a ref the release takes landed while a record with that deadline stood
-          untold                 \* history: the release ran while a creator it costs was untold
+          cput,                  \* each ref a door put: the deadline of the record that stood when it landed, "none" if none did
+          moved, recut, bgone,   \* history: t1 moved by a door; B cut again by a door; B deleted by another caller
+          untold,                \* history: the release deleted a ref a door put under its record, its creator untold
+          rmark                  \* the release's mark in the table's history fence (erasure_release.mark_key)
 
-\* Everything but the ref door's and the faults.
+\* Everything but the ref door's, the mark and the faults.
 Base == <<retained, subj, head, tags, br, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl,
           rel, due, rpc, rplan, dropped, announced, toldDl, recDls, nfiled, tfiled, gone, deletedByRelease, clone, cloned, held,
           cut, copied, restored, dropDone, badDrop, releasedOn, reopened>>
-CVars == <<cpc, ckind, cver, cdl, cfiled, ctold, cowed, untold>>
-CKeep == UNCHANGED CVars
-vars == <<Base, faults, CVars>>
+CVars == <<cpc, ckind, cver, cdl, chold, cfiled, ctold, cput, moved, recut, bgone, untold>>
+CKeep == UNCHANGED CVars /\ UNCHANGED rmark
+vars == <<Base, faults, CVars, rmark>>
 
 Init ==
   /\ retained = {1, 2}
@@ -227,8 +269,10 @@ Init ==
   /\ cut = FALSE /\ copied = FALSE /\ restored = FALSE /\ dropDone = FALSE
   /\ badDrop = FALSE /\ releasedOn = TRUE /\ reopened = FALSE
   /\ faults = 0
-  /\ cpc = "idle" /\ ckind = "tag" /\ cver = 0 /\ cdl = "none"
-  /\ cfiled = {} /\ ctold = {} /\ cowed = {} /\ untold = FALSE
+  /\ cpc = "idle" /\ ckind = "tag" /\ cver = 0 /\ cdl = "none" /\ chold = FALSE
+  /\ cfiled = {} /\ ctold = {} /\ cput = [r \in CRefs |-> "none"]
+  /\ moved = FALSE /\ recut = FALSE /\ bgone = FALSE /\ untold = FALSE
+  /\ rmark = FALSE
 
 Fault   == faults < MaxFaults /\ faults' = faults + 1
 NoFault == faults' = faults
@@ -248,12 +292,15 @@ Evidence == HeadsClean /\ (\A v \in Residual : v # head /\ Pinned(v)) /\ ~CloneO
 Erased == (\A v \in retained : ~Holds(v)) /\ (\A b \in Branches : br[b].on => ~br[b].dirty)
 
 ReclaimRunning == \E p \in Verifiers : vpc[p] = "delete"
-ReleaseRunning == rpc # "idle"
-\* The ref door holds the table's history as a ref write from its read of the release to its last step.
-CreatorHolds == cpc # "idle"
-\* A ref another caller makes stands: tag t2, or branch C.
-Stands(r) == IF r = "t2" THEN tags["t2"] # 0 ELSE br["C"].on
-RefOf(k) == IF k = "tag" THEN "t2" ELSE "C"
+\* The release's tick holds the table's history from its plan to its last step; with G9 its finish is inside the hold.
+ReleaseRunning == rpc # "idle" /\ (FinishHeld \/ rpc \notin {"finish", "finish2"})
+\* The ref door holds the table's history from its read of the release until its ref is written (dataplane.create_tag and
+\* the rest); it sends after the hold has ended (ref_notices.putting_ref). A stalled door's hold may lapse meanwhile.
+CreatorHolds == cpc \in {"file", "land"} /\ chold
+RefOf(k) == CASE k = "tag" -> "t2" [] k = "branch" -> "C" [] k = "move" -> "t1" [] OTHER -> "B"
+IsTag(r) == r \in {"t2", "t1"}
+\* A ref stands where a door put it: a tag on main version `at`, a branch cut from main version `at` (0: from B).
+StandsAt(r, at) == IF IsTag(r) THEN tags[r] = at ELSE br[r].on /\ br[r].fork = at
 
 \* A filed notice lands, and a finish sends it, while the record stands, and with G5 only while it is the record the notice
 \* describes (RecordHeld with the record's due_at).
@@ -385,25 +432,28 @@ VSchedule(p) ==
   /\ vpc[p] = "schedule" /\ NoFault
   /\ IF Releasing(p)
        THEN IF ~rel.on
-              THEN IF ScheduleHeld /\ CreatorHolds
+              \* The scheduling's hold is refused beside a ref door's, and beside the release's own (which shares with nothing).
+              THEN IF ScheduleHeld /\ (CreatorHolds \/ ReleaseRunning)
                      THEN /\ vsettled' = [vsettled EXCEPT ![p] = FALSE] /\ nfiled' = nfiled \ Mine(p) /\ Go(p, "settle")
-                          /\ UNCHANGED <<rel, recDls, vdl>>
+                          /\ UNCHANGED <<rel, recDls, vdl, rmark>>
                      ELSE /\ rel' = [NoRel EXCEPT !.on = TRUE, !.refs = vpins[p], !.res = vres[p], !.dl = p]
+                          /\ rmark' = TRUE
                           /\ recDls' = recDls \cup {p}
                           /\ UNCHANGED <<vsettled, nfiled, vdl>> /\ Go(p, "notify")
               ELSE IF NoticeOfTheStanding
                      THEN /\ nfiled' = nfiled \ Mine(p) /\ Go(p, "nfile")
-                          /\ UNCHANGED <<rel, vsettled, vdl, recDls>>
-                     ELSE /\ UNCHANGED <<rel, recDls>>
+                          /\ UNCHANGED <<rel, vsettled, vdl, recDls, rmark>>
+                     ELSE /\ UNCHANGED <<rel, recDls, rmark>>
                           /\ vsettled' = [vsettled EXCEPT ![p] = vpins[p] \subseteq rel.refs]
                           /\ vdl' = [vdl EXCEPT ![p] = rel.dl]
                           /\ IF NoticeFiled /\ vpins[p] \subseteq rel.refs
                                THEN Go(p, "notify") /\ UNCHANGED nfiled
                                ELSE Go(p, "settle") /\ nfiled' = nfiled \ Mine(p)
-       ELSE UNCHANGED <<rel, vsettled, nfiled, vdl, recDls>> /\ Go(p, "settle")
+       ELSE UNCHANGED <<rel, vsettled, nfiled, vdl, recDls, rmark>> /\ Go(p, "settle")
   /\ UNCHANGED <<subj, live, followed, rpc, rplan, toldDl, deletedByRelease, clone, cloned, held, cut, copied, restored, dropDone>>
   /\ due' = (due /\ rel.on)
-  /\ NKeep
+  /\ UNCHANGED <<badDrop, tfiled, retained, head, tags, br, ob, vclean, vdel, vpins, vres, vdropped, vevid, dropped, announced, gone, releasedOn, reopened>>
+  /\ UNCHANGED CVars
 
 \* Then the notices, to the requester and the table's owners, naming the deadline it holds, and its filing is removed.
 VNotify(p) ==
@@ -455,45 +505,53 @@ FinishNotice ==
 \* The release tick (erasure_release._release), once the grace period has ended. It holds the history fence from its plan
 \* to its last step (A3); with G1 as a release, which no ref write shares.
 
-RUnchanged0 == UNCHANGED <<subj, head, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, dropped, announced,
-                          toldDl, recDls, nfiled, tfiled, clone, cloned, cut, copied, restored, dropDone, badDrop, releasedOn, reopened>>
-                          /\ UNCHANGED <<cpc, ckind, cver, cdl, cfiled, ctold, cowed>>
-RUnchanged == RUnchanged0 /\ UNCHANGED untold
+RFixed == UNCHANGED <<subj, head, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, dropped, announced,
+                     toldDl, recDls, nfiled, tfiled, clone, cloned, cut, copied, restored, dropDone, badDrop, releasedOn, reopened>>
+          /\ UNCHANGED <<cpc, ckind, cver, cdl, chold, cfiled, ctold, moved, recut, bgone>>
+RUnchanged == RFixed /\ UNCHANGED <<cput, untold, rmark>>
 
 GraceEnds ==
   /\ rel.on /\ ~due /\ NoFault
   /\ due' = TRUE
   /\ UNCHANGED <<retained, tags, br, rel, rpc, rplan, gone, deletedByRelease, held>> /\ RUnchanged
 
-\* G1: a branch stands on a residual: cut from one, or from a branch that does.
-Tainted(b) == Sweep /\ br[b].on /\ IF br[b].fork = 0 THEN br["B"].on /\ br["B"].fork \in rel.res ELSE br[b].fork \in rel.res
-TaintedSet == {b \in Branches : Tainted(b)}
-\* G1 takes every tag standing on a residual; with G4 never a registered clone's.
-ResidualTags == IF Sweep THEN {t \in Tags : tags[t] \in rel.res /\ (CloneWaits => t # "tc")} ELSE {}
 \* G4: a registered clone's tag on a residual holds the release.
 CloneHolds == CloneWaits /\ CloneOn(rel.res)
 
-\* The branches the release takes: those it names, those standing on a residual (G1), and with A1 every branch cut from
-\* one since.
-Subtree(named) == LET s == {b \in named : br[b].on} IN
-                  IF Reread /\ "B" \in s /\ br["C"].on /\ br["C"].fork = 0 THEN s \cup {"C"} ELSE s
 NamedBranches == {b \in Branches : <<"branch", b>> \in rel.refs}
 NamedTags     == {t \in Tags : <<"tag", t>> \in rel.refs}
 
+\* G8: THE ONE PREDICATE (erasure_release._taken), read off the table `tg` and `b` as they stand. A ref is taken while it
+\* stands on a residual (G1: a tag on one, a branch cut from one or from a branch that is), or, with A1, is cut from a
+\* branch the release takes. Without G1 only what the release recorded is taken, and still only while it stands so.
+\* Without G8 the release also takes every name it recorded, wherever it stands now. With G4 never a clone's tag.
+RecordedTag(t)    == rel.phase # "recreating" /\ t \in NamedTags \cup rel.tags
+RecordedBranch(x) == rel.phase # "recreating" /\ (x \in NamedBranches \/ x \in rel.plan)
+\* `byName`: the recorded names are taken wherever they stand, which only the release does, and only without G8.
+TakenTagsBy(tg, byName) ==
+  {t \in Tags : /\ tg[t] # 0 /\ (CloneWaits => t # "tc")
+                /\ \/ Sweep /\ tg[t] \in rel.res
+                   \/ RecordedTag(t) /\ (tg[t] \in rel.res \/ byName)}
+OnRes(b, x) == b[x].on /\ IF b[x].fork = 0 THEN b["B"].on /\ b["B"].fork \in rel.res ELSE b[x].fork \in rel.res
+Roots(b, byName) == {x \in Branches : b[x].on /\ ((Sweep /\ OnRes(b, x)) \/ (RecordedBranch(x) /\ (OnRes(b, x) \/ byName)))}
+TakenBranchesBy(b, byName) == LET s == Roots(b, byName) IN IF Reread /\ "B" \in s /\ b["C"].on /\ b["C"].fork = 0 THEN s \cup {"C"} ELSE s
+\* What the release takes; a door judges with byName FALSE, which is the same predicate whenever G8 holds.
+TakenTagsOf(tg) == TakenTagsBy(tg, ~PlacedOnly)
+TakenBranchesOf(b) == TakenBranchesBy(b, ~PlacedOnly)
+
 \* _plan and _claim: the plan read from the table now, recorded before any delete (A2). A resumed tick keeps what the
-\* record holds and adds what is new. One resumed once its deletes are done adds only what stands on a residual (G1).
+\* record holds and adds what is taken now.
 RClaim ==
-  LET fresh == Subtree(NamedBranches \cup rel.plan \cup TaintedSet)
-      ts == {t \in NamedTags \cup rel.tags : tags[t] # 0} \cup ResidualTags IN
+  LET fresh == TakenBranchesOf(br)
+      ts == TakenTagsOf(tags) IN
   /\ rel.on /\ due /\ rpc = "idle" /\ ~ReclaimRunning /\ NoFault
   /\ Fenced => ~CreatorHolds
   /\ NoticeFiled => nfiled = {}
   \* G6: the tick waits while a creator's notice is filed.
   /\ CreatorTold => cfiled = {}
   /\ ~CloneHolds
-  /\ untold' = (untold \/ \E x \in cowed : x \notin ctold /\ Stands(x.ref))
   /\ IF rel.phase = "recreating"
-       THEN /\ rel' = [rel EXCEPT !.plan = @ \cup TaintedSet]
+       THEN /\ rel' = [rel EXCEPT !.plan = @ \cup fresh]
             /\ UNCHANGED rplan /\ rpc' = IF Sweep THEN "delete" ELSE "recreate"
        ELSE IF PlanFirst
               THEN /\ rel' = [rel EXCEPT !.phase = "deleting", !.tags = @ \cup ts, !.plan = @ \cup fresh,
@@ -501,7 +559,7 @@ RClaim ==
                    /\ UNCHANGED rplan /\ rpc' = "delete"
               ELSE /\ rel' = [rel EXCEPT !.phase = "deleting", !.tags = @ \cup ts, !.at = IF rel.phase = "pending" THEN head ELSE @]
                    /\ rplan' = fresh /\ rpc' = "delete"
-  /\ UNCHANGED <<retained, tags, br, gone, deletedByRelease, due, held>> /\ RUnchanged0
+  /\ UNCHANGED <<retained, tags, br, gone, deletedByRelease, due, held>> /\ RUnchanged
 
 \* G4: held by a clone, the tick changes nothing, records why on the obligation and tells the release's people
 \* (_held_by_clones); a later tick reads again.
@@ -510,10 +568,9 @@ RHeld ==
   /\ held' = TRUE
   /\ UNCHANGED <<retained, tags, br, rel, rpc, rplan, gone, deletedByRelease, due>> /\ RUnchanged
 
-\* What a delete takes: before the recreates everything planned; after them only what stands on a residual (G1), since a
-\* branch already back stands where the release recreated it.
-DelTags     == IF rel.phase = "recreating" THEN ResidualTags ELSE rel.tags
-DelBranches(plan) == IF rel.phase = "recreating" THEN plan \cap TaintedSet ELSE plan
+\* What a delete takes: of what is planned, only what G8 takes now. A branch already back stands where the release
+\* recreated it, and a ref its owner moved off a residual, or cut again from clean history, stands where nothing is taken.
+DelBranches(plan) == plan \cap TakenBranchesOf(br)
 
 \* Lance refuses to delete a branch another branch is cut from (measured on pylance 12.0.0, erasure_release.py docstring):
 \* a plan that leaves such a child out fails its delete, and the tick hands its lease back (release_due).
@@ -524,16 +581,21 @@ RRefused ==
   /\ rpc' = "idle" /\ rplan' = {}
   /\ UNCHANGED <<retained, tags, br, rel, gone, deletedByRelease, due, held>> /\ RUnchanged
 
-\* _delete: every tag, then every branch leaf-first; one already gone is skipped.
+\* _delete: every tag, then every branch leaf-first; one already gone is skipped. What a creator is owed is read here,
+\* from what the release actually deletes: a ref a door put while this record stood, whose creator was not told of it.
 RDelete ==
-  LET plan == DelBranches(IF PlanFirst THEN rel.plan ELSE rplan) IN
+  LET plan == DelBranches(IF PlanFirst THEN rel.plan ELSE rplan)
+      dt == TakenTagsOf(tags)
+      taken == {r \in CRefs : IF IsTag(r) THEN r \in dt ELSE r \in plan /\ br[r].on} IN
   /\ rpc = "delete" /\ NoFault
   /\ ~Refused(plan)
-  /\ tags' = [t \in Tags |-> IF t \in DelTags THEN 0 ELSE tags[t]]
+  /\ tags' = [t \in Tags |-> IF t \in dt THEN 0 ELSE tags[t]]
   /\ br' = [b \in Branches |-> IF b \in plan THEN [br[b] EXCEPT !.on = FALSE] ELSE br[b]]
   /\ deletedByRelease' = deletedByRelease \cup {b \in plan : br[b].on}
+  /\ untold' = (untold \/ \E r \in taken : cput[r] = rel.dl /\ [ref |-> r, dl |-> rel.dl] \notin ctold)
+  /\ cput' = [r \in CRefs |-> IF r \in taken THEN "none" ELSE cput[r]]
   /\ rpc' = "mark"
-  /\ UNCHANGED <<retained, rel, rplan, gone, held>> /\ UNCHANGED due /\ RUnchanged
+  /\ UNCHANGED <<retained, rel, rplan, gone, held, rmark, due>> /\ RFixed
 
 \* The record moves to "recreating" (with A2 removed, the plan is written only now).
 RMark ==
@@ -542,7 +604,7 @@ RMark ==
   /\ rpc' = "recreate"
   /\ UNCHANGED <<retained, tags, br, rplan, gone, deletedByRelease, due, held>> /\ RUnchanged
 
-\* _recreate: each branch top-down at the recorded head; one cut from B comes back from B.
+\* _recreate: each branch top-down at the recorded head; one cut from B comes back from B; one standing is skipped.
 RRecreate ==
   /\ rpc = "recreate" /\ NoFault
   /\ br' = [b \in Branches |->
@@ -562,11 +624,20 @@ RReclaim ==
   /\ rpc' = "finish"
   /\ UNCHANGED <<tags, br, rel, rplan, deletedByRelease, due, held>> /\ RUnchanged
 
-\* _finish deletes the record.
+\* _finish, two deletes: with G9 the record and then the mark, inside the hold; without it after the hold has ended
+\* (FinishHeld), or the mark first (MarkFirst). The tick may die between the two.
+RecordGoes == rel' = NoRel /\ due' = FALSE /\ held' = FALSE /\ UNCHANGED rmark
+MarkGoes   == rmark' = FALSE /\ UNCHANGED <<rel, due, held>>
 RFinish ==
   /\ rpc = "finish" /\ NoFault
-  /\ rel' = NoRel /\ due' = FALSE /\ rpc' = "idle" /\ rplan' = {} /\ held' = FALSE
-  /\ UNCHANGED <<retained, tags, br, gone, deletedByRelease>> /\ RUnchanged
+  /\ IF MarkFirst THEN MarkGoes ELSE RecordGoes
+  /\ rpc' = "finish2"
+  /\ UNCHANGED <<retained, tags, br, rplan, gone, deletedByRelease, cput, untold>> /\ RFixed
+RFinish2 ==
+  /\ rpc = "finish2" /\ NoFault
+  /\ IF MarkFirst THEN RecordGoes ELSE MarkGoes
+  /\ rpc' = "idle" /\ rplan' = {}
+  /\ UNCHANGED <<retained, tags, br, gone, deletedByRelease, cput, untold>> /\ RFixed
 
 \* The tick dies or fails; its lease lapses (or it hands it back) and a later tick resumes from the record.
 RDies ==
@@ -588,52 +659,61 @@ Cleanup ==
 ---------------------------------------------------------------------------
 \* Other callers.
 
-Others == UNCHANGED <<vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, rel, due, rpc, rplan, dropped, announced, toldDl, recDls,
-                      nfiled, tfiled, gone, deletedByRelease, held, badDrop, releasedOn, reopened, ob>> /\ CKeep
+Others0 == UNCHANGED <<vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, rel, due, rpc, rplan, dropped, announced, toldDl, recDls,
+                       nfiled, tfiled, gone, deletedByRelease, held, badDrop, releasedOn, reopened, ob>>
+Others == Others0 /\ CKeep
 
-\* create_tag and create_branch (C cut from main or from B), one door at a time, under the history fence as a ref write
-\* from its read of the release to its last step (A3): never while a reclaim runs, nor (G1) while a release does. The door
-\* reads the release that stands and judges whether it takes the ref; with G6 it files the creator's notice first, landed
-\* once the ref and that record stand, and sends it after the ref; without G6 it sends it after the ref, filing nothing.
-\* Whether the release that stands takes the ref k made on main version v (0: C cut from B), as its next tick reads the
-\* table (erasure_release.takes, the same reading as _plan): a tag or a branch on a residual, or a branch cut from one the
-\* release takes.
-TaintedAt(v) == Sweep /\ IF v = 0 THEN br["B"].on /\ br["B"].fork \in rel.res ELSE v \in rel.res
+\* The ref doors: create_tag of t2, create_branch of C (cut from main or from B), and, where Moves, update_tag of t1 and
+\* create_branch of B once another caller deleted it. One door at a time, under the history fence as a ref write from its
+\* read of the release until its ref is written (A3): never while a reclaim runs, nor (G1) while a release does. The door
+\* lists the fence's directory: where the release's mark stands it reads the record, and judges whether the release takes
+\* the ref by G8, the same predicate the release's delete runs, over the table as it will stand with the ref put
+\* (erasure_release.takes). With G6 it files the creator's notice first, landed once the ref stands where it is put and
+\* that record stands, and sends it after its hold has ended; without G6 it sends after the ref, filing nothing. A mark
+\* whose record is gone is removed. With G11 the door confirms its hold before the ref: one whose hold lapsed while it
+\* stalled writes nothing and removes its filing (a refusal, judged at once).
+NewBranch(v) == IF v = 0 THEN [on |-> TRUE, fork |-> 0, dirty |-> br["B"].dirty] ELSE [on |-> TRUE, fork |-> v, dirty |-> Holds(v)]
 Takes(k, v) ==
-  /\ rel.on
-  /\ IF k = "tag" THEN Sweep /\ v \in rel.res
-     ELSE \/ TaintedAt(v)
-          \/ v = 0 /\ rel.phase # "recreating" /\ Reread /\ br["B"].on /\ ("B" \in NamedBranches \/ "B" \in rel.plan \/ Tainted("B"))
+  /\ rmark /\ rel.on
+  /\ IF IsTag(RefOf(k))
+       THEN RefOf(k) \in TakenTagsBy([tags EXCEPT ![RefOf(k)] = v], FALSE)
+       ELSE RefOf(k) \in TakenBranchesBy([br EXCEPT ![RefOf(k)] = NewBranch(v)], FALSE)
 
 CStill == UNCHANGED Base
 
 CBegin(k, v) ==
   /\ cpc = "idle" /\ live /\ NoFault
-  /\ IF k = "tag"
-       THEN CopyTags /\ ~copied /\ v \in retained /\ (Fenced => ~ReclaimRunning /\ (Sweep => ~ReleaseRunning))
-       ELSE /\ Cuts # "none" /\ ~cut /\ ~br["C"].on /\ (Fenced => ~ReclaimRunning /\ ~ReleaseRunning)
-            /\ IF Cuts = "B" THEN v = 0 /\ br["B"].on ELSE v \in retained
-  /\ ckind' = k /\ cver' = v
+  /\ CASE k = "tag"    -> CopyTags /\ ~copied /\ v \in retained /\ (Fenced => ~ReclaimRunning /\ (Sweep => ~ReleaseRunning))
+       [] k = "move"   -> Moves /\ ~moved /\ tags["t1"] # 0 /\ v \in retained /\ (Fenced => ~ReclaimRunning /\ ~ReleaseRunning)
+       [] k = "recut"  -> Moves /\ ~recut /\ HasBranch /\ ~br["B"].on /\ v \in retained /\ (Fenced => ~ReclaimRunning /\ ~ReleaseRunning)
+       [] OTHER        -> /\ Cuts # "none" /\ ~cut /\ ~br["C"].on /\ (Fenced => ~ReclaimRunning /\ ~ReleaseRunning)
+                          /\ IF Cuts = "B" THEN v = 0 /\ br["B"].on ELSE v \in retained
+  /\ ckind' = k /\ cver' = v /\ chold' = TRUE
   /\ cdl' = IF Takes(k, v) THEN rel.dl ELSE "none"
   /\ cpc' = IF CreatorTold /\ Takes(k, v) THEN "file" ELSE "land"
-  /\ UNCHANGED <<cfiled, ctold, cowed, untold>> /\ CStill
+  /\ rmark' = (rmark /\ rel.on)
+  /\ UNCHANGED <<cfiled, ctold, cput, moved, recut, bgone, untold>> /\ CStill
 
 CFile ==
   /\ cpc = "file" /\ NoFault
-  /\ cfiled' = cfiled \cup {[by |-> "door", ref |-> RefOf(ckind), dl |-> cdl]}
+  /\ cfiled' = cfiled \cup {[by |-> "door", ref |-> RefOf(ckind), at |-> cver, dl |-> cdl]}
   /\ cpc' = "land"
-  /\ UNCHANGED <<ckind, cver, cdl, ctold, cowed, untold>> /\ CStill
+  /\ UNCHANGED <<ckind, cver, cdl, chold, ctold, cput, moved, recut, bgone, untold, rmark>> /\ CStill
 
 CLand ==
   /\ cpc = "land" /\ NoFault
-  /\ IF ckind = "tag"
-       THEN tags' = [tags EXCEPT !["t2"] = cver] /\ copied' = TRUE /\ UNCHANGED <<br, cut>>
-       ELSE /\ br' = [br EXCEPT !["C"] = IF cver = 0 THEN [on |-> TRUE, fork |-> 0, dirty |-> br["B"].dirty]
-                                                    ELSE [on |-> TRUE, fork |-> cver, dirty |-> Holds(cver)]]
-            /\ cut' = TRUE /\ UNCHANGED <<tags, copied>>
-  /\ cowed' = IF Takes(ckind, cver) THEN cowed \cup {[ref |-> RefOf(ckind), dl |-> rel.dl]} ELSE cowed
-  /\ cpc' = IF cdl # "none" THEN "send" ELSE "idle"
-  /\ UNCHANGED <<ckind, cver, cdl, cfiled, ctold, untold>>
+  /\ IF RefConfirmed /\ ~chold
+       THEN /\ cfiled' = {f \in cfiled : f.by # "door"} /\ cpc' = "idle"
+            /\ UNCHANGED <<tags, br, cut, copied, cput, moved, recut>>
+       ELSE /\ CASE ckind = "tag"  -> tags' = [tags EXCEPT !["t2"] = cver] /\ copied' = TRUE /\ UNCHANGED <<br, cut, moved, recut>>
+                 [] ckind = "move" -> tags' = [tags EXCEPT !["t1"] = cver] /\ moved' = TRUE /\ UNCHANGED <<br, cut, copied, recut>>
+                 [] OTHER          -> /\ br' = [br EXCEPT ![RefOf(ckind)] = NewBranch(cver)] /\ UNCHANGED <<tags, copied, moved>>
+                                      /\ IF ckind = "recut" THEN recut' = TRUE /\ UNCHANGED cut ELSE cut' = TRUE /\ UNCHANGED recut
+            \* The ref is the door's, put while the record with this deadline stood (or none did).
+            /\ cput' = [cput EXCEPT ![RefOf(ckind)] = IF rel.on THEN rel.dl ELSE "none"]
+            /\ cpc' = IF cdl # "none" THEN "send" ELSE "idle"
+            /\ UNCHANGED cfiled
+  /\ UNCHANGED <<ckind, cver, cdl, chold, ctold, bgone, untold, rmark>>
   /\ UNCHANGED <<retained, subj, head, live, followed, clone, cloned, restored, dropDone, vpc, vclean, vdel, vpins, vres, vsettled,
                  vdropped, vevid, vdl, rel, due, rpc, rplan, dropped, announced, toldDl, recDls, nfiled, tfiled, gone,
                  deletedByRelease, held, badDrop, releasedOn, reopened, ob>>
@@ -643,22 +723,43 @@ CSend ==
   /\ ctold' = ctold \cup {[ref |-> RefOf(ckind), dl |-> cdl]}
   /\ cfiled' = {f \in cfiled : f.by # "door"}
   /\ cpc' = "idle"
-  /\ UNCHANGED <<ckind, cver, cdl, cowed, untold>> /\ CStill
+  /\ UNCHANGED <<ckind, cver, cdl, chold, cput, moved, recut, bgone, untold, rmark>> /\ CStill
 
 \* The door ends between two steps; what it filed stands, and its hold lapses.
 CDies ==
   /\ cpc # "idle" /\ Fault
   /\ cfiled' = {IF f.by = "door" THEN [f EXCEPT !.by = "left"] ELSE f : f \in cfiled}
   /\ cpc' = "idle"
-  /\ UNCHANGED <<ckind, cver, cdl, ctold, cowed, untold>> /\ CStill
+  /\ UNCHANGED <<ckind, cver, cdl, chold, ctold, cput, moved, recut, bgone, untold, rmark>> /\ CStill
 
-\* The finish sends what a dead door filed, where its ref and the record with its deadline stand, and removes the filing.
+\* A door stalls with its hold standing: its renewals stop and the hold lapses while it is still at work. A stall counts
+\* as a failure, so a behaviour has as many as MaxFaults allows.
+CLapse ==
+  /\ StalledDoors /\ cpc \in {"file", "land"} /\ chold /\ Fault
+  /\ chold' = FALSE
+  /\ UNCHANGED <<cpc, ckind, cver, cdl, cfiled, ctold, cput, moved, recut, bgone, untold, rmark>> /\ CStill
+
+\* The finish sends what a door filed, where its ref stands where the door put it and the record with its deadline stands,
+\* and removes the filing: a dead door's, or (StalledDoors) one whose door stalled past the filings' lease. With G10 it
+\* judges only while it holds the table's history as a scheduling, which a ref door's hold and a release refuse.
 FinishCreator ==
   /\ \E f \in cfiled :
-       /\ f.by = "left" /\ NoFault
-       /\ ctold' = IF Stands(f.ref) /\ rel.on /\ rel.dl = f.dl THEN ctold \cup {[ref |-> f.ref, dl |-> f.dl]} ELSE ctold
+       /\ f.by = "left" \/ StalledDoors
+       /\ FinishFenced => ~CreatorHolds /\ ~ReleaseRunning
+       /\ NoFault
+       /\ ctold' = IF StandsAt(f.ref, f.at) /\ rel.on /\ rel.dl = f.dl THEN ctold \cup {[ref |-> f.ref, dl |-> f.dl]} ELSE ctold
        /\ cfiled' = cfiled \ {f}
-  /\ UNCHANGED <<cpc, ckind, cver, cdl, cowed, untold>> /\ CStill
+  /\ UNCHANGED <<cpc, ckind, cver, cdl, chold, cput, moved, recut, bgone, untold, rmark>> /\ CStill
+
+\* Another caller deletes B (branches/delete takes no hold): Lance refuses while a branch is cut from it or a tag names it
+\* (lance_docs/lance/guide/tags_and_branches.md, "A branch cannot be deleted while other branches or tags reference it";
+\* no tag here stands on a branch). Before the release takes anything: EveryReleasedBranchComesBack judges the release, not
+\* an owner deleting a branch the release gave back.
+DeleteB ==
+  /\ Moves /\ ~bgone /\ live /\ br["B"].on /\ ~(br["C"].on /\ br["C"].fork = 0) /\ deletedByRelease = {} /\ rpc = "idle" /\ NoFault
+  /\ br' = [br EXCEPT !["B"].on = FALSE] /\ bgone' = TRUE /\ cput' = [cput EXCEPT !["B"] = "none"]
+  /\ UNCHANGED <<retained, subj, head, tags, live, followed, clone, cloned, cut, copied, restored, dropDone>> /\ Others0
+  /\ UNCHANGED <<cpc, ckind, cver, cdl, chold, cfiled, ctold, moved, recut, untold, rmark>>
 
 \* register_table of a shallow clone of a retained version: the catalog tags it under the history fence as a ref write
 \* (clone_sources.take_tags), never while a reclaim or a release runs.
@@ -702,7 +803,7 @@ Follow ==
 VRun(p) == VHeads(p) \/ VTagFile(p) \/ VTagDrop(p) \/ VReclaimRead(p) \/ VReclaimDelete(p) \/ VVerify(p)
            \/ VEmit(p) \/ VNoticeFile(p) \/ VSchedule(p) \/ VNotify(p) \/ VSettle(p)
 VSteps(p) == VStart(p) \/ VRun(p)
-RSteps == RClaim \/ RHeld \/ RDelete \/ RRefused \/ RMark \/ RRecreate \/ RReclaim \/ RFinish
+RSteps == RClaim \/ RHeld \/ RDelete \/ RRefused \/ RMark \/ RRecreate \/ RReclaim \/ RFinish \/ RFinish2
 
 Work ==
   \/ JobMain \/ \E b \in Branches : JobBranch(b)
@@ -715,9 +816,9 @@ Work ==
 Next ==
   \/ Work
   \/ \E p \in Verifiers : VDies(p)
-  \/ RDies \/ CDies
+  \/ RDies \/ CDies \/ CLapse \/ DeleteB
   \/ \E v \in Versions : RegisterClone(v)
-  \/ \E k \in {"tag", "branch"}, v \in Versions \cup {0} : CBegin(k, v)
+  \/ \E k \in {"tag", "branch", "move", "recut"}, v \in Versions \cup {0} : CBegin(k, v)
   \/ Restore \/ Drop
 
 Fair ==
@@ -766,9 +867,13 @@ OnlyTagsOverTheSubjectAreDropped == ~badDrop
 \* People are told only of a release the catalog recorded, and only with the deadline a recorded release names (G5).
 NoticeOnlyForARecordedRelease == toldDl \subseteq recDls /\ \A x \in ctold : x.dl \in recDls
 
-\* Whoever made a ref the release takes, once its record stood, was told of it, with that record's deadline, before the
-\* release ran (G6, G7).
+\* Whoever put a ref the release deletes, while its record stood, was told of it, with that record's deadline, before the
+\* delete (G6, G7, G8, G10, G11). What is owed is read off the release's own delete (RDelete), never off the door's
+\* judgement.
 ACreatorIsToldBeforeTheRelease == ~untold
+
+\* No release's record stands without its mark, which is how every ref door finds it (G9).
+ARecordHasItsMark == rel.on => rmark
 
 \* The release brings back every branch it deleted, once it has finished.
 EveryReleasedBranchComesBack == (~rel.on /\ deletedByRelease # {}) => \A b \in deletedByRelease : br[b].on
@@ -784,10 +889,10 @@ ErasedOnceReleased == (ob = "released") ~> Erased
 EveryObligationIsReleased == <>(ob = "released")
 \* A recorded release is finished, whatever tick dies.
 EveryReleaseFinishes == rel.on ~> ~rel.on
-\* Everyone a release costs is told of it, with the deadline its record names, before it runs.
-EveryoneIsTold ==
-  /\ \A d \in Verifiers : (d \in recDls) ~> (d \in toldDl)
-  /\ \A r \in {"t2", "C"}, d \in Verifiers : ([ref |-> r, dl |-> d] \in cowed) ~> ([ref |-> r, dl |-> d] \in ctold \/ ~Stands(r))
+\* Everyone a recorded release names is told of it, with the deadline its record names. (A ref's creator is the safety
+\* invariant ACreatorIsToldBeforeTheRelease, judged at the release's own delete; a filing that would hold the tick for
+\* good fails EveryReleaseFinishes.)
+EveryoneIsTold == \A d \in Verifiers : (d \in recDls) ~> (d \in toldDl)
 \* Every tag a verification deletes is announced.
 EveryDroppedTagIsAnnounced == \A t \in Tags : (t \in dropped) ~> (t \in announced)
 \* A release a clone holds says so, unless the clone ends or the release finishes first (G4).

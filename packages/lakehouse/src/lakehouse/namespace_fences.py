@@ -79,6 +79,7 @@ class NamespaceFence(HolderFence):
     log_name: ClassVar[str] = "namespace_fence"
     stored_field: ClassVar[str] = "name"
     holder_model: ClassVar[type[HolderRecord]] = NamespaceHolder
+    kinds: ClassVar[frozenset[str]] = frozenset(NamespaceWork)
 
     name: str
 

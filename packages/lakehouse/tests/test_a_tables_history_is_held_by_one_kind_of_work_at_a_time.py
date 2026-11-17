@@ -3,26 +3,33 @@
 The doors' side, a ref write refused while a reclaim holds the fence and every reclaim refused while a ref write does,
 is pinned in ``services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py`` and
 ``tests/integration/test_no_reclaim_deletes_a_version_while_a_ref_is_written.py``; that many ref writes share it through
-the tag door, on a real S3 store, in ``tests/integration/test_a_tables_ref_writes_share_its_history.py``. Here, on a
-local control root, the fence's own rules: holders of one kind share it, each holding an object of its own (ADR 0233
-§9), a hold that lapsed because its holder crashed does not refuse the other kind, and a released hold frees it.
+the tag door, on a real S3 store, in ``tests/integration/test_a_tables_ref_writes_share_its_history.py``. Here the
+fence's own rules: holders of one kind share it, each holding an object of its own (ADR 0233 §9), a hold that lapsed
+because its holder crashed does not refuse the other kind, a released hold frees it, what a lower tier plants below it
+holds no more than its key names, and two takes that exclude each other never both hold it, the last on a local root and,
+in the lane that names an S3 store (``scripts/lifecycle_on_rustfs_check.sh``), on that store.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import threading
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from lakehouse import history_fences, records, stored_objects
-from lakehouse.fences import FenceUnreadableError
-from lakehouse.history_fences import HistoryHolder, HistoryWork, TableHistory
+from lakehouse.history_fences import HistoryFencedError, HistoryHolder, HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
 
 
 _UUID = "5f0e9c3a-8b1d-4e2f-a6c7-0d9b8e7f6a5c"
+_STORE = os.environ.get("RASK_LIFECYCLE_STORE_ENDPOINT", "")
 
 type Before = Callable[[TableHistory, pytest.MonkeyPatch], None]
 
@@ -68,12 +75,99 @@ def test_a_take_joins_a_hold_of_its_own_kind_or_replaces_a_lapsed_one(
     assert sorted(held) == held_by
 
 
-def test_a_holder_that_does_not_parse_is_refused_by_name(tmp_path: Path) -> None:
+#: What a writer of ``<directory>/reclaim-*`` can plant below a table's fence directory, and what a ref write's take reads
+#: of it: (where, body, the kind the take is refused by, the marks it is handed). A table's maintain-tier vend may put any
+#: of these (measured on RustFS 1.0.3, ADR 0233 §9; ``tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py``).
+_ID = "0" * 32
+_PLANTED = {
+    "a-reclaim-name-whose-body-is-no-json": (f"reclaim-{_ID}.json", b"not json", "reclaim", frozenset()),
+    "a-reclaim-name-claiming-a-release-until-2099": (
+        f"reclaim-{_ID}.json",
+        json.dumps(
+            {"uuid": _UUID, "holder": {"token": "x", "work": "release", "taken_at": "2026-01-01T00:00:00Z", "expires_at": "2099-01-01T00:00:00Z"}}
+        ).encode(),
+        "reclaim",
+        frozenset(),
+    ),
+    "a-mark-below-a-subdirectory": (f"reclaim-x/erasure-release.{'1' * 32}.json", b"{}", None, frozenset()),
+    "a-release-hold-below-a-subdirectory": (f"reclaim-x/release-{_ID}.json", b"{}", None, frozenset()),
+    "a-name-the-fence-does-not-define": ("reclaim-zz.json", b"{}", None, frozenset()),
+}
+
+
+@pytest.mark.parametrize("planted", list(_PLANTED), ids=list(_PLANTED))
+def test_what_is_planted_below_the_fence_holds_at_most_what_its_key_names_until_it_lapses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, planted: str
+) -> None:
+    # A take judges only the names the fence defines, directly in its directory, a holder's kind by its key whatever its
+    # body says (F3 of specs/catalog/Fence.tla): a body that does not parse, or claims another kind and a later end, holds
+    # a reclaim's hold, refusing a ref write 409 and never 500, and a mark or a holder's name below a subdirectory is
+    # nothing. Whatever was planted is swept once it has stood a hold on the store's clock.
     history = TableHistory(control_root=str(tmp_path), storage_options={}, table_uuid=_UUID)
-    key = f"{history.directory}/{HistoryWork.RECLAIM}-{'0' * 32}.json"
-    records.create_json(history.control_root, StorageOptions(), key, {"uuid": _UUID, "holder": "every one"})
+    name, body, refused_by, marks = _PLANTED[planted]
+    path = tmp_path / history.directory / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
 
-    with pytest.raises(FenceUnreadableError) as refused:
-        history.take(HistoryWork.REFS)
+    try:
+        with history.hold_for(HistoryWork.REFS, renewed=False) as hold:
+            seen: tuple[str | None, frozenset[tuple[str, str]]] = (None, hold.marks)
+    except HistoryFencedError as exc:
+        seen = (str(exc).split()[1], frozenset())
+    with monkeypatch.context() as lapsed:
+        lapsed.setattr(history_fences, "HOLD", timedelta(0))
+        history.release(history.take(HistoryWork.RECLAIM))
+    left = [listed.path for listed in stored_objects.list_under(f"{tmp_path}/{history.directory}", StorageOptions())]
 
-    assert key in str(refused.value), f"the refusal does not name the holder: {refused.value}"
+    assert (seen, left) == ((refused_by, marks), []), f"a ref write's take read {seen}, and once it lapsed {left} still stood"
+
+
+@pytest.fixture(params=["dir", "s3"] if _STORE else ["dir"])
+def control_root(request: pytest.FixtureRequest, tmp_path: Path) -> tuple[str, StorageOptions]:
+    """A control root on the local root and, where a lane names an S3 store (``scripts/lifecycle_on_rustfs_check.sh``), in a
+    bucket of the test's own there, whose conditional writes and listings arbitrate the fence."""
+    if request.param == "dir":
+        return str(tmp_path), StorageOptions()
+    import boto3
+
+    bucket = f"fence-{uuid.uuid4().hex[:12]}"
+    access, secret = os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"]
+    boto3.client("s3", endpoint_url=_STORE, region_name="us-east-1", aws_access_key_id=access, aws_secret_access_key=secret).create_bucket(Bucket=bucket)
+    options = StorageOptions.from_flat({"aws_access_key_id": access, "aws_secret_access_key": secret, "aws_region": "us-east-1"}).with_endpoint(_STORE)
+    return f"s3://{bucket}", options
+
+
+def test_two_takes_that_exclude_each_other_never_both_hold_the_fence(control_root: tuple[str, StorageOptions], monkeypatch: pytest.MonkeyPatch) -> None:
+    # F1 of specs/catalog/Fence.tla: a ref write and a reclaim each list the directory empty, each write their own object,
+    # and only then list again. The second listing shows each the other, so at most one holds the fence; without it both
+    # would, and a tag could name a version the reclaim deletes.
+    root, options = control_root
+    history = TableHistory(control_root=root, storage_options=options, table_uuid=_UUID)
+    listed, written = threading.Barrier(2, timeout=30), threading.Barrier(2, timeout=30)
+    real = TableHistory._excluding
+
+    def _in_step(fence: TableHistory, work: str, *, mine: str | None) -> Any:
+        if mine is not None:
+            written.wait()
+        found = real(fence, work, mine=mine)
+        if mine is None:
+            listed.wait()
+        return found
+
+    monkeypatch.setattr(TableHistory, "_excluding", _in_step)
+    held: list[HistoryWork] = []
+
+    def _take(work: HistoryWork) -> None:
+        try:
+            history.take(work)
+        except HistoryFencedError:
+            return
+        held.append(work)
+
+    takers = [threading.Thread(target=_take, args=(work,)) for work in (HistoryWork.REFS, HistoryWork.RECLAIM)]
+    for taker in takers:
+        taker.start()
+    for taker in takers:
+        taker.join(timeout=60)
+
+    assert len(held) < 2, f"a ref write and a reclaim both hold the table's history: {held}"

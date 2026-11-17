@@ -67,7 +67,7 @@ from lakehouse.storage_options import StorageOptions
 
 PREFIX: Final = control_prefixes.HISTORY_FENCES
 
-__all__ = ["HOLD", "PREFIX", "HistoryFencedError", "HistoryHolder", "HistoryWork", "Holder", "TableHistory", "end", "fence_directory"]
+__all__ = ["HOLD", "PREFIX", "RELEASE_MARK", "HistoryFencedError", "HistoryHolder", "HistoryWork", "Holder", "TableHistory", "end", "fence_directory"]
 
 
 def fence_directory(table_uuid: str) -> str:
@@ -108,6 +108,10 @@ class HistoryWork(StrEnum):
     SCHEDULE = "schedule"
 
 
+#: The kind of an erasure release's mark in a table's fence directory (``catalog.services.erasure_release.mark_key``): the
+#: one mark a take hands its holder, and one only the catalog's own credential can write.
+RELEASE_MARK: Final = "erasure-release"
+
 #: The kinds that keep refs off the table's history while they hold it: they delete versions, or write what a ref write
 #: must see before it lands. They share it with their own kind and with each other.
 _REF_FREE: Final = frozenset({HistoryWork.RECLAIM, HistoryWork.SCHEDULE})
@@ -138,13 +142,18 @@ class TableHistory(HolderFence):
     """Where one table's history fence is kept: the control root, the credential that writes there, and the table's uuid.
 
     A maintain-tier vend reaches this directory and no other of the control root: it lists it, reads every object in it,
-    and writes and deletes only a reclaim's holder objects (``catalog.core.vending.TableRecords``), so a lapsed holder of
-    another kind is swept by the catalog's next take, never by maintenance. It ends with the table (:func:`end`).
+    and puts and deletes every key below ``reclaim-`` (``catalog.core.vending.TableRecords``), which is a reclaim's holder
+    objects and, since an IAM ``*`` matches ``/``, any name in a subdirectory below one. A take judges only the names this
+    fence defines directly in the directory, a holder's kind by its key (:class:`lakehouse.fences.HolderFence`), so what
+    the vend can plant is at most a reclaim's hold, for one hold; a lapsed holder of another kind, and whatever was planted,
+    is swept by the catalog's next take. It ends with the table (:func:`end`).
     """
 
     log_name: ClassVar[str] = "history_fence"
     stored_field: ClassVar[str] = "uuid"
     holder_model: ClassVar[type[HolderRecord]] = HistoryHolder
+    kinds: ClassVar[frozenset[str]] = frozenset(HistoryWork)
+    mark_kinds: ClassVar[frozenset[str]] = frozenset({RELEASE_MARK})
 
     table_uuid: str
 

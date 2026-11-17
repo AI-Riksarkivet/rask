@@ -142,12 +142,13 @@ def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool
     """IAM's verdict on ``action`` over ``bucket/key``, by moto's evaluator.
 
     moto turns a Resource into a regex without escaping it, so the ``$`` a table directory carries would
-    read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike.
+    read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike. IAM's ``?`` (any one
+    character) is left as a regex quantifier, which a run of them makes invalid, so it becomes the regex's ``.``.
     """
     from catalog.core.vending import NEVER_OVER_A_SEALED_FILE
 
     unsealed = {**policy, "Statement": [statement for statement in policy["Statement"] if statement.get("Sid") != NEVER_OVER_A_SEALED_FILE["Sid"]]}
-    document = json.dumps(unsealed).replace("$", "~")
+    document = json.dumps(unsealed).replace("$", "~").replace("?", ".")
     return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 
@@ -211,8 +212,8 @@ def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(
     """The reclaim holds its table's history fence and forgets the records of its committed files under the vend
     (`lakehouse.history_fences`, `lakehouse.file_identities`), so the vend reaches those two of its own table; it puts no
     committed-file record, since one it could put would record a replaced file as committed, and reaches no other table's.
-    Of the fence's directory it reads every object and writes and deletes only a reclaim's own holder objects: never a ref
-    writer's hold, nor the mark of a scheduled erasure release (ADR 0233 §9). The control root here is the table's bucket;
+    Of the fence's directory it reads every object and writes and deletes only keys of a reclaim's holder's shape: never a
+    ref writer's hold, nor the mark of a scheduled erasure release, nor a mark below a subdirectory (ADR 0233 §9). The control root here is the table's bucket;
     its listing is scoped by an `s3:prefix` condition this evaluator does not read, which RustFS enforces (measured, ADR
     0233 §9)."""
     mine, other = estate.table_uuid(), uuid.uuid4().hex
@@ -229,6 +230,7 @@ def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(
         "removes-no-ref-writers-hold": ("s3:DeleteObject", f"{fence}/refs-{token}.json"),
         "rewrites-no-release-mark": ("s3:PutObject", f"{fence}/erasure-release.{token}.json"),
         "removes-no-release-mark": ("s3:DeleteObject", f"{fence}/erasure-release.{token}.json"),
+        "plants-no-mark-below-a-subdirectory": ("s3:PutObject", f"{fence}/reclaim-x/erasure-release.{token}.json"),
         "holds-no-other-fence": ("s3:PutObject", f"{history_fences.fence_directory(other)}/reclaim-{token}.json"),
         "forgets-no-other-records": ("s3:DeleteObject", f"{file_identities.records_of(other)}/txn.json"),
     }
@@ -242,6 +244,7 @@ def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(
         "removes-no-ref-writers-hold": False,
         "rewrites-no-release-mark": False,
         "removes-no-release-mark": False,
+        "plants-no-mark-below-a-subdirectory": False,
         "holds-no-other-fence": False,
         "forgets-no-other-records": False,
     }, policy

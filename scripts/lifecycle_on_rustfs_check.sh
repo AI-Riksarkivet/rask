@@ -10,7 +10,8 @@
 # of its own. The catalog writes under that root pair: what is checked is how the store arbitrates the writes, not whose
 # identity makes them (the governance-chain lane checks that). The stock client's cases write with the credential the
 # catalog vends them and no other key: a session the store's STS issues, under the catalog's session policy, to a user of
-# the run's own holding the catalog's canned policy (race_catalog). Stops the store at the end; KEEP_UP=1 leaves it running
+# the run's own holding the catalog's canned policy (race_catalog); the maintain vend's test writes under the credential
+# the catalog's own session policy vends. Stops the store at the end; KEEP_UP=1 leaves it running
 # and prints the environment a test run needs.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -58,4 +59,7 @@ uv run --no-sync pytest \
   tests/integration/test_a_stock_create_and_a_catalog_create_of_one_name_never_both_land.py \
   tests/integration/test_a_tables_ref_writes_share_its_history.py \
   tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py \
+  packages/lakehouse/tests/test_a_tables_history_is_held_by_one_kind_of_work_at_a_time.py \
   -k s3 -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"
+# The maintain vend's own credential, which only this lane's store can mint (ADR 0233 §9): every case is the store's.
+uv run --no-sync pytest tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py -p no:cacheprovider -rA "$@"

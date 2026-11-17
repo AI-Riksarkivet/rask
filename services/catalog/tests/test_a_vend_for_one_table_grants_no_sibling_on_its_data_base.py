@@ -82,9 +82,10 @@ def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool
     """IAM's verdict on ``action`` over ``bucket/key``, by moto's evaluator.
 
     moto turns a Resource into a regex without escaping it, so the ``$`` a table directory carries would
-    read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike.
+    read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike. IAM's ``?`` (any one
+    character) is left as a regex quantifier, which a run of them makes invalid, so it becomes the regex's ``.``.
     """
-    document = json.dumps(policy).replace("$", "~")
+    document = json.dumps(policy).replace("$", "~").replace("?", ".")
     return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 

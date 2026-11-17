@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
@@ -44,7 +45,9 @@ from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from lakehouse.history_fences import HistoryFencedError
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.records import read_json
 from lakehouse.storage_options import StorageOptions
 
 
@@ -248,6 +251,14 @@ def test_a_released_erasure_whose_release_ran_leaves_the_subject_on_no_ref(
     assert 2 not in versions, f"the release ran and version 2 stands ({versions}); the {ref} write answered {answered}, tags {dataset.tags.list()}"
 
 
+#: What the creator's door does, and whether the release takes the ref it leaves (G8): each case's ref on the table once
+#: the release has run, where it does not.
+_LEFT_ALONE = {"its-owner-moves-the-pinning-tag", "cut-again-from-clean-history"}
+#: The cases whose caller's door fails with its outcome unknown, and whose ref did not land: another caller's of the same
+#: name and place stands, written before this door filed.
+_NOT_THEIRS = {"its-door-fails-beside-another-callers-tag"}
+
+
 @pytest.mark.parametrize(
     ("ref", "when"),
     [
@@ -255,6 +266,11 @@ def test_a_released_erasure_whose_release_ran_leaves_the_subject_on_no_ref(
         pytest.param("branch", "in-the-grace", id="a-branch-cut-in-the-grace"),
         pytest.param("tag", "its-door-fails-after-the-ref", id="its-door-fails-after-the-tag"),
         pytest.param("tag", "while-the-release-is-recorded", id="a-tag-written-while-the-release-is-recorded"),
+        pytest.param("tag", "its-owner-moves-the-pinning-tag", id="the-pinning-tag-moved-onto-a-clean-version"),
+        pytest.param("branch", "cut-again-from-clean-history", id="a-branch-deleted-and-cut-again-from-clean-history"),
+        pytest.param("tag", "its-name-is-taken", id="a-tag-refused-because-another-callers-stands-there"),
+        pytest.param("tag", "its-door-fails-after-the-write-lands", id="a-tag-whose-write-lands-and-whose-door-fails"),
+        pytest.param("tag", "its-door-fails-beside-another-callers-tag", id="a-tag-whose-door-fails-unwritten-beside-another-callers"),
     ],
 )
 def test_whoever_puts_a_ref_the_release_takes_is_told_before_it_runs(
@@ -267,19 +283,24 @@ def test_whoever_puts_a_ref_the_release_takes_is_told_before_it_runs(
     # The owner's ruling (ADR 0233 §9): another caller puts a tag on version 2, or cuts a branch from it, and the release
     # will take it. The ref door reads the release its hold's take found marked, files the caller's notice before the ref
     # and sends it after (G6): a door that fails after its ref leaves the notice to the finish, and the release waits for
-    # it. A ref written while the verification records the release meets its hold (G7): it is refused, or told.
+    # it. A ref written while the verification records the release meets its hold (G7): it is refused, or told. A door the
+    # store refused (the name is another caller's) tells nobody; one whose outcome is unknown tells its caller once its ref
+    # stands where it put it, written since it filed, and nobody for another caller's written before. The release takes a ref only while it pins the residual (G8): a pinning tag moved onto a clean version, or a
+    # branch cut again from clean history after a tick that died recorded it, stays, its caller untold, and the residual
+    # version is reclaimed all the same.
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
     emitter, clock = _Recorder(), _Clock()
     path, body = _REF_WRITES[ref]
     answered: list[int] = []
 
-    def _write() -> None:
+    def _write(at: str | None = None, sent: dict[str, Any] | None = None) -> None:
         with catalog.signed_in_as(_CREATOR_LOGIN):
-            answered.append(catalog.client.post(f"/v1/table/{_TABLE}/{path}", json=body).status_code)
+            answered.append(catalog.client.post(f"/v1/table/{_TABLE}/{at or path}", json=sent if sent is not None else body).status_code)
 
     with _catalog(ns, tmp_path, emitter=emitter, clock=clock) as catalog:
         obligation = catalog.record()
         erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
+        head = int(open_by_name(ns, StorageOptions(), _TABLE_ID).version)
         if when == "while-the-release-is-recorded":
             real_create, pending = erasure_release.create_json, [True]
 
@@ -295,18 +316,106 @@ def test_whoever_puts_a_ref_the_release_takes_is_told_before_it_runs(
         assert recorded is not None, "precondition: the release is scheduled"
         if when == "its-door-fails-after-the-ref":
             _fails_once(monkeypatch, Announcer, "send_filed")
-        if when != "while-the-release-is-recorded":
+        if when == "its-name-is-taken":
+            # Another caller's tag of the same name lands where this caller puts one, after this door filed and before it
+            # writes (ref writes share the table's history): its write is refused.
+            real_notices, pending = erasure_release.RefNotices.__call__, [True]
+
+            def _another_callers_tag_lands(notices: erasure_release.RefNotices, *args: Any) -> None:  # noqa: ANN401 — the wrapped method's own types
+                real_notices(notices, *args)
+                if pending:
+                    pending.clear()
+                    open_by_name(ns, StorageOptions(), _TABLE_ID).tags.create("copy", 2)
+
+            monkeypatch.setattr(erasure_release.RefNotices, "__call__", _another_callers_tag_lands)
+        if when in {"its-door-fails-after-the-write-lands", "its-door-fails-beside-another-callers-tag"}:
+            # The tag write fails once with the store's answer lost: after it landed, or (beside another caller's tag of the
+            # same name and place, written before) before it was made.
+            lands = when == "its-door-fails-after-the-write-lands"
+            if not lands:
+                open_by_name(ns, StorageOptions(), _TABLE_ID).tags.create("copy", 2)
+            real_tags, failing = lance.LanceDataset.tags.fget, [True]
+
+            class _FailsOnce:
+                def __init__(self, tags: Any) -> None:  # noqa: ANN401 — pylance's Tags
+                    self._tags = tags
+
+                def __getattr__(self, name: str) -> Any:  # noqa: ANN401 — pylance's own attributes
+                    return getattr(self._tags, name)
+
+                def create(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — pylance's own arguments
+                    if failing:
+                        failing.clear()
+                        if lands:
+                            self._tags.create(*args, **kwargs)
+                        raise OSError("the store reset the connection")
+                    self._tags.create(*args, **kwargs)
+
+            monkeypatch.setattr(lance.LanceDataset, "tags", property(lambda dataset: _FailsOnce(real_tags(dataset))))
+        if when == "its-owner-moves-the-pinning-tag":
+            _write("tags/update", {"tag": "trained", "version": head})
+        elif when != "while-the-release-is-recorded":
             _write()
         clock.now = recorded.due_at + timedelta(seconds=1)
         if when == "its-door-fails-after-the-ref":
             catalog.release()
             monkeypatch.setattr(announcement_intents, "LEASE", timedelta(0))
             catalog.finish()
+        if when == "cut-again-from-clean-history":
+            # A tick records the branch in its plan and fails before its deletes; the caller deletes the branch and cuts it
+            # again from main's head, and its next tick runs the release.
+            _fails_once(monkeypatch, erasure_release, "_delete")
+            catalog.release()
+            _write("branches/delete", {"name": "copy"})
+            _write("branches/create", {"name": "copy"})
         told = [(event.extra["subject"], event.extra["due_at"]) for event in emitter.actions("erasure_release_scheduled") if event.extra["subject"] == _CREATOR]
+        before = open_by_name(ns, StorageOptions(), _TABLE_ID)
+        kept = (before.tags.list() or {}).get("trained") if ref == "tag" else (before.branches.list() or {}).get("copy")
         catalog.release()
 
-    expected = [] if answered == [409] else [(_CREATOR, recorded.due_at.isoformat())]
+    due = recorded.due_at.isoformat()
+    if when in _LEFT_ALONE:
+        after = open_by_name(ns, StorageOptions(), _TABLE_ID)
+        stands = (after.tags.list() or {}).get("trained") if ref == "tag" else (after.branches.list() or {}).get("copy")
+        versions = [entry["version"] for entry in after.versions()]
+        expected = [(_CREATOR, due)] if ref == "branch" else []
+        assert (told, stands == kept, 2 in versions) == (expected, True, False), (
+            f"its caller was told {told}; the ref the release does not take stands as before: {stands == kept} ({kept} -> {stands}); "
+            f"version 2 stands: {2 in versions}"
+        )
+        return
+    expected = [] if answered == [409] or when in _NOT_THEIRS else [(_CREATOR, due)]
     assert told == expected, f"the {ref} write answered {answered}, and before the release ran its caller was told {told}"
+
+
+def test_a_release_recorded_again_as_the_last_one_ends_is_found_by_its_mark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
+    # The release ends inside its hold, its record and then its mark (G9): a verification recording the release again
+    # under the same obligation between the two deletes is refused, rather than landing a record whose mark the second
+    # delete then removes, which every later ref door would miss.
+    ns = _tagged_over_a_plain_delete(tmp_path / "data")
+    emitter, clock = _Recorder(), _Clock()
+    with _catalog(ns, tmp_path, emitter=emitter, clock=clock) as catalog:
+        obligation = catalog.record()
+        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
+        catalog.settled(obligation)
+        recorded = erasure_release.scheduled(catalog.control_root, StorageOptions(), obligation)
+        assert recorded is not None, "precondition: the release is scheduled"
+        real_delete, again = erasure_release.delete_record, []
+
+        def _recorded_again_between(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the wrapped function's own types
+            real_delete(*args, **kwargs)
+            try:
+                erasure_release.schedule(catalog.control_root, StorageOptions(), recorded)
+            except HistoryFencedError as exc:
+                again.append(str(exc))
+
+        monkeypatch.setattr(erasure_release, "delete_record", _recorded_again_between)
+        clock.now = recorded.due_at + timedelta(seconds=1)
+        catalog.release()
+        standing = erasure_release.scheduled(catalog.control_root, StorageOptions(), obligation)
+        marked = read_json(catalog.control_root, StorageOptions(), erasure_release.mark_key(recorded.table_uuid, obligation))
+
+    assert standing is None or marked is not None, f"a release's record stands with no mark (the scheduling between was refused: {again})"
 
 
 def test_a_release_never_takes_a_registered_clones_tag(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob

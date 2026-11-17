@@ -1055,11 +1055,13 @@ governing their data. The project-scoped surface is the console's project page, 
   `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_vend_maintain`) gets and deletes on the whole prefix for
   cleanup and puts nothing of the table (ADR 0204, [[LH-575]]: maintenance's commits are the catalog's, at its maintainer
   doors), with an explicit Deny of delete on `<prefix>/_refs/*` (`lakehouse.table_layout.REFS_GLOB`), plus, on
-  the control root, the table's history fence directory (list it, get every object in it, put and delete only a
-  reclaim's own holder objects `reclaim-*`, never a ref writer's hold or an erasure release's mark; ADR 0233 §9, measured
-  on RustFS 1.0.3: every other key, listing and table refused `AccessDenied`) and its committed-file records `_file_identities/<uuid>/*`
-  (get/delete) (`vending.TableRecords`, [[LH-219]]; the fence's grant costs 484 characters, so a maintain vend at a
-  63-character bucket fits a table prefix of 182, against a write vend's 71), and get/delete on the table's own data directories, those of its declared bases its base record holds as
+  the control root, the table's history fence directory (list it, get every object in it, put and delete only keys
+  `<dir>/reclaim-<32 ?>.json`, a reclaim holder's length: an IAM `?` matches a `/`, so a 32-character name holding a slash
+  is reachable too, but no name the fence defines fits below a subdirectory; never a ref writer's hold or an erasure
+  release's mark; ADR 0233 §9, measured on RustFS 1.0.3 with the vend's own credential: `?` enforced, every other key,
+  listing and table refused `AccessDenied`) and its committed-file records `_file_identities/<uuid>/*`
+  (get/delete) (`vending.TableRecords`, [[LH-219]]; the fence's grant costs about 520 characters, so a maintain vend at a
+  63-character bucket fits a table prefix of about 146, against a write vend's 71), and get/delete on the table's own data directories, those of its declared bases its base record holds as
   `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. The warehouse scope
   probe signs with `probe` (`vending.SessionTier`): get, put and delete in its probe prefix, which no door vends, since a
   door's `tier` query takes only `vending.Tier`. The management vend door checks the one rung its
@@ -1283,8 +1285,10 @@ governing their data. The project-scoped surface is the console's project page, 
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
   `tags/update`, `branches/create`) holds the fence,
   one object per holder under the table's directory `_history_fences/table-<digest>/` (`fences.HolderFence`,
-  `history_fences.fence_directory`; a holder object that does not parse raises `fences.FenceUnreadableError`, naming
-  it; the directory ends with the table, `history_fences.end`); holders of one kind share it whatever their number,
+  `history_fences.fence_directory`; a take judges only the names the fence defines directly in the directory, a
+  holder's kind by its KEY whatever its body says, live until it is a hold old on the store's clock, and sweeps whatever
+  else stands there once lapsed, so what maintenance's vend can plant is at most a reclaim's hold, never a 500 nor a
+  mark, F3 of `specs/catalog/Fence.tla`; the directory ends with the table, `history_fences.end`); holders of one kind share it whatever their number,
   never contending for a write (measured on RustFS 1.0.3 through the tag door: 16 of 16 and 64 of 64 concurrent tag writes
   answered 200, against 7 to 9 of 16 and 36 to 39 of 64 refused with one record per table, ADR 0233 §9,
   `tests/integration/test_a_tables_ref_writes_share_its_history.py`), the other kind is refused 409 code
@@ -1297,6 +1301,13 @@ governing their data. The project-scoped surface is the console's project page, 
   (`erasure-release.<id>.json`, `fences.MARK_NAME`) and then its record; every ref write's take lists the directory, so
   a ref door that sees a mark reads that release and, when the release will take its ref, files and sends the caller an
   `erasure_release_scheduled` naming the ref (`erasure_release.RefNotices`, `api/ref_notices.putting_ref`, ADR 0233 §9).
+  Whether the release takes a ref is ONE predicate, `erasure_release._taken`, which the door (`takes`, over the table
+  with its ref put), the tick's plan and its deletes all ask: a ref still standing on a residual, where a pin stood
+  (`ReleaseRecord.pinned_at`), or in a taken subtree, whatever its name; a pinning tag moved onto a clean version, or a
+  branch cut again from clean history, is left (G8). Every ref door confirms its hold just before its write
+  (`Hold.confirm`, G11), a refused write drops its filing unsent, an unknown outcome is judged by the ref standing where
+  the door put it and written since its filing, and the finish judges a door's filing only while it holds the history as
+  a scheduling (G10). The release ends inside its hold, record then mark (G9).
   A table with no release scheduled carries no mark, and its ref writes read nothing more. A hold lapses after 15
   minutes on the store's clock.
   Pinned by `services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py` and

@@ -165,6 +165,11 @@ class VendedSession(BaseModel):
         )
 
 
+#: A holder's token in its object's name, as IAM matches it: one ``?`` per character of the 32-hex id a take mints
+#: (:class:`lakehouse.fences.HolderFence`), so the grant reaches names of a holder's length only.
+_HOLDER_TOKEN: Final = "?" * 32
+
+
 class TableRecords(BaseModel):
     """Where one table's records are kept on the control root, which its maintain-tier vend may write ([[LH-219]]).
 
@@ -173,13 +178,19 @@ class TableRecords(BaseModel):
     (:mod:`lakehouse.file_identities`). It never puts one of those: a holder that could would record a replaced file as
     the one committed. No other record on the control root, and none of another table.
 
-    THE FENCE'S DIRECTORY, AND OF IT ONLY A RECLAIM'S OWN OBJECTS ARE WRITTEN. A take lists the table's fence directory
-    and reads the holders it judges, then creates its own holder object, renews it and deletes it
+    THE FENCE'S DIRECTORY, AND OF IT ONLY KEYS SHAPED AS A RECLAIM'S HOLDER ARE WRITTEN. A take lists the table's fence
+    directory and reads the holders it judges, then creates its own holder object, renews it and deletes it
     (:class:`lakehouse.fences.HolderFence`): the vend lists exactly that directory, gets every object in it, and puts and
-    deletes only objects named as a reclaim's holder (``reclaim-<token>.json``), the one kind maintenance takes. It cannot
-    remove or rewrite a ref writer's or a release's hold, nor an erasure release's mark (``erasure_release``), so a
-    compromised maintenance pod cannot admit its reclaim beside a ref write or hide a scheduled release from a ref's
-    writer; a lapsed holder of another kind it meets is left to the catalog's next take, which sweeps it.
+    deletes every key ``<directory>/reclaim-<32 characters>.json``, the one kind maintenance takes. An IAM ``?`` matches any
+    one character, a ``/`` included, so the grant also reaches a 32-character name holding a slash, below a subdirectory
+    (``reclaim-<15>/<16>.json``), and any body: no name the fence defines fits below one (a holder's name is at least 38
+    characters, a mark's 48), and a take judges only names directly in the directory, a holder's kind by its key, so what
+    the vend can plant is at most a reclaim's hold on its own table for one hold, swept after (``HolderFence._excluding``).
+    It cannot put, rewrite or remove a ref writer's or a release's hold, nor an erasure release's mark
+    (``erasure_release``), so a compromised maintenance pod cannot admit its reclaim beside a ref write or hide a scheduled
+    release from a ref's writer; a lapsed holder of another kind it meets is left to the catalog's next take, which sweeps
+    it. Measured on RustFS 1.0.3 with a non-root user's AssumeRole and this session policy (ADR 0233 §9): ``?`` is enforced
+    there, a 31-character name and ``reclaim-x/erasure-release.<id>.json`` refused, a slash in a 32-character name taken.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -212,7 +223,7 @@ class TableRecords(BaseModel):
                 "Sid": "HoldFence",
                 "Effect": "Allow",
                 "Action": ["s3:PutObject", "s3:DeleteObject"],
-                "Resource": f"arn:aws:s3:::{bucket}/{fence}/{history_fences.HistoryWork.RECLAIM}-*",
+                "Resource": f"arn:aws:s3:::{bucket}/{fence}/{history_fences.HistoryWork.RECLAIM}-{_HOLDER_TOKEN}.json",
             },
             {
                 "Sid": "CommittedFileRecords",

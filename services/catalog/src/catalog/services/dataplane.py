@@ -4118,6 +4118,9 @@ class PlacedRef(BaseModel):
 
 #: What a ref door asks inside its hold of the table's history, before it writes ``ref``: given the marks its take saw
 #: (:attr:`lakehouse.fences.Hold.marks`) and its handle on the table (``catalog.services.erasure_release.RefNotices``).
+#: Every ref door then confirms its hold (:meth:`lakehouse.fences.Hold.confirm`) just before its write: a door whose hold
+#: lapsed while it stalled may have let a reclaim, a release's scheduling or the release itself in, and writes nothing
+#: (G11 of ``specs/catalog/Erasure.tla``, 409 code 14).
 type BeforeRef = Callable[[frozenset[tuple[str, str]], lance.LanceDataset, PlacedRef], None]
 
 
@@ -4127,13 +4130,15 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
 
     Raises:
         InvalidInputError: The tag's ref file would be longer than an object-store key segment ([[LH-283]]).
-        ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]); no tag was written.
+        ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]), or this door's hold of it lapsed before
+            the tag; no tag was written.
     """
     _refuse_a_ref_name_no_key_segment_holds("tag", req.tag)
     dataset = _open_with_branch(table, so, req.branch)
     with table.history_held(HistoryWork.REFS) as hold:
         if before_ref is not None:
             before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=recorded_branch(req.branch), version=req.version))
+        hold.confirm()
         with _ref_errors("tag", req.tag):
             dataset.tags.create(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
     return CreateTableTagResponse()
@@ -4187,13 +4192,15 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
 
     Raises:
         TableTagNotFoundError: No tag can have the name: its ref file would be longer than a key segment ([[LH-283]]).
-        ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]); the tag was not moved.
+        ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]), or this door's hold of it lapsed before
+            the move; the tag was not moved.
     """
     _require_a_tag_a_key_segment_can_hold(req.tag)
     dataset = _open_with_branch(table, so, req.branch)
     with table.history_held(HistoryWork.REFS) as hold:
         if before_ref is not None:
             before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=recorded_branch(req.branch), version=req.version))
+        hold.confirm()
         with _ref_errors("tag", req.tag):
             dataset.tags.update(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
     return UpdateTableTagResponse()
@@ -4293,6 +4300,7 @@ def create_branch(
             with _ref_errors("branch", source, invalid_name=req.name):
                 cut_at = req.from_version if req.from_version is not None else int(_source_head(dataset, req.from_branch))
             before_ref(hold.marks, dataset, PlacedRef(kind="branch", name=req.name, branch=req.from_branch, version=cut_at))
+        hold.confirm()
         try:
             with _ref_errors("branch", source, invalid_name=req.name):
                 dataset.create_branch(req.name, _branch_reference(req))

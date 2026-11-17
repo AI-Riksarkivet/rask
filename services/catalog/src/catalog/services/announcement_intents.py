@@ -30,7 +30,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Literal
 from uuid import uuid4
 
@@ -136,20 +136,31 @@ class TagGone(BaseModel):
 
 class RefOnARelease(BaseModel):
     """A ref the person told put on a table landed while the erasure release that takes it stands: the tag or branch
-    ``name`` stands at the table at ``location``, naming ``(branch, version)`` (a tag's version, a branch's parent), and
-    the release's record at ``key`` holds ``due_at`` (ADR 0233 §9)."""
+    ``name`` stands at the table ``table_uuid`` at ``location``, naming ``(branch, version)`` (a tag's version, a branch's
+    parent), written no earlier than ``not_before``, and the release's record at ``key`` holds ``due_at`` (ADR 0233 §9).
+
+    Judged only for a door whose outcome is unknown (it died, or its write failed in a way that does not say whether the
+    ref landed): a door the store or Lance refused files nothing that is sent. A Lance tag records when it was last
+    written (``updatedAt``) and a branch when it was created (``createAt``, in seconds), each on the writer's clock, and
+    nothing else that tells two writers apart (``lance_docs/lance/format/table/branch_tag.md``): a ref standing where the
+    door put it, written since the door's filing, is taken for the door's, so a person who may have lost nothing is told
+    rather than one who did left untold (``docs/COMMIT-EVENTS.md``).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     kind: Literal["ref_on_a_release"] = "ref_on_a_release"
     key: str
     due_at: str
+    table_uuid: str
     location: str
     ref: Literal["tag", "branch"]
     name: str
     #: The branch the tag's version is on, or the branch the branch was cut from; ``None`` for main.
     branch: str | None
     version: int
+    #: The door's clock when it filed, before its write: the ref's own stamp is no earlier.
+    not_before: datetime
 
 
 class RoleEnded(BaseModel):
