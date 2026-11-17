@@ -110,6 +110,8 @@ class _Asked(BaseModel):
     mine: bool
     window: datetime
     until_next: float
+    #: The window was claimed before this turn by this same replica, which ran it.
+    ran_here: bool = False
 
 
 def claim_key(name: str) -> str:
@@ -136,7 +138,7 @@ class Timer:
         storage_options: How to reach that root, read at each turn so a rotated session signs the next one.
         held: Whether the service holds its timers now; a held turn claims nothing and runs nothing.
         elsewhere: Run on a turn that finds the window another replica's: where a replica drops what only the replica
-            that ran the tick knows, as a gauge the tick measured.
+            that ran the tick knows, as a gauge the tick measured. Not run for the replica that claimed the window.
         holder: Who claims, as the record names it: the pod's host name unless given.
     """
 
@@ -186,7 +188,11 @@ class Timer:
             log.warning("timer_claim_unread", extra={"timer": self.name, "error": str(exc)[:300]})
             return self._ended(Outcome.UNREAD, None, min(self._period, RETRY_SECONDS))
         if not asked.mine:
-            self._elsewhere()
+            # A wait is measured on the monotonic clock and a window on the store's, whose front ends may stamp a second
+            # apart, so the replica that ran a window can turn again inside it. What its tick measured is still the only
+            # reading of that window, so only a replica that did not run it drops what it holds.
+            if not asked.ran_here:
+                self._elsewhere()
             return self._ended(Outcome.ELSEWHERE, asked.window, asked.until_next)
         try:
             await self._work()
@@ -225,7 +231,7 @@ class Timer:
         # it would hold every replica off until the store's time passed it, so it is claimed over like an old one.
         if held is not None and window <= held.window <= read.at + timedelta(seconds=self._period):
             _last_claimed.set(held.window.timestamp(), {"timer": self.name})
-            return _Asked(mine=False, window=held.window, until_next=until_next)
+            return _Asked(mine=False, window=held.window, until_next=until_next, ran_here=held.by == self._holder)
         claim = _Claim(timer=self.name, window=window, claimed_at=read.at, by=self._holder).model_dump(mode="json")
         try:
             if read.stored is None:

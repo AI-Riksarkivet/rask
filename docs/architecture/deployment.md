@@ -355,8 +355,12 @@ log export, which is not lossless: a full export queue, a process killed before 
 retries ran out each drop records without a word, and a record is the only account of who granted a tuple or was
 refused. Each service therefore also counts every record it emits on the metric export, as `audit.records`
 (`audit_records_total` in a Prometheus-shaped store) by `action` and `outcome`. The trail is whole over a window when
-the store holds as many records for it as the services counted; comparing the two is the platform's check to run, since
-the store and its query language are the platform's.
+the gateway admitted as many records to it as the services counted. The gateway therefore counts the audit records it
+admits, as `audit.records.admitted` (`audit_records_admitted_total`): the development Collector does with its
+`count/audit` connector, and a platform's gateway owes the same series. `deploy/alerting/rules.yml` pages on the
+difference over an hour (`AuditRecordsNotReachingTheTrail`) and warns when the gateway counts nothing
+(`AuditAdmissionsUncounted`). What the gateway admits and its store then loses is the gateway's own telemetry to
+watch, and a process killed with a batch unsent loses that minute's count with its records.
 
 **The gateway, store, dashboards and alerting are a prerequisite, not part of the chart** (ADR 0153). A platform
 provides an **OTLP/HTTP gateway** that verifies ServiceAccount tokens of `observability.identity.audience` signed by the

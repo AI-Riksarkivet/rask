@@ -17,6 +17,17 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 | **CloudNativePG operator** | a `Cluster` only with `age.cnpgCluster.enabled`; see [`CNPG-AGE.md`](CNPG-AGE.md) |
 | **The OTLP gateway** | `observability.export.endpoint` and `observability.identity.audience`: each service exports to the gateway as itself with its ServiceAccount token ([ADR 0215](adr/0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md)); the gateway, store, dashboards and alerting are the platform's |
 
+**Two things the platform's edge owes the lakehouse**, since rask runs neither a gateway nor a telemetry store:
+
+- **A traffic policy on the Gateway that serves the chart's HTTPRoutes.** No lakehouse service limits a caller's
+  request rate (the catalog sheds only concurrent writes). The door to limit first is the catalog's decision door,
+  `POST /management/v1/decisions/check` under the catalog's public prefix: one question names up to 1,000 objects and
+  costs about 40 OpenFGA batch requests, and any signed-in caller may ask. A per-client limit of a few requests a
+  second there, and a looser one on the rest of `/api/*`, is the platform's to set and tune; rask has measured none.
+- **A count of the audit records the OTLP gateway admits**, as the metric `audit.records.admitted`
+  ([architecture/deployment.md](architecture/deployment.md), "The trail's records are counted"). The rules in
+  `deploy/alerting/rules.yml` compare it with what the services count, so a trail that loses records pages somebody.
+
 The lakehouse runs no compute and submits no job ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)):
 KubeRay, Kueue, GPU operators and whatever orchestrates a pipeline belong to the user who runs that pipeline, and no
 lakehouse service imports `ray` (the import contract `the-lakehouse-knows-no-client`).

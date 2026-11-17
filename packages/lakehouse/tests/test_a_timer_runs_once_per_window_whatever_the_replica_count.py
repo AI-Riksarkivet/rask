@@ -204,6 +204,25 @@ async def test_a_claim_that_cannot_be_read_runs_nothing_and_is_read_again_within
 
 
 @pytest.mark.asyncio
+async def test_a_replica_that_turns_again_in_the_window_it_ran_keeps_what_its_tick_measured(tmp_path: Path) -> None:
+    """A wait is measured on the monotonic clock and a window on the store's, so the replica that ran a window can turn
+    again inside it. It runs nothing, and it is not told the window was another replica's: what its tick measured is
+    still the only reading of the window."""
+    ran: list[str] = []
+    dropped: list[str] = []
+
+    async def work() -> None:
+        ran.append("pod-1")
+
+    one = Timer("relay", period=600, work=work, root=str(tmp_path), storage_options=StorageOptions, elsewhere=lambda: dropped.append("pod-1"), holder="pod-1")
+    assert (await one.turn()).outcome is Outcome.RAN
+
+    again = await one.turn()
+
+    assert (again.outcome, ran, dropped) == (Outcome.ELSEWHERE, ["pod-1"], [])
+
+
+@pytest.mark.asyncio
 async def test_the_loop_takes_turn_after_turn_until_it_is_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every outcome's series of the turn counter exists from the loop's start, the ones that never happen at 0: an
     alert reads a counter's increase, and a series born at a timer's first failed turn would show none."""
@@ -227,5 +246,8 @@ async def test_the_loop_takes_turn_after_turn_until_it_is_cancelled(tmp_path: Pa
         for point in data.resource_metrics[0].scope_metrics[0].metrics[0].data.data_points
         if isinstance(point, NumberDataPoint)
     }
-    assert {outcome: count for outcome, count in turns.items() if outcome != "ran"} == {"failed": 0, "elsewhere": 0, "held": 0, "unread": 0}
+    # A turn taken as its wait ends can still find the window this replica ran, which counts as claimed before the
+    # turn: `elsewhere` is there from the start and may have risen.
+    assert set(turns) == {"ran", "failed", "elsewhere", "held", "unread"}
+    assert {outcome: turns[outcome] for outcome in ("failed", "held", "unread")} == {"failed": 0, "held": 0, "unread": 0}
     assert turns["ran"] >= 3

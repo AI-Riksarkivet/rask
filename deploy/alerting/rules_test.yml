@@ -283,8 +283,8 @@ tests:
               service: catalog
               lance_bus_consumer: catalog.control.v1
             exp_annotations:
-              summary: "The catalog gave up control events (catalog.control.v1) — its feed missed them"
-              description: "A catalog replica could not buffer a control event it followed: the keys its signature is checked against could not be read on any try, or its handling raised. That replica's change-event feed lacks the event; the audit trail still records the change. Read the replica's `bus_followed_message_not_handled` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              summary: "The catalog gave up judging control events (catalog.control.v1)"
+              description: "A catalog replica could not judge a control event it followed: the keys its signature is checked against could not be read, or its handling raised. A forged event among them was not counted in catalog_signature_refused. The change-event feed is unaffected: it serves the event once its keys are read. Read the replica's `bus_followed_message_not_handled` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
       - eval_time: 18m
         alertname: CatalogControlLaneDroppingEvents
         exp_alerts: []
@@ -2118,3 +2118,51 @@ tests:
             exp_annotations:
               summary: "Table maintenance is failing on one or more datasets"
               description: "A table's pass could not complete one or more datasets, and retries them every `maintenance.queue.retrySeconds`. Sustained failure means those datasets accumulate superseded versions indefinitely. Break down by error.type; the per-dataset URI is on the trace span and in the maintenance_dataset_outcome log line, deliberately not on the metric (unbounded cardinality)."
+
+  # [[LH-585]] A quarter of an hour's audit records never reach the trail → AuditRecordsNotReachingTheTrail; a trail
+  # that admits every record, a minute behind, stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'audit_records_total{service_name="catalog", action="authz", outcome="allow"}'
+        values: "0+100x120"
+      - series: 'audit_records_admitted_total{}'
+        values: "0+75x120"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: AuditRecordsNotReachingTheTrail
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: fleet
+            exp_annotations:
+              summary: "Audit records are emitted and not admitted to the trail"
+              description: "Over the last hour the services counted more audit records than the gateway admitted to the trail. The trail is the only account of who granted a tuple or was refused, and the missing records are in no other store. Compare audit_records_total by service_name with the gateway's audit pipeline: a service's export queue filled or was refused (its `Failed to export logs` lines), or the gateway's sender filter does not list the service's ServiceAccount."
+      - eval_time: 2h
+        alertname: AuditAdmissionsUncounted
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'audit_records_total{service_name="catalog", action="authz", outcome="allow"}'
+        values: "0+100x120"
+      - series: 'audit_records_admitted_total{}'
+        values: "0 0+100x119"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: AuditRecordsNotReachingTheTrail
+        exp_alerts: []
+
+  # The gateway counts nothing → AuditAdmissionsUncounted.
+  - interval: 1m
+    input_series:
+      - series: 'audit_records_total{service_name="catalog", action="authz", outcome="allow"}'
+        values: "0+100x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: AuditAdmissionsUncounted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fleet
+            exp_annotations:
+              summary: "The gateway counts no admitted audit record"
+              description: "No `audit_records_admitted_total` series exists, so nothing compares the audit records the services emit with the ones that reach the trail. The gateway counts none (its audit pipeline has no counter, or admits nothing), or no audit record was emitted since the store's retention began."

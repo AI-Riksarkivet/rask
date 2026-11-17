@@ -199,6 +199,7 @@ data:
         logs:
           log_record:
             - 'instrumentation_scope.name == "lance.audit"'
+      deltatocumulative: {}
       batch: {}
     exporters:
       otlphttp/traces:
@@ -216,6 +217,14 @@ data:
         headers: { x-greptime-db-name: {{ .Values.store.dbName | quote }} }
         sending_queue: { enabled: true, storage: file_storage, queue_size: 500 }
         retry_on_failure: { enabled: true, initial_interval: 5s, max_interval: 30s, max_elapsed_time: 300s }
+    connectors:
+      # The gateway's own count of the audit records it admits to the trail's pipeline, after the sender filter: a
+      # service counts each record it emits (`audit.records`), and the rules compare the two, so a record dropped before
+      # the store (an export queue that filled, a sender the filter does not list) is a difference somebody is paged on.
+      count/audit:
+        logs:
+          audit.records.admitted:
+            description: Audit records admitted to the trail's pipeline.
     service:
       extensions: [health_check, file_storage, oidc]
       pipelines:
@@ -224,8 +233,9 @@ data:
           processors: [memory_limiter, k8sattributes, batch]
           exporters: [otlphttp/traces]
         metrics:
-          receivers: [otlp, prometheus]
-          processors: [memory_limiter, k8sattributes, batch]
+          receivers: [otlp, prometheus, count/audit]
+          # The count connector emits a delta sum per batch; the rules read a counter's increase.
+          processors: [memory_limiter, k8sattributes, deltatocumulative, batch]
           exporters: [otlphttp]
         logs:
           receivers: [otlp, filelog]
@@ -234,5 +244,5 @@ data:
         logs/audit:
           receivers: [otlp]
           processors: [memory_limiter, attributes/sender, k8sattributes, filter/audit_only, batch]
-          exporters: [otlphttp/audit]
+          exporters: [otlphttp/audit, count/audit]
 {{- end }}

@@ -655,6 +655,47 @@ groups:
             row rests on has expired. Re-read the per-route rates and take the row off the shelf.
             Runbook: docs/runbooks/RUNBOOK-oncall.md
 
+  - name: lance-audit
+    rules:
+      # [[LH-585]] The governance trail rides the log export, which drops records without a word (a full export queue,
+      # a gateway whose retries ran out, a sender the gateway's filter does not list). Each service counts every record
+      # it emits (`audit.records`), and the gateway counts every record it admits to the trail (`audit.records.admitted`,
+      # the development Collector's `count/audit` connector; a platform's gateway owes the same series). The two are
+      # exported on different clocks, a minute apart at most, so the difference is read over an hour with a margin of a
+      # twentieth and twenty records. A process killed with a batch unsent loses that minute's count with it, which no
+      # rule here sees.
+      - alert: AuditRecordsNotReachingTheTrail
+        expr: >-
+          sum(increase(audit_records_total[1h])) - sum(increase(audit_records_admitted_total[1h]))
+          > 0.05 * sum(increase(audit_records_total[1h])) + 20
+        for: 30m
+        labels:
+          severity: critical
+          service: fleet
+        annotations:
+          summary: "Audit records are emitted and not admitted to the trail"
+          description: >-
+            Over the last hour the services counted more audit records than the gateway admitted to the trail. The
+            trail is the only account of who granted a tuple or was refused, and the missing records are in no other
+            store. Compare audit_records_total by service_name with the gateway's audit pipeline: a service's export
+            queue filled or was refused (its `Failed to export logs` lines), or the gateway's sender filter does not
+            list the service's ServiceAccount.
+
+      # ABSENT IS NOT ZERO: with no admitted series the difference above is a vector that does not exist. Bare
+      # `absent()` in its own rule, as GreptimeDB refuses the composite form.
+      - alert: AuditAdmissionsUncounted
+        expr: absent(audit_records_admitted_total)
+        for: 30m
+        labels:
+          severity: warning
+          service: fleet
+        annotations:
+          summary: "The gateway counts no admitted audit record"
+          description: >-
+            No `audit_records_admitted_total` series exists, so nothing compares the audit records the services emit
+            with the ones that reach the trail. The gateway counts none (its audit pipeline has no counter, or admits
+            nothing), or no audit record was emitted since the store's retention began.
+
   - name: lance-infra
     rules:
       # The infra-tier signal: a lane that cannot settle its deliveries. A service counts each delivery it took from
