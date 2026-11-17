@@ -47,7 +47,9 @@ def _helm_template(*set_values: str) -> str:
     helm = shutil.which("helm") or str(REPO / ".localbin/helm")
     if not Path(helm).exists():
         pytest.skip("helm not available")
-    argv = [helm, "template", str(CHART)]
+    # Named `rask`: the chart's defaults name the release in the literals a subchart cannot template, and the render
+    # refuses any other (templates/openfga-authn.yaml).
+    argv = [helm, "template", "rask", str(CHART)]
     # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
     # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
     argv += ["--set", "image.localImages=true"]
@@ -107,9 +109,8 @@ def _docs(rendered: str) -> list[str]:
 def _job_by_component(rendered: str, component: str) -> str | None:
     """The rendered Job carrying `app.kubernetes.io/component: <component>`.
 
-    Selected by LABEL, not by name: `_helm_template` renders without a release name (helm's
-    `release-name` placeholder), and the bootstrap Jobs now carry a release-revision suffix — a
-    name-prefix match would encode both accidents.
+    Selected by LABEL, not by name: the bootstrap Jobs carry a release-revision suffix, which a name match
+    would encode.
     """
     for doc in _docs(rendered):
         if not re.search(r"^kind: Job$", doc, re.MULTILINE):
@@ -716,8 +717,7 @@ def test_a_read_only_rootfs_is_SURVIVABLE_on_every_first_party_pod() -> None:
 def _env_by_component(docs: list[dict], component: str) -> dict[str, str]:
     """The merged container env of the Deployment carrying ``app.kubernetes.io/component: <component>``.
 
-    Selected by LABEL rather than by name because `_helm_template` renders without a release name, so a
-    name-prefix match would encode helm's `release-name` placeholder.
+    Selected by LABEL rather than by name, so the selection holds whatever the release is called.
     """
     for doc in docs:
         if doc.get("kind") != "Deployment":
@@ -747,12 +747,6 @@ def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
     for label, extra in combinations:
         docs = _rendered_docs(*extra)
         secrets = set(_written_secrets(docs))
-        # SUBCHART NAMING is a separate concern and not this gate's. A subchart names its workloads
-        # `{{ .Release.Name }}-x` while this chart's own Secrets use `lance.fullname`, so the two agree
-        # only when the release is named `rask` — which it always is here, and which `_helm_template`
-        # does not pin. Filtered rather than asserted, so this gate reports the class it was built for
-        # instead of a rendering artefact; the naming mismatch is recorded in the backlog.
-        secrets |= {name.replace("release-name-", "rask-", 1) for name in secrets}
         for doc in docs:
             for name in _secret_refs(doc):
                 if name in secrets:

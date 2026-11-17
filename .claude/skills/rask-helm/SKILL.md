@@ -262,6 +262,12 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
 - **Every first-party pod names its own SA**, and the NATS fixture's server and nats-box run as their own
   (`serviceAccount` values in deploy/fixtures/nats). A shared SA is allowed only where the sharers are one identity
   (`sa-maintenance` for the maintenance service); one-shot Jobs share `sa-jobs`.
+- **OpenFGA's pod runs as a tokenless account rask renders** ([[XC-156]]): the subchart's own ServiceAccount mounts an
+  API token and binds a Job-status reader with no switch for either, so `openfga.serviceAccount` is `create: false`,
+  `name: <release>-openfga`, and `security-sa.yaml` renders that account with `automountServiceAccountToken: false`.
+  `openfga-authn.yaml` refuses a render where that name, or the `openfga-config` volume's Secret
+  (`<release>-infra-credentials`, [[XC-036]]), names anything but this release's. No subchart pod may mount a token: the
+  identity test's `a subchart's pod holding an API token` bucket.
 - **A binding names its subject through the helper the pod uses**, never through a free value with a
   `default` fallback: an unset value then puts the grant on the shared identity. Likewise a pod names its SA with the prefix `security-sa.yaml`
   renders it with, `lance.fullname` (the release name). `rask.fullname` is pinned to `rask` by

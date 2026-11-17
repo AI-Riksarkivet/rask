@@ -14,6 +14,12 @@ release kept. A pod names its SA with this file's prefix (lance.fullname), which
 rask.fullname does not. Pinned by tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py, and
 the stale client key by tests/unit/test_the_product_chart_renders_no_client.py.
 
+## `name: {{ .Release.Name }}-openfga`
+
+[[XC-156]]: the account the OpenFGA subchart's pod runs as, rendered here because the subchart's own mounts an API token
+and has no switch for it. OpenFGA calls the Kubernetes API for nothing, so its account holds no token and no binding.
+The name is the one the subchart would give its own (`<release>-openfga`), so the pod's `serviceAccountName` is unchanged.
+
 ## `"hooks"` in the component list (`lance.saComponents`)
 
 `<release>-sa-hooks`, the identity of the hooks that run before the release manifest (openfga-model at

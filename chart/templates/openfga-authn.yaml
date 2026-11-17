@@ -8,6 +8,19 @@
 {{- if or (not $ref.name) (ne ($ref.key | default "") "subjects") }}
 {{- fail "OpenFGA must read OPENFGA_AUTHN_OIDC_SUBJECTS from a configMapKeyRef with key `subjects` (openfga.extraEnvVars), or it admits every ServiceAccount in the cluster" }}
 {{- end }}
+{{- $account := printf "%s-openfga" .Release.Name }}
+{{- if or (($fga.serviceAccount).create) (ne ((($fga.serviceAccount).name) | default "") $account) }}
+{{- fail (printf "openfga.serviceAccount must be create=false, name=%q, the tokenless ServiceAccount this release renders for OpenFGA; it is create=%v, name=%q, so the pod would run as an account holding an API token, or as one that does not exist" $account (($fga.serviceAccount).create) ((($fga.serviceAccount).name) | default "")) }}
+{{- end }}
+{{- $running := index (($fga.podAnnotations) | default dict) "rask.dev/openfga-account" | default "" }}
+{{- if ne $running $account }}
+{{- fail (printf "openfga.podAnnotations.rask.dev/openfga-account is %q, but OpenFGA runs as %q: a running pod would keep the token of the account it started as" $running $account) }}
+{{- end }}
+{{- $credentials := printf "%s-infra-credentials" (include "lance.fullname" .) }}
+{{- $mounted := "" }}{{- range $fga.extraVolumes }}{{- if eq .name "openfga-config" }}{{- $mounted = ((.secret).secretName) | default "" }}{{- end }}{{- end }}
+{{- if ne $mounted $credentials }}
+{{- fail (printf "openfga.extraVolumes mounts the Secret %q as openfga-config, but this release renders the datastore credentials as %q: OpenFGA would start with no datastore DSN" $mounted $credentials) }}
+{{- end }}
 {{- $cm := $ref.name }}
 {{- $named := index (($fga.podAnnotations) | default dict) "rask.dev/openfga-clients" | default "" }}
 {{- if ne $named (include "lance.openfgaClients" .) }}

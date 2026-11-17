@@ -162,7 +162,7 @@ func (m *Rask) Charts(
 		// The arguments are not a workaround: a `required` guard means the chart HAS no valid default
 		// render, so a gate that renders must state a configuration. renderArgs is that statement, in
 		// one place, used by every render below.
-		WithExec([]string{"sh", "-c", "helm template chart " + renderArgs + " >/dev/null"}).
+		WithExec([]string{"sh", "-c", "helm template rask chart " + renderArgs + " >/dev/null"}).
 		// 'Helm render network-policy layer (flag on) + invariants'.
 		WithExec([]string{"bash", "-c", networkPolicyGate}).
 		// 'Helm render security hardening (flags on) + invariants'.
@@ -246,7 +246,7 @@ RENDER_ARGS="` + renderArgs + `"
 # is exempt, and MEDALLION_DLQ_TOPIC inside a note about a historical subject name. Stripping comment
 # lines at the source makes every check below mean what it says — and prevents the mirrored bug, where a
 # "must be present" grep is satisfied by documentation rather than by a rendered field.
-render() { helm template chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
+render() { helm template rask chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
 # THE ABSENCE ASSERTIONS RENDER TO A FILE FIRST, and that is the whole point of the extra line.
 # Written as 'off=$(render ... | grep -c "kind: X" || true)', the '|| true' sits OUTSIDE the pipeline, so
 # 'set -euo pipefail' cannot propagate a render failure into the substitution: a render that produces
@@ -276,7 +276,7 @@ RENDER_ARGS="` + renderArgs + `"
 # is exempt, and MEDALLION_DLQ_TOPIC inside a note about a historical subject name. Stripping comment
 # lines at the source makes every check below mean what it says — and prevents the mirrored bug, where a
 # "must be present" grep is satisfied by documentation rather than by a rendered field.
-render() { helm template chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
+render() { helm template rask chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
 # RENDERED TO A FILE FIRST, so set -e sees a failed render: inside '$(render | grep -c X || true)' the
 # '|| true' swallows it and a render of nothing reads as a count of zero. The 'kind: Deployment' probe
 # proves the render produced a manifest before anything is concluded from it.

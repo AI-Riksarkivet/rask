@@ -1481,6 +1481,17 @@ openfga: # @schema skipProperties: true; additionalProperties: true
   enabled: true
   # -- Subchart passthrough: number of OpenFGA server replicas.
   replicaCount: 1
+  # NO API TOKEN ([[XC-156]]). OpenFGA calls the Kubernetes API for nothing: it fetches the issuer's keys from the issuer
+  # mirror and reads its datastore DSN from a mounted file. The subchart's own ServiceAccount mounts a token and binds
+  # a job-status reader for a migration wait rask turns off, and has no switch for either, so the subchart creates none
+  # and runs as the tokenless account rask renders (templates/security-sa.yaml). Subchart values cannot template, so the
+  # release-prefixed name is written out, `<release>-openfga`, and templates/openfga-authn.yaml refuses a render where
+  # it names another.
+  serviceAccount:
+    # -- Subchart passthrough: off, so the subchart renders no ServiceAccount and no job-status Role for it; rask renders the pod's tokenless account.
+    create: false
+    # -- Subchart passthrough: the ServiceAccount the OpenFGA pod runs as, `<release>-openfga`, which rask renders with no token; a render naming another is refused.
+    name: rask-openfga
 
   # TELEMETRY ([[XC-047]]). Metrics come from the platform's scrape of OpenFGA's metrics port and are the
   # STANDING signal. Tracing is a DEBUGGING tool here and is OFF by default, which is a measured
@@ -1618,9 +1629,14 @@ openfga: # @schema skipProperties: true; additionalProperties: true
   # THE POD NAMES THE CLIENTS ITS SUBJECT LIST ADMITS, so the next reconcile restarts OpenFGA whenever they change. The
   # subchart renders `podAnnotations` verbatim, with no tpl, so the list is written here, and templates/openfga-authn.yaml
   # refuses a render where it differs from the clients the chart derives (`lance.openfgaClients`).
-  # -- Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits, so a change to them restarts it.
+  # THE POD NAMES THE ACCOUNT IT RUNS AS too ([[XC-156]]). A pod mounts its account's token when it starts, and the
+  # subchart's pod template says nothing about the token, so a change to the account alone replaces no pod: a running
+  # OpenFGA would keep the token it mounted. templates/openfga-authn.yaml refuses a render where the annotation is not
+  # `openfga.serviceAccount.name`.
+  # -- Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits and `rask.dev/openfga-account` the tokenless account it runs as, so a change to either restarts it.
   podAnnotations:
     rask.dev/openfga-clients: "catalog,hooks"
+    rask.dev/openfga-account: rask-openfga
   # AUTHENTICATED ([[XC-077]]). With no authn the API answers any pod that presents no credential, so code in any pod
   # could write `estate#admin` for itself or replace the model with no rask audit record. The API authenticates
   # each client as an OIDC client of the cluster ServiceAccount issuer (D1), so a client presents its pod's

@@ -13,10 +13,13 @@ then answers an uncredentialed call 401 is the live probe's (`scratch/probe_open
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import PurePosixPath
 
+import pytest
+
 from catalog.services.declaration import Declaration
-from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
+from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render, render_text
 
 
 def _openfga(docs: tuple[dict, ...]) -> dict[str, str]:
@@ -122,3 +125,37 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
         "kubernetes~system:serviceaccount:default:rask-sa-maintenance": ["reclaimer", "reconciler"]
     }, seeded
     assert reachers == {"catalog", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"
+
+
+@pytest.mark.parametrize(
+    ("values", "refusal"),
+    [
+        pytest.param(
+            ("--set-string", "openfga.serviceAccount.name=other-openfga"),
+            'openfga.serviceAccount must be create=false, name="rask-openfga"',
+            id="another-account",
+        ),
+        pytest.param(
+            ("--set", "openfga.serviceAccount.create=true"), 'openfga.serviceAccount must be create=false, name="rask-openfga"', id="the-subcharts-own-account"
+        ),
+        pytest.param(
+            ("--set-string", r"openfga.podAnnotations.rask\.dev/openfga-account=another"),
+            'openfga.podAnnotations.rask.dev/openfga-account is "another", but OpenFGA runs as "rask-openfga"',
+            id="a-pod-template-naming-another-account",
+        ),
+        pytest.param(
+            ("--set-json", 'openfga.extraVolumes=[{"name":"openfga-config","secret":{"secretName":"other-infra-credentials"}}]'),
+            'mounts the Secret "other-infra-credentials" as openfga-config, but this release renders the datastore credentials as "rask-infra-credentials"',
+            id="another-releases-credentials",
+        ),
+    ],
+)
+def test_a_name_the_subchart_cannot_template_is_refused_unless_it_is_this_releases(values: tuple[str, ...], refusal: str) -> None:
+    """Subchart values cannot template, so the account OpenFGA runs as and the Secret holding its datastore DSN are
+    written out with the release's name. A render where either names anything else is refused: the pod would run as an
+    account holding an API token or one that does not exist, or keep the token of the account it started as ([[XC-156]]),
+    or start with no DSN ([[XC-036]])."""
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_text(*DEFAULT_ARGS, *values)
+
+    assert refusal in refused.value.stderr

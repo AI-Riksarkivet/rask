@@ -124,8 +124,7 @@ _UNHARDENED_TODAY: dict[str, dict[str, tuple[str, ...]]] = {
 
 def _key(kind: str, name: str, container: str) -> str:
     """`Kind/workload/container`, with the release prefix stripped so the key survives a rename."""
-    for prefix in ("release-name-", "rask-"):
-        name = name.removeprefix(prefix)
+    name = name.removeprefix("rask-")
     return f"{kind}/{re.sub(r'-r\d+$', '', name)}/{container}"
 
 

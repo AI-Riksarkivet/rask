@@ -43,6 +43,7 @@ def _rendered_eso() -> list[dict]:
         [
             helm,
             "template",
+            "rask",
             str(REPO / "chart"),
             "--set",
             "image.localImages=true",

@@ -233,10 +233,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.http | object | `{"corsAllowedHeaders":["Authorization"],"corsAllowedOrigins":["https://openfga.invalid"]}` | Subchart passthrough: CORS for the OpenFGA HTTP API, closed by allowing only the unreachable origin `https://openfga.invalid`. |
 | openfga.image.tag | string | `"v1.18.3"` | OpenFGA image tag for the subchart server and for rask's own migrate Job (templates/openfga-migrate.yaml), so schema and binary match. |
 | openfga.playground.enabled | bool | `false` | Subchart passthrough: the OpenFGA browser playground; off, since it only runs with authn `none`. |
-| openfga.podAnnotations | object | `{"rask.dev/openfga-clients":"catalog,hooks"}` | Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits, so a change to them restarts it. |
+| openfga.podAnnotations | object | `{"rask.dev/openfga-account":"rask-openfga","rask.dev/openfga-clients":"catalog,hooks"}` | Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits and `rask.dev/openfga-account` the tokenless account it runs as, so a change to either restarts it. |
 | openfga.podSecurityContext | object | `{"fsGroup":65532}` | Subchart passthrough: the OpenFGA pod's securityContext; fsGroup 65532, the image's own user, which may read the mounted config file. |
 | openfga.replicaCount | int | `1` | Subchart passthrough: number of OpenFGA server replicas. |
 | openfga.resources | object | `{"limits":{"memory":"2Gi"},"requests":{"cpu":"50m","memory":"512Mi"}}` | Subchart passthrough: CPU and memory requests/limits for the OpenFGA server. |
+| openfga.serviceAccount.create | bool | `false` | Subchart passthrough: off, so the subchart renders no ServiceAccount and no job-status Role for it; rask renders the pod's tokenless account. |
+| openfga.serviceAccount.name | string | `"rask-openfga"` | Subchart passthrough: the ServiceAccount the OpenFGA pod runs as, `<release>-openfga`, which rask renders with no token; a render naming another is refused. |
 | openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":""},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the platform's gateway; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
 | podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service running more than one replica. |
 | podDisruptionBudget.minAvailable | int | `1` | minAvailable of every rendered PodDisruptionBudget. |

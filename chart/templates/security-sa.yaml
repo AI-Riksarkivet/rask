@@ -8,6 +8,15 @@ metadata:
   labels: {{- include "lance.labels" $ | nindent 4 }}
 automountServiceAccountToken: false
 {{- end }}
+{{- if .Values.openfga.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-openfga
+  labels: {{- include "lance.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+{{- end }}
 {{- range $name := include "lance.extraStoreIdentities" . | fromJsonArray }}
 ---
 apiVersion: v1

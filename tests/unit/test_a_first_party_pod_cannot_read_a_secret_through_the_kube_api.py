@@ -10,9 +10,15 @@ that binds a secret reader to it is the known case) reaches any pod the chart gi
 `default` with its token mounted. Code execution in such a container then reads every Secret in the namespace, around
 the secret store's policies.
 
+[[LH-341]]. A grant that hands its holder another identity reaches a Secret as surely as reading one: a pod it creates
+runs as any ServiceAccount of the namespace, `serviceaccounts/token` mints a token outright, `impersonate` acts as its
+target, and `bind` and `escalate` on a role give whatever that role grants. An aggregated ClusterRole's rules are written
+by the cluster, so a binding to one cannot be judged and fails the gate.
+
 READ FROM THE RENDER, in the three overlays that ship: the default values, the deployed estate
-(`make k3s-up` layers `values-local.yaml`), and production. A binding is judged by what its role
-grants, so a new subchart that binds a secret-reading role to `default` fails here without anyone
+(`make k3s-up` layers `values-local.yaml`), and production, and the default values rendered into another namespace,
+since a subject is one of the release's pods' only in the namespace the release installs into ([[LH-344]]). A binding is
+judged by what its role grants, so a new subchart that binds a secret-reading role to `default` fails here without anyone
 having listed it.
 
 ONE TEST PER CLOSES-WHEN CLAUSE a render can see: the grants, and one SA per service. That the dev store its
@@ -22,7 +28,10 @@ MUTATION-CHECKED 2026-10-11 ([[XC-128]]; again with [[XC-130]]). With a template
 chart, the grants test fails in every overlay on `RoleBinding/<name> grants ['secrets'] to SA default` and the
 identity test passes. With `openfga-model` on `rask-sa-jobs`, an ordinary SA no
 earlier revision guarantees, only the identity test fails, on that pre-upgrade hook. With `rask-sa-hooks` rendered as
-a hook again, only the identity test fails, on `identities rendered as hooks`.
+a hook again, only the identity test fails, on `identities rendered as hooks`. Again 2026-11-17: a Role granting `pods`
+create bound to `default` in the release's namespace fails the grants test in every overlay, the other namespace's
+included; `escalate` on ClusterRoles bound to the catalog's account fails it likewise; and a bound aggregated ClusterRole
+fails both tests; and a Role creating `deployments` bound to `default` fails the grants test as the `pods` one does.
 """
 
 from __future__ import annotations
@@ -38,8 +47,12 @@ from tests.unit.chart_render import DEFAULT_ARGS, PROD_ARGS, REPO, render_fixtur
 from tests.unit.chart_yaml import FAST_LOADER
 
 
+#: A namespace other than the one `helm template` renders into unasked, so a subject is judged in the release's own.
+_ANOTHER_NAMESPACE = "lake"
+
 _OVERLAYS: dict[str, tuple[str, ...]] = {
     "default": DEFAULT_ARGS,
+    "another-namespace": (*DEFAULT_ARGS, "--namespace", _ANOTHER_NAMESPACE),
     "deployed": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")),
     "prod": PROD_ARGS,
 }
@@ -51,12 +64,25 @@ _FIRST_PARTY_SOURCE = "rask/templates/"
 #: port-forward.
 _INTERIOR = frozenset({"nodes/proxy", "pods/exec", "pods/attach", "pods/portforward"})
 
+#: Grants that hand their holder another identity: a pod it creates, itself or through a workload whose pod template it
+#: writes, runs as any ServiceAccount of the namespace with that account's token mounted, `serviceaccounts/token` mints
+#: one outright, `impersonate` acts as its target, and `bind` and
+#: `escalate` on a role give the holder whatever that role grants.
+_BORROWED_IDENTITY = frozenset({"pods", "serviceaccounts/token", "impersonate", "bind", "escalate"})
+
+#: The kinds that carry a pod template, by API group.
+_POD_TEMPLATE_KINDS: dict[str, frozenset[str]] = {
+    "": frozenset({"replicationcontrollers"}),
+    "apps": frozenset({"deployments", "statefulsets", "daemonsets", "replicasets"}),
+    "batch": frozenset({"jobs", "cronjobs"}),
+}
+
 #: Built-in roles a binding may reference without the chart rendering them, and what each grants of
 #: the capabilities this gate is about. An unlisted external role fails the gate: it cannot judge it.
 _BUILTIN_GRANTS: dict[tuple[str, str], frozenset[str]] = {
-    ("ClusterRole", "cluster-admin"): frozenset({"secrets", "tokenreviews"} | _INTERIOR),
-    ("ClusterRole", "admin"): frozenset({"secrets", "pods/exec", "pods/attach", "pods/portforward"}),
-    ("ClusterRole", "edit"): frozenset({"secrets", "pods/exec", "pods/attach", "pods/portforward"}),
+    ("ClusterRole", "cluster-admin"): frozenset({"secrets", "tokenreviews"} | _INTERIOR | _BORROWED_IDENTITY),
+    ("ClusterRole", "admin"): frozenset({"secrets", "pods/exec", "pods/attach", "pods/portforward", "pods", "serviceaccounts/token", "impersonate"}),
+    ("ClusterRole", "edit"): frozenset({"secrets", "pods/exec", "pods/attach", "pods/portforward", "pods", "serviceaccounts/token", "impersonate"}),
     ("ClusterRole", "view"): frozenset(),
     ("ClusterRole", "system:auth-delegator"): frozenset({"tokenreviews"}),
     ("ClusterRole", "system:service-account-issuer-discovery"): frozenset(),
@@ -182,12 +208,34 @@ def _rule_grants(rule: dict) -> set[str]:
         found.add("tokenreviews")
     if groups & {"", "*"} and verbs:
         found |= {sub for sub in _INTERIOR if resources & {sub, f"{sub.split('/')[0]}/*", "*"}}
+    if groups & {"", "*"} and resources & {"pods", "*"} and verbs & {"create", "*"}:
+        found.add("pods")
+    # A workload's pod template names the account its pods run as, so writing one is creating a pod as that account.
+    if any(groups & {group, "*"} and resources & (kinds | {"*"}) for group, kinds in _POD_TEMPLATE_KINDS.items()) and verbs & {
+        "create",
+        "update",
+        "patch",
+        "*",
+    }:
+        found.add("pods")
+    if groups & {"", "*"} and resources & {"serviceaccounts/token", "serviceaccounts/*", "*"} and verbs & {"create", "*"}:
+        found.add("serviceaccounts/token")
+    if verbs & {"impersonate", "*"}:
+        found.add("impersonate")
+    if groups & {"rbac.authorization.k8s.io", "*"} and resources & {"roles", "clusterroles", "*"}:
+        found |= {"bind", "escalate"} if "*" in verbs else verbs & {"bind", "escalate"}
     return found
+
+
+def _namespace(args: tuple[str, ...]) -> str:
+    """The namespace a render with ``args`` installs into, which a namespaced subject must name to be one of its pods'."""
+    return args[args.index("--namespace") + 1] if "--namespace" in args else "default"
 
 
 @functools.cache
 def _bindings(*args: str) -> tuple[_Binding, ...]:
     docs = [doc for _, doc in _documents(*args)]
+    namespace = _namespace(args)
     roles = {(doc["kind"], doc["metadata"]["name"]): doc for doc in docs if doc.get("kind") in {"Role", "ClusterRole"}}
     found: list[_Binding] = []
     for doc in docs:
@@ -195,15 +243,17 @@ def _bindings(*args: str) -> tuple[_Binding, ...]:
             continue
         ref = (doc["roleRef"]["kind"], doc["roleRef"]["name"])
         if ref in roles:
+            # An aggregated role's rules are written by the cluster from every role its selectors match, so no render holds them.
+            assert "aggregationRule" not in roles[ref], f"{doc['kind']}/{doc['metadata']['name']} binds {ref}, whose rules the cluster aggregates"
             grants = frozenset().union(*(_rule_grants(rule) for rule in roles[ref].get("rules") or []))
         elif ref in _BUILTIN_GRANTS:
             grants = _BUILTIN_GRANTS[ref]
         else:
             pytest.fail(f"{doc['kind']}/{doc['metadata']['name']} binds {ref}, which neither the render nor _BUILTIN_GRANTS describes")
         subjects = doc.get("subjects") or []
-        accounts = [s["name"] for s in subjects if s.get("kind") == "ServiceAccount" and s.get("namespace", "default") == "default"]
+        accounts = [s["name"] for s in subjects if s.get("kind") == "ServiceAccount" and s.get("namespace", namespace) == namespace]
         users = (_SERVICE_ACCOUNT_USER.match(s.get("name", "")) for s in subjects if s.get("kind") == "User")
-        accounts += [user["name"] for user in users if user and user["namespace"] == "default"]
+        accounts += [user["name"] for user in users if user and user["namespace"] == namespace]
         found.append(
             _Binding(
                 name=f"{doc['kind']}/{doc['metadata']['name']}",
@@ -271,11 +321,12 @@ def test_no_first_party_service_account_can_read_a_secret_review_a_token_or_reac
     # prove the split.
     if overlay != "prod":
         assert any(not pod.first_party for pod in pods), f"{overlay}: no subchart pods rendered; the source split is broken"
-    # No role the render holds grants `secrets` (the operators that needed one are prerequisites, ADR 0153), so the proof that
-    # the classifier recognises one is the planted binding of the module's mutation check. Production binds no role to
-    # any pod: every workload that called the Kubernetes API there is the platform's.
+    # The render holds no Role or ClusterRole of its own (the operators that needed one are prerequisites, ADR 0153, and
+    # OpenFGA's subchart renders none, [[XC-156]]), so the proof that the classifier reads a rendered role is the planted
+    # binding of the module's mutation check. Production binds no role to any pod: every workload that called the
+    # Kubernetes API there is the platform's.
     if overlay != "prod":
-        assert any(b.role not in _BUILTIN_GRANTS for b in bindings), f"{overlay}: no binding to a rendered role was classified"
+        assert bindings, f"{overlay}: the walk found no binding at all"
 
     assert _offending(args) == [], f"{overlay}: {_offending(args)}"
     # The dev store is the openbao fixture's ([[XC-131]]): rask binds no reviewer, and the fixture binds the SA its own pod
@@ -302,7 +353,8 @@ def test_every_first_party_service_runs_as_its_own_service_account(overlay: str)
     admission and its workload never starts, and a hook holds the whole upgrade until its timeout. A
     one-shot Job never borrows a service's identity, no identity (an SA, a role or a binding) is a hook, and a
     first-party pod mounts an API token only when a
-    binding gives its SA something to do with it, since an idle token is only a credential to steal. The D1 verifiers (LH-220) validate SA tokens offline against the issuer's JWKS, which the API
+    binding gives its SA something to do with it, since an idle token is only a credential to steal. A subchart's pod
+    mounts none: OpenFGA, the one subchart, calls the Kubernetes API for nothing ([[XC-156]]). The D1 verifiers (LH-220) validate SA tokens offline against the issuer's JWKS, which the API
     server serves only to a grant.
     """
     args = _OVERLAYS[overlay]
@@ -334,6 +386,7 @@ def test_every_first_party_service_runs_as_its_own_service_account(overlay: str)
         "an API token no grant uses": sorted(
             f"{pod.workload} ({pod.service_account})" for pod in first_party if pod.token_mounted and pod.service_account not in granted
         ),
+        "a subchart's pod holding an API token": sorted(f"{pod.workload} ({pod.service_account})" for pod in pods if pod.token_mounted and not pod.first_party),
         "D1 verifiers that cannot read the SA issuer": sorted(verifiers - issuer_readers),
         "issuer discovery granted to `default`": sorted(issuer_readers & {"default"}),
         "identities rendered as hooks": sorted(

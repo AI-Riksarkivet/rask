@@ -19,6 +19,21 @@ refused unless that literal is `lance.openfgaClients`: a change to the client se
 every reconcile (Helm or Argo CD) rolls. The auth toggle changes the list without the literal; it fails closed when auth
 is turned on (nothing is admitted until the pod restarts), and with auth off no service presents a token.
 
+## `{{- $account := printf "%s-openfga" .Release.Name }}`
+
+[[XC-156]], [[XC-036]]: two names the subchart takes as literals, because subchart values cannot template, are held to
+this release. `openfga.serviceAccount` must be `create: false` with the name `<release>-openfga`, the tokenless account
+`security-sa.yaml` renders: with `create` on, the subchart renders its own account, which mounts an API token, and a
+Role reading Job status for a migration wait this chart turns off; with another name the pod is refused at admission.
+The `openfga-config` volume must mount `<release>-infra-credentials`, the Secret `external-secrets.yaml` renders: under
+any other name OpenFGA starts with no datastore DSN and fails at runtime. Both refusals name the value and what this
+release renders.
+
+A pod mounts its account's token when it starts, and the subchart's pod template carries no
+`automountServiceAccountToken`, so changing the account alone changes no pod template and replaces no pod. The pod
+template therefore names the account in `openfga.podAnnotations."rask.dev/openfga-account"`, which the render holds
+equal to the account: the reconcile that changes the account replaces the pod.
+
 ## `{{- if not $subjects }}{{- $subjects = "system:serviceaccount:-:no-fga-client" }}{{- end }}`
 
 No FGA client renders (auth off): an empty list would admit every subject, so name one no ServiceAccount
