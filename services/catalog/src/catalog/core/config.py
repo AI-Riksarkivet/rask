@@ -376,6 +376,18 @@ class CatalogVendingSettings(BaseSettings):
     # MODE is the separate CREDENTIAL mechanism. The chart turns `web_identity` on with the catalog's token mounted.
     vending_mode: Literal["mode_b", "web_identity"] = Field(default="mode_b", alias="LANCE_VENDING_MODE")
     vending_ttl_seconds: int = Field(default=900, ge=60, alias="LANCE_VENDING_TTL_SECONDS")
+    #: The buckets whose warehouse git declares runs with DETECTION ONLY (ADR 0242 § The declared exception): the chart
+    #: renders them from `catalog.declared.warehouses[].seal: detection_only` (the bucket, or the id where none is named)
+    #: and `catalog.declared.estateWarehouseSeal` (the estate's own bucket); comma-separated, empty by default. Such a
+    #: warehouse registers on a store the probe finds unenforced or untaggable, and its commits tag where the store
+    #: grants it and go on where it refuses. Every other warehouse requires the seal: registration refuses a store that
+    #: does not enforce it, and a commit whose seal the store refuses fails before its version lands.
+    seal_detection_only: str = Field(default="", alias="LANCE_SEAL_DETECTION_ONLY_BUCKETS")
+
+    @property
+    def seal_detection_only_buckets(self) -> frozenset[str]:
+        """:attr:`seal_detection_only` as a set of bucket names."""
+        return frozenset(bucket.strip() for bucket in self.seal_detection_only.split(",") if bucket.strip())
 
 
 class CatalogAuthzSettings(BaseSettings):

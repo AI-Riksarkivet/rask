@@ -735,8 +735,15 @@ catalog:
     # -- Projects git declares, each `{id, admins, protected}`: `admins` lists people's principals (`<idp-id>~<user id>`), and a project naming none is administered by `auth.bootstrapAdmin` when that is set; `protected` arms its deletion protection. The default declares one project, so a one-team install never creates one.
     projects: # @schema item: object; itemProperties: {"id": {"type": "string"}, "admins": {"type": "array", "items": {"type": "string"}}, "protected": {"type": "boolean"}}
       - id: default
-    # -- Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it. The id is the first segment of every name in the warehouse.
+    # ADR 0242: every file a commit adds is sealed (an object tag the catalog puts), and the catalog identity's store
+    # policy refuses a put over a sealed key. A warehouse whose store does not enforce that, as the warehouse probe
+    # measures at registration (`sealed: unenforced` or `untaggable`), is refused unless git declares it here with
+    # `seal: detection_only`: it then registers, its commits tag where the store grants it and go on where it refuses,
+    # maintenance's committed-file pass is its only guard, and `WarehouseSealUnenforced` fires while it runs so.
+    # -- Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active, seal}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it, and `seal` is `required` (unset) or `detection_only`, which admits a store that does not enforce the seal (ADR 0242). The id is the first segment of every name in the warehouse.
     warehouses: []
+    # -- The seal of the estate's own warehouse, on `objectStore.bucket`, which has no registration to probe: `required` (the default; a commit whose seal the store refuses fails before it lands) or `detection_only` (commits tag where the store grants it and go on where it refuses; `WarehouseSealUnenforced` fires). ADR 0242.
+    estateWarehouseSeal: required # @schema enum: [required, detection_only]
     # -- Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:<id>` or `warehouse:<id>`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:<namespace>:<name>`). The catalog revokes a grant removed from here, and only one it wrote from here.
     grants: []
   declarationConverge:

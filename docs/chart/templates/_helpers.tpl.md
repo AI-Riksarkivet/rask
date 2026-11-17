@@ -720,7 +720,12 @@ with none fails the render as an undefined template.
   and `PutObjectTagging`, with which it seals each file a commit adds (`rask-sealed`, `lakehouse.file_identities.as_stored`,
   ADR 0242). Its Deny `NeverOverASealedFile` refuses a put over a sealed key, to the catalog's own IO and to every session
   vended from it, which a session policy can only narrow: measured on RustFS 1.0.3 (2026-11-17), a put, a multipart
-  upload's create, part and complete, and a copy onto a sealed key answer 403 AccessDenied.
+  upload's create, part and complete, and a copy onto a sealed key answer 403 AccessDenied. It is the seal's only Deny:
+  no session policy repeats it, and `make lifecycle-rustfs-check` renders this policy for its vending user.
+- `lance.sealDetectionOnlyBuckets`: the buckets git declares run with the seal unenforced
+  (`catalog.declared.warehouses[].seal: detection_only`, and `objectStore.bucket` under
+  `catalog.declared.estateWarehouseSeal`), rendered into the catalog's `LANCE_SEAL_DETECTION_ONLY_BUCKETS`; any other
+  value of either fails the render (ADR 0242).
 - `lineage`: list, get and delete under `<control bucket>/_lineage_outbox/`, the one outbox it drains, and get and put on
   exactly `<control bucket>/_timers/lineage-relay.json`, its relay timer's claim record.
 - `maintenance`: `ListAllMyBuckets`; list and `GetBucketLocation` on every bucket; get on each table's history and no

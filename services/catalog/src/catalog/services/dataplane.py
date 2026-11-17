@@ -1754,12 +1754,11 @@ def _discard_unlanded_attempt(
 def _read_attempt_files(
     table: table_claims.DoorTable, so: StorageOptions, before: lance.LanceDataset, after: lance.LanceDataset, transaction: Transaction, *, branch: str | None
 ) -> file_identities.CommittedFiles | None:
-    """What a refused attempt added, read on its way out; ``None`` when the store does not answer, which leaves the files it
-    wrote but its transaction file to Lance's rule rather than replace the refusal."""
+    """What a refused attempt added, read on its way out and sealed nowhere, since it is deleted next; ``None`` when the
+    store does not answer, which leaves the files it wrote but its transaction file to Lance's rule rather than replace
+    the refusal."""
     try:
-        return committed_files.added(
-            before, after, table_location=table.location, branch=branch, so=so, transaction_uuid=transaction.uuid, read_version=transaction.read_version
-        )
+        return committed_files.found(before, after, table_location=table.location, branch=branch, so=so, transaction_uuid=transaction.uuid)
     except OSError as exc:
         log.warning("commit_attempt_files_unread", extra={"table": table.segments, "transaction": transaction.uuid, "error": str(exc)[:300]})
         return None

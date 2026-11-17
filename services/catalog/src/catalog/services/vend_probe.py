@@ -46,6 +46,16 @@ CAS_RESERVE: Final = "conditional_put"
 #: encryption, its role holding no grant on the KMS key, and not a store it could not reach ([[LH-262]]).
 ENCRYPTED_WRITE: Final = "encrypted_write"
 
+#: The check whose result IS the SEAL claim (ADR 0242), and the only one that may set `sealed`: a probe file a vended
+#: WRITE credential put, sealed by the catalog as a commit seals what it adds, then put over by the same credential, as
+#: one put and as a multipart upload's create. Its outcome is `pass` only when the store refused both.
+SEAL_CHECK: Final = "overwrite_of_a_sealed_file_refused"
+
+#: What the seal check measured of the warehouse's store (ADR 0242): it refused both overwrites (`enforced`), took the
+#: seal and let an overwrite through (`unenforced`: the store does not evaluate `s3:ExistingObjectTag` on a put), or
+#: refused the seal itself (`untaggable`: the role holds no `s3:PutObjectTagging`, or the store keeps no object tags).
+type Sealed = Literal["enforced", "unenforced", "untaggable"]
+
 
 class ProbeCheck(BaseModel):
     """One step of the probe, with its own outcome — never folded into a neighbour's."""
@@ -72,14 +82,19 @@ class ProbeReport(BaseModel):
     #: a second concurrent writer would see. Reporting that as `False` raises a false alarm about the
     #: store; reporting it as `True` claims a guarantee nothing tested.
     commit_safe: bool | None = None
+    #: What the seal check measured (:data:`Sealed`); `None` when it never ran: no write credential, or the probe file
+    #: could not be put. Recorded on the warehouse and served (`WarehouseResponse.sealed`).
+    sealed: Sealed | None = None
     checks: list[ProbeCheck] = Field(default_factory=list)
 
 
-def summarize_probe(checks: list[ProbeCheck]) -> ProbeReport:
+def summarize_probe(checks: list[ProbeCheck], *, sealed: Sealed | None = None) -> ProbeReport:
     """Reduce every check to one verdict WITHOUT dropping any of them.
 
     A first-failure exit cannot tell an over-permissive store from an unreachable one, and those need
-    different answers — so the caller runs every step it can and this reduces the whole list.
+    different answers — so the caller runs every step it can and this reduces the whole list. ``sealed`` is what the
+    seal check measured, carried as it is: whether a store that does not enforce the seal is refused is the warehouse's
+    declaration's to decide, not the probe's.
     """
     by_name = {c.name: c for c in checks}
     scope = by_name.get(SCOPE_CHECK)
@@ -93,4 +108,4 @@ def summarize_probe(checks: list[ProbeCheck]) -> ProbeReport:
         outcome = "skip"
     else:
         outcome = "pass"
-    return ProbeReport(outcome=outcome, enforced=enforced, commit_safe=commit_safe, checks=list(checks))
+    return ProbeReport(outcome=outcome, enforced=enforced, commit_safe=commit_safe, sealed=sealed, checks=list(checks))

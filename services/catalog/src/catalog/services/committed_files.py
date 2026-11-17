@@ -9,10 +9,12 @@ What a version adds against the version it follows on the same ref, each a file 
 (``table_layout.WRITER_PUT_GLOBS``) and, once sealed here, never put over (ADR 0242): the data file of each fragment it holds anew (``data/*.lance``,
 ``lance_docs/lance/format/table/layout.md`` § Basic Layout), the blob sidecars beside it when the table has a blob column
 (``blob.md`` § Sidecar Resolution), each deletion file a fragment did not carry (``_deletions/``), the files of each index
-it adds (``_indices/<uuid>/``), and its own transaction file (``_transactions/<read version>-<uuid>.txn``, ``layout.md`` §
-Transaction Files). pylance 13.0.0's ``read_transaction`` reads the manifest's inline copy (measured: a zeroed ``.txn``
-read back unchanged), and the file is still one the version names and a writer may replace. A file named through a base
-is not under the table's root, and no vend puts there.
+it adds (``_indices/<uuid>/``), and the transaction file its manifest names (``_transactions/<read version>-<uuid>.txn``,
+``layout.md`` § Transaction Files). pylance 13.0.0's ``read_transaction`` reads the manifest's inline copy when it carries
+one (measured: a zeroed ``.txn`` read back unchanged) and the file when it carries none, so the file is sealed like any
+other. A version naming a file the store does not hold is refused (:class:`lakehouse.file_identities.FilesNotHeldError`):
+the key would stay a writer's to put later, unsealed and unrecorded. A file named through a base is not under the
+table's root, and no vend puts there.
 """
 
 from __future__ import annotations
@@ -24,16 +26,26 @@ from typing import Final
 import lance
 import pyarrow.fs as pafs
 from lance.dataset import Transaction
+from lance_namespace import InvalidInputError, ServiceUnavailableError
 from opentelemetry import metrics
 
+from catalog.core.config import get_settings
 from catalog.services import client_fragments
-from lakehouse import base_refs, file_identities
+from lakehouse import base_refs, file_identities, manifest_wire, stored_objects
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
+
+#: Commits refused before their version landed because the store refused, or did not answer, a seal (ADR 0242 B4), by
+#: ``lance.seal_failure`` (``refused``, ``unavailable``).
+_seal_failed = metrics.get_meter("lance.catalog").create_counter(
+    "catalog.commit.seal_failed",
+    unit="{commit}",
+    description="Commits refused before their version landed because the object store refused, or did not answer, sealing a file they add.",
+)
 
 #: Commits Lance made itself whose files the catalog could not record, so the sweep never reads them ([[LH-419]]).
 #: Added to at every such commit, zero included, so the series exists before the first miss and the alert's
@@ -54,25 +66,135 @@ def added(
     so: StorageOptions,
     transaction_uuid: str,
     read_version: int,
+    seal_transaction: bool = True,
 ) -> file_identities.CommittedFiles:
     """What ``after`` adds over ``before`` (``None`` for a table's first version) on ``branch`` (``None`` for main), the
-    version whose transaction ``transaction_uuid`` was planned on ``read_version``.
+    version whose transaction ``transaction_uuid`` was planned on ``read_version``, each file sealed and every one the
+    version names held (ADR 0242). Without ``seal_transaction`` the transaction file is required and recorded and left for
+    the caller to seal once the version lands (:func:`seal_landed_transaction`): a stock writer's, which it puts again
+    under the same name on each attempt of the commit.
+
+    Raises:
+        FilesNotHeldError: The version names a file the store does not hold.
+        InvalidInputError: The version's manifest names a transaction file other than its transaction's own.
+        ServiceUnavailableError: The store refused, or did not answer, a seal on a warehouse whose store must enforce it:
+            the commit has not landed, and a retry finds the store answering or the operator's grant in place.
+        OSError: The store refused, or could not be reached for, a read.
+    """
+    root = table_root(table_location)
+    paths = added_paths(before, after, root=root, branch=branch, so=so)
+    planned = transaction_file(branch, read_version, transaction_uuid)
+    if (named := _named_transaction(after, branch)) is not None and named != planned:
+        raise InvalidInputError(f"commit refused: the manifest names transaction file {named!r}, and its transaction's own is {planned!r}")
+    unsealed = [named] if named is not None and not seal_transaction else []
+    try:
+        return file_identities.as_stored(root, so, transaction_uuid, paths, where_granted=detection_only(table_location), unsealed=unsealed)
+    except stored_objects.SealRefusedError as exc:
+        _count_seal_failed(table_location, "refused", exc)
+        raise ServiceUnavailableError(
+            "the commit was not landed: the object store refused sealing a file it adds (s3:PutObjectTagging), which every "
+            "warehouse not declared detection-only requires; the store's operator grants it, then retry"
+        ) from exc
+    except stored_objects.SealUnavailableError as exc:
+        _count_seal_failed(table_location, "unavailable", exc)
+        raise ServiceUnavailableError("the commit was not landed: the object store did not answer sealing a file it adds; retry") from exc
+
+
+def seal_landed_transaction(table_location: str, so: StorageOptions, committed: file_identities.CommittedFiles) -> None:
+    """Seal the transaction file of a stock commit whose version has landed, which :func:`added` left unsealed: the writer
+    puts it no more. A seal the store refuses or does not answer is logged at ERROR and counted, and the version stays
+    landed: no reader of it reads the file, since ``version/create`` admits only a manifest carrying its transaction
+    inline, and the commit's record keeps the file's identity, which maintenance's pass reads again."""
+    paths = [file.path for file in committed.files if f"/{TRANSACTIONS}/" in f"/{file.path}"]
+    try:
+        stored_objects.seal(table_root(table_location), so, paths, where_granted=detection_only(table_location))
+    except (stored_objects.SealRefusedError, stored_objects.SealUnavailableError) as exc:
+        _count_seal_failed(table_location, "after_landing", exc)
+
+
+#: The directory of a ref's transaction files (``lance_docs/lance/format/table/layout.md`` § Transaction Files).
+TRANSACTIONS: Final = "_transactions"
+
+
+def found(
+    before: lance.LanceDataset | None, after: lance.LanceDataset, *, table_location: str, branch: str | None, so: StorageOptions, transaction_uuid: str
+) -> file_identities.CommittedFiles:
+    """What ``after`` adds over ``before`` as the store holds it, sealing nothing: the files of an attempt that never
+    lands, read to delete them ([[LH-564]]).
 
     Raises:
         OSError: The store refused, or could not be reached for, a read.
     """
     root = table_root(table_location)
+    return file_identities.as_found(root, so, transaction_uuid, added_paths(before, after, root=root, branch=branch, so=so))
+
+
+def added_paths(before: lance.LanceDataset | None, after: lance.LanceDataset, *, root: str, branch: str | None, so: StorageOptions) -> list[str]:
+    """Every file under ``root`` that ``after`` names and ``before`` does not, relative to ``root``.
+
+    Named by the version, each of which the store must hold: each new data file, each new deletion file, and the
+    transaction file its manifest names. Listed, as the store holds them: each added index's directory and the sidecars
+    beside a new data file of a blob column, whose completeness the index and blob rules judge (a file an index declares,
+    and a blob a data file names, are refused absent). The other files a version can reference under its root are of
+    features no commit may turn on (``lakehouse.features.SUPPORTED``): an overlay's data file (flag 64), a spilled row
+    lineage column (2048), a fragment tree's objects under ``_bt/`` (4096), managed blobs under ``_blobs/`` (16384), and a
+    MemWAL, which ``version/create`` refuses by its index.
+    """
     ref = _ref_prefix(branch)
     data = list(_data_files(before, after))
     listed = [f"{ref}data/{name.removesuffix('.lance')}" for name in data] if client_fragments.blob_columns(after) else []
     listed += [f"{ref}_indices/{uuid}" for uuid in _indices(before, after)]
-    paths = [
+    named = _named_transaction(after, branch)
+    return [
         *(f"{ref}data/{name}" for name in data),
         *(f"{ref}{path}" for path in _deletion_files(before, after)),
         *_listed(root, so, listed),
-        transaction_file(branch, read_version, transaction_uuid),
+        *([named] if named is not None else []),
     ]
-    return file_identities.as_stored(root, so, transaction_uuid, paths)
+
+
+#: ``string transaction_file = 12`` of ``message Manifest``: the name, under the ref's ``_transactions/``, of the file
+#: holding the version's transaction, empty for none. Measured on pylance 13.0.0: ``<read version>-<uuid>.txn`` on every
+#: version it writes, and Lance reads the version's transaction from it whenever the manifest carries none inline
+#: (``lance_docs/lance/format/table/transaction.md`` § Inline Transaction Sections).
+TRANSACTION_FILE_FIELD: Final = 12
+
+
+def transaction_file_in(message: bytes) -> str | None:
+    """The transaction file a ``Manifest`` protobuf ``message`` names, ``None`` when it names none.
+
+    Raises:
+        InvalidInputError: The name is not one file directly under ``_transactions/``.
+        manifest_wire.ManifestWireError: ``message`` does not parse.
+    """
+    value = next((value for number, value in manifest_wire.fields(message) if number == TRANSACTION_FILE_FIELD and isinstance(value, bytes)), None)
+    if not value:
+        return None
+    name = value.decode("utf-8", errors="replace")
+    if "/" in name or "\\" in name or name in {".", ".."}:
+        raise InvalidInputError(f"commit refused: the manifest names transaction file {name!r}, which is not one file under _transactions/")
+    return name
+
+
+def _named_transaction(dataset: lance.LanceDataset, branch: str | None) -> str | None:
+    manifest: bytes = dataset._ds.serialized_manifest()  # noqa: SLF001 — pylance exposes no manifest field; its own __reduce__ path reads this
+    name = transaction_file_in(manifest)
+    return None if name is None else f"{_ref_prefix(branch)}_transactions/{name}"
+
+
+def detection_only(table_location: str) -> bool:
+    """Whether git declares the warehouse whose bucket holds ``table_location`` runs with detection only
+    (``catalog.declared.warehouses[].seal``, ``LANCE_SEAL_DETECTION_ONLY_BUCKETS``, ADR 0242 § The declared exception): its
+    commits tag where the store grants it and go on where it refuses. Any other warehouse's commit fails rather than land
+    a file unsealed."""
+    if not table_location.startswith("s3://"):
+        return False
+    return table_location.removeprefix("s3://").partition("/")[0] in get_settings().seal_detection_only_buckets
+
+
+def _count_seal_failed(table_location: str, reason: str, exc: OSError) -> None:
+    _seal_failed.add(1, {"lance.seal_failure": reason})
+    log.error("commit_seal_failed", extra={"location": table_location, "reason": reason, "error": str(exc)[:300]})
 
 
 def table_root(table_location: str) -> str:
@@ -136,7 +258,7 @@ def record_landed(
         record(
             added(before, after, table_location=table_location, branch=branch, so=so, transaction_uuid=transaction.uuid, read_version=transaction.read_version)
         )
-    except OSError as exc:
+    except (OSError, file_identities.FilesNotHeldError, InvalidInputError, ServiceUnavailableError) as exc:
         _count_unrecorded(table_location, after.version, f"{type(exc).__name__}: {exc}")
         return transaction
     _unrecorded.add(0)

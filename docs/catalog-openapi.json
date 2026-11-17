@@ -10067,6 +10067,16 @@
             ],
             "title": "Outcome",
             "type": "string"
+          },
+          "sealed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sealed"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -11405,6 +11415,14 @@
         "title": "RoleRecord",
         "type": "object"
       },
+      "Sealed": {
+        "enum": [
+          "enforced",
+          "unenforced",
+          "untaggable"
+        ],
+        "type": "string"
+      },
       "SetLabelRequest": {
         "additionalProperties": false,
         "description": "Attach a label the object's project defines, with its value; a marker carries none.",
@@ -12660,6 +12678,22 @@
           "root_uri": {
             "title": "Root Uri",
             "type": "string"
+          },
+          "sealed": {
+            "anyOf": [
+              {
+                "enum": [
+                  "enforced",
+                  "unenforced",
+                  "untaggable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sealed"
           },
           "status": {
             "anyOf": [

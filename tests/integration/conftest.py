@@ -117,37 +117,16 @@ class RaceCatalog(BaseModel):
     stock_options: dict[str, str]
 
 
-#: The canned policy the chart grants the catalog's own identity on the store (`lance.objectStorePolicy.catalog`,
-#: chart/templates/_helpers.tpl): every vend is a session of it, narrowed by the session policy the catalog writes.
-_CATALOG_POLICY = {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "TheWholeDataPlaneItGoverns",
-            "Effect": "Allow",
-            "Action": [
-                "s3:ListBucket",
-                "s3:GetBucketLocation",
-                "s3:ListAllMyBuckets",
-                "s3:GetObject",
-                "s3:PutObject",
-                "s3:PutObjectTagging",
-                "s3:DeleteObject",
-                "s3:AbortMultipartUpload",
-                "s3:CreateBucket",
-                "s3:DeleteBucket",
-            ],
-            "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"],
-        },
-        {
-            "Sid": "NeverOverASealedFile",
-            "Effect": "Deny",
-            "Action": ["s3:PutObject"],
-            "Resource": ["arn:aws:s3:::*/*"],
-            "Condition": {"Null": {"s3:ExistingObjectTag/rask-sealed": "false"}},
-        },
-    ],
-}
+def _catalog_policy() -> dict[str, object]:
+    """The canned policy the chart grants the catalog's own identity on the store (`lance.objectStorePolicy.catalog`), as
+    `helm template` renders it into the identities ConfigMap the provisioning hook reads: every vend is a session of it,
+    narrowed by the session policy the catalog writes, so the seal's Deny there is the one the store applies to every
+    vend (ADR 0242). Rendered, never copied: a lane that held its own copy would pass with the chart's Deny removed."""
+    from tests.unit import chart_render
+
+    rendered = chart_render.render(*chart_render.DEFAULT_ARGS)
+    identities = next(doc for doc in rendered if doc.get("kind") == "ConfigMap" and doc["metadata"]["name"].endswith("-object-store-identities"))
+    return json.loads(identities["data"]["rask-sa-catalog.json"])
 
 
 def _vending_session() -> Callable[..., IssuedSession]:
@@ -167,7 +146,7 @@ def _vending_session() -> Callable[..., IssuedSession]:
     spec.loader.exec_module(script)
     admin = script.AdminClient(_RACE_STORE, os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"])
     user, secret = f"rask-vend-{uuid4().hex[:8]}", secrets.token_urlsafe(24)
-    admin.put("add-canned-policy", {"name": "rask-lifecycle-catalog"}, json.dumps(_CATALOG_POLICY).encode())
+    admin.put("add-canned-policy", {"name": "rask-lifecycle-catalog"}, json.dumps(_catalog_policy()).encode())
     admin.put("add-user", {"accessKey": user}, json.dumps({"secretKey": secret, "status": "enabled"}).encode())
     admin.put("set-user-or-group-policy", {"policyName": "rask-lifecycle-catalog", "userOrGroup": user, "isGroup": "false"}, b"")
     sts = boto3.client(

@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, assert_never, r
 from urllib.parse import urlsplit
 
 from botocore.exceptions import BotoCoreError, ClientError
-from lance_namespace import InternalError, InvalidInputError, ServiceUnavailableError
+from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
@@ -53,7 +53,7 @@ from lakehouse.objectfs import lance_storage_options
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.storage_options import StorageOptions
 from lakehouse.store_session import IssuedSession, WebIdentity
-from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, SEALED_CONDITION_KEY, WRITER_PUT_GLOBS
+from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 
 
 if TYPE_CHECKING:
@@ -358,25 +358,6 @@ _TABLE_OBJECT_ACTIONS: Final[dict[SessionTier, tuple[str, ...]]] = {
     "maintain": _MAINTAIN_ACTIONS,
     "probe": _PROBE_ACTIONS,
 }
-#: The write tier's refusal of a put over a file a commit added (ADR 0242): the catalog seals each such file with
-#: :data:`SEALED_TAG` before its version lands (``lakehouse.file_identities.as_stored``), and the store refuses this
-#: session a ``PutObject`` whose key holds that tag. Measured on RustFS 1.0.3 (2026-11-17, a session the store's STS issued
-#: to a user holding the catalog's canned policy under this policy): a put, a put sending ``If-None-Match: *``, a
-#: ``CreateMultipartUpload``, an ``UploadPart`` and a ``CompleteMultipartUpload`` of an upload begun before the seal, and a
-#: ``CopyObject`` onto a sealed key each 403 AccessDenied, while a put and a multipart upload of a new key, and a put over
-#: the writer's own unsealed key, answer 200. RustFS reads the existing object's tags into the request's conditions for any
-#: object action a policy conditions on them (``rustfs@1.0.3:rustfs/src/storage/access.rs:1288-1370``).
-#:
-#: ``Null`` false is "the existing object carries the tag", so an absent object, or one no commit added, is not refused. The
-#: resource is every object: the session reaches no object outside its table's statements, so naming its prefix again
-#: would cost characters and narrow nothing. 146 characters of the compact policy.
-NEVER_OVER_A_SEALED_FILE: Final[dict[str, object]] = {
-    "Sid": "NeverOverASealedFile",
-    "Effect": "Deny",
-    "Action": ["s3:PutObject"],
-    "Resource": "arn:aws:s3:::*",
-    "Condition": {"Null": {SEALED_CONDITION_KEY: "false"}},
-}
 #: What S3 asks of the KMS key an object is encrypted with: ``kms:Decrypt`` to GET one, ``kms:GenerateDataKey`` to PUT one,
 #: and both for a multipart upload (AWS, "Using server-side encryption with AWS KMS keys") ([[LH-262]]).
 _KMS_READ_ACTIONS = ("kms:Decrypt",)
@@ -384,23 +365,69 @@ _KMS_WRITE_ACTIONS = ("kms:Decrypt", "kms:GenerateDataKey")
 
 #: The longest inline session policy STS takes: 2,048 characters of the plaintext on AWS, and 2,048 bytes as RustFS
 #: re-serialises it (`rustfs@1.0.3:rustfs/src/admin/service/session_policy.rs:34-39`). The policy is sent as compact,
-#: escaped (so ASCII) JSON, which neither store re-serialises any shorter, so its length is the bound ([[LH-262]]).
+#: escaped (so ASCII) JSON, and judged by :func:`counted_length`, the longer of the two counts ([[LH-262]]).
 SESSION_POLICY_LIMIT: Final = 2048
 
 
-class SessionPolicyTooLong(InternalError):
-    """A vend whose session policy STS would refuse: its table's location, bases or KMS key are too long ([[LH-262]]).
+def counted_length(policy: dict[str, object]) -> int:
+    """The length a store counts ``policy`` at, the compact JSON with every ``Resource`` and condition value that is one
+    string written as a one-element list: RustFS 1.0.3 re-serialises such a string as a list before it counts, measured
+    2026-11-17 on the lane's STS (one statement padded to the edge: a list ``Resource`` was taken at 2,048 characters, a
+    string one at 2,046 and refused at 2,047, two string ones refused past 2,044), while AWS counts the plaintext sent,
+    never longer. Counted the longer way, a policy the catalog admits is one both stores take: counted the short way, a
+    write vend for a 99-character branch on the lane passed the catalog's check at 2,045 characters and the store refused
+    the exchange, which the door answered 503."""
 
-    A 5xx's ``detail`` is redacted (``ns_errors.problem_detail``), so the cause travels in the problem's title (this class's
-    name) and in extension members the catalog wrote itself: the policy's length and the limit.
+    def listed(value: object) -> object:
+        return [value] if isinstance(value, str) else value
+
+    statements = policy.get("Statement")
+    counted = [
+        {
+            **statement,
+            **({"Resource": listed(statement["Resource"])} if "Resource" in statement else {}),
+            **(
+                {"Condition": {op: {key: listed(value) for key, value in keys.items()} for op, keys in statement["Condition"].items()}}
+                if isinstance(statement.get("Condition"), dict)
+                else {}
+            ),
+        }
+        for statement in (statements if isinstance(statements, list) else [])
+        if isinstance(statement, dict)
+    ]
+    return len(json.dumps({**policy, "Statement": counted}, separators=(",", ":")))
+
+
+class PolicyNames(BaseModel):
+    """What a vend's session policy names whose length is the caller's or its table's: the table's prefix, the branch, the
+    bases its manifest declares and the KMS key the deployment names, each by its length in characters."""
+
+    model_config = ConfigDict(frozen=True)
+
+    table_prefix: int = 0
+    branch: int = 0
+    bases: int = 0
+    kms_key: int = 0
+
+
+class SessionPolicyTooLong(InvalidInputError):
+    """A vend whose session policy STS would refuse: what it names is too long for a direct credential ([[LH-262]]).
+
+    The spec's InvalidInput (400, code 13): no retry can shorten the names, and the store's own refusal would read as an
+    outage to retry. The problem names the policy's length, the limit and what fills it (:class:`PolicyNames`) as extension
+    members, beside a detail naming the longest of them.
     """
 
     #: RFC 9457 extension members, merged into the problem body by ``ns_errors.problem_detail``.
     problem_extra: dict[str, object]
 
-    def __init__(self, message: str, *, characters: int) -> None:
+    def __init__(self, message: str, *, characters: int, names: PolicyNames) -> None:
         super().__init__(message)
-        self.problem_extra = {"session_policy_characters": characters, "session_policy_limit": SESSION_POLICY_LIMIT}
+        self.problem_extra = {
+            "session_policy_characters": characters,
+            "session_policy_limit": SESSION_POLICY_LIMIT,
+            "session_policy_names": names.model_dump(),
+        }
 
 
 #: What AWS lets a RoleSessionName hold (2 to 64 of `[\w+=,.@-]`); RustFS accepts the name and keeps none of it.
@@ -894,12 +921,14 @@ def build_session_policy(
       that could put under ``_refs/`` could move a tag, forge a branch or fail every ref listing with a child
       prefix. The Deny is load-bearing, measured (LH-469, #594): the staged Allow also matches
       ``<n>.manifest-<uuid>.manifest``, a name pylance reads as final, and a session policy's explicit Deny
-      overrides any Allow on RustFS and on AWS S3 alike (Deny statements are evaluated first). A second
-      Deny, :data:`NEVER_OVER_A_SEALED_FILE`, refuses a put over any file a commit added, which the catalog
-      sealed before the version landed (ADR 0242). The ``tree/`` grant costs 20 characters of the table prefix
-      a write credential fits within a 2,048-byte session policy, the limit RustFS and AWS both enforce, and
-      the seal's Deny 18 more (109 to 89 to 71 at a 63-character bucket, counted on the compact policy
-      :class:`WebIdentityVendor` sends; a KMS key's grant costs 26 more, to 45, [[LH-262]]).
+      overrides any Allow on RustFS and on AWS S3 alike (Deny statements are evaluated first). A put over a
+      file a commit added is refused by no statement here: the catalog seals each such file before its version
+      lands, and the catalog identity's own store policy denies every session of it a put over a sealed key
+      (``lance.objectStorePolicy.catalog``, ADR 0242), which a session inherits whatever its session policy
+      says, at no cost to the 2,048 characters a session policy holds. The ``tree/`` grant costs 20 characters
+      of the table prefix a write credential fits within that limit, which RustFS and AWS both enforce (109 to
+      89 at a 63-character bucket, counted as a store counts it, :func:`counted_length`; a KMS key's
+      grant costs 26 more, to 63, [[LH-262]], ADR 0242 § The session policy's length).
     * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get and delete on ``<prefix>/*``, since cleanup
       deletes versions and what only they reference. No put: a credential that could put a final manifest could commit
       around every door, so the commits maintenance makes are the catalog's, at its maintainer doors ([[LH-575]]). An
@@ -915,7 +944,7 @@ def build_session_policy(
     *`` on the final manifest alone (measured behind a counting proxy: a data file's put and its multipart upload, a
     deletion, index and transaction file carry none), so a policy requiring the header (``s3:if-none-match``, which
     RustFS 1.0.3 refuses as an unknown key) would refuse every stock write. The seal is the store's own answer instead:
-    the existing object's tag, which only the catalog puts (ADR 0242). As an STS *session* policy this can only
+    the existing object's tag, which only the catalog puts, refused in the catalog identity's own policy (ADR 0242). As an STS *session* policy this can only
     RESTRICT the catalog's role (intersection-only), never widen it.
 
     ``bases`` are the base paths the table's manifest declares, granted READ and never write, at either
@@ -1029,7 +1058,6 @@ def build_session_policy(
         statements.append(
             {"Sid": "NeverAFinalManifest", "Effect": "Deny", "Action": ["s3:PutObject"], "Resource": f"arn:aws:s3:::{ref_root}/{FINAL_MANIFEST_GLOB}"}
         )
-        statements.append(NEVER_OVER_A_SEALED_FILE)
     elif tier == "maintain" and branch:
         statements.append(
             {
@@ -1253,7 +1281,10 @@ class WebIdentityVendor:
             records=records,
         )
         ttl = self._ttl if at_most_seconds is None else min(self._ttl, at_most_seconds)
-        return self._session(policy, session_name=session_name, policy_of=f"the {tier} session policy for {table_location}", ttl_seconds=ttl)
+        names = PolicyNames(
+            table_prefix=len(prefix), branch=len(branch.strip("/")), bases=sum(len(base) for base in bases), kms_key=len(self._encryption.kms_key_id or "")
+        )
+        return self._session(policy, session_name=session_name, policy_of=f"the {tier} session policy for {table_location}", ttl_seconds=ttl, names=names)
 
     def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
         """The session the catalog's token is exchanged for under the policy ``scope`` writes: one trashed table's bytes.
@@ -1263,22 +1294,28 @@ class WebIdentityVendor:
             IdentityTokenUnavailableError: The catalog's projected token cannot be read.
             botocore.exceptions.ClientError: The store refused the exchange.
         """
-        return self._session(scope.policy(), session_name=session_name, policy_of=f"the reclaim session policy for {scope.location}", ttl_seconds=self._ttl)
+        names = PolicyNames(table_prefix=len(split_s3_location(scope.location)[1]), kms_key=len(self._encryption.kms_key_id or ""))
+        return self._session(
+            scope.policy(), session_name=session_name, policy_of=f"the reclaim session policy for {scope.location}", ttl_seconds=self._ttl, names=names
+        )
 
-    def _session(self, policy: dict[str, object], *, session_name: str, policy_of: str, ttl_seconds: int) -> VendedSession:
+    def _session(self, policy: dict[str, object], *, session_name: str, policy_of: str, ttl_seconds: int, names: PolicyNames) -> VendedSession:
         """The session the catalog's token is exchanged for under ``policy``, lasting ``ttl_seconds``.
 
         Raises:
             SessionPolicyTooLong: ``policy`` is past what STS takes.
         """
         text = json.dumps(policy, separators=(",", ":"))
-        if len(text) > SESSION_POLICY_LIMIT:
+        if (counted := counted_length(policy)) > SESSION_POLICY_LIMIT:
             # Refused here, naming the cause: past the limit the store refuses the exchange, which the caller would read as
             # an outage to retry, when no retry can shorten the locations, bases or key the policy names ([[LH-262]]).
             raise SessionPolicyTooLong(
-                f"{policy_of} is {len(text)} characters, past the {SESSION_POLICY_LIMIT:,} STS accepts: "
-                "the locations, bases or KMS key it names are too long for a direct credential",
-                characters=len(text),
+                f"{policy_of} is {counted} characters as a store counts it, {counted - SESSION_POLICY_LIMIT} past the {SESSION_POLICY_LIMIT:,} STS "
+                f"accepts: what it names is too long for a direct credential (characters: table prefix {names.table_prefix}, branch {names.branch}, "
+                f"named in each statement of the ref, bases {names.bases}, KMS key {names.kms_key}); a shorter branch name fits, or the "
+                "server-mediated doors serve the table",
+                characters=counted,
+                names=names,
             )
         issued = self._exchange(self._identity, session_name=session_name, duration_seconds=ttl_seconds, policy=text)
         return VendedSession(

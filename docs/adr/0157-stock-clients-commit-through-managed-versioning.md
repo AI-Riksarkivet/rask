@@ -47,10 +47,13 @@ live chart); the catalog's registry and FGA are the real project store, as in La
   matches across `/` (IAM User Guide, "Session policies" and "Using wildcards in resource ARNs"). It is about 1.4 KB
   for long bucket and table names, under the 2,048-character inline limit; every sanctioned base adds to it. A put
   over a committed `data/`, `_transactions/`, `_deletions/` or `_indices/` file is refused by the store (ADR 0242): the
-  catalog seals each file a commit adds with an object tag before its version lands, and the write tier's session
-  policy, and the catalog's own canned policy, deny `s3:PutObject` over a key holding it (measured 403 on RustFS 1.0.3
-  for a put, a multipart upload and a copy onto one, 2026-11-17). A store that does not evaluate
-  `s3:ExistingObjectTag` on PutObject (AWS S3) lets it through, and ADR 0184's pass finds it.
+  catalog seals each file a commit adds with an object tag before its version lands, and the catalog identity's own
+  store policy denies every session of it `s3:PutObject` over a key holding it, so no session policy carries the Deny
+  (measured 403 on RustFS 1.0.3 for a put, a multipart upload and a copy onto one, 2026-11-17). A commit naming a file
+  the store does not hold is refused 400; a staged manifest must carry its transaction inline, read once from the
+  catalog's copy, and the writer's `.txn` file is sealed once the version lands (its retries put it again).
+  A store the warehouse probe finds not enforcing the seal registers only where git declares it detection-only, and
+  there ADR 0184's pass finds an overwrite after the fact.
 - **A declaration is its declarer's** (ADR 0227 §9, owner 2026-11-17). `DeclareTable` takes the table's location claim
   fenced for the authenticated subject that sent it, so until the declarer's first `version/create` lands, or the fence
   lapses after the claim's `LEASE` (15 minutes), a catalog create of the name or a version 1 by any other principal
@@ -68,7 +71,8 @@ live chart); the catalog's registry and FGA are the real project store, as in La
   object of size 7 bytes"); with the bound, the credential expires within the second of the fence's lapse, before any
   other principal's create can fence the claim (ADR 0227 §9). A write credential on a written table is refused a put
   over every committed file of its table where the store enforces the seal (ADR 0242).
-- **Provenance:** at version/create the catalog reads the staged manifest's transaction properties and refuses a
+- **Provenance:** at version/create the catalog reads the staged manifest's transaction properties, once,
+  from the transaction its own copy of the manifest carries inline (ADR 0242 B2), and refuses a
   silver/gold commit without `rask.run_id` and `rask.inputs` (and checks `can_read_data` on each input); on its own
   doors it stamps them from the Context headers. No manifest is rewritten.
 - **Versions:** pylance 13 and lancedb 0.40 everywhere now; lance-namespace stays 0.11.1 and lance-ray 0.5.0 (the

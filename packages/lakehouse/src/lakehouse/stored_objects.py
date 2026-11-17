@@ -178,38 +178,65 @@ def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[
     return found
 
 
-def seal(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -> None:
-    """Tag each object at ``<uri>/<key>`` the store holds with :data:`lakehouse.table_layout.SEALED_TAG`, after which the
-    store refuses a write-tier credential, and the catalog's own identity, a put over it (ADR 0242); an absent one is
-    left alone. Sixteen at a time, as :func:`identities` reads them. A local root holds no tags and no policy, so it is
-    left as it is.
+class SealRefusedError(OSError):
+    """The store answered a seal (``PutObjectTagging``) with a refusal: the role holds no grant for it, or the store keeps
+    no object tags (a 4xx other than 404, or 501 NotImplemented). Another attempt is answered the same."""
+
+
+class SealUnavailableError(OSError):
+    """The store did not answer a seal: a transport failure or a 5xx other than 501. Another attempt may be answered."""
+
+
+#: What a store that keeps no object tags answers ``PutObjectTagging``: S3's ``NotImplemented`` is a 501.
+_NOT_IMPLEMENTED: Final = 501
+
+
+def seal(uri: str, storage_options: StorageOptions, keys: Sequence[str], *, where_granted: bool = False) -> list[str]:
+    """Tag each object at ``<uri>/<key>`` with :data:`lakehouse.table_layout.SEALED_TAG`, after which the store refuses
+    every session of the catalog's identity a put over it (ADR 0242); the keys the store holds no object at, which the
+    caller refuses or reports, since a key no object holds is one a writer can still put later, unsealed. Sixteen at a
+    time, as :func:`identities` reads them. A local root holds no tags and no policy, so it is left as it is and every
+    key is answered held.
+
+    ``where_granted`` is a warehouse git declares runs with detection only (ADR 0242 § The declared exception): a key the
+    store refuses to tag is left untagged and logged, and the commit goes on, so a store that grants tagging later
+    enforces from its next commit with nothing rewritten. Otherwise a refusal fails the seal.
 
     A seal replaces the object's tag set, which no writer of a Lance table sets, and sealing an object again is the same
     write: a commit recorded twice seals its files twice.
 
     Raises:
-        OSError: The store refused, or could not be reached for, a seal.
+        SealRefusedError: The store refused a seal, and ``where_granted`` is off.
+        SealUnavailableError: The store could not be reached for, or failed with a 5xx, a seal.
     """
     if not keys or not on_s3(uri):
-        return
+        return []
     from botocore.exceptions import BotoCoreError, ClientError
 
     bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
     client = object_client(storage_options)
 
-    def tag(key: str) -> None:
+    def tag(key: str) -> bool:
         full_key = f"{prefix}/{key}" if prefix else key
         try:
             client.put_object_tagging(Bucket=bucket, Key=full_key, Tagging={"TagSet": [{"Key": SEALED_TAG, "Value": "true"}]})
         except ClientError as exc:
-            if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
-                return
-            raise OSError(f"the store refused sealing {bucket}/{full_key}: {exc}") from exc
+            status = int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 0)
+            if status == 404:
+                return False
+            if status >= 500 and status != _NOT_IMPLEMENTED:
+                raise SealUnavailableError(f"the store failed sealing {bucket}/{full_key}: {exc}") from exc
+            if where_granted:
+                log.warning("seal_refused_detection_only", extra={"bucket": bucket, "key": full_key, "status": status})
+                return True
+            raise SealRefusedError(f"the store refused sealing {bucket}/{full_key}: {exc}") from exc
         except BotoCoreError as exc:
-            raise OSError(f"the store could not be reached sealing {bucket}/{full_key}: {exc}") from exc
+            raise SealUnavailableError(f"the store could not be reached sealing {bucket}/{full_key}: {exc}") from exc
+        return True
 
     with ThreadPoolExecutor(max_workers=min(_IDENTITY_READS, len(keys))) as pool:
-        list(pool.map(tag, keys))
+        held = list(pool.map(tag, keys))
+    return [key for key, is_held in zip(keys, held, strict=True) if not is_held]
 
 
 def _s3_identity(uri: str, storage_options: StorageOptions) -> Callable[[str], ObjectIdentity | None]:

@@ -39,7 +39,7 @@ from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.vending import EncryptionAtRest, make_vendor
-from catalog.services import provenance_namespace, warehouses
+from catalog.services import provenance_namespace, seal_posture, warehouses
 from lakehouse.admission import judge_before_the_body
 from lakehouse.bus import Bus, bus_session
 from lakehouse.control_emit import make_control_emitter
@@ -194,6 +194,8 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         await run_in_threadpool(warehouses.ensure_catalog_row, namespace, settings.estate_warehouse)
     except Exception as exc:  # noqa: BLE001 — retried by the loop below
         log.warning("estate_warehouse_row_deferred", extra={"error": str(exc)})
+    # Every warehouse's measured seal, exported from the first scrape (ADR 0242 B4): a restart keeps the alert's series.
+    await run_in_threadpool(seal_posture.load, settings)
     # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
     # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
     # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be

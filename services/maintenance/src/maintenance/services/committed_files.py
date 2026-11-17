@@ -1,9 +1,12 @@
 """The files the catalog recorded at each commit, read again: what is no longer as committed is named ([[LH-419]]).
 
-A writer's vend may put over any file a commit adds under its table (``table_layout.WRITER_PUT_GLOBS``), and a maintain
-vend may also delete one. Lance checks no file's content: measured on pylance 13.0.0, a same-size overwrite of a data
-file is served silently, while Lance requires a published payload to stay immutable while a protected snapshot references
-it (``lance_docs/lance/format/table/blob.md:254-257``). The catalog records every file a commit adds, with its ETag and
+A writer's vend puts new files under its table (``table_layout.WRITER_PUT_GLOBS``), and the catalog seals each file a
+commit adds before its version lands, after which a store that enforces the seal refuses every vend a put over it (ADR
+0242); a maintain vend may still delete one. This pass is the guard where the seal is not enforced: a warehouse git
+declares detection-only (its store keeps no tag, or evaluates none on a put), a file committed before the seal existed,
+and a one-call write's files in the moment between its landing and its seal. Lance checks no file's content: measured
+on pylance 13.0.0, a same-size overwrite of a data file is served silently, while Lance requires a published payload to
+stay immutable while a protected snapshot references it (``lance_docs/lance/format/table/blob.md:254-257``). The catalog records every file a commit adds, with its ETag and
 size, before the version lands (``lakehouse.file_identities``), and each pass of the table reads them all again, off one
 listing of its root (:func:`lakehouse.stored_objects.listed_identities`): a request per thousand objects, not one per file.
 The store's own event of a write under the table holds that pass early (:mod:`maintenance.services.store_events`).

@@ -8768,6 +8768,7 @@ export interface components {
              * @enum {string}
              */
             outcome: "pass" | "fail" | "skip";
+            sealed?: components["schemas"]["Sealed"] | null;
         };
         ProblemDetails: {
             /** @description The spec's error code, which a client dispatches on */
@@ -9328,6 +9329,8 @@ export interface components {
             /** Project */
             project: string;
         };
+        /** @enum {string} */
+        Sealed: "enforced" | "unenforced" | "untaggable";
         /**
          * SetLabelRequest
          * @description Attach a label the object's project defines, with its value; a marker carries none.
@@ -9923,6 +9926,8 @@ export interface components {
             protected_by?: string | null;
             /** Root Uri */
             root_uri: string;
+            /** Sealed */
+            sealed?: ("enforced" | "unenforced" | "untaggable") | null;
             /** Status */
             status?: string | null;
         };

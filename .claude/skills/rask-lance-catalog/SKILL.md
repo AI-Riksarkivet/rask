@@ -1067,19 +1067,30 @@ governing their data. The project-scoped surface is the console's project page, 
   release's mark; ADR 0233 §9, measured on RustFS 1.0.3 with the vend's own credential: `?` enforced, every other key,
   listing and table refused `AccessDenied`) and its committed-file records `_file_identities/<uuid>/*`
   (get/delete) (`vending.TableRecords`, [[LH-219]]; the fence's grant costs about 520 characters, so a maintain vend at a
-  63-character bucket fits a table prefix of about 146, against a write vend's 71), and get/delete on the table's own data directories, those of its declared bases its base record holds as
+  63-character bucket fits a table prefix of 166, against a write vend's 89, counted as a store counts it, ADR 0242), and get/delete on the table's own data directories, those of its declared bases its base record holds as
   `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. The warehouse scope
   probe signs with `probe` (`vending.SessionTier`): get, put and delete in its probe prefix, which no door vends, since a
   door's `tier` query takes only `vending.Tier`. The management vend door checks the one rung its
   tier names, never either. A put over a committed file is REFUSED BY THE STORE (ADR 0242): every catalog commit SEALS
   each file it adds under the table's root (data files, blob sidecars, deletion files, index files and its transaction
   file) with the object tag `rask-sealed=true` (`lakehouse.stored_objects.seal`, `table_layout.SEALED_TAG`), and the
-  write tier's session policy (`vending.NEVER_OVER_A_SEALED_FILE`, 167 characters: a write vend at a 63-character
-  bucket fits a table prefix of 71, 45 with a KMS key) and the catalog's own canned policy deny `s3:PutObject` over a key
-  holding it, which RustFS 1.0.3 enforces for a put, a multipart upload's create, part and complete, and a copy onto it
-  (measured 403; `tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py` in
-  `make lifecycle-rustfs-check`). No vended tier may tag or untag. AWS S3 does not evaluate `s3:ExistingObjectTag` on
-  PutObject, so there the overwrite still lands and is only DETECTED ([[LH-419]], ADR 0184): every catalog commit records
+  catalog identity's own store policy (`lance.objectStorePolicy.catalog`, the ONE Deny: every vend is a session of that
+  identity and inherits it, so no session policy carries it and a write vend keeps its length budget, below) denies
+  `s3:PutObject` over a key holding it, which RustFS 1.0.3 enforces for a put, a multipart upload's create, part and
+  complete, and a copy onto it (measured 403; `tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py`
+  in `make lifecycle-rustfs-check`, which renders that policy from the chart). No vended tier may tag or untag. A commit
+  naming a file the store does not hold is REFUSED 400 (`file_identities.FilesNotHeldError`: the key would stay a
+  writer's to put after the version lands), and `version/create` admits only a manifest carrying its transaction inline,
+  read once from its own copy (`managed_versions._require_an_inline_transaction`, `StagedVersion.transaction`), and seals
+  the writer's `.txn` file once the version lands (`committed_files.seal_landed_transaction`: a stock writer puts it
+  again, same name, on every retry, so a seal before landing refuses its retry). A seal the store refuses fails the
+  commit 503 before its version lands, unless git declares the warehouse's bucket detection-only
+  (`catalog.declared.warehouses[].seal`, `LANCE_SEAL_DETECTION_ONLY_BUCKETS`, `committed_files.detection_only`); the
+  warehouse probe's seal check (`vend_probe.SEAL_CHECK`) refuses a store that does not enforce the seal at registration
+  unless git declares it so, records `sealed` on the warehouse and exports `catalog.warehouse.seal`
+  (`WarehouseSealUnenforced`, `WarehouseSealLost`). A session policy past what a store counts (`vending.counted_length`:
+  RustFS re-serialises a one-string `Resource` as a list) is refused 400 `SessionPolicyTooLong` naming each part's
+  length. Where the seal is not enforced the overwrite lands and is only DETECTED ([[LH-419]], ADR 0184): every catalog commit records
   each file it adds, right after sealing it, with the ETag and size the store answers, before its version is
   announced (`lakehouse.file_identities`, `_file_identities/<table
   uuid>/<transaction uuid>.json`, written by `version/create` before it judges a stock commit's files, by

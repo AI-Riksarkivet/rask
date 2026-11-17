@@ -53,7 +53,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 | A maintain-tier vend's session reaches its table's history-fence directory and nothing else of the control root: a ListBucket `s3:prefix` `StringLike` of exactly `<dir>/` (the same prefix without its slash, the parent and another table's refused), get on `<dir>/*`, put and delete only on `<dir>/reclaim-<32 ?>.json` (a ref writer's hold and an erasure release's mark refused) | measured on 1.0.3, 2026-11-17, STS AssumeRole by a non-root user with the catalog's canned policy (ADR 0233 §9) |
 | IAM wildcards in a session policy's Resource: `*` matches across `/` (a `reclaim-*` grant took `reclaim-x/erasure-release.<id>.json`), `?` is enforced as exactly one character, a `/` included (a 31-character name refused, `reclaim-<15>/<16>.json` taken). A grant cannot stop matching `/`; bound the length, and judge what is read by its place | measured on 1.0.3, 2026-11-17, with the maintain vend's own credential (`tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py`) |
 | A write-tier vend's session (a declaration's, as `DeclareTable` answers it) puts data under its table, and is refused a final `_versions/*.manifest`, a `_refs/` put, any delete and another table's prefix; a direct `lance.write_dataset` on it is refused at the final manifest, so only `version/create` finalizes | measured on 1.0.3, 2026-11-17, STS AssumeRole by a non-root user with the catalog's canned policy, through `make lifecycle-rustfs-check` (ADR 0227 §9) |
-| A policy's explicit Deny of `s3:PutObject` conditioned on `s3:ExistingObjectTag/<key>` (`Null` false) refuses, on a key holding the tag, a PUT, a PUT with `If-None-Match: *`, `CreateMultipartUpload`, `UploadPart` and `CompleteMultipartUpload` of an upload begun before the tag, and `CopyObject` onto it (403), in a session policy and in a canned policy alike, while a new key and an untagged one take the put (200): the seal that stops a write credential, and the catalog's own identity, putting over a committed file (ADR 0242) | measured on 1.0.3, 2026-11-17, STS AssumeRole by a non-root user with the catalog's canned policy, and through `make lifecycle-rustfs-check` (`tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py`); RustFS fetches the existing object's tags for any object action a policy conditions on them (`rustfs@1.0.3:rustfs/src/storage/access.rs:1288-1370`) |
+| A policy's explicit Deny of `s3:PutObject` conditioned on `s3:ExistingObjectTag/<key>` (`Null` false) refuses, on a key holding the tag, a PUT, a PUT with `If-None-Match: *`, `CreateMultipartUpload`, `UploadPart` and `CompleteMultipartUpload` of an upload begun before the tag, and `CopyObject` onto it (403), in a session policy and in a canned policy alike, and a canned policy's Deny binds every session assumed from it whatever its session policy says, while a new key and an untagged one take the put (200): the seal that stops a write credential, and the catalog's own identity, putting over a committed file (ADR 0242) | measured on 1.0.3, 2026-11-17, STS AssumeRole by a non-root user with the catalog's canned policy as the chart renders it and no Deny in the session policy, and through `make lifecycle-rustfs-check` (`tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py`, which fails with the chart's Deny removed); RustFS fetches the existing object's tags for any object action a policy conditions on them (`rustfs@1.0.3:rustfs/src/storage/access.rs:1288-1370`) |
 | A prefix-scoped session is refused pyarrow's `HeadBucket` (an unprefixed `s3:ListBucket`) | measured (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`) |
 | Conditional CompleteMultipartUpload (R11) | source only (`rustfs@1.0.3:crates/ecstore/src/set_disk/ops/multipart.rs:2702-2742`) |
 | Warehouse purge: DeleteObjects then DeleteBucket (R13) | not measured |
@@ -132,8 +132,11 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   condition key, `rustfs@1.0.3:crates/policy/src/policy/function/key_name.rs:168-246`; measured 2026-11-08 on a canned and
   a session policy, and 2026-11-17 as `AssumeRole` 400 `InvalidRequest`), and stock pylance sends the header only on a
   final manifest. A write credential is refused a put over a committed file by the SEAL instead (ADR 0242): the catalog
-  tags each file a commit adds `rask-sealed=true` before the version lands, and the write tier's session policy and the
-  catalog's canned policy deny `s3:PutObject` on a key holding the tag; no vended tier may tag or untag.
+  tags each file a commit adds `rask-sealed=true` before the version lands, and the catalog's canned policy (and no
+  session policy: every vend is a session of that identity and inherits its Deny) denies `s3:PutObject` on a key holding
+  the tag; no vended tier may tag or untag. A session policy is counted as RustFS counts it: it re-serialises a
+  one-string `Resource` as a one-element list before its 2,048 limit (measured 2026-11-17: a list `Resource` taken at
+  2,048 characters, a string one refused at 2,047), so `vending.counted_length` adds those brackets before it admits one.
 - **Never set `RUSTFS_IDENTITY_OPENID_ROLE_POLICY`.** With it, **every** valid token for the audience gets the whole
   role policy, and any pod may project a token for any audience as its own ServiceAccount
   (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`). Without it the token's `groups` claim is mapped to
@@ -306,11 +309,17 @@ expiry the platform owns and sets past the time it takes to answer a page, becau
 committed file and the noncurrent version is what restores it ([[LH-419]]: maintenance's pass of the table names such a file, reading every file
 the table's commits recorded against one listing of its root, and `CommittedFileOverwritten` pages); no Object Lock default retention, no expiration lifecycle on rask prefixes beyond
 AbortIncompleteMultipartUpload and that noncurrent-version expiry; one writable site per table (async replication cannot
-arbitrate a Lance commit); conditional writes proven exclusive across nodes; `s3:ExistingObjectTag/<key>` evaluated in
-identity and session policies for `s3:PutObject` on every request that writes a key (PutObject, CreateMultipartUpload,
-UploadPart, CompleteMultipartUpload, a CopyObject's destination), and `PutObjectTagging` for the catalog's identity, so the
-seal refuses a put over a committed file (ADR 0242; RustFS 1.0.3 does, measured; AWS S3 lists the key for no PutObject
-request, so there the overwrite is only found by the pass). Nothing in rask checks that a store keeps
+arbitrate a Lance commit); conditional writes proven exclusive across nodes; object tags kept, `PutObjectTagging` granted
+to the catalog's identity, and an explicit Deny in that identity's own policy of `s3:PutObject` conditioned on
+`s3:ExistingObjectTag/rask-sealed` (`Null` false) evaluated for every session of it on every request that writes a key
+(PutObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, a CopyObject's destination), so the seal refuses
+a put over a committed file (ADR 0242 § What a platform S3 store must support; RustFS 1.0.3 does, measured). The
+warehouse probe's seal check measures exactly this with a real vended write credential at registration and on
+validate, records `sealed: enforced | unenforced | untaggable` on the warehouse, and refuses a store that is not
+`enforced` unless git declares the warehouse `seal: detection_only`, under which the committed-file pass is the only
+guard and `WarehouseSealUnenforced` warns for as long as it runs so. Whether AWS S3 evaluates the key on PutObject is
+unmeasured: its service authorization reference does not list it among PutObject's condition keys (read 2026-11-17), so
+on AWS the probe decides. Nothing in rask checks that a store keeps
 versions: the dev fixture's buckets are unversioned, so a tampered file there is found and not restorable.
 
 ## Routing

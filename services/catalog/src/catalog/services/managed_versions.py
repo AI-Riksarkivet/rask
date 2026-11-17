@@ -25,6 +25,7 @@ from functools import partial
 import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
+from lance.dataset import Transaction
 from lance.fragment import DataFile
 from lance_namespace import (
     ConcurrentModificationError,
@@ -145,6 +146,9 @@ class StagedVersion(BaseModel):
     max_fragment_id: int | None = None
     #: The staged manifest's ``next_row_id``, ``None`` when it states none.
     next_row_id: int | None = None
+    #: The staged transaction as :func:`stage` read it, once and after its file was sealed: every rule that reads the
+    #: transaction reads this, so one commit is judged on one read (ADR 0242 B2).
+    transaction: InstanceOf[Transaction] | None = None
 
     @property
     def creates(self) -> bool:
@@ -241,6 +245,14 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     with fs.open_input_stream(dataplane.dataset_fs(staged, so)[1]) as source:
         manifest = source.read()
     stated = manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.VERSION_FIELD)
+    # THE TRANSACTION IS READ ONCE, FROM BYTES NO WRITER CAN PUT OVER (ADR 0242 § Found by review, B2). Lance reads a
+    # version's transaction from the manifest's inline section when it carries one and from the file it names when it does
+    # not (`lance_docs/lance/format/table/transaction.md` § Inline Transaction Sections). The manifest is read once above
+    # and judged and finalized from the catalog's own copies below, which no vend may put (`_versions/*.manifest`), so a
+    # transaction inline is one read the writer cannot change; one read from the writer's `.txn` file could be put over
+    # between the judgement and the finalize, and a version judged as one operation commit another. Sealing that file
+    # first is no answer: the writer puts it again, under the same name, on each attempt of the commit.
+    _require_an_inline_transaction(manifest)
     detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
     _write(location, so, f"d{detached_id}.manifest", manifest_bytes.with_manifest_version(manifest, detached_id))
     _write(location, so, f"d{finalize_id}.manifest", manifest)
@@ -291,7 +303,23 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         read_version=transaction.read_version,
         max_fragment_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.MAX_FRAGMENT_ID_FIELD),
         next_row_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.NEXT_ROW_ID_FIELD),
+        transaction=transaction,
     )
+
+
+def _require_an_inline_transaction(manifest: bytes) -> None:
+    """Refuse a staged manifest that carries no inline transaction (ADR 0242 B2): the catalog judges a commit only on a
+    transaction it reads from its own copy of the manifest. Stock pylance 13.0.0 inlines every transaction it writes
+    (measured: a 5,000-fragment append's and a delete over them, manifests of 0.3 and 1 MB), so no stock commit is refused.
+
+    Raises:
+        InvalidInputError: The manifest carries no transaction section.
+    """
+    if manifest_bytes.transaction_section(manifest) is None:
+        raise InvalidInputError(
+            "commit refused: the staged manifest carries no inline transaction; the catalog judges a commit only on the transaction "
+            "its manifest carries, which no writer can put over before the version lands"
+        )
 
 
 def _unmodelled_operation(manifest: bytes) -> str | None:
@@ -790,8 +818,8 @@ def _added_indices(version: _Judged) -> list[_AddedIndex]:
 
 
 def _declared_index_files(version: _Judged) -> dict[str, dict[str, int]]:
-    """The files each index the staged transaction adds says it has, by name and size."""
-    transaction = version.proposed.read_transaction(version.staged.detached_id)
+    """The files each index the staged transaction adds says it has, by name and size, off the one read :func:`stage` made."""
+    transaction = version.staged.transaction
     new_indices = getattr(transaction.operation, "new_indices", None) if transaction is not None else None
     return {index.uuid: {file.path: file.size_bytes for file in index.files or []} for index in new_indices or []}
 
@@ -858,8 +886,11 @@ def _refuse_an_index_read_elsewhere(index: _AddedIndex, *, fragments: set[int]) 
 
 
 def _refuse_an_index_without_its_files(index: _AddedIndex, *, declared: dict[str, int], present: dict[str, int]) -> None:
+    # An index whose transaction declares none of its files is refused too: Lance would read files by name that the store
+    # need not hold, each a key a writer could put after the version lands (ADR 0242 B1). Measured on pylance 13.0.0, a
+    # BTREE, BITMAP and INVERTED index each declare every file they write.
     missing = sorted(path for path, size in declared.items() if present.get(path) != size)
-    if missing or not present:
+    if missing or not present or not declared:
         raise InvalidInputError(
             f"commit refused: _indices/{index.uuid}/ does not hold index {index.name!r}'s file(s) {missing[:5] or '(none present)'} at their sizes"
         )
@@ -914,15 +945,22 @@ def judge(
     _refuse_config(proposed, current)
     held = None if current is None else _held_counters(staged.location, so, staged.version - 1)
     version = _Judged(staged=staged, so=so, proposed=proposed, current=current, split=_split(proposed, current), held=held)
-    files = committed_files.added(
-        current,
-        proposed,
-        table_location=staged.table_location,
-        branch=staged.branch,
-        so=so,
-        transaction_uuid=staged.transaction_uuid,
-        read_version=staged.read_version,
-    )
+    try:
+        files = committed_files.added(
+            current,
+            proposed,
+            table_location=staged.table_location,
+            branch=staged.branch,
+            so=so,
+            transaction_uuid=staged.transaction_uuid,
+            read_version=staged.read_version,
+            # Sealed once the version lands (`finalize`): the writer puts it again, under its name, on each attempt.
+            seal_transaction=False,
+        )
+    except file_identities.FilesNotHeldError as exc:
+        # Admitted, each would be a key the writer puts after the version lands, untagged and unrecorded, changing what a
+        # committed version reads (ADR 0242 B1: a deletion file named and put later changes which rows it deletes).
+        raise InvalidInputError(f"commit refused: the version names files the store does not hold: {', '.join(exc.paths[:5])}") from exc
     _refuse_bases(version, base_judge)
     _refuse_foreign_file_versions(version)
     _refuse_added_feature_flags(proposed, current)

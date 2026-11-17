@@ -251,8 +251,9 @@ def test_a_vend_may_use_the_configured_kms_key_and_no_other(sessions: _Rig, tier
 def test_a_vend_whose_policy_sts_would_refuse_is_refused_naming_why(sessions: _Rig, monkeypatch: pytest.MonkeyPatch) -> None:
     """STS takes an inline session policy of at most 2,048 characters (AWS counts the plaintext; RustFS the bytes it
     re-serialises, `rustfs@1.0.3:rustfs/src/admin/service/session_policy.rs:34-39`), and a long location, several bases or a
-    KMS key carry a write policy past it. The catalog refuses before it asks, naming why in the problem's title and extension
-    members, since a 5xx's detail is redacted ([[LH-262]]). The limit is lowered so an ordinary table's policy is past it."""
+    KMS key carry a write policy past it. The catalog refuses before it asks, as the spec's InvalidInput (400, code 13): no
+    retry shortens what the policy names, and its detail and extension members name each part's length ([[LH-262]],
+    ADR 0242 B3). The limit is lowered so an ordinary table's policy is past it."""
     from catalog.core import vending
 
     table = f"lance_catalog$ses{uuid.uuid4().hex[:10]}$t"
@@ -264,8 +265,9 @@ def test_a_vend_whose_policy_sts_would_refuse_is_refused_naming_why(sessions: _R
     refused = sessions.catalog.post(f"/management/v1/table/{table}/credentials", params={"tier": "write"})
 
     body = refused.json()
-    assert (refused.status_code, refused.headers["content-type"], body["code"], body["title"]) == (500, "application/problem+json", 18, "SessionPolicyTooLong")
+    assert (refused.status_code, refused.headers["content-type"], body["code"], body["title"]) == (400, "application/problem+json", 13, "SessionPolicyTooLong")
     assert body["session_policy_limit"] == 100 < body["session_policy_characters"]
+    assert body["session_policy_names"]["table_prefix"] > 0 and "table prefix" in body["detail"], body
     assert len(sessions.sessions()) == exchanged, "the store was asked to take a policy the catalog knew it refuses"
 
 

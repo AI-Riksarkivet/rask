@@ -61,6 +61,9 @@ _BUCKET_CLAIMS_PREFIX = f"{_REGISTRY_PREFIX}/bucket-claims"
 #: The record fields holding a warehouse's delete profile, as strings like every record field.
 DELETE_MODE = "delete_mode"
 TRASH_GRACE_DAYS = "trash_grace_days"
+#: What the warehouse probe's seal check last measured of the warehouse's store (ADR 0242): ``enforced``, ``unenforced``
+#: or ``untaggable``; absent where no check ran (a deployment vending no direct credential).
+SEALED = "sealed"
 
 
 def grace_days(record: dict[str, str] | None, *, estate: float) -> float:
@@ -151,7 +154,10 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
 #:
 #: ``delete_mode`` and ``trash_grace_days`` are the warehouse's delete profile (ADR 0146), which its
 #: project's admin declares; a request naming one replaces both, so a hard profile keeps no grace.
-_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint", "credential_ref", DELETE_MODE, TRASH_GRACE_DAYS})
+#:
+#: ``sealed`` is what the registration's seal check measured of the store (ADR 0242), replaced by every registration that
+#: measured one.
+_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint", "credential_ref", DELETE_MODE, TRASH_GRACE_DAYS, SEALED})
 
 
 class WarehouseProjectConflict(Exception):
@@ -191,6 +197,16 @@ def set_warehouse_protection(
     try:
         return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), protect)
     except (RecordMissingError, WarehouseProjectConflict):
+        return None
+
+
+def set_warehouse_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str, sealed: str) -> dict[str, str] | None:
+    """Record what a validate's seal check measured of warehouse ``warehouse_id``'s store (ADR 0242): ``enforced``,
+    ``unenforced`` or ``untaggable``. Conditional on the record's ETag, every other field as it stands at the write;
+    ``None`` when the record is gone."""
+    try:
+        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), lambda record: {**record, SEALED: sealed})
+    except RecordMissingError:
         return None
 
 

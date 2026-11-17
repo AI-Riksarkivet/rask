@@ -646,6 +646,40 @@ tests:
         alertname: CommittedFilesUnrecorded
         exp_alerts: []
 
+  # ADR 0242: a warehouse git declares detection-only warns while its store does not enforce the seal; one git requires
+  # the seal of pages; an enforced warehouse is quiet.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_warehouse_seal{lance_warehouse="wh-a",lance_seal="unenforced",lance_seal_required="false"}'
+        values: "1+0x10"
+      - series: 'catalog_warehouse_seal{lance_warehouse="wh-b",lance_seal="untaggable",lance_seal_required="true"}'
+        values: "1+0x10"
+      - series: 'catalog_warehouse_seal{lance_warehouse="wh-c",lance_seal="enforced",lance_seal_required="true"}'
+        values: "1+0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WarehouseSealUnenforced
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: catalog
+              lance_warehouse: "wh-a"
+              lance_seal: "unenforced"
+            exp_annotations:
+              summary: "Warehouse wh-a runs with the seal unenforced (unenforced), as git declares"
+              description: "Git declares this warehouse detection-only (catalog.declared.warehouses[].seal), and its store does not refuse a put over a committed file: a write credential can replace a file a committed version names, which only maintenance's committed-file pass finds, after the fact. unenforced is a store that keeps the tag and evaluates no s3:ExistingObjectTag on PutObject; untaggable a store or role refusing s3:PutObjectTagging. ADR 0242 states what the store must support."
+      - eval_time: 5m
+        alertname: WarehouseSealLost
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: catalog
+              lance_warehouse: "wh-b"
+              lance_seal: "untaggable"
+            exp_annotations:
+              summary: "Warehouse wh-b's store no longer enforces the seal (untaggable)"
+              description: "A validate found this warehouse's store no longer refuses a put over a sealed file, and git requires the seal of it: any write credential can replace a file a committed version names, with a 200. untaggable also fails every commit there with a 503. Restore the store's policy (ADR 0242 § What a platform S3 store must support), then validate the warehouse again (POST /management/v1/warehouses/{id}/validate)."
+
   # One table refused on its daily passes. Every refusal's series exists at 0 from the worker's start, so the first
   # refused pass is an increase and pages; the next refused pass, a day later, holds the alert through its 25h window.
   - interval: 1h

@@ -13,9 +13,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceRequest, LanceNamespace, ListNamespacesRequest, connect
 from moto.server import ThreadedMotoServer
+from opentelemetry.metrics import CallbackOptions
 from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
@@ -23,7 +25,9 @@ from catalog.api.v1.endpoints import warehouses as wh_ep
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import EncryptionAtRest, VendedSession
 from catalog.services import projects as proj_svc
+from catalog.services import seal_posture
 from catalog.services import warehouses as wh_svc
+from lakehouse import stored_objects
 from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -33,13 +37,14 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
 
 
-def _settings(tmp_path: Any, store: str, *, fga: bool = False, reserved: str = "") -> Settings:
+def _settings(tmp_path: Any, store: str, *, fga: bool = False, reserved: str = "", detection_only: str = "") -> Settings:
     data: dict[str, Any] = {
         "impl": "dir",
         "root": "s3://lance-catalog",
         "s3_endpoint": store,
         "control_root": f"file://{tmp_path}",
         "reserved_buckets": reserved,
+        "seal_detection_only": detection_only,
         "s3_access_key_id": "x",
         "s3_secret_access_key": "x",
     }
@@ -146,18 +151,24 @@ class _VendingStore:
 
     Ignoring a credential's prefix is what a store that accepts the inline session policy and drops it looks
     like from outside; ignoring `If-None-Match` lets two writers both commit one Lance version. Its role holds no grant on
-    any KMS key, so it refuses every write encrypting with one.
+    any KMS key, so it refuses every write encrypting with one. `seal` is what it does with the catalog's seal (ADR 0242):
+    `enforced` refuses a put over a tagged key, `unenforced` keeps the tag and refuses nothing, `untaggable` keeps no tags.
+    It is both the vended writer's client and the catalog's own, so the probe's seal lands where its writer put.
     """
 
-    def __init__(self, *, honours_scope: bool, honours_conditional_put: bool) -> None:
+    def __init__(self, *, honours_scope: bool, honours_conditional_put: bool, seal: str = "enforced") -> None:
         self.honours_scope = honours_scope
         self.honours_conditional_put = honours_conditional_put
+        self.seal = seal
         self.scope = ""
         self.keys: dict[str, bytes] = {}
+        self.sealed: set[str] = set()
 
     def _check(self, key: str) -> None:
         if self.honours_scope and not key.startswith(self.scope):
             raise PermissionError(f"AccessDenied: {key} is outside {self.scope}")
+        if self.seal == "enforced" and key in self.sealed:
+            raise PermissionError(f"AccessDenied: {key} is sealed")
 
     def put_object(  # noqa: N803 — boto3's casing
         self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None, SSEKMSKeyId: str | None = None, **_sse: object
@@ -170,12 +181,44 @@ class _VendingStore:
         self.keys[Key] = Body
         return {}
 
-    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
+    def put_object_tagging(self, *, Bucket: str, Key: str, Tagging: dict[str, Any]) -> dict[str, Any]:  # noqa: N803
+        if self.seal == "untaggable":
+            raise ClientError(
+                {
+                    "Error": {"Code": "NotImplemented"},
+                    "ResponseMetadata": {"RequestId": "", "HostId": "", "HTTPStatusCode": 501, "HTTPHeaders": {}, "RetryAttempts": 0},
+                },
+                "PutObjectTagging",
+            )
+        if Key not in self.keys:
+            raise ClientError(
+                {
+                    "Error": {"Code": "NoSuchKey"},
+                    "ResponseMetadata": {"RequestId": "", "HostId": "", "HTTPStatusCode": 404, "HTTPHeaders": {}, "RetryAttempts": 0},
+                },
+                "PutObjectTagging",
+            )
+        self.sealed.add(Key)
+        return {}
+
+    def create_multipart_upload(self, *, Bucket: str, Key: str, **_sse: object) -> dict[str, Any]:  # noqa: N803
         self._check(Key)
+        return {"UploadId": "u"}
+
+    def abort_multipart_upload(self, *, Bucket: str, Key: str, UploadId: str) -> dict[str, Any]:  # noqa: N803
+        return {}
+
+    def head_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
+        return {"ContentLength": len(self.keys[Key])}
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
+        if self.honours_scope and not Key.startswith(self.scope):
+            raise PermissionError(f"AccessDenied: {Key} is outside {self.scope}")
         return {"Body": self.keys[Key]}
 
     def delete_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
-        self._check(Key)
+        if self.honours_scope and not Key.startswith(self.scope):
+            raise PermissionError(f"AccessDenied: {Key} is outside {self.scope}")
         self.keys.pop(Key, None)
         return {}
 
@@ -202,16 +245,31 @@ class _ScopedVendor:
         )
 
 
+_KMS_KEY = "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+
+
 @pytest.mark.parametrize(
-    ("honours_scope", "honours_conditional_put", "unreachable", "encrypts_with", "status", "code", "named"),
+    ("honours_scope", "honours_conditional_put", "unreachable", "encrypts_with", "seal", "detection_only", "status", "code", "named"),
     [
-        (False, True, False, None, 400, 13, "write_outside_refused"),
-        (True, False, False, None, 400, 13, "conditional_put_refused"),
-        (True, True, True, None, 503, 17, None),
-        (True, True, False, None, 200, None, None),
-        (True, True, False, "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab", 400, 13, "encrypted_write"),
+        (False, True, False, None, "enforced", "", 400, 13, "write_outside_refused"),
+        (True, False, False, None, "enforced", "", 400, 13, "conditional_put_refused"),
+        (True, True, True, None, "enforced", "", 503, 17, None),
+        (True, True, False, None, "enforced", "", 200, None, None),
+        (True, True, False, _KMS_KEY, "enforced", "", 400, 13, "encrypted_write"),
+        (True, True, False, None, "unenforced", "", 400, 13, "sealed: unenforced"),
+        (True, True, False, None, "untaggable", "", 400, 13, "sealed: untaggable"),
+        (True, True, False, None, "unenforced", "wh-p", 200, None, None),
     ],
-    ids=["store-ignores-scope", "store-ignores-conditional-put", "sts-unreachable", "store-conforms", "store-refuses-the-vended-kms-key"],
+    ids=[
+        "store-ignores-scope",
+        "store-ignores-conditional-put",
+        "sts-unreachable",
+        "store-conforms",
+        "store-refuses-the-vended-kms-key",
+        "store-takes-a-put-over-a-sealed-file",
+        "store-keeps-no-tags",
+        "git-declares-the-warehouse-detection-only",
+    ],
 )
 def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     client: TestClient,
@@ -222,6 +280,8 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     honours_conditional_put: bool,
     unreachable: bool,
     encrypts_with: str | None,
+    seal: str,
+    detection_only: str,
     status: int,
     code: int | None,
     named: str | None,
@@ -231,10 +291,14 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     create runs the probe before it writes the registry record ([[LH-481]], ADR 0089). A store that broke a
     guarantee is the request's problem (InvalidInput, 13); a probe that could not reach the store learned
     nothing and asks for a retry (ServiceUnavailable, 17). A store refusing the encryption its vends name, its role
-    holding no grant on the KMS key, broke a guarantee every writer needs ([[LH-262]]). A store's refusal names its check."""
-    vending = _VendingStore(honours_scope=honours_scope, honours_conditional_put=honours_conditional_put)
+    holding no grant on the KMS key, broke a guarantee every writer needs ([[LH-262]]). A store's refusal names its check.
+
+    The seal fails closed (ADR 0242): a store that takes a vended write credential's put over a sealed file, or keeps no
+    tags, is refused unless git declares the warehouse detection-only, which registers it with what was measured."""
+    vending = _VendingStore(honours_scope=honours_scope, honours_conditional_put=honours_conditional_put, seal=seal)
     monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending)
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    monkeypatch.setattr(stored_objects, "object_client", lambda *a, **k: vending)
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store, detection_only=detection_only)
     client.app.dependency_overrides[get_vendor] = lambda: _ScopedVendor(vending, unreachable=unreachable, encrypts_with=encrypts_with)
     _mk_projects(client, "acme")
 
@@ -246,6 +310,11 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
         assert (resp.headers["content-type"], resp.json()["code"]) == ("application/problem+json", code), resp.text
     if named is not None:
         assert f"({named})" in resp.json()["detail"], resp.text
+    if status == 200:
+        assert resp.json()["sealed"] == seal, resp.text
+        assert vending.sealed and not set(vending.keys) & vending.sealed, "the probe leaves no sealed file behind"
+        exported = {str((point.attributes or {})["lance.warehouse"]): dict(point.attributes or {}) for point in seal_posture._observe(CallbackOptions())}
+        assert exported["wh-p"] == {"lance.warehouse": "wh-p", "lance.seal": seal, "lance.seal_required": "false" if detection_only else "true"}
 
 
 def test_create_warehouse_cross_project_collision_409(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:

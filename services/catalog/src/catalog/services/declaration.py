@@ -18,7 +18,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Annotated, Final, Self
+from typing import Annotated, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
@@ -63,6 +63,10 @@ class DeclaredWarehouse(_Declared):
     delete_profile: DeleteProfile | None = None
     protected: bool = False
     active: bool = True
+    #: Whether the warehouse's store must enforce the seal (ADR 0242). ``detection_only`` admits a store the probe finds
+    #: unenforced or untaggable; the chart renders the bucket into ``LANCE_SEAL_DETECTION_ONLY_BUCKETS``, which is what
+    #: registration and every commit read (``Settings.seal_detection_only_buckets``).
+    seal: Literal["required", "detection_only"] = "required"
 
 
 class DeclaredGrant(_Declared):

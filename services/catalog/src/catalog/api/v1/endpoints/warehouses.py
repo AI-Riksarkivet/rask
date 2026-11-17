@@ -81,11 +81,11 @@ from catalog.schemas import (
     TrashListing,
     WarehouseResponse,
 )
-from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, dataplane, native, seal_posture, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, RecordGone
 from catalog.services.control_records import INCARNATION, ProtectionChange, with_protection
-from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
-from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
+from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, SEAL_CHECK, ProbeCheck, ProbeReport, Sealed, summarize_probe
+from lakehouse import base_registry, clone_sources, data_directories, location_claims, stored_objects, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
@@ -95,6 +95,7 @@ from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.ns_errors import PartiallyApplied, status_for
 from lakehouse.records import RecordExistsError, RecordMissingError
 from lakehouse.storage import s3_client, split_s3_uri
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -219,11 +220,12 @@ async def establish_warehouse(
     existing = await _claim_the_bucket(settings, body, ids, author=author, owner=owner)
     root_uri = f"s3://{bucket}"
     await run_in_threadpool(warehouses.provision_bucket, bucket, settings.storage_options())
-    await _require_a_conforming_store(settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
+    sealed = await _require_a_conforming_store(settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
     actor = author.actor if author is not None else None
     protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
-    record = _record_for(body, existing, warehouse_id=warehouse_id, project=project, bucket=bucket, protection=protection)
+    record = _record_for(body, existing, warehouse_id=warehouse_id, project=project, bucket=bucket, protection=protection, sealed=sealed)
     replaced, record = await _write_record(settings, body, record, existing=existing, protection=protection)
+    seal_posture.observe(warehouse_id, record.get(warehouses.SEALED), required=bucket not in settings.seal_detection_only_buckets)
     # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
     # catalog refuses a namespace whose parent has no row (measured on pylance 13.0.0). After the record, which makes
     # the root the warehouse's, and idempotent, so a re-POST converges a create that failed here.
@@ -319,7 +321,9 @@ async def _claim_the_bucket(
     return existing
 
 
-async def _require_a_conforming_store(settings: Settings, vendor: CredentialVendor, root_uri: str, *, warehouse_id: str, author: Author | None) -> None:
+async def _require_a_conforming_store(
+    settings: Settings, vendor: CredentialVendor, root_uri: str, *, warehouse_id: str, author: Author | None
+) -> Sealed | None:
     """Probe the store under ``root_uri`` before the record makes it routable ([[LH-481]], ADR 0089).
 
     Every Lance commit rests on the store refusing a second conditional put, and every vended credential on it
@@ -333,15 +337,30 @@ async def _require_a_conforming_store(settings: Settings, vendor: CredentialVend
     nothing about it, 503, and the retry is the right move; a GitOps re-POST of a live warehouse must not read a store
     blip as a verdict on its store.
 
+    THE SEAL IS REQUIRED UNLESS GIT DECLARES OTHERWISE (ADR 0242): a store the seal check finds ``unenforced`` or
+    ``untaggable`` is refused 400, unless the warehouse's bucket is one git declares detection-only
+    (``catalog.declared.warehouses[].seal``). Answers what the seal check measured, which the record keeps and serves.
+
     Raises:
-        InvalidInputError: The store failed a conformance check.
+        InvalidInputError: The store failed a conformance check, or does not enforce the seal and git declares no exception.
         ServiceUnavailableError: The store or its STS could not be probed.
     """
     bucket = split_s3_uri(root_uri)[0]
     creator = role_session_name(author.subject if author is not None else ANONYMOUS_SUBJECT)
-    probe = partial(_run_scope_probe, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=creator)
-    report = summarize_probe(await run_in_threadpool(probe))
-    failed = [c.name for c in report.checks if c.outcome == "fail"]
+    report = await _probe(settings, vendor, root_uri, session_name=creator)
+    # The seal check's failure is the store's verdict when it measured one (`sealed`), judged below against the
+    # declaration; without one it learned nothing about the store, as every other failure outside the conformance checks.
+    failed = [c.name for c in report.checks if c.outcome == "fail" and not (c.name == SEAL_CHECK and report.sealed is not None)]
+    if report.sealed in ("unenforced", "untaggable") and bucket not in settings.seal_detection_only_buckets:
+        # FAIL CLOSED (ADR 0242 B4): a store that does not refuse a put over a sealed file lets any write credential
+        # replace what a committed version names, with a 200; only git may accept that, per warehouse.
+        log.warning("warehouse_store_unsealed", extra={"warehouse": warehouse_id, "bucket": bucket, "sealed": report.sealed})
+        raise InvalidInputError(
+            f"warehouse {warehouse_id!r} was not registered: its object store does not enforce the seal (sealed: {report.sealed}). "
+            "The store must refuse s3:PutObject over an object tagged rask-sealed=true for every session of the catalog's identity, "
+            "and grant that identity s3:PutObjectTagging (ADR 0242). A warehouse may run without it only where git declares "
+            "it so: catalog.declared.warehouses[].seal: detection_only."
+        )
     if broken := [name for name in failed if name in _CONFORMANCE_CHECKS]:
         log.warning("warehouse_store_failed_probe", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": broken})
         raise InvalidInputError(
@@ -352,6 +371,18 @@ async def _require_a_conforming_store(settings: Settings, vendor: CredentialVend
     if failed:
         log.warning("warehouse_store_unprobed", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": failed})
         raise ServiceUnavailableError(f"warehouse {warehouse_id!r} was not registered: its object store could not be probed ({', '.join(failed)}); retry")
+    return report.sealed
+
+
+async def _probe(settings: Settings, vendor: CredentialVendor, root_uri: str, *, session_name: str) -> ProbeReport:
+    """The scope probe and the seal check against the store under ``root_uri``, reduced to one report."""
+    probe = partial(_run_scope_probe, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=session_name)
+    checks = await run_in_threadpool(probe)
+    seal = partial(
+        _run_seal_check, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=session_name, catalog_options=settings.storage_options()
+    )
+    check, sealed = await run_in_threadpool(seal)
+    return summarize_probe([*checks, check], sealed=sealed)
 
 
 def _record_for(
@@ -362,8 +393,10 @@ def _record_for(
     project: str,
     bucket: str,
     protection: ProtectionChange | None,
+    sealed: Sealed | None,
 ) -> dict[str, str]:
-    """The registry record ``body`` asks for, carrying forward from ``existing`` what a re-create does not own."""
+    """The registry record ``body`` asks for, carrying forward from ``existing`` what a re-create does not own; ``sealed``
+    is what this registration's seal check measured, written over the last one (ADR 0242)."""
     record = {
         "id": warehouse_id,
         "bucket": bucket,
@@ -384,6 +417,7 @@ def _record_for(
         # What a drop under this warehouse does (ADR 0146), CALLER-OWNED like the endpoint: named, it replaces the
         # live profile; omitted, the merge carries the live one forward.
         **_delete_profile_fields(body.delete_profile),
+        **({warehouses.SEALED: sealed} if sealed is not None else {}),
     }
     # Deletion protection (Decision 5) is what the request declares ([[LH-548]]): `true` arms it, `false` clears it, and
     # a request naming neither leaves it as it stands. A new warehouse's record takes it here; a re-create's merge takes
@@ -1248,6 +1282,7 @@ async def delete_warehouse(
                     },
                 ) from exc
 
+            seal_posture.forget(warehouse_id)
             log.info(
                 "warehouse_deleted",
                 extra={
@@ -1318,9 +1353,13 @@ async def validate_warehouse_credentials(
     require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     subject = token.subject if token is not None else ANONYMOUS_SUBJECT
-    probe = partial(_run_scope_probe, str(record["root_uri"]), vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=role_session_name(subject))
-    checks = await run_in_threadpool(probe)
-    return summarize_probe(checks)
+    report = await _probe(settings, vendor, str(record["root_uri"]), session_name=role_session_name(subject))
+    if report.sealed is not None:
+        # Recorded and served, so a store that stopped enforcing the seal since registration shows on the warehouse and
+        # pages (`WarehouseSealUnenforced`) from this validate on, whatever the declaration (ADR 0242 B4).
+        await run_in_threadpool(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed)
+        seal_posture.observe(warehouse_id, report.sealed, required=str(record["bucket"]) not in settings.seal_detection_only_buckets)
+    return report
 
 
 def _encryption_put_args(options: Mapping[str, str]) -> dict[str, Any]:
@@ -1440,3 +1479,72 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     else:
         checks += [ProbeCheck(name=n, outcome="skip", detail="nothing was written") for n in ("read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, "cleanup")]
     return checks
+
+
+def _run_seal_check(
+    root_uri: str, *, vendor: CredentialVendor, store_endpoint: str, session_name: str, catalog_options: StorageOptions
+) -> tuple[ProbeCheck, Sealed | None]:
+    """Prove the warehouse's store refuses a put over a sealed file, end to end, with a real vended WRITE credential (ADR 0242).
+
+    The credential is the write tier's for a probe table of its own under ``_validate/``, so it holds exactly what a
+    stock writer's ``DescribeTable`` vend holds. It puts a probe file where a writer stages a data file; the catalog seals
+    it under ``catalog_options``, its own identity, through the call every commit seals with
+    (:func:`lakehouse.stored_objects.seal`); the credential then puts over it and begins a multipart upload of it. Both
+    refused is ``enforced``; either taken is ``unenforced``, a store that keeps the tag and evaluates no
+    ``s3:ExistingObjectTag`` on a put; a seal refused is ``untaggable``. The probe file is removed under the catalog's
+    identity, which a seal does not stop deleting.
+    """
+    bucket, prefix = split_s3_uri(root_uri.rstrip("/"))
+    table = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate/{uuid.uuid4().hex}"
+    probe_file = "data/seal-probe.lance"
+    key = f"{table}/{probe_file}"
+    try:
+        vended = vendor.vend(table_location=f"s3://{bucket}/{table}", tier="write", session_name=session_name)
+        options = None if vended is None else vended.as_storage_options()
+    except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
+        return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail=f"no write credential was vended: {type(exc).__name__}: {str(exc)[:120]}"), None
+    if options is None:
+        return ProbeCheck(name=SEAL_CHECK, outcome="skip", detail="server_mediated: this warehouse vends no direct credentials"), None
+    access_key, secret_key, session_token = options.credential_in_clear()
+    writer = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.region)
+    encrypted = _encryption_put_args(options.options)
+
+    def refused(write: Callable[[], object]) -> bool:
+        try:
+            write()
+        except Exception:  # noqa: BLE001 — the store's refusal is the result here
+            return True
+        return False
+
+    try:
+        writer.put_object(Bucket=bucket, Key=key, Body=b"seal-probe", **encrypted)
+    except Exception as exc:  # noqa: BLE001 — a write the store did not take measures nothing about the seal
+        return ProbeCheck(
+            name=SEAL_CHECK, outcome="fail", detail=f"the write credential could not put the probe file: {type(exc).__name__}: {str(exc)[:120]}"
+        ), None
+    try:
+        try:
+            absent = stored_objects.seal(f"s3://{bucket}/{table}", catalog_options, [probe_file])
+        except stored_objects.SealRefusedError as exc:
+            return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail=f"untaggable: the store refused the seal: {str(exc)[:160]}"), "untaggable"
+        except stored_objects.SealUnavailableError as exc:
+            return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail=f"the store did not answer the seal: {str(exc)[:160]}"), None
+        if absent:
+            return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail="the probe file the store took was gone at the seal"), None
+        put = refused(lambda: writer.put_object(Bucket=bucket, Key=key, Body=b"over-a-sealed-file", **encrypted))
+        upload: dict[str, Any] = {}
+
+        def begin() -> None:
+            upload.update(writer.create_multipart_upload(Bucket=bucket, Key=key, **encrypted))
+
+        multipart = refused(begin)
+        if upload.get("UploadId"):
+            with suppress(Exception):
+                writer.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload["UploadId"])
+    finally:
+        with suppress(Exception):
+            stored_objects.delete_object(f"s3://{bucket}", catalog_options, key)
+    if put and multipart:
+        return ProbeCheck(name=SEAL_CHECK, outcome="pass"), "enforced"
+    taken = [name for name, was_refused in (("PutObject", put), ("CreateMultipartUpload", multipart)) if not was_refused]
+    return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail=f"unenforced: the store took {' and '.join(taken)} over a sealed file"), "unenforced"

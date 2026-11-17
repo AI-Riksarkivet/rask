@@ -44,7 +44,7 @@ from catalog.api.security import CurrentToken, current_subject
 from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import dataplane, maintenance, managed_versions, table_inputs
+from catalog.services import committed_files, dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
 from lakehouse import branch_layout, commit_records, commit_turns, stored_objects
 from lakehouse.governed import fga
@@ -297,6 +297,9 @@ async def create_table_version(
         if created:
             await run_in_threadpool(managed_versions.forget_unlanded_author, table, staged, so)
         raise
+    # The writer's transaction file, which it put again on each attempt of this commit, is sealed now that the version
+    # landed (ADR 0242): every other file the version adds was sealed before it was judged.
+    await run_in_threadpool(committed_files.seal_landed_transaction, staged.table_location, so, verdict.files)
     audit(
         AuditAction.COMMIT_VERSION,
         AuditOutcome.SUCCESS,

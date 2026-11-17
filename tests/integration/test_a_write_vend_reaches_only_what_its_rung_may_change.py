@@ -145,10 +145,7 @@ def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool
     read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike. IAM's ``?`` (any one
     character) is left as a regex quantifier, which a run of them makes invalid, so it becomes the regex's ``.``.
     """
-    from catalog.core.vending import NEVER_OVER_A_SEALED_FILE
-
-    unsealed = {**policy, "Statement": [statement for statement in policy["Statement"] if statement.get("Sid") != NEVER_OVER_A_SEALED_FILE["Sid"]]}
-    document = json.dumps(unsealed).replace("$", "~").replace("?", ".")
+    document = json.dumps(policy).replace("$", "~").replace("?", ".")
     return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 

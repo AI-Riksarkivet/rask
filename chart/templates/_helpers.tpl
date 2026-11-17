@@ -976,6 +976,23 @@ buckets as the estate's reads already are. */ -}}
 {{- dict "projects" $projects "warehouses" (.Values.catalog.declared.warehouses | default list) "grants" (.Values.catalog.declared.grants | default list) "estate" $estate | toJson -}}
 {{- end -}}
 
+{{- /* The buckets whose warehouse git declares runs with detection only (ADR 0242): each declared warehouse with
+`seal: detection_only` (its bucket, or its id where it names none), and the estate's own bucket under
+`catalog.declared.estateWarehouseSeal: detection_only`. A seal value other than the two is refused at render, so a
+misspelling never reads as `required` silently relaxed or tightened. */ -}}
+{{- define "lance.sealDetectionOnlyBuckets" -}}
+{{- $buckets := list -}}
+{{- range .Values.catalog.declared.warehouses -}}
+{{- $seal := .seal | default "required" -}}
+{{- if not (has $seal (list "required" "detection_only")) }}{{- fail (printf "catalog.declared.warehouses[%s].seal is %q: it is `required` or `detection_only` (ADR 0242)" .id $seal) }}{{- end -}}
+{{- if eq $seal "detection_only" }}{{- $buckets = append $buckets (.bucket | default .id) }}{{- end -}}
+{{- end -}}
+{{- $estate := .Values.catalog.declared.estateWarehouseSeal | default "required" -}}
+{{- if not (has $estate (list "required" "detection_only")) }}{{- fail (printf "catalog.declared.estateWarehouseSeal is %q: it is `required` or `detection_only` (ADR 0242)" $estate) }}{{- end -}}
+{{- if eq $estate "detection_only" }}{{- $buckets = append $buckets .Values.objectStore.bucket }}{{- end -}}
+{{- join "," ($buckets | uniq) -}}
+{{- end -}}
+
 {{- define "lance.oidcAudience" -}}
 {{- $audience := required "auth.oidc.audience names the lakehouse's own audience, which every governed door checks" .Values.auth.oidc.audience -}}
 {{- $audience -}}

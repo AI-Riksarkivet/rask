@@ -313,6 +313,14 @@
                 "declared": {
                     "type": "object",
                     "properties": {
+                        "estateWarehouseSeal": {
+                            "description": "The seal of the estate's own warehouse, on `objectStore.bucket`, which has no registration to probe: `required` (the default; a commit whose seal the store refuses fails before it lands) or `detection_only` (commits tag where the store grants it and go on where it refuses; `WarehouseSealUnenforced` fires). ADR 0242.",
+                            "type": "string",
+                            "enum": [
+                                "required",
+                                "detection_only"
+                            ]
+                        },
                         "grants": {
                             "description": "Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:\u003cid\u003e` or `warehouse:\u003cid\u003e`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:\u003cnamespace\u003e:\u003cname\u003e`). The catalog revokes a grant removed from here, and only one it wrote from here.",
                             "type": "array"
@@ -340,7 +348,7 @@
                             }
                         },
                         "warehouses": {
-                            "description": "Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it. The id is the first segment of every name in the warehouse.",
+                            "description": "Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active, seal}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it, and `seal` is `required` (unset) or `detection_only`, which admits a store that does not enforce the seal (ADR 0242). The id is the first segment of every name in the warehouse.",
                             "type": "array"
                         }
                     },

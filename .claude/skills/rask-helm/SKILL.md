@@ -202,6 +202,12 @@ provisioned by its operator and attested by `signing.provisioned`).
   Read a declared change back on the catalog (`managed_by: "git"` on the project or warehouse read, the
   `declaration_converged` log line), not on the Deployment's revision: none moves. `docs/OPERATORS.md` § 2 is the
   procedure. Pinned by `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`.
+- **A warehouse's seal posture is declared, never set at a door** (ADR 0242). `catalog.declared.warehouses[].seal` is
+  `required` (unset) or `detection_only`, and `catalog.declared.estateWarehouseSeal` the same for the estate's own
+  warehouse on `objectStore.bucket`; `lance.sealDetectionOnlyBuckets` renders the detection-only buckets (a warehouse's
+  `bucket`, or its id) into the catalog's ENV `LANCE_SEAL_DETECTION_ONLY_BUCKETS`, which registration and every commit
+  read, so a change rolls the catalog; any other value fails the render. Pinned by
+  `tests/unit/test_a_warehouse_runs_unsealed_only_where_its_declaration_says.py`.
 - **`services.lineage.provenanceNamespace` must name a namespace of the estate's own warehouse**
   (`lance_catalog$<namespace>`, default `lance_catalog$provenance`): `lance.provenanceNamespace` fails the render on
   any other, and the catalog refuses to boot on one. The first segment of every name is its warehouse ([[LH-593]]).
@@ -298,7 +304,9 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   token for (`lance.objectStoreSessionEnv`: `<PREFIX>_S3_WEB_IDENTITY_TOKEN_FILE`, `_STS_ENDPOINT`, `_ASSUME_ROLE_ARN`
   from `objectStore.identity.roleArns.<component>`, `_SESSION_SECONDS`), and holds no key pair. The policies render in
   every mode in the ConfigMap `<release>-object-store-identities`, one `<release>-sa-<component>.json` per identity
-  (`lance.objectStoreIdentities`, `lance.objectStorePolicy`); the hook writes each under its account
+  (`lance.objectStoreIdentities`, `lance.objectStorePolicy`; the catalog's carries the seal's one Deny,
+  `NeverOverASealedFile`, which every vend inherits and `make lifecycle-rustfs-check` renders from the chart, ADR 0242);
+  the hook writes each under its account
   (`lance.saAccount`), the token's `sub`, and binds no user to any, and a platform store's operator creates them.
   `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds each workload's token, its policy and the
   store's provider equal.

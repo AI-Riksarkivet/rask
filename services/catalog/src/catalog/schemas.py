@@ -776,6 +776,11 @@ class WarehouseResponse(BaseModel):
     managed_by: Literal["git", "self"] = "self"
     #: The warehouse's own delete profile; None where it takes the estate's.
     delete_profile: DeleteProfile | None = None
+    #: What the probe's seal check last measured of the warehouse's store (ADR 0242): `enforced` (a put over a sealed file
+    #: is refused), `unenforced` (the store took one) or `untaggable` (it refused the seal). None where no check ran: a
+    #: deployment vending no direct credential. A warehouse other than `enforced` registers only where git declares it
+    #: detection-only.
+    sealed: Literal["enforced", "unenforced", "untaggable"] | None = None
 
     @model_validator(mode="before")
     @classmethod

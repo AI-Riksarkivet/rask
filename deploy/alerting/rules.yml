@@ -1152,6 +1152,38 @@ groups:
             overwrite of them goes unseen. The committed_files_unrecorded ERROR log names the location, the version and
             the store's error.
 
+      # ADR 0242: a warehouse whose store does not refuse a put over a sealed file, as the probe's seal check last measured
+      # it (`catalog.warehouse.seal`, one series per warehouse, exported from the catalog's start). One git declares
+      # detection-only runs so by declaration and warns for as long as it does: maintenance's committed-file pass is its
+      # only guard. One git requires the seal of is a store that stopped enforcing it since registration, found by a
+      # validate, and pages: every committed file there is replaceable by any write credential, with a 200.
+      - alert: WarehouseSealUnenforced
+        expr: max by (lance_warehouse, lance_seal) (catalog_warehouse_seal{lance_seal!="enforced", lance_seal_required="false"}) > 0
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "Warehouse {{ $labels.lance_warehouse }} runs with the seal unenforced ({{ $labels.lance_seal }}), as git declares"
+          description: >-
+            Git declares this warehouse detection-only (catalog.declared.warehouses[].seal), and its store does not refuse
+            a put over a committed file: a write credential can replace a file a committed version names, which only
+            maintenance's committed-file pass finds, after the fact. unenforced is a store that keeps the tag and evaluates
+            no s3:ExistingObjectTag on PutObject; untaggable a store or role refusing s3:PutObjectTagging. ADR 0242 states
+            what the store must support.
+
+      - alert: WarehouseSealLost
+        expr: max by (lance_warehouse, lance_seal) (catalog_warehouse_seal{lance_seal!="enforced", lance_seal_required="true"}) > 0
+        labels:
+          severity: critical
+          service: catalog
+        annotations:
+          summary: "Warehouse {{ $labels.lance_warehouse }}'s store no longer enforces the seal ({{ $labels.lance_seal }})"
+          description: >-
+            A validate found this warehouse's store no longer refuses a put over a sealed file, and git requires the seal of
+            it: any write credential can replace a file a committed version names, with a 200. untaggable also fails every
+            commit there with a 503. Restore the store's policy (ADR 0242 § What a platform S3 store must support), then
+            validate the warehouse again (POST /management/v1/warehouses/{id}/validate).
+
       # One table the catalog keeps refusing, or whose policy record cannot be read, which the ratio rule cannot see: an
       # id that holds no tuples is answered 403 at the vend door on every pass. Counted by what refused it, a closed
       # set whose series exist at 0 from a worker's start, so the first parked pass is an increase. A refused table is

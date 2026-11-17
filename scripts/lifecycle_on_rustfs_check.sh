@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # lifecycle_on_rustfs_check.sh: run the table lifecycle's, the namespace cascade's, the stock create's, the history
 # fence's and the keyed commit's race tests (ADR 0227, ADR 0233, ADR 0240), and the store's refusal of a vended write
-# credential's put over a committed file (ADR 0242),
+# credential's put over a committed file, with the commits that name a file the store does not hold, a transaction put
+# over while judged, a long branch's vend and a seal the store refuses (ADR 0242),
 # with the catalog's root and control root on a REAL S3 store, so every fence, claim and record is arbitrated by the
 # store's own conditional writes (put-if-not-exists, If-Match) rather than the local root's file lock.
 #
@@ -10,7 +11,7 @@
 # of its own. The catalog writes under that root pair: what is checked is how the store arbitrates the writes, not whose
 # identity makes them (the governance-chain lane checks that). The stock client's cases write with the credential the
 # catalog vends them and no other key: a session the store's STS issues, under the catalog's session policy, to a user of
-# the run's own holding the catalog's canned policy (race_catalog); the maintain vend's test writes under the credential
+# the run's own holding the catalog's canned policy as the chart renders it (race_catalog); the maintain vend's test writes under the credential
 # the catalog's own session policy vends. Stops the store at the end; KEEP_UP=1 leaves it running
 # and prints the environment a test run needs.
 set -euo pipefail
@@ -19,6 +20,10 @@ port="${RASK_LIFECYCLE_STORE_PORT:-$("$root/scripts/free_port.sh")}"
 endpoint="http://127.0.0.1:$port"
 work="$(mktemp -d)"
 store="$(bash "$root/scripts/rustfs_server.sh")"
+# The vending user holds the catalog's canned policy as the chart renders it (helm template, its subcharts from
+# `make k3s-deps`), so the seal's Deny the store applies is the chart's own (ADR 0242): no helm, no lane.
+command -v helm >/dev/null || { echo "!! helm not on PATH: the lane renders the catalog's store policy from the chart" >&2; exit 1; }
+ls "$root"/chart/charts/*.tgz >/dev/null 2>&1 || { echo "!! chart/charts holds no subchart: run make k3s-deps" >&2; exit 1; }
 
 cd "$root"
 stop() {

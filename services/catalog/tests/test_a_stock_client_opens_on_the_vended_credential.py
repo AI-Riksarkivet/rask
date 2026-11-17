@@ -283,14 +283,9 @@ def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool
     """IAM's verdict on ``action`` over ``bucket/key``, by moto's evaluator.
 
     moto turns a Resource into a regex without escaping it, so a ``$`` in a key would read as an end anchor; it is swapped
-    for a character IAM gives no meaning, on both sides alike. Every key asked about is one no commit sealed, and IAM
-    applies the seal's Deny only to an object holding the tag (ADR 0242), so it is left out: moto's evaluator reads a
-    statement whose condition it cannot evaluate as matching, which would refuse every put.
+    for a character IAM gives no meaning, on both sides alike.
     """
-    from catalog.core.vending import NEVER_OVER_A_SEALED_FILE
-
-    unsealed = {**policy, "Statement": [statement for statement in policy["Statement"] if statement.get("Sid") != NEVER_OVER_A_SEALED_FILE["Sid"]]}
-    document = json.dumps(unsealed, ensure_ascii=False).replace("$", "~")
+    document = json.dumps(policy, ensure_ascii=False).replace("$", "~")
     return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 
