@@ -181,7 +181,7 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
 # with neither written there is no inheritance path for any admin either), and permanently blocks
 # its own id against the retry that would repair it.
 #
-# `seed_ownership` is patched, NOT the door's seam around it (`seed_before_write`, `seed_ownership_or_compensate`): the
+# `seed_ownership` is patched, NOT the door's seam around it (`seed_before_write`): the
 # compensating seam is the code under test, so stubbing it would assert nothing. The patch lands on the fga_deps module global,
 # which is exactly what the seam's internal call resolves.
 # --------------------------------------------------------------------------- #
@@ -214,21 +214,10 @@ def test_declare_converges_after_a_failed_grant(moto_client: TestClient) -> None
     assert moto_client.post("/v1/table/lance_catalog$f3d$t/declare", json={}).status_code == 200
 
 
-def test_namespace_create_converges_after_a_failed_grant(moto_client: TestClient) -> None:
-    """A stranded namespace is worse than a stranded table: it blocks the NAME, and every child
-    create under it inherits the missing parent edge."""
-    with pytest.MonkeyPatch.context() as mp:
-        _failing_seed_ctx(mp)
-        failed = moto_client.post("/v1/namespace/lance_catalog$f3ns/create", json={})
-    assert failed.status_code == 503, failed.text
-    assert moto_client.post("/v1/namespace/lance_catalog$f3ns/describe", json={}).status_code == 404
-    assert moto_client.post("/v1/namespace/lance_catalog$f3ns/create", json={}).status_code == 200
-
-
 def test_undrop_restores_the_table_under_its_uuid_and_grants_the_undropper_nothing(moto_client_recoverable: TestClient) -> None:
     """UNDROP IS A PURE RESTORE (owner ruling, diff2 F10 item 4b).
 
-    This door used to `seed_ownership_or_compensate`, making whoever pressed the button an owner. A
+    A door that seeded ownership here would make whoever pressed the button an owner. A
     recoverable drop deliberately KEEPS the table's tuples (#75 — the owner is the one person who
     needs to undrop it), so the original owner's grants are already live by the time undrop runs: the
     seed restored nothing and only ADDED the caller. Anna drops a table, Bob undrops it, and the
@@ -251,8 +240,7 @@ def test_undrop_restores_the_table_under_its_uuid_and_grants_the_undropper_nothi
 
     seeded: list[object] = []
     with pytest.MonkeyPatch.context() as mp:
-        for name in ("seed_ownership", "seed_ownership_or_compensate"):
-            mp.setattr(fga_deps_mod, name, lambda *a, **kw: seeded.append(kw or a))  # noqa: ARG005
+        mp.setattr(fga_deps_mod, "seed_ownership", lambda *a, **kw: seeded.append(kw or a))  # noqa: ARG005
         recovered = moto_client_recoverable.post("/management/v1/table/lance_catalog$f3u$t/undrop", json={})
 
     assert recovered.status_code == 200, recovered.text

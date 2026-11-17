@@ -360,7 +360,18 @@ async def declare_table(
     grants = fga_deps.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
     try:
         location = await run_in_threadpool(
-            partial(dataplane.declare_table, ns, so, segments, root=root, claims=claims, holder=canonical, table_uuid=table_uuid, before_register=grants)
+            partial(
+                dataplane.declare_table,
+                ns,
+                so,
+                segments,
+                root=root,
+                claims=claims,
+                holder=canonical,
+                table_uuid=table_uuid,
+                before_register=grants,
+                after_register=partial(grants.parent_as_authorized, ns),
+            )
         )
     except Exception:
         await grants.take_back_unless_standing(ns)
@@ -1333,6 +1344,25 @@ async def register_table(
         # destroy — the whole point of the door. Deregister is the exact inverse: it removes the
         # catalog object this request created and leaves the data exactly where it was found.
         await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+
+    # The row is recorded by name, so the namespace it landed in is read now that it stands there ([[LH-585]]): one
+    # dropped and created again since the router authorized this request is another namespace, and the registration
+    # is detached before anything is claimed, marked or announced for it.
+    try:
+        await fga_deps.require_parent_as_authorized(ns, settings, client, resolver, resource="table", segments=segments)
+    except Exception:
+        await fga_deps.undo_a_create_whose_parent_is_unread(
+            client,
+            settings,
+            token,
+            resource="table",
+            segments=segments,
+            uuid=table_uuid,
+            undo=_deregister,
+            # No claim was taken for it yet, so it is a table no uuid identifies ([[LH-534]]).
+            remedy="the estate admin deregisters it before a retry",
+        )
+        raise
 
     async def _free_location() -> None:
         # The location's claim goes with the row; one another table holds is not this registration's to free.

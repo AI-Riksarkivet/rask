@@ -174,14 +174,22 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership_and_a_new_uu
     assert maintenance_policies.get_policy(str(tmp_path), StorageOptions(), "namespace", replaced) is None
 
 
-def test_existok_keeps_an_existing_top_level_namespace(real_ns_client: TestClient, governed: _TupleStore) -> None:
-    """[[LH-416]] ExistOk over a namespace directly in a warehouse keeps it."""
+@pytest.mark.parametrize(("mode", "status"), [pytest.param("ExistOk", 200, id="exist-ok-keeps-it"), pytest.param("Create", 409, id="create-conflicts")])
+def test_a_create_over_a_standing_namespace_keeps_it_and_grants_its_caller_nothing(
+    real_ns_client: TestClient, governed: _TupleStore, mode: str, status: int
+) -> None:
+    """[[LH-416]] ExistOk over a namespace directly in a warehouse keeps it, and Create answers the conflict. The
+    namespace is alice's either way: bob, who may create one, gains no tuple by asking for hers."""
     _create_top_level(real_ns_client, "kept")
     kept = _properties(real_ns_client, "kept")["rask.uuid"]
+    held = set(governed.tuples)
+    act_as(real_ns_client, "bob")
 
-    resp = real_ns_client.post(f"/v1/namespace/{WAREHOUSE}$kept/create", json={"mode": "ExistOk"}, headers=AUTH)
+    resp = real_ns_client.post(f"/v1/namespace/{WAREHOUSE}$kept/create", json={"mode": mode}, headers=AUTH)
 
-    assert (resp.status_code, resp.json().get("properties", {}).get("rask.uuid")) == (200, kept), resp.text
+    assert resp.status_code == status, resp.text
+    assert _properties(real_ns_client, "kept")["rask.uuid"] == kept
+    assert governed.tuples == held, f"the create changed who holds what: {governed.tuples ^ held}"
 
 
 def test_overwrite_by_a_caller_who_may_not_delete_the_namespace_is_refused(real_ns_client: TestClient, governed: _TupleStore) -> None:

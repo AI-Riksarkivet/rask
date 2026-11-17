@@ -68,6 +68,7 @@ from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import store_refusal
 from lakehouse.storage_options import StorageOptions
 
@@ -2154,7 +2155,7 @@ async def seed_ownership(
     segments: list[str],
     uuid: str,
 ) -> None:
-    """Grant the creator ``owner`` + the ``parent`` edge on a just-created object, ``table:<uuid>`` or ``namespace:<uuid>``.
+    """Grant the creator ``owner`` and the link to its parent on the table ``table:<uuid>`` its door brings into being.
 
     The object is keyed by the uuid the create minted (ADR 0173 §8, [[LH-524]]), so no tuple an earlier object at the
     same name left can reach it: a table dropped and created again under that name is another uuid.
@@ -2164,9 +2165,9 @@ async def seed_ownership(
     before the table is written (:func:`seed_before_write`, [[LH-588]]), and a door that finds the table standing writes
     no grant.
 
-    No-op when FGA is off or the request is unauthenticated, and a 503 when FGA is on with no client wired — so
-    create endpoints call it unconditionally with one line. This is the ONE place the
-    post-create seed policy lives. The ``parent`` edge names :func:`parent_object_of`.
+    No-op when FGA is off or the request is unauthenticated, and a 503 when FGA is on with no client wired, so a
+    door calls it unconditionally with one line. Who owns what a create makes is decided here and in
+    :func:`seed_namespace_before_write`, and nowhere else. The ``parent`` edge names :func:`parent_object_of`.
     """
     if token is None or (client := wired(settings, client)) is None:
         return
@@ -2201,10 +2202,9 @@ async def seed_before_write(
     """:func:`seed_ownership` for the table ``uuid`` its door minted and is about to write: its grants stand before the
     table does ([[LH-588]]), so no table stands without them.
 
-    A process killed between the two writes leaves the grants alone, which grant nothing (no other object holds the
-    uuid) and which the drift repair revokes as a ghost's once nothing can still record a table under it
-    (:func:`catalog.services.grant_reconcile.claim_refusal`). A seed that fails is taken back before its error is
-    raised, so a grant whose answer OpenFGA lost leaves nothing either.
+    A process killed between the two writes leaves the grants alone, which the drift repair revokes as a ghost's once
+    nothing can still record a table under their uuid (:func:`catalog.services.grant_reconcile.claim_refusal`). A seed
+    that fails is taken back before its error is raised, so a grant whose answer OpenFGA lost leaves nothing either.
     """
     try:
         await seed_ownership(client, settings, token, resolver, resource="table", segments=segments, uuid=uuid)
@@ -2213,16 +2213,165 @@ async def seed_before_write(
         raise
 
 
-async def take_back_seed(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, segments: list[str], uuid: str, reason: str) -> None:
-    """Revoke what :func:`seed_before_write` wrote for the table ``uuid``, whose door wrote no table under it.
+async def seed_namespace_before_write(
+    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+) -> None:
+    """Grant the creator ``owner`` of the namespace ``uuid`` its door minted and is about to write, and the ``parent``
+    edge it inherits through, so no namespace stands without them ([[LH-585]]).
 
-    Best effort, and never raised: the caller is answering the failure that brought it here, and grants left behind
-    are a ghost's, which the drift repair revokes.
+    Every ``namespace`` relation resolves through a direct tuple or ``from parent``, so one standing with no tuple is
+    invisible to its creator and its project's admin alike, while its name refuses every retry. A machine owns no
+    namespace it creates (:func:`seed_ownership`). The inverse ``child`` edge waits until the namespace stands
+    (:func:`name_namespace_child`): it is the one tuple that confers something on the parent's side, so what a door
+    killed between its two writes leaves behind, on a uuid no object holds, grants nothing to anyone. A seed that fails
+    is taken back before its error is raised.
+    """
+    if token is None or (client := wired(settings, client)) is None:
+        return
+    try:
+        await fga.grant_before_arrival(  # noqa: TID251
+            client,
+            user_sub=token.subject,
+            obj=fga.namespace_object(uuid),
+            actor=token.subject,
+            origin="create",
+            grant_owner=not isinstance(token, ServicePrincipal),
+            parent_object=await _namespace_parent(resolver, settings, segments),
+        )
+    except Exception:
+        await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason="grant_failed", resource="namespace")
+        raise
+
+
+async def _namespace_parent(resolver: Resolver, settings: Settings, segments: list[str]) -> str:
+    """:func:`parent_object_of` for a namespace, which always names one: its warehouse, or the namespace above it."""
+    parent = await parent_object_of(resolver, settings, "namespace", segments)
+    if parent is None:
+        raise NamespaceNotFoundError(f"namespace not found: {segments[:-1]}")
+    return parent
+
+
+async def name_namespace_child(
+    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+) -> None:
+    """Name the namespace ``uuid`` a child of its parent, now that it stands there: the end of its create.
+
+    The namespace exists by now, owned and inheriting, so an outage here is logged at ERROR and raised over nothing:
+    it is then named a child of no parent, which costs whoever holds a rung only beneath it the sight of the namespaces
+    above, and which its parent's listing covers for a removal.
+    """
+    if token is None or (client := wired(settings, client)) is None:
+        return
+    obj = fga.namespace_object(uuid)
+    try:
+        await fga.name_child(client, obj=obj, parent=await _namespace_parent(resolver, settings, segments), actor=token.subject, origin="create")  # noqa: TID251
+    except ServiceUnavailableError as exc:
+        log.error("namespace_arrival_not_settled", extra={"object": obj, "name": fga.canonical_object_id(segments), "error": str(exc)})
+
+
+async def take_back_seed(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Caller | None,
+    *,
+    segments: list[str],
+    uuid: str,
+    reason: str,
+    resource: Literal["table", "namespace"] = "table",
+) -> None:
+    """Revoke what :func:`seed_before_write` wrote for the ``resource`` ``uuid``, whose door wrote no object under it.
+
+    Best effort, and never raised: the caller is answering the failure that brought it here. A table's grants left
+    behind are a ghost's, which the drift repair revokes; a namespace's name a uuid no object holds and no ``child``
+    edge, so they grant nothing.
     """
     try:
-        await revoke_ownership(client, settings, obj=fga.table_object(uuid), token=token, origin="create")
+        await revoke_ownership(client, settings, obj=owned_object(resource, uuid), token=token, origin="create")
     except Exception as exc:  # noqa: BLE001 — the door's own failure is what the caller is told
         log.warning("seed_not_taken_back", extra={"object": fga.canonical_object_id(segments), "uuid": uuid, "reason": reason, "error": str(exc)[:300]})
+
+
+async def take_back_unless_namespace_stands(
+    ns: LanceNamespace, client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, segments: list[str], uuid: str, reason: str
+) -> None:
+    """Take back the grants written for the namespace ``uuid``, whose create door is failing or kept another namespace,
+    unless the namespace stands under ``segments``: a create whose answer the store lost may have landed, and a namespace
+    never stands without its grants ([[LH-585]]). An answer that cannot be read is read on the side that keeps them.
+    """
+    try:
+        standing = await run_in_threadpool(object_uuids.resolve_namespace_uuid, ns, segments)
+    except Exception as exc:  # noqa: BLE001 — an unreadable answer may be the namespace standing
+        log.warning("namespace_standing_unread", extra={"namespace": fga.canonical_object_id(segments), "uuid": uuid, "error": str(exc)[:300]})
+        return
+    if standing != uuid:
+        await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason=reason, resource="namespace")
+
+
+class ParentChangedError(ConcurrentModificationError):
+    """A create's parent namespace was dropped or replaced between the request's authorization and its write.
+
+    A conflict of its own kind, so a door that reads a conflict on its table as a race it lost to another create of the
+    same name (an ExistOk) never reads this one so: the table such a door would keep is in a namespace its caller was
+    not judged on.
+    """
+
+
+async def undo_a_create_whose_parent_is_unread(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Caller | None,
+    *,
+    resource: Literal["table", "namespace"],
+    segments: list[str],
+    uuid: str,
+    undo: Callable[[], Awaitable[None]],
+    remedy: str,
+) -> None:
+    """Take back the ``resource`` a door recorded and could not confirm in the namespace it was authorized on
+    (:func:`require_parent_as_authorized` refused it, or could not read the parent), for the door to raise what stopped it.
+
+    Raises:
+        PartiallyApplied: The undo failed, so the object stands, with its grants, where nobody confirmed it belongs: a
+            retry would meet it as already there, so the answer names it and its remedy.
+    """
+    if await undo_then_take_back(client, settings, token, segments=segments, uuid=uuid, undo=undo, reason="parent_unconfirmed", resource=resource):
+        return
+    name = fga.canonical_object_id(segments)
+    raise PartiallyApplied(
+        f"the {resource} {name} was recorded, its parent namespace could not be confirmed as the one authorized, and it could not be removed",
+        problem_extra={resource: name, "recorded": True, "remedy": remedy},
+    )
+
+
+async def require_parent_as_authorized(
+    ns: LanceNamespace, settings: Settings, client: OpenFgaClient | None, resolver: Resolver, *, resource: str, segments: list[str]
+) -> None:
+    """Refuse a create whose parent namespace is not the one the request was authorized on, asked once the backend
+    has recorded the new object ([[LH-585]]).
+
+    The router authorizes a create on its parent's uuid and the backend records the object by name, so a namespace
+    dropped and created again between the two would receive an object its caller was never judged on, hanging off a
+    ``parent`` edge to a namespace that is gone. The reading is made after the write because a namespace holding the
+    new object is not dropped without it, so no drop can follow the reading. A parent that is a warehouse is its
+    id, which no re-create changes. With FGA off nothing was authorized, and nothing is asked.
+
+    Raises:
+        ParentChangedError: The parent's name holds another namespace, or none; the caller's door undoes what it
+            recorded, as it does when the parent cannot be read at all.
+    """
+    parent = segments[:-1]
+    if wired(settings, client) is None or len(parent) < 2:
+        return
+    authorized = await resolver.namespace_uuid(parent)
+    standing = await run_in_threadpool(object_uuids.resolve_namespace_uuid, ns, parent)
+    if standing != authorized:
+        log.warning(
+            "create_refused_parent_changed",
+            extra={"object": fga.canonical_object_id(segments), "resource": resource, "authorized": authorized, "standing": standing},
+        )
+        raise ParentChangedError(
+            f"namespace {fga.canonical_object_id(parent)} was dropped or replaced while {resource} {fga.canonical_object_id(segments)} was being created; retry"
+        )
 
 
 async def undo_then_take_back(
@@ -2234,28 +2383,31 @@ async def undo_then_take_back(
     uuid: str,
     undo: Callable[[], Awaitable[None]],
     reason: str,
-) -> None:
-    """Undo the table ``uuid`` its door brought into being and is about to fail for, then take its grants back.
+    resource: Literal["table", "namespace"] = "table",
+) -> bool:
+    """Undo the ``resource`` ``uuid`` its door brought into being and is about to fail for, then take its grants back;
+    whether the undo went through.
 
-    The table first, its grants once it is gone ([[LH-588]]): an undo that fails leaves the table standing, and it keeps
-    its grants, so it never stands without them; the failure is logged for the operator. Never raised: the caller is
-    answering the failure that brought it here.
+    The object first, its grants once it is gone ([[LH-588]]): an undo that fails leaves the object standing, and it
+    keeps its grants, so it never stands without them; the failure is logged for the operator and answered ``False``.
+    Never raised: the caller is answering the failure that brought it here.
     """
     name = fga.canonical_object_id(segments)
     try:
         await undo()
     except Exception as undo_exc:  # noqa: BLE001 — the door's own failure is what the caller is told
-        log.error("create_compensation_failed", extra={"object": name, "resource": "table", "reason": reason, "error": str(undo_exc)[:300]})
-        return
-    log.warning("create_compensated", extra={"object": name, "resource": "table", "reason": reason})
-    await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason=reason)
+        log.error("create_compensation_failed", extra={"object": name, "resource": resource, "reason": reason, "error": str(undo_exc)[:300]})
+        return False
+    log.warning("create_compensated", extra={"object": name, "resource": resource, "reason": reason})
+    await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason=reason, resource=resource)
+    return True
 
 
 class GrantsBeforeWrite:
     """The ``before_register`` a create or declare door hands :func:`dataplane.declare_table`: called on the backend
     write's worker thread with the uuid the declaration minted and claimed and the location it claimed, it writes the
     table's grants on the request's event loop (:func:`seed_before_write`) and remembers whose they are and where that
-    table lives.
+    table lives. :meth:`parent_as_authorized` is the door's ``after_register``.
     """
 
     def __init__(self, client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, segments: list[str]) -> None:
@@ -2271,6 +2423,12 @@ class GrantsBeforeWrite:
     def __call__(self, uuid: str, location: str) -> None:
         anyio.from_thread.run(partial(seed_before_write, self._client, self._settings, self._token, self._resolver, segments=self._segments, uuid=uuid))
         self.uuid, self._location = uuid, location
+
+    def parent_as_authorized(self, ns: LanceNamespace) -> None:
+        """:func:`require_parent_as_authorized` for the table, from the backend write's worker thread."""
+        anyio.from_thread.run(
+            partial(require_parent_as_authorized, ns, self._settings, self._client, self._resolver, resource="table", segments=self._segments)
+        )
 
     async def take_back(self, *, reason: str) -> None:
         """Take back the grants written, the door having undone the table they were written for."""
@@ -2677,83 +2835,6 @@ def _trashed_objects(settings: Settings) -> set[str]:
         if (uuid := trash.object_uuid(record)) is not None:
             objects.add(fga.object_of(str(record.get("kind") or "table"), uuid))
     return objects
-
-
-async def seed_ownership_or_compensate(
-    client: OpenFgaClient | None,
-    settings: Settings,
-    token: Caller | None,
-    resolver: Resolver,
-    *,
-    resource: str,
-    segments: list[str],
-    uuid: str,
-    undo: Callable[[], Awaitable[None]] | None,
-) -> None:
-    """:func:`seed_ownership`, but UNDO the native create when the grant fails (diff2 F3).
-
-    The dual-write hazard this closes: a namespace's create door runs the native mutation FIRST and seeds tuples
-    second. If the seed fails (an OpenFGA blip is enough), the object exists on storage with no owner and no ``parent``
-    edge, so per-item list filtering hides it from every caller including
-    its creator, and the obvious retry hits native ``AlreadyExists`` and never reaches the seed again.
-    The object is then unreachable by anything except a hand-written tuple. ``undo`` runs the native
-    delete of what THIS request just created, so the retry starts from a clean slate and converges.
-
-    TWO ORDERING FACTS CARRY THIS:
-
-    1. The revoke and the undo are INDEPENDENT best-effort steps, not one try block. The revoke goes through
-       ``read_object_tuples`` — an OpenFGA call. So in the exact scenario the compensation exists for,
-       a down OpenFGA, a revoke that raised would stop the native undo. The undo needs no FGA, so nothing
-       FGA-shaped may stand in front of it.
-    2. The revoke is attempted FIRST anyway, when it can run. A grant can commit server-side while its
-       response is lost, and the uuid it names then holds tuples no object does, which drift detection reports.
-
-    ``undo=None`` means the caller has decided a native delete is unsafe here: an adopted namespace holds datasets
-    from before this request. Dropping it escalates a transient blip into irreversible
-    loss; stranded-but-admin-recoverable beats destroyed. Passing ``None`` is a decision, not a
-    default: it leaves the stranded state reachable.
-
-    The original grant error is always re-raised — compensation changes what is left behind, never
-    what the caller is told.
-    """
-    try:
-        await seed_ownership(client, settings, token, resolver, resource=resource, segments=segments, uuid=uuid)
-    except Exception:
-        if undo is not None:
-            await compensate_create(client, settings, token, resource=resource, segments=segments, uuid=uuid, undo=undo, reason="grant_failed")
-        raise
-
-
-async def compensate_create(
-    client: OpenFgaClient | None,
-    settings: Settings,
-    token: Caller | None,
-    *,
-    resource: str,
-    segments: list[str],
-    uuid: str,
-    undo: Callable[[], Awaitable[None]],
-    reason: str,
-) -> None:
-    """Take back a create whose request is about to fail: revoke the ownership it seeded, then run ``undo``.
-
-    The two steps are independent and best effort, revoke first, as :func:`seed_ownership_or_compensate` explains;
-    nothing here raises, because the caller re-raises the error that made it compensate.
-    """
-    name = fga.canonical_object_id(segments)
-    try:
-        await revoke_ownership(client, settings, obj=owned_object(resource, uuid), token=token, origin="create")
-    except Exception as revoke_exc:
-        # Expected when OpenFGA is the thing that is down. Logged, never fatal — the undo below
-        # is what actually makes the retry converge, and it must not be skipped for this.
-        log.warning("compensation_revoke_failed", extra={"object": name, "resource": resource, "error": str(revoke_exc)})
-    try:
-        await undo()
-        log.warning("create_compensated", extra={"object": name, "resource": resource, "reason": reason})
-    except Exception as undo_exc:
-        # Both halves failed: the object is stranded and only the structural reconcile can
-        # reach it. Loud on purpose — this is the state an operator has to be told about.
-        log.error("create_compensation_failed", extra={"object": name, "resource": resource, "error": str(undo_exc)})
 
 
 async def require_can_drop_table(

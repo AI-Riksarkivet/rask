@@ -586,6 +586,7 @@ def declare_table(
     holder: str,
     table_uuid: str | None = None,
     before_register: Callable[[str, str], None] | None = None,
+    after_register: Callable[[], None] | None = None,
 ) -> str:
     """Declare ``segments`` at ``<root>/<table uuid>``, where a table the catalog makes lives, and answer that location ([[LH-520]]).
 
@@ -601,16 +602,21 @@ def declare_table(
        from revoking them while the table is being written;
     3. the `.lance-reserved` marker is written at the location;
     4. the ``__manifest`` row is recorded through RegisterTable's relative location. Measured on pylance 13.0.0, such a
-       row answers ``is_only_declared`` until data lands, as the backend's own declaration does, and keeps no properties.
+       row answers ``is_only_declared`` until data lands, as the backend's own declaration does, and keeps no properties;
+    5. ``after_register`` judges the row where it landed: a governed door refuses there a table recorded in a namespace
+       other than the one its request was authorized on ([[LH-585]]). The backend records the row by name, so only a
+       reading made once the row stands is one no drop and re-create of the namespace can follow: a namespace holding a
+       row is not dropped without it.
 
-    A failure after the claim removes the marker and releases the claim; what ``before_register`` wrote is its caller's to
-    take back. ``claims`` is ``None`` for a caller outside governance (a test building a fixture), which takes no claim.
+    A failure after the claim removes the row when it was recorded, removes the marker and releases the claim; what
+    ``before_register`` wrote is its caller's to take back. ``claims`` is ``None`` for a caller outside governance (a test building a fixture), which takes no claim.
 
     Raises:
         InvalidInputError: ``segments`` names a table outside every namespace: the `dir` backend resolves a root-level
             table by its ``<name>.lance`` directory, never by its row (measured on pylance 13.0.0).
         ConcurrentModificationError: Another table holds the location.
         TableAlreadyExistsError: A table already holds the name.
+        PartiallyApplied: ``after_register`` refused the row and the backend kept it.
     """
     if len(segments) < 2:
         raise InvalidInputError(f"table {segments!r} names no namespace; a table the catalog makes lives in one")
@@ -621,12 +627,24 @@ def declare_table(
             table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=minted)
         except location_claims.LocationHeldError:
             raise ConcurrentModificationError(f"the location minted for table {holder} is held by another table; retry to be given another") from None
+    recorded = False
     try:
         if before_register is not None:
             before_register(minted, location)
         _reserve(location, so)
         native.call(ns, "register_table", RegisterTableRequest(id=segments, location=minted))
+        recorded = True
+        if after_register is not None:
+            after_register()
     except Exception as exc:
+        if recorded and not _row_removed(ns, segments):
+            # The row stands, so its marker and claim stay with it: a table never stands at a location no claim holds.
+            # A retry would meet it as already there, so the answer names it and its remedy.
+            name = "$".join(segments)
+            raise PartiallyApplied(
+                f"the table {name} was recorded, its declaration was then refused ({exc}), and its row could not be removed",
+                problem_extra={"table": name, "recorded": True, "remedy": "drop it before retrying"},
+            ) from exc
         _unreserve(location, so, claims=claims, holder=holder)
         # The `dir` backend keeps namespaces and tables in one object-id space and arbitrates the add by
         # put-if-not-exists, so a namespace at the id surfaces as the add's conflict: a TableAlreadyExists on a local
@@ -636,6 +654,16 @@ def declare_table(
             raise TableAlreadyExistsError(f"a namespace already holds the id {'$'.join(segments)}; a table cannot be created there") from exc
         raise
     return _described_location(ns, segments, fallback=location)
+
+
+def _row_removed(ns: LanceNamespace, segments: list[str]) -> bool:
+    """Take back the row a declaration recorded and is failing for; ``False``, logged, when the backend keeps it."""
+    try:
+        native.call(ns, "deregister_table", DeregisterTableRequest(id=segments))
+    except Exception as exc:  # noqa: BLE001 — the declaration's own failure is what its caller is told
+        log.error("declaration_row_not_removed", extra={"table": "$".join(segments), "error": str(exc)[:300]})
+        return False
+    return True
 
 
 def stands_at(ns: LanceNamespace, segments: list[str], location: str) -> bool:
@@ -720,6 +748,7 @@ def create_table(
     overwriting: table_claims.DoorTable | None = None,
     before_commit: Callable[[str], None] | None = None,
     before_register: Callable[[str, str], None] | None = None,
+    after_register: Callable[[], None] | None = None,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -852,7 +881,14 @@ def create_table(
         )
 
     location = declare_table(
-        ns, so, segments, root=root, claims=None if registry is None else _claim_store(registry), holder=holder, before_register=before_register
+        ns,
+        so,
+        segments,
+        root=root,
+        claims=None if registry is None else _claim_store(registry),
+        holder=holder,
+        before_register=before_register,
+        after_register=after_register,
     )
     return _write_blob_into(
         ns,

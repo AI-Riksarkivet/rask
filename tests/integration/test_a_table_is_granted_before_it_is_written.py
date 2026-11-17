@@ -1,4 +1,4 @@
-"""[[LH-588]] A table's grants are written before the table, so no table stands without them.
+"""[[LH-588]], [[LH-585]] A table's grants, and a namespace's, are written before it, so neither stands without them.
 
 Every ``table`` relation resolves through a direct tuple or ``from parent``, so a table holding no tuple denies every
 principal, its creator included. Create, declare and register therefore write the table's grants (its owner, and its
@@ -13,6 +13,10 @@ audit with drift repair armed, asking the catalog's own grant doors for the cens
 runs after a SIGKILL: at the door's grant (its OpenFGA write) or at its backend write (the ``register_table`` call that
 records the table's row). The app's middleware answers it 500, which no caller reads. A door that fails once the table
 stands, and whose undo of the table fails too, keeps the table's grants with it.
+
+A namespace is granted the same way ([[LH-585]]): every ``namespace`` relation resolves through a direct tuple or ``from
+parent`` too, so one standing with no tuple is invisible to its creator and its project's admin alike, and its name
+refuses every retry.
 """
 
 from __future__ import annotations
@@ -166,3 +170,73 @@ def test_a_door_killed_between_its_two_writes_leaves_no_table_without_its_grants
         audited(estate.maintenance)
 
     assert estate.tables_granted() - before == ({standing} if standing else set())
+
+
+def _at_the_namespace_grant(monkeypatch: pytest.MonkeyPatch, killed: list[str]) -> None:
+    async def _killed(*_args: object, **_kwargs: object) -> None:
+        killed.append("grant")
+        raise Killed
+
+    monkeypatch.setattr(fga, "grant_before_arrival", _killed)
+
+
+def _at_the_namespace_write(monkeypatch: pytest.MonkeyPatch, killed: list[str]) -> None:
+    call = native.call
+
+    def _killed(ns: Any, method: str, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the backend's own request and answer
+        if method == "create_namespace":
+            killed.append(method)
+            raise Killed
+        return call(ns, method, *args, **kwargs)
+
+    monkeypatch.setattr(native, "call", _killed)
+
+
+@pytest.mark.parametrize("kill", [pytest.param(_at_the_namespace_grant, id="at-the-grant"), pytest.param(_at_the_namespace_write, id="at-the-backend-write")])
+def test_a_namespace_create_killed_between_its_two_writes_leaves_no_namespace_without_its_grants(
+    estate: _Estate, kill: Callable[[pytest.MonkeyPatch, list[str]], None]
+) -> None:
+    """Killed at its grant, the door has written nothing. Killed at its backend write, it leaves the owner and the
+    ``parent`` edge of a uuid no namespace holds, and no ``child`` edge: nothing that names another object's side, so
+    nothing anyone holds a relation through."""
+    namespace = f"{estate.namespace}$silver"
+    before = set(estate.store.tuples)
+    killed: list[str] = []
+    with pytest.MonkeyPatch.context() as killing:
+        kill(killing, killed)
+        estate.catalog.post(f"/v1/namespace/{namespace}/create", json={})
+    assert len(killed) == 1, killed
+
+    left = set(estate.store.tuples) - before
+
+    assert [held for held in left if held[1] == "child"] == [], f"the dead create names a child of a standing object: {left}"
+    created = estate.catalog.post(f"/v1/namespace/{namespace}/create", json={})
+    assert created.status_code == 200, f"{namespace} stands and no tuple names it, or its name is not free: {created.text}"
+    standing = f"namespace:{created.json()['properties']['rask.uuid']}"
+    assert left.isdisjoint(estate.store.naming([standing]).get(standing, set())), "the namespace created since holds the dead create's grants"
+    # Its owner, its parent edge and its parent's child edge naming it.
+    assert len(estate.store.naming([standing]).get(standing, set())) == 3, estate.store.naming([standing])
+
+
+def test_a_namespace_whose_create_answer_was_lost_keeps_its_grants(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backend records the namespace and its answer never arrives: the door fails, and the namespace it cannot
+    disown keeps its owner and its ``parent`` edge, so its creator and its project's admin reach it."""
+    namespace = f"{estate.namespace}$silver"
+    call = native.call
+
+    def _answer_lost(ns: Any, method: str, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the backend's own request and answer
+        answer = call(ns, method, *args, **kwargs)
+        if method == "create_namespace":
+            raise ServiceUnavailableError("the store's answer was lost")
+        return answer
+
+    with pytest.MonkeyPatch.context() as losing:
+        losing.setattr(native, "call", _answer_lost)
+        failed = estate.catalog.post(f"/v1/namespace/{namespace}/create", json={})
+    assert failed.status_code == 503, failed.text
+
+    described = estate.catalog.post(f"/v1/namespace/{namespace}/describe", json={})
+
+    assert described.status_code == 200, described.text
+    standing = f"namespace:{described.json()['properties']['rask.uuid']}"
+    assert {held[1] for held in estate.store.naming([standing]).get(standing, set())} == {"owner", "parent"}

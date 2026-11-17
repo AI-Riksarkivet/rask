@@ -2940,7 +2940,7 @@ export interface paths {
         put?: never;
         /**
          * Create Namespace
-         * @description Create a namespace via ``create_namespace``, then seed its FGA owner + parent edge.
+         * @description Create a namespace via ``create_namespace``, owned by its creator and joined to its parent before it is recorded.
          */
         post: operations["create_namespace_v1_namespace__id__create_post"];
         delete?: never;

@@ -38,7 +38,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.governed.store_credential import S3KeyPair
-from tests.unit.named_resolver import NamedResolver
+from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 def _auth_settings(*, read_only: bool = False) -> Settings:
@@ -78,7 +78,10 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     fga_client = MagicMock()
     fga_client.close = AsyncMock()
     client.app.state.fga = fga_client
-    fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(properties={"rask.requires_run": "true"})
+    # The namespace the backend describes is the one the resolver names: a declare reads its parent again once its row stands.
+    fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(
+        properties={"rask.requires_run": "true", "rask.uuid": uuid_of("namespace", ["lance_catalog", "db"])}
+    )
     recorder = MagicMock()
     recorder.vend.side_effect = lambda **kw: VendedSession(
         key_pair=S3KeyPair(access_key_id=f"AK-{kw['tier']}", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1
@@ -96,6 +99,8 @@ def _grants(monkeypatch: pytest.MonkeyPatch, relations: set[str]) -> None:
 
     monkeypatch.setattr(fga_module, "check", check)
     monkeypatch.setattr(fga_module, "grant_on_create", AsyncMock())
+    monkeypatch.setattr(fga_module, "grant_before_arrival", AsyncMock())
+    monkeypatch.setattr(fga_module, "name_child", AsyncMock())
     monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))
 
 

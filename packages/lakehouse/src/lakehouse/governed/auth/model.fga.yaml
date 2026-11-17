@@ -661,7 +661,7 @@ tuples:
   - { user: 'user:cycle_member', relation: assignee, object: 'role:cycle_b' }
   - { user: 'role:cycle_a#assignee', relation: reader, object: 'table:wide_0_0' }
   # A PIPELINE'S OWN OUTPUT — the tuple `register_table` writes for itself. Registering calls
-  # `seed_ownership_or_compensate(resource="table")`, so the identity that registered a table is
+  # `seed_before_write`, so the identity that registered a table is
   # granted `owner` on it. That is what decides whether a pipeline can tag what it just wrote, and
   # nothing in any seed script grants it.
   - { user: 'user:service-pipeline-a', relation: owner, object: 'table:acme_silver$features' }

@@ -340,7 +340,20 @@ the missing project's 404. Pinned by `services/catalog/tests/test_a_project_is_r
 
 Check order at every create door: **identity (401) → shape (`InvalidInput` 400, the warehouse rule above
 included) → parent exists (404) → authz (403) → conflict (409) → tuples → native write → events** for a table
-([[LH-588]]); a namespace's create door still writes its tuples (`seed_ownership_or_compensate`) after its native write.
+([[LH-588]]), and a namespace's create door writes its owner and `parent` edge before the namespace, under the uuid it
+minted ([[LH-585]], `fga_deps.seed_namespace_before_write`): a seed that fails has written no namespace, a create the
+backend refuses or an ExistOk that keeps one takes the grants back (`take_back_unless_namespace_stands`), and a door
+killed between the two leaves an owner and a `parent` edge on a uuid no object holds. The inverse `child` edge, the one
+tuple that shows the parent to whoever holds a rung beneath it, is written only once the namespace stands
+(`name_namespace_child`), so those leftovers grant nothing; no drift repair revokes them (it judges tables).
+**A create lands only in the namespace it was authorized on** ([[LH-585]]): the router authorizes on the parent's uuid
+and the backend records the object by name, so once the row stands each door reads the parent's uuid again
+(`fga_deps.require_parent_as_authorized`: create and declare as `dataplane.declare_table`'s `after_register`, register
+and the namespace door after their native call) and, where a drop and a re-create left another namespace under the
+name, or the parent cannot be read, removes what it recorded and takes its grants back. A changed parent answers 409
+code 14 (`ParentChangedError`, which an ExistOk create never reads as a race it lost); an undo the store refuses
+answers 503 `PartiallyApplied` naming what stands and its remedy. Pinned by
+`services/catalog/tests/test_a_create_lands_only_in_the_namespace_its_request_was_authorized_on.py`.
 Guards run BEFORE `native.call` — rejecting after leaves a real Lance object with no authz parent.
 
 `project` and `warehouse` are **rask's objects, not spec objects** — their endpoints

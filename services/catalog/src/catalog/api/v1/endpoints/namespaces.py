@@ -152,7 +152,7 @@ async def create_namespace(
     resolver: ResolverDep,
     body: CreateNamespaceRequest | None = None,
 ) -> CreateNamespaceResponse:
-    """Create a namespace via ``create_namespace``, then seed its FGA owner + parent edge."""
+    """Create a namespace via ``create_namespace``, owned by its creator and joined to its parent before it is recorded."""
     # LANCE-ONLY (2026-08-15 ruling). A namespace carries no bytes, but its `properties` map is
     # where a client sets a DEFAULT format for the tables created under it — so accepting one here
     # would let the ruling be bypassed one level up from the door that enforces it.
@@ -178,62 +178,58 @@ async def create_namespace(
     req.properties = with_minted_uuid(req.properties)
     minted = req.properties[UUID_PROPERTY]
     await _judge_run_rule_declaration(ns, settings, token, client, segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
+    # The namespace's owner and its `parent` edge are written under the uuid minted above BEFORE the backend records it
+    # ([[LH-585]], `fga_deps.seed_namespace_before_write`), so a seed that fails has nothing to undo and no namespace
+    # stands without them. They name the minted uuid, so they reach no namespace the request only finds standing: an
+    # ExistOk that keeps one, or a create the backend refuses, takes them back.
+    await fga_deps.seed_namespace_before_write(client, settings, token, resolver, segments=segments, uuid=minted)
     # RACE-FREE BY CATCHING RATHER THAN PRE-CHECKING. An `exists?` read followed by a create leaves a
-    # window in which another caller creates the namespace, and on THIS door the loser of that race
-    # would go on to seed ownership over somebody else's object. The backend's own refusal is the only
+    # window in which another caller creates the namespace; the backend's own refusal is the only
     # answer that cannot be stale.
-    if create_mode is CreateMode.EXIST_OK:
-        response, kept_existing = await create_or_keep_namespace(ns, segments, req)
-        if kept_existing and declared and (response.properties or {}).get(write_judge.REQUIRES_RUN_PROPERTY) != write_judge.REQUIRED:
+    try:
+        if create_mode is CreateMode.EXIST_OK:
+            response, kept_existing = await create_or_keep_namespace(ns, segments, req)
+        elif create_mode is CreateMode.OVERWRITE:
+            response, kept_existing = await _create_or_replace_empty_namespace(ns, settings, token, client, segments, req), False
+        else:
+            response, kept_existing = await run_in_threadpool(native.call, ns, "create_namespace", req), False
+    except Exception:
+        await fga_deps.take_back_unless_namespace_stands(ns, client, settings, token, segments=segments, uuid=minted, reason="not_written")
+        raise
+    if kept_existing:
+        # NOT ON THE `ExistOk` KEEP PATH, for the grants and for the ANNOUNCEMENT alike: the namespace kept is another
+        # caller's, under its own uuid and grants, and `namespace_created` would announce a creation that did not
+        # happen to every subscriber of the control stream.
+        await fga_deps.take_back_seed(client, settings, token, segments=segments, uuid=minted, reason="not_kept", resource="namespace")
+        if declared and (response.properties or {}).get(write_judge.REQUIRES_RUN_PROPERTY) != write_judge.REQUIRED:
             # ExistOk keeps the namespace as it is, so a rule it does not already declare would not land. The rule is
             # declared once (ADR 0211): saying so beats a 200 that quietly ignored the declaration.
             raise NamespaceAlreadyExistsError(
                 f"namespace {id!r} already exists without {write_judge.REQUIRES_RUN_PROPERTY}; the rule is declared once, at create"
             )
-    elif create_mode is CreateMode.OVERWRITE:
-        response = await _create_or_replace_empty_namespace(ns, settings, token, client, segments, req)
-        kept_existing = False
-    else:
-        response = await run_in_threadpool(native.call, ns, "create_namespace", req)
-        kept_existing = False
+        return response
 
     async def _undo_create() -> None:
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
 
-    # Owner + parent edge (parent namespace if nested, else the catalog root) so the
-    # concentric cascade reaches the namespace and its tables — stops a nested-namespace
-    # lockout and lets a grant on a namespace reach its children.
-    #
-    # Compensated (diff2 F3): the namespace is EMPTY at this instant — it was created three lines up
-    # and nothing can have been put in it yet — so the undo cannot destroy anyone's data. A failed
-    # seed used to leave a namespace its creator could neither see nor drop, while native
-    # `NamespaceAlreadyExists` refused every retry, permanently reserving the name.
-    # NOT ON THE `ExistOk` KEEP PATH — for the seed and for the ANNOUNCEMENT alike. The namespace
-    # already exists and already has an owner, so seeding would hand somebody else's namespace to any
-    # caller who may create one (the same reason `table_create.py` carries `existok_kept_existing`),
-    # and `namespace_created` would announce a creation that did not happen to every subscriber of the
-    # control stream. Nothing changed, so the honest control event is none. A namespace this call
-    # really created still gets both, which is why the condition is the flag rather than the mode.
-    if not kept_existing:
-        await fga_deps.seed_ownership_or_compensate(
-            client,
-            settings,
-            token,
-            resolver,
-            resource="namespace",
-            segments=segments,
-            uuid=minted,
-            undo=_undo_create,
+    try:
+        await fga_deps.require_parent_as_authorized(ns, settings, client, resolver, resource="namespace", segments=segments)
+    except Exception:
+        # A Restrict drop, which removes the namespace only while it holds nothing, so the undo destroys nobody's data.
+        await fga_deps.undo_a_create_whose_parent_is_unread(
+            client, settings, token, resource="namespace", segments=segments, uuid=minted, undo=_undo_create, remedy="drop it before retrying"
         )
-        await emit_control(
-            control,
-            action="namespace_created",
-            object_type="namespace",
-            object_id=fga.namespace_object(minted),
-            object_name=fga.canonical_object_id(segments),
-            actor=f"user:{token.subject}" if token else None,
-            extra={"mode": req.mode, "properties": req.properties},
-        )
+        raise
+    await fga_deps.name_namespace_child(client, settings, token, resolver, segments=segments, uuid=minted)
+    await emit_control(
+        control,
+        action="namespace_created",
+        object_type="namespace",
+        object_id=fga.namespace_object(minted),
+        object_name=fga.canonical_object_id(segments),
+        actor=f"user:{token.subject}" if token else None,
+        extra={"mode": req.mode, "properties": req.properties},
+    )
     return response
 
 
@@ -296,9 +292,8 @@ async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req:
     them itself, and two callers here want them for different reasons.
 
     CATCHING RATHER THAN PRE-CHECKING. An ``exists?`` read followed by a create leaves a window another
-    caller can create the namespace in, and for the create door the loser of that race would then seed
-    ownership over somebody else's object. The backend's own refusal is the only answer that cannot be
-    stale.
+    caller can create the namespace in, and the loser of that race would answer for a namespace it did not
+    make. The backend's own refusal is the only answer that cannot be stale.
 
     The kept namespace is DESCRIBED rather than echoed, so a caller receives what the namespace
     actually is instead of a reflection of its own request.
@@ -369,7 +364,7 @@ async def _create_or_replace_empty_namespace(
 
     The drop clears the bar ``POST /v1/namespace/{id}/drop`` does: ``can_delete`` on the namespace (the
     router already checked create-on-parent) and its deletion protection. The old namespace's tuples,
-    protection and policy go with it, so the creator is seeded on a clean id.
+    protection and policy go with it; the creator's grants name the replacement's own uuid.
 
     Catching rather than pre-checking, as in :func:`create_or_keep_namespace`: a create that wins needs no
     drop, and a concurrent create between the drop and the re-create answers the ordinary 409.

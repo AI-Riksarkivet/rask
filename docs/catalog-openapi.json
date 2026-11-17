@@ -22094,7 +22094,7 @@
     },
     "/v1/namespace/{id}/create": {
       "post": {
-        "description": "Create a namespace via ``create_namespace``, then seed its FGA owner + parent edge.",
+        "description": "Create a namespace via ``create_namespace``, owned by its creator and joined to its parent before it is recorded.",
         "operationId": "create_namespace_v1_namespace__id__create_post",
         "parameters": [
           {

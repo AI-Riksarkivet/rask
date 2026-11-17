@@ -171,9 +171,9 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str) -> list[Clie
     one-directional link is a perfectly valid tuple that simply never resolves, so it is invisible to
     every mocked-client test and to the API itself. The set of callers is closed, and the TID251
     banned-api entry on `lakehouse.governed.fga.hierarchy_edge_tuples` holds it that way: its callers are
-    `grant_on_create` below, where the catalog's create-door seed lands, and the steps a link moves by
-    (`move_parent`, `leave_parent`, `unname_child`, `name_child`, `link_to_parent`), which leave it whole at each end of
-    the move.
+    `grant_on_create` below, where the catalog's create-door seed lands, and the steps a link moves or arrives by
+    (`move_parent`, `leave_parent`, `unname_child`, `name_child`, `link_to_parent`, `grant_before_arrival`), which leave
+    it whole once the object is at rest.
 
     The inverse is written only when the PARENT's type declares `child` (:data:`_CHILD_EDGE_PARENT_TYPES`):
     a `child` tuple on a type that does not is accepted by the API and read by no rule.
@@ -2230,6 +2230,25 @@ async def grant_on_create(
         retry_backoff_seconds=retry_backoff_seconds,
         retry_max_backoff_seconds=retry_max_backoff_seconds,
     )
+
+
+async def grant_before_arrival(
+    client: OpenFgaClient, *, user_sub: str, obj: str, actor: str, origin: TupleOrigin, grant_owner: bool, parent_object: str
+) -> None:
+    """What a namespace holds before the backend records it ([[LH-585]]): the creator's ``owner`` on ``obj`` (unless
+    ``grant_owner`` is false, :func:`grant_on_create`) and the ``parent`` edge it inherits through, in one write.
+
+    The inverse ``child`` edge is not written here. It is the one tuple of a link that confers something on ANOTHER
+    object: ``visible_below from child`` shows the parent to whoever holds a rung on the child, so one naming an
+    object that never came to stand would leave its creator seeing the parent for as long as the parent lives. An
+    object is named a child only of the parent it is at rest under, once it stands there (:func:`name_child`).
+
+    Raises:
+        ServiceUnavailableError: OpenFGA gave no answer.
+    """
+    forward, _ = _link_by_direction(obj, parent_object)
+    owner = [ClientTuple(user=user_object(user_sub), relation="owner", object=obj)] if grant_owner else []
+    await write_tuples(client, [*owner, forward], actor=actor, origin=origin)
 
 
 def _delete_reported_absent(exc: ApiException) -> bool:

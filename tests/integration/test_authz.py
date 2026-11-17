@@ -419,8 +419,9 @@ def test_create_namespace_seeds_owner_and_parent_link(client: TestClient, fake_n
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=True))
-    grant = AsyncMock()
-    monkeypatch.setattr(fga_module, "grant_on_create", grant)
+    grant, named = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(fga_module, "grant_before_arrival", grant)
+    monkeypatch.setattr(fga_module, "name_child", named)
     monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))  # no previous incarnation at the id
 
     resp = client.post("/v1/namespace/lance_catalog$parent$child/create", json={}, headers={"Authorization": "Bearer t"})
@@ -433,6 +434,9 @@ def test_create_namespace_seeds_owner_and_parent_link(client: TestClient, fake_n
     kwargs = call.kwargs
     assert kwargs["obj"] == f"namespace:{_minted(fake_ns)}"
     assert kwargs["parent_object"] == _namespace("lance_catalog$parent")  # nested ns links to its parent
+    # Named its parent's child once it stands there ([[LH-585]]).
+    assert named.await_args is not None
+    assert (named.await_args.kwargs["obj"], named.await_args.kwargs["parent"]) == (kwargs["obj"], kwargs["parent_object"])
 
 
 def test_create_top_level_namespace_links_to_catalog_root(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -442,7 +446,8 @@ def test_create_top_level_namespace_links_to_catalog_root(client: TestClient, fa
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     grant = AsyncMock()
-    monkeypatch.setattr(fga_module, "grant_on_create", grant)
+    monkeypatch.setattr(fga_module, "grant_before_arrival", grant)
+    monkeypatch.setattr(fga_module, "name_child", AsyncMock())
     monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))  # no previous incarnation at the id
 
     resp = client.post("/v1/namespace/lance_catalog$bronze/create", json={}, headers={"Authorization": "Bearer t"})

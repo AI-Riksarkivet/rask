@@ -271,10 +271,15 @@ async def create_governed_table(
             settings.registry_root, settings.storage_options(), name=table_id, declared=await fga_deps.declared_inputs(resolver, run)
         ),
         before_register=grants,
+        after_register=partial(grants.parent_as_authorized, ns),
     )
     try:
         try:
             response: CreateTableResponse = await run_in_threadpool(create)
+        except fga_deps.ParentChangedError:
+            # Not a race lost to another create of the name: the table an ExistOk would keep is in a namespace this
+            # caller was not judged on ([[LH-585]]).
+            raise
         except (TableAlreadyExistsError, ConcurrentModificationError):
             # AN ExistOk THAT LOST THE RACE KEEPS THE WINNER'S TABLE. Two ExistOk creates in one pod both find no table
             # at the probe, and the backend's put-if-not-exists answers the loser's add as a conflict; ExistOk asks for

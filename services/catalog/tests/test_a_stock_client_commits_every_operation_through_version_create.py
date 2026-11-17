@@ -197,6 +197,8 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(fga_module, "check", check)
     monkeypatch.setattr(fga_module, "grant_on_create", AsyncMock())
+    monkeypatch.setattr(fga_module, "grant_before_arrival", AsyncMock())
+    monkeypatch.setattr(fga_module, "name_child", AsyncMock())
     monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))
     from catalog.core.config import Settings, get_settings
 
