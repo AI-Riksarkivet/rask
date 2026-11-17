@@ -169,6 +169,17 @@ rust-check: rust-vectors rust-port
 	  || { echo "!! The port's vectors or ledger drifted: a Python function or a crate changed. Commit the diff above."; exit 1; }
 	@echo "The Rust plane agrees with the Python it replaces"
 
+# ---- the models (specs/, ADR 0221) -------------------------------------------
+# TLC checks every TLA+ model under specs/ in every interleaving its config bounds. The jar is fetched once, held to
+# its digest (scripts/toolchain.sha256), and needs a Java runtime. `tla-check-full` adds the configs too large for
+# every run.
+.PHONY: tla-check tla-check-full
+tla-check:
+	bash scripts/tla_check.sh
+
+tla-check-full:
+	bash scripts/tla_check.sh --full
+
 # ---- the console image -----------------------------------------------------
 # The console is one static single-page app served by its own `serve.ts` (.docker/frontend.dockerfile). The build goes
 # through DAGGER (scripts/dagger-image.sh -> `dagger call image --name=frontend`), like every image in this repository;

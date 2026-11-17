@@ -324,6 +324,10 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
   `clippy -D warnings`, the tests, the vectors (`rust/vectors/`, what the Python functions answer, written by
   `scripts/gen_port_vectors.py`) and the ledger (`docs/rust-port.json`, which operations Rust serves and each crate's
   lines against `rust/budget.json`). Each ported feature has an ADR naming what moved and what differs.
+- `specs/` — the **models** (ADR 0221): one TLA+ module per protocol under `specs/<area>/`, written from the code it
+  describes and checked by TLC in every interleaving (`make tla-check`; `make tla-check-full` adds the large configs).
+  A config whose first line says `EXPECT VIOLATION <Invariant>` removes an assumption the design rests on and must
+  fail. A model holds before the code it describes is ported or reordered.
 - `tests/` — `tests/unit`, `tests/integration` and `tests/e2e-py` (the live suites) for the lakehouse; the console's
   browser suite is its own Playwright suite (`frontend/console/e2e`).
 - `scripts/` — **all** dev/ops scripts, shell + Python. **No production-state-changing CLIs** — data enters, and moves
