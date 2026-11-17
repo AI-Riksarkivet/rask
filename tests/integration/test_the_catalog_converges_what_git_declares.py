@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,7 +25,7 @@ from moto.server import ThreadedMotoServer
 
 from catalog.api import declaration_converge
 from catalog.api.ticks import Tick
-from catalog.services import warehouses
+from catalog.services import declaration, warehouses
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 
@@ -343,14 +344,14 @@ def test_an_estate_admin_whose_successor_could_not_be_granted_keeps_the_estate(e
     estate.declare(estate={"admins": [f"{IDP}~alice"]})
     estate.tick()
     alice, carol = fga.user_object(f"{IDP}~alice"), fga.user_object(f"{IDP}~carol")
-    write = fga.write_tuples
+    write = fga.commit_unless_changed
 
-    async def refusing_carol(client: Any, tuples: list[fga.ClientTuple], **kwargs: Any) -> Any:
-        if any(t.user == carol for t in tuples):
+    async def refusing_carol(client: Any, *, writes: list[fga.ClientTuple], **kwargs: Any) -> Any:
+        if any(t.user == carol for t in writes):
             raise ServiceUnavailableError("the store did not answer")
-        return await write(client, tuples, **kwargs)
+        return await write(client, writes=writes, **kwargs)
 
-    monkeypatch.setattr(fga, "write_tuples", refusing_carol)
+    monkeypatch.setattr(fga, "commit_unless_changed", refusing_carol)
     estate.declare(estate={"admins": [f"{IDP}~carol"]})
 
     answer = estate.tick()
@@ -401,18 +402,41 @@ def test_a_tick_corrects_a_declared_warehouse_that_drifted(estate: Estate) -> No
     assert (answer.converged, (estate.record("acme") or {}).get("status")) == (["warehouse:acme"], "active")
 
 
-def test_a_grant_removed_from_git_is_revoked_and_one_made_at_a_door_stands(estate: Estate) -> None:
+@pytest.mark.parametrize("granted", ["before-git-declares-it", "as-the-tick-writes-it"])
+def test_a_grant_removed_from_git_is_revoked_and_one_made_at_a_door_stands(estate: Estate, monkeypatch: pytest.MonkeyPatch, granted: str) -> None:
     """The catalog revokes only a tuple it wrote from the declaration: the reader grant here was made at the warehouse's
-    access door before git ever declared it, so removing it from git takes nothing."""
+    access door, before git ever declared it or between the tick's last read of the store and its write (ADR 0241, the
+    model's `GrantsConvergeAdopts`), so removing it from git takes nothing."""
     _declared_acme(estate)
-    at_the_door = estate.client.post(
-        "/management/v1/warehouse/acme/access/grant", json={"user": PIPELINE, "relation": "reader"}, headers=estate.bearer("alice")
-    )
-    assert at_the_door.status_code == 200, at_the_door.text
-    estate.declare(
-        projects=[_project("acme")], warehouses=[_warehouse("acme", "acme")], grants=[_grant("warehouse:acme", "reader"), _grant("warehouse:acme", "writer")]
-    )
-    estate.tick()
+
+    def _at_the_door() -> None:
+        at_the_door = estate.client.post(
+            "/management/v1/warehouse/acme/access/grant", json={"user": PIPELINE, "relation": "reader"}, headers=estate.bearer("alice")
+        )
+        assert at_the_door.status_code == 200, at_the_door.text
+
+    declared = [_grant("warehouse:acme", "reader"), _grant("warehouse:acme", "writer")]
+    estate.declare(projects=[_project("acme")], warehouses=[_warehouse("acme", "acme")], grants=declared)
+    if granted == "before-git-declares-it":
+        _at_the_door()
+        estate.tick()
+    else:
+        recorded, release, real_record = threading.Event(), threading.Event(), declaration.record_grant
+
+        def _record(*args: Any) -> bool:  # noqa: ANN401 — record_grant's own arguments
+            made = real_record(*args)
+            if args[-1].relation == "reader" and not recorded.is_set():
+                recorded.set()
+                assert release.wait(30), "the held tick was never released"
+            return made
+
+        monkeypatch.setattr(declaration, "record_grant", _record)
+        ticking = threading.Thread(target=estate.tick)
+        ticking.start()
+        assert recorded.wait(30), "the tick never recorded the reader grant"
+        _at_the_door()
+        release.set()
+        ticking.join(30)
     estate.declare(projects=[_project("acme")], warehouses=[_warehouse("acme", "acme")])
 
     estate.tick()

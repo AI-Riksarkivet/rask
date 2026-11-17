@@ -144,6 +144,13 @@ fine. A catalog door resolves the name once per request (`catalog.api.dependenci
 an object by resolving the name first, never by joining it into `table:<name>`. A
 warehouse, a project, a classification label and a transaction keep their ids.
 
+**A project's and a warehouse's id is reused once it is deleted, so a write on it is fenced by its incarnation** (ADR
+0241, `specs/catalog/Grants.tla`): `revision` on both types is bookkeeping holding the marker `revision:<incarnation>`
+(never revoked) and the token `revision:<incarnation>.<n>`. Write a tuple on one through `fga.write_fenced` (or
+`project_admins.confer(incarnation=)` for an `admin`), never `fga.write_tuples`, and read the token before asking the
+caller's authority; a delete retires the token (`fga.retire`) before it reads what to revoke. A test seeding a project or
+warehouse straight to the store holds no token, so a grant door answers it 404: make it at its door.
+
 ### Testing
 | File | Description |
 |------|-------------|

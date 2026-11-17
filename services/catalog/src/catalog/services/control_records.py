@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from enum import StrEnum
-from typing import Self
+from typing import Final, Self
 
 from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -29,6 +30,16 @@ from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
+
+#: The field of a project's or warehouse's record naming its incarnation (ADR 0241): minted when the record is, kept by
+#: every merge, and what each write of a tuple on its id is fenced by, since another tenant may hold the id once it is
+#: deleted.
+INCARNATION: Final = "incarnation"
+
+
+def new_incarnation() -> str:
+    """A fresh incarnation for a project or warehouse record."""
+    return uuid.uuid4().hex
 
 
 def write_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, str]) -> None:

@@ -82,7 +82,7 @@ from catalog.schemas import (
 from catalog.services import object_labels, role_grants, roles, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
-from catalog.services.control_records import GIT, MANAGED_BY, ProtectionChange
+from catalog.services.control_records import GIT, INCARNATION, MANAGED_BY, ProtectionChange
 from lakehouse import maintenance_policies, protection
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
@@ -304,7 +304,9 @@ async def establish_project(
     }
     async with filed as filing:
         record = await _write_project_record(settings, so, record, existing=existing)
-        granted = await fga_deps.seed_project_admin(client, settings, author.subject if author is not None else None, project=project_id, admin=admin)
+        granted = await fga_deps.seed_project_admin(
+            client, settings, author.subject if author is not None else None, project=project_id, admin=admin, incarnation=record["incarnation"]
+        )
         log.info("project_created", extra={"project": project_id, "existing": existing is not None})
         await filing.send(created)
         if granted and admin is not None and admin_granted is not None:
@@ -650,6 +652,9 @@ async def delete_project(
         # described and re-deletable; the opposite order would strand grants on a project no API can name any
         # more — privilege that nothing in the product can see, let alone clear.
         if authz is not None:
+            # Its incarnation retired first (ADR 0241): from here no grant decided on it lands, so the revoke below reads
+            # every grant it will hold, and none reaches a project made again under the id.
+            await fga.retire(authz, obj, record.get(INCARNATION), actor=current_subject(token), origin="lifecycle_delete")  # noqa: TID251
             removed = await fga.revoke_object_tuples(  # noqa: TID251
                 authz,
                 obj,
@@ -664,10 +669,6 @@ async def delete_project(
             async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
                 ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
                 await ending.send(ending_filed, ended, actor=actor, reason="project_deleted")
-        if authz is not None:
-            # A role's ending moves its project's `admin_revision` (`project_admins.withdraw`), bookkeeping no grant
-            # reads and nobody is told of, so the project's tuples are revoked once more after its last role ended.
-            await fga.revoke_object_tuples(authz, obj, actor=token.subject if token is not None else "system:catalog", origin="lifecycle_delete")  # noqa: TID251
         # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
         # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
         # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse

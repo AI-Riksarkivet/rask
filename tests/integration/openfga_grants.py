@@ -18,7 +18,7 @@ from openfga_sdk.models import CheckResponse, ListUsersResponse, ReadRequestTupl
 from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.validation_error_message_response import ValidationErrorMessageResponse
 
-from lakehouse.governed.fga import user_object
+from lakehouse.governed.fga import BOOKKEEPING_RELATIONS, user_object
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal, is_principal
@@ -118,8 +118,9 @@ class TupleStore:
         return None
 
     def naming(self, objects: list[str]) -> dict[str, set[Triple]]:
-        """The held tuples naming each of ``objects`` as their object or their user, for those any tuple names."""
-        named = {obj: {t for t in self.tuples if obj in (t[0], t[2])} for obj in objects}
+        """The held grants naming each of ``objects`` as their object or their user, for those any grant names: an
+        incarnation's `revision` is bookkeeping a delete leaves (ADR 0241), no grant."""
+        named = {obj: {t for t in self.tuples if obj in (t[0], t[2]) and t[1] not in BOOKKEEPING_RELATIONS} for obj in objects}
         return {obj: held for obj, held in named.items() if held}
 
 

@@ -54,6 +54,7 @@ from lakehouse import (
 )
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
+from lakehouse.governed.fga import BOOKKEEPING_RELATIONS
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
@@ -194,6 +195,12 @@ class _Tenant:
         return True
 
 
+def _granted(tuples: Any) -> int:  # noqa: ANN401 — the store double's tuples
+    """How many of ``tuples`` are grants: an incarnation's `revision` is bookkeeping, which the delete retires or keeps
+    and does not count as revoked (ADR 0241)."""
+    return sum(1 for t in tuples if t[1] not in BOOKKEEPING_RELATIONS)
+
+
 def _lifecycle(event: dict[str, Any]) -> str | None:
     facets = event["dataset"]["facets"] if "dataset" in event else {}
     return facets.get("lifecycleStateChange", {}).get("lifecycleStateChange")
@@ -300,7 +307,7 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
         table: str(tenant.client.post(f"/v1/table/{table}/describe", json={}).json()["location"])
         for table in ("acme-wh$bronze$a", "acme-wh$bronze$b", "acme-wh$bronze$inner$c")
     }
-    held = len(tenant.store.tuples)
+    held = _granted(tenant.store.tuples)
     tenant.posted.clear()
 
     answer = tenant.delete_warehouse()
@@ -316,7 +323,7 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
     assert tenant.store.naming(tenant.fga(governed)) == {}, "a grant outlived the object it was on"
     assert (tenant.trashed(trash_held), tenant.has_policy("acme-wh$silver$s")) == ([], False), "the warehouse's trash outlived it"
     assert tenant.base_recorded(locations) == [], "a trashed table's base record outlived its warehouse"
-    assert body["tuples_revoked"] == held - len(tenant.store.tuples), "the door reported a count the store did not lose"
+    assert body["tuples_revoked"] == held - _granted(tenant.store.tuples), "the door reported a count the store did not lose"
     assert sorted(tenant.announced_drops()) == ["acme-wh$bronze$a", "acme-wh$bronze$b", "acme-wh$bronze$inner$c"]
     assert not tenant.bucket_exists()
 
@@ -368,7 +375,7 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
         "nothing kept for an undrop, so its end would pass vacuously"
     )
     before = tenant.store.naming(tenant.fga(governed))
-    held = len(tenant.store.tuples)
+    held = _granted(tenant.store.tuples)
     fail(tenant)
 
     partial = tenant.delete_warehouse()
@@ -387,7 +394,7 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
     said_gone = [*(f"namespace:{name}" for name in report["namespaces_dropped"]), *(f"table:{name}" for name in report["tables_removed"])]
     assert (report["partial"], sorted(said_gone)) == (True, sorted(gone)), "the 503 named other than what is gone"
     assert sorted(report["trash_ended"]) == sorted(ended), "the 503 named other than the trash it ended"
-    assert report["tuples_revoked"] == held - len(tenant.store.tuples), "the 503 reported a count the store did not lose"
+    assert report["tuples_revoked"] == held - _granted(tenant.store.tuples), "the 503 reported a count the store did not lose"
     tenant.store.down = None
 
     finished = tenant.delete_warehouse()

@@ -79,7 +79,7 @@ async def test_a_record_without_a_project_is_REPORTED_not_guessed(monkeypatch) -
     """
     _stub_client(monkeypatch)
 
-    async def _grant(_c, _s, *, warehouse_id: str, project: str, actor: str) -> int:
+    async def _grant(_c, _s, *, warehouse_id: str, project: str, actor: str, incarnation: str | None) -> int:
         return 2
 
     monkeypatch.setattr(warehouse_grant_backfill.fga_deps, "converge_warehouse_grants", _grant)
@@ -102,7 +102,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
     _stub_client(monkeypatch)
     calls: list[str] = []
 
-    async def _flaky(_c, _s, *, warehouse_id: str, project: str, actor: str) -> int:
+    async def _flaky(_c, _s, *, warehouse_id: str, project: str, actor: str, incarnation: str | None) -> int:
         calls.append(warehouse_id)
         if warehouse_id == "boom":
             raise RuntimeError("openfga said no")

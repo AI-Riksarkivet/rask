@@ -2093,25 +2093,43 @@ async def seed_project_admin(
     *,
     project: str,
     admin: str | None,
+    incarnation: str,
 ) -> bool:
-    """Grant ``admin`` (from :func:`project_admin_for`) on the new ``project:<id>`` — the tuple that makes
-    a tenant self-sustaining (every later warehouse/namespace/table grant cascades from it). ``actor``,
-    the caller or the declaration, is recorded as its writer.
+    """Bear ``incarnation`` of ``project:<id>`` with ``admin`` (from :func:`project_admin_for`) as its admin — the tuple
+    that makes a tenant self-sustaining (every later warehouse/namespace/table grant cascades from it). ``actor``, the
+    caller or the declaration, is recorded as its writer.
 
     Written by ``POST /management/v1/projects`` in the same operation as the registry record, which is the whole
-    point of Decision 1: existence and permission are minted together and cannot drift. Idempotent —
-    ``write_tuples`` swallows duplicate writes on a create retry. Returns True when the tuple was
-    actually written, so the caller audits a grant that really happened (never one an FGA-off stack
-    silently skipped)."""
-    if not (settings.fga_enabled and actor is not None and client is not None and admin is not None):
+    point of Decision 1: existence and permission are minted together and cannot drift. The birth is one Write
+    (:func:`fga.bear`, ADR 0241); a re-POST of a project already born writes the admin under its token, and one whose
+    birth never landed bears it now. Returns True when the admin tuple was written by this call, so the caller audits
+    a grant that really happened (never one an FGA-off stack silently skipped).
+
+    Raises:
+        ConcurrentModificationError: The incarnation was retired by a delete: the project is being deleted.
+    """
+    if not (settings.fga_enabled and actor is not None and client is not None):
         return False
-    await fga.write_tuples(  # noqa: TID251
-        client,
-        [fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=f"project:{project}")],
-        actor=actor,
-        origin="project_create",
-    )
-    return True
+    obj = f"project:{project}"
+    seed = [fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=obj)] if admin is not None else []
+    return await _bear_or_assert(client, obj, incarnation, seed, actor=actor, origin="project_create")
+
+
+async def _bear_or_assert(client: OpenFgaClient, obj: str, incarnation: str, seed: list[fga.ClientTuple], *, actor: str, origin: fga.TupleOrigin) -> bool:
+    """Bear ``incarnation`` of ``obj`` with ``seed``, or, born already, write what ``seed`` still lacks under its token;
+    whether any of ``seed`` was written.
+
+    Raises:
+        ConcurrentModificationError: The incarnation was born and its token retired: the object is being deleted.
+    """
+    if await fga.bear(client, obj, incarnation, seed, actor=actor, origin=origin):  # noqa: TID251
+        return bool(seed)
+    if not seed:
+        return False
+    try:
+        return await fga.write_fenced(client, obj, incarnation, seed, actor=actor, origin=origin)  # noqa: TID251
+    except fga.IncarnationEnded as exc:
+        raise ConcurrentModificationError(f"{obj} is being deleted; make it again once its delete has finished") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -2548,27 +2566,51 @@ async def revoke_removed_object(client: OpenFgaClient | None, settings: Settings
     return len(removed)
 
 
-async def revoke_ghost_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> int:
-    """Delete every tuple on ``obj``, an object no registry names ([[LH-061]]'s repair half), and return how many went.
+async def retire_incarnation(client: OpenFgaClient | None, settings: Settings, obj: str, incarnation: str | None, *, token: Caller | None) -> None:
+    """Retire the incarnation of the project or warehouse ``obj`` its delete is ending (:func:`fga.retire`, ADR 0241),
+    before the delete reads what to revoke. A no-op when FGA is off; a 503 when it is on with no client wired."""
+    if (client := wired(settings, client)) is None:
+        return
+    await fga.retire(client, obj, incarnation, actor=token.subject if token is not None else "system:catalog", origin="lifecycle_delete")  # noqa: TID251
+
+
+async def read_ghost_object(client: OpenFgaClient | None, settings: Settings, obj: str) -> list[fga.ClientTuple]:
+    """Every tuple on ``obj``, read BEFORE it is judged a ghost (ADR 0241): a project or warehouse made again under the
+    id after that read writes its grants after it, and :func:`revoke_ghost_object` revokes only what this returned. Empty
+    when FGA is off; a 503 when it is on with no client wired."""
+    if (client := wired(settings, client)) is None:
+        return []
+    return await fga.read_object_tuples(client, obj)
+
+
+async def revoke_ghost_object(client: OpenFgaClient | None, settings: Settings, obj: str, read: list[fga.ClientTuple], *, token: Caller | None) -> int:
+    """Delete ``read``, the tuples :func:`read_ghost_object` read on ``obj``, an object no registry named when it was then
+    judged ([[LH-061]]'s repair half), and return how many went.
 
     The origin is ``drift_repair``: nothing was destroyed, the object was already gone, and the revoke is justified only
-    by the drift finding the catalog judged again on its own reads. 0 when FGA is off; a 503 when it is on with no
-    client wired.
+    by the drift finding the catalog judged again on its own reads. Only what stood before the judgement goes: a create
+    landing after it is a new object's, whose grants are not this ghost's. 0 when FGA is off; a 503 when it is on with
+    no client wired.
     """
     if (client := wired(settings, client)) is None:
         return 0
     actor = token.subject if token is not None else "system:catalog"
-    return len(await fga.revoke_object_tuples(client, obj, actor=actor, origin="drift_repair"))  # noqa: TID251
+    return len(await fga.revoke_read_tuples(client, obj, read, actor=actor, origin="drift_repair"))  # noqa: TID251
 
 
-async def write_registry_edges(client: OpenFgaClient | None, settings: Settings, edges: list[fga.ClientTuple], *, token: Caller | None) -> None:
-    """Write ``edges``, structural tuples a registry record justifies, under the ``registry_rebuild`` origin ([[LH-061]]):
-    no person granted them, they were reconstructed from the record. A no-op when FGA is off; a 503 when it is on
-    with no client wired."""
-    if (client := wired(settings, client)) is None or not edges:
+async def write_registry_edge(client: OpenFgaClient | None, settings: Settings, edge: fga.ClientTuple, *, incarnation: str, token: Caller | None) -> None:
+    """Write ``edge``, a structural tuple a registry record justifies, under the ``registry_rebuild`` origin ([[LH-061]]):
+    no person granted it, it was reconstructed from the record. Written under the token of the incarnation the record
+    names (ADR 0241), so a rebuild that read a record whose warehouse is deleted meanwhile writes its edge nowhere. A
+    no-op when FGA is off; a 503 when it is on with no client wired.
+
+    Raises:
+        fga.IncarnationEnded: The incarnation was retired: the warehouse's delete has begun.
+    """
+    if (client := wired(settings, client)) is None:
         return
     actor = token.subject if token is not None else "system:catalog"
-    await fga.write_tuples(client, edges, actor=actor, origin="registry_rebuild")  # noqa: TID251
+    await fga.write_fenced(client, edge.object, incarnation, [edge], actor=actor, origin="registry_rebuild")  # noqa: TID251
 
 
 async def revoke_expired_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> list[fga.ClientTuple]:
@@ -3035,10 +3077,12 @@ async def seed_warehouse(
     *,
     warehouse_id: str,
     project: str,
+    incarnation: str,
 ) -> None:
     """Grant a creator who is a person ``owner`` on the new ``warehouse:<id>`` and link it to its ``project:<project>``
     parent, so the concentric cascade (project → warehouse → namespace → table) reaches everything created
-    under it. No-op when FGA is off or unauthenticated; a 503 when FGA is on with no client wired.
+    under it, in the Write that bears ``incarnation`` of it (ADR 0241). No-op when FGA is off or unauthenticated; a
+    503 when FGA is on with no client wired.
 
     NOTE: the warehouse's parent-pointer relation is ``project`` (``define project: [project]`` in
     ``lakehouse/governed/auth/model.fga``) — NOT the ``parent`` name that namespaces/tables use. So this writes
@@ -3059,12 +3103,8 @@ async def seed_warehouse(
     # A person owns the warehouse they create. A machine holds nothing on it by creating it, as with a table or a
     # project ([[LH-433]]): its project's admins own it through the project edge.
     owner = [] if isinstance(token, ServicePrincipal) else [fga.ClientTuple(user=fga.user_object(token.subject), relation="owner", object=obj)]
-    await fga.write_tuples(  # noqa: TID251
-        client,
-        [*owner, *cascade_tuples(settings, warehouse_id=warehouse_id, project=project)],
-        actor=token.subject,
-        origin="warehouse_create",
-    )
+    seed = [*owner, *cascade_tuples(settings, warehouse_id=warehouse_id, project=project)]
+    await _bear_or_assert(client, obj, incarnation, seed, actor=token.subject, origin="warehouse_create")
 
 
 def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> list[fga.ClientTuple]:
@@ -3110,9 +3150,14 @@ async def converge_warehouse_grants(
     warehouse_id: str,
     project: str,
     actor: str,
+    incarnation: str | None,
 ) -> int:
-    """Converge one EXISTING warehouse's grants: assert :func:`cascade_tuples`, and take back the maintenance rung from
-    each of the release's own accounts it no longer declares. Returns the number of tuples written plus those revoked.
+    """Converge one EXISTING warehouse's grants: assert :func:`cascade_tuples` under the token of ``incarnation``, the
+    one its record names (bearing it, where its birth never landed), and take back the maintenance rung from each of
+    the release's own accounts it no longer declares. Returns the number of tuples written plus those revoked.
+
+    A write for an incarnation whose delete has retired it lands nowhere (ADR 0241), so a converge that read the record
+    before the warehouse was deleted never writes its tenancy edge onto a warehouse made again under the id.
 
     Why this is needed at all, given creates already seed: the grants are written ONCE, at create, from
     a config value that CHANGES (``LANCE_FGA_MAINTAINERS``), so every warehouse that predates a change is
@@ -3122,11 +3167,18 @@ async def converge_warehouse_grants(
     when OpenFGA rejects a batch for containing a duplicate, so a re-run lands only what is missing.
     It inherits fail-closed too — an unreachable OpenFGA raises rather than reporting success, because
     a backfill that silently wrote nothing is indistinguishable from one that had nothing to do.
+
+    Raises:
+        InvalidInputError: The record names no incarnation, so no write on the warehouse can be fenced.
+        ConcurrentModificationError: The incarnation was retired: the warehouse is being deleted.
     """
     if (client := wired(settings, client)) is None:
         return 0
+    if incarnation is None:
+        raise InvalidInputError(f"warehouse {warehouse_id!r} names no incarnation: POST it again to give it one")
+    obj = f"warehouse:{warehouse_id}"
     tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
-    await fga.write_tuples(client, tuples, actor=actor, origin="warehouse_grant_backfill")  # noqa: TID251
+    await _bear_or_assert(client, obj, incarnation, tuples, actor=actor, origin="warehouse_grant_backfill")
     own = own_users(settings)
     revoked = await fga.revoke_undeclared(  # noqa: TID251 — the converge's revoking site
         client, tuples, obj=f"warehouse:{warehouse_id}", relation="maintenance", own=own, actor=actor, origin="warehouse_grant_backfill"

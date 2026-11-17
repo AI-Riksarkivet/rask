@@ -27,9 +27,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import lru_cache
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
-from lance_namespace import InvalidInputError, NamespaceNotFoundError, ServiceUnavailableError, TableNotFoundError, UnauthenticatedError
+from lance_namespace import (
+    ConcurrentModificationError,
+    InvalidInputError,
+    NamespaceNotFoundError,
+    ServiceUnavailableError,
+    TableNotFoundError,
+    UnauthenticatedError,
+)
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import announcing, fga_deps
@@ -198,6 +206,30 @@ async def list_namespace_access(id: str, client: FgaClientDep, settings: Setting
     """Effective access on the namespace, per ``can_*`` action — owner-gated by the router
     (``can_delete``)."""
     return await _access_list(client, settings, token, resolver, "namespace", id)
+
+
+async def _incarnation(client: OpenFgaClient | None, settings: Settings, obj: str) -> fga.Incarnation | None:
+    """The token standing on the project or warehouse ``obj``, read before its grant door asks the caller's authority
+    (ADR 0241): the grant is written under it, so a grant decided on an incarnation deleted meanwhile lands nowhere.
+    ``None`` with FGA off, and for an object no birth bore."""
+    if (wired := fga_deps.wired(settings, client)) is None:
+        return None
+    return await fga.read_incarnation(wired, obj)
+
+
+async def warehouse_incarnation(id: str, client: FgaClientDep, settings: SettingsDep) -> fga.Incarnation | None:
+    """:func:`_incarnation` of ``warehouse:<id>``, a dependency listed before the grant door's gate."""
+    return await _incarnation(client, settings, f"warehouse:{id}")
+
+
+async def project_incarnation(id: str, client: FgaClientDep, settings: SettingsDep) -> fga.Incarnation | None:
+    """:func:`_incarnation` of ``project:<id>``, a dependency listed before the grant door's gate."""
+    return await _incarnation(client, settings, f"project:{id}")
+
+
+#: The incarnation a grant door read before its gate, the same value the gate's dependency computed (FastAPI caches it).
+WarehouseIncarnation = Annotated[fga.Incarnation | None, Depends(warehouse_incarnation)]
+ProjectIncarnation = Annotated[fga.Incarnation | None, Depends(project_incarnation)]
 
 
 async def require_warehouse_review(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
@@ -432,6 +464,7 @@ async def _access_mutate(
     body: AccessGrantRequest,
     *,
     grant: bool,
+    incarnation: fga.Incarnation | None = None,
 ) -> AccessGrantResponse:
     """Grant or revoke one grantable rung to a subject on a table, a namespace, a warehouse, a project or a classification label.
 
@@ -451,7 +484,12 @@ async def _access_mutate(
     is a 4xx, not a silent junk tuple); an OpenFGA outage is a 503, never a silent grant/revoke no-op. Both
     directions are idempotent (``write_tuples`` swallows a duplicate, ``delete_tuples`` an absent tuple) and
     audited distinctly (``access_grant`` / ``access_revoke``), carrying the grantee + rung. The announcement is filed
-    before the write, so a door that fails after it is still announced, once ([[LH-576]])."""
+    before the write, so a door that fails after it is still announced, once ([[LH-576]]).
+
+    A grant on a project or a warehouse, whose id another tenant may hold once it is deleted, is written under
+    ``incarnation``, the token its door read before asking the caller's authority (ADR 0241): none stands, and the
+    object is answered not found; it was retired meanwhile, and the grant is refused 409, written nowhere. The estate's
+    own warehouse is never deleted and needs none."""
     client = fga_deps.require_fga(settings, client, feature="access mutation")
     grantable = _grantable_relations(fga_type)
     if body.relation not in grantable:
@@ -476,12 +514,19 @@ async def _access_mutate(
     told = announcing.grant_announcement(
         tup, action="grant_added" if grant else "grant_revoked", actor=f"user:{token.subject}" if token else None, object_name=name
     )
+    fenced = grant and fga_type in fga.INCARNATED_TYPES and obj != settings.fga_default_warehouse_object
+    if fenced and incarnation is None:
+        raise TableNotFoundError(f"{fga_type} not found: {id}")
     async with announcer.announcing(door="access_grant" if grant else "access_revoke", target=obj, announcements=[told]) as filing:
         try:
-            if grant:
+            if fenced and incarnation is not None:
+                await fga.write_fenced(client, obj, incarnation.incarnation, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+            elif grant:
                 await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
             else:
                 await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        except fga.IncarnationEnded as exc:
+            raise ConcurrentModificationError(f"{fga_type} {id!r} was deleted while this grant ran; nothing was granted") from exc
         except ServiceUnavailableError:
             audit(event, AuditOutcome.FAILURE, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
             raise
@@ -521,7 +566,7 @@ async def grant_namespace_access(
     return await _access_mutate(client, announcer, settings, token, resolver, "namespace", id, body, grant=True)
 
 
-@warehouse_router.post("/{id}/access/grant", dependencies=[Depends(require_warehouse_grant)])
+@warehouse_router.post("/{id}/access/grant", dependencies=[Depends(warehouse_incarnation), Depends(require_warehouse_grant)])
 async def grant_warehouse_access(
     id: str,
     client: FgaClientDep,
@@ -530,9 +575,11 @@ async def grant_warehouse_access(
     resolver: ResolverDep,
     token: CurrentToken,
     body: AccessGrantRequest,
+    incarnation: WarehouseIncarnation,
 ) -> AccessGrantResponse:
-    """Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]])."""
-    return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=True)
+    """Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]]), under the
+    token read before the gate (ADR 0241)."""
+    return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=True, incarnation=incarnation)
 
 
 @warehouse_router.post("/{id}/access/revoke", dependencies=[Depends(require_warehouse_revoke)])
@@ -549,7 +596,7 @@ async def revoke_warehouse_access(
     return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=False)
 
 
-@project_router.post("/{id}/access/grant", dependencies=[Depends(require_project_grant)])
+@project_router.post("/{id}/access/grant", dependencies=[Depends(project_incarnation), Depends(require_project_grant)])
 async def grant_project_access(
     id: str,
     client: FgaClientDep,
@@ -558,8 +605,10 @@ async def grant_project_access(
     resolver: ResolverDep,
     token: CurrentToken,
     body: AccessGrantRequest,
+    incarnation: ProjectIncarnation,
 ) -> AccessGrantResponse:
-    """Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]).
+    """Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]), under the token
+    read before the gate (ADR 0241).
 
     The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
     nothing beyond them. Who belongs to the project is the members door's.
@@ -573,15 +622,18 @@ async def grant_project_access(
         resolver: The request's name resolver.
         token: The verified caller.
         body: The subject and the rung.
+        incarnation: The project's token, read before the gate.
 
     Returns:
         The tuple granted.
 
     Raises:
         InvalidInputError: The rung is no rung this door grants on a project.
+        TableNotFoundError: No project stands under the id.
+        ConcurrentModificationError: The project was deleted while the grant ran.
         ServiceUnavailableError: OpenFGA did not answer.
     """
-    return await _access_mutate(client, announcer, settings, token, resolver, "project", id, body, grant=True)
+    return await _access_mutate(client, announcer, settings, token, resolver, "project", id, body, grant=True, incarnation=incarnation)
 
 
 @project_router.post("/{id}/access/revoke", dependencies=[Depends(require_project_revoke)])

@@ -204,12 +204,14 @@ def recorded_grants(control_root: str, storage_options: StorageOptions) -> set[G
     return {GrantTuple.model_validate(record) for record in records}
 
 
-def record_grant(control_root: str, storage_options: StorageOptions, grant: GrantTuple) -> None:
-    """Record ``grant`` as the declaration's, before its tuple is written; one already recorded stays as it is."""
+def record_grant(control_root: str, storage_options: StorageOptions, grant: GrantTuple) -> bool:
+    """Record ``grant`` as the declaration's, before its tuple is written; whether this call recorded it (one already
+    recorded stays as it is)."""
     try:
         create_json(control_root, storage_options, _grant_key(grant), grant.model_dump())
     except RecordExistsError:
-        return
+        return False
+    return True
 
 
 def forget_grant(control_root: str, storage_options: StorageOptions, grant: GrantTuple) -> None:

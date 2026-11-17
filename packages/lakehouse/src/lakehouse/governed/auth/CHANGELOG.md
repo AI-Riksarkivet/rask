@@ -6,6 +6,25 @@ One entry per change to `model.fga` that a store holding tuples has to know abou
 whether the change writes new tuples into a store. When both are `FALSE`, deploying the model is the whole migration:
 `write_model.py` writes it, and every tuple in the store keeps its name and is read by the new model as it stands.
 
+## 2026-11-17: a project's and a warehouse's incarnation is kept in `revision`
+
+```text
+MODIFIES_TUPLES: FALSE
+ADDS_TUPLES:     TRUE
+```
+
+ADR 0241.
+
+- **Renamed:** `project#admin_revision` is `project#revision`. It holds the project's incarnation: its marker
+  `revision:<incarnation>`, written by its birth and never revoked, and its token `revision:<incarnation>.<n>`, which
+  every grant on the project and every change to its administration moves in the same Write.
+- **Added:** `warehouse#revision: [revision]`, the same for a warehouse. Bookkeeping: no permission reads either.
+
+**Stored `admin_revision` tuples.** No door rewrites or removes them, and the model no longer defines the relation, so
+each authorizes nothing and fences nothing. A project or warehouse stored before this change holds no token: a grant on
+it is answered not found until it is POSTed again, which bears its incarnation (the record's `incarnation`, given by
+that POST where the record names none).
+
 ## 2026-11-16: reading an object's deletion protection has its own verb
 
 ```text

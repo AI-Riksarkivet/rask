@@ -53,16 +53,20 @@ type role
     # A role's name and assignees are read with the project's roles (`can_list_roles from project`).
     define can_read: can_list_roles from project
 
-# A revision of a project's admin set ([[LH-434]]). It confers nothing: it is the subject of `project#admin_revision`.
+# An incarnation of a project or warehouse id, and a count of the grants on it (ADR 0241). It confers nothing: it is
+# the subject of `project#revision` and `warehouse#revision`.
 type revision
 
 # A project = a tenant. Holds its warehouses and its roles.
 type project
   relations
-    # BOOKKEEPING, NOT A RUNG: no permission reads it. An admin revoke deletes the admin tuple and this
-    # relation's `revision:<n>` and writes `revision:<n+1>` in ONE Write, which the store refuses whole when
-    # another revoke moved the revision first, so two overlapping revokes cannot both pass the last-admin guard.
-    define admin_revision: [revision]
+    # BOOKKEEPING, NOT A RUNG: no permission reads it. A project's id may be held again by another tenant once it is
+    # deleted, and its tuples name the id, so each incarnation is told apart here: `revision:<incarnation>`, written by
+    # its birth and never revoked, and the token `revision:<incarnation>.<n>`. Every grant on the project deletes the
+    # token and writes the next in the same Write, which the store refuses whole once the token moved, so a grant
+    # decided on an incarnation its delete retired lands nowhere (ADR 0241), and two overlapping admin revokes cannot
+    # both pass the last-admin guard ([[LH-434]]).
+    define revision: [revision]
     define admin: [user, role#assignee]
     define member: [user, role#assignee] or admin
     # ---- the admin SPLIT. Additive: `admin` implies both, so nobody loses a rung by their
@@ -239,6 +243,8 @@ type estate
 type warehouse
   relations
     define project: [project]
+    # BOOKKEEPING, NOT A RUNG: the incarnation of this warehouse id and the token its grants move, as on `project`.
+    define revision: [revision]
     # The INVERSE of `namespace#parent`, written by the same `grant_on_create` batch. It exists for one
     # reason: upward visibility (see `can_get_metadata`). Keeping it a separate edge rather than deriving
     # it is not a choice — OpenFGA cannot traverse a tuple backwards, so "is anything under me visible?"

@@ -130,7 +130,9 @@ def test_a_role_nested_beneath_an_admin_role_is_filled_and_emptied_as_the_admin_
 
     _status(catalog.client.delete("/management/v1/projects/acme", headers=catalog.bearer("bob")), 200)
     ended = {"project:acme", *(f"role:{role_id}" for role_id in made.values())}
-    assert not [t for t in catalog.store.tuples() if {t[0].split("#")[0], t[2]} & ended], "a tuple of the project or its roles survived it"
+    # The project's incarnation marker stays (ADR 0241): it confers nothing and keeps a stalled birth from bearing it again.
+    survived = [t for t in catalog.store.tuples() if {t[0].split("#")[0], t[2]} & ended and t[1] not in fga.BOOKKEEPING_RELATIONS]
+    assert not survived, "a tuple of the project or its roles survived it"
 
 
 def test_an_unassignment_and_an_admin_revoke_at_once_leave_the_project_administered(governed_catalog: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog

@@ -48,7 +48,11 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
         "created_at": datetime.now(UTC).isoformat(),
     }
     warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), record)
+    incarnation = record["incarnation"]
     catalog.store.write(
+        # Born as its create bears it (ADR 0241): its incarnation's marker and token.
+        (f"revision:{incarnation}", "revision", f"warehouse:{WAREHOUSE}"),
+        (f"revision:{incarnation}.0", "revision", f"warehouse:{WAREHOUSE}"),
         (f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"),
         (catalog.person(MEMBER), "member", f"project:{PROJECT}"),
         (catalog.person(GRANTER), "manage_grants", f"warehouse:{WAREHOUSE}"),

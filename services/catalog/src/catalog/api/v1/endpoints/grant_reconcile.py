@@ -26,6 +26,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GhostRevokeRequest, GhostRevokeResponse, GrantCensusResponse, TenancyRebuildRequest, TenancyRebuildResponse
 from catalog.services import grant_reconcile, table_claims, warehouses
+from catalog.services.control_records import INCARNATION
 from lakehouse import location_claims
 from lakehouse.governed import fga
 
@@ -58,13 +59,16 @@ async def revoke_ghost_grants(
 ) -> GhostRevokeResponse:
     """Revoke every grant on each object no registry names, as a drift report found them.
 
-    Each object is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
+    Each object's grants are read, then it is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
     record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a
     table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]).
     """
     held = await run_in_threadpool(grant_reconcile.held_table_claims, settings)
     answer = GhostRevokeResponse()
     for obj in dict.fromkeys(body.objects):
+        # Read before the judgement, and only what was read is revoked (ADR 0241): a project or warehouse made again under
+        # the id once it is judged absent writes its grants after this read, and keeps them.
+        read = await fga_deps.read_ghost_object(client, settings, obj)
         claim = held.get(obj)
         reason = await _claim_refusal(request, settings, claim) if claim is not None else None
         if reason is None:
@@ -72,7 +76,7 @@ async def revoke_ghost_grants(
         if reason is not None:
             answer.refused[obj] = reason
             continue
-        answer.revoked[obj] = await fga_deps.revoke_ghost_object(client, settings, obj, token=token)
+        answer.revoked[obj] = await fga_deps.revoke_ghost_object(client, settings, obj, read, token=token)
     return answer
 
 
@@ -99,14 +103,16 @@ async def rebuild_warehouse_tenancy(body: TenancyRebuildRequest, settings: Setti
     project, or no record at all, is answered unjustified.
     """
     answer = TenancyRebuildResponse()
-    edges: list[fga.ClientTuple] = []
     for warehouse_id in dict.fromkeys(body.warehouses):
         record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
         match grant_reconcile.tenancy_edge(record, warehouse_id):
             case str() as reason:
                 answer.unjustified[warehouse_id] = reason
             case edge:
-                edges.append(edge)
-    await fga_deps.write_registry_edges(client, settings, edges, token=token)
-    answer.written = [f"{edge.user} {edge.relation} {edge.object}" for edge in edges]
+                try:
+                    await fga_deps.write_registry_edge(client, settings, edge, incarnation=str((record or {}).get(INCARNATION) or ""), token=token)
+                except fga.IncarnationEnded:
+                    answer.unjustified[warehouse_id] = f"the warehouse record {warehouse_id!r} names an incarnation no token stands for: it is being deleted"
+                    continue
+                answer.written.append(f"{edge.user} {edge.relation} {edge.object}")
     return answer

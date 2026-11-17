@@ -35,7 +35,8 @@ class _Harness:
     """Answers the gate and records the writes the endpoint issues."""
 
     def __init__(self, existing: list[SimpleNamespace] | None = None, *, allow: bool = True) -> None:
-        self.existing = existing if existing is not None else []
+        # The project as its door made it: born, its token standing (ADR 0241).
+        self.existing = [_tuple("revision:i1", "revision", "project:acme"), _tuple("revision:i1.0", "revision", "project:acme"), *(existing or [])]
         self.allow = allow
         self.written: list[Any] = []
 
@@ -49,13 +50,14 @@ class _Harness:
         async def fake_read(_c: object, _obj: str, **_kw: object) -> list[SimpleNamespace]:
             return list(self.existing)
 
-        async def fake_write(_c: object, tuples: list[Any], **_kw: object) -> None:
+        async def fake_write(_c: object, _obj: str, _incarnation: str, tuples: list[Any], **_kw: object) -> bool:
             self.written.extend(tuples)
             self.existing.extend(_tuple(t.user, t.relation, t.object) for t in tuples)
+            return True
 
         monkeypatch.setattr(fga_deps, "require_relation", fake_require)
         monkeypatch.setattr(members.fga, "read_object_tuples", fake_read)
-        monkeypatch.setattr(members.fga, "write_tuples", fake_write)
+        monkeypatch.setattr(members.fga, "write_fenced", fake_write)
 
 
 def _client() -> Any:

@@ -47,11 +47,16 @@ def test_the_tenancy_rebuild_writes_the_edge_a_warehouses_record_names_and_none_
 ) -> None:
     catalog = governed_catalog
     settings = get_settings()
-    catalog.store.write((catalog.person("mx"), "reconciler", settings.fga_root_object))
+    # wh-a born as its create bears it (ADR 0241), its tenancy edge since lost.
+    catalog.store.write(
+        (catalog.person("mx"), "reconciler", settings.fga_root_object),
+        ("revision:i1", "revision", "warehouse:wh-a"),
+        ("revision:i1.0", "revision", "warehouse:wh-a"),
+    )
     warehouses.put_warehouse(
         settings.registry_root,
         settings.storage_options(),
-        {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "2026-11-08T00:00:00Z"},
+        {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "2026-11-08T00:00:00Z", "incarnation": "i1"},
     )
 
     rebuilt = catalog.client.post("/management/v1/grants/tenancy/rebuild", json={"warehouses": ["wh-a", "wh-gone"]}, headers=catalog.bearer("mx"))

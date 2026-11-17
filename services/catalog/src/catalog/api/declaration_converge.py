@@ -39,7 +39,7 @@ from catalog.core.vending import CredentialVendor
 from catalog.schemas import CreateWarehouseRequest, DeleteProfile
 from catalog.services import declaration, project_admins, warehouses
 from catalog.services import projects as project_registry
-from catalog.services.control_records import GIT, MANAGED_BY, DeleteMode, ProtectionChange
+from catalog.services.control_records import GIT, INCARNATION, MANAGED_BY, DeleteMode, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
 from lakehouse import protection
 from lakehouse.control_emit import ControlEmitter
@@ -250,22 +250,22 @@ class _Converger:
             self.tick.grants_revoked += len(revoked)
 
     async def _grant(self, client: OpenFgaClient, grant: GrantTuple) -> None:
-        if not await self._stands(grant.object):
+        if (stands := await self._stands(grant.object)) is None:
             raise LookupError(f"{grant.object} has no registry record, so no grant on it is written")
         # Read again right before the record: a tuple somebody made at a door since the tick's first read is theirs,
-        # and recording it would have the declaration revoke it later. What remains is a door's grant landing between
-        # this read and the record below, one store write wide.
+        # and recording it would have the declaration revoke it later.
         if (grant.user, grant.relation) in await _held(client, grant.object):
             return
         # Recorded before the tuple: a tuple written and never recorded would outlive its declaration.
-        await run_in_threadpool(declaration.record_grant, self._root, self._so, grant)
+        recorded = await run_in_threadpool(declaration.record_grant, self._root, self._so, grant)
         told = announcing.grant_announcement(grant.client_tuple, action="grant_added", actor=DECLARATION.actor, extra={"reason": "declared"})
         async with self._announcer.announcing(door="declaration_converge", target=grant.object, announcements=[told]) as filing:
-            if grant.relation == project_admins.ADMIN and grant.object.startswith("project:"):
-                # With the project's revision, as the members door grants it: who administers the project changes.
-                await project_admins.confer(client, grant.client_tuple, actor=DECLARATION.subject, origin="declaration")
-            else:
-                await fga.write_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
+            if not await _written(client, grant, incarnation=stands.incarnation):
+                # A door made the tuple between the read above and this write (ADR 0241): it is the door's, so the record
+                # this tick made goes and git never revokes it. A record another tick made stays: that tick wrote it.
+                if recorded:
+                    await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+                return
             await filing.send(told)
         self.tick.grants_written += 1
 
@@ -281,13 +281,41 @@ class _Converger:
         await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
         self.tick.grants_revoked += 1
 
-    async def _stands(self, obj: str) -> bool:
+    async def _stands(self, obj: str) -> _Standing | None:
+        """What a grant on ``obj`` is written under: ``None`` where no record names it, no incarnation for the estate's own
+        objects, which no record names and nothing deletes, and the record's for a project or warehouse."""
         if obj in self._estate_objects:
-            return True
+            return _Standing(incarnation=None)
         kind, _, object_id = obj.partition(":")
         if kind == "project":
-            return await run_in_threadpool(project_registry.get_project, self._root, self._so, object_id) is not None
-        return await run_in_threadpool(warehouses.get_warehouse, self._root, self._so, object_id) is not None
+            record = await run_in_threadpool(project_registry.get_project, self._root, self._so, object_id)
+        else:
+            record = await run_in_threadpool(warehouses.get_warehouse, self._root, self._so, object_id)
+        if record is None:
+            return None
+        return _Standing(incarnation=record.get(INCARNATION) or "")
+
+
+class _Standing(BaseModel):
+    """An object a declared grant is written on: the incarnation it is written under, ``None`` for an estate object."""
+
+    incarnation: str | None
+
+
+async def _written(client: OpenFgaClient, grant: GrantTuple, *, incarnation: str | None) -> bool:
+    """Write ``grant``'s tuple; whether this write created it. A project's or warehouse's grant is written under the
+    token of the incarnation its record names (ADR 0241), a project's admin with the project's administration.
+
+    Raises:
+        fga.IncarnationEnded: The record's incarnation was retired: its delete has begun.
+    """
+    t = grant.client_tuple
+    if incarnation is None:
+        return await fga.commit_unless_changed(client, deletes=[], writes=[t], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
+    if grant.relation == project_admins.ADMIN and grant.object.startswith("project:"):
+        # As the members door grants it: who administers the project changes.
+        return await project_admins.confer(client, t, actor=DECLARATION.subject, origin="declaration", incarnation=incarnation)
+    return await fga.write_fenced(client, grant.object, incarnation, [t], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
 
 
 async def _held(client: OpenFgaClient, obj: str) -> set[tuple[str, str]]:

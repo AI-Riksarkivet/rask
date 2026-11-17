@@ -587,7 +587,7 @@ export interface paths {
          * Revoke Ghost Grants
          * @description Revoke every grant on each object no registry names, as a drift report found them.
          *
-         *     Each object is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
+         *     Each object's grants are read, then it is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
          *     record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a
          *     table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]).
          */
@@ -1194,7 +1194,8 @@ export interface paths {
         put?: never;
         /**
          * Grant Project Access
-         * @description Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]).
+         * @description Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]), under the token
+         *     read before the gate (ADR 0241).
          *
          *     The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
          *     nothing beyond them. Who belongs to the project is the members door's.
@@ -1485,8 +1486,12 @@ export interface paths {
          *
          *     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
          *     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
-         *     on the second call. An ``admin`` is granted in one Write with the project's ``admin_revision``
+         *     on the second call. An ``admin`` is granted in one Write with the project's token (``revision``)
          *     (:func:`project_admins.confer`), since it changes who administers the project.
+         *
+         *     The grant is written under the token of the project it was authorized on, read before the authority is asked
+         *     (ADR 0241): a project deleted meanwhile, and one made again under its id by another tenant, is not the project the
+         *     grant was decided on, and the grant lands on neither.
          */
         put: operations["grant_member_management_v1_projects__project_id__members_put"];
         post?: never;
@@ -1605,7 +1610,7 @@ export interface paths {
          * @description Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on
          *     the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
          *
-         *     The assignment is one Write with the project's ``admin_revision`` (:func:`project_admins.confer`), judged on the
+         *     The assignment is one Write with the project's token (``revision``) (:func:`project_admins.confer`), judged on the
          *     read that found whether ``admin`` reaches the role.
          */
         put: operations["assign_role_management_v1_projects__project_id__roles__role_id__assignees_put"];
@@ -2490,7 +2495,8 @@ export interface paths {
         put?: never;
         /**
          * Grant Warehouse Access
-         * @description Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]]).
+         * @description Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]]), under the
+         *     token read before the gate (ADR 0241).
          */
         post: operations["grant_warehouse_access_management_v1_warehouse__id__access_grant_post"];
         delete?: never;

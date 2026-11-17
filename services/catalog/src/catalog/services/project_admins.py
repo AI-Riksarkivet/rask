@@ -9,7 +9,7 @@ that: a role holding ``admin`` may reach nobody.
 Every door that changes a project's ``admin`` tuples or who is in a role goes through :func:`confer` or
 :func:`withdraw`: the members door, the role doors, the principal delete door ([[LH-233]]), a role's ending
 ([[LH-557]]) and the declaration converge. Each judges the administration it read and commits in one Write that moves
-the project's ``admin_revision``, which the store refuses whole once another such change moved it, so no two of them,
+the project's token (``revision``, ADR 0241), which the store refuses whole once another such change moved it, so no two of them,
 each judged on its own read, both commit.
 """
 
@@ -55,22 +55,18 @@ def _role_of(subject: str) -> str | None:
     return role if relation == ASSIGNEE and role.startswith("role:") else None
 
 
-def revision_number(subject: str) -> int:
-    """The ``n`` of a ``revision:<n>`` subject; ``0`` for one that names no number, which the next revision outgrows."""
-    _, _, number = subject.partition(":")
-    return int(number) if number.isdigit() else 0
+def next_revision(tuples: list[fga.ClientTuple], obj: str) -> tuple[list[fga.ClientTuple], list[fga.ClientTuple]]:
+    """The token a Write changing project ``obj``'s administration writes, and the one it deletes: none of either for a
+    project whose token no longer stands (a delete retired it, ADR 0241), where nothing is granted and a removal arbitrates
+    with nobody.
 
-
-def next_revision(tuples: list[fga.ClientTuple], obj: str) -> tuple[fga.ClientTuple, list[fga.ClientTuple]]:
-    """The ``admin_revision`` tuple a Write changing project ``obj``'s administration writes, and the ones it deletes.
-
-    A Write carrying both commits only while the revision is the one ``tuples`` were read at (:func:`fga.commit_unless_changed`),
+    A Write carrying both commits only while the token is the one ``tuples`` were read at (:func:`fga.commit_unless_changed`),
     so two changes to who administers a project, each judged on one read, cannot both commit.
     """
-    revisions = [t for t in tuples if t.object == obj and t.relation == fga.ADMIN_REVISION]
-    following = 1 + max((revision_number(t.user) for t in revisions), default=0)
-    moved = fga.ClientTuple(user=f"revision:{following}", relation=fga.ADMIN_REVISION, object=obj)
-    return moved, [fga.ClientTuple(user=t.user, relation=t.relation, object=obj) for t in revisions]
+    current = fga.standing_incarnation(tuples, obj)
+    if current is None:
+        return [], []
+    return [current.moved().token(obj)], [current.token(obj)]
 
 
 #: What a change takes away: grants, each ``(subject, object)``.
@@ -179,7 +175,7 @@ async def _held(client: OpenFgaClient, targets: list[fga.ClientTuple]) -> list[f
 def _revisions(scope: dict[str, Administration]) -> tuple[list[fga.ClientTuple], list[fga.ClientTuple]]:
     """The revision tuples a Write changing every administration in ``scope`` writes, and those it deletes."""
     moves = [next_revision(held.tuples, project) for project, held in scope.items()]
-    return [moved for moved, _ in moves], [t for _, replaced in moves for t in replaced]
+    return [t for moved, _ in moves for t in moved], [t for _, replaced in moves for t in replaced]
 
 
 def _fits(scope: dict[str, Administration], targets: list[fga.ClientTuple]) -> bool:
@@ -209,19 +205,33 @@ async def _commit(
     return await fga.commit_unless_changed(client, deletes=[*deletes, *stale], writes=[*writes, *moved], actor=actor, origin=origin)  # noqa: TID251
 
 
-async def confer(client: OpenFgaClient, target: fga.ClientTuple, *, actor: str, origin: fga.TupleOrigin, permit: Permit | None = None) -> bool:
+async def confer(
+    client: OpenFgaClient,
+    target: fga.ClientTuple,
+    *,
+    actor: str,
+    origin: fga.TupleOrigin,
+    permit: Permit | None = None,
+    incarnation: str | None = None,
+) -> bool:
     """Write ``target``, a project's ``admin`` tuple or a role assignment; whether this call wrote it.
 
     ``permit`` is asked with the projects the tuple makes its subject an administrator of, on the read the Write is
     judged by: a role nested beneath one holding a project's ``admin`` confers that ``admin``, however deep. Writing
-    what is held is a no-op.
+    what is held is a no-op. ``incarnation`` is the project's its caller was authorized on (ADR 0241): an ``admin`` tuple
+    is written only while that incarnation's token stands on its project, in the Write that moves it.
 
     Raises:
         ConcurrentModificationError: The administrations the tuple touches changed under both reads.
         InvalidInputError: The tuple touches more administrations than one Write moves.
+        fga.IncarnationEnded: ``target``'s project is not the incarnation its caller was authorized on.
     """
     for _ in range(READS):
         scope = await administrations(client, [target])
+        if incarnation is not None and is_admin(target):
+            standing = fga.standing_incarnation(scope[target.object].tuples, target.object)
+            if standing is None or standing.incarnation != incarnation:
+                raise fga.IncarnationEnded(f"{target.object} is not the project this grant was decided on: it was deleted")
         if permit is not None:
             await permit(touched(scope, [target]))
         if await _held(client, [target]):

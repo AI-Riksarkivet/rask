@@ -232,7 +232,7 @@ async def assign_role(
     """Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on
     the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
 
-    The assignment is one Write with the project's ``admin_revision`` (:func:`project_admins.confer`), judged on the
+    The assignment is one Write with the project's token (``revision``) (:func:`project_admins.confer`), judged on the
     read that found whether ``admin`` reaches the role.
     \f
 

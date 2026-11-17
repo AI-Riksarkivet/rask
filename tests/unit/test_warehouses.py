@@ -128,19 +128,20 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     # Regression guard for a WRITE-side model mismatch the mocked-`fga.check` gate tests cannot catch: the
     # seed originally wrote `warehouse#parent` (via grant_on_create) but the warehouse type's parent-pointer
     # is `project`, not `parent` — OpenFGA rejects the undefined relation and the whole seed 503s LIVE while
-    # every unit test stays green. Drive the REAL seed with a recording `write_tuples` and assert every
+    # every unit test stays green. Drive the REAL seed with a recording birth (`fga.bear`, ADR 0241) and assert every
     # (type, relation) it emits is actually defined in the compiled model.json.
     captured: list[Any] = []
 
-    async def rec_write(_client: object, tuples: list[Any], **_kw: object) -> None:
-        captured.extend(tuples)
+    async def rec_bear(_client: object, obj: str, incarnation: str, tuples: list[Any], **_kw: object) -> bool:
+        captured.extend([fga_module.marker(obj, incarnation), fga_module.Incarnation(incarnation, 0).token(obj), *tuples])
+        return True
 
-    monkeypatch.setattr(fga_module, "write_tuples", rec_write)
+    monkeypatch.setattr(fga_module, "bear", rec_bear)
     # Drive BOTH seeds: together they are the full tuple surface this feature writes — seed_warehouse
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
-    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
-    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice"))
+    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme", incarnation="i1"))
+    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice", incarnation="i2"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
     model = {t["type"]: set(t.get("relations") or {}) for t in fga_module.load_model()["type_definitions"]}
@@ -172,11 +173,12 @@ def test_seed_warehouse_never_grants_project_admin(monkeypatch: pytest.MonkeyPat
     # quietly escalate to tenant admin.
     captured: list[Any] = []
 
-    async def rec_write(_client: object, tuples: list[Any], **_kw: object) -> None:
+    async def rec_bear(_client: object, _obj: str, _incarnation: str, tuples: list[Any], **_kw: object) -> bool:
         captured.extend(tuples)
+        return True
 
-    monkeypatch.setattr(fga_module, "write_tuples", rec_write)
-    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
+    monkeypatch.setattr(fga_module, "bear", rec_bear)
+    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme", incarnation="i1"))
     assert {(t.user, t.relation, t.object) for t in captured} == {
         (f"user:{_TOKEN.subject}", "owner", "warehouse:wh-a"),
         ("project:acme", "project", "warehouse:wh-a"),
@@ -221,6 +223,14 @@ class _FakeStore:
     async def write(self, _client: object, tuples: list[Any], **_kw: object) -> None:
         self.tuples.update((t.user, t.relation, t.object) for t in tuples)
 
+    async def bear(self, _client: object, obj: str, incarnation: str, tuples: list[Any], **_kw: object) -> bool:
+        """The birth of a project or warehouse (ADR 0241): its marker, and its seed."""
+        born = (f"revision:{incarnation}", "revision", obj)
+        if born in self.tuples:
+            return False
+        self.tuples.update([born, *((t.user, t.relation, t.object) for t in tuples)])
+        return True
+
     async def list_users(self, _client: object, *, relation: str, obj: str, **_kw: object) -> list[str]:
         # `can_administer` derives from a direct `admin` tuple in the compiled model; the projects
         # endpoint's display-only admins lookup resolves the same way here.
@@ -229,6 +239,7 @@ class _FakeStore:
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(fga_module, "check", self.check)
         monkeypatch.setattr(fga_module, "write_tuples", self.write)
+        monkeypatch.setattr(fga_module, "bear", self.bear)
         monkeypatch.setattr(fga_module, "list_users", self.list_users)
 
 

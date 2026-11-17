@@ -84,7 +84,7 @@ def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_delete
     deleted = _ok(catalog.client.delete(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))).json()
 
     assert _naming(catalog, ALICE) == set()
-    assert {t for t in before if t[0] != fga.user_object(ALICE) and t[1] != fga.ADMIN_REVISION} <= catalog.store.tuples()
+    assert {t for t in before if t[0] != fga.user_object(ALICE) and t[1] != fga.REVISION} <= catalog.store.tuples()
     record = _ok(catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))).json()
     assert (record["principal"], record["kind"], record["deleted_by"], record["deleted_at"] is not None) == (ALICE, "person", "dex~root", True)
     assert deleted["revoked"] == 4

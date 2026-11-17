@@ -223,7 +223,7 @@ def test_commit_unless_changed_reports_a_rolled_back_write_and_fails_closed_on_a
     """[[LH-434]] A 409 is a Write a SQL datastore rolled back for another one that overlapped it, so nothing committed and the
     caller reads again; an outage is an unknown outcome and fails closed. The memory datastore never answers 409, so the
     integration test on a real OpenFGA cannot reach this branch."""
-    tup = ClientTuple(user="revision:2", relation="admin_revision", object="project:acme")
+    tup = ClientTuple(user="revision:i1.2", relation="revision", object="project:acme")
 
     async def commit() -> bool:
         return await fga.commit_unless_changed(_client(_WriteRefusedClient(exc)), deletes=[], writes=[tup], actor="a", origin="grant_api")  # noqa: TID251

@@ -22,8 +22,10 @@ import logging
 import pyarrow.fs as pafs
 
 from catalog.services.control_records import (
+    INCARNATION,
     ProjectRecord,
     ProtectionChange,
+    new_incarnation,
     read_json,
     validated,
     validated_or_refuse,
@@ -100,6 +102,8 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
         # Identity fields belong to the ORIGINAL create; a re-POST never resets a tenant's age or author.
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
         merged["created_by"] = live.get("created_by") or record.get("created_by", "")
+        # The incarnation is the original create's (ADR 0241); a record written before incarnations takes the request's.
+        merged[INCARNATION] = live.get(INCARNATION) or record.get(INCARNATION) or new_incarnation()
         return merged
 
     return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", merge)
@@ -143,8 +147,9 @@ def create_project_record(control_root: str, storage_options: StorageOptions, re
 
     Raises :class:`lakehouse.records.RecordExistsError` on a lost race; the caller
     re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
-    like the sequential idempotent re-POST path.
+    like the sequential idempotent re-POST path. A record naming no incarnation is given one here (ADR 0241).
     """
+    record.setdefault(INCARNATION, new_incarnation())
     create_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
 
 

@@ -378,9 +378,10 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     # and finds it — and the estate side cannot dangle for a second reason: there is exactly one
     # `estate:` object, seeded at bootstrap, and no door deletes it.
     ("classification", "parent", "estate"): "tuple's object IS the dropped object; the estate is never dropped",
-    # A project's admin revision ([[LH-434]]): `revision` has no relations and no door makes or drops one, and the
-    # project's delete removes the tuple with every other tuple on the project.
-    ("project", "admin_revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
+    # A project's or warehouse's incarnation (ADR 0241): `revision` has no relations and no door makes or drops one; the
+    # delete retires the token and keeps the marker, which confers nothing, so no birth bears the incarnation again.
+    ("project", "revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
+    ("warehouse", "revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
     ("namespace", "managed_access", "role"): "role is a subject type, not a droppable object",
     ("warehouse", "managed_access", "role"): "role is a subject type, not a droppable object",
     # A project cannot be deleted while a warehouse claims it — `projects.py`'s emptiness refusal

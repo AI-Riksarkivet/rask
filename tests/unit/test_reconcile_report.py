@@ -223,10 +223,10 @@ def test_unreferenced_projects_fires_on_a_record_with_no_tuples(tmp_path: Path, 
     """The mirror image of a ghost, and just as undeletable: the record exists, so every door 404s no
     one — but no tuple grants anyone `can_administer`, so the delete door can never be passed either.
 
-    Its admin revision ([[LH-434]]) is bookkeeping and grants no one anything, so it does not count."""
+    Its incarnation token (ADR 0241) is bookkeeping and grants no one anything, so it does not count."""
     estate = _Estate(tmp_path)
     proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
-    estate.fga.tuples["project:orphaned"] = [("revision:3", "admin_revision")]
+    estate.fga.tuples["project:orphaned"] = [("revision:i1.3", "revision")]
     report = estate.run(monkeypatch)
     assert [p.id for p in report.unreferenced_projects] == ["orphaned"]
     assert [p.id for p in mod._unreferenced_projects({"acme"}, {"acme": 1})] == []  # ...and silent when tuples exist

@@ -83,7 +83,7 @@ from catalog.schemas import (
 )
 from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, RecordGone
-from catalog.services.control_records import ProtectionChange, with_protection
+from catalog.services.control_records import INCARNATION, ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
@@ -230,9 +230,11 @@ async def establish_warehouse(
     ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
     await run_in_threadpool(warehouses.ensure_catalog_row, ns_conn, warehouse_id)
     if owner is not None:
-        await fga_deps.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project)
+        await fga_deps.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project, incarnation=record["incarnation"])
     elif author is not None:
-        await fga_deps.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject)
+        await fga_deps.converge_warehouse_grants(
+            client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject, incarnation=record.get("incarnation")
+        )
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
     await emit_control(
         control,
@@ -1175,6 +1177,9 @@ async def delete_warehouse(
                     async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
                         revoked += count
 
+                # Its incarnation retired before its own grants are read (ADR 0241): from here no grant decided on it lands,
+                # so none outlives the delete onto a warehouse made again under the id.
+                await fga_deps.retire_incarnation(client, settings, f"warehouse:{warehouse_id}", record.get(INCARNATION), token=token)
                 revoked += await fga_deps.revoke_removed_object(client, settings, f"warehouse:{warehouse_id}", token=token)
                 # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
                 # fail, it keeps the warehouse for the re-issue that finishes them.

@@ -96,7 +96,9 @@ async def _reconcile(client: OpenFgaClient, settings: Settings) -> tuple[int, in
             log.warning("warehouse_grant_backfill_no_project", extra={"warehouse": warehouse_id})
             continue
         try:
-            written += await fga_deps.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=ACTOR)
+            written += await fga_deps.converge_warehouse_grants(
+                client, settings, warehouse_id=warehouse_id, project=project, actor=ACTOR, incarnation=record.get("incarnation")
+            )
         except Exception as exc:
             # One unreachable warehouse must not abandon the rest — but it MUST be reported, and the
             # exit code must reflect it. A backfill that half-ran and said nothing is how an estate

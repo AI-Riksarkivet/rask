@@ -29,10 +29,12 @@ from lance_namespace import (
 from catalog.core.identifiers import warehouse_of, with_minted_uuid
 from catalog.services import native
 from catalog.services.control_records import (
+    INCARNATION,
     BucketClaimRecord,
     DeleteMode,
     ProtectionChange,
     WarehouseRecord,
+    new_incarnation,
     read_json,
     validated,
     validated_or_refuse,
@@ -263,6 +265,8 @@ def upsert_warehouse(
         # A record written before the lifecycle feature has no status, and absent means live.
         merged.setdefault("status", "active")
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
+        # The incarnation is the original create's (ADR 0241); a record written before incarnations takes the request's.
+        merged[INCARNATION] = live.get(INCARNATION) or record.get(INCARNATION) or new_incarnation()
         if protection is not None:
             merged = with_protection(merged, protection)
         # THE THIRD REQUEST FIELD, and it must be one: `merged` takes only `_CALLER_OWNED` keys from
@@ -282,8 +286,10 @@ def create_warehouse_record(control_root: str, storage_options: StorageOptions, 
 
     Raises :class:`lakehouse.records.RecordExistsError` on a lost race. The caller
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
-    guard's read may predate the rival's write; this refusal is what closes that window).
+    guard's read may predate the rival's write; this refusal is what closes that window). A record naming no
+    incarnation is given one here (ADR 0241).
     """
+    record.setdefault(INCARNATION, new_incarnation())
     create_json(control_root, storage_options, _warehouse_key(record["id"]), record)
 
 

@@ -50,7 +50,7 @@ def _fga_settings(**overrides: object) -> Settings:
 
 
 async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
-    """Run `fn` with `write_tuples` stubbed, and return the tuples it tried to write.
+    """Run `fn` with the birth (`fga.bear`, ADR 0241) stubbed, and return the tuples it tried to write with it.
 
     This replaces an `inspect.getsource(...)` string match. That assertion broke the moment the tuple
     set was extracted into `cascade_tuples` for the backfill to share — while the BEHAVIOUR it was
@@ -58,10 +58,11 @@ async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
     """
     seen: list[fga.ClientTuple] = []
 
-    async def _capture(_client, tuples, **_kw) -> None:
+    async def _capture(_client, _obj, _incarnation, tuples, **_kw) -> bool:
         seen.extend(tuples)
+        return True
 
-    monkeypatch.setattr(fga, "write_tuples", _capture)
+    monkeypatch.setattr(fga, "bear", _capture)
     await fn()
     return seen
 
@@ -85,11 +86,15 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
 
     async def _repair() -> None:
         async with fga.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
-            await fga_deps.converge_warehouse_grants(store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill")
+            await fga_deps.converge_warehouse_grants(
+                store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill", incarnation="i1"
+            )
 
     asyncio.run(_repair())
 
     assert openfga_store.tuples() == {
+        ("revision:i1", "revision", "warehouse:wh1"),
+        ("revision:i1.0", "revision", "warehouse:wh1"),
         ("project:acme", "project", "warehouse:wh1"),
         (declared, "maintenance", "warehouse:wh1"),
         (dropped, "reader", "warehouse:wh1"),
@@ -128,7 +133,7 @@ async def test_creating_a_warehouse_grants_it(monkeypatch, creator: PersonPrinci
     settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
 
     seen = await _captured_tuples(
-        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, creator, warehouse_id="wh1", project="acme"),
+        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, creator, warehouse_id="wh1", project="acme", incarnation="i1"),
         monkeypatch,
     )
 

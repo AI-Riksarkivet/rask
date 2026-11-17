@@ -24,7 +24,7 @@ import logging
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Path, status
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import ConcurrentModificationError, ServiceUnavailableError, TableNotFoundError
 
 from catalog.api import announcing, fga_deps
 from catalog.api.announcing import AnnouncerDep
@@ -62,7 +62,7 @@ def _user_string(raw: str) -> str:
 
 
 def _direct_grants(tuples: list[Any], obj: str) -> list[Member]:
-    """The membership rungs, filtered out of every tuple on the object (``admin_revision`` is bookkeeping)."""
+    """The membership rungs, filtered out of every tuple on the object (``revision`` is bookkeeping)."""
     return [Member(user=t.user, relation=t.relation) for t in tuples if t.object == obj and t.relation in GRANTABLE]
 
 
@@ -110,18 +110,27 @@ async def grant_member(
 
     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
-    on the second call. An ``admin`` is granted in one Write with the project's ``admin_revision``
+    on the second call. An ``admin`` is granted in one Write with the project's token (``revision``)
     (:func:`project_admins.confer`), since it changes who administers the project.
+
+    The grant is written under the token of the project it was authorized on, read before the authority is asked
+    (ADR 0241): a project deleted meanwhile, and one made again under its id by another tenant, is not the project the
+    grant was decided on, and the grant lands on neither.
     \f
 
     Raises:
         PermissionDeniedError: The caller may not grant the rung.
         InvalidInputError: The subject is a role another project owns.
-        ConcurrentModificationError: The project's administration changed under both of an ``admin`` grant's reads.
+        TableNotFoundError: No project stands under the id, or its delete has begun.
+        ConcurrentModificationError: The project's administration changed under both of an ``admin`` grant's reads, or
+            the project was deleted while the grant ran.
     """
     obj = f"project:{project_id}"
-    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(client, settings)
+    standing = await fga.read_incarnation(wired, obj)
+    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    if standing is None:
+        raise TableNotFoundError(f"project not found: {project_id}")
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
     await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
@@ -136,11 +145,14 @@ async def grant_member(
     # row in someone's inbox for something that did not happen.
     told = announcing.grant_announcement(tup, action="grant_added", actor=f"user:{token.subject}" if token else None)
     async with announcer.announcing(door="member_grant", target=obj, announcements=[told]) as filing:
-        if payload.relation in ADMINISTRATIVE:
-            if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api"):
-                return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
-        else:
-            await fga.write_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        try:
+            if payload.relation in ADMINISTRATIVE:
+                if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api", incarnation=standing.incarnation):
+                    return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
+            else:
+                await fga.write_fenced(wired, obj, standing.incarnation, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        except fga.IncarnationEnded as exc:
+            raise ConcurrentModificationError(f"project {project_id!r} was deleted while this grant ran; nothing was granted") from exc
         existing = await fga.read_object_tuples(wired, obj)
         audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
         await filing.send(told)

@@ -86,7 +86,13 @@ def test_a_role_is_granted_only_inside_its_own_tenant(
         root = tmp_path / "house"
         warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "house", "project": tenant, "bucket": tenant, "root_uri": str(root)})
         warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": str(root)}), "house")
-        catalog.store.write((catalog.person("alice"), "admin", f"project:{tenant}"), (f"project:{tenant}", "project", "warehouse:house"))
+        catalog.store.write(
+            (catalog.person("alice"), "admin", f"project:{tenant}"),
+            (f"project:{tenant}", "project", "warehouse:house"),
+            # The warehouse born, as its create bears it (ADR 0241): its incarnation's marker and token.
+            ("revision:i1", "revision", "warehouse:house"),
+            ("revision:i1.0", "revision", "warehouse:house"),
+        )
     if target == "namespace":
         created = (
             catalog.client.post(f"/v1/namespace/{name}/create", json={}, headers=alice)

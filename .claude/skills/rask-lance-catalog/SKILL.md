@@ -350,8 +350,8 @@ person its `admin` tuples reach, directly or through roles nested to any depth
 of `admin` tuples, since a role holding `admin` may reach nobody. Every change to a project's `admin` tuples or to who
 is in a role goes through `project_admins.confer` or `project_admins.withdraw`: the members door, the role doors'
 assign and unassign, a role's ending, the offboarding door and the declaration converge. Each judges the administration
-it read and commits in ONE Write that moves `project#admin_revision` (`revision:<n>` to `<n+1>`, a bookkeeping relation
-no permission reads) without ignoring duplicates (`fga.commit_unless_changed`), so of two overlapping changes one
+it read and commits in ONE Write that moves the project's token (`project#revision`, `revision:<incarnation>.<n>` to
+`<n+1>`, a bookkeeping relation no permission reads) without ignoring duplicates (`fga.commit_unless_changed`), so of two overlapping changes one
 commits and the other reads again and judges again; a refused Write is a 400 on the memory datastore and a 409 rollback
 on a SQL one. A removal after which the project's `admin` reaches no person is refused 409 code 14. While a project's
 `admin` reaches a role, filling, emptying or ending it asks `can_grant_admin` on that project (a refusal answers the
@@ -536,6 +536,23 @@ the rule:
   drop, deregister) are filed before their change, with the control event each door sends, and a door that fails after its change has them sent by the catalog's finish (`POST /management/v1/announcement-intents/finish`, asked by maintenance's hourly audit), under the run id and event id the door built (ADR 0205, [[LH-576]]); the namespace and warehouse cascades file theirs the same way. Pinned by
   `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
 
+## A project's or warehouse's id is reused, so its grants are fenced by incarnation (ADR 0241)
+
+A table or namespace is named in OpenFGA by its uuid; a project and a warehouse by their id (`project:<id>`,
+`warehouse:<id>`), which another tenant may hold once the object is deleted. Each record carries an `incarnation`
+(`control_records.INCARNATION`, minted with the record, kept by every merge), and `revision` on `project` and
+`warehouse` holds its marker `revision:<incarnation>` (written by the birth, never revoked) and its token
+`revision:<incarnation>.<n>`. A create bears the incarnation in one Write with its seed (`fga.bear`, through
+`fga_deps.seed_project_admin` / `seed_warehouse` / `converge_warehouse_grants`); every write of a tuple on the object
+moves the token in the same Write (`fga.write_fenced`, `project_admins.confer(incarnation=)`), and a door reads the token
+BEFORE it asks the caller's authority (`members.grant_member`, `access.project_incarnation` / `warehouse_incarnation`
+listed before the gate); a delete retires it (`fga.retire`: marks born, then deletes the token conditionally) before it
+reads what to revoke, and `fga.revoke_read_tuples` never takes `revision`. A grant on an unborn or deleting object is a
+404, one whose object was deleted while it ran a 409. The drift repair reads a ghost's tuples before judging it and
+revokes only what it read (`fga_deps.read_ghost_object`). Model: `specs/catalog/Grants.tla`. Pinned by
+`services/catalog/tests/test_a_grant_on_a_deleted_project_reaches_no_project_made_again_under_its_id.py` and
+`test_a_ghost_revoke_takes_nothing_a_project_made_after_its_judgement_holds.py`.
+
 ## The declaration: the catalog converges what git declares ([[XC-213]], ADR 0206)
 
 An install from git holds its tenants with no call to any door. The chart's `catalog.declared` values (`projects`
@@ -574,7 +591,8 @@ tables are never declared.
 - **The grant ledger** `_declared_grants/` (`control_prefixes.DECLARED_GRANTS`, one record per tuple keyed by its
   sha256): a declared tuple the store lacks is recorded BEFORE it is written (`declaration.record_grant`), so a tuple
   never outlives its declaration unrecorded; a declared tuple the store already holds is not recorded, so a grant made at
-  a door is never taken. A recorded tuple git no longer asks for is revoked, then its record forgotten. A project
+  a door is never taken. The write commits only where the tuple is absent, and a tick whose write found it standing (a
+  door granted it between the tick's read and its write) forgets the record it made (ADR 0241 G5). A recorded tuple git no longer asks for is revoked, then its record forgotten. A project
   `admin` goes through `project_admins.withdraw`, which keeps a project its last administrator: that revoke fails,
   and is counted on every tick, until another admin is granted. A grant on an object with no registry record is not
   written (`LookupError`, counted). With FGA off no grant is converged.
