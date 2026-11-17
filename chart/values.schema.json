@@ -17,7 +17,7 @@
                             "type": "boolean"
                         },
                         "extensionImage": {
-                            "description": "The built AGE extension image for the CNPG cluster (e.g. ghcr.io/\u003corg\u003e/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default.",
+                            "description": "The built AGE extension image for the CNPG cluster, by digest (`ghcr.io/\u003corg\u003e/age-cnpg-ext@sha256:\u003cdigest\u003e`; a tag alone is refused); required when `cnpgCluster.enabled`, no default.",
                             "type": "string"
                         }
                     },

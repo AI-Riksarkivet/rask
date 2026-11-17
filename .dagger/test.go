@@ -44,7 +44,7 @@ func (m *Rask) Test(
 	return m.base(src).
 		// base() only syncs the root project; the suites IMPORT the workspace members
 		// (the kits, the services, …), so install every member like `make install` does.
-		WithExec([]string{"uv", "sync", "--all-packages"}).
+		WithExec([]string{"uv", "sync", "--all-packages", "--locked"}).
 		// ── helm, so the chart-render invariants actually RUN (audit m5, fixed 2026-08-03) ──────────
 		// THIRTEEN tests in tests/unit/test_invariants.py render the chart through _helm_template()
 		// (:242) or _helm_notes() (:678), and both open with `pytest.skip("helm not available")`.

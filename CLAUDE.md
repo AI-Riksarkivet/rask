@@ -233,8 +233,8 @@ and k3s holds running images in its own containerd cache.
   `make k3s-pins TAGS="lance-rest-catalog=<tag> web-console=<tag>"`, then `make k3s-up`. Running `helm upgrade` by
   hand with other values replaces every deployed image with the chart default.
 - **A killed `helm upgrade` leaves the release in `pending-upgrade`,** and every later upgrade is
-  refused until someone runs `helm rollback rask <last-good-rev>`. Check `helm history rask` before
-  anything else.
+  refused until someone runs `make helm-rollback REV=<last-good-rev>`. Check `make helm-history` before
+  anything else (both go through `scripts/helm.sh`, which refuses a kubeconfig the caller did not name).
 
 
 (The only relational store in the lakehouse is the chart-managed `rask-age` Postgres, which serves OpenFGA's database.

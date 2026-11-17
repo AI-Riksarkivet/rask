@@ -16,7 +16,8 @@
 # CloudNativePG Cluster for the lance-ns state of record (the AGE lineage graph + the OpenFGA datastore),
 # with Apache AGE mounted as an ImageVolume extension. Requires: PostgreSQL 18, CloudNativePG >= 1.27,
 # Kubernetes 1.33+ with the ImageVolume feature gate (1.35 default-on), containerd >= 2.1 / CRI-O >= 1.31.
-# Build + push the extension image first: docker build -f .docker/cnpg-age-ext.dockerfile -t <registry>/age-cnpg-ext:1.7.0-18 .
+# Build and push the extension image first (bash scripts/dagger-image.sh --name cnpg-age-ext --push <registry>/age-cnpg-ext:1.7.0-18),
+# and name it here by the digest the push reports.
 # For older clusters that lack ImageVolume, use the custom-full-image bridge instead (docs/CNPG-AGE.md).
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -24,7 +25,7 @@ metadata:
   name: lance-pg
 spec:
   instances: 3                                   # HA — 1 primary + 2 replicas, automated failover
-  imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-trixie   # STOCK image, unchanged
+  imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-trixie@sha256:37fdeea29a4d3ed14570f719488ba55bd21e8975eaea864be5ce74d25a9a13de
   postgresql:
     # AGE recommends preloading; the lance code also does LOAD 'age' per-session, which works via the
     # dynamic_library_path CNPG auto-configures — preloading is belt-and-suspenders.
@@ -34,7 +35,9 @@ spec:
       - name: age
         image:
           # From values (required — no placeholder default can render): the extension image you built + pushed.
-          reference: {{ required "age.cnpgCluster.extensionImage is required when age.cnpgCluster.enabled=true — build + push .docker/cnpg-age-ext.dockerfile first" .Values.age.cnpgCluster.extensionImage }}
+          {{- $extension := required "age.cnpgCluster.extensionImage is required when age.cnpgCluster.enabled=true — build + push .docker/cnpg-age-ext.dockerfile first" .Values.age.cnpgCluster.extensionImage }}
+          {{- if not (regexMatch "@sha256:[0-9a-f]{64}$" $extension) }}{{- fail (printf "age.cnpgCluster.extensionImage is %q, which names no digest: a tag is mutable, and the extension is loaded into the database server, so name the image as <repository>@sha256:<digest>" $extension) }}{{- end }}
+          reference: {{ $extension }}
         # CNPG auto-appends /extensions/age/share → extension_control_path and /extensions/age/lib →
         # dynamic_library_path; no manual path config needed for the standard layout.
   storage:

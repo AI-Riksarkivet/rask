@@ -121,7 +121,14 @@ def test_a_real_deployment_refuses_what_would_expose_it(setting: tuple[str, ...]
 
 
 #: The AGE-on-CNPG path, the one part of the render that needs the CloudNativePG API ([[XC-130]]).
-_CNPG_CLUSTER = ("--set", "age.enabled=false", "--set", "age.cnpgCluster.enabled=true", "--set-string", "age.cnpgCluster.extensionImage=reg.example/age:1")
+_CNPG_CLUSTER = (
+    "--set",
+    "age.enabled=false",
+    "--set",
+    "age.cnpgCluster.enabled=true",
+    "--set-string",
+    f"age.cnpgCluster.extensionImage=reg.example/age@sha256:{'ab' * 32}",
+)
 
 
 @pytest.mark.parametrize(

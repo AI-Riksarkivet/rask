@@ -169,7 +169,7 @@ measured 2026-09-25 on a maintenance setting, contained only because the rolling
   message rather than a pod: see `LANCE_ERASURE_RELEASE_GRACE_DAYS` in `chart/templates/services.yaml`.
 - `helm diff upgrade` shows a `''` before it ships.
 - Never kill a running upgrade — it leaves the release in `pending-upgrade`, which refuses every later
-  one until `helm rollback`.
+  one until `make helm-rollback REV=<revision>`.
 
 ## 5. The chart is the only path configuration reaches the estate
 
@@ -181,7 +181,7 @@ secret (the ServiceAccount's name, `lance.signingKeys`) is
 seeded into the dev OpenBao by the seed the chart renders (the platform's store, which the chart does not mint into, is
 provisioned by its operator and attested by `signing.provisioned`).
 
-- Before believing a chart commit landed: `helm history rask` — if the top revision predates the
+- Before believing a chart commit landed: `make helm-history` — if the top revision predates the
   commit, it did not.
 - The release stores image tags. A chart apply after a `kubectl set image` roll **reverts the roll**
   unless the tag is pinned on the command: `--set image.tags.lance-rest-catalog=<tag>`.

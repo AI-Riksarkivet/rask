@@ -1,4 +1,4 @@
-.PHONY: fga-store-check sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth release-handoff go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: fga-store-check sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check helm-history helm-rollback k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth release-handoff go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -557,6 +557,15 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check k3s-values-check ## Apply 
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
 	@echo "API → http://<node-ip>/api/catalog/v1/… and /api/lineage/events   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 
+# THE RECOVERY VERBS GO THROUGH THE SEAM ([[XC-055]]): scripts/helm.sh refuses a kubeconfig the caller did not name, and
+# the default one on a developer's machine can be another cluster that answers.
+helm-history: ## The release's last MAX=10 revisions through the helm seam; DESCRIPTION names what each deployed
+	$(HELM) history rask --max $(or $(MAX),10)
+
+helm-rollback: ## Roll the release back to REV=<revision> through the helm seam (a killed upgrade leaves it pending-upgrade until this runs)
+	@test -n "$(REV)" || { echo "!! make helm-rollback REV=<revision>   (make helm-history lists them)" >&2; exit 1; }
+	$(HELM) rollback rask $(REV) --wait
+
 k3s-values: k3s-values-check ## Print the values `make k3s-up` supplies, as `helm get values rask -o json` reads them (a server dry run: writes nothing)
 	@$(K3S_PINS_CHECK)
 	@$(HELM) upgrade --install rask ./chart --dry-run=server -o json $(K3S_VALUES) | jq -S .config
@@ -663,15 +672,21 @@ HELM_DOCS_ARCH := $(shell uname -m | sed -e 's/aarch64/arm64/')
 # k9s tags its assets Linux/Darwin (capitalised), unlike everything else above.
 K9S_OS    := $(shell uname -s)
 
-bootstrap: ## Download kind/kubectl/fga/k9s/helm-docs/helm-schema into .localbin (idempotent) — helm must be on PATH
+# A TOOL IS FETCHED AGAIN WHEN ITS PIN CHANGES ([[XC-063]]). Each install leaves `.<tool>-<version>` beside the binary,
+# and a binary whose stamp is not the pinned version's is replaced, so a checkout that moved a pin does not go on running
+# the version an earlier bootstrap installed. A binary with no stamp is one of unknown version and is fetched once more.
+pinned = { test -x $(LOCALBIN)/$(1) && test -e $(LOCALBIN)/.$(1)-$(2); }
+stamp  = rm -f $(LOCALBIN)/.$(1)-* && touch $(LOCALBIN)/.$(1)-$(2)
+
+bootstrap: ## Download kind/kubectl/fga/k9s/helm-docs/helm-schema into .localbin at their pinned versions (idempotent) — helm must be on PATH
 	@mkdir -p $(LOCALBIN)
 	@test -n "$(HOST_ARCH)" || { echo "!! unsupported CPU '$$(uname -m)' — need x86_64 or arm64"; exit 1; }
-	@test -x $(KIND)              || { echo "kind ->"; $(FETCH) "https://kind.sigs.k8s.io/dl/$(KIND_V)/kind-$(HOST_OS)-$(HOST_ARCH)" $(KIND) && chmod +x $(KIND); }
-	@test -x $(LOCALBIN)/kubectl  || { echo "kubectl ->"; $(FETCH) "https://dl.k8s.io/release/$(KUBECTL_V)/bin/$(HOST_OS)/$(HOST_ARCH)/kubectl" $(LOCALBIN)/kubectl && chmod +x $(LOCALBIN)/kubectl; }
-	@test -x $(LOCALBIN)/fga      || { echo "fga ->"; $(FETCH) "https://github.com/openfga/cli/releases/download/v$(FGA_V)/fga_$(FGA_V)_$(HOST_OS)_$(HOST_ARCH).tar.gz" $(LOCALBIN)/.fga.tgz && tar xzf $(LOCALBIN)/.fga.tgz -C $(LOCALBIN) fga && rm $(LOCALBIN)/.fga.tgz; }
-	@test -x $(LOCALBIN)/k9s      || { echo "k9s ->"; $(FETCH) "https://github.com/derailed/k9s/releases/download/$(K9S_V)/k9s_$(K9S_OS)_$(HOST_ARCH).tar.gz" $(LOCALBIN)/.k9s.tgz && tar xzf $(LOCALBIN)/.k9s.tgz -C $(LOCALBIN) k9s && rm $(LOCALBIN)/.k9s.tgz; }
-	@test -x $(LOCALBIN)/helm-docs || { echo "helm-docs ->"; $(FETCH) "https://github.com/norwoodj/helm-docs/releases/download/v$(HELM_DOCS_V)/helm-docs_$(HELM_DOCS_V)_$(K9S_OS)_$(HELM_DOCS_ARCH).tar.gz" $(LOCALBIN)/.helm-docs.tgz && tar xzf $(LOCALBIN)/.helm-docs.tgz -C $(LOCALBIN) helm-docs && rm $(LOCALBIN)/.helm-docs.tgz; }
-	@test -x $(LOCALBIN)/helm-schema || { echo "helm-schema ->"; $(FETCH) "https://github.com/losisin/helm-values-schema-json/releases/download/v$(HELM_SCHEMA_V)/helm-values-schema-json_$(HELM_SCHEMA_V)_$(HOST_OS)_$(HOST_ARCH).tgz" $(LOCALBIN)/.helm-schema.tgz && tar xzf $(LOCALBIN)/.helm-schema.tgz -C $(LOCALBIN) schema && mv $(LOCALBIN)/schema $(LOCALBIN)/helm-schema && rm $(LOCALBIN)/.helm-schema.tgz; }
+	@$(call pinned,kind,$(KIND_V)) || { echo "kind ->"; $(FETCH) "https://kind.sigs.k8s.io/dl/$(KIND_V)/kind-$(HOST_OS)-$(HOST_ARCH)" $(KIND) && chmod +x $(KIND) && $(call stamp,kind,$(KIND_V)); }
+	@$(call pinned,kubectl,$(KUBECTL_V)) || { echo "kubectl ->"; $(FETCH) "https://dl.k8s.io/release/$(KUBECTL_V)/bin/$(HOST_OS)/$(HOST_ARCH)/kubectl" $(LOCALBIN)/kubectl && chmod +x $(LOCALBIN)/kubectl && $(call stamp,kubectl,$(KUBECTL_V)); }
+	@$(call pinned,fga,$(FGA_V)) || { echo "fga ->"; $(FETCH) "https://github.com/openfga/cli/releases/download/v$(FGA_V)/fga_$(FGA_V)_$(HOST_OS)_$(HOST_ARCH).tar.gz" $(LOCALBIN)/.fga.tgz && tar xzf $(LOCALBIN)/.fga.tgz -C $(LOCALBIN) fga && rm $(LOCALBIN)/.fga.tgz && $(call stamp,fga,$(FGA_V)); }
+	@$(call pinned,k9s,$(K9S_V)) || { echo "k9s ->"; $(FETCH) "https://github.com/derailed/k9s/releases/download/$(K9S_V)/k9s_$(K9S_OS)_$(HOST_ARCH).tar.gz" $(LOCALBIN)/.k9s.tgz && tar xzf $(LOCALBIN)/.k9s.tgz -C $(LOCALBIN) k9s && rm $(LOCALBIN)/.k9s.tgz && $(call stamp,k9s,$(K9S_V)); }
+	@$(call pinned,helm-docs,$(HELM_DOCS_V)) || { echo "helm-docs ->"; $(FETCH) "https://github.com/norwoodj/helm-docs/releases/download/v$(HELM_DOCS_V)/helm-docs_$(HELM_DOCS_V)_$(K9S_OS)_$(HELM_DOCS_ARCH).tar.gz" $(LOCALBIN)/.helm-docs.tgz && tar xzf $(LOCALBIN)/.helm-docs.tgz -C $(LOCALBIN) helm-docs && rm $(LOCALBIN)/.helm-docs.tgz && $(call stamp,helm-docs,$(HELM_DOCS_V)); }
+	@$(call pinned,helm-schema,$(HELM_SCHEMA_V)) || { echo "helm-schema ->"; $(FETCH) "https://github.com/losisin/helm-values-schema-json/releases/download/v$(HELM_SCHEMA_V)/helm-values-schema-json_$(HELM_SCHEMA_V)_$(HOST_OS)_$(HOST_ARCH).tgz" $(LOCALBIN)/.helm-schema.tgz && tar xzf $(LOCALBIN)/.helm-schema.tgz -C $(LOCALBIN) schema && mv $(LOCALBIN)/schema $(LOCALBIN)/helm-schema && rm $(LOCALBIN)/.helm-schema.tgz && $(call stamp,helm-schema,$(HELM_SCHEMA_V)); }
 	@command -v helm   >/dev/null || { echo "!! helm not on PATH — install https://helm.sh/docs/intro/install/"; exit 1; }
 	@echo "toolchain ready in .localbin ($(HOST_OS)/$(HOST_ARCH))"
 

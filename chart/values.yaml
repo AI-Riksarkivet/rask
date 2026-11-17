@@ -1571,7 +1571,7 @@ openfga: # @schema skipProperties: true; additionalProperties: true
   #
   # If the migrate Job does fail: it never completes (backoffLimit 30), the server never becomes
   # Ready against an unmigrated schema, `helm upgrade --wait` times out and leaves the release in
-  # `pending-upgrade` (refusing later upgrades until `helm rollback rask <rev>` — CLAUDE.md). The
+  # `pending-upgrade` (refusing later upgrades until `make helm-rollback REV=<rev>` — CLAUDE.md). The
   # answer then is to drop and recreate the openfga database rather than to revert the tag.
   image:
     # -- OpenFGA image tag for the subchart server and for rask's own migrate Job (templates/openfga-migrate.yaml), so schema and binary match.
@@ -1772,9 +1772,10 @@ age:
   cnpgCluster:
     # -- Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (>= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1.
     enabled: false
-    # The built AGE extension image (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18). Deliberately NO
-    # default — required() when enabled, so a REPLACE-ME placeholder can never render.
-    # -- The built AGE extension image for the CNPG cluster (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default.
+    # The built AGE extension image, named by the digest its push reported. Deliberately NO default: required() when
+    # enabled, so a placeholder can never render, and a tag alone is refused, since a tag is mutable and the extension is
+    # code loaded into the database server.
+    # -- The built AGE extension image for the CNPG cluster, by digest (`ghcr.io/<org>/age-cnpg-ext@sha256:<digest>`; a tag alone is refused); required when `cnpgCluster.enabled`, no default.
     extensionImage: ""
 
 # === Dex — the development OIDC issuer, a fixture (deploy/fixtures/dex) ===========================

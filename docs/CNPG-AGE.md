@@ -34,6 +34,10 @@ bash scripts/dagger-image.sh --name cnpg-age-ext --arg AGE_REF=release/PG18/1.7.
 # or as an OCI tarball, for a registry-less node:
 #   bash scripts/dagger-image.sh --name cnpg-age-ext --arg AGE_REF=release/PG18/1.7.0 --out build/age-cnpg-ext.tar
 ```
+The chart takes the image only by the digest the push reports (`age.cnpgCluster.extensionImage:
+<registry>/age-cnpg-ext@sha256:<digest>`; a tag alone is refused at render). The build holds the AGE branch to one
+commit (`AGE_COMMIT`), so a bump passes both: `--arg AGE_REF=<ref> --arg AGE_COMMIT=<its commit>`.
+
 Pin the AGE branch to the PG major (`--arg AGE_REF=release/PG18/1.7.0`); a PG-major bump means rebuilding
 this small image for the new major (the same lockstep the PG-major runbook in `docs/runbooks/RUNBOOK-restore.md` covers)
 — but it's an isolated extension image, not a whole Postgres fork.

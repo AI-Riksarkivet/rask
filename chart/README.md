@@ -33,7 +33,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 |-----|------|---------|-------------|
 | age.bootstrapDb | string | `"lineage"` | Name of the database the AGE server initialises and probes; no client reads it. |
 | age.cnpgCluster.enabled | bool | `false` | Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (>= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1. |
-| age.cnpgCluster.extensionImage | string | `""` | The built AGE extension image for the CNPG cluster (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default. |
+| age.cnpgCluster.extensionImage | string | `""` | The built AGE extension image for the CNPG cluster, by digest (`ghcr.io/<org>/age-cnpg-ext@sha256:<digest>`; a tag alone is refused); required when `cnpgCluster.enabled`, no default. |
 | age.enabled | bool | `true` | Run the in-cluster apache/age Postgres StatefulSet that serves OpenFGA's database. |
 | age.externalHost | string | `""` | Postgres host OpenFGA uses instead of the in-cluster AGE; the render refuses it empty with age.enabled=false. |
 | age.image | string | `"apache/age:release_PG16_1.6.0"` | Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64). |

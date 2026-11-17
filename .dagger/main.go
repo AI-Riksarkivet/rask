@@ -62,7 +62,9 @@ func (m *Rask) pythonBase(src *dagger.Directory) *dagger.Container {
 // every run. `.dagger/test.go` always had the flag — only this base lacked it,
 // which is why the pytest lane passed while the type gate could not.
 func (m *Rask) base(src *dagger.Directory) *dagger.Container {
-	return m.tools(src).WithExec([]string{"uv", "sync", "--all-packages"})
+	// --locked: the gate runs what uv.lock names, and fails where the lock no longer matches the manifests, as the image
+	// build does (.docker/rest-catalog.dockerfile). Without it a sync re-resolves in the container and checks that.
+	return m.tools(src).WithExec([]string{"uv", "sync", "--all-packages", "--locked"})
 }
 
 // tools is base without the workspace synced: uv, the source and its caches, for a lane that runs scripts and charts but
