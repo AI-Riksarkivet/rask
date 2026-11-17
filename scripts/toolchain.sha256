@@ -26,3 +26,5 @@ d9df63af574ac39b9b428630037e8c50bb4dc198aa8d9ed982de0149ecb7485e  https://github
 2d8399db5b33d240d5f8985241bcf5483563150b968e3229823822979f3e4b8b  https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Darwin_arm64.tar.gz
 270d6212b8f01d5639288168e0ebb70fd82fdc8bda1b87c22762bbfe93874e90  https://github.com/losisin/helm-values-schema-json/releases/download/v2.6.0/helm-values-schema-json_2.6.0_darwin_arm64.tgz
 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+86c727b5790288ef1fc590319ef3d5486f05f7f5d644c73a72c047d80c595e3c  https://github.com/openfga/openfga/releases/download/v1.18.3/openfga_1.18.3_linux_amd64.tar.gz
+62f90aee3d8b3487011e207b0b83b714b334a5b3983fe21c1daa5eef1a4656d2  https://github.com/openfga/openfga/releases/download/v1.18.3/openfga_1.18.3_linux_arm64.tar.gz

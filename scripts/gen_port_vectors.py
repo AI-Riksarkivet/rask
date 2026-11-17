@@ -462,6 +462,7 @@ def main() -> None:
     import asyncio
 
     from _port_auth_vectors import auth_vectors
+    from _port_authz_vectors import authz_vectors
     from _port_delivery_vectors import delivery_vectors
     from _port_signing_vectors import signing_vectors
     from _port_tables_vectors import tables_vectors
@@ -473,6 +474,7 @@ def main() -> None:
         ("lineage_functions", _function_vectors()),
         ("shell_http", shell),
         ("auth", auth_vectors()),
+        ("authz", authz_vectors()),
         ("delivery", delivery_vectors()),
         ("signing", signing_vectors()),
         ("tables", tables_vectors()),
