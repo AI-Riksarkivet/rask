@@ -462,6 +462,7 @@ def main() -> None:
     import asyncio
 
     from _port_auth_vectors import auth_vectors
+    from _port_delivery_vectors import delivery_vectors
 
     shell = {"limits": [{"max_body_bytes": _MAX_BODY_BYTES, "deadline_seconds": _DEADLINE_SECONDS}], "exchanges": asyncio.run(_shell_vectors())}
     _OUT.mkdir(parents=True, exist_ok=True)
@@ -470,6 +471,7 @@ def main() -> None:
         ("lineage_functions", _function_vectors()),
         ("shell_http", shell),
         ("auth", auth_vectors()),
+        ("delivery", delivery_vectors()),
     ):
         (_OUT / f"{name}.json").write_text(_one_entry_a_line(vectors))
         print(f"wrote rust/vectors/{name}.json")

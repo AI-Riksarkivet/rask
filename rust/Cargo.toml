@@ -19,8 +19,9 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["catch-panic"] }
 tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
-# `preserve_order`: an event is stored as the JSON it arrived as, members in the order sent.
-serde_json = { version = "1", features = ["preserve_order"] }
+# `preserve_order`: an event is stored as the JSON it arrived as, members in the order sent. `unbounded_depth`: an
+# envelope's nesting is bounded by the lane's own count (`delivery::envelope_of`), not by the parser's.
+serde_json = { version = "1", features = ["preserve_order", "unbounded_depth"] }
 sha2 = "0.10"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "v5"] }

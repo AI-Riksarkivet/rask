@@ -1,11 +1,11 @@
 {
   "crates": {
     "lakehouse-core": {
-      "lines": 1302,
+      "lines": 1502,
       "budget": 11234
     },
     "lineage": {
-      "lines": 618,
+      "lines": 703,
       "budget": 2621
     }
   },

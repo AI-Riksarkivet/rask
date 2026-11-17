@@ -228,3 +228,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0219](0219-the-service-shell-in-rust-answers-as-the-python-app-factory-does.md) |  | The service shell in Rust answers as the Python app factory does (2026-11-17) | accepted |
 | [0220](0220-a-bearer-names-the-same-caller-in-rust-as-in-python.md) |  | A bearer names the same caller in Rust as in Python (2026-11-17) | accepted |
 | [0221](0221-lineages-event-path-is-modelled-in-tla-and-checked-before-it-is-ported.md) |  | Lineage's event path is modelled in TLA+ and checked before it is ported (2026-11-17) | accepted |
+| [0224](0224-a-delivery-is-settled-and-an-event-judged-in-rust-by-the-models-steps.md) |  | A delivery is settled and an event judged in Rust by the model's steps (2026-11-17) | accepted |

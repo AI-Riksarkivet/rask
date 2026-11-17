@@ -1,6 +1,7 @@
 //! The lineage service: the OpenLineage intake, the commit feed and the table-level edge list.
 
 pub mod feed;
+pub mod intake;
 pub mod model;
 pub mod paging;
 pub mod targeting;
