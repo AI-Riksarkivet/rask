@@ -40,8 +40,12 @@ neutral: the doors (`docs/*-openapi.json`), the events (`docs/COMMIT-EVENTS.md`)
    - *Models*: the lifecycle and the event path are specified in TLA+ and checked with TLC; a model's traces are
      replayed against the running service.
 6. **A line budget per crate, enforced.** `rust/budget.json` holds the most lines of production Rust a crate may
-   have, at or below the executing Python it replaces (lineage: 2,621). Test code and vectors are not counted.
-   Rationale and measurements go to an ADR; a comment says why, in a sentence.
+   have: twice the executing Python it replaces (lineage: 5,242 for 2,621). Test code and vectors are not counted.
+   Rationale and measurements go to an ADR; a comment says why, in a sentence. The rule was first "at or below the
+   Python". Measured 2026-11-17 with about half of lineage ported, like for like: the store is 1,146 lines of Rust
+   for 618 of Python, authorization 830 for 446, the bus 1,047 for 642 after a pass that removed its duplicates. The
+   Rust writes out what Pydantic, FastAPI, nats-py and rows held as dicts give the Python, so the first rule could
+   be met only by dropping behaviour or by code that is harder to read. Owner, 2026-11-17: "Cap at 2x Python".
 7. **Features are tracked by generation and by record.** `docs/rust-port.json` is generated from
    `docs/operations.json` and from what the Rust plane declares it serves, so the ledger cannot claim a door the
    code does not hold. Each ported feature area gets an ADR naming what moved, how parity was shown and what
