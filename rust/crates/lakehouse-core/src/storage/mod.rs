@@ -6,6 +6,7 @@
 //! renews it once half is used and hands none out within a minute of its end. `s3` signs each request with SigV4
 //! (`sigv4`) under whatever session is held then, and maps a store's refusal to a [`StorageError`].
 
+pub mod records;
 pub mod s3;
 pub mod session;
 pub mod sigv4;

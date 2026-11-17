@@ -67,7 +67,8 @@ impl S3 {
         })
     }
 
-    async fn send(
+    /// Sign and send one request, and answer the store's response whatever its status.
+    pub(super) async fn signed(
         &self,
         method: Method,
         bucket: &str,
@@ -107,11 +108,23 @@ impl S3 {
             value.set_sensitive(matches!(name, "authorization" | "x-amz-security-token"));
             request = request.header(name, value);
         }
-        let answer = request
+        request
             .body(body)
             .send()
             .await
-            .map_err(|error| StorageError::NoAnswer(error.without_url().to_string()))?;
+            .map_err(|error| StorageError::NoAnswer(error.without_url().to_string()))
+    }
+
+    async fn send(
+        &self,
+        method: Method,
+        bucket: &str,
+        key: Option<&str>,
+        query: &[(&str, &str)],
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+    ) -> Result<reqwest::Response, StorageError> {
+        let answer = self.signed(method, bucket, key, query, headers, body).await?;
         let status = answer.status();
         if status.is_success() {
             return Ok(answer);
