@@ -79,31 +79,73 @@ them against each other.
    - A4, `WorkQueueNoAudit.cfg` (temporal, one fault): without the hourly audit, a table whose first announcement the
      lane gave up is held by nothing for good.
 
-4. **Two findings, each kept as a config whose first line reads `FINDING` and `EXPECT VIOLATION`, each a CANDIDATE.**
-   Neither is shown against the running service: that needs a real NATS JetStream with message schedules, which is the
-   `nats-auth` e2e lane's and was not run here. Each costs a table at most the hour until the audit finds it. Neither
-   loses data, and neither lets two passes overlap.
-   - `WorkQueueLateSchedule.cfg` (`HeldUnlessBackstopped`, 10 states, no fault). A pass reads the table and holds its next
-     time (`tasks.py` 63) at `next_due`, which counts from the pass's start (`table_pass.py` 837, 968) and is never
-     sooner than a minute after it (`_SOONEST`, 85). A pass longer than that minute that finds the table due again holds
-     a time already past, which fires at once (queue.py 20). `_move` finds the pass's own task still in flight, takes it
-     as covered and acks the fired schedule (queue.py 1261-1264). The pass then acks (queue.py 959). The schedule is
-     spent, the task is gone, and nothing holds the table until the audit. The claim in `run_due`'s docstring ("a table
-     that already has a task queued or in flight is covered by it, since its pass computes the table's next time")
-     does not hold when that pass has already computed it. The race is between the fire, its delivery and the move,
-     and the pass's `schedule_first` and ack; which wins on a real bus was not measured.
-   - `WorkQueueUndropFollowUp.cfg` (`HeldUnlessBackstopped`, 12 states, no fault). An undrop announces the table
-     (`tables.py` 1598) and then clears its trash record (1599), and the lane holds a follow-up for the announcement
-     `commitPassDelaySeconds` out, so its pass reads the table after the clear (arrival.py 11-13). If a follow-up from a
-     commit before the drop is still held, the announcement holds none of its own (`TaskQueue.follow_up`, queue.py
-     608-623). That older follow-up can fire between the announcement and the clear; its pass reads the table as
-     trashed and holds no next time (`table_pass.py` 849-852). Once the record is cleared, nothing holds the live table
-     until the audit (or, later, the trash task's restored-table pass at the record's deadline, `trash_task.py` 63-71).
-     It needs the table's own schedule to have fired while the table was dropped, and the undrop's two writes to land
-     around the older follow-up's fire time.
+4. **Two findings, each kept as a config whose first line reads `FINDING` and `EXPECT VIOLATION`, and each CONFIRMED
+   against the running worker on 2026-11-17.** Each was shown by
+   `tests/integration/test_a_live_table_stays_held_on_the_bus.py`: the real worker, task runner and commit lane on the
+   pinned nats-server 2.15.2 (`scripts/nats_server.sh`), its streams, consumers and claims bucket declared as the chart's
+   stream Job declares them, one step held at the moment the trace names, and the harm read as the audit reads it
+   (`TaskQueue.held` over the table's schedule and its task). Each test is marked `xfail(strict=True)` and failed on its
+   harm assertion five runs of five under `--runxfail`. With the held step in the order A5 or A6 states, each holds the
+   table. Every step of each trace maps to the code below, and no guard, other order or rollback was found. Neither loses
+   data, and neither lets two passes overlap. Each leaves the table to the hourly audit (`auditSchedule` `@hourly`,
+   `chart/values.yaml` 786): its next pass comes up to 60 minutes late, 30 on average.
+   - `WorkQueueLateSchedule.cfg` (`HeldUnlessBackstopped`, 10 states, no fault): CONFIRMED,
+     `test_a_pass_that_holds_a_time_already_past_leaves_its_table_held`. The trace: the worker pulls the task
+     (`Worker.run_tasks`, queue.py 901) and claims the table (`_claim`, 944, 993-1020). The pass reads the table and
+     counts its next time from its start (`table_pass.py` 837): `now + _SOONEST` for a dataset due during the pass (968,
+     85), or `now + retry_seconds` for one it could not decide (920-921). A pass longer than that holds a time already
+     past (`tasks.py` 63, `schedule_at` queue.py 583-586). It fires: measured on the pinned server, a past `@at` fired
+     248-261 ms after its publish was answered, 20 of 20. `_move` (1255) finds the pass's own task in flight, the
+     guarded publish is refused (438-456), and the fired schedule is acked as covered (1261-1264). The pass acks (959)
+     and releases its claim (967). The test holds that ack until the move has settled. Unheld, the ack won 30 of 30 on
+     one local server: the harm needs the pass's ack to be answered more than about 250 ms after its next time was
+     held, as on a bus that answers slowly, which `_tell` waits out up to the lease (1071-1092). The trigger is a pass
+     longer than a minute whose table comes due again during it, or one longer than `retry_seconds` (900 s) that could
+     not decide a dataset; the pass's bound is 1800 s.
+   - `WorkQueueUndropFollowUp.cfg` (`HeldUnlessBackstopped`, 12 states, no fault): CONFIRMED,
+     `test_an_undropped_table_is_held_when_an_older_follow_up_fires_before_the_clear`. The trace: a write's announcement
+     holds the table's follow-up (`Arrivals._held`, arrival.py 187-191; `TaskQueue.follow_up`, queue.py 608-623). The table
+     is dropped. The undrop announces it (catalog `tables.py` 1598), and the lane answers `covered`, since the write's
+     follow-up is still held (620-621, arrival.py 191). That follow-up fires, is moved onto the empty queue (1255), and its
+     pass reads the table in the trash and holds no next time (`table_pass.py` 849-852, `tasks.py` 60-61). The undrop
+     then clears the record (1599). The test makes the door's two writes in the door's order and holds the clear until
+     that pass has acked. It needs the table to have no schedule of its own at the undrop: a table dropped before its
+     first pass, or one whose schedule fired while it was dropped. It also needs the clear to land after the older
+     follow-up's fire and its pass's trash read: measured on the pinned server, a future follow-up's pass started 3 to 13
+     ms after its time, 10 of 10. Neither the store-event lane (a key under no writer directory reads nothing) nor the
+     trash task (its pass of a restored table comes at the record's deadline, `trash_task.py` 63-71) holds the table
+     sooner.
 
    `WorkQueueUndrop.cfg` holds the undrop under A6 as the comment states it: no follow-up fires between the announcement
    and the clear.
+
+   **The fixes, checked in the model only** (constants `NextTimeFix` and `UndropFix`, each `"none"` in every gate config,
+   whose state counts are unchanged). Each fix config is `ON DEMAND`: one fault, a commit, the workers distinct, every
+   invariant and the three properties, under the finding's own setting (two TLC workers). Each holds:
+   - `WorkQueueLateScheduleFromEnd.cfg`: the next time counted from the pass's end. 64,837 states, 38 s. With symmetry
+     and two faults, 137,169 states; with a drop and its undrop, 177,828. It is A5 itself, and holds only while the ack is
+     answered inside `_SOONEST`: the chart sets no ceiling on `ackWaitSeconds`, and a lease longer than a minute lets the
+     time fire first.
+   - `WorkQueueLateScheduleNak.cfg`: a fired schedule naked while a task holds the table, as a fired follow-up is
+     (`_move` 1261-1262), the time still counted from the start. 64,669 states, 42 s. With symmetry and two faults,
+     135,884; with a drop and its undrop, 179,269. Measured on the pinned server, a fired schedule naked with a delay on
+     `maintenance-due` came back after the delay each time (1.0 s, four deliveries), and A3 has the consumer redeliver it
+     for ever.
+   - `WorkQueueUndropAfterClear.cfg`: the undrop sends its announcement after the clear, filed before it. 268,484
+     states, 256 s. With symmetry, 137,479.
+   - `WorkQueueUndropOwn.cfg`: an undrop's announcement holds its own follow-up whatever is held, replacing the older one
+     (a publish without the guard). 335,996 states, 257 s. With symmetry, 172,015. Measured on the pinned server, a held follow-up replaced this way fired once,
+     at the newer time, with the newer body.
+
+   Recommended: `nak` for the first and `own` for the second. Both are maintenance's own change and rest on a JetStream
+   behaviour measured on the pinned server, not on a timing argument: `fromEnd` rests on the ack beating a minute, and
+   `afterClear` changes the catalog's undrop door, whose outbox files the announcement before the clear on purpose
+   ([[LH-576]]). `nak` costs one more pass when a schedule fires while another task passes the table; `own` moves an
+   older follow-up up to `commitPassDelaySeconds` later, and its pass still reads every commit. GitOps and cloud native
+   are untouched by all four (no value, no object, no replica rule); Lance-namespace is untouched by `nak` and `own` and
+   touched by `afterClear` (a door's order); zero trust is unchanged by all four.
+   The two together, under both findings' settings, a drop and one fault, with symmetry: 173,351 states, every invariant
+   holds (checked once, not kept as a config).
 
 5. **The model was shown to bite.** Six defects were planted one at a time in a copy, and each was reported: a claim
    created over a standing one (`OnePassPerTable`, 14 states), a claim that ages out while it is renewed
@@ -126,9 +168,9 @@ them against each other.
   `chart/templates/_helpers.tpl` 415-416).
 - **A4.** The hourly audit runs (`maintenance.queue.auditSchedule`, `chart/values.yaml` 786; asserted again every 15
   minutes, `tasks.py` 200-215).
-- **A5.** The time a pass holds comes after it acks. Not held: finding `WorkQueueLateSchedule`.
+- **A5.** The time a pass holds comes after it acks. Not held: finding `WorkQueueLateSchedule`, confirmed.
 - **A6.** No follow-up fires between an undrop's announcement and its clear. Held only for a follow-up the announcement
-  itself held: finding `WorkQueueUndropFollowUp`.
+  itself held: finding `WorkQueueUndropFollowUp`, confirmed.
 - One message per subject on the task stream (`max_msgs_per_subject 1`, `discard_new_per_subject`,
   `nats-stream-job.yaml` 151) and the guarded publish (queue.py 134, 438-456), as measured in queue.py 127-132.
 - The task consumer allows one delivery past `maxDeliver` (`_helpers.tpl` 411-413), and a task whose worker died on
@@ -160,8 +202,7 @@ any of it takes.
 - The Rust worker keeps these steps in this order: the claim before the pass, the next time before the ack, the ack
   before the claim's release, every settle answered inside the lease or the process ended. A change to that order
   changes this model first.
-- The two findings are the owner's to rule on. A fix for the first could count `next_due` from the pass's end, or nak a
-  fired schedule while the table's task is in flight as a fired follow-up is; for the second, the undrop could hold
-  its own follow-up whatever is held. Each config turns into a plain gate config once its fix lands in the model and the
-  code.
+- The two findings are confirmed defects, and their fixes are the owner's to schedule. Each finding's config turns into
+  a plain gate config, and its fix config joins the gate, once the fix lands in the code with `NextTimeFix` or
+  `UndropFix` set to it; its test then turns red and loses its `xfail`.
 - `make tla-check` runs this model's gate and expected failures in about 40 s on four cores.

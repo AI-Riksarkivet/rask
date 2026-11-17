@@ -55,6 +55,15 @@
 (*       announcement itself held ("own"): WorkQueueUndropFollowUp.cfg,    *)
 (*       a FINDING.                                                        *)
 (*                                                                         *)
+(* THE FIXES EACH FINDING IS CHECKED WITH (ADR 0232 §4), none in the code: *)
+(*   NextTimeFix "fromEnd": the next time counts from the pass's end, so   *)
+(*       it fires after the ack while the ack is answered inside           *)
+(*       _SOONEST (an ack wait of at most 60 s); "nak": a fired schedule   *)
+(*       waits while a task holds the table, as a fired follow-up does.    *)
+(*   UndropFix "afterClear": the undrop's announcement is sent after its   *)
+(*       clear, filed before it; "own": an undrop's announcement holds its *)
+(*       follow-up whatever is held, replacing an older one.               *)
+(*                                                                         *)
 (* NOT MODELLED: the pass's own effects on the store (they are one Read    *)
 (* step here), the orphan check and the trash task (other subjects; the    *)
 (* orphan check shares the table's claim), the audit and the scan's        *)
@@ -75,7 +84,9 @@ CONSTANTS Workers,
           DueUnlimited,         \* A3
           Audits,               \* A4
           ScheduleAfterSettle,  \* A5
-          UndropDelay           \* A6: "all" or "own"
+          UndropDelay,          \* A6: "all" or "own"
+          NextTimeFix,          \* a fix of A5's finding: "none", "fromEnd" or "nak"
+          UndropFix             \* a fix of A6's finding: "none", "afterClear" or "own"
 
 VARIABLES table,      \* "live", "dropped", or "undropping" (announced, its trash record not yet cleared)
           owed,       \* a commit landed that no pass has read the table after
@@ -329,23 +340,27 @@ AgesOff ==
 \* A held time fires. Under A5 one a pass held fires only once that pass has acked.
 FireSchedule ==
   /\ sched /\ NoFault
-  /\ ScheduleAfterSettle => \A w \in Workers : ws[w] # "scheduled"
+  /\ IF ScheduleAfterSettle \/ NextTimeFix = "fromEnd" THEN \A w \in Workers : ws[w] # "scheduled" ELSE TRUE
   /\ sched' = FALSE /\ soon' = FALSE
   /\ dueSched' = TRUE /\ dueSoon' = soon
   /\ UNCHANGED <<env, followup, dueFollow, mst, mholder, mn, net, workers, claim, backstop>>
 
 \* A fired schedule is moved onto the queue; a table that has a task queued or in flight is taken as covered by it, and
-\* the fired schedule is acked either way.
+\* the fired schedule is acked either way. With NextTimeFix "nak" it waits, naked, while a task holds the table.
 MoveSchedule ==
   /\ dueSched /\ NoFault
+  /\ IF NextTimeFix = "nak" THEN mst = "none" ELSE TRUE
   /\ IF mst = "none" THEN Enqueued ELSE UNCHANGED <<mst, mholder, mn, wcur, net>>
   /\ dueSched' = FALSE /\ dueSoon' = FALSE
   /\ UNCHANGED <<env, followup, dueFollow, sched, soon, wn, ws, lapsed, claim, backstop>>
 
-\* The commit lane holds the table's follow-up unless one is held, which covers this commit.
+\* The commit lane holds the table's follow-up unless one is held, which covers this commit. With UndropFix "own" an
+\* undrop's announcement holds its own, replacing an older one; with "afterClear" it is sent once the record is cleared.
 Lane ==
   /\ hint /\ NoFault
-  /\ followup' = IF followup = "none" THEN (IF table = "undropping" THEN "late" ELSE "early") ELSE followup
+  /\ IF UndropFix = "afterClear" THEN table # "undropping" ELSE TRUE
+  /\ followup' = IF table = "undropping" /\ (followup = "none" \/ UndropFix = "own") THEN "late"
+                 ELSE IF followup = "none" THEN "early" ELSE followup
   /\ hint' = FALSE
   /\ UNCHANGED <<table, owed, commits, drops, dueFollow, sched, soon, dueSched, dueSoon, mst, mholder, mn, net, workers, claim, backstop>>
 
@@ -419,9 +434,9 @@ Fairness ==
   /\ \A w \in Workers : WF_vars(Step(w))
   /\ WF_vars(\E w \in Workers : Pull(w))
   /\ WF_vars(AckWaitRunsOut) /\ WF_vars(ClaimAgesOut) /\ WF_vars(LateSettle) /\ WF_vars(AgesOff)
-  /\ WF_vars(FireSchedule) /\ WF_vars(MoveSchedule) /\ WF_vars(Lane) /\ WF_vars(FireFollowUp) /\ WF_vars(UndropClears)
+  /\ WF_vars(FireSchedule) /\ WF_vars(Lane) /\ WF_vars(FireFollowUp) /\ WF_vars(UndropClears)
   \* Each is enabled only while the queue is empty, which the table's own schedule refills: strong fairness.
-  /\ SF_vars(MoveFollowUp) /\ SF_vars(Audit)
+  /\ SF_vars(MoveFollowUp) /\ SF_vars(Audit) /\ SF_vars(MoveSchedule)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
