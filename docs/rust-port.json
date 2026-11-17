@@ -13,7 +13,7 @@
       "budget": 960
     },
     "lineage": {
-      "lines": 3599,
+      "lines": 4426,
       "budget": 5242
     }
   },
@@ -205,8 +205,7 @@
     },
     "lineage": {
       "operations": 10,
-      "served": [],
-      "not_served": [
+      "served": [
         "GET /admin/dlq",
         "GET /admin/dlq/parked",
         "POST /admin/dlq/parked/{run_id}/replay",
@@ -217,7 +216,8 @@
         "GET /livez",
         "GET /readyz",
         "GET /tables/{name}/derived"
-      ]
+      ],
+      "not_served": []
     }
   }
 }

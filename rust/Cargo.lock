@@ -1419,6 +1419,8 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "http-body-util",
+ "jsonwebtoken",
  "lakehouse-bus",
  "lakehouse-core",
  "lakehouse-tables",
@@ -1429,6 +1431,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]

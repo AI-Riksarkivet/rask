@@ -47,7 +47,7 @@ impl CatalogNames {
 
     /// The uuid the catalog keeps `name` under, or `None` where it names nothing the caller may see. Any other answer
     /// is an outage: a table recorded under a name it should have been keyed by a uuid would split its lineage.
-    async fn describe(&self, kind: &str, name: &str, body: Value, bearer: Option<&str>) -> Result<Option<String>, Unavailable> {
+    pub(crate) async fn describe(&self, kind: &str, name: &str, body: Value, bearer: Option<&str>) -> Result<Option<String>, Unavailable> {
         let id = utf8_percent_encode(name, NON_ALPHANUMERIC);
         let delimiter = utf8_percent_encode(CATALOG_DELIMITER, NON_ALPHANUMERIC);
         let url = format!("{}/v1/{kind}/{id}/describe?delimiter={delimiter}", self.base);

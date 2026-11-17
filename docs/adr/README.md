@@ -242,3 +242,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0233](0233-erasure-and-the-namespace-cascade-are-modelled-in-tla.md) |  | Erasure and the namespace and warehouse cascade are modelled in TLA+; eight defects found (2026-11-17) | accepted |
 | [0234](0234-the-outbox-and-its-store-session-are-spoken-in-rust-as-in-python.md) |  | The outbox and its store session are spoken in Rust as in Python (2026-11-17) | accepted |
 | [0235](0235-what-lineage-runs-without-a-request-is-ported-to-rust-by-the-models-steps.md) |  | What lineage runs without a request is ported to Rust by the model's steps: its settings, the ingest lane, the relay tick and the forwarder (2026-11-17) | accepted |
+| [0236](0236-lineages-doors-are-served-from-rust-as-the-python-app-serves-them.md) |  | Lineage's doors are served from Rust as the Python app serves them (2026-11-17) | accepted |
