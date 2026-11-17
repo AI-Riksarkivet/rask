@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lakehouse.governed.issuer_mirror import IssuerMirrorSettings, create_app
+from lakehouse.lifecycle import mark_draining
 
 
 _KEYS: dict[str, Any] = {"keys": [{"kty": "RSA", "kid": "k3s-1", "alg": "RS256", "use": "sig", "n": "AQAB", "e": "AQAB"}]}
@@ -79,3 +80,26 @@ def test_a_verifier_with_no_credential_reads_the_discovery_and_keys_through_the_
     assert discovery.json() == {"issuer": "https://kubernetes.default.svc.cluster.local", "jwks_uri": "http://rask-issuer-mirror:8080/openid/v1/jwks"}
     assert keys.json() == _KEYS
     assert seen == ["Bearer mirror-token-1", "Bearer mirror-token-2", "Bearer mirror-token-2"]
+
+
+def test_the_mirror_is_ready_while_the_issuer_answers_it_and_never_once_it_drains(issuer: tuple[str, Path, list[str]], tmp_path: Path) -> None:
+    """`/readyz` is what the chart probes: ready while the issuer serves the mirror its discovery document, out of
+    rotation while it does not, and draining without asking the issuer anything."""
+    url, token, seen = issuer
+    app = create_app(IssuerMirrorSettings(issuer=url, public_url="http://rask-issuer-mirror:8080", token_file=str(token)))
+    refused = tmp_path / "refused"
+    refused.write_text("a token the issuer does not admit\n")
+    unanswered = create_app(IssuerMirrorSettings(issuer=url, public_url="http://rask-issuer-mirror:8080", token_file=str(refused)))
+
+    not_started = TestClient(app).get("/readyz")
+    with TestClient(app) as probe, TestClient(unanswered) as cut_off:
+        ready = probe.get("/readyz")
+        out_of_rotation = cut_off.get("/readyz")
+        asked = len(seen)
+        mark_draining(app)
+        draining = probe.get("/readyz")
+
+    assert (not_started.status_code, not_started.json()["status"]) == (503, "starting")
+    assert (ready.status_code, ready.json()) == (200, {"status": "ready", "components": {"issuer": "healthy"}})
+    assert (out_of_rotation.status_code, out_of_rotation.json()["status"]) == (503, "unhealthy"), out_of_rotation.text
+    assert (draining.status_code, draining.json()["status"], len(seen)) == (503, "shutting_down", asked)

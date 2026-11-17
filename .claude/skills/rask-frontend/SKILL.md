@@ -25,7 +25,9 @@ The console is **the lakehouse's own UI** (ADR 0193): it reaches the catalog and
 any client uses, and the **product chart** ships it (`chart/templates/console.yaml`, `console.enabled`): the Deployment
 and Service `rask-console` (image `web-console`, port `console.port` 3000), the ServiceAccount `rask-sa-console` with no
 token mounted (the console calls no door as itself), the ConfigMap `rask-console-config` holding `/config.json`, and the
-HTTPRoute `rask-console` sending `/` to it. `make k3s-up` installs it with the lakehouse. The no-client lint
+HTTPRoute `rask-console` sending `/` to it. `serve.ts` answers `/readyz`, the chart's readiness probe (it depends on
+nothing but the files it read at start, so serving is being ready), and on SIGTERM stops accepting, answers the
+requests in flight and exits 0. `make k3s-up` installs it with the lakehouse. The no-client lint
 (`scripts/lakehouse_names_no_client.py`) scopes `frontend/` too, so no file here names a client.
 
 ## The one app

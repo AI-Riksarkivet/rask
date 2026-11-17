@@ -39,7 +39,7 @@ spec:
             - { name: RASK_ISSUER_MIRROR_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }
             - { name: RASK_ISSUER_MIRROR_CA_FILE, value: /var/run/secrets/rask/sa-fetch/ca.crt }
           ports: [{ name: http, containerPort: 8080 }]
-          readinessProbe: { httpGet: { path: /.well-known/openid-configuration, port: http }, periodSeconds: 10, timeoutSeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 10, timeoutSeconds: 5 }
           livenessProbe: { tcpSocket: { port: http }, periodSeconds: 20 }
           resources:
             requests: { cpu: 10m, memory: 96Mi }

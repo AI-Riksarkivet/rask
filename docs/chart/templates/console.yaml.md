@@ -58,9 +58,16 @@ The preStop hook holds the pod for `lifecycle.preStopSeconds` while the Gateway 
 fleet pod does. The image has no shell, so the hook is the image's own `bun` sleeping rather than `sleep`, which would
 fail to exec and end the hook at once.
 
+## `httpGet: { path: /readyz, port: http }`
+
+Readiness asks `serve.ts` at `/readyz`, the path every first-party pod is probed at. The server depends on nothing
+but the files it read at start, so it answers ready whenever it serves. A pod that is stopping leaves the Service
+because Kubernetes marks a terminating pod not ready, not because this answer changes; on SIGTERM `serve.ts` stops
+accepting, answers the requests in flight and exits.
+
 ## `httpGet: { path: /, port: http }`
 
-Readiness and liveness ask `serve.ts` for the page itself, the one thing the pod serves.
+Liveness asks `serve.ts` for the page itself, the one thing the pod serves.
 
 ## `{{- if .Values.route.enabled }}`
 

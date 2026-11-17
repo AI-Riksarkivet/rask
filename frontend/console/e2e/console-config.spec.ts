@@ -1,3 +1,8 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createServer } from 'node:net';
+import { fileURLToPath } from 'node:url';
+
 import { test, expect } from '@playwright/test';
 
 // The console's own static server and its runtime config, as the image ships them (`serve.ts` behind
@@ -37,4 +42,34 @@ test('a malformed percent-escape in the path is a 400, not a server error', asyn
 	const res = await request.get('/catalog/%E0%A4%A');
 	expect(res.status()).toBe(400);
 	expect(res.headers()['content-security-policy']).toContain("frame-ancestors 'none'");
+});
+
+test('the server answers /readyz as ready, and told to stop it exits cleanly', async () => {
+	const probe = createServer().listen(0, '127.0.0.1');
+	await once(probe, 'listening');
+	const { port } = probe.address() as { port: number };
+	probe.close();
+	const server = spawn('bun', ['serve.ts'], {
+		cwd: fileURLToPath(new URL('..', import.meta.url)),
+		env: { ...process.env, PORT: String(port) },
+		stdio: 'ignore',
+	});
+	try {
+		// What the kubelet's readiness probe reads: JSON saying ready, never the app's page.
+		await expect
+			.poll(() =>
+				fetch(`http://127.0.0.1:${port}/readyz`).then(
+					async (r) => [r.status, r.headers.get('content-type'), await r.text()],
+					() => null,
+				),
+			)
+			.toEqual([200, 'application/json;charset=utf-8', '{"status":"ready"}']);
+
+		server.kill('SIGTERM');
+		const [code, signal] = (await once(server, 'exit')) as [number | null, string | null];
+
+		expect({ code, signal }).toEqual({ code: 0, signal: null });
+	} finally {
+		server.kill('SIGKILL');
+	}
 });

@@ -12,6 +12,11 @@
  *    `connect-src` when the issuer is not this origin, and `frame-ancestors 'none'`, which a meta tag
  *    cannot carry. The meta tag is removed: a meta policy and a header policy both apply, so a meta
  *    `connect-src 'self'` would block a cross-origin issuer whatever the header allowed.
+ *  - `/readyz` answers the kubelet's readiness probe. The server depends on nothing but the files it
+ *    read at start, so serving at all is being ready.
+ *  - On SIGTERM it stops accepting, answers the requests in flight, and exits 0. `server.stop()`
+ *    with no argument waits for them: measured 2026-11-17 on Bun 1.4.2, it held for a 1.5 s request,
+ *    which completed with its body, and closed an idle keep-alive socket at once.
  */
 import { join, normalize } from 'node:path';
 
@@ -59,11 +64,17 @@ function page(body: string, contentType: string, cache: string): Response {
 	});
 }
 
-Bun.serve({
+const server = Bun.serve({
 	hostname: '0.0.0.0',
 	port: PORT,
 	async fetch(request) {
 		const { pathname } = new URL(request.url);
+		if (pathname === '/readyz') {
+			return Response.json(
+				{ status: 'ready' },
+				{ headers: { ...SECURITY_HEADERS, 'cache-control': 'no-store' } },
+			);
+		}
 		if (pathname === '/api' || pathname.startsWith('/api/')) {
 			return Response.json(
 				{ detail: `no route serves ${pathname}` },
@@ -103,6 +114,10 @@ Bun.serve({
 		}
 		return page(index, 'text/html; charset=utf-8', 'no-cache');
 	},
+});
+
+process.on('SIGTERM', () => {
+	void server.stop().then(() => process.exit(0));
 });
 
 console.log(`console serving ${ROOT} on :${PORT}`);

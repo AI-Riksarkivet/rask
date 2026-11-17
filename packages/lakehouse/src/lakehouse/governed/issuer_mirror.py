@@ -9,7 +9,7 @@ fetch fails. The k3s API server serves both only to a bearer from its private CA
 directly. The rask verifiers fetch them with their own token (`lakehouse.governed.oidc`); this module
 does the same for a verifier that cannot.
 
-It answers two GETs and nothing else, and both bodies are public material: the discovery document with
+It answers two GETs and its probes, and both bodies are public material: the discovery document with
 ``jwks_uri`` pointed at this mirror, and the key set as the API server serves it. Each request re-reads
 the mirror pod's own API-audience token, because the kubelet rotates it, and fetches upstream; nothing is
 cached, since a verifier asks at boot, every 48 h, and on an unknown key id (rate-limited to once a
@@ -18,7 +18,9 @@ verifier names this mirror as its issuer URL and the cluster issuer as an alias 
 ``authn.oidc.issuerAliases``).
 
 A plain FastAPI app rather than `lakehouse.lance_app`'s: it has no governed door and no
-state, and the chart runs it from the catalog image with ``uvicorn --factory``.
+state, and the chart runs it from the catalog image with ``uvicorn --factory``. Its probes are the library's
+(`lakehouse.probes`): ``/readyz`` is ready while the issuer serves this pod its discovery document, the one thing
+the mirror depends on.
 """
 
 from __future__ import annotations
@@ -33,7 +35,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
+from lakehouse.lifecycle import mark_draining, mark_started
+from lakehouse.probes import make_probes_router
+from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
 DISCOVERY_PATH: Final = "/.well-known/openid-configuration"
@@ -83,9 +89,24 @@ def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
         verify: ssl.SSLContext | bool = ssl.create_default_context(cafile=resolved.ca_file) if resolved.ca_file else True
         async with httpx.AsyncClient(verify=verify, timeout=resolved.timeout_seconds) as client:
             app.state.upstream = client
-            yield
+            mark_started(app)
+            # At SIGTERM, not at teardown: uvicorn reaches the teardown only once it has drained.
+            disarm = arm_drain_on_sigterm(app)
+            try:
+                yield
+            finally:
+                mark_draining(app)
+                disarm()
+
+    async def ready(request: Request) -> Readiness:
+        try:
+            await _fetch(request.app.state.upstream, f"{issuer}{DISCOVERY_PATH}", resolved.token_file)
+        except HTTPException as exc:
+            return Readiness(status=ReadinessStatus.unhealthy, components={"issuer": str(exc.detail)})
+        return Readiness(status=ReadinessStatus.ready, components={"issuer": "healthy"})
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.include_router(make_probes_router(ready))
 
     @app.get(DISCOVERY_PATH)
     async def discovery(client: UpstreamDep) -> dict[str, Any]:

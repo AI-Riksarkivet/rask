@@ -15,11 +15,6 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 
-#: The two first-party workloads that are not built on the lance app factory and serve no `/readyz`: the console's static server
-#: and the issuer mirror, each probed at the one thing it serves. Neither reports draining.
-_NO_READYZ = {"rask-console/console": "/", "rask-issuer-mirror/mirror": "/.well-known/openid-configuration"}
-
-
 def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
     """A readiness probe pointed at a constant cannot report draining, which is its whole job."""
     from test_invariants import _rendered_docs  # noqa: PLC0415
@@ -34,9 +29,11 @@ def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
             if path:
                 probed[f"{name}/{container['name']}"] = path
 
-    assert {"rask-catalog/catalog", "rask-lineage/lineage"} <= set(probed), f"the walk found no probe on the lakehouse's services: {sorted(probed)}"
+    assert {"rask-catalog/catalog", "rask-lineage/lineage", "rask-console/console", "rask-issuer-mirror/mirror"} <= set(probed), (
+        f"the walk found no probe on the lakehouse's services: {sorted(probed)}"
+    )
     wrong = {workload: path for workload, path in probed.items() if path != "/readyz"}
-    assert wrong == _NO_READYZ, (
+    assert not wrong, (
         f"these readiness probes point somewhere other than /readyz: {wrong}; `/api/health` is a "
         f"static badge, so it answers 200 while the pod drains and the kubelet keeps sending traffic"
     )
