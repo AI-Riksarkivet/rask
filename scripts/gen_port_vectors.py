@@ -461,12 +461,15 @@ async def _shell_vectors() -> list[dict[str, Any]]:
 def main() -> None:
     import asyncio
 
+    from _port_auth_vectors import auth_vectors
+
     shell = {"limits": [{"max_body_bytes": _MAX_BODY_BYTES, "deadline_seconds": _DEADLINE_SECONDS}], "exchanges": asyncio.run(_shell_vectors())}
     _OUT.mkdir(parents=True, exist_ok=True)
     for name, vectors in (
         ("lineage_events", {"catalog": [_CATALOG], "cases": _event_vectors()}),
         ("lineage_functions", _function_vectors()),
         ("shell_http", shell),
+        ("auth", auth_vectors()),
     ):
         (_OUT / f"{name}.json").write_text(_one_entry_a_line(vectors))
         print(f"wrote rust/vectors/{name}.json")
