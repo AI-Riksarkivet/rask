@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, LanceNamespace
 from moto.server import ThreadedMotoServer
+from pydantic import BaseModel
 
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
@@ -79,6 +80,48 @@ def real_ns_client(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> Iterato
 _RACE_STORE = os.environ.get("RASK_LIFECYCLE_STORE_ENDPOINT", "")
 
 
+def _race_bucket() -> dict[str, str]:
+    """A bucket of the test's own on the lane's S3 store, made now; the catalog's settings that root it there."""
+    import boto3
+
+    bucket = f"race-{uuid4().hex[:12]}"
+    access, secret = os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"]
+    store = boto3.client("s3", endpoint_url=_RACE_STORE, region_name="us-east-1", aws_access_key_id=access, aws_secret_access_key=secret)
+    store.create_bucket(Bucket=bucket)
+    return {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": f"s3://{bucket}",
+        "LANCE_CONTROL_ROOT": f"s3://{bucket}",
+        "LANCE_S3_ENDPOINT": _RACE_STORE,
+        "LANCE_S3_ACCESS_KEY_ID": access,
+        "LANCE_S3_SECRET_ACCESS_KEY": secret,
+        "LANCE_S3_REGION": "us-east-1",
+    }
+
+
+class RaceCatalog(BaseModel):
+    """The live catalog a race between a stock client and the catalog's doors runs against."""
+
+    url: str
+    #: What a stock client's own Lance writes the root with: nothing on the local root; on the lane's store its key pair,
+    #: since the catalog vends no credential where it runs without a web identity (``LANCE_VENDING_MODE=mode_b``).
+    stock_options: dict[str, str]
+
+
+@pytest.fixture(params=["dir", "s3"] if _RACE_STORE else ["dir"])
+def race_catalog(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[RaceCatalog]:
+    """The catalog app under a live uvicorn (`lineage_app.live_catalog`), for a race a stock Lance client takes part in, on
+    the local root and, where a lane names an S3 store, in a bucket of the test's own there, as ``race_ns_client``."""
+    from tests.integration.lineage_app import live_catalog
+
+    env = _race_bucket() if request.param == "s3" else {}
+    with live_catalog(tmp_path / "catalog", monkeypatch, **env) as url:
+        from catalog.core.config import get_settings
+
+        options = get_settings().storage_options().in_clear() if env else {}
+        yield RaceCatalog(url=url, stock_options=options)
+
+
 @pytest.fixture(params=["dir", "s3"] if _RACE_STORE else ["dir"])
 def race_ns_client(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """``real_ns_client`` for a test of a race between doors, whose every exclusion is a conditional write on the store:
@@ -87,21 +130,7 @@ def race_ns_client(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: 
     if request.param == "dir":
         yield request.getfixturevalue("real_ns_client")
         return
-    import boto3
-
-    bucket = f"race-{uuid4().hex[:12]}"
-    access, secret = os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"]
-    store = boto3.client("s3", endpoint_url=_RACE_STORE, region_name="us-east-1", aws_access_key_id=access, aws_secret_access_key=secret)
-    store.create_bucket(Bucket=bucket)
-    for key, value in {
-        "LANCE_REST_IMPL": "dir",
-        "LANCE_REST_ROOT": f"s3://{bucket}",
-        "LANCE_CONTROL_ROOT": f"s3://{bucket}",
-        "LANCE_S3_ENDPOINT": _RACE_STORE,
-        "LANCE_S3_ACCESS_KEY_ID": access,
-        "LANCE_S3_SECRET_ACCESS_KEY": secret,
-        "LANCE_S3_REGION": "us-east-1",
-    }.items():
+    for key, value in _race_bucket().items():
         monkeypatch.setenv(key, value)
     from catalog.api.dependencies import get_namespace
     from catalog.core.config import get_settings

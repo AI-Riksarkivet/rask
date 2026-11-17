@@ -60,6 +60,12 @@ request's take is refused (:class:`LocationFencedError`) until the rename lifts 
 under the new name, or hands the claim back under its token. Pinned by
 ``tests/integration/test_concurrent_renames_leave_one_id_per_location.py``.
 
+A DECLARATION IS ITS DECLARER'S (ADR 0227 §9, owner 2026-11-17). DeclareTable takes its claim fenced, the fence naming the
+authenticated subject that declared (:attr:`ClaimFence.declarer`): until the declarer's first version takes it over, or
+it lapses after :data:`LEASE`, every other request's fence, take and hand-over is refused, as any fence's is. Only a
+request of the declaring principal takes it over to write (:func:`fence`'s ``takes_over``), and a door removing the
+table takes it over to remove it.
+
 A LEASE IS TIMED ON THE STORE'S CLOCK ([[LH-413]]). ``claimed_at``, a fence's ``at`` and ``released_at`` are stamped
 with the clock of the read each write follows (:attr:`lakehouse.records.StoreRead.at`, the store's
 ``Date``), and a lease is judged against the clock of the read that finds the claim, so a claim one pod wrote is aged by
@@ -112,6 +118,10 @@ class ClaimFence(BaseModel):
     #: The request that fenced it.
     token: str
     at: datetime
+    #: On a declaration's fence, the authenticated subject that declared the table (ADR 0227 §9): the declaration is that
+    #: principal's until the fence lapses, and only a request of theirs takes the fence over to write the table's first
+    #: version; a door removing the table takes it over too. ``None`` on every other fence.
+    declarer: str | None = None
 
 
 class LocationClaim(BaseModel):
@@ -291,6 +301,7 @@ def take(
     uuid: str | None = None,
     is_kept: Callable[[LocationClaim], bool] = lambda _claim: False,
     fenced: bool = False,
+    declarer: str | None = None,
 ) -> LocationClaim:
     """Make ``table`` the holder of ``location``, and answer the claim it then holds.
 
@@ -315,21 +326,23 @@ def take(
 
     ``fenced`` writes the claim fenced for request ``token`` (:func:`fence`): a create brings its table into being under
     the fence and writes its data before it lifts it, so no other request takes, fences or hands over the claim of a
-    table still being created (ADR 0227).
+    table still being created (ADR 0227). ``declarer`` makes it a declaration's fence (:attr:`ClaimFence.declarer`).
 
     Raises:
         LocationFencedError: Another request is acting on the location's holder.
         LocationHeldError: Another table holds the location.
         records.RecordChangedError: The claim kept changing under the hand-over.
-        ValueError: ``fenced`` names no ``token`` to fence the claim for.
+        ValueError: ``fenced`` names no ``token`` to fence the claim for, or ``declarer`` is given unfenced.
     """
     if fenced and token is None:
         raise ValueError("a fenced take names the request it fences the claim for")
+    if declarer is not None and not fenced:
+        raise ValueError("a declaration's claim is taken fenced for its declarer")
     key = claim_key(location)
     # Read first, so even a create is stamped on the store's clock; each round re-judges the claim another taker wrote.
     for _ in range(_TAKE_ATTEMPTS):
         found = records.read_json_at(store.control_root, store.storage_options, key)
-        mark = ClaimFence(token=token, at=found.at) if fenced and token is not None else None
+        mark = ClaimFence(token=token, at=found.at, declarer=declarer) if fenced and token is not None else None
         if found.stored is None:
             fresh = LocationClaim(
                 location=decoded_path(location), table=table, segments=list(segments), uuid=uuid, claimed_at=found.at, token=token, fence=mark
@@ -407,7 +420,15 @@ def hand_over(
 
 
 def fence(
-    store: ClaimStore, location: str, read_as: ClaimRead | None, *, table: str, segments: list[str], token: str, is_gone: Callable[[LocationClaim], bool]
+    store: ClaimStore,
+    location: str,
+    read_as: ClaimRead | None,
+    *,
+    table: str,
+    segments: list[str],
+    token: str,
+    is_gone: Callable[[LocationClaim], bool],
+    takes_over: Callable[[ClaimFence], bool] = lambda _fence: False,
 ) -> None:
     """Fence ``table``'s claim on ``location`` for request ``token``, judged on the claim ``read_as`` found.
 
@@ -416,6 +437,11 @@ def fence(
     acted and lifts its fence. A claim the location does not yet carry (no record, or a released one) is taken for
     ``table``, and so is one whose holder is gone, as :func:`take` would.
 
+    Another request's fence refuses, unless ``takes_over`` admits it: a declaration's fence (:attr:`ClaimFence.declarer`)
+    is taken over by its declarer's own write and by a door removing the table, and the fence written in its place is
+    this request's, no declaration's. The write is conditional on ``read_as`` as every other is, so of two requests
+    taking one fence over, the second answers that the claim changed.
+
     Raises:
         LocationHeldError: Another table holds the location.
         ClaimChangedError: The claim changed since ``read_as``, or another request is acting on ``table``.
@@ -423,7 +449,7 @@ def fence(
     now = store_now(store, location)
     mark = ClaimFence(token=token, at=now)
     current = read_as.claim if read_as is not None else None
-    if current is not None and current.fenced_against(token, now):
+    if current is not None and current.fenced_against(token, now) and not (current.fence is not None and takes_over(current.fence)):
         raise ClaimChangedError(f"another request is acting on table {current.table!r}")
     if current is None or current.released_at is not None:
         carried = current.uuid if current is not None and current.table == table else None

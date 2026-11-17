@@ -140,6 +140,7 @@ from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_a
 from lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
+from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.history_fences import HistoryWork
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
 from lakehouse.lancekit.versions import committed_at
@@ -618,6 +619,7 @@ def declare_table(
     table_uuid: str | None = None,
     before_register: Callable[[str, str], None] | None = None,
     fence_for: str | None = None,
+    declarer: str | None = None,
 ) -> str:
     """Declare ``segments`` at ``<root>/<table uuid>``, where a table the catalog makes lives, and answer that location ([[LH-520]]).
 
@@ -638,7 +640,9 @@ def declare_table(
     A failure after the claim removes the marker and releases the claim; what ``before_register`` wrote is its caller's to
     take back. ``claims`` is ``None`` for a caller outside governance (a test building a fixture), which takes no claim.
     ``fence_for`` is a create's token: the claim is taken fenced for it, and the create lifts the fence once its data is
-    committed (:func:`create_table`).
+    committed (:func:`create_table`). ``declarer`` is the subject a bare DeclareTable authenticated: the claim is taken
+    fenced for that principal's declaration under a token nobody is answered (ADR 0227 §9), which their first version
+    takes over (``table_claims.DoorTable.first_version_fenced``) or which lapses after ``location_claims.LEASE``.
 
     Raises:
         InvalidInputError: ``segments`` names a table outside every namespace: the `dir` backend resolves a root-level
@@ -651,8 +655,9 @@ def declare_table(
     minted = table_uuid or str(uuid.uuid4())
     location = f"{root.rstrip('/')}/{minted}"
     if claims is not None:
+        fenced_for = fence_for if fence_for is not None or declarer is None else uuid.uuid4().hex
         try:
-            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=minted, fence_for=fence_for)
+            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=minted, fence_for=fenced_for, declarer=declarer)
         except location_claims.LocationHeldError:
             raise ConcurrentModificationError(f"the location minted for table {holder} is held by another table; retry to be given another") from None
     try:
@@ -670,6 +675,25 @@ def declare_table(
             raise TableAlreadyExistsError(f"a namespace already holds the id {'$'.join(segments)}; a table cannot be created there") from exc
         raise
     return _described_location(ns, segments, fallback=location)
+
+
+def own_declaration(
+    ns: LanceNamespace, so: StorageOptions, segments: list[str], *, claims: location_claims.ClaimStore, declarer: str
+) -> table_claims.ResolvedTable | None:
+    """The table ``segments`` names when it is a declaration ``declarer`` made that nothing has acted on since: its claim
+    still carries the declaration's fence that subject took (ADR 0227 §9), lapsed or not, and its location holds no
+    version. ``None`` for any other table, or none.
+
+    A DeclareTable its declarer sends again, its answer lost, is that declaration's: the door answers it as it answered
+    the first, the declaration and its fence as they are, rather than 409 against its own declarer.
+    """
+    resolved = table_claims.resolve(ns, claims, segments)
+    held = resolved.claim.claim if resolved.claim is not None else None
+    if resolved.location is None or held is None or held.released_at is not None or held.fence is None:
+        return None
+    if not table_claims.declared_by(declarer)(held.fence) or holds_a_version(resolved.location, so):
+        return None
+    return resolved
 
 
 def stands_at(ns: LanceNamespace, segments: list[str], location: str) -> bool:
@@ -754,6 +778,7 @@ def create_table(
     overwriting: table_claims.DoorTable | None = None,
     before_commit: Callable[[str], None] | None = None,
     before_register: Callable[[str, str], None] | None = None,
+    declarer: str = ANONYMOUS_SUBJECT,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -812,6 +837,9 @@ def create_table(
     ``before_register`` is handed the uuid and location of a table this call brings into being, by :func:`declare_table`, before the
     backend records it: a governed create writes the table's grants there ([[LH-588]]). It is not called for a table the
     call finds under the name (written, or declared by an earlier request), which holds its own grants.
+
+    ``declarer`` is the subject the door authenticated: a declaration under the name whose fence stands is written into
+    only when that subject made it (ADR 0227 §9, a declaration is its declarer's); another principal's answers 409.
 
     Raises:
         ConcurrentModificationError: The table an ``Overwrite`` resolved changed since, or another request is creating
@@ -882,7 +910,7 @@ def create_table(
                 overwriting.require_held()
             if registry is not None and fence is not None:
                 fenced_at = existing
-                _fence_the_declaration(ns, so, _claim_store(registry), existing, segments, holder=holder, token=fence)
+                _fence_the_declaration(ns, so, _claim_store(registry), existing, segments, holder=holder, token=fence, declarer=declarer)
             location = existing
         else:
             location = declare_table(
@@ -919,17 +947,26 @@ def create_table(
 
 
 def _fence_the_declaration(
-    ns: LanceNamespace, so: StorageOptions, store: location_claims.ClaimStore, location: str, segments: list[str], *, holder: str, token: str
+    ns: LanceNamespace,
+    so: StorageOptions,
+    store: location_claims.ClaimStore,
+    location: str,
+    segments: list[str],
+    *,
+    holder: str,
+    token: str,
+    declarer: str,
 ) -> None:
     """Fence the claim of the table an earlier request declared at ``location`` for this create, then probe again under
     the fence: the name still describes ``location`` and holds no version. Nothing is written before this answers, so a
     refusal rolls nothing back.
 
     Raises:
-        ConcurrentModificationError: Another request fences the claim or changed it, or the declaration is gone.
+        ConcurrentModificationError: Another request fences the claim or changed it, a declaration of another principal's
+            stands, or the declaration is gone.
         TableAlreadyExistsError: A create that finished since the probe wrote the table.
     """
-    table_claims.fence_declared(ns, store, location, holder=holder, segments=segments, token=token)
+    table_claims.fence_declared(ns, store, location, holder=holder, segments=segments, token=token, declarer=declarer)
     described = _existing_location(ns, segments)
     if described is None or decoded_path(described) != decoded_path(location):
         raise ConcurrentModificationError(f"table {holder} changed while this request was being served; describe it and retry")

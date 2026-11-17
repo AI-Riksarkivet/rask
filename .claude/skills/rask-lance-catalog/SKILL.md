@@ -124,9 +124,17 @@ Two contracts stack here, and confusing them is how bugs happen:
   table step of a namespace cascade (`_destroy_listed_table`, `_trash_listed_table`, through the door's `unprotected`):
   a table protected after the cascade's listing stops it 409 code 19. The protection door writes its record first and
   then refuses 409 while a request fences the claim or the claim changed since its resolution
-  (`table_claims.require_unfenced`). Open (ADR 0227 §9): a stock client's `DeclareTable` takes no fence, so a catalog
-  create of the declared name can land over the client's version 1. These races run on a real store's conditional writes
-  in `make lifecycle-rustfs-check` (`race_ns_client`'s `s3` parameter). A release replaces
+  (`table_claims.require_unfenced`). **A declaration is its declarer's** (ADR 0227 §9, owner 2026-11-17): `DeclareTable`
+  takes its claim fenced for the authenticated subject that declared (`ClaimFence.declarer`, through
+  `dataplane.declare_table(declarer=…)`), so every other principal's catalog create of the name, and its version 1 through
+  `version/create`, answers 409 code 14 until the fence lapses (`LEASE`, 15 min); the declarer's own catalog create takes
+  the fence over (`table_claims.fence_declared(declarer=…)`), and so does a drop, deregister or cascade
+  (`table_claims.is_a_declaration`), so a declared, unwritten table is dropped at once. `version/create` of a version 1
+  fences the claim under the ETag its resolution read right before the finalize and lifts it after
+  (`DoorTable.first_version_fenced`), taking the declarer's own declaration fence over, lapsed or not, so a declarer whose
+  declaration another request took meanwhile is refused 409. The declarer's DeclareTable sent again is answered its
+  declaration as it stands (`dataplane.own_declaration`). These races run on a real store's conditional writes in
+  `make lifecycle-rustfs-check` (`race_ns_client`'s and `race_catalog`'s `s3` parameter). A release replaces
   the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
   record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and
   `take` read a released claim as a free location. A holder that no

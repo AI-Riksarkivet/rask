@@ -40,13 +40,13 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.pagination import ListLimit, paginate_versions
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, current_subject
 from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
-from lakehouse import branch_layout, commit_records, stored_objects
+from lakehouse import branch_layout, commit_records, commit_turns, stored_objects
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.history_fences import HistoryWork
@@ -282,7 +282,15 @@ async def create_table_version(
         # Waited out here, in the event loop, so a stock writer waiting holds no request thread; a turn handed to another stock
         # writer is not waited out, since this writer races it as Lance's own backoff spreads them ([[LH-259]]).
         kept = await table.wait_for_turn_in_loop(ref.branch, mine=writer.token if writer is not None else None, handed=False)
-        response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), table, staged, body, so)
+        if staged.creates:
+            # THE TABLE'S FIRST VERSION LANDS UNDER A FENCE OF ITS OWN (ADR 0227 §9): written on the claim right before the
+            # finalize, so a catalog create of the name, which Lance's commit lands over whatever it finds (A4), cannot
+            # fence the declaration between this check and the put; and a declaration is its declarer's, so a version 1
+            # another principal stages into it answers 409 until its fence lapses.
+            first = partial(_first_version, writer=writer, kept=kept, declarer=current_subject(token))
+            response = await run_in_threadpool(first, table, staged, body, so)
+        else:
+            response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), table, staged, body, so)
     except Exception:
         # Only the request that created the record deletes it: a retry sharing the transaction relies on its twin's. A
         # cancelled request is left out too, since its finalize may still land in the thread it runs in.
@@ -313,6 +321,27 @@ async def create_table_version(
         commits_rows=staged.creates and verdict.adds_data,
     )
     return response
+
+
+def _first_version(
+    table: DoorTable,
+    staged: managed_versions.StagedVersion,
+    request: CreateTableVersionRequest,
+    so: StorageOptions,
+    *,
+    writer: commit_turns.Writer | None,
+    kept: bool,
+    declarer: str,
+) -> CreateTableVersionResponse:
+    """:func:`managed_versions.finalize` of the table's first version while the door holds the claim fenced for it
+    (:meth:`DoorTable.first_version_fenced`).
+
+    Raises:
+        ConcurrentModificationError: Another request fences the claim, a declaration of another principal's included,
+            or the claim changed since the door resolved the table.
+    """
+    with table.first_version_fenced(declarer):
+        return managed_versions.finalize(table, staged, request, so, writer=writer, kept=kept)
 
 
 @router.post("/{id}/version/describe", response_model_exclude_none=True)

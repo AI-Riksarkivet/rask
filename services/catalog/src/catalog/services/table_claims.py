@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, NoReturn
 from uuid import uuid4
 
 import lance
@@ -198,7 +198,7 @@ class DoorTable:
         if location != self.location or _etag(location_claims.read(self._claims, location)) != _etag(self._resolved.claim):
             self._refuse(location)
 
-    def _refuse(self, now: str | None) -> None:
+    def _refuse(self, now: str | None) -> NoReturn:
         log.warning("door_table_changed", extra={"table": self.segments, "location": self.location, "resolves_to": now})
         raise TableChangedError(f"table {fga.canonical_object_id(self.segments)} changed while this request was being served; describe it and retry")
 
@@ -271,6 +271,56 @@ class DoorTable:
         finally:
             if kept and not handed and token is not None:
                 self._turns().release(token)
+
+    @contextmanager
+    def first_version_fenced(self, declarer: str) -> Generator[None]:
+        """The table's claim fenced for this request while the block finalizes the table's first version, a version
+        ``declarer`` authenticated as commits (ADR 0227 §9, StockFencesFirstVersion and DeclarerLifts); lifted when it ends.
+
+        One conditional write under the ETag the door's resolution read, so of this commit and any other request acting
+        on the claim (a catalog create of the name fencing the declaration, a drop, a second first version) the one that
+        writes second answers 409: no create commits its version 1 over this one's (A4), and none lands this one over
+        its own. Another request's fence refuses, a declaration of another principal's included: a declaration is its
+        declarer's until its fence lapses. The declarer's own declaration fence is taken over, lapsed or not: a claim
+        whose ETag is still the one the resolution read was acted on by no one since, so a declarer whose write
+        outlasted the declaration's lease still commits, and one whose declaration another request took meanwhile is
+        refused. The block's finalize, one write after this, is assumed to end within the fence's lease (ADR 0227 A5).
+
+        The resolution moves to the claim as fenced, so the finalize's own check (:meth:`require_named`) reads it.
+
+        Raises:
+            TableNotFoundError: The name named no table.
+            TableChangedError: The claim changed since the resolution read it, or was released.
+            ConcurrentModificationError: Another request fences the claim, a declaration of another principal's
+                included.
+        """
+        location = self.location
+        now = location_claims.read(self._claims, location)
+        if now is None or now.claim.released_at is not None or _etag(now) != _etag(self._resolved.claim):
+            self._refuse(location)
+        token = uuid4().hex
+        try:
+            location_claims.fence(
+                self._claims,
+                location,
+                now,
+                table=now.claim.table,
+                segments=now.claim.segments,
+                token=token,
+                is_gone=lambda _claim: False,
+                takes_over=declared_by(declarer),
+            )
+        except (location_claims.ClaimChangedError, location_claims.LocationHeldError):
+            log.warning("first_version_refused_fenced", extra={"table": self.segments, "location": location})
+            raise ConcurrentModificationError(
+                f"table {fga.canonical_object_id(self.segments)} is declared by another principal or acted on by another request; describe it and retry"
+            ) from None
+        fenced = DoorFence(location=location, token=token)
+        try:
+            self._resolved = self._resolved.model_copy(update={"claim": location_claims.read(self._claims, location)})
+            yield
+        finally:
+            lift_fence(self._claims, fenced)
 
     def hand_turn(self, ref: str | None, writer: commit_turns.Writer | None) -> bool:
         """Hand ``ref``'s next turn to the stock writer whose commit just lost its race, unless another commit holds the turn
@@ -529,8 +579,25 @@ def names_now(store: ClaimStore, records: list[TableRecord]) -> list[str | None]
     return [current_name(store, record.location, record.uuid) for record in records]
 
 
+def is_a_declaration(fenced: location_claims.ClaimFence) -> bool:
+    """Whether ``fenced`` is a declaration's fence, which a door removing the table takes over (ADR 0227 §9): a declared,
+    unwritten table is dropped by whoever may drop it without waiting out the declaration's lease. Its declarer's first
+    version takes the fence over before it lands (:meth:`DoorTable.first_version_fenced`), so a declaration's fence never
+    stands over a version."""
+    return fenced.declarer is not None
+
+
+def declared_by(declarer: str) -> Callable[[location_claims.ClaimFence], bool]:
+    """Whether a fence is a declaration ``declarer`` made: the one fence a request of that principal takes over to write
+    the table's first version (ADR 0227 §9, DeclarerLifts)."""
+    return lambda fenced: fenced.declarer is not None and fenced.declarer == declarer
+
+
 def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder: str, verb: str) -> DoorFence:
     """Fence the claim ``table`` resolved to, before a door that removes ``holder`` from ``__manifest`` acts on it.
+
+    A declaration's fence is taken over (:func:`is_a_declaration`): the door removes the table, and the declarer's first
+    version, which needs the claim the door's fence changes, is refused.
 
     A claim naming another table that still resolves to the location refuses too, deregister and recoverable drop
     included: it is what the resolution reads when a rename landed between its describe and its claim read, and acting
@@ -548,7 +615,14 @@ def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder
     token = uuid4().hex
     try:
         location_claims.fence(
-            store, table.location, table.claim, table=holder, segments=table.segments, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim)
+            store,
+            table.location,
+            table.claim,
+            table=holder,
+            segments=table.segments,
+            token=token,
+            is_gone=lambda claim: holder_is_gone(ns, store, claim),
+            takes_over=is_a_declaration,
         )
     except location_claims.ClaimChangedError:
         raise ConcurrentModificationError(f"cannot {verb} {holder}: it changed while this request was being served; describe it and retry") from None
@@ -699,7 +773,15 @@ def take(
 
 
 def claim_new_table(
-    ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str], table_uuid: str, fence_for: str | None = None
+    ns: LanceNamespace,
+    store: ClaimStore,
+    location: str,
+    *,
+    table: str,
+    segments: list[str],
+    table_uuid: str,
+    fence_for: str | None = None,
+    declarer: str | None = None,
 ) -> LocationClaim:
     """Make a table this request brings into being the holder of ``location``, under the uuid its door minted (ADR 0173 §2).
 
@@ -713,7 +795,9 @@ def claim_new_table(
 
     ``fence_for`` is the token of a create, which takes the claim fenced for itself and lifts the fence once its data is
     committed (:func:`lift_fence`): until then no drop, rename, deregister, undrop or second create acts on the table it
-    is still writing (ADR 0227).
+    is still writing (ADR 0227). With ``declarer`` it is a declaration's fence, the declaring subject's (ADR 0227 §9): no
+    request of another principal acts on the table, a door removing it aside, until that subject's first version takes
+    the fence over or it lapses.
 
     Raises:
         LocationHeldError: Another table holds the location.
@@ -726,20 +810,22 @@ def claim_new_table(
         uuid=table_uuid,
         token=fence_for,
         fenced=fence_for is not None,
+        declarer=declarer,
         is_gone=lambda claim: holder_is_gone(ns, store, claim),
         is_kept=lambda claim: kept_in_trash(store, claim),
     )
 
 
-def fence_declared(ns: LanceNamespace, store: ClaimStore, location: str, *, holder: str, segments: list[str], token: str) -> DoorFence:
+def fence_declared(ns: LanceNamespace, store: ClaimStore, location: str, *, holder: str, segments: list[str], token: str, declarer: str) -> DoorFence:
     """Fence the claim of a table another request declared at ``location``, for the create ``token`` that writes its
-    first version there (ADR 0227).
+    first version there, a create ``declarer`` authenticated as (ADR 0227).
 
     A create writes into a declaration only while no other request acts on it: a create still writing it holds it
     fenced, so the second of two creates of one name answers 409 here, never writing at the first's location as though
-    the declaration were its own. The write is one conditional write under the ETag of the claim it reads
-    (:func:`lakehouse.location_claims.fence`). A declaration at rest (a bare declare, or a create whose process died
-    and whose fence lapsed) is fenced and written into.
+    the declaration were its own. A declaration is its declarer's (§9): a DeclareTable whose fence stands answers this
+    create 409 unless ``declarer`` made it, in which case the create takes its fence over. The write is one conditional
+    write under the ETag of the claim it reads (:func:`lakehouse.location_claims.fence`). A declaration at rest (one whose
+    fence lapsed, or a create whose process died and whose fence lapsed) is fenced and written into.
 
     Raises:
         ConcurrentModificationError: Another request fences the claim, the claim changed under the fence, it was
@@ -749,7 +835,16 @@ def fence_declared(ns: LanceNamespace, store: ClaimStore, location: str, *, hold
     if found is not None and found.claim.released_at is not None:
         raise ConcurrentModificationError(f"table {holder} changed while this request was being served; describe it and retry")
     try:
-        location_claims.fence(store, location, found, table=holder, segments=segments, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim))
+        location_claims.fence(
+            store,
+            location,
+            found,
+            table=holder,
+            segments=segments,
+            token=token,
+            is_gone=lambda claim: holder_is_gone(ns, store, claim),
+            takes_over=declared_by(declarer),
+        )
     except (location_claims.ClaimChangedError, location_claims.LocationHeldError):
         raise ConcurrentModificationError(f"table {holder} is being created or changed by another request; describe it and retry") from None
     return DoorFence(location=location, token=token)
@@ -792,6 +887,8 @@ def require_unfenced(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable
     For a door that writes a record a fencing door reads once it holds its fence: the protection door writes its record
     first and asks this after, as a drop writes its fence first and reads protection after, so of the two one sees what
     the other wrote. A drop that fenced before this answers the door 409 here, and one fencing after reads the record.
+    A declaration's fence is no drop's (:func:`is_a_declaration`): a drop takes it over by writing a fence of its own,
+    which this then reads.
 
     Raises:
         TableNotFoundError: The name named no table.
@@ -805,7 +902,12 @@ def require_unfenced(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable
         log.warning("door_table_changed", extra={"table": table.segments, "location": table.location, "resolves_to": now.location})
         raise TableChangedError(f"table {fga.canonical_object_id(table.segments)} changed while this request was being served; describe it and retry")
     held = now.claim.claim if now.claim is not None else None
-    if held is not None and held.fence is not None and held.fenced_against(None, location_claims.store_now(store, table.location)):
+    if (
+        held is not None
+        and held.fence is not None
+        and not is_a_declaration(held.fence)
+        and held.fenced_against(None, location_claims.store_now(store, table.location))
+    ):
         raise ConcurrentModificationError(f"table {fga.canonical_object_id(table.segments)} is being acted on by another request; retry")
 
 

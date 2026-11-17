@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# lifecycle_on_rustfs_check.sh: run the table lifecycle's and the namespace cascade's race tests (ADR 0227, ADR 0233)
+# lifecycle_on_rustfs_check.sh: run the table lifecycle's, the namespace cascade's and the stock create's race tests (ADR 0227, ADR 0233)
 # with the catalog's root and control root on a REAL S3 store, so every fence, claim and record is arbitrated by the
 # store's own conditional writes (put-if-not-exists, If-Match) rather than the local root's file lock.
 #
 # Starts the pinned RustFS (scripts/rustfs_server.sh) as a process, with a root pair made for this run and read from
-# files, and runs the tests' `s3` parametrization (tests/integration/conftest.py::race_ns_client), each test in a bucket
+# files, and runs the tests' `s3` parametrization (tests/integration/conftest.py::race_ns_client and race_catalog), each test in a bucket
 # of its own. The catalog writes under that root pair: what is checked is how the store arbitrates the writes, not whose
 # identity makes them (the governance-chain lane checks that). Stops the store at the end; KEEP_UP=1 leaves it running
 # and prints the environment a test run needs.
@@ -51,4 +51,5 @@ fi
 uv run --no-sync pytest \
   tests/integration/test_a_lifecycle_door_keeps_what_it_answered_beside_a_concurrent_door.py \
   tests/integration/test_a_cascade_keeps_what_it_answered.py \
+  tests/integration/test_a_stock_create_and_a_catalog_create_of_one_name_never_both_land.py \
   -k s3 -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"

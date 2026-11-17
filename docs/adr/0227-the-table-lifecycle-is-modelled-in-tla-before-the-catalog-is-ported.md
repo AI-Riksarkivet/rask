@@ -3,7 +3,7 @@
 **Status:** accepted; the second model of the port (ADR 0217 §5, ADR 0221). ADR 0221 left the table lifecycle for "a
 model of its own before the catalog is ported". The seven findings of §5 are fixed in the model and in the catalog
 (owner, 2026-11-17: "Fix in Python now"). An independent review of those fixes found four more, each fixed model first
-(§8); one further race, a stock client's create beside a catalog create, is modelled and left open for a decision (§9).
+(§8); one further race, a stock client's create beside a catalog create, is closed on the owner's ruling (§9).
 
 ## Context
 
@@ -36,8 +36,10 @@ handful of races in tests; nothing checks the doors against each other.
      protection read again, the drop's effects);
    - the namespace undrop's table step, which is the table undrop's own (`trash_doors.restore_kept_table`), admitted by
      the namespace's record with no standing check;
-   - a stock client's create: the declare door (`dataplane.declare_table`, its claim unfenced), its own Lance write on
-     vended credentials, and its first commit through `version/create` (put-if-not-exists);
+   - a stock client's create: the declare door (`dataplane.declare_table`, its claim fenced for its declarer), its own
+     Lance write on vended credentials, and its first commit through `version/create` (`DoorTable.first_version_fenced`,
+     the put-if-not-exists, the fence's lift); another principal's stock client writing version 1 into the declaration;
+     and the declarer's own catalog create of the name;
    - maintenance: the deadline, `endpoints/trash_reclaim.release_trash` (`_standing_refusal`), and the purge
      (`purge._purge_one`: the snapshot and last-instant liveness, the vend, the delete, `end_trash`).
    Failures are explicit actions counted against a bound: a RegisterTable that fails, a Lance write that fails, a
@@ -57,10 +59,17 @@ handful of races in tests; nothing checks the doors against each other.
    - `TableLifecycleCascade.cfg` (a table, protected or not, under a namespace a cascade drops, destroying it or to the
      trash; a protect, a rename or the table undrop; nothing, a create of the name or the namespace undrop's table step;
      two failures): 234,291 states, 73 s.
+   - `TableLifecycleStock.cfg` (a stock client declaring n1, writing it and committing version 1; against another
+     principal's catalog create of the name, the declarer's own catalog create or a destroying drop; against nothing or
+     another principal's stock client writing into the declaration; one failure, a declaration's fence lapsing wherever
+     its declarer is): 57,757 states, 41 s on two workers (§9, measured on a machine at load 19).
    - `TableLifecycleWide.cfg`, ON DEMAND (three failures, the wider mix it names): 546,845 states, 115 s on four workers.
+   - `TableLifecycleStockWide.cfg`, ON DEMAND (the stock gate with a recoverable drop, a second create and two
+     failures): 526,901 states, 293 s on three workers at load 12.
 
    Every invariant below holds in every gate config, and so does the liveness property, with fences lapsing under live
-   requests as A5 states. The gate configs together run in about five and a half minutes on two workers.
+   requests as A5 states. The gate configs together run in about five and a half minutes on two workers, and
+   `TableLifecycleStock.cfg` adds 41 s (§9); the existing configs' state counts are unchanged by §9's steps.
 
    The invariants, each a claim the code makes:
    - `LiveHasData`: no row names deleted bytes (`destroy_table`'s row-before-bytes order; `purge.check` STILL_REGISTERED).
@@ -73,6 +82,8 @@ handful of races in tests; nothing checks the doors against each other.
      it acts on it.
    - `OneCreateCommitsPerTable`: of the creates writing one table, one commits; a Create never lands over rows another
      create committed (`CreateMode.CREATE`: a written table is the create's conflict).
+   - `DeclarationIsItsDeclarers`: until a declaration's fence lapses, or a door removing the table ends it, no request of
+     another principal takes it to write version 1 (§9).
    - `RecoverableUntilPurged`: a recoverable drop's record stays until an undrop registers the table again or the purge
      ends it (`_drop`'s "RECORD FIRST, DETACH SECOND").
    - `UndropRestoresExactly`: an undrop that answered 200 restored that uuid at its location under the name, with its
@@ -95,7 +106,7 @@ handful of races in tests; nothing checks the doors against each other.
      `LEASE`; this config is the one place the lapse lands between a renewal and the effect it was made for. The A5 of
      the first version of this ADR, "no request outlives its `LEASE`", was not held by anything (`RequestDeadlineMiddleware`
      answers 503 at 300 s and lets the door run on) and is gone.
-   - Each guard of §5 and §8 is one more: the model's constant `Off` names the guard a config removes, and each such
+   - Each guard of §5, §8 and §9 is one more: the model's constant `Off` names the guard a config removes, and each such
      config must fail.
 
    A4, that Lance's create of a dataset commits only where none is, does not hold, and is modelled as Lance does it:
@@ -277,45 +288,124 @@ handful of races in tests; nothing checks the doors against each other.
      and dies, its fence lapsing; `test_a_table_whose_protection_answered_200_is_not_destroyed_without_force[drop-before-its-fence]`
      holds the drop between its first protection read and its fence. Each fails with its guard removed and passes with it.
 
-9. **A finding left open: StockCreateRace** (`OneCreateCommitsPerTable`, `TableLifecycleStockCreateRace.cfg`, a
-   `FINDING` config that fails as expected; test
-   `tests/integration/test_a_stock_create_and_a_catalog_create_of_one_name_never_both_land.py`, strict xfail). A stock
-   client creates a table by `DeclareTable`, whose claim takes no fence, a Lance write on the credential the catalog
-   vends, and its first commit through `version/create`, which finalizes version 1 put-if-not-exists (ADR 0157). A
-   catalog create of the name meanwhile finds the declaration empty, fences it (`fence_declared` admits an unfenced
-   claim) and writes; the client's version 1 lands after the create's probe, and the create's commit, not conditional on
-   its check (A4), lands over the client's rows as version 2. Both answer success (measured through the real catalog
-   and stock pylance 13.0.0: the client's declare held before it answers, the create held right before its commit; both
-   succeed and the table holds the create's rows). What the code has closes only part of it: `version/create` acts
-   through `DoorTable`, which refuses a commit when the claim's ETag changed since the door resolved the table, so a
-   client resolved before the create's fence answers 409 (measured); one resolved after it reads the fenced claim as its
-   resolution and finalizes, since nothing there reads the fence, and the create's renewal (§8) finds its own fence.
-   Two designs close it, each meeting the four facts, and the choice is the owner's:
-   - **(a) A declaration is its declarer's.** `DeclareTable` takes the claim fenced for a token it answers to no one,
-     so a catalog create of a declared name answers 409 ConcurrentModification until the fence lapses after `LEASE` or
-     the client's first `version/create` lifts it. Cost: a bare declare that is never written wedges its name for one
-     `LEASE`, and a create retrying a crashed declare waits as long; a stock client's version/create that outlives the
-     lease meets the same lapse §8 handles, with a renewal in `version/create`.
-   - **(b) version/create respects a create's fence, and a create commits only onto an empty location.**
-     `version/create` answers 409 for a version 1 while another request fences the claim (`DoorTable.require_held`
-     reading the fence), which closes every order but one: the client's check passing before the create's fence and its
-     put landing after the create's probe. Closing that one needs the create's commit conditional on no version
-     existing; measured on pylance 13.0.0, `LanceDataset.commit(..., max_retries=0)` of a create's transaction onto a
-     dataset written since is refused, but with an error naming a missing `0.manifest`, not a conflict, a behaviour
-     Lance does not document. Cost: without that, a timing window between `version/create`'s check and its put; with
-     it, a dependence on undocumented Lance behaviour.
-   (a) is the GitOps- and zero-trust-neater answer (a declaration names who may write it, as a fence does everywhere
-   else); (b) keeps a declare free for anyone to write into. Not chosen here.
+9. **StockCreateRace, FIXED by design (a): a declaration is its declarer's** (owner, 2026-11-17: "Declaration is its
+   declarer's"). A stock client creates a table by `DeclareTable`, a Lance write on the credential the catalog vends, and
+   its first commit through `version/create`, which finalizes version 1 put-if-not-exists (ADR 0157). The declare took
+   its claim unfenced, so a catalog create of the name found the declaration empty, fenced it (`fence_declared` admitted
+   an unfenced claim) and wrote; the client's version 1 landed after the create's probe, and the create's commit, not
+   conditional on its check (A4), landed over the client's rows as version 2. Both answered success (measured through the
+   real catalog and stock pylance 13.0.0, the client's declare held before it answers, the create held right before its
+   commit). `version/create` read no fence: its `DoorTable` refused only a claim whose ETag changed since its resolution.
+
+   **What ties a declaration to its declarer.** The declare and the client's first `version/create` are two requests,
+   possibly on two replicas, with the client's own Lance write between them, and the spec gives the client nothing to
+   carry from one to the other: no field of `CreateTableVersionRequest` names a declaration, and a stock client sends
+   none. So no token in a process ties them. The claim does: the declare writes its fence with the subject the catalog
+   authenticated for it (`location_claims.ClaimFence.declarer`), and every later request carries its own authenticated
+   subject (`catalog.api.security.current_subject`: the bearer's principal key, verified on every request), which the
+   catalog compares with the one the claim records. Nothing is trusted by position: a request lifts a declaration's
+   fence only as the principal the catalog verified it to be, and only through a conditional write under the ETag of the
+   claim it read. With OIDC off every caller is `anon`, one principal.
+
+   **The guards**, each a step of `TableLifecycle.tla` with a config that removes it and must fail, and a case of
+   `tests/integration/test_a_stock_create_and_a_catalog_create_of_one_name_never_both_land.py` (the real catalog under
+   uvicorn, stock pylance as the client, two principals) that is red without it:
+   - **DeclarationFence**: `DeclareTable` takes its claim fenced for its declarer under a token it answers to no one
+     (`dataplane.declare_table(declarer=…)` through `table_claims.claim_new_table` and `location_claims.take`). Every
+     other request's fence, take and hand-over is refused as any fence's is: another principal's catalog create of the
+     name answers 409 ConcurrentModification (14) at `fence_declared`. Config `TableLifecycleStockCreateRace.cfg`, now an
+     assumption config (`DeclarationIsItsDeclarers`: another principal's create writes into the declaration). Case
+     `declared-then-catalog-create`: without it the other principal's create lands and the declarer's version 1 is
+     refused.
+   - **DeclarerLifts**: only a request of the declaring principal takes the declaration's fence over to write version 1:
+     its first `version/create` (`DoorTable.first_version_fenced`, `table_claims.declared_by`) or its own catalog create
+     (`table_claims.fence_declared(declarer=…)`). Another principal's version 1 into the declaration answers 409
+     ConcurrentModification (14), the spec's code for a request meeting another's act on the table, as every fence
+     answers it. Config `TableLifecycleStockIntruder.cfg` (`DeclarationIsItsDeclarers`, through another principal's
+     stock client). Case `another-principals-version-1`: without it the other principal's version 1 lands and the
+     declarer's own create is refused.
+   - **StockFencesFirstVersion**: `version/create` of a version 1 fences the claim, one write under the ETag its
+     resolution read, right before the finalize, and lifts the fence after (`DoorTable.first_version_fenced`, called by
+     `endpoints/versions._first_version`). Another request's live fence refuses; the declarer's own declaration fence is
+     taken over, lapsed or not, since a claim whose ETag is still the one the resolution read was acted on by no one
+     since: a declarer whose write outlasted the lease still commits (renew-if-still-own, §8's rule). A declarer whose
+     declaration lapsed and that another request took since is refused 409 (14) with nothing finalized. The finalize is
+     one write after the fence, which A5 assumes ends within `LEASE`. Config `TableLifecycleStockLapse.cfg`
+     (`OneCreateCommitsPerTable`: the declaration lapses in the client's write, a catalog create fences it and writes,
+     the client's version 1 lands after its check and the create's commit lands over it). Case `declaration-lapsed`
+     (`LEASE` driven to zero while the declarer writes, back to 15 minutes once the create fenced): without it both
+     answer 200 and the table holds the create's rows.
+   A door removing the table (a drop, a deregister, a namespace cascade's table step, through `table_claims.fence` and
+   `fence_listed`) takes a declaration's fence over (`table_claims.is_a_declaration`), so a declared, unwritten table is
+   removed by whoever may remove it at once rather than after the lease; the declarer's late `version/create` then finds
+   the name gone. No version stands under a declaration's fence (the first `version/create` replaces it before it
+   finalizes), so the door that takes it over acts on an unwritten table. Case `declared-then-dropped`: without the
+   take-over the drop answers 409 (14). The protection door reads a declaration's fence as no drop's
+   (`table_claims.require_unfenced`), as before. Case `catalog-create-then-declared` is the other order, which A1 closes:
+   the declare finds the name taken and answers 409 TableAlreadyExists (5).
+
+   **The retries a correct client meets**, each answered:
+   - the declarer sends `DeclareTable` again (its answer lost): the same location, a credential vended anew, the fence as
+     it stands, 200 (`dataplane.own_declaration`: the name's claim carries a declaration fence of the caller's and the
+     location holds no version). pylance's own `mode="create"` on a name its principal declared is this retry and lands.
+     Another principal's declare of the name answers 409 TableAlreadyExists (5), as it did.
+   - the declarer creates through the catalog's one-call create door instead of writing itself: its create takes its
+     declaration's fence over and writes, 200.
+   - the declarer crashed, and another principal creates the name: 409 ConcurrentModification (14) until the fence
+     lapses, then the create fences the declaration and writes, 200 (§5's lapsed declaration); the crashed declarer's
+     late `version/create` meets the create's live fence or a changed ETag and answers 409 (14), or, once the create
+     committed, the version taken, 409 (14).
+   - a `version/create` after the lease lapsed with nobody else having acted: the claim's ETag is the one its resolution
+     read, its own declaration fence is taken over, version 1 lands, 200.
+   - `RegisterTable` onto a declared name, and a rename onto it: 409 TableAlreadyExists (5), the name being taken, as
+     before. A rename of the declared table: 404, it holds no version, as before.
+   - a drop, or a namespace cascade, of a declared, unwritten table: served at once by a principal the door authorizes,
+     200; a deregister likewise.
+   **The cost the owner accepted**: a declaration never written blocks its name, to every other principal, for up to one
+   `LEASE` (15 minutes), unless a principal entitled to drop it drops it.
+
+   **Design (b), not taken**: `version/create` reading a create's fence (`DoorTable.require_held`) and a create committing
+   only onto an empty location. It left the window between the version/create's read and its put unless the create's
+   commit were conditional on no version existing, which pylance 13.0.0 refuses for `LanceDataset.commit(...,
+   max_retries=0)` only with an error naming a missing `0.manifest`, a behaviour Lance does not document; and it left a
+   declaration free for any principal to write into. (a) keeps both arbitrations conditional writes the store decides,
+   and a declaration names who may write it, as a fence does everywhere else.
+
+   **What the vended credential can still do after a lapse** (measured from the code, not changed here): the declare's
+   credential is the write tier for the table's location prefix (`core/vending.py`, `build_session_policy`, ADR 0157),
+   minted after the claim's fence with `LANCE_VENDING_TTL_SECONDS` (default 900 s, `core/config.py`), so on the default
+   it expires within the request's latency of the fence's lapse; an operator setting a longer TTL lets it outlive the
+   fence by the difference, and a refresh through DescribeTable vends anew to anyone the write grant reaches. Until it
+   expires it can put data, transaction, deletion and staged-manifest objects under the location (which a create of the
+   name by another principal after the lapse writes into: §5's declared path keeps the declaration's location), and the
+   store does not refuse those puts; it refuses a final `_versions/*.manifest`, a tag, a branch and any delete (ADR 0157),
+   and the catalog refuses its `version/create` (the guards above). So what a lapsed declarer can still do is put files
+   no version names, or overwrite a data file of the new table by its key, which ADR 0157 already records as open for
+   every write credential. Re-designing the vend's lifetime around the fence is not part of this change.
+
+   **The four facts.** GitOps: no new record, object or step; the declaration's fence is a field of the claim the declare
+   already writes, and an unlifted one lapses with nothing to clean up. Cloud native: every exclusion is a conditional
+   write on the claim (the declare's put-if-not-exists, the first version's and the create's fence under the ETag they
+   read), so two replicas arbitrate as two threads do; the RustFS lane runs the cases on a real store's conditional
+   writes (`race_catalog`'s `s3` parameter). Lance-namespace/table-idiomatic: the stock client's path is the spec's
+   exactly (`DeclareTable`, its own write, `CreateTableVersion`), no field and no call added, and every refusal is a spec
+   code (ConcurrentModification 14, TableAlreadyExists 5). Zero trust: a declaration's fence is lifted only by the
+   principal the catalog authenticated as its declarer, through a conditional write; a request that cannot prove both
+   answers 409.
 
 10. **A real store.** The race tests of this ADR and ADR 0233 run on the local root's file lock in the offline suite, and
     on a real S3 store's conditional writes in the lane `make lifecycle-rustfs-check`
     (`scripts/lifecycle_on_rustfs_check.sh`): the pinned RustFS (1.0.3) as a process, the catalog's root and control root
-    in a bucket of each test's own (`tests/integration/conftest.py::race_ns_client`, its `s3` parameter collected only
-    where the lane names the store).
+    in a bucket of each test's own (`tests/integration/conftest.py::race_ns_client`, and `race_catalog` for the stock
+    client's cases of §9, which serves the catalog under uvicorn, their `s3` parameter collected only where the lane
+    names the store).
 
 ## Not modelled
 
-The namespaces' own rows (`Cascade.tla` models them), the deregister and register doors, Overwrite and ExistOk creates,
+The declarer's DeclareTable sent again (it writes nothing: `dataplane.own_declaration` reads the claim and answers it),
+the model's lapse writing the claim where the code's writes nothing (it refuses a declarer whose own fence lapsed unseen,
+which the code admits: a 409 the code spares, never a write the code would refuse),
+the namespaces' own rows (`Cascade.tla` models them), the deregister and register doors, Overwrite and ExistOk creates,
 idempotency keys, the announcements, base records, data directories and clone endings, `force`, a lease's clock beyond
 the lapse (a claim held under another name refuses here, where the code lets a gone holder's be taken past `LEASE`), a
 deregister whose answer was lost (`_still_described`), a purge refusal retried on a later tick, and what a holder of a
@@ -335,6 +425,10 @@ deregister whose answer was lost (`_still_described`), a purge refusal retried o
   where the table undrop would, keeping the records of what it has not restored; a create whose write outlived its
   fence's lease answers 409 code 14 when another request acted on the table meanwhile, and commits nothing.
 - A guard removed from the code is a config that fails: the catalog's port follows the model's steps, guards included.
+- What a client sees change with §9: another principal's catalog create of a declared name, and its version 1 into the
+  declaration, answer 409 code 14 for up to 15 minutes after the declare; the declarer's DeclareTable sent again answers
+  200 with its declaration where it answered 409 code 5; a version 1 whose declaration another request took since
+  answers 409 code 14. A drop of a declared, unwritten table is served at once, as it was.
 
 ## The four facts, for §8
 

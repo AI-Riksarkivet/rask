@@ -71,6 +71,7 @@ from catalog.services import dataplane, native, provenance_namespace, table_base
 from lakehouse import base_registry
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
+from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.storage_options import StorageOptions
 
 
@@ -271,6 +272,8 @@ async def create_governed_table(
             settings.registry_root, settings.storage_options(), name=table_id, declared=await fga_deps.declared_inputs(resolver, run)
         ),
         before_register=grants,
+        # A declaration under the name is written into by its own declarer only (ADR 0227 §9).
+        declarer=created_by if created_by is not None else ANONYMOUS_SUBJECT,
     )
     try:
         try:

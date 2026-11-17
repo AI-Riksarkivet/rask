@@ -67,7 +67,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import Caller, CurrentToken, current_subject
 from catalog.core import json_arrow, provenance_guard
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings
@@ -353,13 +353,33 @@ async def declare_table(
     req.id = reconcile_body_id(segments, req.id)
     canonical = fga.canonical_object_id(segments)
     claims = table_claims.claim_store(settings)
+    declarer = current_subject(token)
+    # A DECLARATION IS ITS DECLARER'S (ADR 0227 §9): sent again by the subject that made it, nothing having acted on it
+    # since, the declaration is answered as it stands, its fence kept, with a fresh credential the vend judges anew.
+    own = await run_in_threadpool(partial(dataplane.own_declaration, ns, so, segments, claims=claims, declarer=declarer))
+    if own is not None and own.location is not None:
+        return await _vended_declaration(
+            ns, so, segments, req, location=own.location, table_uuid=own.require_uuid(), undo=None, settings=settings, vendor=vendor, token=token, client=client
+        )
     # The table's uuid is minted with its location's claim, before anything grants or announces it (ADR 0173 §2, §5),
-    # and its grants are written once the claim records it, before the backend records the table ([[LH-588]]).
+    # and its grants are written once the claim records it, before the backend records the table ([[LH-588]]). The claim
+    # is fenced for the declarer until its first version or the fence's lease (ADR 0227 §9).
     table_uuid = str(uuid4())
     grants = fga_deps.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
     try:
         location = await run_in_threadpool(
-            partial(dataplane.declare_table, ns, so, segments, root=root, claims=claims, holder=canonical, table_uuid=table_uuid, before_register=grants)
+            partial(
+                dataplane.declare_table,
+                ns,
+                so,
+                segments,
+                root=root,
+                claims=claims,
+                holder=canonical,
+                table_uuid=table_uuid,
+                before_register=grants,
+                declarer=declarer,
+            )
         )
     except Exception:
         await grants.take_back_unless_standing(ns)
@@ -401,7 +421,7 @@ async def _vended_declaration(
     *,
     location: str,
     table_uuid: str,
-    undo: Callable[[], Awaitable[None]],
+    undo: Callable[[], Awaitable[None]] | None,
     settings: Settings,
     vendor: CredentialVendor,
     token: Caller | None,
@@ -409,7 +429,8 @@ async def _vended_declaration(
 ) -> DeclareTableResponse:
     """The declaration of ``segments`` at ``location`` as its declarer is answered, owned by them since before it was
     recorded ([[LH-588]]), with the credential they write it with, ``undo`` taking the declaration and its grants back
-    when the vend fails (:func:`fga_deps.undo_then_take_back`: the table first, its grants once it is gone)."""
+    when the vend fails (:func:`fga_deps.undo_then_take_back`: the table first, its grants once it is gone). ``None``
+    for a declaration answered again to its declarer, which a failed vend leaves as it stands."""
     response = DeclareTableResponse(location=location)
     # The credential is part of the answer, so a vend that fails takes the declaration back with it, before
     # anything announces the table: a declared, owned table whose declarer was told it failed is one a retry
@@ -430,7 +451,8 @@ async def _vended_declaration(
                 asked=req.vend_credentials is True,
             )
         except Exception:
-            await fga_deps.undo_then_take_back(client, settings, token, segments=segments, uuid=table_uuid, undo=undo, reason="vend_failed")
+            if undo is not None:
+                await fga_deps.undo_then_take_back(client, settings, token, segments=segments, uuid=table_uuid, undo=undo, reason="vend_failed")
             raise
     response.managed_versioning = True
     return response
