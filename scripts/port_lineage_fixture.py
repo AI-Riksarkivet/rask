@@ -856,7 +856,13 @@ def check_start(estate: Estate) -> None:
     with httpx.Client(timeout=5) as held:
         held.get(f"{rust.url}/livez")
         rust.process.send_signal(signal.SIGTERM)
+        # A task of the service handles the signal, so a probe sent in the same instant can be answered first (measured
+        # 2026-11-17 at load 8 on 4 cores: one 200 before the 503). The service turns to draining before it stops
+        # answering, so the held connection reads 503 before it is refused: a refusal with no 503 before it fails here.
         draining = status_on(held, rust.url)
+        asked_until = time.monotonic() + 2
+        while draining == (200, "ready") and time.monotonic() < asked_until:
+            draining = status_on(held, rust.url)
     code = rust.process.wait(60)
     verdict("(c) /readyz is 503 shutting down once SIGTERM lands", draining == (503, "shutting_down") and code == 0, f"{draining}, exit {code}")
 
