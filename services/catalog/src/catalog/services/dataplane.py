@@ -2476,8 +2476,8 @@ def caller_sql(action: str) -> Generator[None]:
 
 
 #: The two shapes a query-plane refusal of the caller's expression arrives in (measured on pylance 13.0.0, through the
-#: `dir` backend): ``query_table`` raises a typed ``InternalError`` whose text is Lance's Debug form,
-#: ``Failed to execute query: InvalidInput { source: "Error parsing statement: …", location: … }``, while
+#: `dir` backend): ``query_table`` and ``count_table_rows`` raise a typed ``InternalError`` whose text is Lance's Debug
+#: form, ``Failed to execute query: InvalidInput { source: "Error parsing statement: …", location: … }``, while
 #: ``explain_table_query_plan`` and ``analyze_table_query_plan`` raise a bare ``RuntimeError`` carrying
 #: ``Failed to explain query plan for table at '<location>': Invalid user input: …``.
 _QUERY_INPUT_MARKERS = (_USER_INPUT_MARKER, "InvalidInput {")
@@ -3040,18 +3040,25 @@ def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTabl
     correct; re-implementing it here would put a second definition of "count" in the estate for no
     defect, and any divergence in predicate dialect or version resolution would be ours to own. The native count
     names the table, so the answer is kept only when the name still resolves to the door's location ([[LH-530]]).
+
+    A predicate is a filter like the query door's, so both refs answer its refusal through :func:`caller_query`, the
+    query door's mapping: a predicate that does not parse is 13 ``InvalidInput`` (400) and one naming an absent column
+    is 12 ``TableColumnNotFound`` (404). The native count raises Lance's refusal as a typed ``InternalError``
+    (``Failed to count rows for table at '<location>': InvalidInput { … }``, measured on pylance 13.0.0), which
+    unmapped answered 500 for the caller's own mistake.
     """
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     if req.branch is None:
         # PINNED TO THE VERSION JUDGED ([[LH-279]]): the native count opens the table inside Rust, so the
         # request carries the exact version whose bases were just checked.
         req.version = int(table.open(so, version=req.version).version)
-        response = table.read_natively("count_table_rows", req, via=data_ns)
+        with caller_query("invalid count predicate"):
+            response = table.read_natively("count_table_rows", req, via=data_ns)
         if not isinstance(response, CountTableRowsResponse) or response.count is None:
             raise TypeError(f"count_table_rows must answer a CountTableRowsResponse with a count, got {type(response).__name__}: {response!r}")
         return RowCount(count=response.count, version=req.version)
     dataset = table.open(so, version=req.version, branch=req.branch)
-    with caller_sql("invalid count predicate"):
+    with caller_query("invalid count predicate"):
         counted = dataset.count_rows(filter=req.predicate) if req.predicate else dataset.count_rows()
     return RowCount(count=int(counted), version=int(dataset.version))
 

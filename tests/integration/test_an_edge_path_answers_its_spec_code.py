@@ -5,7 +5,10 @@ answered 500 code 18 tells it the server broke, and a request answered 200 with 
 Each case below is one path that did one of those (measured 2026-10-25 against main 1585bf91): a pinned
 TableExists answered for the latest version, a namespace listing served `limit=0`, a `virtual_column` alter, a typo in a
 query's filter and a list_view column each answered 500, a detailed describe left out `stats`, and a branch Overwrite's
-row count is the one a client reads to confirm the replace. A query refusal's detail names no storage location.
+row count is the one a client reads to confirm the replace. A count's predicate is refused as a query's filter is, on
+main and on a branch: 400 for one that does not parse, 404 for one naming an absent column (measured 2026-11-17 on
+2c606898: main answered all three 500, a branch answered the absent column 400). A query refusal's detail names no
+storage location.
 An add_columns entry is added as it declares or the request is refused ([[LH-537]]): an entry declaring `computed` or
 `virtual_column` beside an `expression` asks for a column the backend cannot make (406), and an entry declaring nothing
 or a column named twice is malformed (400), since filling the first from its expression or dropping the others answers
@@ -81,6 +84,12 @@ _ADD_COLUMNS_VIRTUAL = {
             lambda c: c.post(f"{T}/alter_columns", json={"alterations": [{"path": "id", "virtual_column": _VIRTUAL}]}), 406, 0, id="alter-a-virtual-column"
         ),
         pytest.param(lambda c: c.post(f"{T}/query", json={"k": 1, "filter": "nope > 1", "vector": _VECTOR}), 404, 12, id="query-filters-an-absent-column"),
+        pytest.param(lambda c: c.post(f"{T}/count_rows", json={"predicate": "id = = 1"}), 400, 13, id="count-a-predicate-that-does-not-parse"),
+        pytest.param(lambda c: c.post(f"{T}/count_rows", json={"predicate": "id >"}), 400, 13, id="count-a-predicate-cut-short"),
+        pytest.param(lambda c: c.post(f"{T}/count_rows", json={"predicate": "nope > 1"}), 404, 12, id="count-filters-an-absent-column"),
+        pytest.param(
+            lambda c: c.post(f"{T}/count_rows", json={"predicate": "nope > 1", "branch": "b"}), 404, 12, id="count-on-a-branch-filters-an-absent-column"
+        ),
         pytest.param(
             lambda c: c.post(f"{T}/explain_plan", json={"query": {"k": 1, "filter": "id >>> (", "vector": _VECTOR}}),
             400,
