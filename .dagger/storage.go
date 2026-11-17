@@ -117,6 +117,7 @@ func (m *Rask) RustfsProvisioning(
 			"uv", "run", "--no-sync", "pytest",
 			"tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py",
 			"tests/e2e-py/test_a_reclaim_session_deletes_one_tables_bytes_and_nothing_else.py",
+			"tests/e2e-py/test_the_storage_probe_finds_rustfs_refusing_a_writer_the_final_manifest.py",
 			"tests/e2e-py/test_the_store_answers_maintenance_which_buckets_send_store_events.py",
 			"tests/e2e-py/test_maintenance_s3_e2e.py",
 			"-m", "rustfs_provisioning", "-v", "-rs", "-p", "no:cacheprovider", "--timeout=300", "--timeout-method=thread", "--require-live",

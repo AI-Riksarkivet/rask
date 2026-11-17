@@ -9,6 +9,7 @@ non-project-admin with 403.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from fnmatch import fnmatchcase
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,7 +22,7 @@ from pydantic import SecretStr
 from catalog.api.dependencies import get_vendor
 from catalog.api.v1.endpoints import warehouses as wh_ep
 from catalog.core.config import Settings, get_settings
-from catalog.core.vending import EncryptionAtRest, VendedSession
+from catalog.core.vending import EncryptionAtRest, SessionTier, VendedSession, build_session_policy, split_s3_location
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from lakehouse.governed import fga as fga_module
@@ -142,59 +143,101 @@ def test_an_empty_project_is_retired_with_no_grant_to_revoke(client: TestClient,
 
 
 class _VendingStore:
-    """An object store reached with vended credentials, which honours or ignores what Lance relies on.
+    """An object store reached with vended credentials, which judges each request by the session policy the catalog
+    built for the credential, or ignores one part of it.
 
-    Ignoring a credential's prefix is what a store that accepts the inline session policy and drops it looks
-    like from outside; ignoring `If-None-Match` lets two writers both commit one Lance version. Its role holds no grant on
-    any KMS key, so it refuses every write encrypting with one.
+    ``ignores`` names the part: ``scope`` is a store that takes the inline session policy and drops it, so every key is
+    reachable; ``allow-list`` one that reduces the policy to its prefix, so a writer puts anything under the table;
+    ``deny`` one that evaluates Allows alone, so a writer puts the final manifest only the catalog may;
+    ``conditional-put`` one on which two writers both commit one Lance version; ``write-tier`` one that answers a
+    writer's credential nothing at all. Its role holds no grant on any KMS key, so it refuses every write encrypting
+    with one.
     """
 
-    def __init__(self, *, honours_scope: bool, honours_conditional_put: bool) -> None:
-        self.honours_scope = honours_scope
-        self.honours_conditional_put = honours_conditional_put
-        self.scope = ""
+    def __init__(self, *, ignores: str | None) -> None:
+        self.ignores = ignores
+        self.bucket = ""
+        #: The session policy of each credential vended, by the tier it was vended at, and the prefix it was vended for.
+        self.policies: dict[str, dict[str, Any]] = {}
+        self.prefixes: dict[str, str] = {}
         self.keys: dict[str, bytes] = {}
 
-    def _check(self, key: str) -> None:
-        if self.honours_scope and not key.startswith(self.scope):
-            raise PermissionError(f"AccessDenied: {key} is outside {self.scope}")
+    def signed_as(self, tier: str) -> _Signed:
+        """The store as a client holding the ``tier`` credential reaches it."""
+        return _Signed(self, tier)
+
+    def admits(self, tier: str, action: str, key: str) -> bool:
+        """Whether this store lets the ``tier`` credential do ``action`` on ``key``: IAM's own rule, an Allow that
+        matches and no Deny that does, less whatever the store ignores."""
+        if self.ignores == "scope":
+            return True
+        if self.ignores == "allow-list" and key.startswith(self.prefixes[tier] + "/"):
+            allowed = True
+        else:
+            allowed = self._stated(tier, "Allow", action, key)
+        return allowed and (self.ignores == "deny" or not self._stated(tier, "Deny", action, key))
+
+    def _stated(self, tier: str, effect: str, action: str, key: str) -> bool:
+        arn = f"arn:aws:s3:::{self.bucket}/{key}"
+        for statement in self.policies[tier]["Statement"]:
+            resources = statement["Resource"] if isinstance(statement["Resource"], list) else [statement["Resource"]]
+            if statement["Effect"] == effect and action in statement["Action"] and any(fnmatchcase(arn, resource) for resource in resources):
+                return True
+        return False
+
+
+class _Signed:
+    """One credential's reach into a :class:`_VendingStore`."""
+
+    def __init__(self, store: _VendingStore, tier: str) -> None:
+        self._store = store
+        self._tier = tier
+
+    def _check(self, action: str, key: str) -> None:
+        if self._tier == "write" and self._store.ignores == "write-tier":
+            raise ConnectionError("the store did not answer the write tier")
+        if not self._store.admits(self._tier, action, key):
+            raise PermissionError(f"AccessDenied: {action} on {key}")
 
     def put_object(  # noqa: N803 — boto3's casing
         self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None, SSEKMSKeyId: str | None = None, **_sse: object
     ) -> dict[str, Any]:
-        self._check(Key)
+        self._check("s3:PutObject", Key)
         if SSEKMSKeyId is not None:
             raise PermissionError(f"AccessDenied: kms:GenerateDataKey on {SSEKMSKeyId} is not granted")
-        if IfNoneMatch is not None and self.honours_conditional_put and Key in self.keys:
+        if IfNoneMatch is not None and self._store.ignores != "conditional-put" and Key in self._store.keys:
             raise FileExistsError("PreconditionFailed")
-        self.keys[Key] = Body
+        self._store.keys[Key] = Body
         return {}
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
-        self._check(Key)
-        return {"Body": self.keys[Key]}
+        self._check("s3:GetObject", Key)
+        return {"Body": self._store.keys[Key]}
 
     def delete_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
-        self._check(Key)
-        self.keys.pop(Key, None)
+        self._check("s3:DeleteObject", Key)
+        self._store.keys.pop(Key, None)
         return {}
 
 
 class _ScopedVendor:
-    """Vends a credential for one prefix and tells the store which prefix that is; `unreachable` is an STS that is down."""
+    """Vends a credential keyed by the tier asked, under the session policy the catalog builds for that tier and
+    prefix, which it hands the store; `unreachable` is an STS that is down."""
 
     def __init__(self, store: _VendingStore, *, unreachable: bool, encrypts_with: str | None) -> None:
         self.store = store
         self.unreachable = unreachable
         self.encrypts_with = encrypts_with
 
-    def vend(self, *, table_location: str, tier: str, **_kw: Any) -> VendedSession:
+    def vend(self, *, table_location: str, tier: SessionTier, **_kw: Any) -> VendedSession:
         if self.unreachable:
             raise ConnectionError("STS endpoint unreachable")
-        self.store.scope = table_location.split("/", 3)[3]
+        bucket, prefix = split_s3_location(table_location)
+        self.store.bucket, self.store.prefixes[tier] = bucket, prefix
+        self.store.policies[tier] = build_session_policy(bucket, prefix, tier)
         encryption = EncryptionAtRest() if self.encrypts_with is None else EncryptionAtRest(algorithm="aws:kms", kms_key_id=self.encrypts_with)
         return VendedSession(
-            key_pair=S3KeyPair(access_key_id="k", secret_access_key=SecretStr("s")),
+            key_pair=S3KeyPair(access_key_id=tier, secret_access_key=SecretStr("s")),
             endpoint="http://store:9000",
             region="us-east-1",
             encryption=encryption,
@@ -203,23 +246,32 @@ class _ScopedVendor:
 
 
 @pytest.mark.parametrize(
-    ("honours_scope", "honours_conditional_put", "unreachable", "encrypts_with", "status", "code", "named"),
+    ("ignores", "unreachable", "encrypts_with", "status", "code", "named"),
     [
-        (False, True, False, None, 400, 13, "write_outside_refused"),
-        (True, False, False, None, 400, 13, "conditional_put_refused"),
-        (True, True, True, None, 503, 17, None),
-        (True, True, False, None, 200, None, None),
-        (True, True, False, "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab", 400, 13, "encrypted_write"),
+        pytest.param("scope", False, None, 400, 13, "write_outside_refused, final_manifest_refused, ref_put_refused", id="store-ignores-scope"),
+        pytest.param("conditional-put", False, None, 400, 13, "conditional_put_refused", id="store-ignores-conditional-put"),
+        pytest.param("deny", False, None, 400, 13, "final_manifest_refused", id="store-ignores-the-write-tiers-deny"),
+        pytest.param("allow-list", False, None, 400, 13, "ref_put_refused", id="store-reduces-the-policy-to-its-prefix"),
+        pytest.param("write-tier", False, None, 503, 17, None, id="write-tier-stages-nothing"),
+        pytest.param(None, True, None, 503, 17, None, id="sts-unreachable"),
+        pytest.param(None, False, None, 200, None, None, id="store-conforms"),
+        pytest.param(
+            None,
+            False,
+            "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+            400,
+            13,
+            "encrypted_write",
+            id="store-refuses-the-vended-kms-key",
+        ),
     ],
-    ids=["store-ignores-scope", "store-ignores-conditional-put", "sts-unreachable", "store-conforms", "store-refuses-the-vended-kms-key"],
 )
 def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     client: TestClient,
     tmp_path: Any,
     store: str,
     monkeypatch: pytest.MonkeyPatch,
-    honours_scope: bool,
-    honours_conditional_put: bool,
+    ignores: str | None,
     unreachable: bool,
     encrypts_with: str | None,
     status: int,
@@ -231,9 +283,14 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     create runs the probe before it writes the registry record ([[LH-481]], ADR 0089). A store that broke a
     guarantee is the request's problem (InvalidInput, 13); a probe that could not reach the store learned
     nothing and asks for a retry (ServiceUnavailable, 17). A store refusing the encryption its vends name, its role
-    holding no grant on the KMS key, broke a guarantee every writer needs ([[LH-262]]). A store's refusal names its check."""
-    vending = _VendingStore(honours_scope=honours_scope, honours_conditional_put=honours_conditional_put)
-    monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending)
+    holding no grant on the KMS key, broke a guarantee every writer needs ([[LH-262]]). Managed versioning rests on the
+    store refusing a writer's credential the final manifest and every ref (ADR 0157), so a store that evaluates the
+    write tier's Allows and not its Deny, or reduces its policy to a prefix, is refused too ([[LH-511]]); a write tier
+    that could stage nothing was never asked, so it is a retry. The store judges each request by the policy the catalog
+    built, so a probe key no statement of that policy matches as the claim needs fails here. A store's refusal names its
+    check."""
+    vending = _VendingStore(ignores=ignores)
+    monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending.signed_as(str(k["access_key"])))
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
     client.app.dependency_overrides[get_vendor] = lambda: _ScopedVendor(vending, unreachable=unreachable, encrypts_with=encrypts_with)
     _mk_projects(client, "acme")
@@ -246,6 +303,7 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
         assert (resp.headers["content-type"], resp.json()["code"]) == ("application/problem+json", code), resp.text
     if named is not None:
         assert f"({named})" in resp.json()["detail"], resp.text
+    assert vending.keys == {}, f"the probe left objects in the warehouse's bucket: {sorted(vending.keys)}"
 
 
 def test_create_warehouse_cross_project_collision_409(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:

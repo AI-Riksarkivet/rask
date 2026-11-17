@@ -402,7 +402,7 @@ rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-a
 
 # The provisioning hook's script against a throwaway RustFS that boots as the fixture does (root pair from files): a
 # policy the store refuses fails the run and leaves the stored one (XC-163).
-rustfs-provisioning: ## Store IAM vs a REAL RustFS (a refused policy fails the hook; a reclaim session ends one record and nothing else)
+rustfs-provisioning: ## Store IAM vs a REAL RustFS (a refused policy fails the hook; a reclaim session ends one record and nothing else; a writer's session is refused a final manifest)
 	$(DAGGER) call rustfs-provisioning
 
 # The dataops loop: authorization + provenance AUTHORSHIP + derivation lineage, with real Dex tokens

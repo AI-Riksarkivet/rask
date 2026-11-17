@@ -47,6 +47,22 @@ CAS_RESERVE: Final = "conditional_put"
 ENCRYPTED_WRITE: Final = "encrypted_write"
 
 
+#: The checks whose results ARE the managed-versioning claim ([[LH-511]], ADR 0157), each asked of a WRITE-tier
+#: credential. The store refuses it a final manifest, at a key the tier's own staged-commit Allow also matches, so only
+#: an honoured explicit Deny refuses it: a store that evaluates Allows alone lets any writer finalize a version past
+#: ``version/create``.
+FINAL_MANIFEST_CHECK: Final = "final_manifest_refused"
+#: And it refuses a tag or branch pointer under ``_refs/``, which no statement of the tier allows: a store that reduces
+#: a session policy to its prefix lets a writer pin a version an erasure removes. The scope check cannot show this,
+#: since the probe tier it runs under may put anywhere in its prefix.
+REF_CHECK: Final = "ref_put_refused"
+
+#: Their setup: the write-tier credential is issued, and stages a manifest the tier allows. Either failing means the
+#: two refusals above were never asked of a credential that works, which says nothing about the store's Deny.
+WRITE_TIER_ISSUE: Final = "issue_write_tier"
+STAGED_MANIFEST: Final = "staged_manifest"
+
+
 class ProbeCheck(BaseModel):
     """One step of the probe, with its own outcome — never folded into a neighbour's."""
 
@@ -72,6 +88,9 @@ class ProbeReport(BaseModel):
     #: a second concurrent writer would see. Reporting that as `False` raises a false alarm about the
     #: store; reporting it as `True` claims a guarantee nothing tested.
     commit_safe: bool | None = None
+    #: Whether the store refuses a writer's credential the final manifest and every ref, which managed versioning
+    #: rests on. THREE-VALUED as the two above: ``None`` means neither refusal was asked of a write credential that works.
+    versions_guarded: bool | None = None
     checks: list[ProbeCheck] = Field(default_factory=list)
 
 
@@ -86,6 +105,8 @@ def summarize_probe(checks: list[ProbeCheck]) -> ProbeReport:
     enforced = None if scope is None or scope.outcome == "skip" else scope.outcome == "pass"
     cas = by_name.get(CAS_CHECK)
     commit_safe = None if cas is None or cas.outcome == "skip" else cas.outcome == "pass"
+    guards = [check for name in (FINAL_MANIFEST_CHECK, REF_CHECK) if (check := by_name.get(name)) is not None and check.outcome != "skip"]
+    versions_guarded = all(check.outcome == "pass" for check in guards) if guards else None
 
     if any(c.outcome == "fail" for c in checks):
         outcome: Outcome = "fail"
@@ -93,4 +114,4 @@ def summarize_probe(checks: list[ProbeCheck]) -> ProbeReport:
         outcome = "skip"
     else:
         outcome = "pass"
-    return ProbeReport(outcome=outcome, enforced=enforced, commit_safe=commit_safe, checks=list(checks))
+    return ProbeReport(outcome=outcome, enforced=enforced, commit_safe=commit_safe, versions_guarded=versions_guarded, checks=list(checks))

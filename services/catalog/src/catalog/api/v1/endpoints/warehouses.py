@@ -83,7 +83,19 @@ from catalog.schemas import (
 from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, RecordGone
 from catalog.services.control_records import ProtectionChange, with_protection
-from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
+from catalog.services.vend_probe import (
+    CAS_CHECK,
+    CAS_RESERVE,
+    ENCRYPTED_WRITE,
+    FINAL_MANIFEST_CHECK,
+    REF_CHECK,
+    SCOPE_CHECK,
+    STAGED_MANIFEST,
+    WRITE_TIER_ISSUE,
+    ProbeCheck,
+    ProbeReport,
+    summarize_probe,
+)
 from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
@@ -97,10 +109,13 @@ from lakehouse.storage import s3_client, split_s3_uri
 
 log = logging.getLogger(__name__)
 
-#: The probe checks whose failure is a verdict on the STORE: it ignored a credential's scope, or a conditional
-#: put. Every other failing check (`issue`, `write_inside`, `read_inside`, `cleanup`) means the probe could not
-#: reach the store or its STS, which says nothing about the store.
-_CONFORMANCE_CHECKS: Final = frozenset({SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, ENCRYPTED_WRITE})
+#: The probe checks whose failure is a verdict on the STORE: it ignored a credential's scope, a conditional put, or
+#: the write tier's Deny. Every other failing check (`issue`, `write_inside`, `read_inside`, `issue_write_tier`,
+#: `staged_manifest`, `cleanup`) means the probe could not reach the store or its STS, which says nothing about the store.
+_CONFORMANCE_CHECKS: Final = frozenset({SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, ENCRYPTED_WRITE, FINAL_MANIFEST_CHECK, REF_CHECK})
+
+#: The checks of the probe's write-tier leg, in the order it makes them.
+_WRITE_TIER_CHECKS: Final = (WRITE_TIER_ISSUE, STAGED_MANIFEST, FINAL_MANIFEST_CHECK, REF_CHECK)
 
 router = APIRouter(prefix="/management/v1/warehouses", tags=["warehouse"])
 
@@ -202,8 +217,8 @@ async def establish_warehouse(
     What the create door does once its caller is authorized, and what the catalog does for a warehouse git declares
     ([[XC-213]]): claim and provision the bucket (idempotent), probe its store, write the registry record, give the
     warehouse its row in its own catalog, seed its grants and announce it. The probe refuses a store that ignores
-    credential scope or a conditional put (400) and one it cannot reach (503), so no such warehouse becomes routable
-    ([[LH-481]]). ``ids`` are ``body``'s (:func:`validated_ids`), in a project its caller found in the registry.
+    credential scope, a conditional put or the write tier's policy (400) and one it cannot reach (503), so no such
+    warehouse becomes routable ([[LH-481]], [[LH-511]]). ``ids`` are ``body``'s (:func:`validated_ids`), in a project its caller found in the registry.
     ``owner`` is the caller granted ``owner`` on it, none for a declared warehouse, whose project's admins own it
     through the project.
 
@@ -318,8 +333,9 @@ async def _claim_the_bucket(
 async def _require_a_conforming_store(settings: Settings, vendor: CredentialVendor, root_uri: str, *, warehouse_id: str, author: Author | None) -> None:
     """Probe the store under ``root_uri`` before the record makes it routable ([[LH-481]], ADR 0089).
 
-    Every Lance commit rests on the store refusing a second conditional put, and every vended credential on it
-    honouring the session policy; a store that accepts either and ignores it fails silently, with a 200 on every write.
+    Every Lance commit rests on the store refusing a second conditional put, every vended credential on it honouring
+    the session policy, and managed versioning on it refusing a writer the final manifest and every ref ([[LH-511]]); a
+    store that accepts any of them and ignores it fails silently, with a 200 on every write.
     The probe `POST …/validate` runs is run here too, so such a warehouse is refused rather than found later by a
     client. A `skip` (this deployment vends no direct credentials) proves nothing and refuses nothing. The bucket claim
     stays: it names this project and id, so the same create retried converges.
@@ -342,8 +358,9 @@ async def _require_a_conforming_store(settings: Settings, vendor: CredentialVend
         log.warning("warehouse_store_failed_probe", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": broken})
         raise InvalidInputError(
             f"warehouse {warehouse_id!r} was not registered: its object store failed the storage probe ({', '.join(broken)}). "
-            "A Lance warehouse needs a store that enforces vended-credential scope, refuses a second conditional write, and "
-            "takes the encryption its vends name (the catalog's role granted kms:Decrypt and kms:GenerateDataKey on the key)."
+            "A Lance warehouse needs a store that enforces vended-credential scope, refuses a second conditional write, "
+            "refuses a writer's credential the final manifest and every put under _refs/, and takes the encryption its "
+            "vends name (the catalog's role granted kms:Decrypt and kms:GenerateDataKey on the key)."
         )
     if failed:
         log.warning("warehouse_store_unprobed", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": failed})
@@ -1272,7 +1289,9 @@ async def validate_warehouse_credentials(
     IT WRITES, and that is the point — a policy document can be inspected without learning anything
     about the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under
     the warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix
-    which MUST be refused, and removes what it made. The failure of that last write is the finding.
+    which MUST be refused. Under a second credential, vended at the WRITE tier for the same prefix, it stages a
+    manifest and attempts a final manifest and a put under `_refs/`, which MUST both be refused ([[LH-511]]). It removes
+    what it made. The refusals are the finding.
 
     Admin-gated on the warehouse's own project and collapsing denied → 404, the same
     no-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's
@@ -1311,8 +1330,60 @@ def _encryption_put_args(options: Mapping[str, str]) -> dict[str, Any]:
     return args
 
 
+def _probe_the_write_tier(
+    step: Callable[..., bool],
+    vendor: CredentialVendor,
+    *,
+    bucket: str,
+    probe_prefix: str,
+    store_endpoint: str,
+    session_name: str,
+    checks: list[ProbeCheck],
+) -> list[str]:
+    """Ask the store, under a write-tier credential for ``probe_prefix``, to refuse what that tier is denied; the keys
+    the leg landed, for the probe's cleanup.
+
+    The final manifest is put at ``_versions/<n>.manifest-<uuid>.manifest``: a key the tier's staged-commit Allow
+    matches as well (``table_layout.WRITER_PUT_GLOBS``), so a store that refuses it is honouring the explicit Deny, and
+    one that evaluates Allows alone accepts it. The ref is put under ``_refs/tags/``, which no statement allows. Both
+    follow a staged manifest the store accepted, so a refusal is the Deny's and not a credential that cannot write.
+    """
+    staged = f"{probe_prefix}/_versions/1.manifest-{uuid.uuid4()}"
+    final, ref = f"{staged}.manifest", f"{probe_prefix}/_refs/tags/probe.json"
+    try:
+        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="write", session_name=session_name)
+        options = None if vended is None else vended.as_storage_options()
+    except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
+        checks.append(ProbeCheck(name=WRITE_TIER_ISSUE, outcome="fail", detail=f"{type(exc).__name__}: {exc}"))
+        options = None
+    else:
+        checks.append(ProbeCheck(name=WRITE_TIER_ISSUE, outcome="pass" if options is not None else "skip"))
+    if options is None:
+        checks.extend(ProbeCheck(name=n, outcome="skip", detail="no write-tier credential") for n in _WRITE_TIER_CHECKS[1:])
+        return []
+    access_key, secret_key, session_token = options.credential_in_clear()
+    writer = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.region)
+    if not step(STAGED_MANIFEST, lambda: writer.put_object(Bucket=bucket, Key=staged, Body=b"scope-probe")):
+        checks.extend(ProbeCheck(name=n, outcome="skip", detail="the write tier staged nothing") for n in _WRITE_TIER_CHECKS[2:])
+        return []
+    landed = [staged]
+    if not step(
+        FINAL_MANIFEST_CHECK,
+        lambda: writer.put_object(Bucket=bucket, Key=final, Body=b"scope-probe"),
+        accepted_is="the store accepted a FINAL MANIFEST from a write-tier credential, whose session policy denies it",
+    ):
+        landed.append(final)
+    if not step(
+        REF_CHECK,
+        lambda: writer.put_object(Bucket=bucket, Key=ref, Body=b"scope-probe"),
+        accepted_is="the store accepted a put under _refs/ from a write-tier credential, which no statement of its policy allows",
+    ):
+        landed.append(ref)
+    return landed
+
+
 def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint: str, session_name: str) -> list[ProbeCheck]:
-    """The IO half: vend, write in, read in, write OUT (must fail), clean up.
+    """The IO half: vend, write in, read in, write OUT (must fail), ask the write tier's Deny, clean up.
 
     The probe signs with the vended credential and reaches the store at ``store_endpoint``, the catalog's own
     address: the vended endpoint is the one a client reaches from where it runs ([[LH-489]]), which the catalog's
@@ -1350,25 +1421,25 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
 
     if options is None:
         checks += [
-            ProbeCheck(name=n, outcome="skip", detail="no credential") for n in ("write_inside", "read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, "cleanup")
+            ProbeCheck(name=n, outcome="skip", detail="no credential")
+            for n in ("write_inside", "read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, *_WRITE_TIER_CHECKS, "cleanup")
         ]
         return checks
 
     access_key, secret_key, session_token = options.credential_in_clear()
     s3 = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.region)
 
-    def _step(name: str, fn: Callable[[], object], *, expect_refusal: bool = False) -> bool:
+    def _step(name: str, fn: Callable[[], object], *, accepted_is: str = "") -> bool:
+        """Run one check: ``fn`` must go through, or, where ``accepted_is`` says what the store did wrong by accepting
+        it, must be refused. Whether the check got the outcome it wanted."""
+        expect_refusal = bool(accepted_is)
         try:
             fn()
         except Exception as exc:  # noqa: BLE001 — the store's refusal is the RESULT here, not an error
             detail = f"{type(exc).__name__}: {str(exc)[:120]}"
             checks.append(ProbeCheck(name=name, outcome="pass" if expect_refusal else "fail", detail="" if expect_refusal else detail))
             return expect_refusal
-        checks.append(
-            ProbeCheck(name=name, outcome="fail", detail="the store accepted a write OUTSIDE the credential's prefix")
-            if expect_refusal
-            else ProbeCheck(name=name, outcome="pass")
-        )
+        checks.append(ProbeCheck(name=name, outcome="fail", detail=accepted_is) if expect_refusal else ProbeCheck(name=name, outcome="pass"))
         return not expect_refusal
 
     wrote = _step("write_inside", lambda: s3.put_object(Bucket=bucket, Key=inside, Body=b"scope-probe"))
@@ -1388,7 +1459,11 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         # write LANDED and left an object at the warehouse root. Cleaned below — but only in that case:
         # a correctly scoped credential is refused the delete too, and reporting that refusal as a
         # cleanup failure would raise a false alarm about the store that just passed.
-        scope_refused = _step(SCOPE_CHECK, lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"), expect_refusal=True)
+        scope_refused = _step(
+            SCOPE_CHECK,
+            lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"),
+            accepted_is="the store accepted a write OUTSIDE the credential's prefix",
+        )
         # PUT-IF-NOT-EXISTS, the primitive Lance's commit protocol rests on
         # (`lance_docs/lance/format/table/transaction.md` § "Commit Protocol" -> "Storage Primitives"). Two conditional
         # puts at one key: the first must be ACCEPTED and the second REFUSED. A store that accepts
@@ -1398,21 +1473,35 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         # check rather than the first.
         reserved = _step(CAS_RESERVE, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"first", IfNoneMatch="*"))
         if reserved:
-            _step(CAS_CHECK, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"), expect_refusal=True)
+            _step(
+                CAS_CHECK,
+                lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"),
+                accepted_is="the store accepted a second conditional put at a key that exists",
+            )
         else:
             # The store refused the HEADER, not a racing writer. That is a real failure — recorded by
             # the step above — but it measures nothing about a second writer, so the claim stays
             # UNKNOWN rather than becoming a verdict the probe never reached.
             checks.append(ProbeCheck(name=CAS_CHECK, outcome="skip", detail="the store refused the conditional header itself"))
 
+        # [[LH-511]] THE WRITE TIER'S DENY, asked of a write-tier credential for the same prefix. Managed versioning
+        # (ADR 0157) rests on the store refusing a writer the final manifest and every ref; a store that takes the
+        # session policy and ignores its Deny would let any writer finalize a version past `version/create`.
+        landed = _probe_the_write_tier(
+            _step, vendor, bucket=bucket, probe_prefix=probe_prefix, store_endpoint=store_endpoint, session_name=session_name, checks=checks
+        )
+
         def _clean() -> None:
-            s3.delete_object(Bucket=bucket, Key=inside)
-            s3.delete_object(Bucket=bucket, Key=cas)
-            s3.delete_object(Bucket=bucket, Key=sealed)
+            # Under the probe tier: the write tier deletes nothing, what it landed included.
+            for key in (inside, cas, sealed, *landed):
+                s3.delete_object(Bucket=bucket, Key=key)
             if not scope_refused:
                 s3.delete_object(Bucket=bucket, Key=outside)
 
         _step("cleanup", _clean)
     else:
-        checks += [ProbeCheck(name=n, outcome="skip", detail="nothing was written") for n in ("read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, "cleanup")]
+        checks += [
+            ProbeCheck(name=n, outcome="skip", detail="nothing was written")
+            for n in ("read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, *_WRITE_TIER_CHECKS, "cleanup")
+        ]
     return checks

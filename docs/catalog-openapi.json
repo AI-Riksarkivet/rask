@@ -10067,6 +10067,17 @@
             ],
             "title": "Outcome",
             "type": "string"
+          },
+          "versions_guarded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Versions Guarded"
           }
         },
         "required": [
@@ -21718,7 +21729,7 @@
     },
     "/management/v1/warehouses/{warehouse_id}/validate": {
       "post": {
-        "description": "Prove this warehouse's vended credentials are actually SCOPED, by using one.\n\nTHE CONTROL THIS ASSERTS IS THE WHOLE STORAGE POSTURE. `core/vending.py::build_session_policy`\nrestricts every credential to one bucket + prefix, and the goal names STS as the answer for\nstorage \u2014 so if the object store ACCEPTS the inline session policy and IGNORES it, every credential\nthe estate has ever vended reached the whole bucket, every log line reads normal, and no audit\nrecord could reconstruct which of them over-reached. Nothing asserted it: every vending defect in\nthis estate's history was found by a client failing later, never by the catalog.\n\nIT WRITES, and that is the point \u2014 a policy document can be inspected without learning anything\nabout the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under\nthe warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix\nwhich MUST be refused, and removes what it made. The failure of that last write is the finding.\n\nAdmin-gated on the warehouse's own project and collapsing denied \u2192 404, the same\nno-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's\nbucket, so its gate is the create/lifecycle rung and not a read one.\n\nReports every check even after one fails (see :func:`summarize_probe`) \u2014 an over-permissive store\nand an unreachable one need different answers, and a first-failure exit cannot tell them apart.",
+        "description": "Prove this warehouse's vended credentials are actually SCOPED, by using one.\n\nTHE CONTROL THIS ASSERTS IS THE WHOLE STORAGE POSTURE. `core/vending.py::build_session_policy`\nrestricts every credential to one bucket + prefix, and the goal names STS as the answer for\nstorage \u2014 so if the object store ACCEPTS the inline session policy and IGNORES it, every credential\nthe estate has ever vended reached the whole bucket, every log line reads normal, and no audit\nrecord could reconstruct which of them over-reached. Nothing asserted it: every vending defect in\nthis estate's history was found by a client failing later, never by the catalog.\n\nIT WRITES, and that is the point \u2014 a policy document can be inspected without learning anything\nabout the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under\nthe warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix\nwhich MUST be refused. Under a second credential, vended at the WRITE tier for the same prefix, it stages a\nmanifest and attempts a final manifest and a put under `_refs/`, which MUST both be refused ([[LH-511]]). It removes\nwhat it made. The refusals are the finding.\n\nAdmin-gated on the warehouse's own project and collapsing denied \u2192 404, the same\nno-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's\nbucket, so its gate is the create/lifecycle rung and not a read one.\n\nReports every check even after one fails (see :func:`summarize_probe`) \u2014 an over-permissive store\nand an unreachable one need different answers, and a first-failure exit cannot tell them apart.",
         "operationId": "validate_warehouse_credentials_management_v1_warehouses__warehouse_id__validate_post",
         "parameters": [
           {

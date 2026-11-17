@@ -2846,7 +2846,9 @@ export interface paths {
          *     IT WRITES, and that is the point — a policy document can be inspected without learning anything
          *     about the store that receives it. The probe vends a real credential for `_validate/<uuid4>` under
          *     the warehouse's own root, writes and reads inside it, then attempts a write to the PARENT prefix
-         *     which MUST be refused, and removes what it made. The failure of that last write is the finding.
+         *     which MUST be refused. Under a second credential, vended at the WRITE tier for the same prefix, it stages a
+         *     manifest and attempts a final manifest and a put under `_refs/`, which MUST both be refused ([[LH-511]]). It removes
+         *     what it made. The refusals are the finding.
          *
          *     Admin-gated on the warehouse's own project and collapsing denied → 404, the same
          *     no-existence-oracle rule the lifecycle doors follow (audit #4): this door writes to a tenant's
@@ -8744,6 +8746,8 @@ export interface components {
              * @enum {string}
              */
             outcome: "pass" | "fail" | "skip";
+            /** Versions Guarded */
+            versions_guarded?: boolean | null;
         };
         ProblemDetails: {
             /** @description The spec's error code, which a client dispatches on */

@@ -44,7 +44,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 | A non-root, policy-scoped user calls STS `AssumeRole` with an inline session policy (R1; no rask caller since ADR 0170) | measured |
 | The session policy is intersected with the parent's on every request; a session cannot widen its parent (R2) | measured |
 | An explicit Deny on `sts:AssumeRole` refuses the user's AssumeRole; `s3:prefix` `StringLike` gates ListBucket (R4) | measured |
-| A session policy's explicit Deny beats an Allow (R3, rask's `NeverAFinalManifest`) | source only (`rustfs@1.0.3:crates/policy/src/policy/policy.rs:70-76`) |
+| A session policy's explicit Deny beats an Allow (R3, rask's `NeverAFinalManifest`) | measured on 1.0.3 by the `rustfs-provisioning` lane (`tests/e2e-py/test_the_storage_probe_finds_rustfs_refusing_a_writer_the_final_manifest.py`, [[LH-511]]), and asked of every warehouse's store by the storage probe (§7); source `rustfs@1.0.3:crates/policy/src/policy/policy.rs:70-76` |
 | `DurationSeconds=900` honoured (R6) | measured |
 | `If-None-Match: *` → 412 for the loser; 16 racing writers × 20 rounds, one winner each round (R9) | measured |
 | `If-Match` with a stale ETag → 412 (R10) | measured |
@@ -284,8 +284,11 @@ The CAS check rests on Lance's own requirement: a commit needs put-if-not-exists
 one writer wins a manifest version (`lance_docs/lance/format/table/transaction.md` § Commit Protocol, "Storage Primitives"). The catalog
 proves the same primitive, plus prefix scope, against any warehouse's store through a vended credential:
 `POST /management/v1/warehouses/{warehouse_id}/validate` writes inside the prefix, is refused outside it, and sends two
-`If-None-Match: *` PUTs at one key expecting the second refused
-(`services/catalog/src/catalog/api/v1/endpoints/warehouses.py:104,1165-1166,1211,1274-1291`). Run it against a platform
+`If-None-Match: *` PUTs at one key expecting the second refused, and then, under a WRITE-tier credential for the same
+prefix, stages a manifest and expects a final manifest and a `_refs/` put refused ([[LH-511]]: the final one at a key
+the tier's Allow matches too, so only an honoured Deny refuses it; `versions_guarded` in the report). The warehouse
+create door runs the same probe and registers no warehouse on a store that fails it
+(`services/catalog/src/catalog/api/v1/endpoints/warehouses.py`, `_run_scope_probe`, `_probe_the_write_tier`). Run it against a platform
 store before rask relies on it; it is not a contention test, so the CAS harness still decides exclusivity.
 
 ## 8. What rask demands of a platform store

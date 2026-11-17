@@ -54,7 +54,14 @@ class _Vendor:
         self.asked.append((table_location, tier))
         if self._error is not None:
             raise self._error
-        return self._credentials
+        # Keyed by the tier it was vended at, which is how the store below tells the two credentials apart.
+        return (
+            None
+            if self._credentials is None
+            else self._credentials.model_copy(
+                update={"key_pair": S3KeyPair(access_key_id=tier, secret_access_key=SecretStr("s"), session_token=SecretStr("t"))}
+            )
+        )
 
     def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
         raise AssertionError("the scope probe vends no reclaim")
@@ -74,11 +81,18 @@ class _Store:
     def __init__(self, *, scoped_to: str | None, conditional: str = "honours") -> None:
         self._scoped_to = scoped_to
         self._conditional = conditional
+        #: The tier of the credential the next request is signed with (:meth:`signed_as`).
+        self._tier = "probe"
         self.keys: dict[str, bytes] = {}
         #: Every key a PUT was attempted at, kept whether or not it survived. What the probe TRIED is a
         #: different question from what it left behind, and the probe now cleans up after itself — so a
         #: test that read `keys` to learn where it wrote would be reading the cleanup, not the attempt.
         self.attempted: list[str] = []
+
+    def signed_as(self, tier: str) -> _Store:
+        """This store as the ``tier`` credential reaches it: one store, whichever credential signs."""
+        self._tier = tier
+        return self
 
     def _check(self, key: str) -> None:
         if self._scoped_to is not None and not key.startswith(self._scoped_to):
@@ -87,6 +101,9 @@ class _Store:
     def put_object(self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None) -> dict[str, Any]:  # noqa: N803 — boto3's own casing
         self.attempted.append(Key)
         self._check(Key)
+        # A store that honours the policy holds the write tier to it as well: no final manifest, nothing under `_refs/`.
+        if self._scoped_to is not None and self._tier == "write" and (Key.endswith(".manifest") or "/_refs/" in Key):
+            raise PermissionError(f"AccessDenied: the write tier is refused {Key}")
         if IfNoneMatch is not None:
             if self._conditional == "rejects":
                 raise ValueError("NotImplemented: this store does not support IfNoneMatch")
@@ -136,9 +153,9 @@ def store_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Installed]:
         installed = _Installed()
 
         def _client(endpoint_url: str | None = None, **kwargs: object) -> _Store:
-            store = _Store(scoped_to=installed.prefix if scoped else None, conditional=conditional)
-            installed.store = store
-            return store
+            if installed.store is None:
+                installed.store = _Store(scoped_to=installed.prefix if scoped else None, conditional=conditional)
+            return installed.store.signed_as(str(kwargs["access_key"]))
 
         monkeypatch.setattr(endpoint, "s3_client", _client)
         return installed
@@ -169,11 +186,13 @@ class TestTheProbeTellsTheTwoStoresApart:
         assert outcomes["read_inside"] == "pass"
         assert outcomes[SCOPE_CHECK] == "pass", "a refused write outside the prefix IS the control passing"
         assert outcomes["cleanup"] == "pass"
-        assert endpoint.summarize_probe(checks).enforced is True
+        report = endpoint.summarize_probe(checks)
+        assert (report.outcome, report.enforced, report.versions_guarded) == ("pass", True, True)
+        assert installed.store is not None and installed.store.keys == {}, "the probe left objects behind"
 
     def test_a_store_that_IGNORES_the_policy_is_the_finding(self, store_factory: Callable[..., _Installed]) -> None:
-        """The headline case. Every other check passes, so a probe that only asked "did the writes
-        work" would report a healthy warehouse on a store that hands out the whole bucket."""
+        """The headline case. Every write the probe expects to land does, so a probe that only asked "did the
+        writes work" would report a healthy warehouse on a store that hands out the whole bucket."""
         vendor = _Vendor(credentials=_creds())
         installed = store_factory(scoped=False)
         installed.prefix = "acme/warehouse/_validate/"
