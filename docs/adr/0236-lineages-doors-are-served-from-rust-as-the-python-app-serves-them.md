@@ -104,8 +104,8 @@ checks, their validation and their answers, member for member.
   reader with some grants, a subject with none and the feed's reader; 28 writes are put to both, each implementation
   going first in turn, so each reads what the other wrote; the feed is paged to its end older and forward on each
   side's own cursors; a replay that consumes its object is put to each with its own staged event or parked run and
-  compared with the run id read as the same. Result on 2026-11-17: **0 differences**; 7 cases differ on purpose,
-  under the first five entries below.
+  compared with the run id read as the same. Result on 2026-11-17: **0 differences**; 6 cases differ on purpose,
+  under the first four entries below (a seventh, the trailing slash, ended when the Python stopped redirecting it).
 - **Nine planted defects**, each restored after, each failed a test:
 
   | Defect | Vectors (121) | Side by side |
@@ -122,17 +122,14 @@ checks, their validation and their answers, member for member.
 
 ## What differs from the Python, on purpose
 
-- **A path with a trailing slash is not redirected.** The Python app answers `307` to the path without it, at
-  `http://<Host>/…`: built from the Host header and the transport the pod sees, which behind the platform's TLS
-  Gateway sends the client to plain http. The Rust answers 404. No client uses the form.
 - **A GET door answers HEAD**, as ADR 0219 keeps.
 - **The `errors` list of an event the model refuses is the port's own**: one entry naming `body` with the model's
   message, where pydantic lists each field (ADR 0218 keeps the messages). The status, type and code are the same.
 - **A body nested deeper than 512 levels is refused** with the framework's 400 ("There was an error parsing the
   body"), before any value is built (ADR 0223's reader bound). CPython reads far deeper.
-- **A governed name the catalog refuses to describe is an outage** (503, ADR 0226). The Python relays the catalog's
-  400 with a problem type of `about:blank#validationerror` and the catalog's own problem body, its trace id included,
-  in the detail: a defect, not copied.
+- **A governed name the catalog refuses to describe is an outage** (503, ADR 0226). The Python answers the caller
+  400 with code 13 and a detail naming the caller's own input: the catalog's refusal is a verdict on the name, which
+  no retry cures. The Rust is to follow it; until it does, this case differs.
 - **A record the store fails for any reason but another author's run is a 503**: `Recording::Failed` carries no class
   (ADR 0228). The Python answers the catalog's class. Outside the corpus.
 - **An outbox object that is no UTF-8 is listed as poison.** The Python decodes it strictly and answers the whole

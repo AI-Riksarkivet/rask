@@ -30,10 +30,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
 
-/// What the Rust doors answer on purpose where the Python app answers otherwise (ADR 0236), by case: the status ours
-/// gives.
-const KEPT: &[(&str, u16)] = &[("a trailing slash", 404)];
-
 fn vectors() -> Value {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/doors.json");
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
@@ -183,10 +179,6 @@ async fn differences(case: &Value, shell: &Shell, state: &State, secret: &str) -
             differing.push(format!("{what}\n    rust:   {ours}\n    python: {theirs}"));
         }
     };
-    if let Some((_, status)) = KEPT.iter().find(|(name, _)| case["name"] == *name) {
-        check("status (kept)", answer.status().as_u16().to_string(), status.to_string());
-        return differing;
-    }
     check("status", answer.status().as_u16().to_string(), case["status"].to_string());
     // A GET door answers HEAD here and its `Allow` says so; the Python doors refuse HEAD (ADR 0219).
     let header = |name: &str| Some(answer.headers().get(name)?.to_str().unwrap().replace(",HEAD", ""));

@@ -60,11 +60,10 @@ OUTBOX = "_lineage_outbox"
 HEADERS = ("content-type", "cache-control", "vary", "allow", "location")
 #: What the Rust doors answer on purpose where the Python app answers otherwise, by case: ADR 0236 says why.
 KEPT = {
-    "a trailing slash": "the Python app redirects to the path without it, built from the Host header and plain http",
     "HEAD on a GET door": "a GET door answers HEAD (ADR 0219)",
     "ingest: a body no event model takes": "the errors list of an event the model refuses is the port's own (ADR 0218)",
     "ingest: a run event with no job": "the errors list of an event the model refuses is the port's own (ADR 0218)",
-    "ingest: admin names a governed table with a slash": "a name the catalog refuses to describe is an outage (ADR 0226); Python relays its 400",
+    "ingest: admin names a governed table with a slash": "a name the catalog refuses to describe is an outage here (ADR 0226); Python answers 400",
     "ingest: nested deeper than the reader reads": "a body nested deeper than 512 levels is refused before it is read (ADR 0223)",
     "ingest: nested far deeper": "a body nested deeper than 512 levels is refused before it is read (ADR 0223)",
 }
