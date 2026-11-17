@@ -197,7 +197,12 @@ def _format_version(version: str) -> tuple[int, int]:
 
 
 def _read_footers(location: str, so: StorageOptions, paths: Sequence[str]) -> list[_FooterMetadata | Exception]:
-    """Each file's footer, read concurrently: one or two ranged reads from the end of each file."""
+    """Each file's footer, read concurrently: one or two ranged reads from the end of each file.
+
+    One reader per file, each built from the same options. Measured on pylance 13.0.0 over a moto server, 2026-11-17: a
+    shared ``LanceFileSession`` reads 8 footers in 33 ms against 30 ms for a reader each, and 64 in 222 to 236 ms against
+    218 to 223 ms, so a reader each costs no more ([[LH-402]]).
+    """
     root = location.rstrip("/") + "/data/"
     options = so.in_clear() or None
 

@@ -1863,8 +1863,11 @@ def get_table_stats(
         branch = body.branch
     req = GetTableStatsRequest(id=segments, branch=branch)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
-    # The request carries no version to pin, so a base planted between this judgement and the native
-    # open is read unjudged; the window is the two opens apart ([[LH-279]]).
+    # The request carries no version to pin, so the native read opens the table again after this judgement. No door
+    # changes a table's base list between the two: every commit is judged at `version/create` or `commit_stamped`,
+    # which refuse a base added, removed or repointed, and a writer's credential puts no final manifest, which every
+    # warehouse's store is probed for ([[LH-511]]). A base the second open would read unjudged is therefore one written
+    # past the store's own policy ([[LH-323]]).
     table.open(so)
     stats = table.read_natively("get_table_stats", req)
     return stats
