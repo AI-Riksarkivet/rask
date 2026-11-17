@@ -51,9 +51,13 @@
 (*       records (purge.due_from). TableLifecycleNoSettle lets the release *)
 (*       land while such an undrop runs, and LiveHasData fails: the purge  *)
 (*       deletes the bytes the undrop then registers.                      *)
-(*   A4. A Lance create of a dataset is a conditional commit: of two       *)
-(*       creates at one location one commits and the other fails          *)
-(*       ("Dataset already exists", dataplane._write_blob). Atomic here.   *)
+(*   A4. A Lance create of a dataset refuses a location that already holds *)
+(*       one ("Dataset already exists", dataplane._write_blob) before it   *)
+(*       writes a row, and its commit is NOT conditional on that check: a  *)
+(*       create whose check passed before another committed lands as the  *)
+(*       next version, over the other's rows (measured on pylance 13       *)
+(*       through the catalog, TableLifecycleCreateBothAnswered). Two steps *)
+(*       here, CWrite and CCommit.                                         *)
 (*   A5. A fence whose request has ended lapses after LEASE (Lapse), and   *)
 (*       no request outlives its LEASE. LEASE is otherwise not modelled:   *)
 (*       a claim held under another name refuses every take and fence      *)
@@ -61,7 +65,8 @@
 (*       its lease (location_claims._taken, holder_is_gone).              *)
 (*                                                                         *)
 (* FINDINGS, each a config whose first line reads FINDING (ADR 0227):     *)
-(*   TableLifecycleCreateRace, TableLifecycleUndropRace,                   *)
+(*   TableLifecycleCreateRace, TableLifecycleCreateBothAnswered,           *)
+(*   TableLifecycleUndropRace,                                             *)
 (*   TableLifecycleUndropClearsRedrop, TableLifecycleUndropOverDestroyed,  *)
 (*   TableLifecycleSoftDropWrongRow, TableLifecycleProtectRace. The gate   *)
 (*   configs leave out the mixes each needs, and say so.                   *)
@@ -117,11 +122,12 @@ VARIABLES rows,      \* __manifest: the <<name, location>> rows
           undropOk,    \* <<name, location>> an undrop answered 200 for, until a door acts on the table again
           purged,      \* locations the purge ended
           protHit,     \* data was deleted while its table held protection
-          purgeHitLive \* the purge deleted bytes a row named
+          purgeHitLive, \* the purge deleted bytes a row named
+          overwritten  \* locations where a create's commit landed over rows another create committed
 
 store  == <<rows, bytes, claim, trash, prot, grants>>
 locals == <<lloc, lver, lx, lpath>>
-hist   == <<acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive>>
+hist   == <<acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten>>
 vars   == <<store, op, pc, locals, mpc, mloc, faults, hist>>
 
 NoClaim  == [st |-> "none", name |-> None, fence |-> None, ver |-> 0]
@@ -140,7 +146,7 @@ Init ==
   /\ mpc = "idle" /\ mloc = None
   /\ faults = 0
   /\ acked = IF InitialTable THEN {"L0"} ELSE {}
-  /\ doorEnded = {} /\ softDropped = {} /\ undropOk = {} /\ purged = {} /\ protHit = FALSE /\ purgeHitLive = FALSE
+  /\ doorEnded = {} /\ softDropped = {} /\ undropOk = {} /\ purged = {} /\ protHit = FALSE /\ purgeHitLive = FALSE /\ overwritten = {}
 
 ---------------------------------------------------------------------------
 \* Helpers.
@@ -252,16 +258,24 @@ CTakeBack(p) ==
   /\ Goto(p, "done")
   /\ UNCHANGED <<rows, bytes, claim, trash, prot, op, locals, mpc, mloc, hist>>
 
-\* _write_blob(mode="create"): Lance's create commits only where no dataset is (A4).
+\* _write_blob(mode="create"), Lance's write_dataset: a location already holding a dataset is refused ("Dataset
+\* already exists") before a row is written (A4).
 CWrite(p) ==
   /\ pc[p] = "c_write" /\ NoFault
-  /\ IF bytes[lloc[p]] = "data"
-       THEN Goto(p, "c_rb_drop") /\ UNCHANGED bytes
-       ELSE Goto(p, "c_answer") /\ bytes' = [bytes EXCEPT ![lloc[p]] = "data"]
-  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, hist>>
+  /\ Goto(p, IF bytes[lloc[p]] = "data" THEN "c_rb_drop" ELSE "c_commit")
+  /\ UNCHANGED <<store, op, locals, mpc, mloc, hist>>
+
+\* The commit, once the rows are written, is not conditional on that check: a create committed at the location since
+\* is overwritten, this one landing as the table's next version (A4).
+CCommit(p) ==
+  /\ pc[p] = "c_commit" /\ NoFault
+  /\ bytes' = [bytes EXCEPT ![lloc[p]] = "data"]
+  /\ overwritten' = IF bytes[lloc[p]] = "data" THEN overwritten \cup {lloc[p]} ELSE overwritten
+  /\ Goto(p, "c_answer")
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive>>
 
 CWriteFails(p) ==
-  /\ pc[p] = "c_write" /\ Fault
+  /\ pc[p] \in {"c_write", "c_commit"} /\ Fault
   /\ Goto(p, "c_rb_drop")
   /\ UNCHANGED <<store, op, locals, mpc, mloc, hist>>
 
@@ -282,7 +296,7 @@ CRollbackDelete(p) ==
   /\ pc[p] = "c_rb_delete" /\ NoFault
   /\ DeleteBytes(lx[p])
   /\ Goto(p, "c_rb_release")
-  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, purgeHitLive>>
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, purgeHitLive, overwritten>>
 
 \* The rollback releases the claim under the name and the uuid the claim recorded, then (fresh path) the grants.
 CRollbackRelease(p) ==
@@ -295,7 +309,7 @@ CAnswer(p) ==
   /\ pc[p] = "c_answer" /\ NoFault
   /\ acked' = acked \cup {lloc[p]}
   /\ Goto(p, "done")
-  /\ UNCHANGED <<store, op, locals, mpc, mloc, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive>>
+  /\ UNCHANGED <<store, op, locals, mpc, mloc, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten>>
 
 ---------------------------------------------------------------------------
 \* DROP: the resolution, the protection guard and the fence are common to both branches of _drop.
@@ -345,14 +359,14 @@ DDereg(p) ==
             /\ Retired(LocOf(n))
             /\ Goto(p, IF LocOf(n) = l THEN "d_delete" ELSE "done")
             /\ UNCHANGED trash
-  /\ UNCHANGED <<bytes, claim, prot, grants, op, locals, mpc, mloc, acked, softDropped, purged, protHit, purgeHitLive>>
+  /\ UNCHANGED <<bytes, claim, prot, grants, op, locals, mpc, mloc, acked, softDropped, purged, protHit, purgeHitLive, overwritten>>
 
 \* _delete_everything_under; a delete that fails is TableBytesLeftError: the residue record and the claim stay.
 DDelete(p) ==
   /\ pc[p] = "d_delete" /\ NoFault
   /\ DeleteBytes(lloc[p])
   /\ Goto(p, "d_clear")
-  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, purgeHitLive>>
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, purgeHitLive, overwritten>>
 
 DDeleteFails(p) ==
   /\ pc[p] = "d_delete" /\ Fault
@@ -409,7 +423,7 @@ SDereg(p) ==
             /\ softDropped' = softDropped \cup {LocOf(n)}
             /\ Retired(LocOf(n))
             /\ Goto(p, "s_lift")
-  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, purged, protHit, purgeHitLive>>
+  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, purged, protHit, purgeHitLive, overwritten>>
 
 SUnprot(p) ==
   /\ pc[p] = "s_unprot" /\ NoFault
@@ -461,7 +475,7 @@ URegister(p) ==
        THEN UNCHANGED <<rows, softDropped>>
        ELSE rows' = rows \cup {<<n, l>>} /\ softDropped' = softDropped \ {l}
   /\ Goto(p, "u_clear")
-  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, undropOk, purged, protHit, purgeHitLive>>
+  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, undropOk, purged, protHit, purgeHitLive, overwritten>>
 
 \* trash.clear(uuid): the record goes once the table is registered.
 UClear(p) ==
@@ -474,7 +488,7 @@ UAnswer(p) ==
   /\ pc[p] = "u_answer" /\ NoFault
   /\ undropOk' = undropOk \cup {<<NameOf(op[p]), lloc[p]>>}
   /\ Goto(p, "done")
-  /\ UNCHANGED <<store, op, locals, mpc, mloc, acked, doorEnded, softDropped, purged, protHit, purgeHitLive>>
+  /\ UNCHANGED <<store, op, locals, mpc, mloc, acked, doorEnded, softDropped, purged, protHit, purgeHitLive, overwritten>>
 
 ---------------------------------------------------------------------------
 \* RENAME n1 -> n2 (endpoints/tables.py rename_table, dataplane.rename_table).
@@ -514,7 +528,7 @@ RDereg(p) ==
   /\ IF Named(n) = {}
        THEN Goto(p, "r_handback") /\ UNCHANGED <<rows, doorEnded, undropOk>>
        ELSE rows' = rows \ Named(n) /\ doorEnded' = doorEnded \cup {lloc[p]} /\ Retired(LocOf(n)) /\ Goto(p, "r_register")
-  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, softDropped, purged, protHit, purgeHitLive>>
+  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, softDropped, purged, protHit, purgeHitLive, overwritten>>
 
 \* ns.register_table(destination, location): put-if-not-exists (A1); a failure compensates.
 RRegister(p) ==
@@ -633,7 +647,7 @@ PDelete ==
   /\ DeleteBytes(mloc)
   /\ purgeHitLive' = (purgeHitLive \/ (Live(mloc) /\ bytes[mloc] = "data"))
   /\ mpc' = "end"
-  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, pc, locals, mloc, acked, doorEnded, softDropped, undropOk, purged>>
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, pc, locals, mloc, acked, doorEnded, softDropped, undropOk, purged, overwritten>>
 
 PDeleteFails ==
   /\ mpc = "delete" /\ Fault
@@ -652,13 +666,13 @@ PEnd ==
             /\ trash' = [trash EXCEPT ![l] = NoRecord]
             /\ purged' = purged \cup {l}
             /\ mpc' = "idle" /\ mloc' = None
-  /\ UNCHANGED <<rows, bytes, op, pc, locals, acked, doorEnded, softDropped, undropOk, protHit, purgeHitLive>>
+  /\ UNCHANGED <<rows, bytes, op, pc, locals, acked, doorEnded, softDropped, undropOk, protHit, purgeHitLive, overwritten>>
 
 ---------------------------------------------------------------------------
 Step(p) ==
   \/ Start(p)
   \/ CProbe(p) \/ CTake(p) \/ CClaim(p) \/ CGrant(p) \/ CReserve(p) \/ CRegister(p) \/ CUnreserve(p) \/ CTakeBack(p)
-  \/ CWrite(p) \/ CRollbackDrop(p) \/ CRollbackDelete(p) \/ CRollbackRelease(p) \/ CAnswer(p)
+  \/ CWrite(p) \/ CCommit(p) \/ CRollbackDrop(p) \/ CRollbackDelete(p) \/ CRollbackRelease(p) \/ CAnswer(p)
   \/ DResolve(p) \/ DProtect(p) \/ DFence(p) \/ DJudge(p) \/ DDereg(p) \/ DDelete(p) \/ DClear(p) \/ DRelease(p)
   \/ DRecords(p) \/ DRevoke(p) \/ DLift(p) \/ SPut(p) \/ SDereg(p) \/ SUnprot(p)
   \/ UFind(p) \/ UStand(p) \/ UTake(p) \/ URegister(p) \/ UClear(p) \/ UAnswer(p)
@@ -699,6 +713,10 @@ PurgeNeverRemovesLive == ~purgeHitLive
 \* A create that answered 200 made a table that stands, with its data, until a door the owner called removes it
 \* (a drop or rename door that resolved that very table).
 AnsweredCreateStands == \A l \in acked : l \in doorEnded \/ (Live(l) /\ bytes[l] = "data")
+
+\* Of the creates that write one table, one commits: a Create never lands over rows another create committed, which
+\* that create answers 200 for (CreateMode.CREATE: a written table is the create's conflict).
+OneCreateCommitsPerTable == overwritten = {}
 
 \* A dropped table can be undropped until it is purged: a recoverable drop leaves its record, and the record
 \* goes only with an undrop that registered the table again or with the purge.
