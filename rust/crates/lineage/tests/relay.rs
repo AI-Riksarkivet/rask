@@ -78,7 +78,7 @@ async fn a_staged_event_is_drained_as_python_drains_it() {
             "refused": count(matches!(drained, Drained::Refused { .. })),
             "recorded": count(kept.is_some()),
         });
-        let ours = json!({"effects": effects.called, "outcome": outcome, "counted": kept.map(|counted| counted.name()).into_iter().collect::<Vec<_>>()});
+        let ours = json!({"effects": effects.called, "outcome": outcome, "counted": kept.map(|counted| counted.label()).into_iter().collect::<Vec<_>>()});
         let theirs = json!({"effects": case["effects"], "outcome": case["outcome"], "counted": case["counted"]});
         if ours != theirs {
             failures.push(format!("{case}\n    rust:   {ours}\n    python: {theirs}"));

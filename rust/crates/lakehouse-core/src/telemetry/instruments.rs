@@ -7,7 +7,7 @@
 
 use crate::signing::RefusalReason;
 use opentelemetry::KeyValue;
-use opentelemetry::metrics::{Counter, Histogram, Meter, ObservableGauge};
+use opentelemetry::metrics::{Counter, Gauge, Histogram, Meter, ObservableGauge};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -450,5 +450,55 @@ impl OutboxMetrics {
         if let Ok(mut backlogs) = self.backlogs.lock() {
             backlogs.remove(&lane);
         }
+    }
+}
+
+/// A fixed timer's turns (scope `lance.timers`), which the alert on a timer that stopped running reads.
+pub struct TimerMetrics {
+    turns: Counter<u64>,
+    last_claimed: Gauge<f64>,
+    period: Gauge<f64>,
+}
+
+impl TimerMetrics {
+    /// Every outcome a turn can end in, as `timer.turns` labels it.
+    pub const OUTCOMES: [&'static str; 5] = ["ran", "failed", "elsewhere", "held", "unread"];
+
+    pub fn new(meter: &Meter) -> TimerMetrics {
+        let gauge = |name, description| meter.f64_gauge(name).with_unit("s").with_description(description).build();
+        TimerMetrics {
+            turns: counter(
+                meter,
+                "timer.turns",
+                "{turn}",
+                "Turns each fixed timer's loop took in this process, by timer and by how the turn ended.",
+            ),
+            last_claimed: gauge(
+                "timer.last_claimed",
+                "When the window this process last saw claimed began, as Unix seconds on the store's clock, by timer: a timer whose value stops moving has stopped running on every replica.",
+            ),
+            period: gauge(
+                "timer.period",
+                "The period git declares for each fixed timer this process runs, which a stopped timer's age is judged by.",
+            ),
+        }
+    }
+
+    /// The timer's period, and every outcome's series at 0: called as its loop starts.
+    pub fn started(&self, timer: &str, period: f64) {
+        self.period.record(period, &[KeyValue::new("timer", timer.to_owned())]);
+        for outcome in Self::OUTCOMES {
+            self.record_turn(timer, outcome, 0);
+        }
+    }
+
+    pub fn record_turn(&self, timer: &str, outcome: &'static str, count: u64) {
+        self.turns
+            .add(count, &[KeyValue::new("timer", timer.to_owned()), KeyValue::new("outcome", outcome)]);
+    }
+
+    /// The window last seen claimed began at `window_seconds`, Unix seconds on the store's clock.
+    pub fn record_claimed(&self, timer: &str, window_seconds: f64) {
+        self.last_claimed.record(window_seconds, &[KeyValue::new("timer", timer.to_owned())]);
     }
 }

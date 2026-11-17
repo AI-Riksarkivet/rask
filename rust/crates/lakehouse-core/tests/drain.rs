@@ -47,7 +47,7 @@ async fn sigterm_drains_the_shell_and_an_open_request_is_answered() {
     let address = listener.local_addr().unwrap();
     let served = tokio::spawn({
         let (shell, router) = (shell.clone(), shell.router(doors));
-        async move { shell.serve(listener, router).await }
+        async move { shell.serve(listener, router, Duration::from_secs(5)).await }
     });
 
     assert_eq!(ask(address, "/readyz").await.0, 200);

@@ -5,6 +5,8 @@
 //! catalog does not answer.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use axum::body::{Body, Bytes};
 use axum::http::Request;
 use http_body_util::{BodyExt, Full};
@@ -13,6 +15,7 @@ use lakehouse_core::auth::settings::AuthSettings;
 use lakehouse_core::auth::verifier::{Authenticator, KeySource, SigningKey, Unavailable as KeysDown};
 use lakehouse_core::authz::{AccessDecider, Answer, TableDecision};
 use lakehouse_core::events::DatasetUuids;
+use lakehouse_core::secrets::PublishedKeys;
 use lakehouse_core::service::health::HealthWatch;
 use lakehouse_core::service::lifecycle::Lifecycle;
 use lakehouse_core::service::shell::Shell;
@@ -20,6 +23,7 @@ use lakehouse_tables::Catalog;
 use lakehouse_tables::bearer::anonymous;
 use lineage::app::router;
 use lineage::authz::gates::Names;
+use lineage::gate::Gate;
 use lineage::signature::Signing;
 use lineage::state::{Resolver, State};
 use lineage::store::Store;
@@ -28,6 +32,7 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use support::counted::Counted;
 use tower::ServiceExt;
 
 fn vectors() -> Value {
@@ -113,18 +118,22 @@ fn shell_and_state(stand_ins: &Value) -> (Shell, State) {
     let catalog = stand_ins["env"]["LINEAGE_CATALOG_DATASET_NAMESPACE"].as_str().unwrap().to_owned();
     let unanswered = Catalog::new("http://127.0.0.1:9", anonymous(), Duration::from_secs(5)).unwrap();
     let store = Store::new(unanswered, vec!["lance_catalog".to_owned(), "provenance".to_owned()], &catalog, true).unwrap();
-    let state = State {
-        authenticator: Arc::new(authenticator),
+    let gate = Gate {
+        signing: Signing::default(),
+        keys: Arc::new(PublishedKeys::new(Arc::new(|_: &str| BTreeMap::new()))),
         fga_enabled: true,
         decider: Some(Arc::new(Grants(stand_ins["grants"].clone()))),
         catalog,
         root: stand_ins["env"]["RASK_FGA_ROOT_OBJECT"].as_str().unwrap().to_owned(),
         store,
+        signals: Arc::clone(&Counted::new().signals),
+    };
+    let state = State {
+        authenticator: Arc::new(authenticator),
+        gate: Arc::new(gate),
         names: Arc::new(Catalogued(stand_ins.clone())),
         outbox: None,
         publisher: None,
-        keys: Arc::new(BTreeMap::<String, Vec<String>>::new()),
-        signing: Signing::default(),
     };
     let lifecycle = Lifecycle::default();
     lifecycle.mark_started();

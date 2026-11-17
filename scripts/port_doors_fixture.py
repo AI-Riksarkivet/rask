@@ -277,7 +277,8 @@ class Corpus:
             headers = {header: answer.headers.get(header, "").replace(",HEAD", "") for header in HEADERS}
             seen[side] = {"status": answer.status_code, "headers": headers, "body": body}
         if seen["python"] != seen["rust"]:
-            line = f"{name}:\n    python: {json.dumps(seen['python'])[:900]}\n    rust:   {json.dumps(seen['rust'])[:900]}"
+            width = None if os.environ.get("DOORS_FULL") else 900
+            line = f"{name}:\n    python: {json.dumps(seen['python'])[:width]}\n    rust:   {json.dumps(seen['rust'])[:width]}"
             (self.kept if name in KEPT else self.differences).append(line)
         self.statuses[f"{seen['python']['status']}"] += 1
         if os.environ.get("DOORS_VERBOSE"):

@@ -3,11 +3,10 @@
 //! every output and input, and only then is the event recorded.
 
 use super::{Answer, Refusal, answer, caller, field_error};
-use crate::authz::gates::ingest_authz;
 use crate::authz::names::{enforce_author, stamp_resolved_uuids};
-use crate::intake::Recording;
+use crate::intake::{Recording, refusal_outcome};
 use crate::model::{Event, parse_event, without_signature_facet};
-use crate::state::{State, StoreFeed};
+use crate::state::State;
 use axum::body::to_bytes;
 use axum::extract::{Request, State as Shared};
 use axum::http::StatusCode;
@@ -15,8 +14,10 @@ use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 use lakehouse_core::pywire::json;
 use lakehouse_core::service::problem::{ErrorCode, NsError, Problem};
+use lakehouse_core::telemetry::instruments::{LineageDoor, LineageOutcome};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::time::Instant;
 
 /// Whether a body of this content type is read as JSON: `application/json` or `application/*+json`, as an email
 /// header parses it; a body with no content type is not.
@@ -87,10 +88,24 @@ pub async fn ingest(Shared(state): Shared<State>, request: Request) -> Answer {
         .map_err(|error| Refusal::Invalid(vec![field_error("body", &error.to_string(), "value_error")]))?;
     let (subject, bearer) = (caller.subject.as_deref(), caller.bearer.as_deref());
     enforce_author(&mut event, subject);
-    let decider = state.decider.as_deref().filter(|_| state.fga_enabled);
-    stamp_resolved_uuids(&mut event, state.names.as_ref(), bearer, decider, subject, &state.catalog).await?;
-    let aliased = ingest_authz(&event, subject, &state.authority(), Some(&StoreFeed(&state.store))).await?;
-    recorded(state.store.record(&event, &aliased.into_iter().collect::<Vec<_>>()).await, &event)?;
+    let decider = state.gate.decider.as_deref().filter(|_| state.gate.fga_enabled);
+    stamp_resolved_uuids(&mut event, state.names.as_ref(), bearer, decider, subject, &state.gate.catalog).await?;
+    let metrics = &state.gate.signals.lineage;
+    // A refusal names a run the graph should have held, so it is counted by the outcome every door counts it by; a 401,
+    // a 422 or an outage names none.
+    let aliased = state.gate.ingest(&event, subject).await.inspect_err(|denial| {
+        if let Ok(refusal) = denial.refusal() {
+            metrics.record_outcome(refusal_outcome(refusal), LineageDoor::Http);
+        }
+    })?;
+    let started = Instant::now();
+    let recording = state.gate.store.record(&event, &aliased.into_iter().collect::<Vec<_>>()).await;
+    if recording == Recording::ForeignRun {
+        metrics.record_outcome(LineageOutcome::Unrepairable, LineageDoor::Http);
+    }
+    recorded(recording, &event)?;
+    metrics.record_ingest_duration(started.elapsed().as_secs_f64());
+    metrics.record_outcome(LineageOutcome::Ingested, LineageDoor::Http);
     let run = match &event {
         Event::Run(run) => Value::String(run.run.run_id.clone()),
         Event::Dataset(_) => Value::Null,

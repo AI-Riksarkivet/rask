@@ -4,4 +4,5 @@ pub mod health;
 pub mod lifecycle;
 pub mod problem;
 pub mod shell;
+pub mod supervision;
 pub mod trace;

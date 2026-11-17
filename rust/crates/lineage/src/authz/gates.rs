@@ -15,6 +15,8 @@ use lakehouse_core::auth::principal::Principal;
 use lakehouse_core::authz::{AccessDecider, Answer, Unavailable, is_object_id, table_object};
 use lakehouse_core::events::{DatasetUuids, LANCE_FACET};
 use lakehouse_core::service::problem::{ErrorCode, NsError};
+use lakehouse_core::telemetry::audit::{self, AuditAction, AuditOutcome};
+use lakehouse_core::telemetry::logging::Value as Field;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -147,9 +149,11 @@ pub trait Names: Send + Sync {
     fn table<'a>(&'a self, name: &'a str, bearer: Option<&'a str>) -> Answer<'a, DatasetUuids>;
 }
 
+/// A refusal: who was refused on the audit trail, one record per object as the catalog's doors write them, then a line.
 fn denied(event: &str, subject: &str, relation: &str, resources: &[String]) {
     for resource in resources {
-        tracing::info!(target: "lance.audit", action = "authz", outcome = "deny", relation, subject, resource, "audit");
+        let relation = [("relation", Field::Str(relation.to_owned()))];
+        audit::emit(AuditAction::AUTHZ, AuditOutcome::Deny, Some(subject), Some(resource), &relation);
     }
     tracing::info!(relation, objects = ?resources, "{event}");
 }

@@ -16,6 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use http_body_util::Limited;
+use opentelemetry::trace::FutureExt as _;
 use serde_json::json;
 use std::any::Any;
 use std::sync::Arc;
@@ -23,6 +24,9 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tower_http::catch_panic::CatchPanicLayer;
+
+/// How long after SIGTERM the listener still takes a connection.
+const NOTICE: Duration = Duration::from_millis(100);
 
 /// What a service hands the shell to be served in it.
 #[derive(Clone)]
@@ -113,7 +117,8 @@ async fn deadline(State(shell): State<Shell>, request: Request, next: Next) -> R
 
     let (method, path) = (request.method().clone(), request.uri().path().to_owned());
     let trace_id = trace::current_trace_id().unwrap_or_default();
-    let mut door = tokio::spawn(trace::within(trace_id, next.run(request)));
+    // The door runs on a task of its own, in the span the request is served in, so a span it starts is that span's child.
+    let mut door = tokio::spawn(trace::within(trace_id, next.run(request)).with_context(opentelemetry::Context::current()));
     let mut hung_up = StopUnlessLetGo(Some(door.abort_handle()));
     match tokio::time::timeout(shell.request_deadline, &mut door).await {
         Ok(Ok(response)) => response,
@@ -185,15 +190,31 @@ impl Shell {
         layered.layer(from_fn(trace::traced))
     }
 
-    /// Serve `router` on `listener` until SIGTERM, which turns `/readyz` to shutting down and lets open requests end.
-    pub async fn serve(&self, listener: TcpListener, router: Router) -> std::io::Result<()> {
+    /// Serve `router` on `listener` until SIGTERM, which turns `/readyz` to shutting down at once, takes no new
+    /// connection, and gives the requests open then `grace` to be answered; one still open after it is dropped.
+    pub async fn serve(&self, listener: TcpListener, router: Router, grace: Duration) -> std::io::Result<()> {
         let mut terminate = signal(SignalKind::terminate())?;
         let lifecycle = Arc::clone(&self.lifecycle);
+        let (told, stopping) = tokio::sync::oneshot::channel();
         let told_to_stop = async move {
             terminate.recv().await;
             lifecycle.mark_draining();
             tracing::info!("drain_armed_by_sigterm");
+            // A request already on its way as the signal lands, a probe among them, is answered (the probe: shutting
+            // down) rather than refused, as the Python server answers what arrives before its loop next looks at its
+            // exit flag, every 0.1 s.
+            tokio::time::sleep(NOTICE).await;
+            let _ = told.send(());
         };
-        axum::serve(listener, router).with_graceful_shutdown(told_to_stop).await
+        let serving = axum::serve(listener, router).with_graceful_shutdown(told_to_stop).into_future();
+        tokio::pin!(serving);
+        tokio::select! {
+            served = &mut serving => return served,
+            _ = stopping => {}
+        }
+        tokio::time::timeout(grace, serving).await.unwrap_or_else(|_| {
+            tracing::warn!(seconds = grace.as_secs_f64(), "drain_grace_passed");
+            Ok(())
+        })
     }
 }

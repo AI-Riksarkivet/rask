@@ -99,10 +99,9 @@ Each is outside the corpus:
   required at start where the outbox or the timer root is on the store (Python fails at the first use), an outbox or root
   that is not on the store is refused (ADR 0234), and a number of seconds that is infinite is refused (Python takes
   `inf`). Pydantic's lax forms outside the corpus (`5.`, digits of other scripts) are not promised.
-- **Counts are kept in an in-process `Tally`**, by door and outcome as `lineage.events.processed` names them; the
-  OpenTelemetry metrics (the processed counter, the timer's turns and last claim, the outbox's backlog and drained,
-  stranded and refused counts, the forwarder's) are not ported, and with them the timer's `elsewhere` hook, which only
-  forgot the backlog gauge.
+- **Counts are the OpenTelemetry metrics the Python records** (ADR 0238): the processed counter by door and outcome,
+  the timer's turns, last claim and period, the outbox's backlog and drained, stranded and refused counts, and the
+  forwarder's. The timer's `elsewhere` hook, which only forgot the backlog gauge, is not ported.
 - **One listing a tick.** Python lists the outbox for its backlog and again for the events; the Rust lists once and logs
   the backlog from that listing.
 - **The key id that paces reads of published keys** is read from the arrived event's facet without validating the rest of

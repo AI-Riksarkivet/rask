@@ -35,7 +35,7 @@ async fn an_event_is_judged_as_python_judges_it() {
             Verdict::Again => "again",
             Verdict::Park => "park",
         };
-        let ours = json!({"verdict": verdict, "counted": [counted.name()]});
+        let ours = json!({"verdict": verdict, "counted": [counted.label()]});
         let theirs = json!({"verdict": case["verdict"], "counted": case["counted"]});
         if ours != theirs {
             failures.push(format!(

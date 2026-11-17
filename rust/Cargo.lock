@@ -1390,6 +1390,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "lakehouse-core",
+ "opentelemetry",
  "serde_json",
  "thiserror",
  "tokio",
@@ -1488,6 +1489,8 @@ dependencies = [
  "lakehouse-bus",
  "lakehouse-core",
  "lakehouse-tables",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "percent-encoding",
  "reqwest",
  "serde",
@@ -1703,6 +1706,7 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.5",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

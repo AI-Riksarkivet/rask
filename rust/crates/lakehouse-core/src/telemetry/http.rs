@@ -10,7 +10,7 @@ use axum::http::Version;
 use axum::middleware::Next;
 use axum::response::Response;
 use opentelemetry::metrics::{Histogram, UpDownCounter};
-use opentelemetry::trace::{FutureExt as _, SpanContext, SpanId, SpanKind, Status, TraceContextExt as _, TraceFlags, TraceId, TraceState, Tracer as _};
+use opentelemetry::trace::{FutureExt as _, SpanKind, Status, TraceContextExt as _, Tracer as _};
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_sdk::trace::SdkTracer;
 use std::sync::{Arc, OnceLock};
@@ -84,17 +84,7 @@ impl HttpTelemetry {
         };
         let [host, agent, length, traceparent] = ["host", "user-agent", "content-length", "traceparent"]
             .map(|name| request.headers().get(name).and_then(|value| value.to_str().ok()).map(str::to_owned));
-        let parent = traceparent.as_deref().and_then(trace::parent_of).and_then(|(trace_id, span_id, flags)| {
-            let flags = TraceFlags::new(u8::from_str_radix(flags, 16).ok()?);
-            let context = SpanContext::new(
-                TraceId::from_hex(trace_id).ok()?,
-                SpanId::from_hex(span_id).ok()?,
-                flags,
-                true,
-                TraceState::default(),
-            );
-            Some(Context::new().with_remote_span_context(context))
-        });
+        let parent = traceparent.as_deref().and_then(trace::remote_parent);
         let mut attributes = vec![
             KeyValue::new("url.scheme", "http"),
             KeyValue::new("network.protocol.version", version),

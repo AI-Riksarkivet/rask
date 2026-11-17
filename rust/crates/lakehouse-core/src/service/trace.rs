@@ -3,6 +3,8 @@
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
+use opentelemetry::Context;
+use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState};
 use uuid::Uuid;
 
 tokio::task_local! {
@@ -23,6 +25,20 @@ pub(crate) fn parent_of(traceparent: &str) -> Option<(&str, &str, &str)> {
         && nonzero(span_id)
         && lower_hex(flags, 2);
     well_formed.then_some((trace_id, span_id, flags))
+}
+
+/// The context a span continues where `traceparent` names its parent in another process.
+pub fn remote_parent(traceparent: &str) -> Option<Context> {
+    let (trace_id, span_id, flags) = parent_of(traceparent)?;
+    let flags = TraceFlags::new(u8::from_str_radix(flags, 16).ok()?);
+    let context = SpanContext::new(
+        TraceId::from_hex(trace_id).ok()?,
+        SpanId::from_hex(span_id).ok()?,
+        flags,
+        true,
+        TraceState::default(),
+    );
+    Some(Context::new().with_remote_span_context(context))
 }
 
 /// The trace id of the request being served, where one is.

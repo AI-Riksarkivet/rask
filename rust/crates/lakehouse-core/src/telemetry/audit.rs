@@ -8,8 +8,18 @@ use super::logging::{LogSink, Value};
 use crate::service::trace;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Meter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tracing::Level;
+
+/// The process's trail, once installed: every door of every service records through it.
+static TRAIL: OnceLock<Audit> = OnceLock::new();
+
+/// Record on the process's trail (`Audit::install`); nothing before one is installed.
+pub fn emit(action: AuditAction, outcome: AuditOutcome, subject: Option<&str>, resource: Option<&str>, fields: &[(&str, Value)]) {
+    if let Some(trail) = TRAIL.get() {
+        trail.record(action, outcome, subject, resource, fields);
+    }
+}
 
 /// The scope every record is emitted under, and the meter `audit.records` is counted on.
 pub const AUDIT_SCOPE: &str = "lance.audit";
@@ -90,6 +100,11 @@ impl Audit {
             .with_description("Audit records this process emitted, by action and outcome: compare with the records the store holds.")
             .build();
         Audit { enabled, sink, records }
+    }
+
+    /// Make this the process's trail, which [`emit`] records on; a second install keeps the first.
+    pub fn install(self) {
+        let _ = TRAIL.set(self);
     }
 
     /// Record `action` on `resource` by `subject` and what it came to; `fields` (a relation, a reason) ride the same

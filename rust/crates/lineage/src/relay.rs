@@ -4,8 +4,9 @@
 //! RelayRepublish, RelayRefuse, RelayDrop): an event leaves the outbox only once it is recorded or kept as refused,
 //! and any step that fails leaves it staged for the next tick.
 
-use crate::intake::{Authorizing, Counted, Recording, Refusal};
+use crate::intake::{Authorizing, Recording, Refusal, refusal_outcome};
 use crate::model::Event;
+use lakehouse_core::telemetry::instruments::LineageOutcome as Counted;
 use serde_json::{Map, Value};
 
 /// What became of one staged event.
@@ -19,15 +20,6 @@ pub enum Drained {
     Refused { kept: Option<Counted> },
     /// It could not be read as an event, and was dropped.
     Poison,
-}
-
-/// How a refusal the relay kept is counted.
-fn counted(refusal: Refusal) -> Counted {
-    match refusal {
-        Refusal::Denied => Counted::Refused,
-        Refusal::Unverified => Counted::SignatureRefused,
-        Refusal::Unauthored | Refusal::ForeignRun | Refusal::Ungoverned => Counted::Unrepairable,
-    }
 }
 
 /// The effects the relay has on one staged event. Each answers whether it was done.
@@ -45,7 +37,9 @@ async fn refused(key: &str, event: &Event, refusal: Refusal, effects: &mut impl 
         return Drained::Refused { kept: None };
     }
     effects.drop_staged(key).await;
-    Drained::Refused { kept: Some(counted(refusal)) }
+    Drained::Refused {
+        kept: Some(refusal_outcome(refusal)),
+    }
 }
 
 /// Drain the event staged under `key`. `staged` is the event and the data it arrived as, or `None` where the staged

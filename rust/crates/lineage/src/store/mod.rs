@@ -2,7 +2,7 @@
 //! in the catalog's provenance namespace and reached only through the catalog's doors, as this service's own identity.
 //!
 //! What is decided lives in the submodules as functions of values ([`commit::plan`], [`window::Cursor`],
-//! [`walk::walk`], [`prune_predicate`]); [`Store`] is the shell that reads and writes.
+//! [`walk::Walk`], [`prune_predicate`]); [`Store`] is the shell that reads and writes.
 
 pub mod commit;
 pub mod group;
@@ -19,6 +19,8 @@ use group::{Committer, Group};
 use lakehouse_core::service::problem::ErrorCode;
 use lakehouse_tables::filters::{in_lists, sql_literal};
 use lakehouse_tables::{Catalog, CatalogError, Rows, Scan, Table};
+use opentelemetry::trace::{Span as _, Status, Tracer as _};
+use opentelemetry::{KeyValue, global};
 use rows::EventRecord;
 use serde_json::{Map, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -159,7 +161,22 @@ impl Committer for Tables {
     /// Land a batch in one commit per table, in the order of `specs/lineage/EventPath.tla`: the run bindings, the
     /// edges, the feed rows. Each is an insert-only merge on the table's key, so a write that lands late, or twice, lands
     /// nothing new, and the feed row is written last, so a row in the feed says the rest is there.
+    ///
+    /// The commit is the span `lineage.record`, carrying how many events it lands.
     async fn commit(&self, batch: &[Admitted]) -> Result<Vec<usize>, CatalogError> {
+        let mut span = global::tracer("lineage.services.provenance").start("lineage.record");
+        span.set_attribute(KeyValue::new("lance.lineage.events", i64::try_from(batch.len()).unwrap_or(i64::MAX)));
+        let landed = self.land(batch).await;
+        if landed.is_err() {
+            span.set_status(Status::error("the batch did not land"));
+        }
+        span.end();
+        landed
+    }
+}
+
+impl Tables {
+    async fn land(&self, batch: &[Admitted]) -> Result<Vec<usize>, CatalogError> {
         let bound = self.authors_of(&commit::runs_of(batch)).await?;
         let plan = commit::plan(batch, &bound, self.refuse_foreign_runs).map_err(|error| unwritable(&error))?;
         let writes = [
@@ -401,7 +418,8 @@ impl Store {
     pub async fn derived(&self, sources: &BTreeSet<String>, max_depth: u32) -> Result<(Vec<DerivedTable>, bool), CatalogError> {
         let edges = self.table(tables::EDGES);
         let version = edges.version().await?;
-        let read = async |inputs: &BTreeSet<String>| {
+        let mut walking = walk::Walk::new(sources, Some(max_depth));
+        while let Some(inputs) = walking.frontier() {
             let mut found = Vec::new();
             for filter in in_lists("in_table", inputs) {
                 let scan = Scan {
@@ -424,9 +442,9 @@ impl Store {
                     });
                 }
             }
-            Ok::<_, CatalogError>(found)
-        };
-        let walked = walk::walk(read, sources, Some(max_depth)).await?;
+            walking.take(found);
+        }
+        let walked = walking.walked();
         Ok((walk::derived_tables(&walked), walked.complete))
     }
 

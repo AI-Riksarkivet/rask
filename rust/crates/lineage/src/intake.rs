@@ -4,6 +4,7 @@
 
 use crate::model::{Event, parse_event};
 use lakehouse_core::delivery::Verdict;
+use lakehouse_core::telemetry::instruments::LineageOutcome as Counted;
 use serde_json::{Map, Value};
 
 /// Why an event's writer may not write it.
@@ -38,25 +39,13 @@ pub enum Recording {
     Failed(String),
 }
 
-/// What an event is counted as, in `lineage.events.processed`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Counted {
-    Ingested,
-    Refused,
-    Retried,
-    Unrepairable,
-    SignatureRefused,
-}
-
-impl Counted {
-    pub fn name(self) -> &'static str {
-        match self {
-            Counted::Ingested => "ingested",
-            Counted::Refused => "refused",
-            Counted::Retried => "retried",
-            Counted::Unrepairable => "unrepairable",
-            Counted::SignatureRefused => "signature_refused",
-        }
+/// The outcome every door counts a refusal under (`refusal_outcome`), so an alert reading it means one thing by every
+/// route: a signature no listed signer's key verifies is its own; what no grant could repair is unrepairable.
+pub fn refusal_outcome(refusal: Refusal) -> Counted {
+    match refusal {
+        Refusal::Denied => Counted::Refused,
+        Refusal::Unverified => Counted::SignatureRefused,
+        Refusal::Unauthored | Refusal::ForeignRun | Refusal::Ungoverned => Counted::Unrepairable,
     }
 }
 
@@ -68,8 +57,7 @@ pub fn after_authorizing(authorizing: Authorizing) -> Result<Vec<String>, (Verdi
     match authorizing {
         Authorizing::Allowed(aliased) => Ok(aliased),
         Authorizing::Refused(Refusal::Denied) => Err((Verdict::Park, Counted::Refused)),
-        Authorizing::Refused(Refusal::Unverified) => Err((Verdict::Taken, Counted::SignatureRefused)),
-        Authorizing::Refused(Refusal::Unauthored | Refusal::ForeignRun | Refusal::Ungoverned) => Err((Verdict::Taken, Counted::Unrepairable)),
+        Authorizing::Refused(refusal) => Err((Verdict::Taken, refusal_outcome(refusal))),
         Authorizing::Unavailable(error) => {
             tracing::warn!(error, "lineage_authz_unavailable");
             Err((Verdict::Again, Counted::Retried))

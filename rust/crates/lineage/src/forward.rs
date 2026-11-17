@@ -66,12 +66,12 @@ impl Followed for Store {
 
 /// POST up to `batch` events of `window`, the feed after `mark`, a page at a time; the seq of the last event the backend
 /// answered, which the cursor may move to, and what was sent. `authorization` is read once, before the first POST.
-async fn send<R: FeedReader>(
+async fn send<R: FeedReader, P: Future<Output = Result<u16, String>>>(
     window: &mut FeedWindow<R>,
     batch: usize,
     mark: i64,
-    authorization: impl AsyncFnOnce() -> Result<Option<String>, String>,
-    mut post: impl AsyncFnMut(&Map<String, Value>, Option<&str>) -> Result<u16, String>,
+    authorization: impl Future<Output = Result<Option<String>, String>>,
+    mut post: impl FnMut(Map<String, Value>, Option<String>) -> P,
 ) -> Result<(i64, Forwarded), String> {
     let (mut reached, mut sent) = (mark, Forwarded::default());
     let mut authorization = Some(authorization);
@@ -83,10 +83,10 @@ async fn send<R: FeedReader>(
             break;
         }
         if let Some(read) = authorization.take() {
-            header = read().await?;
+            header = read.await?;
         }
         for record in records {
-            match post(&record.event, header.as_deref()).await {
+            match post(record.event, header.clone()).await {
                 Err(error) => return Ok((reached, Forwarded { stalled: Some(error), ..sent })),
                 Ok(200..=299) => sent.forwarded += 1,
                 Ok(status) if REFUSED.contains(&status) => {
@@ -110,11 +110,13 @@ async fn send<R: FeedReader>(
 }
 
 /// POST the feed's events after the forwarder's cursor to the backend in seq order, and move the cursor past them.
-pub async fn forward<F: Followed>(
+/// `authorization` is the read of the backend's key, made only once there is an event to send; `post` sends one event
+/// with that key.
+pub async fn forward<F: Followed, P: Future<Output = Result<u16, String>>>(
     feed: &F,
     settings: &Settings,
-    authorization: impl AsyncFnOnce() -> Result<Option<String>, String>,
-    post: impl AsyncFnMut(&Map<String, Value>, Option<&str>) -> Result<u16, String>,
+    authorization: impl Future<Output = Result<Option<String>, String>>,
+    post: impl FnMut(Map<String, Value>, Option<String>) -> P,
 ) -> Result<Forwarded, String> {
     let failed = |error: CatalogError| error.to_string();
     let name = settings.follower(&feed.incarnation().await.map_err(failed)?);

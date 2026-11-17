@@ -177,10 +177,9 @@ The SDK fails none of the criteria, so it is used. `opentelemetry-proto` is also
 
 ## Not ported yet
 
-- **Lineage starting it**: `Telemetry::from_env`, `install`, the handles and `Shell::instrumented_router` in its main,
-  and its lanes, relay and doors recording through the handles.
-- **Spans of the bus and the store** (`publish <topic>`, `process <subject>`, `lineage.record`): `Telemetry::tracer`
-  is what they will start them with.
+- Lineage starting it, its lanes, relay and doors recording through the handles, and the spans of the bus and the store
+  (`publish <topic>`, `process <subject>`, `lineage.record`): ported in ADR 0238, the spans on the tracer `install` makes
+  the process's.
 - **Lance's own metrics** (`lakehouse.lance_metrics`): they belong to a crate that links Lance.
 
 ## Consequences

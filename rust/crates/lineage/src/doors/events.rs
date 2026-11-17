@@ -160,9 +160,9 @@ pub async fn events(Shared(state): Shared<State>, request: Request) -> Answer {
     paging.one_direction()?;
     let scope = Scope::resolve(&state, &caller, table, namespace).await?;
     let limit = paging.limit;
-    let fetch = if state.fga_enabled || scope.scoped() { EVENTS_FETCH } else { limit };
-    let mut window = state.store.window(paging.after, paging.since, summary).await?;
-    let mut filter = DatasetFilter::new(state.authority(), caller.subject.as_deref());
+    let fetch = if state.gate.fga_enabled || scope.scoped() { EVENTS_FETCH } else { limit };
+    let mut window = state.gate.store.window(paging.after, paging.since, summary).await?;
+    let mut filter = DatasetFilter::new(state.gate.authority(), caller.subject.as_deref());
     let (mut read, mut visible) = (Vec::new(), Vec::new());
     let (mut want, mut reads) = (limit.min(fetch), 1);
     loop {
@@ -173,7 +173,7 @@ pub async fn events(Shared(state): Shared<State>, request: Request) -> Answer {
         }
         read.extend(chunk.iter().cloned());
         let named = chunk.into_iter().filter(|record| scope.names(record)).collect();
-        visible.extend(filter.governed(named, |record| governed_by(record, &state.catalog)).await?);
+        visible.extend(filter.governed(named, |record| governed_by(record, &state.gate.catalog)).await?);
         let left = if exhausted { 0 } else { fetch - read.len() };
         if visible.len() >= limit || left == 0 {
             break;
@@ -199,8 +199,8 @@ pub async fn projection(Shared(state): Shared<State>, request: Request) -> Answe
     paging.limit = usize::try_from(query.int("limit", 1, Some(EVENTS_RETURN)).unwrap_or(500)).unwrap_or(500);
     query.checked()?;
     paging.one_direction()?;
-    require_event_feed_reader(&state.authority(), caller.subject.as_deref()).await?;
-    let mut window = state.store.window(paging.after, paging.since, false).await?;
+    require_event_feed_reader(&state.gate.authority(), caller.subject.as_deref()).await?;
+    let mut window = state.gate.store.window(paging.after, paging.since, false).await?;
     let records = window.take(paging.limit).await?;
     let bounds = window.bounds().await?;
     let next_cursor = paging.next_cursor(&records, &records, usize::MAX, bounds.map_or(0, |(_, head)| head));

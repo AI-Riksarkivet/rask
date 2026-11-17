@@ -10,12 +10,11 @@
 use crate::authz::gates::authorizing;
 use crate::forward::{self, Forwarded};
 use crate::gate::{Gate, arrived_data};
-use crate::intake::{Authorizing, Counted, Recording};
-use crate::lane::Tally;
+use crate::intake::{Authorizing, Recording};
 use crate::model::{Event, author_sub_from_payload, parse_event};
 use crate::relay::{self, Drained, drain_one};
 use crate::settings::Settings;
-use crate::store::Store;
+use crate::signals::LANE;
 use lakehouse_bus::{Bus, CloudEvent, lineage_envelope, publish_event};
 use lakehouse_core::outbox::{Outbox, Staged, backlog};
 use lakehouse_core::pywire;
@@ -23,6 +22,7 @@ use lakehouse_core::secrets::fits_a_header;
 use lakehouse_core::secrets::store::{Budget, SecretStore, read_required_secret};
 use lakehouse_core::storage::records::Records;
 use lakehouse_core::storage::{Listed, S3};
+use lakehouse_core::telemetry::instruments::{LineageDoor, LineageOutcome as Counted};
 use lakehouse_core::timers::{Timer, host_name};
 use serde_json::{Map, Value};
 use std::sync::Arc;
@@ -152,14 +152,13 @@ pub async fn tick(effects: &mut impl Tick, settings: &Settings) -> RelayReport {
 /// The relay of one replica: its tick over the real store, outbox, bus and backend, and the timer it runs on.
 pub struct Relay {
     settings: Arc<Settings>,
-    store: Store,
+    /// The gate a staged event passes, whose store it is recorded in and whose signals count it.
     gate: Arc<Gate>,
     bus: Option<Arc<Bus>>,
     outbox: Option<Outbox>,
     timer: Option<Timer<Records>>,
     secrets: Option<Arc<SecretStore>>,
     client: reqwest::Client,
-    pub tally: Arc<Tally>,
 }
 
 impl Relay {
@@ -167,12 +166,10 @@ impl Relay {
     /// one is named; `bus` is where a drained event is published again (none publishes nothing).
     pub fn new(
         settings: Arc<Settings>,
-        store: Store,
         gate: Arc<Gate>,
         bus: Option<Arc<Bus>>,
         s3: Option<Arc<S3>>,
         secrets: Option<Arc<SecretStore>>,
-        tally: Arc<Tally>,
     ) -> Result<Self, String> {
         let s3_for = |what: &str| {
             s3.clone()
@@ -183,8 +180,9 @@ impl Relay {
             uri => Some(Outbox::new(uri, s3_for("LINEAGE_OUTBOX_URI")?)?),
         };
         let timer = if settings.relay_period_seconds > 0.0 {
+            gate.signals.outbox.create_series(LANE);
             let claims = Records::new(&settings.timer_root, s3_for("LINEAGE_TIMER_ROOT")?)?;
-            Some(Timer::new(RELAY_TIMER, settings.relay_period_seconds, claims, &host_name())?)
+            Some(Timer::new(RELAY_TIMER, settings.relay_period_seconds, claims, &host_name())?.instrumented(gate.signals.timer()))
         } else {
             None
         };
@@ -197,14 +195,12 @@ impl Relay {
             .map_err(|error| format!("the forwarder's HTTP client cannot be built: {error}"))?;
         Ok(Relay {
             settings,
-            store,
             gate,
             bus,
             outbox,
             timer,
             secrets,
             client,
-            tally,
         })
     }
 
@@ -216,7 +212,14 @@ impl Relay {
             arrived: Vec::new(),
             reason: String::new(),
         };
-        tick(&mut ticking, &self.settings).await
+        let report = tick(&mut ticking, &self.settings).await;
+        if self.outbox.is_some() {
+            let outbox = &self.gate.signals.outbox;
+            outbox.record_drained(LANE, report.outbox_drained);
+            outbox.record_stranded(LANE, report.outbox_stranded);
+            outbox.record_refused(LANE, report.outbox_refused);
+        }
+        report
     }
 
     /// Tick once a claimed window for as long as the process runs, held through a read-only window; returns at once
@@ -226,7 +229,7 @@ impl Relay {
             timer
                 .run(
                     || self.settings.read_only,
-                    async || {
+                    || async {
                         self.tick().await;
                         Ok(())
                     },
@@ -297,7 +300,7 @@ impl relay::Effects for Ticking<'_> {
     }
 
     async fn record(&mut self, event: &Event, aliased: &[String]) -> Recording {
-        let recording = self.relay.store.record(event, aliased).await;
+        let recording = self.relay.gate.store.record(event, aliased).await;
         if recording == Recording::ForeignRun {
             self.reason = format!(
                 "run {} was founded by another subject; only its author may extend it",
@@ -336,6 +339,7 @@ impl relay::Effects for Ticking<'_> {
         let text = pywire::dumps(&data, pywire::DEFAULT);
         let kept = self
             .relay
+            .gate
             .store
             .record_refusal(key, run_id(event), author_sub_from_payload(&data), &self.reason, &text)
             .await;
@@ -346,7 +350,14 @@ impl relay::Effects for Ticking<'_> {
 
 impl Tick for Ticking<'_> {
     async fn listing(&mut self) -> Result<Vec<Listed>, String> {
-        self.outbox()?.listing().await.map_err(|error| error.to_string())
+        let listing = self.outbox()?.listing().await.map_err(|error| error.to_string())?;
+        // Every tick's snapshot, an empty one too, so the depth falls back to 0 instead of going stale.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| i64::try_from(since.as_nanos()).unwrap_or(i64::MAX));
+        let (depth, oldest) = backlog(&listing, now);
+        self.relay.gate.signals.outbox.observe_backlog(LANE, depth as u64, oldest);
+        Ok(listing)
     }
 
     async fn read_staged(&mut self, listing: &[Listed], limit: Option<usize>) -> Result<Vec<Staged>, String> {
@@ -355,28 +366,37 @@ impl Tick for Ticking<'_> {
 
     fn draining(&mut self, staged: &Staged, envelope: Option<&CloudEvent>) {
         self.staged = envelope.cloned();
+        if envelope.is_none() {
+            self.relay.gate.signals.outbox.record_poison_dropped(LANE);
+        }
         self.arrived.clone_from(&staged.body);
         self.reason.clear();
     }
 
     fn counted(&mut self, counted: Counted) {
-        self.relay.tally.count("outbox", counted.name());
+        self.relay.gate.signals.lineage.record_outcome(counted, LineageDoor::Outbox);
     }
 
     async fn retire_parks(&mut self) -> Result<u64, String> {
-        let retired = self.relay.store.retire_recovered_parks().await.map_err(|error| error.to_string())?;
+        let retired = self.relay.gate.store.retire_recovered_parks().await.map_err(|error| error.to_string())?;
         Ok(u64::try_from(retired).unwrap_or(u64::MAX))
     }
 
     async fn forward(&mut self) -> Result<Forwarded, String> {
         let (relay, url) = (self.relay, self.relay.settings.endpoint_url());
-        let authorization = async || relay.authorization().await;
-        let post = async |event: &Map<String, Value>, bearer: Option<&str>| relay.post(&url, event, bearer).await;
-        forward::forward(&relay.store, &relay.settings, authorization, post).await
+        let post = |event: Map<String, Value>, bearer: Option<String>| {
+            let url = url.clone();
+            async move { relay.post(&url, &event, bearer.as_deref()).await }
+        };
+        let authorization = relay.authorization();
+        let forwarded = forward::forward(&relay.gate.store, &relay.settings, authorization, post).await?;
+        let metrics = &relay.gate.signals.lineage;
+        metrics.record_forwarded(forwarded.forwarded, forwarded.refused, forwarded.stalled.is_some());
+        Ok(forwarded)
     }
 
     async fn forwarded_through(&mut self) -> Result<i64, String> {
-        let store = &self.relay.store;
+        let store = &self.relay.gate.store;
         let feed = store.feed_incarnation().await.map_err(|error| error.to_string())?;
         store.cursor(&self.relay.settings.follower(&feed)).await.map_err(|error| error.to_string())
     }
@@ -384,6 +404,7 @@ impl Tick for Ticking<'_> {
     async fn prune(&mut self, retention_days: u32, delivered_through: Option<i64>) -> Result<u64, String> {
         let pruned = self
             .relay
+            .gate
             .store
             .prune_events(retention_days, delivered_through)
             .await

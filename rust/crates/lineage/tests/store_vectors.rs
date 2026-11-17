@@ -10,7 +10,7 @@ use lakehouse_tables::arrow::decode_answer;
 use lineage::model::parse_event;
 use lineage::store::commit::{Admitted, admitted, first_of_each, plan};
 use lineage::store::rows::EventRecord;
-use lineage::store::walk::{Edge, derived_tables, is_table_uuid, walk};
+use lineage::store::walk::{Edge, Walk, derived_tables, is_table_uuid};
 use lineage::store::window::{FeedReader, FeedWindow};
 use lineage::store::{delivery_feed_key, parked_filter, prune_predicate, tables};
 use serde_json::{Map, Value, json};
@@ -214,13 +214,14 @@ async fn the_walk_reaches_the_tables_pythons_reaches() {
                 (edge["in_table"].as_str().unwrap().to_owned(), out)
             })
             .collect();
-        let read = async |inputs: &BTreeSet<String>| {
-            let found = edges.iter().filter(|(input, _)| inputs.contains(input)).map(|(_, edge)| edge.clone());
-            Ok::<_, CatalogError>(found.collect())
-        };
         let sources: BTreeSet<String> = serde_json::from_value(case["sources"].clone()).unwrap();
         let depth = u32::try_from(case["max_depth"].as_u64().unwrap()).unwrap();
-        let walked = walk(read, &sources, Some(depth)).await.unwrap();
+        let mut walk = Walk::new(&sources, Some(depth));
+        while let Some(inputs) = walk.frontier() {
+            let found = edges.iter().filter(|(input, _)| inputs.contains(input)).map(|(_, edge)| edge.clone());
+            walk.take(found.collect());
+        }
+        let walked = walk.walked();
         assert_eq!(serde_json::to_value(derived_tables(&walked)).unwrap(), case["derived"], "{}", case["name"]);
         assert_eq!(json!(walked.complete), case["complete"], "{}", case["name"]);
     }

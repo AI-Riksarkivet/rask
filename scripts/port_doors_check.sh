@@ -6,7 +6,7 @@
 # ServiceAccount issuer it trusts (scripts/port_outbox_check.sh with KEEP_UP=1), the pinned OpenFGA on the in-memory
 # datastore with a preshared key (scripts/openfga_server.sh), and an identity provider the requests' tokens are signed
 # by (scripts/port_doors_fixture.py issuer). `setup` makes the governed tables and the grants; then the Python lineage
-# app (uvicorn, lineage.main:app) and the Rust doors (the lineage crate's doors_serve example) start on one environment,
+# app (uvicorn, lineage.main:app) and the Rust binary (`lineage serve`) start on one environment,
 # each logging in to the store as lineage's own ServiceAccount, and `corpus` stages outbox events, parks deliveries and
 # puts every request to both. Exits non-zero when any difference is not one ADR 0236 keeps.
 set -euo pipefail
@@ -32,7 +32,7 @@ up() {
 }
 
 cd "$root"
-(cd rust && cargo build --locked --quiet -p lineage --example doors_serve)
+(cd rust && cargo build --locked --quiet -p lineage --bin lineage)
 uv run --no-sync scripts/port_catalog_fixture.py --port "$catalog_port" >"$work/catalog.log" 2>&1 &
 pids+=($!)
 "$(bash scripts/openfga_server.sh)" run --datastore-engine memory --playground-enabled=false --metrics-enabled=false --log-level error \
@@ -61,7 +61,7 @@ export LINEAGE_S3_WEB_IDENTITY_TOKEN_FILE="$work/store-token" LINEAGE_S3_SESSION
 
 uv run --no-sync uvicorn lineage.main:app --host 127.0.0.1 --port "$python_port" --log-level warning >"$work/python.log" 2>&1 &
 pids+=($!)
-rust/target/debug/examples/doors_serve "$rust_port" >"$work/rust.log" 2>&1 &
+rust/target/debug/lineage serve --host=127.0.0.1 --port="$rust_port" >"$work/rust.log" 2>&1 &
 pids+=($!)
 up "http://127.0.0.1:$python_port/livez" python
 up "http://127.0.0.1:$rust_port/livez" rust

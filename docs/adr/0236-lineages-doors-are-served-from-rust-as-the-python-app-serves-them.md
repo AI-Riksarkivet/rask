@@ -67,15 +67,14 @@ checks, their validation and their answers, member for member.
    comma's at the comma), `null` as missing and any other value as no dictionary.
 5. **A refusal is answered by the shell's problem model**, and a failed validation by its envelope with FastAPI's
    `errors` list (`Refusal::Invalid`), which ADR 0219 left to the first door that needed it.
-6. **The audit records are one function** (`doors::audit`, the `lance.audit` target) at the call sites the Python
-   audits: each replay's success or failure. Its export is not ported (ADR 0220).
+6. **The audit records are one function** (`doors::audit`) at the call sites the Python audits: each replay's success or
+   failure. It records on the process's trail (`telemetry::audit::emit`, ADR 0238).
 7. **The feed's governed page reads as the Python one does**: at most three reads of up to 2,000 rows, sized by
    `paging::next_chunk`, each read's rows kept by the scope and then by the filter, the cursor by
    `paging::forward_cursor`. The Python reads the last chunk ahead beside a long judging; the Rust reads it after. The
    rows read and returned are the same.
-8. **The derived walk runs on a blocking thread of its own.** `Store::derived` reads the edge list through an async
-   closure, and no `Send` bound can name the future such a closure returns, so the handler's future could not hold it.
-   It is driven by `Handle::block_on` from `spawn_blocking`; the answer is the same.
+8. **The derived walk is driven by the store** (`store::walk::Walk`, ADR 0238): the walk names the keys it reads next and
+   takes their edges, and `Store::derived` reads them, so the handler's future is an ordinary `Send` one.
 
 ## How parity was shown
 
@@ -93,7 +92,7 @@ checks, their validation and their answers, member for member.
   compares the status, the `content-type`, `cache-control`, `vary`, `allow` and `location` headers, whether an
   instance is named, and the body as text, so the members' order counts.
 - **Side by side on real collaborators** (`scripts/port_doors_check.sh`, the Python half `scripts/port_doors_fixture.py`,
-  the Rust half the `doors_serve` example). It starts the real Python catalog, the pinned RustFS with its STS and the
+  the Rust half first the `doors_serve` example, then the binary, `lineage serve`, ADR 0238). It starts the real Python catalog, the pinned RustFS with its STS and the
   ServiceAccount issuer it trusts (`scripts/port_outbox_check.sh`), the pinned OpenFGA with the estate's model and a
   tuple set written on the catalog's own table uuids, and an identity provider the tokens are signed by; then the
   Python lineage app under uvicorn and the Rust doors on one environment, each logging in to the store as lineage's
@@ -150,12 +149,10 @@ checks, their validation and their answers, member for member.
 
 ## Not ported yet
 
-- The service's settings and its `main` wiring (the lanes slice); until then `doors_serve` is the only binary serving
-  the router.
-- The outcome counter and ingest duration the doors count (`lineage.events.processed`, `record_ingest_duration`), and
-  the audit trail's export.
+- The service's settings and its `main` wiring: ported in ADR 0238, which serves the router from the binary.
+- The outcome counter and ingest duration the doors count, and the audit trail's export: ported in ADR 0238.
 - The read ahead of a governed page's last chunk, which changes when a read is made, not what is answered.
-- The docs pages (`LINEAGE_DOCS`) and the readiness dependencies.
+- The docs pages (`LINEAGE_DOCS`). The readiness dependencies are ported in ADR 0238.
 
 ## Consequences
 

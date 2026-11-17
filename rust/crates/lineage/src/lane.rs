@@ -9,38 +9,20 @@
 
 use crate::authz::gates::authorizing;
 use crate::gate::{Gate, arrived_data};
-use crate::intake;
+use crate::intake::{self, Recording};
 use crate::model::{Event, author_sub_from_payload, run_id_from_payload};
+use crate::store::delivery_feed_key;
 use crate::store::tables::PARKED_KEY_PREFIX;
-use crate::store::{Store, delivery_feed_key};
 use lakehouse_bus::{Bus, Handler, HandlingPanicked};
 use lakehouse_core::delivery::{Delivery, Lane, Verdict};
 use lakehouse_core::pywire;
+use lakehouse_core::telemetry::instruments::{LineageDoor, LineageOutcome};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+use std::time::Instant;
 
 /// The most of a delivery's own text a kept row's key, its run and author, and a log line carry.
 const MAX_PLAIN_CHARS: usize = 512;
-
-/// What lineage counted, by the door an event came through and what became of it (`lineage.events.processed`).
-#[derive(Debug, Default)]
-pub struct Tally(Mutex<BTreeMap<(&'static str, &'static str), u64>>);
-
-impl Tally {
-    pub fn count(&self, door: &'static str, outcome: &'static str) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner).entry((door, outcome)).or_default() += 1;
-    }
-
-    pub fn counted(&self, door: &str, outcome: &str) -> u64 {
-        let counts = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        counts
-            .iter()
-            .filter(|((by, what), _)| *by == door && *what == outcome)
-            .map(|(_, count)| count)
-            .sum()
-    }
-}
 
 /// `value` where a table and a log line carry it as it stands: a string of 1 to `MAX_PLAIN_CHARS` characters.
 fn plain(value: Option<&str>) -> Option<String> {
@@ -78,14 +60,13 @@ pub fn parking(envelope: &Map<String, Value>) -> Parking {
 
 /// What lineage does with each delivery of its consumer.
 pub struct IngestLane {
-    store: Store,
     gate: Arc<Gate>,
-    pub tally: Arc<Tally>,
 }
 
 impl IngestLane {
-    pub fn new(store: Store, gate: Arc<Gate>, tally: Arc<Tally>) -> Self {
-        IngestLane { store, gate, tally }
+    /// The lane recording what `gate` admits in the gate's store, and counting it in the gate's signals.
+    pub fn new(gate: Arc<Gate>) -> Self {
+        IngestLane { gate }
     }
 
     /// Take `lane`'s deliveries from `bus` until `stop` resolves.
@@ -97,10 +78,24 @@ impl IngestLane {
 impl Handler for IngestLane {
     async fn handle(&self, delivery: &Delivery) -> Result<Verdict, String> {
         let envelope = delivery.envelope();
-        let authorize = async |event: &Event, _: &Map<String, Value>| authorizing(self.gate.authorize(event, arrived_data(&delivery.body)).await);
-        let record = async |event: &Event, aliased: &[String]| self.store.record(event, aliased).await;
+        // The check of the process's supervision (`scripts/port_lineage_check.sh`) needs a handling that dies the way a
+        // native library's panic would: a debug build alone takes this CloudEvent type as one. A release has no such type.
+        #[cfg(debug_assertions)]
+        if envelope.as_ref().and_then(|envelope| envelope.get("type")).and_then(Value::as_str) == Some("rask.check.handling-panics") {
+            std::panic::resume_unwind(Box::new("the check's handling panicked"));
+        }
+        let (gate, metrics) = (&self.gate, &self.gate.signals.lineage);
+        let authorize = async |event: &Event, _: &Map<String, Value>| authorizing(gate.authorize(event, arrived_data(&delivery.body)).await);
+        let record = async |event: &Event, aliased: &[String]| {
+            let started = Instant::now();
+            let recording = gate.store.record(event, aliased).await;
+            if recording == Recording::Landed {
+                metrics.record_ingest_duration(started.elapsed().as_secs_f64());
+            }
+            recording
+        };
         let (verdict, counted) = intake::handle(envelope.as_ref(), Some(authorize), record).await;
-        self.tally.count("subscriber", counted.name());
+        metrics.record_outcome(counted, LineageDoor::Subscriber);
         Ok(verdict)
     }
 
@@ -112,6 +107,7 @@ impl Handler for IngestLane {
         if let Some(parked) = &parked {
             if let Some(feed_key) = &parked.feed_key {
                 recorded = self
+                    .gate
                     .store
                     .events_recorded([feed_key])
                     .await
@@ -120,19 +116,21 @@ impl Handler for IngestLane {
             }
             if let (false, Some(key)) = (recorded, &parked.key) {
                 let (run_id, author) = (parked.run_id.as_deref(), parked.author.as_deref());
-                self.store
+                self.gate
+                    .store
                     .record_refusal(key, run_id, author, reason, &parked.text)
                     .await
                     .map_err(|error| error.to_string())?;
             }
         }
         let (event_id, run_id, author) = parked.map_or((None, None, None), |parked| (parked.event_id, parked.run_id, parked.author));
+        let metrics = &self.gate.signals.lineage;
         if recorded {
             tracing::warn!(event_id, run_id, reason, already_recorded = true, author, "lineage_delivery_parked");
-            self.tally.count("dead_letter", "parked_already_recorded");
+            metrics.record_outcome(LineageOutcome::ParkedAlreadyRecorded, LineageDoor::DeadLetter);
         } else {
             tracing::error!(event_id, run_id, reason, already_recorded = false, author, "lineage_delivery_parked");
-            self.tally.count("dead_letter", "dead_lettered");
+            metrics.record_outcome(LineageOutcome::DeadLettered, LineageDoor::DeadLetter);
         }
         Ok(())
     }

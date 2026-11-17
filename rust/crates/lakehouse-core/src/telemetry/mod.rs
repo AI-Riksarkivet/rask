@@ -115,9 +115,13 @@ impl Telemetry {
         Telemetry::new(Settings::from_env()?.as_ref(), level, logging::stdout())
     }
 
-    /// Make this the process's log subscriber, so every `tracing` event is a log line and, where export is on, a record.
+    /// Make this the process's log subscriber, so every `tracing` event is a log line and, where export is on, a record,
+    /// and its tracers the process's, which a span started anywhere in the process (`opentelemetry::global::tracer`) is
+    /// exported by.
     pub fn install(&self) -> Result<(), String> {
-        tracing::subscriber::set_global_default(self.subscriber()).map_err(|_| "a log subscriber is already installed".to_owned())
+        tracing::subscriber::set_global_default(self.subscriber()).map_err(|_| "a log subscriber is already installed".to_owned())?;
+        opentelemetry::global::set_tracer_provider(self.tracers.clone());
+        Ok(())
     }
 
     /// The `tracing` subscriber that writes this telemetry's log lines and records.

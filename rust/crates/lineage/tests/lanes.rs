@@ -7,10 +7,11 @@ use lakehouse_core::delivery::Delivery;
 use lakehouse_core::outbox::Staged;
 use lakehouse_core::storage::records::{Found, StoreRead, Unless};
 use lakehouse_core::storage::{Listed, StorageError};
+use lakehouse_core::telemetry::instruments::LineageOutcome as Counted;
 use lakehouse_core::timers::{Claims, Outcome, Timer};
 use lakehouse_tables::CatalogError;
 use lineage::forward::{Followed, Forwarded, forward};
-use lineage::intake::{Authorizing, Counted, Recording, Refusal};
+use lineage::intake::{Authorizing, Recording, Refusal};
 use lineage::lane::parking;
 use lineage::model::Event;
 use lineage::relay::Effects;
@@ -150,7 +151,7 @@ async fn a_timer_turns_as_pythons_does() {
         };
         let timer = Timer::new("lineage-relay", case["period"].as_f64().unwrap(), &store, "replica-a").unwrap();
         let mut worked = false;
-        let work = async || {
+        let work = async {
             worked = true;
             if case["work"] == "fails" { Err("the tick failed".to_owned()) } else { Ok(()) }
         };
@@ -259,7 +260,7 @@ impl Tick for Ticker<'_> {
     }
 
     fn counted(&mut self, counted: Counted) {
-        self.counted.push(format!("outbox {}", counted.name()));
+        self.counted.push(format!("outbox {}", counted.label()));
     }
 
     async fn retire_parks(&mut self) -> Result<u64, String> {
@@ -418,7 +419,7 @@ async fn the_forwarder_sends_and_moves_its_cursor_as_pythons_does() {
             case,
             calls: RefCell::default(),
         };
-        let authorization = async || {
+        let authorization = async {
             feed.calls.borrow_mut().push("authorization".to_owned());
             match case["authorization"].as_str().unwrap() {
                 "fails" => Err("RuntimeError: the secret store did not serve the key".to_owned()),
@@ -426,17 +427,20 @@ async fn the_forwarder_sends_and_moves_its_cursor_as_pythons_does() {
                 _ => Ok(None),
             }
         };
-        let url = settings.endpoint_url();
-        let post = async |event: &Map<String, Value>, bearer: Option<&str>| {
+        let url = &settings.endpoint_url();
+        let feed = &feed;
+        let post = |event: Map<String, Value>, bearer: Option<String>| async move {
             let seq = event["seq"].as_i64().unwrap();
-            feed.calls.borrow_mut().push(format!("post {url} {seq} {}", bearer.unwrap_or("None")));
+            feed.calls
+                .borrow_mut()
+                .push(format!("post {url} {seq} {}", bearer.as_deref().unwrap_or("None")));
             match &case["answers"][seq.to_string()] {
                 Value::Null => Ok(200),
                 Value::Number(status) => Ok(u16::try_from(status.as_u64().unwrap()).unwrap()),
                 _ => Err("ConnectError: the backend did not answer".to_owned()),
             }
         };
-        let outcome = match forward(&feed, &settings, authorization, post).await {
+        let outcome = match forward(feed, &settings, authorization, post).await {
             Ok(sent) => json!({"forwarded": sent.forwarded, "refused": sent.refused, "stalled": sent.stalled}),
             Err(_) => json!({"raised": true}),
         };

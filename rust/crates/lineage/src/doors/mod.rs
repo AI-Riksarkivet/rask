@@ -13,6 +13,7 @@ use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use lakehouse_core::authz::Unavailable;
 use lakehouse_core::service::problem::{ErrorCode, NsError, Problem};
+use lakehouse_core::telemetry::audit::{self, AuditAction, AuditOutcome};
 use lakehouse_tables::CatalogError;
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
@@ -112,16 +113,9 @@ pub fn segment(raw: String) -> Result<String, Refusal> {
     if raw.contains('/') { Err(Refusal::NotFound) } else { Ok(raw) }
 }
 
-/// What a door audits on the governance trail, under the `lance.audit` target its export routes.
-pub fn audit(action: &str, outcome: &str, subject: &str, resource: &str) {
-    tracing::info!(target: "lance.audit", action, outcome, subject, resource, "audit");
-}
-
-/// `future` boxed as a `Send` future where it is called, so the borrows it holds are checked at the lifetimes they have
-/// there: a handler's future is checked at every lifetime, which the compiler cannot prove for one holding a borrowed
-/// `&str` across an await, as the metadata gate does.
-pub fn sendable<'a, T>(future: impl Future<Output = T> + Send + 'a) -> std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>> {
-    Box::pin(future)
+/// What a door records on the governance trail.
+pub fn audit(action: AuditAction, outcome: AuditOutcome, subject: &str, resource: &str) {
+    audit::emit(action, outcome, Some(subject), Some(resource), &[]);
 }
 
 /// A query string read as Starlette reads it (the last value of a name wins) and validated as pydantic validates it,

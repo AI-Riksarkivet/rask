@@ -12,6 +12,7 @@
 use crate::pywire;
 use crate::storage::StorageError;
 use crate::storage::records::{Found, Records, StoreRead, Unless};
+use crate::telemetry::instruments::TimerMetrics;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::json;
 use std::time::Duration;
@@ -34,6 +35,18 @@ pub enum Outcome {
     Held,
     /// The claim could not be read or written, so nothing ran.
     Unread,
+}
+
+impl Outcome {
+    pub fn label(self) -> &'static str {
+        match self {
+            Outcome::Ran => "ran",
+            Outcome::Failed => "failed",
+            Outcome::Elsewhere => "elsewhere",
+            Outcome::Held => "held",
+            Outcome::Unread => "unread",
+        }
+    }
 }
 
 /// One turn: how it ended, the window it was about (in microseconds since the epoch), and how long until the next.
@@ -125,6 +138,7 @@ pub struct Timer<C> {
     period: f64,
     claims: C,
     holder: String,
+    metrics: Option<TimerMetrics>,
 }
 
 /// What one read of the claim and the write after it settled: whether the window is this replica's, which, and the
@@ -146,19 +160,31 @@ impl<C: Claims> Timer<C> {
             period,
             claims,
             holder: holder.to_owned(),
+            metrics: None,
         })
     }
 
-    /// Take turn after turn for as long as the process runs; `held` is asked at every turn.
-    pub async fn run(&self, held: impl Fn() -> bool, mut work: impl AsyncFnMut() -> Result<(), String>) {
+    /// This timer, counting its turns and the windows it sees claimed in `metrics`.
+    pub fn instrumented(mut self, metrics: TimerMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    /// Take turn after turn for as long as the process runs; `held` is asked at every turn, and `work` makes the
+    /// turn's work, which runs only where the turn claimed its window.
+    pub async fn run<F: Future<Output = Result<(), String>>>(&self, held: impl Fn() -> bool, mut work: impl FnMut() -> F) {
+        if let Some(metrics) = &self.metrics {
+            metrics.started(&self.name, self.period);
+        }
         loop {
-            let turn = self.turn(held(), async || work().await).await;
+            let turn = self.turn(held(), work()).await;
             tokio::time::sleep(turn.wait).await;
         }
     }
 
     /// Claim the window the store's clock is in and run `work` where the claim landed; how long until the next turn.
-    pub async fn turn(&self, held: bool, work: impl AsyncFnOnce() -> Result<(), String>) -> Turn {
+    /// `work` does nothing until it is awaited, so a turn that claims nothing leaves it undone.
+    pub async fn turn(&self, held: bool, work: impl Future<Output = Result<(), String>>) -> Turn {
         let period = Duration::try_from_secs_f64(self.period).unwrap_or(Duration::MAX);
         if held {
             tracing::info!(timer = self.name, "timer_held");
@@ -177,7 +203,7 @@ impl<C: Claims> Timer<C> {
         if !asked.mine {
             return self.ended(Outcome::Elsewhere, Some(asked.window), until_next);
         }
-        let outcome = match work().await {
+        let outcome = match work.await {
             Ok(()) => Outcome::Ran,
             Err(error) => {
                 tracing::error!(timer = self.name, error, "timer_work_failed");
@@ -189,6 +215,9 @@ impl<C: Claims> Timer<C> {
 
     fn ended(&self, outcome: Outcome, window: Option<i64>, wait: Duration) -> Turn {
         tracing::debug!(timer = self.name, outcome = ?outcome, "timer_turn");
+        if let Some(metrics) = &self.metrics {
+            metrics.record_turn(&self.name, outcome.label(), 1);
+        }
         Turn {
             outcome,
             window,
@@ -207,6 +236,7 @@ impl<C: Claims> Timer<C> {
             Found::Denied(error) => (None, None, Some(error)),
         };
         if let Some(claimed) = held.filter(|claimed| held_elsewhere(*claimed, window, at, self.period)) {
+            self.claimed(claimed);
             return Ok(Asked {
                 mine: false,
                 window: claimed,
@@ -220,7 +250,16 @@ impl<C: Claims> Timer<C> {
             // The record exists and this identity may not read it: a fault to say, never another replica's window.
             return Err(denied.to_string());
         }
+        if mine {
+            self.claimed(window);
+        }
         Ok(Asked { mine, window, until_next })
+    }
+
+    fn claimed(&self, window: i64) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_claimed(&self.name, window as f64 / 1e6);
+        }
     }
 }
 

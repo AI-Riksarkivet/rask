@@ -14,7 +14,11 @@ use crate::page::StreamPage;
 use async_nats::connection::State;
 use async_nats::{Auth, AuthError, Client, ConnectOptions, Event, HeaderMap, Message, client::RequestErrorKind};
 use futures_util::{FutureExt, StreamExt};
-use lakehouse_core::delivery::{Delivery, Lane, Verdict, judged};
+use lakehouse_core::delivery::{Delivery, Lane, Outcome, Verdict, judged};
+use lakehouse_core::service::trace;
+use lakehouse_core::telemetry::instruments::BusMetrics;
+use opentelemetry::trace::{FutureExt as _, Span as _, SpanKind, Status, TraceContextExt as _, Tracer as _};
+use opentelemetry::{Context, KeyValue, global};
 use std::collections::HashSet;
 use std::future::Future;
 use std::path::PathBuf;
@@ -55,6 +59,10 @@ const FAULTS_SAID: usize = 16;
 /// How the bus refuses a subscription its connection's user is not granted.
 const SUBSCRIPTION_REFUSED: &str = "permissions violation for subscription";
 const DISCONNECTED: &str = "disconnected";
+/// The instrumentation scope of the bus's spans.
+const TRACER: &str = "lakehouse.bus";
+/// The most of an envelope's id a span carries: the id is its publisher's own text.
+const MAX_ID_CHARS: usize = 200;
 
 /// The bus as the chart names it to a pod, and the bus user that pod's process connects as.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +187,7 @@ pub struct Bus {
     held: watch::Receiver<Option<Client>>,
     renewing: watch::Receiver<Option<Instant>>,
     keeper: JoinHandle<()>,
+    metrics: Option<Arc<BusMetrics>>,
 }
 
 impl Bus {
@@ -189,7 +198,19 @@ impl Bus {
         let (renewing_tx, renewing) = watch::channel(None);
         let user = settings.user.clone();
         let keeper = tokio::spawn(keep(Arc::new(settings), held_tx, renewing_tx));
-        Bus { user, held, renewing, keeper }
+        Bus {
+            user,
+            held,
+            renewing,
+            keeper,
+            metrics: None,
+        }
+    }
+
+    /// This bus, recording each publish, pull and delivery in `metrics`.
+    pub fn instrumented(mut self, metrics: BusMetrics) -> Self {
+        self.metrics = Some(Arc::new(metrics));
+        self
     }
 
     /// Ok while this process's connection to the bus is up: the verdict a readiness report shows for the bus.
@@ -311,6 +332,9 @@ impl Bus {
     pub async fn consume<H: Handler>(&self, lane: &Lane, handler: Arc<H>, stop: impl Future<Output = ()>) -> Result<(), HandlingPanicked> {
         let mut handling: JoinSet<()> = JoinSet::new();
         let mut said = String::new();
+        if let Some(metrics) = &self.metrics {
+            metrics.create_delivery_series(&lane.consumer, &["taken", "again", "parked"]);
+        }
         let mut panicked = false;
         tokio::pin!(stop);
         loop {
@@ -334,7 +358,7 @@ impl Bus {
             match pull(&client, &lane.stream, &lane.consumer).await {
                 Ok(Some(message)) => {
                     said.clear();
-                    handling.spawn(settled(client, message, lane.clone(), Arc::clone(&handler)));
+                    handling.spawn(settled(client, message, lane.clone(), Arc::clone(&handler), self.metrics.clone()));
                 }
                 Ok(None) => {}
                 Err(fault) => {
@@ -342,6 +366,9 @@ impl Bus {
                         tracing::warn!(stream = lane.stream, consumer = lane.consumer, error = fault, "bus_pull_failed");
                     }
                     said = fault;
+                    if let Some(metrics) = &self.metrics {
+                        metrics.record_pull_failed(&lane.consumer);
+                    }
                     tokio::select! {
                         () = sleep(PULL_WAIT) => {}
                         () = &mut stop => break,
@@ -365,7 +392,7 @@ impl Bus {
     }
 
     /// Close the connection once the bus has taken what was sent on it, or after [`CLOSE_WITHIN`] without.
-    pub async fn close(self) {
+    pub async fn close(&self) {
         self.keeper.abort();
         let client = self.held.borrow().clone();
         if let Some(client) = client {
@@ -386,15 +413,55 @@ impl Drop for Bus {
 
 /// Publish `envelope` on `topic` over this process's connection, within `within`, under the publish's trace context
 /// `trace`, or the trace the envelope was staged under where the caller names none.
+///
+/// The publish is a PRODUCER span `publish <topic>`, in the trace the envelope was staged under where it names one, and
+/// the envelope goes out naming that span unless the caller names another context.
 pub async fn publish_event(bus: &Bus, envelope: &CloudEvent, topic: &str, within: Duration, trace: Option<&TraceContext>) -> Result<(), PublishError> {
-    let staged = TraceContext::continuing(envelope.traceparent.as_deref(), envelope.tracestate.as_deref());
-    let body = envelope.body(trace.or(staged.as_ref())).inspect_err(|oversize| {
-        tracing::warn!(topic, bytes = oversize.bytes, "bus_publish_refused_oversize");
-    })?;
-    if body.len() > WARN_PAYLOAD_BYTES {
-        tracing::warn!(topic, bytes = body.len(), "bus_publish_payload_large");
+    let started = Instant::now();
+    let parent = envelope.traceparent.as_deref().and_then(trace::remote_parent).unwrap_or_else(Context::current);
+    let tracer = global::tracer(TRACER);
+    let span = tracer
+        .span_builder(format!("publish {topic}"))
+        .with_kind(SpanKind::Producer)
+        .with_attributes([
+            KeyValue::new("messaging.system", "nats"),
+            KeyValue::new("messaging.operation.name", "publish"),
+            KeyValue::new("messaging.destination.name", topic.to_owned()),
+            KeyValue::new("messaging.message.id", envelope.id.clone()),
+        ])
+        .start_with_context(&tracer, &parent);
+    let own = span.span_context();
+    let own = own.is_valid().then(|| TraceContext {
+        traceparent: format!("00-{}-{}-{:02x}", own.trace_id(), own.span_id(), own.trace_flags().to_u8()),
+        tracestate: None,
+    });
+    let context = parent.with_span(span);
+    let sent = async {
+        let body = envelope.body(trace.or(own.as_ref())).inspect_err(|oversize| {
+            tracing::warn!(topic, bytes = oversize.bytes, "bus_publish_refused_oversize");
+            if let Some(metrics) = &bus.metrics {
+                metrics.record_refusal(topic, "oversize");
+            }
+        })?;
+        if body.len() > WARN_PAYLOAD_BYTES {
+            tracing::warn!(topic, bytes = body.len(), "bus_publish_payload_large");
+        }
+        bus.send(topic, body, &envelope.id, within).await
     }
-    bus.send(topic, body, &envelope.id, within).await
+    .with_context(context.clone())
+    .await;
+    if let Some(metrics) = &bus.metrics {
+        let failure = sent.as_ref().err().map(|error| match error {
+            PublishError::Oversize(_) => "ValueError",
+            PublishError::Timeout(_) => "TimeoutError",
+            PublishError::Unavailable(_) => "BusUnavailableError",
+        });
+        metrics.record_publish(topic, started.elapsed().as_secs_f64(), failure);
+    }
+    if sent.is_err() {
+        context.span().set_status(Status::error(""));
+    }
+    sent
 }
 
 fn clipped(mut text: String, most: usize) -> String {
@@ -463,7 +530,9 @@ async fn pull(client: &Client, stream: &str, consumer: &str) -> Result<Option<Me
 
 /// Handle one message of `lane` and tell the bus how it was settled. A settle the bus does not take is said, and the
 /// message comes again after the consumer's ack wait.
-async fn settled<H: Handler>(client: Client, message: Message, lane: Lane, handler: Arc<H>) {
+///
+/// The handling is a CONSUMER span `process <subject>` of the trace the envelope was published under.
+async fn settled<H: Handler>(client: Client, message: Message, lane: Lane, handler: Arc<H>, metrics: Option<Arc<BusMetrics>>) {
     let Some(reply) = message.reply.clone() else { return };
     let Some(delivered) = jetstream::delivered(&reply) else {
         tracing::warn!(consumer = lane.consumer, reply = reply.as_str(), "bus_delivery_unreadable");
@@ -475,15 +544,52 @@ async fn settled<H: Handler>(client: Client, message: Message, lane: Lane, handl
         sequence: delivered.sequence,
         attempt: delivered.attempt,
     };
-    let settlement = judged(
+    let started = Instant::now();
+    let envelope = delivery.envelope().unwrap_or_default();
+    let text = |name: &str| envelope.get(name).and_then(serde_json::Value::as_str);
+    let parent = text("traceparent").and_then(trace::remote_parent).unwrap_or_default();
+    let tracer = global::tracer(TRACER);
+    let mut attributes = vec![
+        KeyValue::new("messaging.system", "nats"),
+        KeyValue::new("messaging.operation.name", "process"),
+        KeyValue::new("messaging.destination.name", delivery.subject.clone()),
+        KeyValue::new("messaging.consumer.group.name", lane.consumer.clone()),
+    ];
+    attributes.extend(text("id").map(|id| KeyValue::new("messaging.message.id", id.chars().take(MAX_ID_CHARS).collect::<String>())));
+    let span = tracer
+        .span_builder(format!("process {}", delivery.subject))
+        .with_kind(SpanKind::Consumer)
+        .with_attributes(attributes)
+        .start_with_context(&tracer, &parent);
+    // A process exporting no traces still names each handling's trace in its log lines.
+    let traced = span.span_context().is_valid().then(|| span.span_context().trace_id().to_string());
+    let trace_id = traced.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    let context = parent.with_span(span);
+    let judging = judged(
         &delivery,
         &lane,
         async |delivery: &Delivery| handler.handle(delivery).await,
         async |delivery: &Delivery, reason: &str| handler.park(delivery, reason).await,
-    )
-    .await;
+    );
+    let settlement = trace::within(trace_id, judging).with_context(context.clone()).await;
+    if settlement.outcome == Outcome::Parked {
+        context.span().set_status(Status::error("the delivery was parked"));
+    }
+    context.span().end();
+    if let Some(metrics) = &metrics {
+        metrics.record_processing(&delivery.subject, Some(&lane.consumer), started.elapsed().as_secs_f64());
+    }
     if let Err(error) = client.publish(reply, jetstream::settle_payload(&settlement).into()).await {
         tracing::warn!(consumer = lane.consumer, sequence = delivery.sequence, error = %error, "bus_delivery_unsettled");
+        return;
+    }
+    if let Some(metrics) = &metrics {
+        let outcome = match settlement.outcome {
+            Outcome::Taken => "taken",
+            Outcome::Again => "again",
+            Outcome::Parked => "parked",
+        };
+        metrics.record_delivery(&lane.consumer, outcome);
     }
 }
 

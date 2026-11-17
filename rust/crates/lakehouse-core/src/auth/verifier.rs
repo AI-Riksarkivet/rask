@@ -4,6 +4,8 @@ use crate::auth::claims::{self, Expected, IdToken};
 use crate::auth::identity::{self, Caller, invalid_token};
 use crate::auth::settings::{AuthSettings, Provider};
 use crate::service::problem::{ErrorCode, NsError};
+use crate::telemetry::audit::{self, AuditAction, AuditOutcome};
+use crate::telemetry::logging::Value as Field;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
@@ -138,8 +140,9 @@ pub struct Authenticator {
     account_issuer: Option<String>,
 }
 
-fn audit(outcome: &str, detail: &str) {
-    tracing::info!(target: "lance.audit", action = "authn", outcome, detail);
+fn audit(outcome: AuditOutcome, subject: Option<&str>, reason: Option<&str>) {
+    let fields: Vec<(&str, Field)> = reason.map(|reason| ("reason", Field::Str(reason.to_owned()))).into_iter().collect();
+    audit::emit(AuditAction::AUTHN, outcome, subject, None, &fields);
 }
 
 impl Authenticator {
@@ -194,7 +197,7 @@ impl Authenticator {
                 None => Err(Refusal::Unavailable(Unavailable("the service-account verifier is not up".to_owned()))),
             },
             None if self.people.is_some() => {
-                audit("failure", "missing_token");
+                audit(AuditOutcome::Failure, None, Some("missing_token"));
                 return Err(NsError::new(ErrorCode::Unauthenticated, "Missing bearer token"));
             }
             bearer => match &self.people {
@@ -204,15 +207,15 @@ impl Authenticator {
         };
         match verified {
             Ok(caller) => {
-                audit("success", &caller.subject());
+                audit(AuditOutcome::Success, Some(&caller.subject()), None);
                 Ok(Some(caller))
             }
             Err(Refusal::Refused(refusal)) => {
-                audit("failure", "invalid_token");
+                audit(AuditOutcome::Failure, None, Some("invalid_token"));
                 Err(refusal)
             }
             Err(Refusal::Unavailable(Unavailable(reason))) => {
-                audit("failure", "verifier_unavailable");
+                audit(AuditOutcome::Failure, None, Some("verifier_unavailable"));
                 tracing::warn!(reason, "authentication_unavailable");
                 Err(NsError::new(ErrorCode::ServiceUnavailable, "Authentication is enabled but unavailable"))
             }

@@ -1,11 +1,11 @@
 {
   "crates": {
     "lakehouse-bus": {
-      "lines": 1047,
+      "lines": 1143,
       "budget": 1284
     },
     "lakehouse-core": {
-      "lines": 6170,
+      "lines": 6340,
       "budget": 22468
     },
     "lakehouse-tables": {
@@ -13,7 +13,7 @@
       "budget": 960
     },
     "lineage": {
-      "lines": 4426,
+      "lines": 4832,
       "budget": 5242
     }
   },

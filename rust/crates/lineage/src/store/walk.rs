@@ -41,36 +41,62 @@ pub struct DerivedTable {
     pub depth: u32,
 }
 
-/// Every table derived from the table `sources` key, to `max_depth` hops, or to the last one with `None`.
+/// A walk over the edge list, driven by its reader: [`Walk::frontier`] names the keys whose edges it needs next, and
+/// [`Walk::take`] hands them in. The reader is the caller's own code, so its future is whatever the caller's is.
 ///
-/// `rows` answers the edges whose input is one of the keys it is given, every call at one version of the edge list. A
-/// table among `sources` is never its own derived table, whatever cycle the edges hold.
-pub async fn walk<E>(
-    mut rows: impl AsyncFnMut(&BTreeSet<String>) -> Result<Vec<Edge>, E>,
-    sources: &BTreeSet<String>,
+/// Every table derived from the tables `sources` key, to `max_depth` hops, or to the last one with `None`; every read at
+/// one version of the edge list. A table among `sources` is never its own derived table, whatever cycle the edges hold.
+pub struct Walk {
+    sources: BTreeSet<String>,
     max_depth: Option<u32>,
-) -> Result<Walked, E> {
-    let mut depths: BTreeMap<String, u32> = BTreeMap::new();
-    let mut newest: BTreeMap<String, (i64, String)> = BTreeMap::new();
-    let (mut frontier, mut depth) = (sources.clone(), 0);
-    while !frontier.is_empty() {
+    depths: BTreeMap<String, u32>,
+    newest: BTreeMap<String, (i64, String)>,
+    frontier: BTreeSet<String>,
+    depth: u32,
+    complete: Option<bool>,
+}
+
+impl Walk {
+    pub fn new(sources: &BTreeSet<String>, max_depth: Option<u32>) -> Self {
+        Walk {
+            sources: sources.clone(),
+            max_depth,
+            depths: BTreeMap::new(),
+            newest: BTreeMap::new(),
+            frontier: sources.clone(),
+            depth: 0,
+            complete: None,
+        }
+    }
+
+    /// The keys whose outgoing edges the walk reads next; `None` once it has ended.
+    pub fn frontier(&self) -> Option<&BTreeSet<String>> {
+        (self.complete.is_none() && !self.frontier.is_empty()).then_some(&self.frontier)
+    }
+
+    /// The edges out of the current frontier.
+    pub fn take(&mut self, edges: Vec<Edge>) {
         let mut found = BTreeSet::new();
-        for edge in rows(&frontier).await? {
+        for edge in edges {
             let name = edge.out_name.filter(|name| !name.is_empty()).unwrap_or_else(|| edge.out_table.clone());
-            if newest.get(&edge.out_table).is_none_or(|(at, _)| edge.received_at >= *at) {
-                newest.insert(edge.out_table.clone(), (edge.received_at, name));
+            if self.newest.get(&edge.out_table).is_none_or(|(at, _)| edge.received_at >= *at) {
+                self.newest.insert(edge.out_table.clone(), (edge.received_at, name));
             }
             found.insert(edge.out_table);
         }
-        found.retain(|key| !depths.contains_key(key) && !sources.contains(key));
-        if Some(depth) == max_depth {
-            return Ok(walked(depths, &newest, found.is_empty()));
+        found.retain(|key| !self.depths.contains_key(key) && !self.sources.contains(key));
+        if Some(self.depth) == self.max_depth {
+            self.complete = Some(found.is_empty());
+            return;
         }
-        depth += 1;
-        depths.extend(found.iter().map(|key| (key.clone(), depth)));
-        frontier = found;
+        self.depth += 1;
+        self.depths.extend(found.iter().map(|key| (key.clone(), self.depth)));
+        self.frontier = found;
     }
-    Ok(walked(depths, &newest, true))
+
+    pub fn walked(self) -> Walked {
+        walked(self.depths, &self.newest, self.complete.unwrap_or(true))
+    }
 }
 
 fn walked(depths: BTreeMap<String, u32>, newest: &BTreeMap<String, (i64, String)>, complete: bool) -> Walked {

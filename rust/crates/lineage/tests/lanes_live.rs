@@ -11,6 +11,8 @@
 //! `scripts/port_lanes_check.sh` starts them and runs this file.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod support;
+
 use axum::body::Bytes;
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use lakehouse_bus::{Bus, BusSettings, CloudEvent, lineage_envelope, publish_event};
@@ -24,7 +26,7 @@ use lakehouse_core::timers::{Outcome, Timer};
 use lakehouse_tables::{Catalog, bearer};
 use lineage::feed::feed_key;
 use lineage::gate::Gate;
-use lineage::lane::{IngestLane, Tally};
+use lineage::lane::IngestLane;
 use lineage::model::parse_event;
 use lineage::settings::{CONSUMER, STREAM, Settings};
 use lineage::signature::Signing;
@@ -38,6 +40,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use support::counted::Counted;
 use tokio::sync::oneshot;
 
 const CATALOG: &str = "lance-namespace://localhost/api/catalog";
@@ -249,10 +252,19 @@ impl AccessDecider for Denies {
     }
 }
 
-fn gate(store: &Store, denies: bool) -> Arc<Gate> {
+fn gate(store: &Store, denies: bool, counted: &Counted) -> Arc<Gate> {
     let keys = Arc::new(PublishedKeys::new(Arc::new(|_: &str| BTreeMap::new())));
     let decider: Option<Arc<dyn AccessDecider>> = denies.then(|| Arc::new(Denies) as Arc<dyn AccessDecider>);
-    Arc::new(Gate::new(Signing::default(), keys, denies, decider, CATALOG, "lakehouse:estate", store.clone()))
+    Arc::new(Gate {
+        signing: Signing::default(),
+        keys,
+        fga_enabled: denies,
+        decider,
+        catalog: CATALOG.to_owned(),
+        root: "lakehouse:estate".to_owned(),
+        store: store.clone(),
+        signals: Arc::clone(&counted.signals),
+    })
 }
 
 /// A run's COMPLETE event, by a person, copying the source table into the target.
@@ -306,9 +318,9 @@ impl Estate {
     }
 
     /// The ingest lane on `store`, taking deliveries until the returned sender is dropped or sent.
-    fn lane(&self, store: Store, denies: bool, tally: Arc<Tally>) -> oneshot::Sender<()> {
+    fn lane(&self, store: Store, denies: bool, counted: &Counted) -> oneshot::Sender<()> {
         let (stop, stopped) = oneshot::channel::<()>();
-        let lane = Arc::new(IngestLane::new(store.clone(), gate(&store, denies), tally));
+        let lane = Arc::new(IngestLane::new(gate(&store, denies, counted)));
         let bus = Arc::clone(&self.bus);
         let settings = Lane::new(STREAM, CONSUMER, 5, Duration::from_secs(1), Duration::from_secs(30), 8).unwrap();
         tokio::spawn(async move {
@@ -321,16 +333,14 @@ impl Estate {
         stop
     }
 
-    fn relay(&self, denies: bool, tally: Arc<Tally>) -> Relay {
+    fn relay(&self, denies: bool, counted: &Counted) -> Relay {
         let (settings, store) = (Arc::clone(&self.settings), self.store.clone());
         Relay::new(
             settings,
-            store.clone(),
-            gate(&store, denies),
+            gate(&store, denies, counted),
             Some(Arc::clone(&self.bus)),
             Some(Arc::clone(&self.relay_s3)),
             None,
-            tally,
         )
         .unwrap()
     }
@@ -424,8 +434,8 @@ async fn failing_proxy(catalog: &str) -> Failing {
 async fn way_recorded_by_the_lane_from_the_python_producer_as_the_python_lane_records_it() {
     let Some(fixtures) = fixtures() else { return };
     let estate = Estate::new(fixtures, &[]).await;
-    let tally = Arc::new(Tally::default());
-    let _lane = estate.lane(estate.store.clone(), false, Arc::clone(&tally));
+    let counted = Counted::new();
+    let _lane = estate.lane(estate.store.clone(), false, &counted);
     let data = event(&format!("python-{}", unique()));
     let spec = json!({"bus_url": estate.nats.url, "token_file": estate.nats.token_file, "outbox_uri": estate.outbox_uri,
         "endpoint": estate.fixtures.endpoint, "issuer": estate.fixtures.issuer, "event": data});
@@ -434,7 +444,7 @@ async fn way_recorded_by_the_lane_from_the_python_producer_as_the_python_lane_re
     eventually("the Rust lane to record the event", async || estate.whole(&data).await).await;
     assert_eq!(estate.feed_rows().await, 1);
     assert_eq!(estate.staged().await, 0, "the producer dropped its staged copy once the bus took it");
-    assert_eq!(tally.counted("subscriber", "ingested"), 1);
+    assert_eq!(counted.counted("subscriber", "ingested"), 1);
 
     let theirs = namespace(&estate.fixtures.catalog).await;
     let envelope = Value::Object(lineage_envelope(&data).wire());
@@ -456,16 +466,16 @@ async fn way_recorded_by_the_lane_from_the_python_producer_as_the_python_lane_re
 async fn way_refused_and_parked() {
     let Some(fixtures) = fixtures() else { return };
     let estate = Estate::new(fixtures, &[]).await;
-    let tally = Arc::new(Tally::default());
-    let _lane = estate.lane(estate.store.clone(), true, Arc::clone(&tally));
+    let counted = Counted::new();
+    let _lane = estate.lane(estate.store.clone(), true, &counted);
     let data = event(&format!("refused-{}", unique()));
     let envelope = estate.produce(&data, true).await;
-    eventually("the delivery to be parked", async || tally.counted("dead_letter", "dead_lettered") == 1).await;
+    eventually("the delivery to be parked", async || counted.counted("dead_letter", "dead_lettered") == 1).await;
     let parked = estate.store.parked(None).await.unwrap();
     assert_eq!(parked.len(), 1);
     assert_eq!(parked[0].key, format!("{}{}", tables::PARKED_KEY_PREFIX, envelope.id));
     assert_eq!(parked[0].run_id.as_deref(), data["run"]["runId"].as_str());
-    assert_eq!(tally.counted("subscriber", "refused"), 1);
+    assert_eq!(counted.counted("subscriber", "refused"), 1);
     assert_eq!(estate.feed_rows().await, 0, "nothing is recorded for a refused writer");
 }
 
@@ -477,12 +487,12 @@ async fn a_store_failing_mid_record_leaves_the_delivery_asked_for_again_and_noth
     let estate = Estate::new(fixtures, &[]).await;
     let proxy = failing_proxy(&estate.fixtures.catalog).await;
     let through_proxy = store_at(&proxy.url, estate.namespace.clone()).await;
-    let tally = Arc::new(Tally::default());
-    let _lane = estate.lane(through_proxy, false, Arc::clone(&tally));
+    let counted = Counted::new();
+    let _lane = estate.lane(through_proxy, false, &counted);
     let data = event(&format!("failing-{}", unique()));
     estate.produce(&data, true).await;
     eventually("the feed's write to fail", async || proxy.failed.load(Ordering::SeqCst) >= 1).await;
-    eventually("the lane to ask for the delivery again", async || tally.counted("subscriber", "retried") >= 1).await;
+    eventually("the lane to ask for the delivery again", async || counted.counted("subscriber", "retried") >= 1).await;
     assert_eq!(
         estate.feed_rows().await,
         0,
@@ -495,7 +505,7 @@ async fn a_store_failing_mid_record_leaves_the_delivery_asked_for_again_and_noth
     proxy.failing.store(false, Ordering::SeqCst);
     eventually("a later delivery to record the event", async || estate.whole(&data).await).await;
     assert_eq!(estate.feed_rows().await, 1);
-    assert_eq!(tally.counted("subscriber", "ingested"), 1);
+    assert_eq!(counted.counted("subscriber", "ingested"), 1);
 }
 
 /// The relay drains an event the real Python producer staged while the bus was away: recorded, published again, dropped.
@@ -508,14 +518,14 @@ async fn an_event_staged_by_the_python_producer_with_the_bus_away_is_drained_by_
         "endpoint": estate.fixtures.endpoint, "issuer": estate.fixtures.issuer, "event": data});
     assert_eq!(python("produce", spec).await["left_staged"], true);
     assert_eq!(estate.staged().await, 1);
-    let report = estate.relay(false, Arc::default()).tick().await;
+    let report = estate.relay(false, &Counted::new()).tick().await;
     assert_eq!((report.outbox_drained, report.outbox_stranded, report.outbox_refused), (1, 0, 0), "{report:?}");
     assert!(estate.whole(&data).await);
     assert_eq!(estate.staged().await, 0, "the drained event is dropped");
-    let tally = Arc::new(Tally::default());
-    let _lane = estate.lane(estate.store.clone(), false, Arc::clone(&tally));
+    let counted = Counted::new();
+    let _lane = estate.lane(estate.store.clone(), false, &counted);
     eventually("the copy published again to reach the lane", async || {
-        tally.counted("subscriber", "ingested") == 1
+        counted.counted("subscriber", "ingested") == 1
     })
     .await;
     assert_eq!(estate.feed_rows().await, 1, "the copy lands no second row");
@@ -528,17 +538,17 @@ async fn way_the_lane_fails_then_the_relay_records() {
     let Some(fixtures) = fixtures() else { return };
     let estate = Estate::new(fixtures, &[]).await;
     let proxy = failing_proxy(&estate.fixtures.catalog).await;
-    let tally = Arc::new(Tally::default());
-    let _lane = estate.lane(store_at(&proxy.url, estate.namespace.clone()).await, false, Arc::clone(&tally));
+    let counted = Counted::new();
+    let _lane = estate.lane(store_at(&proxy.url, estate.namespace.clone()).await, false, &counted);
     let data = event(&format!("relayed-{}", unique()));
     estate.produce(&data, true).await;
-    eventually("the lane's write to fail", async || tally.counted("subscriber", "retried") >= 1).await;
-    let report = estate.relay(false, Arc::default()).tick().await;
+    eventually("the lane's write to fail", async || counted.counted("subscriber", "retried") >= 1).await;
+    let report = estate.relay(false, &Counted::new()).tick().await;
     assert_eq!(report.outbox_drained, 1, "{report:?}");
     assert!(estate.whole(&data).await, "NoLoss, and the feed row is whole");
     assert_eq!(estate.staged().await, 0);
     proxy.failing.store(false, Ordering::SeqCst);
-    eventually("the lane to take the delivery", async || tally.counted("subscriber", "ingested") >= 1).await;
+    eventually("the lane to take the delivery", async || counted.counted("subscriber", "ingested") >= 1).await;
     assert_eq!(estate.feed_rows().await, 1);
 }
 
@@ -549,14 +559,14 @@ async fn way_the_relay_refuses() {
     let estate = Estate::new(fixtures, &[]).await;
     let data = event(&format!("relay-refused-{}", unique()));
     estate.produce(&data, false).await;
-    let tally = Arc::new(Tally::default());
-    let report = estate.relay(true, Arc::clone(&tally)).tick().await;
+    let counted = Counted::new();
+    let report = estate.relay(true, &counted).tick().await;
     assert_eq!(
         (report.outbox_refused, report.outbox_refusals_recorded, report.outbox_drained),
         (1, 1, 0),
         "{report:?}"
     );
-    assert_eq!(tally.counted("outbox", "refused"), 1);
+    assert_eq!(counted.counted("outbox", "refused"), 1);
     assert_eq!(estate.refusals().await, 1, "NoLoss: the refusal is kept where an admin finds it");
     assert_eq!(estate.staged().await, 0);
     assert_eq!(estate.feed_rows().await, 0, "OnlyAllowedEventsAreRecorded");
@@ -569,12 +579,12 @@ async fn way_the_lane_and_the_relay_race() {
     let estate = Estate::new(fixtures, &[]).await;
     let data = event(&format!("race-{}", unique()));
     estate.produce(&data, true).await;
-    let tally = Arc::new(Tally::default());
-    let _lane = estate.lane(estate.store.clone(), false, Arc::clone(&tally));
-    let relay = estate.relay(false, Arc::default());
+    let counted = Counted::new();
+    let _lane = estate.lane(estate.store.clone(), false, &counted);
+    let relay = estate.relay(false, &Counted::new());
     let (report, ()) = tokio::join!(
         relay.tick(),
-        eventually("the lane to take it", async || tally.counted("subscriber", "ingested") >= 1)
+        eventually("the lane to take it", async || counted.counted("subscriber", "ingested") >= 1)
     );
     assert_eq!(report.outbox_drained + report.outbox_stranded, 1, "{report:?}");
     if estate.staged().await > 0 {
@@ -599,12 +609,12 @@ async fn two_rust_ticks_in_one_window_run_once() {
             ran.fetch_add(1, Ordering::SeqCst);
             Ok(())
         };
-        let (a, b) = tokio::join!(replicas[0].turn(false, work), replicas[1].turn(false, work));
+        let (a, b) = tokio::join!(replicas[0].turn(false, work()), replicas[1].turn(false, work()));
         let outcomes = BTreeSet::from([format!("{:?}", a.outcome), format!("{:?}", b.outcome)]);
         assert_eq!(ran.load(Ordering::SeqCst), 1, "window {window}: {outcomes:?}");
         assert_eq!(outcomes, BTreeSet::from(["Elsewhere".to_owned(), "Ran".to_owned()]));
         assert_eq!(a.window, b.window, "both name one window");
-        let again = replicas[0].turn(false, async || Err("a window runs once".to_owned())).await;
+        let again = replicas[0].turn(false, async { Err("a window runs once".to_owned()) }).await;
         assert_eq!(again.outcome, Outcome::Elsewhere);
         tokio::time::sleep(a.wait.max(b.wait) + Duration::from_millis(1100)).await;
     }
@@ -659,7 +669,7 @@ async fn the_forwarder_sends_every_recorded_event_and_its_cursor_survives_a_rest
         }
     };
     record(&["f1", "f2", "f3"]).await;
-    let report = estate.relay(false, Arc::default()).tick().await;
+    let report = estate.relay(false, &Counted::new()).tick().await;
     assert_eq!((report.forwarded, report.forward_stalled.clone()), (3, None), "{report:?}");
     assert_eq!(runs(&sink), ["f1", "f2", "f3"]);
 
@@ -667,12 +677,10 @@ async fn the_forwarder_sends_every_recorded_event_and_its_cursor_survives_a_rest
         let store = store_at(&estate.fixtures.catalog, estate.namespace.clone()).await;
         Relay::new(
             Arc::clone(&estate.settings),
-            store.clone(),
-            gate(&store, false),
+            gate(&store, false, &Counted::new()),
             None,
             Some(Arc::clone(&estate.relay_s3)),
             None,
-            Arc::default(),
         )
         .unwrap()
     };
