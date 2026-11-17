@@ -166,8 +166,8 @@ _RIG_GRANTS = Permissions(publish=("$JS.API.>", "$JS.ACK.>", "maintenance.due.>"
 #: The consumer's ack wait the render is given, and the heartbeat each worker beats inside it.
 _ACK_WAIT = 4
 _HEARTBEAT = 1
-#: The longest a fired follow-up waits for the task holding its table before it is moved again
-#: (`maintenance.services.queue`'s retry, 60 s), with room for the move and the pass.
+#: The longest a fired follow-up waits for the task holding its table before it fires again (`maintenance.services.queue`
+#: holds it again 60 s out), with room for the move and the pass.
 _FOLLOW_UP_WAIT = 75.0
 #: Deliveries of one task before a worker ends it; the consumer allows one more, on which the task is ended unrun.
 _MAX_DELIVER = 2

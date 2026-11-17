@@ -160,7 +160,7 @@ nats-server. One offline file runs a broker of its own: `tests/integration/test_
 (maintenance's worker on its queue, ADR 0232) starts the pinned nats-server `scripts/nats_server.sh` prints, a process
 on a free port with a store under `tmp_path`, as the Rust plane's bus tests do. The script fetches the release into
 `.localbin/` against `scripts/toolchain.sha256` when it is not there; `make test`, `check-fast` and `coverage` fetch it
-first (`make nats-server`), `dagger call test` copies the binary of `natsImage` to that path, and a lane that can do
+first (`make nats-server`), `dagger call test` copies the binary of `natsImage` to that path at mode 0755, and a lane that can do
 neither fails the fixture naming the download, never skips. For an ad-hoc broker, bring one up as a Dagger service,
 never a docker container.
 `up` holds the foreground, so run it in the background or in a second shell:

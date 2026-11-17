@@ -377,6 +377,17 @@ _schedules_not_queued = _meter.create_counter(
     unit="{schedule}",
     description="Fired schedules the work queue refused or did not answer, each given back to be moved again.",
 )
+#: A fired schedule or follow-up that met the task holding its table and was held again a minute out
+#: (:meth:`maintenance.services.queue.Worker._hold_again`): ``held`` when the re-hold was taken, ``standing`` when a time
+#: held there already holds the table. Each is one table waiting for a minute; a rate that stays up while the tasks
+#: queue is deep is a backlog the workers do not drain.
+type FiredTime = Literal["schedule", "follow_up"]
+
+_schedules_reheld = _meter.create_counter(
+    "maintenance.schedules.reheld",
+    unit="{schedule}",
+    description="Fired schedules and follow-ups that met their table's task and were held again a minute out, by kind, fired and outcome.",
+)
 
 #: What the worker's sampler reads off the bus every 15 s (:func:`maintenance.services.queue.sample_queue`). Synchronous
 #: gauges: one exports nothing until it is first set, so a process that imports this module and runs no sampler
@@ -494,6 +505,12 @@ def record_arrival_settled(*, outcome: ArrivalOutcome) -> None:
 def record_schedule_not_queued() -> None:
     """Record a fired schedule the queue did not take."""
     _schedules_not_queued.add(1)
+
+
+def record_fired_time_reheld(*, kind: str, fired: FiredTime, held: bool) -> None:
+    """Record a fired schedule or follow-up of a ``kind`` task held again because a task holds its table; ``held`` is
+    whether the re-hold was taken, rather than refused by a time held there already."""
+    _schedules_reheld.add(1, {"kind": kind, "fired": fired, "outcome": "held" if held else "standing"})
 
 
 def record_stream_unsampled(*, stream: str, reads: int) -> None:

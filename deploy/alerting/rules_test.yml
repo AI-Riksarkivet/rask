@@ -946,6 +946,37 @@ tests:
         alertname: MaintenanceStoreEventsStuck
         exp_alerts: []
 
+  # The fired schedules' durable at 950 deliveries awaiting an ack for 15m warns; at 899, or another durable at 1000,
+  # nothing.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-due"}'
+        values: "950x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MaintenanceDueStuck
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MaintenanceDueStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              consumer: maintenance-due
+            exp_annotations:
+              summary: "Fired schedules are near the delivery ceiling of their consumer"
+              description: "The maintenance-due consumer awaits an acknowledgement for at least 900 deliveries, 90 % of its max_ack_pending of 1000; at the ceiling the bus delivers no more fired schedules, and no table's pass, trash release, orphan check, audit or scan is queued until it drains. Read maintenance_schedules_not_queued_total (rising: the bus refuses the moves) and maintenance_schedules_reheld_total by kind, maintenance_queue_waiting for maintenance-due, and the maintenance_due_not_queued WARNING lines."
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-due"}'
+        values: "899x30"
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-store-events"}'
+        values: "1000x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MaintenanceDueStuck
+        exp_alerts: []
+
   # Buckets found without store events warn on the sum of every replica's series: at 4h only the replica that ran the
   # last two audits counted any; nothing warns before the first audit.
   - interval: 1m

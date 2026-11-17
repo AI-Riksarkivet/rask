@@ -859,15 +859,21 @@ governing their data. The project-scoped surface is the console's project page, 
   settle is handed back after a growing delay and ended on its `maxDeliver`-th delivery, each outcome counted on
   `maintenance.arrivals.settled` (`held`, `covered`, `ignored`, `refused`, `unreadable`, `retried`, `ended`). A fired
   schedule or follow-up that meets a task holding its table (a table's, a trash record's, an orphan check's) waits for
-  it, naked a minute out, and is never acked as covered by it (`Worker._move`, ADR 0232, A5): a pass counts its next time
-  from its start, so a long one holds a time already past, which fires while it runs. Only a cadence's firing (the
+  it and is never acked as covered by it (`Worker._move`, ADR 0232, A5): a pass counts its next time from its start, so a
+  long one holds a time already past, which fires while it runs. It waits by being held again a minute out on the
+  subject it fired from, by a publish refused where a time is held there (`schedule_first`, or `follow_up` without
+  `replacing`, which must not replace an undrop's own follow-up), and only then acked (`Worker._hold_again`, A7): a
+  fired time naked to wait instead stays ack-pending, and `maintenance-due`'s `max_ack_pending` (1000) of them stop every
+  delivery on that consumer, the audit's cadence among them. A waiting table costs one publish, one delivery and one ack
+  a minute, each counted on `maintenance.schedules.reheld` (`kind`, `fired`, `outcome`), and no consumer slot;
+  `MaintenanceDueStuck` warns when that consumer's ack-pending count stays at 900 or more. Only a cadence's firing (the
   audit's, the scan's) is covered by the task it meets. A table's pass
   (`maintenance.services.table_pass.run_table_pass`) expires the table and each branch once it has
   `minVersionsToExpire` (20) reclaimable versions, refreshes its due record, reads its committed files (below), and
   schedules its next pass (`next_due`: the earliest a version or a staged manifest comes due, held to the policy's
   cadence, never later than `recheckHours` (24) and never sooner than 60 s; a pass that could not decide, or found the
   table's history fenced, is tried again after `retrySeconds`). The hourly audit opens no table and queues each table
-  and trash record that holds neither a schedule (held, or fired and waiting on its `due` subject) nor a queued task,
+  and trash record that holds neither a schedule (held, or fired and not yet moved off its `due` subject) nor a queued task,
   which bounds a lost announcement or schedule to one
   firing (`maintenance.services.audit.run_audit`); a trash record already released, or carrying no deadline, gets no task,
   which would end holding nothing. The chart's stream Job reads MAINTENANCE_SCHEDULES back and fails unless it allows

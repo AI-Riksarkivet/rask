@@ -1,14 +1,15 @@
-"""Something on the bus holds every live table between its passes (ADR 0232, invariant `HeldUnlessBackstopped`).
+"""Something on the bus holds every live table between its passes (ADR 0232, invariant `HeldUnlessBackstopped`), and a
+table waiting for its task holds none of the fired schedules' consumer's deliveries (`AWaitingFiringHoldsNoSlot`).
 
-Each test is one assumption of the model of maintenance's work queue (`specs/maintenance/WorkQueue.tla`, A5 and A6), the
-shortest trace of the config that removes it played on the running code: the worker (`maintenance.services.queue.Worker`
+Each test is one assumption of the model of maintenance's work queue (`specs/maintenance/WorkQueue.tla`, A5, A6 and A7),
+the trace of the config that removes it played on the running code: the worker (`maintenance.services.queue.Worker`
 over `TaskQueue`), its task runner (`maintenance.services.tasks.run_task`) and its commit lane
 (`maintenance.services.arrival.Arrivals.hold_task`), on the pinned nats-server (`scripts/nats_server.sh`, the release the
 estate's bus runs) with JetStream, its streams, durable consumers and claims bucket declared as the chart's stream Job
 declares them (`chart/templates/nats-stream-job.yaml` 151-169, `lance.busConsumers` in `chart/templates/_helpers.tpl`
-408-418), at one replica. One step is held at the moment the trace names, while every other runs as it would; the harm is
-read as the hourly audit reads it (`audit._queue_what_holds_nothing`: `TaskQueue.held` over the table's schedules, held
-or fired, and its task), once the step has settled.
+408-418), at one replica. One step is held at the moment the trace names, while every other runs as it would; a table
+left unheld is read as the hourly audit reads it (`audit._queue_what_holds_nothing`: `TaskQueue.held` over the table's
+schedules, held or fired, and its task), once the step has settled, and a stalled consumer by what reaches the queue.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
+from maintenance.services import queue as queue_module
 from maintenance.services import tasks
 from maintenance.services.arrival import Arrivals
 from maintenance.services.expiry import DatasetResult
@@ -188,14 +190,16 @@ async def _api(client: Client, subject: str, body: Mapping[str, Any]) -> dict[st
 
 
 @asynccontextmanager
-async def _queue_on(url: str) -> AsyncGenerator[TaskQueue]:
+async def _queue_on(url: str, *, due_ceiling: int | None = None) -> AsyncGenerator[TaskQueue]:
     """The worker's queue on a connection to ``url`` under the worker's inbox prefix, the streams and consumers declared
-    first. The bus session's renewal is the `nats-auth` lane's, so nothing renews here."""
+    first, the fired schedules' consumer's `max_ack_pending` set to ``due_ceiling`` when one is given. The bus session's
+    renewal is the `nats-auth` lane's, so nothing renews here."""
     client = await nats.connect(servers=[url], inbox_prefix=INBOX_PREFIX)
     for stream in _STREAMS:
         await _api(client, f"$JS.API.STREAM.CREATE.{stream['name']}", stream)
     for stream_name, consumer in _CONSUMERS:
-        await _api(client, f"$JS.API.CONSUMER.CREATE.{stream_name}.{consumer['durable_name']}", {"stream_name": stream_name, "config": consumer})
+        config = {**consumer, "max_ack_pending": due_ceiling} if due_ceiling is not None and consumer["durable_name"] == DUE_CONSUMER else consumer
+        await _api(client, f"$JS.API.CONSUMER.CREATE.{stream_name}.{consumer['durable_name']}", {"stream_name": stream_name, "config": config})
     queue = TaskQueue(client, asyncio.Event(), asyncio.create_task(_renews_nothing()))
     try:
         yield queue
@@ -212,13 +216,15 @@ def _never_ends(event: str, **extra: object) -> NoReturn:
 
 
 @asynccontextmanager
-async def _worker(queue: TaskQueue, settings: MaintenanceSettings, run: Callable[[Task], Awaitable[None]]) -> AsyncGenerator[Worker]:
-    """One replica's worker at the settings' timings, pulling its tasks and moving its fired schedules until the block
-    ends."""
+async def _worker(
+    queue: TaskQueue, settings: MaintenanceSettings, run: Callable[[Task], Awaitable[None]], *, ready: Callable[[], bool] = lambda: True
+) -> AsyncGenerator[Worker]:
+    """One replica's worker at the settings' timings, pulling its tasks while ``ready`` says so and moving its fired
+    schedules until the block ends."""
     worker = Worker(
         queue,
         run=run,
-        ready=lambda: True,
+        ready=ready,
         heartbeat_seconds=settings.task_heartbeat_seconds,
         ack_wait_seconds=settings.task_ack_wait_seconds,
         max_deliver=settings.task_max_deliver,
@@ -270,16 +276,24 @@ async def test_a_pass_that_holds_a_time_already_past_leaves_its_table_held(bus: 
     dataset, which holds the next try `retry_seconds` from the start: a pass of 15.5 min, inside the half-hour bound,
     whose store did not answer for one dataset. The held step is the pass's ack (`Worker._handle`): it is sent once the
     fired schedule has met the pass's own task in flight (`Worker._move`, `TaskQueue.enqueue` refused) and the move has
-    settled the fired schedule. What the bus holds once the pass has acked is what the hourly audit reads."""
+    settled the fired schedule. What the bus holds once the pass has acked is what the hourly audit reads; then the time
+    that waited fires again, after the task is gone, and the table is passed once more, its next time held by that pass.
+    The wait is held 2 s out here rather than the worker's minute (`queue._HELD_TABLE_RETRY`), only to bring that fire
+    within the test."""
     settings = _settings(tmp_path)
     started = datetime.now(UTC) - timedelta(seconds=settings.retry_seconds + 30)
+    passes: list[datetime] = []
 
     def long_pass(task: TableTask, settings: MaintenanceSettings) -> PassOutcome:
+        passes.append(datetime.now(UTC))
+        if len(passes) > 1:
+            return PassOutcome(results=[], next_due=datetime.now(UTC) + timedelta(hours=1))
         readings = PassReadings(table_ids=TableIds(), context=PlanContext(policies=[], now=started, older_than=timedelta(days=settings.older_than_days)))
         undecided = DatasetResult(uri=task.location, error="the store did not answer")
         return PassOutcome(results=[undecided], next_due=next_due([undecided], readings=readings, settings=settings))
 
     monkeypatch.setattr(tasks, "run_table_pass", long_pass)
+    monkeypatch.setattr(queue_module, "_HELD_TABLE_RETRY", 2.0)
     table = Task(kind="table", uuid=str(uuid4()), location=str(tmp_path / "table"))
     async with _queue_on(bus) as queue:
         covered, settled = asyncio.Event(), asyncio.Event()
@@ -308,15 +322,83 @@ async def test_a_pass_that_holds_a_time_already_past_leaves_its_table_held(bus: 
         async with _worker(queue, settings, partial(run_task, settings=settings, queue=queue, emitter=NoopEmitter(), control=NoopControlEmitter())):
             assert await queue.enqueue(table), "the table's first task was not queued"
             assert await _until(lambda: _acked(queue, settled)), "the pass never acked"
-        assert await _holds(queue, table.uuid), (
-            "the pass held its table's next time already past; it fired, the move found the pass's own task in flight and "
-            "acked it as covered, the pass acked, and nothing on the bus holds the live table until the hourly audit"
-        )
+            assert await _holds(queue, table.uuid), (
+                "the pass held its table's next time already past; it fired, the move found the pass's own task in flight and "
+                "acked it as covered, the pass acked, and nothing on the bus holds the live table until the hourly audit"
+            )
+            assert await _until(lambda: _passed_again(queue, passes)), (
+                f"the time that met the pass's task never brought the table's pass back once that task was done: {len(passes)} pass(es)"
+            )
+        assert await _holds(queue, table.uuid), "the second pass held no next time for the table"
+
+
+async def _passed_again(queue: TaskQueue, passes: list[datetime]) -> bool:
+    """Whether a second pass of the table has run and its task left the queue, acknowledged."""
+    return len(passes) >= 2 and (await queue.stream_state(TASKS_STREAM)).messages == 0
 
 
 async def _acked(queue: TaskQueue, settled: asyncio.Event) -> bool:
     """Whether the move has settled the fired schedule and the pass's task has left the queue, acknowledged."""
     return settled.is_set() and (await queue.stream_state(TASKS_STREAM)).messages == 0
+
+
+#: The fired schedules' consumer's `max_ack_pending` in the third test, where the chart's is 1000: the claim is that a
+#: fired time waiting for its table's task holds none of it, so as many waiting tables as a small ceiling reach the
+#: stall a thousand reach on the estate.
+_DUE_CEILING = 3
+
+
+async def _runs_nothing(task: Task) -> None:
+    raise AssertionError(f"a worker that is not ready ran {task.subject('task')}")
+
+
+@pytest.mark.asyncio
+async def test_tables_waiting_for_their_tasks_leave_the_fired_schedules_consumer_delivering(bus: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fired schedule that meets its table's task waits for it (`Worker._move`, A5); while it waits it must hold none of
+    the fired schedules' consumer's deliveries (ADR 0232, A7). Naked to come again, it stays ack-pending, and once as many
+    tables wait as the consumer's `max_ack_pending`, JetStream delivers nothing more on `maintenance.due.>`: no other
+    table's schedule, no trash release, no orphan check, and not the audit's cadence.
+
+    The worker is not ready (a fleet whose signing key is unresolved, `Worker.run_tasks`) while it moves fired schedules
+    (`Worker.run_due`), so each table's task stays queued. As many tables as the consumer's ceiling have their schedule
+    fire and meet their task; then another table's schedule and the audit's cadence fire. Both are moved onto the queue,
+    and every waiting table is still held."""
+    settings = _settings(tmp_path)
+    waiting = [Task(kind="table", uuid=str(uuid4()), location=str(tmp_path / f"waiting-{n}")) for n in range(_DUE_CEILING)]
+    fresh = Task(kind="table", uuid=str(uuid4()), location=str(tmp_path / "fresh"))
+    moved: list[str] = []
+    move = Worker._move
+
+    async def counted(worker: Worker, msg: Msg) -> None:
+        await move(worker, msg)
+        moved.append(msg.subject)
+
+    monkeypatch.setattr(Worker, "_move", counted)
+    async with _queue_on(bus, due_ceiling=_DUE_CEILING) as queue:
+        for task in waiting:
+            assert await queue.enqueue(task), f"{task.subject('task')} was not queued"
+        async with _worker(queue, settings, _runs_nothing, ready=lambda: False):
+            for task in waiting:
+                await queue.schedule_at(task, datetime.now(UTC) - timedelta(seconds=1))
+            met = {task.subject("due") for task in waiting}
+
+            async def all_met() -> bool:
+                return met <= set(moved)
+
+            assert await _until(all_met), f"the waiting tables' schedules were not all moved: {moved}"
+            await queue.schedule_at(fresh, datetime.now(UTC) - timedelta(seconds=1))
+            await queue.schedule_at(Task(kind="audit"), datetime.now(UTC) - timedelta(seconds=1))
+
+            async def both_queued() -> bool:
+                return (await queue.stream_state(TASKS_STREAM)).messages == _DUE_CEILING + 2
+
+            assert await _until(both_queued), (
+                f"{_DUE_CEILING} fired schedules waiting for their tables' tasks hold the fired schedules' consumer's "
+                f"{_DUE_CEILING} deliveries, and neither another table's schedule nor the audit's cadence is delivered: "
+                f"{await queue.consumer_state(SCHEDULES_STREAM, DUE_CONSUMER)}"
+            )
+            assert fresh.uuid in await queue.held("task", "table"), "the other table's schedule was moved, but not onto its own task"
+            assert {task.uuid for task in waiting} <= await queue.held("schedule", "table"), "a waiting table is held by nothing on the bus"
 
 
 def _announcement(operation: str, *, uuid: str, location: str) -> bytes:

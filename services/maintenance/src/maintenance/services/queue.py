@@ -18,15 +18,16 @@ a second task for a table that has one:
   is next due, a newer one replacing it, and fires into ``maintenance.due.<kind>.<uuid>``, which the worker moves onto
   the queue (:meth:`Worker.run_due`); its ack deletes the fired message, and no consumer reads a held one. Measured on
   nats-server 2.15.2 (2026-11-09): a replaced ``@at`` fires once, with the newer body; one already past fires at once.
-  Fired while a task holds its table, it waits for that task, since it may be the time that task's pass held already
-  past.
+  Fired while a task holds its table, it is held again a minute out and acked, since it may be the time that task's
+  pass held already past: nothing waits on the fired schedules' consumer.
 
 A commit puts no task on the queue itself: it holds its table's FOLLOW-UP (:meth:`TaskQueue.follow_up`) a delay out,
 beside the table's schedule on ``maintenance.schedule.followup.<kind>.<uuid>``, unless one is already held there. So a
 burst of commits makes one pass, at most one per delay, and that pass reads the table after every commit it covers; the
 follow-up never replaces the schedule a pass writes. A registration's follow-up replaces the one held, since an undrop
-announces its table before it clears the trash record (:mod:`maintenance.services.arrival`). Fired, a follow-up waits
-while a task holds the table, since a pass already running may have read the table before the commits it follows.
+announces its table before it clears the trash record (:mod:`maintenance.services.arrival`). Fired while a task holds
+the table, a follow-up is held again a minute out, since a pass already running may have read the table before the
+commits it follows.
 """
 
 from __future__ import annotations
@@ -65,6 +66,7 @@ from maintenance.core.metrics import (
     record_arrival_settled,
     record_consumer_backlog,
     record_consumer_unsampled,
+    record_fired_time_reheld,
     record_pass_overran,
     record_schedule_not_queued,
     record_store_event_settled,
@@ -126,11 +128,13 @@ _RETRY_FIRST: Final = 15.0
 _RETRY_CEILING: Final = 900.0
 #: The token a follow-up's subjects carry after their area.
 _FOLLOW_UP: Final = "followup"
-#: How long a fired schedule or follow-up waits for the task holding its table before it asks again (:meth:`Worker._move`),
+#: How far out a fired schedule or follow-up that meets the task holding its table is held again (:meth:`Worker._move`),
 #: and how far out a task given up to another's claim holds its next try: the minute that is also the soonest a pass holds
-#: its table's next time (`table_pass._SOONEST`). The fired schedules' consumer redelivers for ever (`maintenance-due`,
-#: `max_deliver -1`), so a wait is never given up; measured on nats-server 2.15.2 (2026-11-17, ADR 0232), a fired
-#: schedule naked with a delay on that consumer came back after the delay on each of four deliveries.
+#: its table's next time (`table_pass._SOONEST`). A waiting table costs one guarded publish, one delivery and one ack a
+#: minute, and holds none of the fired schedules' consumer's deliveries between them: a fired schedule naked to wait
+#: instead stays ack-pending until it is delivered again (measured on nats-server 2.15.2, 2026-11-17, ADR 0232), and
+#: `max_ack_pending` (1000) of them stop every delivery on that consumer, every other table's schedule and the audit's
+#: cadence among them.
 _HELD_TABLE_RETRY: Final = 60.0
 #: JetStream's answers to a publish that expects a subject to hold nothing (`Nats-Expected-Last-Subject-Sequence: 0`) while
 #: it holds a message, both "wrong last sequence". Measured on nats-server 2.15.2 (2026-11-09): one server answers 10071
@@ -663,12 +667,13 @@ class TaskQueue:
 
         A schedule holds its subject only until it fires: measured on nats-server 2.15.2 (2026-11-09), a fired ``@at``
         leaves no message on its ``schedule`` subject, while a cadence (``@hourly``) stays. Fired, it holds its ``due``
-        subject until it is moved onto the queue, and a fired one waiting for the task that holds its table
-        (:meth:`Worker._move`) is still there once that task is acknowledged, so both subjects are read: measured on
-        nats-server 2.15.2 (2026-11-17), a work-queue message naked with a delay stays on its subject, ack-pending at its
-        consumer, until it is delivered again after the delay. A follow-up is
-        no schedule of the table's: its subject carries a token more, which the filter's one-token wildcard does not
-        match.
+        subject until a worker has moved it, so both subjects are read: a fired time not yet delivered, or delivered to a
+        worker that died before its move was acked (handed on after the consumer's ack wait), can be the only thing
+        holding its table; read as held by nothing, the table would be queued by the audit and passed once more a minute
+        after, when the fired time meets that task. A fired time that meets its table's task is held again on its
+        ``schedule`` subject before it is acked (:meth:`Worker._move`), so it is read on one subject or the other
+        throughout. A follow-up is no schedule of the table's: its subject carries a token more, which the filter's
+        one-token wildcard does not match.
 
         Raises:
             QueueUnavailableError: JetStream refused the read, or did not answer it.
@@ -1171,12 +1176,16 @@ class Worker:
     async def run_due(self) -> None:
         """Move each fired schedule onto the queue until :meth:`stop` (:meth:`_move`).
 
-        One whose table (or trash record) a task holds already waits until nothing holds it, and is never covered by that
+        One whose table (or trash record) a task holds already is held again a minute out, and is never covered by that
         task. A fired follow-up follows a commit that task's pass may have read the table before. A fired schedule may be
         the very time that pass held: a pass counts its next time from its start, so one that runs longer than that time
         holds one already past, which fires at once while the pass still runs (`table_pass.next_due`); acked as covered,
         it would leave the table held by nothing once the pass acked. A cadence's firing (the audit's, the scan's) is
-        covered by the task it meets: the cadence holds its next firing itself."""
+        covered by the task it meets: the cadence holds its next firing itself.
+
+        Not gated on readiness, as :meth:`run_tasks` is: a move runs no pass and emits nothing, only publishes, and a
+        fired time that meets a task holds no delivery of this consumer while it waits (ADR 0232, A7), so a fleet that
+        is not ready keeps every table held and the audit's cadence moving."""
         while not self._stopping.is_set():
             msg = await self._next(SCHEDULES_STREAM, DUE_CONSUMER)
             if msg is not None:
@@ -1282,23 +1291,42 @@ class Worker:
             log.warning("maintenance_message_unsettled", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
     async def _move(self, msg: Msg) -> None:
-        """Move one fired schedule or follow-up onto the queue; one the queue refuses because a task holds its table waits
-        for that task, naked :data:`_HELD_TABLE_RETRY` out, unless it is a cadence's (ADR 0232, assumption A5)."""
+        """Move one fired schedule or follow-up onto the queue, then ack it. One the queue refuses because a task holds its
+        table waits for that task (ADR 0232, A5) without holding a delivery of this consumer (A7): its time is held again
+        :data:`_HELD_TABLE_RETRY` out first (:meth:`_hold_again`), and acked after, so a worker that dies between the two
+        leaves the table held, and the delivery handed on after the consumer's ack wait is moved again, its re-hold
+        refused by the one standing. A cadence's firing is acked as covered. A move the bus refuses or does not answer is
+        naked to come again after a growing delay."""
         task = _parsed(msg)
         if task is None:
             await msg.term()
             return
         try:
             queued = await self._queue.enqueue(task, carried=_carried(msg.headers or {}))
+            if not queued and task.kind in _SCHEDULED_KINDS:
+                await self._hold_again(task, follow_up=msg.subject.startswith(f"maintenance.due.{_FOLLOW_UP}."))
         except QueueUnavailableError as exc:
             log.warning("maintenance_due_not_queued", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
             record_schedule_not_queued()
             await msg.nak(delay=redelivery_delay(msg.metadata.num_delivered or 1))
             return
-        if not queued and task.kind in _SCHEDULED_KINDS:
-            await msg.nak(delay=_HELD_TABLE_RETRY)
-            return
         await msg.ack()
+
+    async def _hold_again(self, task: Task, *, follow_up: bool) -> None:
+        """Hold a fired ``task`` that met the task holding its table again :data:`_HELD_TABLE_RETRY` out, on the subject it
+        fired from, by a publish refused while one is held there, which then holds the table already.
+
+        A follow-up's re-hold never replaces one held (:meth:`TaskQueue.follow_up`): the one held may be an undrop's own,
+        which must fire only after its clear of the trash record, and the minute would fire before it (ADR 0232,
+        `WorkQueueReholdFollowUpUnguarded.cfg`). A schedule's never replaces one held either (:meth:`TaskQueue.schedule_first`),
+        which keeps the time and body a pass held (an orphan check's interval rides its body).
+
+        Raises:
+            QueueUnavailableError: The bus refused the re-hold for another reason, or did not answer it.
+        """
+        at = datetime.now(UTC) + timedelta(seconds=_HELD_TABLE_RETRY)
+        held = await (self._queue.follow_up(task, at) if follow_up else self._queue.schedule_first(task, at))
+        record_fired_time_reheld(kind=task.kind, fired="follow_up" if follow_up else "schedule", held=held)
 
 
 #: The streams the worker's sampler reads, each with whether its oldest message's age is read: a work queue whose backlog

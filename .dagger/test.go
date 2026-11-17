@@ -69,8 +69,9 @@ func (m *Rask) Test(
 		WithFile("/usr/local/bin/openfga", dag.Container().From(openfgaImage).File("/openfga")).
 		// ── the pinned nats-server, for the tests that drive maintenance's queue on a real broker ────────────────
 		// (`tests/integration/test_a_live_table_stays_held_on_the_bus.py`): the image the NATS lanes run, at the path
-		// `scripts/nats_server.sh` reads, so the lane neither fetches it nor depends on the network.
-		WithFile(natsServerPath, dag.Container().From(natsImage).File("/usr/local/bin/nats-server")).
+		// `scripts/nats_server.sh` reads, so the lane neither fetches it nor depends on the network. Executable by its
+		// own mode, as nats_auth.go copies it, rather than by whatever mode the image's file carries.
+		WithFile(natsServerPath, dag.Container().From(natsImage).File("/usr/local/bin/nats-server"), dagger.ContainerWithFileOpts{Permissions: 0o755}).
 		// ── a per-test ceiling, because a hang in HERE is undiagnosable without one ─────────────────
 		// This suite has hung in Dagger while passing on a developer box, and the container is what
 		// makes it undebuggable: Dagger buffers a WithExec's stdout until the exec COMPLETES, so a run

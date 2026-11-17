@@ -1009,6 +1009,25 @@ groups:
             refuses the claim reads) and maintenance_queue_oldest_seconds for STORE_EVENTS, and the
             maintenance_store_event_retried WARNING lines.
 
+      # Delivery of fired schedules stops when the durable's deliveries awaiting an ack reach its `max_ack_pending` (1000,
+      # `chart/templates/_helpers.tpl`): 900 is 90 % of it. A fired time that meets its table's task is held again and
+      # acked, never left awaiting an ack (ADR 0232, A7), so a move awaits one only for as long as it runs, or for the
+      # consumer's ack wait (30 s) after a worker died with it; a count held this high is a stall the design rules out.
+      - alert: MaintenanceDueStuck
+        expr: max by (consumer) (maintenance_queue_ack_pending{consumer="maintenance-due"}) >= 900
+        for: 15m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Fired schedules are near the delivery ceiling of their consumer"
+          description: >-
+            The maintenance-due consumer awaits an acknowledgement for at least 900 deliveries, 90 % of its max_ack_pending
+            of 1000; at the ceiling the bus delivers no more fired schedules, and no table's pass, trash release, orphan
+            check, audit or scan is queued until it drains. Read maintenance_schedules_not_queued_total (rising: the bus
+            refuses the moves) and maintenance_schedules_reheld_total by kind, maintenance_queue_waiting for
+            maintenance-due, and the maintenance_due_not_queued WARNING lines.
+
       # A governed bucket the hourly audit found configured with no store event for its writes
       # (`maintenance.services.bucket_events`): a file overwritten in place there is found only at its table's daily
       # recheck. The audit counts each bucket once per run on `maintenance_store_event_buckets_checked_total` by
