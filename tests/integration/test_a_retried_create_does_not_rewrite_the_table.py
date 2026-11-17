@@ -16,6 +16,7 @@ from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
@@ -222,27 +223,36 @@ class TestARetriedAppendLandsOnce:
         counted = real_ns_client.post("/v1/table/lance_catalog$db$grown/count_rows", json={})
         assert (_version(real_ns_client, "lance_catalog$db$grown"), counted.text) == (before + 2, "6"), "a replayed append appended again"
 
-    @pytest.mark.parametrize("keyed_table", [pytest.param(False, id="no-key"), pytest.param(True, id="primary-key")])
-    def test_an_append_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
-        self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, keyed_table: bool
+    @pytest.mark.parametrize("door", ["insert-no-key", "insert-primary-key", "create-overwrite", "restore"])
+    def test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
+        self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: str
     ) -> None:
-        """The answer of an append can be lost after it committed (its pod ended, or a fault after the commit), and a resend
-        past the claim's lease takes the key over. Run again, the append would land twice: the commit carries the key,
-        so the takeover finds it there and answers with it, the rows it added counted whatever operation committed them:
-        an append to a table declaring a primary key commits as Lance's merge, an ``Update`` (ADR 0240, TakeoverCounts)."""
+        """The answer of a keyed write can be lost after it committed (its pod ended, or a fault after the commit), and a
+        resend past the claim's lease takes the key over. Run again, the write would land twice: its commit carries the
+        key, so the takeover finds it there and answers with it (ADR 0240), at every door that lands a version: an append
+        answers the rows it added, whatever operation committed them (an append to a table declaring a primary key commits
+        as Lance's merge, an ``Update``, ADR 0240 TakeoverCounts), a create the version, a restore the transaction."""
         from catalog.api import idempotency as keyed_doors
         from lakehouse import idempotency
 
-        metadata = {"lance-schema:unenforced-primary-key": "true"} if keyed_table else None
+        metadata = {"lance-schema:unenforced-primary-key": "true"} if door == "insert-primary-key" else None
         schema = pa.schema([pa.field("id", pa.int64(), nullable=False, metadata=metadata)])
 
         def rows(*ids: int) -> bytes:
             return _ipc(pa.table({"id": pa.array(ids, pa.int64())}, schema=schema))
 
+        table = "/v1/table/lance_catalog$db$lost"
         assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/lance_catalog$db$lost/create", content=rows(0, 1, 2), headers=ARROW_STREAM).status_code == 200
+        assert real_ns_client.post(f"{table}/create", content=rows(0, 1, 2), headers=ARROW_STREAM).status_code == 200
         before = _version(real_ns_client, "lance_catalog$db$lost")
-        keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f69"}
+        keyed = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f69"}
+
+        def send() -> httpx.Response:
+            if door == "create-overwrite":
+                return real_ns_client.post(f"{table}/create?mode=Overwrite", content=rows(7, 8), headers={**ARROW_STREAM, **keyed})
+            if door == "restore":
+                return real_ns_client.post(f"{table}/restore", json={"version": before}, headers=keyed)
+            return real_ns_client.post(f"{table}/insert?mode=append", content=rows(7, 8), headers={**ARROW_STREAM, **keyed})
 
         async def lost(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("the pod ended before the answer was recorded")
@@ -250,13 +260,19 @@ class TestARetriedAppendLandsOnce:
         with monkeypatch.context() as during:
             during.setattr(keyed_doors.Converge, "remember", lost)
             with pytest.raises(RuntimeError, match="the pod ended"):
-                real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=rows(7, 8), headers=keyed)
+                send()
+        landed = real_ns_client.post(f"{table}/describe", json={"load_detailed_metadata": True}).json()
         monkeypatch.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
-        again = real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=rows(7, 8), headers=keyed)
+        again = send()
 
-        assert (again.status_code, again.json()) == (200, {"num_inserted_rows": 2, "version": before + 1}), again.text
-        counted = real_ns_client.post("/v1/table/lance_catalog$db$lost/count_rows", json={})
-        assert (_version(real_ns_client, "lance_catalog$db$lost"), counted.text) == (before + 1, "5"), "the append ran again after its lease"
+        assert again.status_code == 200, again.text
+        if door.startswith("insert"):
+            assert again.json() == {"num_inserted_rows": 2, "version": before + 1}
+        elif door == "create-overwrite":
+            assert again.json() == {"location": landed["location"], "version": before + 1}
+        counted = real_ns_client.post(f"{table}/count_rows", json={})
+        held = {"create-overwrite": "2", "restore": "3"}.get(door, "5")
+        assert (_version(real_ns_client, "lance_catalog$db$lost"), counted.text) == (before + 1, held), "the write ran again after its lease"
 
     def test_the_key_names_one_append_on_one_ref(self, real_ns_client: TestClient) -> None:
         """The same key on another mode or another ref is another operation, refused rather than answered with this one."""

@@ -184,6 +184,17 @@ def _no_held_secret_store_session() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _no_kept_store_clients() -> Iterator[None]:
+    """Give each test a process that keeps no S3 client (`lakehouse.storage_options.object_client`): a client built under
+    one test's moto mock or store would otherwise serve the next test's records."""
+    from lakehouse import storage_options
+
+    storage_options.forget_clients()
+    yield
+    storage_options.forget_clients()
+
+
+@pytest.fixture(autouse=True)
 def _a_closed_openfga_circuit() -> Iterator[None]:
     """Give each test a process whose circuit over OpenFGA is closed and has counted no outage.
 

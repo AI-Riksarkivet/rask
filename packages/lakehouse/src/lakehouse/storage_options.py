@@ -12,6 +12,7 @@ credential build both through here, so neither failure can come back in a copy.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
@@ -290,12 +291,39 @@ def object_client(storage_options: StorageOptions) -> S3Client:
     whenever the options carry one: a vended credential without it is not a weaker credential but an invalid one, and boto3
     would fall back to whatever ambient chain it finds, broader rights than the vend scoped. ``lakehouse.storage`` is imported at
     call time so a test replaces the seam rather than this wrapper, and a local root needs no S3 stack at all.
+
+    ONE CLIENT PER SEAM, ENDPOINT, CREDENTIAL AND REGION, kept and shared (a botocore client is thread-safe): every
+    control-root record, claim, seal and fence goes through here, and a client built per call costs about 6 ms of the
+    process's interpreter lock and a fresh connection (measured 2026-11-17: sixteen keyed appends to one table on RustFS
+    1.0.3 built some 350 clients between them, and the one shared client cut each store read from 80 ms to 7 ms). A
+    rotated or vended credential is another key, so a client signs with one credential only, and the oldest is let go
+    past :data:`_CLIENTS`. The seam ``lakehouse.storage.s3_client`` is part of the key, so a test replacing it gets its own.
     """
     from lakehouse.storage import s3_client
 
     access_key, secret_key, session_token = storage_options.credential_in_clear()
-    region = storage_options.region or DEFAULT_REGION
-    return s3_client(storage_options.endpoint, access_key=access_key, secret_key=secret_key, session_token=session_token, region=region)
+    key = (s3_client, storage_options.endpoint, access_key, secret_key, session_token, storage_options.region or DEFAULT_REGION)
+    with _CLIENTS_LOCK:
+        client = _clients.pop(key, None)
+        if client is None:
+            client = s3_client(storage_options.endpoint, access_key=access_key, secret_key=secret_key, session_token=session_token, region=key[-1])
+        _clients[key] = client
+        while len(_clients) > _CLIENTS:
+            _clients.pop(next(iter(_clients)))
+    return client
+
+
+#: How many clients :func:`object_client` keeps, the most recently used: a process signs with its own identity's
+#: credential, renewed as it rotates, and a handful of vended ones.
+_CLIENTS: Final = 32
+_CLIENTS_LOCK = threading.Lock()
+_clients: dict[tuple[object, ...], S3Client] = {}
+
+
+def forget_clients() -> None:
+    """Let go of every client :func:`object_client` keeps: for a test, which starts from a process holding none."""
+    with _CLIENTS_LOCK:
+        _clients.clear()
 
 
 def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:

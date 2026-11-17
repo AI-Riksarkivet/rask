@@ -3,8 +3,8 @@
 // A write the catalog has not answered (the browser gave up on it, or the catalog failed it) may still have committed.
 // Sent again under the same key, the catalog answers the first attempt's response and writes nothing a second time; sent
 // under a new one, an append would land twice. So the key is kept while the same rows are retried, and a new one is
-// minted once the write is settled (answered, or refused before it ran) or the rows change: the catalog answers a key it
-// has seen with that key's first response, so an edited batch under the old key would never be written.
+// minted once the write is settled (answered, or refused before it ran) or the rows change: a key names one request, its
+// rows included, and the catalog refuses the old key sent with an edited batch (400, code 13; ADR 0240).
 
 /** Whether a write's outcome leaves it unsettled: unanswered (0), a conflict a retry may clear (409), or a fault (5xx). */
 function unsettled(status: number): boolean {

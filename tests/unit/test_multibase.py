@@ -1,7 +1,7 @@
 """#3-B — Lance multi-base DATA distribution (unit).
 
 The write path (`dataplane._write_blob`) is the only place multi-base touches Lance, so patch
-its write (`lance.fragment.write_fragments` for a create, `lance.write_dataset` for an overwrite) and assert the base wiring (initial_bases + target_bases) — and,
+its write (`lance.fragment.write_fragments`, a create's and an overwrite's alike) and assert the base wiring (initial_bases + target_bases) — and,
 critically, that the #5a invariant (2.2 + stable-row-ids) SURVIVES multi-base. Config allowlist parsing
 mirrors the external-blob-bases property.
 """
@@ -41,7 +41,7 @@ def _capture_write() -> tuple[dict[str, Any], Any]:
 
 
 def _created(fake_write: Any) -> AbstractContextManager[Any]:
-    """A create's write is ``write_fragments`` and then the commit of its transaction: the write captured, the commit a stand-in."""
+    """A table's write is ``write_fragments`` and then the commit of its transaction: the write captured, the commit a stand-in."""
 
     def fake_fragments(table_obj: Any, uri: str, **kw: Any) -> Any:
         fake_write(table_obj, uri, **kw)
@@ -94,7 +94,7 @@ def test_overwrite_registers_none_but_targets_when_resupplied() -> None:
     # on a re-supplied overwrite too — so a re-sent overwrite still distributes rather than silently
     # concentrating the new fragments in the primary root.
     captured, fake_write = _capture_write()
-    with patch.object(lance, "write_dataset", fake_write):
+    with _created(fake_write):
         dataplane._write_blob(
             _table(),
             "s3://root/tbl",

@@ -156,7 +156,8 @@ it started.
 It also resets the process-global state the `lakehouse` library keeps. It makes bare
 `@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the
 `respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it gives the test a
-process that has logged in to no secret store (`lakehouse.governed.secrets.forget_secret_store`), writes the projected
+process that has logged in to no secret store (`lakehouse.governed.secrets.forget_secret_store`) and keeps no S3 client
+(`lakehouse.storage_options.forget_clients`: `object_client` shares one per credential), writes the projected
 service-account token files the catalog's and lineage's doors read and the one a process logs in to its secret store
 with, and sets `LANCE_AUTO_MIGRATION` to `false` as every app build does for its process (`lakehouse.lance_app`),
 restoring it after. A new fixture guarding such state goes there too, so every suite in the repository gets it. The

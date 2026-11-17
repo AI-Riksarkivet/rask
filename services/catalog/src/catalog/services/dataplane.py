@@ -19,6 +19,7 @@ import io
 import itertools
 import json
 import logging
+import random
 import re
 import tempfile
 import time
@@ -27,7 +28,7 @@ from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import timedelta
 from functools import partial
 from typing import Any, Final, Literal, NamedTuple, cast
 
@@ -36,6 +37,7 @@ import lance.fragment
 import pyarrow as pa
 import pyarrow.fs as pafs
 from botocore.exceptions import BotoCoreError, ClientError
+from lance.commit import CommitConflictError
 from lance.dataset import AlterColumn, Transaction
 from lance_namespace import (
     AlterTableAddColumnsRequest,
@@ -132,6 +134,7 @@ from lakehouse import (
     commit_turns,
     data_directories,
     file_identities,
+    idempotency,
     location_claims,
     stored_objects,
     trash,
@@ -140,6 +143,7 @@ from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_a
 from lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
+from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.history_fences import HistoryWork
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
@@ -148,6 +152,7 @@ from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.provenance_stamp import declare_dataset_id
+from lakehouse.records import RecordChangedError
 from lakehouse.schema import SchemaFields, facet_fields
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
@@ -418,15 +423,18 @@ def _write_blob(
     data_bases: list[DataBase] | None = None,
     properties: dict[str, str] | None = None,
     transaction_properties: dict[str, str] | None = None,
-    before_create_commit: Callable[[], None] | None = None,
+    before_commit: Callable[[], None] | None = None,
+    key: idempotency.HeldKey | None = None,
 ) -> lance.LanceDataset:
     """Write a table at file format 2.2 with stable row ids.
 
-    A create writes its rows first and commits them after (``lance.fragment.write_fragments``, then
-    ``LanceDataset.commit`` of the transaction it returns, `lance_docs/lance/guide/distributed_write.md`), so
-    ``before_create_commit`` runs between the two: the create renews its fence there, right before the one write it
-    cannot take back (ADR 0227 §8). The two calls make the dataset ``write_dataset`` makes (measured on pylance 13.0.0:
-    the same file version, schema metadata, config, manifest naming and transaction properties).
+    The rows are written first and committed after (``lance.fragment.write_fragments``, then ``LanceDataset.commit`` of the
+    transaction it returns, `lance_docs/lance/guide/distributed_write.md`), so ``before_commit`` runs between the two: a
+    create renews its fence there, right before the one write it cannot take back (ADR 0227 §8), and an overwrite waits
+    out another commit's turn ([[LH-259]]). The two calls make the dataset ``write_dataset`` makes (measured on pylance
+    13.0.0: the same file version, schema metadata, config, manifest naming, row ids and transaction properties, a create's
+    and an overwrite's). ``key``, the Idempotency-Key the request holds on the table, is stamped on the commit and renewed
+    right before its put, after ``before_commit`` (:func:`land_keyed`, ADR 0240 KeyRenews).
 
     ``allow_external`` opts into ``Blob.from_uri`` columns ANYWHERE outside the dataset root (blanket bypass);
     ``external_blob_bases`` registers approved base URIs so external pointers UNDER a registered base are
@@ -455,44 +463,37 @@ def _write_blob(
     # Configuration: "every base inherits the unscoped options"): a data base on the estate's store is the table's own
     # storage, reached under the catalog's identity as the root is ([[LH-286]]).
     try:
-        if is_create:
-            transaction = lance.fragment.write_fragments(  # noqa: TID251
-                table,
-                uri,
-                return_transaction=True,
-                mode=mode,
-                storage_options=so.in_clear(),
-                data_storage_version=CREATE_FILE_VERSION,
-                enable_stable_row_ids=CREATE_FORMAT.stable_row_ids,
-                initial_bases=initial_bases,
-                target_bases=target_bases,
-                allow_external_blob_outside_bases=allow_external,
-            )
-            if not isinstance(transaction, Transaction):
-                raise InternalError("Lance answered a create's write with no transaction to commit")
-            if transaction_properties:
-                transaction = replace(transaction, transaction_properties=transaction_properties)
-            if before_create_commit is not None:
-                before_create_commit()
-            return lance.LanceDataset.commit(
-                uri, transaction, storage_options=so.in_clear(), enable_v2_manifest_paths=True, enable_stable_row_ids=CREATE_FORMAT.stable_row_ids
-            )
-        return lance.write_dataset(  # noqa: TID251
+        transaction = lance.fragment.write_fragments(  # noqa: TID251
             table,
             uri,
+            return_transaction=True,
             mode=mode,
             storage_options=so.in_clear(),
             data_storage_version=CREATE_FILE_VERSION,
-            # #5a: durable row identity — ``_rowid`` stays constant across compaction (which rewrites
-            # fragments and invalidates row ADDRESSES), gating the row-id index + row-version tracking
-            # (``_row_*_at_version``) that field-level/temporal lineage rests on. CREATE-TIME-ONLY: an ordinary
-            # write with it on does not migrate an existing dataset (`lance_docs/lance/format/table/row_id_lineage.md`
-            # § Enabling Stable Row IDs), so it is set on every create and overwrite here.
+            # #5a: durable row identity — ``_rowid`` stays constant across compaction (which rewrites fragments and
+            # invalidates row ADDRESSES), gating the row-id index + row-version tracking (``_row_*_at_version``) that
+            # field-level/temporal lineage rests on. CREATE-TIME-ONLY: an ordinary write with it on does not migrate an
+            # existing dataset (`lance_docs/lance/format/table/row_id_lineage.md` § Enabling Stable Row IDs), so it is set
+            # on every create and overwrite here.
             enable_stable_row_ids=CREATE_FORMAT.stable_row_ids,
             initial_bases=initial_bases,
             target_bases=target_bases,
             allow_external_blob_outside_bases=allow_external,
-            transaction_properties=transaction_properties,
+        )
+        if not isinstance(transaction, Transaction):
+            raise InternalError("Lance answered a table's write with no transaction to commit")
+        if transaction_properties:
+            transaction = replace(transaction, transaction_properties=transaction_properties)
+        if key is not None:
+            return land_keyed(uri, transaction, key, ref=None, wait=before_commit, storage_options=so, created=is_create)
+        if before_commit is not None:
+            before_commit()
+        return lance.LanceDataset.commit(
+            uri,
+            transaction,
+            storage_options=so.in_clear(),
+            enable_v2_manifest_paths=True if is_create else None,
+            enable_stable_row_ids=CREATE_FORMAT.stable_row_ids if is_create else None,
         )
     except OSError as exc:
         # An external-pointer blob outside every registered base (and the blanket flag off) is a client
@@ -860,8 +861,15 @@ def create_table(
     normalized = CreateMode.parse(mode)
     existing = overwriting.location if overwriting is not None else _existing_location(ns, segments)
     only_declared = existing is not None and not holds_a_version(existing, so)
+    key = held_key(segments)
 
     if existing is not None and not only_declared:  # a written, readable table already lives here
+        if key is not None and key.taken_over_since is not None:
+            # A key taken over from an attempt lost unanswered: the write it landed is the key's answer, never landed again
+            # (ADR 0240).
+            landed = landed_under_key(lance.dataset(existing, storage_options=so.in_clear() or None, session=shared_lance_session()), key)
+            if landed is not None:
+                return CreateTableResponse(location=existing, version=landed[0])
         if normalized is CreateMode.OVERWRITE:
             # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
             # Disarmed first ([[LH-245]]): an overwrite carries the table's config forward, keys included.
@@ -891,6 +899,8 @@ def create_table(
                 data_bases=registered_data_bases(data_bases, current) if data_bases else None,
                 properties=properties,
                 transaction_properties=transaction_properties,
+                before_commit=None if overwriting is None else partial(overwriting.wait_for_turn, None),
+                key=key,
             )
             _record_written(registry, existing, so, dataset, author=recorded_author)
             return CreateTableResponse(location=existing, version=dataset.version)
@@ -1129,7 +1139,8 @@ def _write_blob_into(
             data_bases=own_bases,
             properties=properties,
             transaction_properties=transaction_properties,
-            before_create_commit=None if registry is None or fence is None else partial(table_claims.renew_fence, _claim_store(registry), fence),
+            before_commit=None if registry is None or fence is None else partial(table_claims.renew_fence, _claim_store(registry), fence),
+            key=held_key(segments),
         )
     except BaseException as exc:
         if isinstance(exc, table_claims.FenceLostError) or not _still_fenced(registry, fence):
@@ -1569,9 +1580,32 @@ def _turn_for_the_next_attempt(table: table_claims.DoorTable, ref: str | None, h
 
 
 class SupersededError(ConcurrentModificationError):
-    """A commit refused before its finalize because the request it serves was superseded: another attempt under the
+    """A write refused before it landed because the request it serves was superseded: another attempt under the
     request's Idempotency-Key took the key over (the spec's code 14, ADR 0240). Apart from a lost race, it is not planned
     again: the attempt holding the key commits the write, or answers what it found."""
+
+
+def renew_held(key: idempotency.HeldKey | None) -> None:
+    """Renew ``key``, the claim the request holds on the object a write is about to land on, right before the put that
+    lands it (ADR 0240, KeyRenews); nothing for a request that holds none.
+
+    Raises:
+        SupersededError: Another attempt under the key took it over, or answered: nothing may land.
+        InternalError: The key's record cannot be read as one.
+    """
+    if key is None:
+        return
+    try:
+        key.renew()
+    except (idempotency.KeyTakenOverError, RecordChangedError) as exc:
+        raise SupersededError(f"{exc}; nothing was written: send the request again under its key for its answer") from exc
+    except idempotency.KeyRecordUnreadableError as exc:
+        raise InternalError(str(exc)) from exc
+
+
+def held_key(table_id: list[str]) -> idempotency.HeldKey | None:
+    """The Idempotency-Key claim the request being served holds on the table ``table_id`` names (`idempotency.held`)."""
+    return idempotency.held(fga.canonical_object_id(table_id))
 
 
 def commit_stamped[T](
@@ -1583,7 +1617,6 @@ def commit_stamped[T](
     branch: str | None = None,
     opened: lance.LanceDataset | None = None,
     keeps_labels: bool = False,
-    before_finalize: Callable[[], None] | None = None,
 ) -> tuple[int, T]:
     """Commit the transaction ``plan`` builds on the latest version of ``branch`` (``None`` = main) with ``properties``;
     return the version.
@@ -1620,13 +1653,13 @@ def commit_stamped[T](
     door already opened it (:meth:`table_claims.DoorTable.open`), which the first attempt plans on rather than opening it
     again.
 
-    ``before_finalize`` runs right before each attempt's put, after its turn wait (``DoorTable.finalize_version``): a
-    keyed door renews its Idempotency-Key's claim there (ADR 0240), and a :class:`SupersededError` it raises ends the
-    commit with nothing finalized.
+    A REQUEST HOLDING AN IDEMPOTENCY-KEY ON THE TABLE (:func:`held_key`) stamps the key on the commit, so a takeover finds
+    it, and renews its claim right before each attempt's put, after its turn wait (``DoorTable.finalize_version``,
+    ADR 0240 KeyRenews): an attempt a resend took the key over from ends with nothing finalized.
 
     Raises:
         ConcurrentModificationError: Every attempt lost its race.
-        SupersededError: ``before_finalize`` found the request superseded.
+        SupersededError: The request holds a key another attempt took over.
         TableChangedError: The table changed since the door's resolution.
         InvalidInputError: ``keeps_labels`` and the commit loses or changes a field's ``rask.*`` metadata.
         InvalidInputError: The commit adds or changes a field's encoding knob to one Lance cannot honour ([[LH-246]]).
@@ -1638,6 +1671,9 @@ def commit_stamped[T](
     ref = recorded_branch(branch)
     turn: str | None = None
     author = properties.get(AUTHOR_PROPERTY) if table.announces(properties.get(OPERATION_PROPERTY, "")) else None
+    key = held_key(table_id)
+    if key is not None:
+        properties = {**properties, IDEMPOTENCY_KEY_PROPERTY: key.mark}
     with ExitStack() as held:
         for attempt in range(_STAMPED_COMMIT_ATTEMPTS):
             dataset = disarm_commit_path_cleanup(opened if opened is not None else table.open(so, branch=ref), table_id)
@@ -1689,10 +1725,13 @@ def commit_stamped[T](
                     table.record_author(stamped.uuid, version=version, ref=ref_key, author=author, manifest=judged)
                 finalizing = True
                 try:
-                    table.finalize_version(request, turn=turn, before_write=before_finalize)
-                except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError, SupersededError):
+                    table.finalize_version(request, turn=turn, before_write=None if key is None else partial(renew_held, key))
+                except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError, SupersededError) as refused:
                     if author is not None:
                         _forget_unlanded_author(table, so, stamped.uuid, location=location, version=version, judged=judged)
+                    if isinstance(refused, SupersededError):
+                        # Refused before its put: no version names what it wrote ([[LH-564]]).
+                        _discard_unlanded_attempt(table, so, stamped, wrote, branch=ref, recorded=recorded)
                     raise
                 except ConcurrentModificationError:
                     discard_detached_manifest(location, so, finalize_id)
@@ -1718,6 +1757,84 @@ def commit_stamped[T](
                 discard_detached_manifest(location, so, detached.version)
             return version, measured
         raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
+
+
+#: How many puts a keyed Lance commit makes before it answers 409, each after a renewal: as many as Lance's own commit
+#: retries (pylance 13.0.0, ``LanceDataset.commit(max_retries=20)``).
+_KEYED_LANCE_ATTEMPTS: Final = 20
+#: The most slots a keyed Lance commit's next put is spread over, each as long as the attempt it lost: an attempt is a
+#: renewal and a put, two store round trips, so a writer that lost waits out a random number of attempts of its own
+#: length, as many as the writers it lost to (doubling, up to this many), and the losers' next puts land apart.
+_KEYED_RETRY_SLOTS: Final = 4
+#: How Lance names the version a lost put tried (pylance 13.0.0: "Commit conflict for version 3: Failed to commit the
+#: transaction after 0 retries.").
+_LOST_VERSION: Final = re.compile(r"Commit conflict for version (\d+)")
+
+
+def land_keyed(
+    base: str | lance.LanceDataset,
+    transaction: Transaction,
+    key: idempotency.HeldKey,
+    *,
+    ref: str | None,
+    wait: Callable[[], None] | None,
+    storage_options: StorageOptions,
+    created: bool = False,
+) -> lance.LanceDataset:
+    """Land ``transaction``, whose files are written, through Lance's own commit on ``base`` (``ref`` the branch it is on,
+    ``None`` for main), stamped with ``key``'s mark and renewing ``key`` right before each put (ADR 0240, KeyRenews).
+    ``created`` commits a table's first version, under the manifest naming and row ids every table the catalog makes has.
+
+    Lance's commit rebases a transaction onto every version landed since its read version before it puts, and an append
+    commutes with every operation but an Overwrite, a Restore and a MemWAL update
+    (`lance_docs/lance/format/table/transaction.md` § Append Compatibility): concurrent appends each land without planning
+    again, where a stamped commit plans every loser again under the ref's turn. So each attempt is one Lance commit with no
+    retry of its own (``max_retries=0``, which still rebases before its put: measured on pylance 13.0.0), after the ref's
+    turn wait (``wait``) and the renewal, which is the last write before each put. An attempt that loses its put (a
+    retryable conflict, "Commit conflict for version N ... after 0 retries") reads the version that put tried for its own
+    transaction first: a store that answered a put that landed as a conflict leaves the commit landed, and the same
+    transaction committed again lands a second time (measured on pylance 13.0.0).
+
+    Raises:
+        SupersededError: Another attempt under the key took it over: nothing landed.
+        ConcurrentModificationError: Every attempt lost its put.
+        CommitConflictError: Lance refused the transaction against a version landed since.
+    """
+    stamped = replace(transaction, transaction_properties={**(transaction.transaction_properties or {}), IDEMPOTENCY_KEY_PROPERTY: key.mark})
+    options = storage_options.in_clear() or None
+    checked = int(stamped.read_version)
+    for attempt in range(_KEYED_LANCE_ATTEMPTS):
+        started = time.monotonic()
+        if wait is not None:
+            wait()
+        renew_held(key)
+        lost: re.Match[str] | None = None
+        try:
+            # A handle commits through the store it was opened on; a location is opened with the catalog's options.
+            return lance.LanceDataset.commit(
+                base,
+                stamped,
+                max_retries=0,
+                storage_options=options if isinstance(base, str) else None,
+                enable_v2_manifest_paths=True if created else None,
+                enable_stable_row_ids=CREATE_FORMAT.stable_row_ids if created else None,
+            )
+        except OSError as exc:
+            if not is_retryable_conflict(exc):
+                raise
+            lost = _LOST_VERSION.search(str(exc))
+        latest = base if isinstance(base, lance.LanceDataset) else lance.dataset(base, storage_options=options, session=shared_lance_session())
+        # The version the put lost, as Lance names it, is the one slot it can have landed in; unnamed, every version
+        # landed since the last look.
+        newest = int(lost.group(1)) if lost is not None else int(latest.latest_version)
+        for version in [newest] if lost is not None else range(newest, checked, -1):
+            found = latest.read_transaction(version)
+            if found is not None and found.uuid == stamped.uuid:
+                return latest.checkout_version((ref, version) if ref is not None else version)
+        checked = max(checked, newest)
+        slots = min(2**attempt, _KEYED_RETRY_SLOTS)
+        time.sleep(random.uniform(0, slots * (time.monotonic() - started)))  # noqa: S311 — spreads racing writers, guards nothing
+    raise ConcurrentModificationError(f"the commit lost the race for the next version {_KEYED_LANCE_ATTEMPTS} times; retry it")
 
 
 def _discard_unlanded_attempt(
@@ -2837,32 +2954,39 @@ def delete_from_table(
     return DeleteFromTableResponse(version=version)
 
 
-#: How far before a lapsed attempt's claim its commit is looked for: the commit's time is the pod's clock and the claim's
-#: the store's, so the search starts this much earlier than the claim, wider than any skew between them.
+#: How far before a lapsed attempt first claimed its key its commit is looked for: the commit's time is the pod's clock and
+#: the claim's the store's, so the search starts this much earlier than the claim, wider than any skew between them. The
+#: claim's time is when the attempt FIRST claimed the key (`idempotency.TakenOver.since`), which its renewals do not
+#: move, and the attempt plans its commit after its claim, so no write, however long, puts its commit before the bound.
 _CLOCK_SKEW = timedelta(minutes=10)
 
 
-def committed_under_key(table: table_claims.DoorTable, so: StorageOptions, *, branch: str | None, mark: str, since: datetime) -> InsertIntoTableResponse | None:
-    """The append an earlier attempt under the key ``mark`` names committed on ``branch``, or ``None`` when it committed none.
+def landed_under_key(dataset: lance.LanceDataset, key: idempotency.HeldKey | None) -> tuple[int, Transaction] | None:
+    """The version, and its transaction, that an earlier attempt under ``key`` landed on ``dataset``'s ref; ``None`` when
+    the request holds no key, did not take it over, or that attempt landed nothing.
 
-    For a key taken over from an attempt whose lease ran out unanswered ([[LH-577]]): it may have committed and been lost
-    before it recorded its answer, and an append run again would land twice. Its commit carries the key
-    (:data:`IDEMPOTENCY_KEY_PROPERTY`), so the versions committed since that attempt claimed the key are read, newest
-    first, until one older than the claim, and the one carrying the key is answered as that append was: its version and
-    the rows its new fragments hold. Lance keeps a version's transaction until a cleanup removes it, and a version
-    committed minutes ago is far inside any retention.
+    For a key taken over from an attempt whose lease ran out unanswered ([[LH-577]], ADR 0240): it may have landed its
+    write and been lost before it recorded its answer, and the write run again would land twice. Every keyed write's
+    commit carries the key (:data:`IDEMPOTENCY_KEY_PROPERTY`), so the versions committed since that attempt first claimed
+    the key are read, newest first, until one older than the claim. Lance keeps a version's transaction until a cleanup
+    removes it, and a version committed minutes ago is far inside any retention.
     """
-    dataset = table.open(so, branch=branch)
-    earliest = since - _CLOCK_SKEW
+    if key is None or key.taken_over_since is None:
+        return None
+    earliest = key.taken_over_since - _CLOCK_SKEW
     for entry in reversed(dataset.versions()):
         if committed_at(entry) < earliest:
             return None
         version = int(entry["version"])
         transaction = dataset.read_transaction(version)
-        if transaction is None or (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) != mark:
-            continue
-        return InsertIntoTableResponse(version=version, num_inserted_rows=sum(int(fragment.physical_rows or 0) for fragment in _added_fragments(transaction)))
+        if transaction is not None and (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) == key.mark:
+            return version, transaction
     return None
+
+
+def inserted_rows(transaction: Transaction) -> int:
+    """The rows an append's commit added (:func:`_added_fragments`), as a takeover answers the append it found."""
+    return sum(int(fragment.physical_rows or 0) for fragment in _added_fragments(transaction))
 
 
 def _added_fragments(transaction: Transaction) -> list[lance.FragmentMetadata]:
@@ -2883,7 +3007,6 @@ def insert_into_table(
     *,
     max_bytes: int,
     transaction_properties: dict[str, str],
-    before_commit: Callable[[], None] | None = None,
 ) -> InsertIntoTableResponse:
     """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES, and report the commit it made.
 
@@ -2907,12 +3030,14 @@ def insert_into_table(
     every stamped commit is, so :func:`commit_stamped` judges its rows against those the version it lands on carries
     (ADR 0240, AppendJudged).
 
-    ``before_commit`` is the keyed door's renewal of its Idempotency-Key (ADR 0240, KeyRenews): with it, the write is a
-    stamped commit too, whatever the table declares, so the renewal is the last write before the version's put and a
-    resend that took the key over meanwhile keeps this attempt from landing.
+    A request holding an Idempotency-Key on the table (:func:`held_key`) renews it right before the put that lands its
+    version (ADR 0240, KeyRenews): a stamped commit at its finalize, and any other write through :func:`land_keyed`, Lance's
+    own commit of the fragments written first, which rebases onto whatever landed since as Lance's insert does, so keyed
+    appends land as concurrently as unkeyed ones. Their data files are sealed and recorded before the commit, as a stamped
+    commit's are.
 
     ``transaction_properties`` (the door's stamp, :mod:`catalog.core.run_context`) ride the commit, on any ref: a stamped
-    commit is finalized on the ref it planned on (:func:`commit_stamped`), and Lance's own insert takes them.
+    commit is finalized on the ref it planned on (:func:`commit_stamped`), and Lance's own commit takes them.
     """
     # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
     # and Lance writes whatever an unvalidated offset points at.
@@ -2925,22 +3050,18 @@ def insert_into_table(
     mode = InsertMode.parse(req.mode)
     keys = primary_keys.key_columns(dataset.lance_schema)
     primary_keys.refuse_repeats_within(rows, keys, door="insert")
+    key = held_key(table.segments)
+    ref = recorded_branch(req.branch)
     with _write_schema_errors():
         if mode is InsertMode.APPEND and primary_keys.joinable(rows, keys):
             # Planned on the latest version and finalized as exactly the next, so a racing insert of the same key is
             # planned again and refused ([[LH-243]]).
             version, _ = commit_stamped(
-                table,
-                so,
-                transaction_properties,
-                lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"),
-                branch=req.branch,
-                before_finalize=before_commit,
+                table, so, transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"), branch=req.branch
             )
-        elif (mode is InsertMode.APPEND and keys) or before_commit is not None:
+        elif mode is InsertMode.APPEND and keys:
             # Lance's own insert, captured and finalized as exactly the next version: its rows are judged against the
-            # version they land on (a key Lance's merge cannot join on), and a keyed request renews its key right before
-            # the put.
+            # version they land on, by a key Lance's merge cannot join on.
             version, _ = commit_stamped(
                 table,
                 so,
@@ -2948,35 +3069,83 @@ def insert_into_table(
                 captured(table, so, lambda handle: handle.insert(rows, mode=mode.value), branch=req.branch),
                 branch=req.branch,
                 opened=dataset,
-                before_finalize=before_commit,
             )
+        elif key is not None:
+            version = _land_keyed_rows(table, so, dataset, rows, mode, transaction_properties, key, ref=ref)
         else:
             # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole. Lance commits it
             # itself, so it waits out another commit's turn here rather than at a finalize ([[LH-259]]); the wait refuses a
             # table no uuid identifies, which takes no write ([[LH-534]]), and its files are recorded under the uuid once it lands.
-            table.wait_for_turn(recorded_branch(req.branch))
+            table.wait_for_turn(ref)
             dataset.insert(rows, mode=mode.value, transaction_properties=transaction_properties)
             version = int(dataset.version)
             transaction = committed_files.record_landed(table.record_committed_files, dataset, table_location=table.location, branch=req.branch, so=so)
-            author = transaction_properties.get(AUTHOR_PROPERTY)
-            if author is not None and table.announces(transaction_properties.get(OPERATION_PROPERTY, "")):
-                # The ref's key is read inside the recorder, so a store that does not answer it is a counted miss: the
-                # version has landed, and an error would have the caller append it again.
-                commit_authors.record_landed(
-                    lambda transaction_uuid, landed: table.record_author(
-                        transaction_uuid,
-                        version=landed,
-                        ref=commit_ref_key(table.location, so, table.segments, recorded_branch(req.branch)),
-                        author=author,
-                        manifest=None,
-                    ),
-                    transaction,
-                    version=version,
-                    table_location=table.location,
-                )
+            _record_landed_author(table, so, transaction, version=version, properties=transaction_properties, ref=ref)
     # The rows this request wrote, read off its own payload: a row count diff across the commit would
     # include whatever a concurrent writer appended in between.
     return InsertIntoTableResponse(version=version, num_inserted_rows=rows.num_rows)
+
+
+def _land_keyed_rows(
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    dataset: lance.LanceDataset,
+    rows: pa.Table,
+    mode: InsertMode,
+    properties: dict[str, str],
+    key: idempotency.HeldKey,
+    *,
+    ref: str | None,
+) -> int:
+    """Land ``rows`` on ``dataset``'s ref (``ref``) under the request's key: the fragments written first, their files sealed
+    and recorded, then Lance's own commit, renewing the key before each put (:func:`land_keyed`); the version landed.
+
+    A write that cannot have landed (superseded, every put lost, refused by Lance against a version landed since) deletes
+    what it wrote ([[LH-564]]); one whose outcome is unknown keeps it.
+    """
+    written = lance.fragment.write_fragments(rows, dataset, mode=mode.value, return_transaction=True)  # noqa: TID251 — the insert door's own write
+    if not isinstance(written, Transaction):
+        raise InternalError("Lance answered an insert's write with no transaction to commit")
+    transaction = replace(written, transaction_properties=properties)
+    files = committed_files.appended(
+        getattr(transaction.operation, "fragments", None) or [], dataset, table_location=table.location, branch=ref, so=so, transaction_uuid=transaction.uuid
+    )
+    table.record_committed_files(files)
+    try:
+        landed = land_keyed(dataset, transaction, key, ref=ref, wait=partial(table.wait_for_turn, ref), storage_options=so)
+    except (ConcurrentModificationError, CommitConflictError):
+        _discard_unlanded_attempt(table, so, transaction, files, branch=ref, recorded=True)
+        raise
+    version = int(landed.version)
+    try:
+        table.record_committed_files(
+            committed_files.with_transaction_file(files, table_location=table.location, branch=ref, so=so, read_version=transaction.read_version)
+        )
+    except OSError as exc:
+        # The version landed, and an error would have its caller append it again; its data files are recorded already.
+        log.error("committed_files_unrecorded", extra={"location": table.location, "version": version, "error": str(exc)[:300]})
+    _record_landed_author(table, so, transaction, version=version, properties=properties, ref=ref)
+    return version
+
+
+def _record_landed_author(
+    table: table_claims.DoorTable, so: StorageOptions, transaction: Transaction | None, *, version: int, properties: dict[str, str], ref: str | None
+) -> None:
+    """Record the author of ``version``, a commit Lance made itself as ``transaction``, once it landed (ADR 0187); nothing for
+    an operation the emitter does not announce."""
+    author = properties.get(AUTHOR_PROPERTY)
+    if author is None or not table.announces(properties.get(OPERATION_PROPERTY, "")):
+        return
+    # The ref's key is read inside the recorder, so a store that does not answer it is a counted miss: the version has
+    # landed, and an error would have the caller write it again.
+    commit_authors.record_landed(
+        lambda transaction_uuid, landed: table.record_author(
+            transaction_uuid, version=landed, ref=commit_ref_key(table.location, so, table.segments, ref), author=author, manifest=None
+        ),
+        transaction,
+        version=version,
+        table_location=table.location,
+    )
 
 
 def merge_insert_into_table(

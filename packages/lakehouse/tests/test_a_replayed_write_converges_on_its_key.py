@@ -85,7 +85,7 @@ class TestAnAttemptStillRunningIsNotAReplay:
         root = str(tmp_path)
         _claimed_a_day_ago(root, monkeypatch, attempt="slow")
         claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="retry")
-        record_outcome(root, SO, scope=SCOPE, key=KEY, status=200, body={"ok": True})
+        record_outcome(root, SO, scope=SCOPE, key=KEY, attempt="retry", status=200, body={"ok": True})
 
         assert claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="third") == Replay(status=200, body={"ok": True})
 

@@ -24,9 +24,15 @@ door acts on, and a digest of the request's query and body. The same key on anot
 object, or with another body, is the caller's mistake, refused rather than answered with an operation that did not do
 what this request asks.
 
-A CLAIM IS RENEWED BEFORE THE COMMIT IT GUARDS (:func:`renew`). A door runs on past its request's deadline, so a resend
+A CLAIM IS RENEWED BEFORE THE WRITE IT GUARDS (:func:`renew`). A door runs on past its request's deadline, so a resend
 can take the key over from an attempt that is still running; the renewal, a conditional write of the attempt's own claim
-right before its commit, is what keeps that attempt from committing once the resend took the key (ADR 0240).
+right before its write lands, is what keeps that attempt from landing it once the resend took the key (ADR 0240). The
+claim a request holds is its :class:`HeldKey`, kept in the request's context (:func:`holding`), so every seam that lands a
+version for the request renews it and stamps its commit with it (:func:`held`) without the door passing it down: a keyed
+door cannot land its version unrenewed by forgetting to.
+
+AN ANSWER IS RECORDED ONLY OVER THE ATTEMPT'S OWN CLAIM (:func:`record_outcome`), so the answer a key serves is the one
+the attempt holding it gave, and no attempt superseded while it ran replaces it.
 
 A LEASE IS TIMED ON THE STORE'S CLOCK (ADR 0179): a claim is stamped with the clock of the read it follows and judged
 against the clock of the read that finds it, so two pods' clocks are never compared.
@@ -40,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
@@ -100,8 +107,11 @@ class _Claimed(BaseModel):
     binding: KeyBinding
     #: The attempt that last claimed the key: only it may give the key back.
     attempt: str
-    #: When that attempt claimed it, on the store's clock.
+    #: When that attempt claimed it, or last renewed its claim, on the store's clock: the lease runs from here.
     claimed_at: datetime
+    #: When that attempt first claimed it, on the store's clock, never moved by a renewal: whatever it wrote under the key
+    #: was planned after it, so a takeover looks for its write from here (:class:`TakenOver`).
+    since: datetime
 
 
 class _Answered(BaseModel):
@@ -170,12 +180,67 @@ class TakenOver(BaseModel):
     """This attempt holds the key, taken over from one that held it past its lease and never answered.
 
     That attempt may have written before it was lost, so a door whose operation is not safe to run twice looks for its
-    write before writing again; ``since`` is when that attempt claimed the key, on the store's clock.
+    write before writing again; ``since`` is when that attempt first claimed the key, on the store's clock, which its
+    renewals do not move: its write was planned after it.
     """
 
     model_config = ConfigDict(frozen=True)
 
     since: datetime
+
+
+class HeldKey(BaseModel):
+    """The claim a request's attempt holds while its door runs, kept in the request's context (:func:`holding`).
+
+    Every seam that lands a version of ``target`` for the request reads it (:func:`held`): it stamps the commit with
+    :attr:`mark`, so a takeover can find the write, and renews the claim right before the put (:meth:`renew`), so an
+    attempt a resend took the key over from lands nothing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    root_uri: str
+    storage_options: StorageOptions
+    scope: str
+    key: str
+    attempt: str
+    #: The canonical id of the object the key's operation acts on (:attr:`KeyBinding.target`): only a version of it is
+    #: the key's write.
+    target: str
+    #: Set when this attempt took the key over from one that lapsed unanswered: when that one first claimed it.
+    taken_over_since: datetime | None = None
+
+    @property
+    def mark(self) -> str:
+        """What a commit landing the key's write carries, so a takeover can find it."""
+        return f"{self.scope}/{self.key}"
+
+    def renew(self) -> None:
+        """:func:`renew` this attempt's claim.
+
+        Raises:
+            KeyTakenOverError: The claim is another attempt's, released, answered, or gone.
+            KeyRecordUnreadableError: The key's record cannot be read as one.
+            records.RecordChangedError: The record kept changing across every round.
+        """
+        renew(self.root_uri, self.storage_options, scope=self.scope, key=self.key, attempt=self.attempt)
+
+
+#: The claim the request being served holds, if it sent a key. A context variable, so each request's task and the
+#: threads it hands blocking work to (Starlette's ``run_in_threadpool`` runs them in a copy of the context) see their
+#: own, and nothing else does.
+_HELD: ContextVar[HeldKey | None] = ContextVar("lakehouse_idempotency_held_key", default=None)
+
+
+def holding(key: HeldKey | None) -> None:
+    """Make ``key`` the claim the current request holds; ``None`` once its door has ended."""
+    _HELD.set(key)
+
+
+def held(target: str) -> HeldKey | None:
+    """The claim the current request holds on ``target``; ``None`` when it sent no key or its key names another object."""
+    key = _HELD.get()
+    return key if key is not None and key.target == target else None
 
 
 class Reclaimed(BaseModel):
@@ -247,7 +312,7 @@ def claim(
     for _ in range(_ROUNDS):
         found = records.read_json_at(root_uri, storage_options, record_key)
         stored = found.stored
-        claimed = _Claimed(state="in_flight", binding=binding, attempt=attempt, claimed_at=found.at).model_dump(mode="json")
+        claimed = _Claimed(state="in_flight", binding=binding, attempt=attempt, claimed_at=found.at, since=found.at).model_dump(mode="json")
         if stored is None:
             try:
                 records.create_json(root_uri, storage_options, record_key, claimed)
@@ -271,7 +336,7 @@ def claim(
         except records.RecordChangedError:
             continue
         # A released key was given back before its attempt wrote anything; a lapsed one may have written.
-        return TakenOver(since=current.claimed_at) if current.state == "in_flight" else None
+        return TakenOver(since=current.since) if current.state == "in_flight" else None
     raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
@@ -337,12 +402,14 @@ def renew(root_uri: str, storage_options: StorageOptions, *, scope: str, key: st
     raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
-def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, status: int, body: JsonValue) -> None:
-    """Store what this attempt answered, so a replay returns it rather than re-executing.
+def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str, status: int, body: JsonValue) -> bool:
+    """Store what ``attempt`` answered, so a replay returns it rather than re-executing; whether it was stored.
 
-    Written onto the key's binding, under the ETag of the read it follows. A record no longer there, or one a reclaim
-    is removing, is logged and left: the attempt's write landed, and failing its answer now would only send the caller
-    back to run it again.
+    Written onto the key's binding, under the ETag of the read that found the claim ``attempt``'s own, so the answer a key
+    serves is the one the attempt holding it gave (ADR 0240, RecordOwnClaim). A claim another attempt took over, an answer
+    recorded since, a record no longer there, or one a reclaim is removing, is logged and left: the attempt's write landed
+    or its answer is true, and failing it now would only send the caller back to run it again, while the key keeps the
+    answer of the attempt that holds it.
 
     Raises:
         KeyRecordUnreadableError: The key's record cannot be read as one.
@@ -351,19 +418,19 @@ def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str
     record_key = _record_key(scope, key)
     for _ in range(_ROUNDS):
         stored = records.read_json_at(root_uri, storage_options, record_key).stored
-        if stored is None:
-            log.error("idempotency_outcome_unrecorded", extra={"key": key, "status": status, "reason": "the key's record is gone"})
-            return
-        current = _stored(stored, key)
-        if isinstance(current, _Reclaiming):
-            log.error("idempotency_outcome_unrecorded", extra={"key": key, "status": status, "reason": "the key's record is being reclaimed"})
-            return
+        current = _stored(stored, key) if stored is not None else None
+        if stored is None or not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
+            state = "gone" if current is None else current.state
+            log.warning(
+                "idempotency_outcome_unrecorded", extra={"key": key, "status": status, "reason": f"the key's record is no longer this attempt's claim: {state}"}
+            )
+            return False
         answered = _Answered(state="done", binding=current.binding, status=status, body=body).model_dump(mode="json")
         try:
             records.replace_json(root_uri, storage_options, record_key, answered, etag=stored.etag)
         except records.RecordChangedError:
             continue
-        return
+        return True
     raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
@@ -432,6 +499,7 @@ def _reclaim_listed(root_uri: str, storage_options: StorageOptions, path: str, *
 __all__ = [
     "LEASE",
     "PREFIX",
+    "HeldKey",
     "InFlightError",
     "KeyBinding",
     "KeyRecordUnreadableError",
@@ -441,6 +509,8 @@ __all__ = [
     "Replay",
     "TakenOver",
     "claim",
+    "held",
+    "holding",
     "reclaim",
     "record_outcome",
     "release",

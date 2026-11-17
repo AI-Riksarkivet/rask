@@ -3411,6 +3411,11 @@ export interface paths {
          *     multi-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist — a caller can never point a
          *     base at an arbitrary bucket. Omitted → a single-location table exactly as before.
          *
+         *     An ``Idempotency-Key`` makes a resent create converge on the first attempt's answer ([[LH-576]]): it names one create,
+         *     its mode, properties and rows included, so the same key with another body or other query parameters is refused 400
+         *     (code 13). The version the create lands carries the key and is landed only while the key is still this attempt's, so
+         *     an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing (ADR 0240).
+         *
          *     ``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob
          *     columns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``
          *     entry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted → no
@@ -3540,6 +3545,9 @@ export interface paths {
          *     a table by no uuid ([[LH-166]]), so the feed is not told, and no filing precedes that detach: its announcement names
          *     no uuid the finish could judge a name by. Every other deregister's announcements are filed before the detach, so a
          *     door failing after it still announces it ([[LH-576]]).
+         *
+         *     An ``Idempotency-Key`` makes a resent deregister converge on the first attempt's answer; the same key with another
+         *     body or other query parameters is refused 400 (code 13), and a key bound to another object or door is refused alike.
          */
         post: operations["deregister_table_v1_table__id__deregister_post"];
         delete?: never;
@@ -3614,6 +3622,9 @@ export interface paths {
          *     drop deletes BYTES): a ``protected`` control-root record refuses 409 unless ``force=true``, and
          *     ``force`` turns the protection lock ONLY — the FGA gate ran before this handler, identically
          *     with or without it.
+         *
+         *     An ``Idempotency-Key`` makes a resent drop converge on the first attempt's answer; the same key with another body or
+         *     other query parameters is refused 400 (code 13), and a key bound to another object or door is refused alike.
          */
         post: operations["drop_table_v1_table__id__drop_post"];
         delete?: never;
@@ -3798,7 +3809,8 @@ export interface paths {
          *     refused 400. Its commit carries the key, so a resend that takes the key over from an attempt lost unanswered past its
          *     lease finds that attempt's commit and answers with it rather than appending again; the attempt renews its claim right
          *     before its commit, so one that a resend took the key over from while it still ran answers 409 and commits nothing
-         *     (ADR 0240). Optional, as on every keyed door (:mod:`catalog.api.idempotency`).
+         *     (ADR 0240). The same key with another body or other query parameters is refused 400 (code 13). Optional, as on every
+         *     keyed door (:mod:`catalog.api.idempotency`).
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;
@@ -3883,6 +3895,11 @@ export interface paths {
          *     What the registration announces is filed once the dataset is admitted, the first moment its location as the backend
          *     resolved it is known, so a door failing after that still announces it, and a store refusing the filing detaches the
          *     registration ([[LH-576]]).
+         *
+         *     An ``Idempotency-Key`` makes a resent registration converge on the first attempt's answer; the same key with another
+         *     body or other query parameters is refused 400 (code 13), and a key bound to another object or door is refused alike.
+         *     The backend records the registration only while the key is still this attempt's, so an attempt a resend took the key
+         *     over from while it ran answers 409 (code 14) and attaches nothing (ADR 0240).
          */
         post: operations["register_table_v1_table__id__register_post"];
         delete?: never;
@@ -3926,6 +3943,9 @@ export interface paths {
          *     and another created ([[LH-554]]), filed before the rename so a door failing after it still announces it ([[LH-576]]).
          *     Source missing → 404 ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
          *     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]]).
+         *
+         *     An ``Idempotency-Key`` makes a resent rename converge on the first attempt's answer; the same key with another body
+         *     or other query parameters is refused 400 (code 13), and a key bound to another object or door is refused alike.
          */
         post: operations["rename_table_v1_table__id__rename_post"];
         delete?: never;
@@ -3947,6 +3967,11 @@ export interface paths {
          * Restore Table
          * @description Restore the table at ``id`` to a prior version via ``restore_table``; emits a RESTORE_TABLE event at
          *     the NEW current version (restore mints a fresh version pointing at the restored data).
+         *
+         *     An ``Idempotency-Key`` makes a resent restore converge on the first attempt's answer; the same key with another body
+         *     is refused 400 (code 13). The version the restore lands carries the key and is landed only while the key is still this
+         *     attempt's, so an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing, and a
+         *     resend taking the key over from an attempt lost unanswered answers the restore it landed (ADR 0240).
          */
         post: operations["restore_table_v1_table__id__restore_post"];
         delete?: never;

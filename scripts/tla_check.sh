@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# tla_check.sh [--full]: check every model under specs/ with TLC, the TLA+ model checker (ADR 0221).
+# tla_check.sh [--full] [Module...]: check every model under specs/ with TLC, the TLA+ model checker (ADR 0221), or only
+# the named modules (`scripts/tla_check.sh CommitPath`).
 #
 # A model is specs/<area>/<Module>.tla, checked once per <Module>*.cfg beside it. A config's first line says how:
 #   "EXPECT VIOLATION <Invariant>"  the model must FAIL that invariant: the config removes an assumption the design
@@ -11,7 +12,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 jar="$root/.localbin/tla2tools.jar"
 full=false
-[ "${1:-}" = "--full" ] && full=true
+[ "${1:-}" = "--full" ] && { full=true; shift; }
+only=" $* "
 command -v java >/dev/null || { echo "!! java is not on PATH: TLC needs a Java runtime" >&2; exit 1; }
 if [ ! -f "$jar" ]; then
   mkdir -p "$root/.localbin"
@@ -20,6 +22,8 @@ fi
 
 failed=0
 for model in "$root"/specs/*/*.tla; do
+  module="$(basename "$model" .tla)"
+  [ "$only" = "  " ] || [[ "$only" == *" $module "* ]] || continue
   for config in "${model%.tla}"*.cfg; do
     name="${config#"$root"/}"
     first="$(head -1 "$config")"

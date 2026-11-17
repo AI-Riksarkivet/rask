@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import AsyncIterator, Callable
-from datetime import datetime
+from collections.abc import AsyncIterator
+from functools import partial
 from typing import Annotated, Any
 from urllib.parse import parse_qsl, urlencode
 from uuid import uuid4
@@ -37,7 +37,6 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.services.dataplane import SupersededError
 from lakehouse import idempotency
 from lakehouse.ns_errors import status_for
 from lakehouse.records import RecordChangedError
@@ -74,7 +73,9 @@ class Converge(BaseModel):
 
     `replay` is the first attempt's answer when there is one. `remember` stores this attempt's answer, and
     `release_if_refused` gives the claim back for a refusal; both are no-ops without a key, so a door calls them
-    unconditionally and reads the same on both paths.
+    unconditionally and reads the same on both paths. The claim itself is :attr:`held`, which :meth:`KeyedDoor.begin`
+    puts in the request's context, so every seam landing a version of the key's object renews it and stamps the commit
+    with it (`lakehouse.idempotency.held`, ADR 0240).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -86,14 +87,8 @@ class Converge(BaseModel):
     #: This request's attempt at the key: the claim it gives back is only its own.
     attempt: str = ""
     replay: idempotency.Replay | None = None
-    #: Set when this attempt took the key over from one that lapsed unanswered: when that attempt claimed it, on the
-    #: store's clock. A door that must not run twice looks for that attempt's write first.
-    taken_over_since: datetime | None = None
-
-    @property
-    def mark(self) -> str | None:
-        """What a door stamps on its commit under this key, so a takeover can find the commit (``None`` without a key)."""
-        return None if self.key is None else f"{self.scope}/{self.key}"
+    #: The claim this attempt holds, to be renewed before its write lands; ``None`` without a key or for a replay.
+    held: idempotency.HeldKey | None = None
 
     async def release_if_refused(self, exc: BaseException) -> bool:
         """Give the claim back when ``exc`` is a refusal (a 4xx of the spec's taxonomy), which the keyed doors raise
@@ -114,29 +109,9 @@ class Converge(BaseModel):
             attempt=self.attempt,
         )
 
-    def renewal(self) -> Callable[[], None] | None:
-        """What the door calls right before its commit, in the thread that commits (:func:`idempotency.renew`); ``None``
-        without a key.
-
-        The callable raises :class:`SupersededError` (409, code 14) when another attempt under the key took it over:
-        nothing is committed, and a resend under the key is answered with what that attempt did.
-        """
-        if self.key is None:
-            return None
-        key = self.key
-
-        def renew() -> None:
-            try:
-                idempotency.renew(self.registry_root, self.storage_options, scope=self.scope, key=key, attempt=self.attempt)
-            except (idempotency.KeyTakenOverError, RecordChangedError) as exc:
-                raise SupersededError(f"{exc}; nothing was committed: send the request again under its key for its answer") from exc
-            except idempotency.KeyRecordUnreadableError as exc:
-                raise InternalError(str(exc)) from exc
-
-        return renew
-
     async def remember(self, status: int, response: Any) -> None:  # noqa: ANN401 — the door's own response model
-        """Store what this attempt answered. A no-op without a key, so a door calls it unconditionally.
+        """Store what this attempt answered, over its own claim only (`idempotency.record_outcome`, ADR 0240
+        RecordOwnClaim). A no-op without a key, so a door calls it unconditionally.
 
         SERIALISES INSIDE THE GUARD, and that is not only a saved cycle: the keyless path is every
         existing caller and every unit test that drives a handler with a stand-in response object, so
@@ -147,13 +122,16 @@ class Converge(BaseModel):
             return
         body = response.model_dump(mode="json", exclude_none=True) if hasattr(response, "model_dump") else response
         await run_in_threadpool(
-            idempotency.record_outcome,
-            self.registry_root,
-            self.storage_options,
-            scope=self.scope,
-            key=self.key,
-            status=status,
-            body=body,
+            partial(
+                idempotency.record_outcome,
+                self.registry_root,
+                self.storage_options,
+                scope=self.scope,
+                key=self.key,
+                attempt=self.attempt,
+                status=status,
+                body=body,
+            )
         )
 
 
@@ -188,11 +166,18 @@ async def begin(registry_root: str, storage_options: StorageOptions, scope: str,
         raise ConcurrentModificationError(str(exc)) from exc
     except idempotency.KeyRecordUnreadableError as exc:
         raise InternalError(str(exc)) from exc
-    replay = claimed if isinstance(claimed, idempotency.Replay) else None
-    taken_over_since = claimed.since if isinstance(claimed, idempotency.TakenOver) else None
-    return Converge(
-        registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, attempt=attempt, replay=replay, taken_over_since=taken_over_since
+    if isinstance(claimed, idempotency.Replay):
+        return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, attempt=attempt, replay=claimed)
+    held = idempotency.HeldKey(
+        root_uri=registry_root,
+        storage_options=storage_options,
+        scope=scope,
+        key=key,
+        attempt=attempt,
+        target=binding.target,
+        taken_over_since=claimed.since if isinstance(claimed, idempotency.TakenOver) else None,
     )
+    return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, attempt=attempt, held=held)
 
 
 class KeyedDoor(BaseModel):
@@ -220,6 +205,9 @@ class KeyedDoor(BaseModel):
         """
         binding = idempotency.KeyBinding(endpoint=endpoint, target=target, request=self.request)
         self.converge = await begin(self.registry_root, self.storage_options, self.scope, self.key, binding=binding)
+        # Held for the rest of the request (:func:`keyed_door` lets go of it): every version of ``target`` the door lands
+        # renews it right before its put.
+        idempotency.holding(self.converge.held)
         return self.converge
 
 
@@ -263,6 +251,8 @@ async def keyed_door(
                     f"another attempt under idempotency key {door.key!r} took it over while this one ran; send the request again under its key for its answer"
                 ) from exc
         raise
+    finally:
+        idempotency.holding(None)
 
 
 KeyedDoorDep = Annotated[KeyedDoor, Depends(keyed_door)]

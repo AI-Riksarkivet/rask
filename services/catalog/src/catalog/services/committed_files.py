@@ -2,8 +2,9 @@
 
 Every catalog commit records them before its version is announced (``lakehouse.file_identities``), and
 maintenance's sweep reads each one again: ``version/create`` reads them before it judges a stock commit's files, a door's
-stamped commit (``dataplane.commit_stamped``) before its finalize, and a write Lance commits in one call (the create
-door's ``write_dataset``, an unkeyed ``/insert``) just after it lands (:func:`record_landed`).
+stamped commit (``dataplane.commit_stamped``) before its finalize, a keyed ``/insert`` Lance commits (``dataplane.land_keyed``)
+its data files before the commit and its transaction file just after (:func:`appended`, :func:`with_transaction_file`), and
+a write Lance commits in one call (the create door's, an unkeyed ``/insert``) just after it lands (:func:`record_landed`).
 
 What a version adds against the version it follows on the same ref, each a file a writer's vend may stage
 (``table_layout.WRITER_PUT_GLOBS``) and, once sealed here, never put over (ADR 0242): the data file of each fragment it holds anew (``data/*.lance``,
@@ -20,7 +21,7 @@ table's root, and no vend puts there.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import Final
 
 import lance
@@ -195,6 +196,44 @@ def detection_only(table_location: str) -> bool:
 def _count_seal_failed(table_location: str, reason: str, exc: OSError) -> None:
     _seal_failed.add(1, {"lance.seal_failure": reason})
     log.error("commit_seal_failed", extra={"location": table_location, "reason": reason, "error": str(exc)[:300]})
+
+
+def appended(
+    fragments: Sequence[lance.FragmentMetadata],
+    dataset: lance.LanceDataset,
+    *,
+    table_location: str,
+    branch: str | None,
+    so: StorageOptions,
+    transaction_uuid: str,
+) -> file_identities.CommittedFiles:
+    """What ``fragments``, written for a transaction that has yet to land on ``dataset``'s ref (``branch``), add under the
+    table's root, sealed and read before their version lands: each data file and, on a table with a blob column, the
+    sidecars beside it. Lance writes the transaction's own file inside its commit (pylance 13.0.0), so
+    :func:`with_transaction_file` seals that one once the version names it.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, a seal or a read.
+    """
+    root = table_root(table_location)
+    ref = _ref_prefix(branch)
+    data = [data_file.path for fragment in fragments for data_file in fragment.data_files() if data_file.base_id is None]
+    listed = [f"{ref}data/{name.removesuffix('.lance')}" for name in data] if client_fragments.blob_columns(dataset) else []
+    return file_identities.as_stored(root, so, transaction_uuid, [*(f"{ref}data/{name}" for name in data), *_listed(root, so, listed)])
+
+
+def with_transaction_file(
+    committed: file_identities.CommittedFiles, *, table_location: str, branch: str | None, so: StorageOptions, read_version: int
+) -> file_identities.CommittedFiles:
+    """``committed`` with the transaction file its commit wrote, sealed and read now that its version landed.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the seal or the read.
+    """
+    written = file_identities.as_stored(
+        table_root(table_location), so, committed.transaction_uuid, [transaction_file(branch, read_version, committed.transaction_uuid)]
+    )
+    return committed.model_copy(update={"files": [*committed.files, *written.files]})
 
 
 def table_root(table_location: str) -> str:

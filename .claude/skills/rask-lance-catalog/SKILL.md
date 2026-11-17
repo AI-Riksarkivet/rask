@@ -114,7 +114,8 @@ Two contracts stack here, and confusing them is how bugs happen:
   committed (`claim_new_table(fence_for=…)`; into a table an earlier request declared, `table_claims.fence_declared`, then
   the probe again under the fence), so a second create of the name, and every drop, rename or undrop of a table still
   being written, answers 409 code 14. The create writes its rows (`lance.fragment.write_fragments`) and renews its fence
-  (`table_claims.renew_fence`, conditional on its own token) right before its commit (`LanceDataset.commit`) and before
+  (`table_claims.renew_fence`, conditional on its own token) right before its commit (`LanceDataset.commit`, or
+  `land_keyed`, which renews a held Idempotency-Key after the fence, ADR 0240) and before
   its rollback: a fence that lapsed during the write and that another request took since answers 409 code 14
   (`FenceLostError`) with nothing committed and nothing rolled back (ADR 0227 §8). Every undrop restores a table through
   ONE step, `trash_doors.restore_kept_table`, the table door's and the namespace undrop's for each table its cascade
@@ -959,16 +960,24 @@ governing their data. The project-scoped surface is the console's project page, 
   `lakehouse.idempotency`): create, drop, rename, deregister, register, restore and insert. A key is one request of one
   operation on one object (the door, and for an insert its mode and ref, the object's canonical id, and a digest of the
   request's query and body, `api.idempotency.fingerprint`), answered with its first response; the same key with another
-  body is refused 400 code 13 (ADR 0240). A claim unanswered past `LEASE` (300 s) is taken over, and the claim says so
-  (`TakenOver`): an append run again would land twice, so the insert door stamps the key on its commit
-  (`rask.idempotency_key`, by the caller's scope, a property no stock commit may carry) and a takeover reads the ref's
-  versions since that claim for it, answering with the commit it finds and the rows it added, whatever operation committed
-  them ([[LH-577]], `dataplane.committed_under_key`). The request deadline (also 300 s) lets a door run on, so a resend can
-  take the key over from an attempt still running: every keyed insert is a stamped commit, and renews its claim right
-  before its put (`idempotency.renew`, `DoorTable.finalize_version`'s `before_write`); an attempt whose key another took
-  over answers 409 code 14 and commits nothing, and one refused (4xx) after its key was taken over answers 409 code 14
-  too, not its refusal (`keyed_door`). The insert records its answer right after its commit, before the lineage emit, so
-  a failure after the commit is answered on resend rather than run again. `specs/catalog/CommitPath.tla` models it.
+  body is refused 400 code 13 (ADR 0240). The claim an attempt holds is a `HeldKey` in the request's context
+  (`KeyedDoor.begin` puts it there, `keyed_door` lets go of it), and EVERY SEAM THAT LANDS A VERSION OF THE KEY'S OBJECT
+  READS IT (`dataplane.held_key`): it stamps the key on the commit (`rask.idempotency_key`, by the caller's scope, a
+  property no stock commit may carry) and renews the claim right before each put (`dataplane.renew_held`). The seams are
+  `DoorTable.finalize_version` (every `commit_stamped`: a judged insert, a restore) and `dataplane.land_keyed` (Lance's own
+  commit of fragments written first: an insert to a table declaring no key or an overwrite, a create's first version, a
+  create mode=Overwrite), so a door passes nothing and cannot forget it; `/register`, which lands no version, renews right
+  before the backend's `register_table`; drop, deregister and rename are held by their resolution's claim ETag. A keyed
+  append to a table declaring no key is NOT stamped: `land_keyed` renews, then puts one Lance commit with no retry of its own
+  (`max_retries=0`, which still rebases), so keyed appends land as concurrently as unkeyed ones; a lost put reads the
+  version it tried for its own transaction before putting again. A claim unanswered past `LEASE` (300 s) is taken over,
+  and the claim says so (`TakenOver`, from `since`, when the lapsed attempt FIRST claimed, which no renewal moves): every
+  door that lands a version looks for the version that attempt landed (`dataplane.landed_under_key`) and answers it
+  ([[LH-577]]). An attempt whose key another took over answers 409 code 14 and lands nothing; one refused (4xx) after its
+  key was taken over answers 409 code 14 too, not its refusal (`keyed_door`); and an answer is recorded only over the
+  attempt's own claim (`idempotency.record_outcome`), so the key's answer is never replaced. The insert and the restore
+  record their answer right after their commit, before the lineage emit. `specs/catalog/CommitPath.tla` models it; every
+  keyed door is a case of `tests/integration/test_a_keyed_write_lands_once_beside_its_resend.py` (ADR 0240 §8).
 
 - **`update_table_schema_metadata` MERGES — the spec text ("Replace schema metadata") is wrong about
   every backend.** Probed against a real `dir` backend: posting `{owner}` over `{owner, tier}` leaves

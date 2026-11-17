@@ -850,7 +850,10 @@ async def drop_table(
     Deletion protection (#73, the warehouse door's Decision-5 contract extended to the rung where a
     drop deletes BYTES): a ``protected`` control-root record refuses 409 unless ``force=true``, and
     ``force`` turns the protection lock ONLY — the FGA gate ran before this handler, identically
-    with or without it."""
+    with or without it.
+
+    An ``Idempotency-Key`` makes a resent drop converge on the first attempt's answer; the same key with another body or
+    other query parameters is refused 400 (code 13), and a key bound to another object or door is refused alike."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # DELETES BYTES or files a trash record. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await keyed.begin(endpoint="POST /v1/table/{id}/drop", target=fga.canonical_object_id(parse_identifier(id)))
@@ -1049,7 +1052,10 @@ async def deregister_table(
     location's claim released, and the detach is announced on the control plane alone. Lineage refuses an event naming
     a table by no uuid ([[LH-166]]), so the feed is not told, and no filing precedes that detach: its announcement names
     no uuid the finish could judge a name by. Every other deregister's announcements are filed before the detach, so a
-    door failing after it still announces it ([[LH-576]])."""
+    door failing after it still announces it ([[LH-576]]).
+
+    An ``Idempotency-Key`` makes a resent deregister converge on the first attempt's answer; the same key with another
+    body or other query parameters is refused 400 (code 13), and a key bound to another object or door is refused alike."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # retires the id while the bytes stay. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await keyed.begin(endpoint="POST /v1/table/{id}/deregister", target=fga.canonical_object_id(parse_identifier(id)))
@@ -1219,7 +1225,12 @@ async def register_table(
 
     What the registration announces is filed once the dataset is admitted, the first moment its location as the backend
     resolved it is known, so a door failing after that still announces it, and a store refusing the filing detaches the
-    registration ([[LH-576]])."""
+    registration ([[LH-576]]).
+
+    An ``Idempotency-Key`` makes a resent registration converge on the first attempt's answer; the same key with another
+    body or other query parameters is refused 400 (code 13), and a key bound to another object or door is refused alike.
+    The backend records the registration only while the key is still this attempt's, so an attempt a resend took the key
+    over from while it ran answers 409 (code 14) and attaches nothing (ADR 0240)."""
     # `mode` WAS ACCEPTED AND NEVER READ. The generated model states two: "Create (default): the
     # operation fails with 409. Overwrite: the existing table registration is replaced with the new
     # registration." This door passes `body` straight to the backend, and the backend ignores the
@@ -1300,6 +1311,9 @@ async def register_table(
     table_uuid = str(uuid4())
     await fga_deps.seed_before_write(client, settings, token, resolver, segments=segments, uuid=table_uuid)
     try:
+        # The registration lands only while the request's key is still this attempt's: one a resend took over while this
+        # attempt ran would attach the dataset again after whatever the key's registration met since (ADR 0240).
+        await run_in_threadpool(dataplane.renew_held, converge.held)
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
         await fga_deps.take_back_seed(client, settings, token, segments=segments, uuid=table_uuid, reason="not_registered")
@@ -1728,7 +1742,10 @@ async def rename_table(
     lifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped
     and another created ([[LH-554]]), filed before the rename so a door failing after it still announces it ([[LH-576]]).
     Source missing → 404 ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
-    concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]])."""
+    concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]]).
+
+    An ``Idempotency-Key`` makes a resent rename converge on the first attempt's answer; the same key with another body
+    or other query parameters is refused 400 (code 13), and a key bound to another object or door is refused alike."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # retires the source id and re-registers the destination. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     segments = parse_identifier(id)
@@ -1811,7 +1828,12 @@ async def restore_table(
     authorization: Annotated[str | None, Header()] = None,
 ) -> RestoreTableResponse:
     """Restore the table at ``id`` to a prior version via ``restore_table``; emits a RESTORE_TABLE event at
-    the NEW current version (restore mints a fresh version pointing at the restored data)."""
+    the NEW current version (restore mints a fresh version pointing at the restored data).
+
+    An ``Idempotency-Key`` makes a resent restore converge on the first attempt's answer; the same key with another body
+    is refused 400 (code 13). The version the restore lands carries the key and is landed only while the key is still this
+    attempt's, so an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing, and a
+    resend taking the key over from an attempt lost unanswered answers the restore it landed (ADR 0240)."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # REWINDS the table to an older version. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await keyed.begin(endpoint="POST /v1/table/{id}/restore", target=fga.canonical_object_id(parse_identifier(id)))
@@ -1826,9 +1848,20 @@ async def restore_table(
     # to an earlier version took a new version of its own, and main kept its version).
     # The event names the version THAT restore committed on the ref it restored, and the shared trailer reads
     # its schema off one pinned open (best-effort: a readback failure never fails the committed restore).
+    landed = None
+    if converge.held is not None and converge.held.taken_over_since is not None:
+        landed = await run_in_threadpool(lambda: dataplane.landed_under_key(table.open_unchecked(so, branch=body.branch), converge.held))
+    if landed is not None:
+        # The restore a lapsed attempt under the key landed and never answered is the key's answer (ADR 0240).
+        response, committed = RestoreTableResponse(transaction_id=landed[1].uuid), landed[0]
+        await converge.remember(200, response)
+        return response
     response, committed = await run_in_threadpool(
         partial(dataplane.restore, table, so, body, transaction_properties=lineage_deps.door_stamp(token, RESTORE_TABLE))
     )
+    # Recorded as soon as the restore has committed, as an append's answer is: a failure after this line answers the caller
+    # an error, and its resend under the key is answered with this commit rather than restoring again.
+    await converge.remember(200, response)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -1841,7 +1874,6 @@ async def restore_table(
         pin_version=committed,
         branch=body.branch,
     )
-    await converge.remember(200, response)
     return response
 
 

@@ -6,19 +6,34 @@
 (* A version of a table is a put-if-not-exists of the slot after the one   *)
 (* its writer planned on. The writers, and the functions each action       *)
 (* cites:                                                                  *)
-(*   keyed    /insert with an Idempotency-Key, sent again by its caller    *)
-(*            (endpoints/data.py insert_into_table, api/idempotency.py     *)
-(*            begin and Converge, lakehouse/idempotency.py claim, renew,   *)
-(*            release, record_outcome; dataplane.committed_under_key).     *)
+(*   keyed    a door's write sent with an Idempotency-Key and sent again   *)
+(*            by its caller (api/idempotency.py begin, keyed_door,         *)
+(*            Converge; lakehouse/idempotency.py claim, renew, release,    *)
+(*            record_outcome, HeldKey; dataplane.landed_under_held_key).   *)
+(*            One actor stands for every keyed door that commits a        *)
+(*            version, each mapped to it in ADR 0240 §8:                   *)
+(*              /insert on a table declaring a primary key, a stamped      *)
+(*              commit judged against the version it lands on (mixes      *)
+(*              "retry", "rebody");                                        *)
+(*              /insert on a table declaring none, Lance's own commit of   *)
+(*              fragments written first, which rebases onto whatever      *)
+(*              landed since and renews before each put                    *)
+(*              (dataplane.land_keyed: mix "lane");                        *)
+(*              /create mode=Overwrite of a table, the same Lance commit    *)
+(*              of an Overwrite (dataplane._write_blob: mix "overwrite");  *)
+(*              /restore, a stamped commit of Lance's Restore              *)
+(*              (dataplane.restore: mix "restore").                        *)
 (*            Each attempt is one actor; an attempt starts once the one    *)
 (*            before it was answered, was told 503 at the request deadline *)
-(*            (lakehouse/deadline.py: the door runs on), or died. Every    *)
-(*            keyed append is a stamped commit (dataplane.commit_stamped:  *)
-(*            plan on the latest version, judge, finalize exactly the next *)
-(*            slot, plan again on a lost race), on a table declaring a     *)
-(*            primary key (mixes "retry", "rebody") or none ("lane").      *)
-(*   insert   an unkeyed /insert of one key (commit_stamped,               *)
-(*            primary_keys.plan_new_keys)                                  *)
+(*            (lakehouse/deadline.py: the door runs on), or died. A        *)
+(*            stamped commit (dataplane.commit_stamped) plans on the       *)
+(*            latest version, judges, finalizes exactly the next slot and  *)
+(*            plans again on a lost race.                                  *)
+(*   insert   an unkeyed /insert of one key: a stamped commit judged on a  *)
+(*            table declaring a key (primary_keys.plan_new_keys), Lance's  *)
+(*            own insert on one declaring none, which rebases an append    *)
+(*            and is refused across an Overwrite or a Restore              *)
+(*            (lance_docs/lance/format/table/transaction.md § Append).     *)
 (*   nested   an /insert to a table whose key is a field inside a struct,  *)
 (*            which Lance's merge cannot join on (primary_keys.joinable):  *)
 (*            a stamped commit of Lance's own insert (dataplane.captured), *)
@@ -58,10 +73,18 @@
 (*   KeyBindsBody     a key binds the request it was sent with: its body   *)
 (*                    and query (api/idempotency.py fingerprint), so the   *)
 (*                    same key on another body is refused 400.             *)
-(*   KeyRenews        a keyed attempt renews its claim, conditional on it  *)
-(*                    being its own, right before its commit; a claim      *)
-(*                    another attempt took answers 409 with nothing        *)
-(*                    committed (lakehouse/idempotency.renew).             *)
+(*   KeyRenews        a keyed attempt renews its claim right before each   *)
+(*                    put that would land its version, after the turn      *)
+(*                    wait; a claim another attempt took answers 409 with  *)
+(*                    nothing committed (lakehouse/idempotency.renew,      *)
+(*                    HeldKey.renew, every seam a door's version lands     *)
+(*                    through: DoorTable.finalize_version, land_keyed).    *)
+(*   RenewIsOwn       the renewal is a replace under the ETag of a read    *)
+(*                    that found the claim this attempt's own              *)
+(*                    (idempotency.renew's attempt check).                 *)
+(*   RecordOwnClaim   an answer is recorded only over the attempt's own    *)
+(*                    claim, so the answer a key serves is never replaced  *)
+(*                    (idempotency.record_outcome).                        *)
 (*   RefusalHoldsKey  a keyed attempt refused for its rows answers 400     *)
 (*                    only while the key is still its own; a key another   *)
 (*                    attempt took answers 409, its write maybe landed     *)
@@ -79,23 +102,28 @@
 (* naming the table asks again right before it, DoorTable.require_held and *)
 (* require_named), erasure and the history fence (Erasure.tla, Fence.tla), *)
 (* a merge-insert's and an update's own shapes (each is a stamped commit   *)
-(* of one key here, as insert is), the create door's key, and a stock      *)
-(* client's own retry after a 503 (pylance reads the version back).        *)
+(* of one key here, as insert is), the keyed doors that commit no version  *)
+(* (drop, deregister, register, rename, a create of a new name: a fence or *)
+(* a name that no longer resolves refuses a superseded attempt, ADR 0240   *)
+(* §8 and its race test), a store answering a put that landed as a lost    *)
+(* race (land_keyed reads the versions since its plan for its own), and a  *)
+(* stock client's own retry after a 503 (ADR 0240 Not modelled).          *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
-CONSTANTS Mix,        \* which writers: "retry", "rebody", "lane", "keys", "nested"
+CONSTANTS Mix,        \* which writers: "retry", "rebody", "lane", "keys", "nested", "overwrite", "restore"
           MaxFaults,  \* how many writers may die in one behaviour
           MaxTries,   \* how many times a stamped commit plans again after a lost race
           Off         \* the guards and assumptions a config removes
 
-Guards == {"KeyBindsBody", "KeyRenews", "RefusalHoldsKey", "TakeoverCounts", "AppendJudged"}
+Guards == {"KeyBindsBody", "KeyRenews", "RenewIsOwn", "RecordOwnClaim", "RefusalHoldsKey", "TakeoverCounts", "AppendJudged"}
 Assumptions == {"StoreCAS", "LeaseOutlastsCommit", "TurnLapses"}
 ASSUME Off \subseteq Guards \cup Assumptions
 On(g) == g \notin Off
 
 \* The writers of each mix: their kind, the key value each writes (a keyed attempt's body), and its path.
 N == CASE Mix = "retry" -> 4 [] Mix = "rebody" -> 3 [] Mix = "lane" -> 4 [] Mix = "keys" -> 4 [] Mix = "nested" -> 2
+       [] Mix \in {"overwrite", "restore"} -> 3
 Actors == 1..N
 Kind(a) ==
   CASE Mix = "retry" -> (IF a <= 3 THEN "keyed" ELSE "insert")
@@ -103,19 +131,28 @@ Kind(a) ==
     [] Mix = "lane" -> (IF a <= 3 THEN "keyed" ELSE "maint")
     [] Mix = "keys" -> (CASE a = 1 -> "insert" [] a = 2 -> "stock" [] a = 3 -> "delete" [] OTHER -> "maint")
     [] Mix = "nested" -> (IF a = 1 THEN "nested" ELSE "delete")
+    [] Mix \in {"overwrite", "restore"} -> (IF a <= 2 THEN "keyed" ELSE "insert")
 K(a) ==
-  CASE Mix = "retry" -> (IF a <= 3 THEN 1 ELSE 2)
+  CASE Mix \in {"retry", "overwrite", "restore"} -> (IF Kind(a) = "keyed" THEN 1 ELSE 2)
     [] Mix = "rebody" -> (IF a = 2 THEN 2 ELSE 1)
     [] OTHER -> 1
-\* Whether the table declares a primary key, so that its rows are a set judged at every commit.
 Keyed(a) == Kind(a) = "keyed"
-PKTable == Mix # "lane"
-\* How a writer's commit lands: "stamped" finalizes exactly the slot after its plan; "lance" rebases an append.
-Path(a) == IF Kind(a) = "nested" /\ ~On("AppendJudged") THEN "lance" ELSE "stamped"
+\* Whether the table declares a primary key, so that its rows are a set judged at every commit.
+PKTable == Mix \notin {"lane", "overwrite", "restore"}
+\* A keyed write that replaces the table's rows: an Overwrite (create mode=Overwrite) or a Restore.
+Replaces(a) == Keyed(a) /\ Mix \in {"overwrite", "restore"}
+\* How a writer's commit lands: "stamped" finalizes exactly the slot after its plan; "lance" is Lance's own commit, which
+\* rebases onto whatever landed since (an append across an Overwrite or a Restore is refused).
+Path(a) ==
+  CASE Kind(a) = "nested" -> (IF On("AppendJudged") THEN "stamped" ELSE "lance")
+    [] Kind(a) = "keyed" -> (IF Mix \in {"lane", "overwrite"} THEN "lance" ELSE "stamped")
+    [] Kind(a) = "insert" -> (IF PKTable THEN "stamped" ELSE "lance")
+    [] OTHER -> "stamped"
 \* The table holds key 1 before any writer starts, where a writer's harm needs it held.
 Seed == IF Mix = "nested" THEN <<[by |-> 0, op |-> "ins", k |-> 1, mark |-> FALSE, n |-> 1, path |-> "stamped"]>> ELSE <<>>
 
-None == [st |-> "none", att |-> 0, body |-> 0, lapsed |-> FALSE, abody |-> 0, acnt |-> 0, aver |-> 0]
+\* The key's record; `first` is a ghost, the version the first recorded answer named.
+None == [st |-> "none", att |-> 0, body |-> 0, lapsed |-> FALSE, abody |-> 0, acnt |-> 0, aver |-> 0, first |-> 0]
 
 VARIABLES log,      \* the table's history: one record per version, in order
           rec,      \* the key's record on the control root
@@ -139,6 +176,7 @@ RowsUpTo(i) ==
   ELSE LET c == log[i] IN
        CASE c.op = "ins" -> RowsUpTo(i - 1) \cup {c.k}
          [] c.op = "del" -> RowsUpTo(i - 1) \ {c.k}
+         [] c.op = "ow" -> {c.k}
          [] OTHER -> RowsUpTo(i - 1)
 
 Init ==
@@ -199,7 +237,8 @@ Claim(a) ==
           /\ UNCHANGED <<ans, abody, acnt, aver, turn>>
   /\ UNCHANGED <<log, plan, renewed, tries, told, faults>>
 
-\* dataplane.committed_under_key: the commit carrying the key, answered as its append was, its answer recorded.
+\* dataplane.landed_under_held_key, on every keyed door that commits a version: the commit carrying the key, answered as
+\* its write was, its answer recorded.
 Scan(a) ==
   /\ pc[a] = "scan"
   /\ LET hits == {i \in 1..Len(log) : log[i].mark} IN
@@ -228,11 +267,12 @@ Plan(a) ==
                /\ UNCHANGED <<ans, rec, turn>>
   /\ UNCHANGED <<log, tries, told, abody, acnt, aver, faults>>
 
-\* idempotency.renew, once the ref's turn is free (DoorTable.finalize_version waits, then renews, then puts): the claim
-\* is still this attempt's, under the ETag read; a claim another attempt took answers 409 and nothing is committed.
+\* idempotency.renew, once the ref's turn is free (DoorTable.finalize_version and land_keyed wait, then renew, then put):
+\* the claim is still this attempt's, under the ETag read; a claim another attempt took answers 409 and nothing is
+\* committed.
 Renew(a) ==
   /\ pc[a] = "renew" /\ Free(a)
-  /\ IF rec.st = "in" /\ rec.att = a
+  /\ IF rec.st = "in" /\ (rec.att = a \/ ~On("RenewIsOwn"))
        THEN /\ rec' = [rec EXCEPT !.lapsed = FALSE]
             /\ renewed' = [renewed EXCEPT ![a] = TRUE]
             /\ pc' = [pc EXCEPT ![a] = "put"]
@@ -240,11 +280,16 @@ Renew(a) ==
        ELSE /\ Finish(a, "conflict") /\ UNCHANGED <<rec, renewed>>
   /\ UNCHANGED <<log, plan, tries, told, abody, acnt, aver, faults>>
 
-Commit(a) == [by |-> a, op |-> CASE Kind(a) = "delete" -> "del" [] Kind(a) = "maint" -> "rw" [] OTHER -> "ins",
+Commit(a) == [by |-> a, op |-> CASE Kind(a) = "delete" -> "del" [] Kind(a) = "maint" -> "rw" [] Replaces(a) -> "ow" [] OTHER -> "ins",
               k |-> K(a), mark |-> Keyed(a), n |-> IF Kind(a) \in {"delete", "maint"} THEN 0 ELSE 1, path |-> Path(a)]
 
+\* Lance refuses an append whose rebase crosses an Overwrite or a Restore (transaction.md § Append Compatibility).
+CrossesAReplace(a) == Commit(a).op = "ins" /\ \E i \in (plan[a] + 1)..Len(log) : log[i].op = "ow"
+
 \* The put-if-not-exists of the slot after the plan (A1). Lost: a stamped commit plans again under the ref's turn, up to
-\* MaxTries, then answers 409; Lance's own commit of an append rebases onto the slot now free and puts again.
+\* MaxTries, then answers 409; Lance's own commit rebases onto the slot now free and puts again, a keyed one renewing
+\* its claim first (land_keyed: each attempt is one Lance commit with no retry of its own), an append refused across a
+\* replace.
 Put(a) ==
   /\ pc[a] = "put" /\ (Free(a) \/ renewed[a])
   /\ IF Len(log) = plan[a] \/ ~On("StoreCAS")
@@ -255,22 +300,31 @@ Put(a) ==
             /\ IF Keyed(a)
                  THEN /\ pc' = [pc EXCEPT ![a] = "record"] /\ UNCHANGED <<ans, turn>>
                  ELSE Finish(a, "ok")
-            /\ UNCHANGED <<plan, tries, rec>>
+            /\ UNCHANGED <<plan, tries, rec, renewed>>
+     ELSE IF Path(a) = "lance" /\ CrossesAReplace(a)
+       THEN /\ Finish(a, "conflict") /\ ReleaseIfMine(a) /\ UNCHANGED <<log, plan, tries, abody, acnt, aver, renewed>>
      ELSE IF Path(a) = "lance"
        THEN /\ plan' = [plan EXCEPT ![a] = Len(log)]
-            /\ UNCHANGED <<log, pc, ans, abody, acnt, aver, turn, tries, rec>>
+            /\ IF Keyed(a) /\ On("KeyRenews")
+                 THEN /\ pc' = [pc EXCEPT ![a] = "renew"] /\ renewed' = [renewed EXCEPT ![a] = FALSE]
+                 ELSE UNCHANGED <<pc, renewed>>
+            /\ UNCHANGED <<log, ans, abody, acnt, aver, turn, tries, rec>>
      ELSE IF tries[a] < MaxTries
        THEN /\ tries' = [tries EXCEPT ![a] = tries[a] + 1]
             /\ turn' = IF turn = 0 THEN a ELSE turn
             /\ pc' = [pc EXCEPT ![a] = "plan"]
-            /\ UNCHANGED <<log, plan, ans, abody, acnt, aver, rec>>
-     ELSE /\ Finish(a, "conflict") /\ ReleaseIfMine(a) /\ UNCHANGED <<log, plan, tries, abody, acnt, aver>>
-  /\ UNCHANGED <<renewed, told, faults>>
+            /\ UNCHANGED <<log, plan, ans, abody, acnt, aver, rec, renewed>>
+     ELSE /\ Finish(a, "conflict") /\ ReleaseIfMine(a) /\ UNCHANGED <<log, plan, tries, abody, acnt, aver, renewed>>
+  /\ UNCHANGED <<told, faults>>
 
-\* idempotency.record_outcome, then the answer: written over whatever the record holds now, onto its binding.
+\* idempotency.record_outcome, then the answer: recorded only over the attempt's own claim, onto its binding; an attempt
+\* whose claim another took answers its own write and leaves the key's answer as it is.
 Record(a) ==
   /\ pc[a] = "record"
-  /\ rec' = [rec EXCEPT !.st = "done", !.lapsed = FALSE, !.abody = abody[a], !.acnt = acnt[a], !.aver = aver[a]]
+  /\ rec' = IF (rec.st = "in" /\ rec.att = a) \/ ~On("RecordOwnClaim")
+              THEN [rec EXCEPT !.st = "done", !.lapsed = FALSE, !.abody = abody[a], !.acnt = acnt[a], !.aver = aver[a],
+                               !.first = IF rec.first = 0 THEN aver[a] ELSE rec.first]
+              ELSE rec
   /\ Finish(a, "ok")
   /\ UNCHANGED <<log, plan, renewed, tries, told, abody, acnt, aver, faults>>
 
@@ -338,6 +392,10 @@ SuccessIsForItsBody == \A a \in Actors : Keyed(a) /\ ans[a] = "ok" => abody[a] =
 
 \* A success answers the rows the write it reports added.
 SuccessCountsWhatLanded == \A a \in Actors : ans[a] = "ok" => acnt[a] = log[aver[a]].n
+
+\* The answer a key serves once answered is the one it first recorded: every later send under the key is answered with
+\* what the attempt holding the key answered.
+AnswerStands == rec.first # 0 => rec.st = "done" /\ rec.aver = rec.first
 
 \* Insert-if-absent: a version never adds a key value the version before it holds.
 OneRowPerKey == PKTable => \A i \in 1..Len(log) : log[i].op = "ins" => log[i].k \notin RowsUpTo(i - 1)
