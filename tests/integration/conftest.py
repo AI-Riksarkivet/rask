@@ -83,6 +83,10 @@ def real_ns_client(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> Iterato
 #: the offline suite names none, and collects only the local root.
 _RACE_STORE = os.environ.get("RASK_LIFECYCLE_STORE_ENDPOINT", "")
 
+#: Modules whose claim is a refusal only a real store's policy makes: collected only where the lane names the store, as
+#: ``race_catalog``'s ``s3`` case is, so the offline suite collects neither and skips nothing.
+collect_ignore = [] if _RACE_STORE else ["test_the_store_refuses_a_put_over_a_committed_file.py"]
+
 
 def _race_bucket() -> dict[str, str]:
     """A bucket of the test's own on the lane's S3 store, made now; the catalog's settings that root it there."""
@@ -127,13 +131,21 @@ _CATALOG_POLICY = {
                 "s3:ListAllMyBuckets",
                 "s3:GetObject",
                 "s3:PutObject",
+                "s3:PutObjectTagging",
                 "s3:DeleteObject",
                 "s3:AbortMultipartUpload",
                 "s3:CreateBucket",
                 "s3:DeleteBucket",
             ],
             "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"],
-        }
+        },
+        {
+            "Sid": "NeverOverASealedFile",
+            "Effect": "Deny",
+            "Action": ["s3:PutObject"],
+            "Resource": ["arn:aws:s3:::*/*"],
+            "Condition": {"Null": {"s3:ExistingObjectTag/rask-sealed": "false"}},
+        },
     ],
 }
 

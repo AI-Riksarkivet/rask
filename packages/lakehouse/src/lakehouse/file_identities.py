@@ -1,20 +1,23 @@
-"""What each file a commit adds was when the catalog committed it, so an overwrite in place is found later ([[LH-419]]).
+"""What each file a commit adds was when the catalog committed it: sealed against a put over it, and recorded so an
+overwrite in place a store let through is found later ([[LH-419]], ADR 0242).
 
-A writer's vend may put any object under the paths a commit needs (``table_layout.WRITER_PUT_GLOBS``), and a session
-policy cannot refuse a put over an existing key, so a writer can replace a committed data, deletion, index or blob
-sidecar file. Lance requires a published payload to stay immutable while a protected snapshot references it
-(``lance_docs/lance/format/table/blob.md:254-257``) and checks none: measured on pylance 13.0.0, a same-size overwrite of a
-data file is served silently. Every catalog commit therefore records, before its version lands, each file it adds under
-the table's own root with the ETag and size the store answers, and each pass of the table reads every recorded file
-again (``maintenance.services.committed_files``). A file a commit adds through a base is not recorded: no vend may put
-there.
+A writer's vend may put any object under the paths a commit needs (``table_layout.WRITER_PUT_GLOBS``). Lance requires a
+published payload to stay immutable while a protected snapshot references it (``lance_docs/lance/format/table/blob.md:254-257``)
+and checks none: measured on pylance 13.0.0, a same-size overwrite of a data file is served silently. Every catalog commit
+therefore SEALS, before its version lands, each file it adds under the table's own root (the object tag
+``table_layout.SEALED_TAG``, on which the write tier's session policy and the catalog's own canned policy refuse a put),
+and records it with the ETag and size the store answers; each pass of the table reads every recorded file again
+(``maintenance.services.committed_files``), which finds a file replaced on a store that does not enforce the seal, or
+before it. A file a commit adds through a base is neither sealed nor recorded: no vend may put there.
 
 ONE RECORD PER COMMIT (``_file_identities/<table uuid>/<transaction uuid>.json``), keyed by the table's uuid so a
 rename moves none and a table created later under the name inherits none (ADR 0173 §8), and by the commit's transaction
 uuid, which a commit that loses its race shares with no other. Each path is relative to the table's root, so a branch's
-files are ``tree/<branch>/...``. What is recorded is read before a stock commit's files are judged, so a file replaced
-after that read is found, and one replaced before it is the file judged and committed. A file the catalog writes itself
-is named by a uuid and replaced unseen only between its write and that read, a window this record cannot close.
+files are ``tree/<branch>/...``. What is recorded is sealed and read before a stock commit's files are judged, so the
+file judged is the file committed and no put replaces it after. A file of a write Lance commits in one call (the create
+door's ``write_dataset``, an unkeyed ``/insert``) is sealed just after its version lands: between the landing and the
+seal, another holder of the table's write vend that listed the file can put over it, a window neither the seal nor this
+record closes.
 
 MAINTENANCE KEEPS A COPY of the records it has read (``_maintenance_files/<table uuid>.json``, under its own identity), so
 a pass reads only the records written since its last ([[LH-494]]): a listing of the records and the copy, then a read
@@ -96,14 +99,18 @@ def _copy_key(table_uuid: str) -> str:
 
 
 def as_stored(table_root: str, storage_options: StorageOptions, transaction_uuid: str, paths: Sequence[str]) -> CommittedFiles:
-    """The files at ``paths`` under ``table_root`` (the store's own spelling of it) as the store holds them now.
+    """The files at ``paths`` under ``table_root`` (the store's own spelling of it), each sealed and then read as the
+    store holds it (ADR 0242).
 
-    A path the store does not hold is left out: ``version/create`` refuses a commit naming one, and an object nobody
-    wrote holds no committed bytes to replace.
+    THE SEAL COMES FIRST, so the bytes read are the bytes no put can replace: from the seal on, the store refuses every
+    write-tier credential and the catalog's own identity a put over the file (:func:`stored_objects.seal`), and the
+    identity recorded is the one the store keeps. A path the store does not hold is left out: ``version/create`` refuses a
+    commit naming one, and an object nobody wrote holds no committed bytes to replace.
 
     Raises:
-        OSError: The store refused, or could not be reached for, a read.
+        OSError: The store refused, or could not be reached for, a seal or a read.
     """
+    stored_objects.seal(table_root, storage_options, paths)
     found = stored_objects.identities(table_root, storage_options, paths)
     files = [CommittedFile(path=path, identity=found[path]) for path in paths if path in found]
     return CommittedFiles(transaction_uuid=transaction_uuid, files=files)

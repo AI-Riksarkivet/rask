@@ -144,7 +144,10 @@ def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool
     moto turns a Resource into a regex without escaping it, so the ``$`` a table directory carries would
     read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike.
     """
-    document = json.dumps(policy).replace("$", "~")
+    from catalog.core.vending import NEVER_OVER_A_SEALED_FILE
+
+    unsealed = {**policy, "Statement": [statement for statement in policy["Statement"] if statement.get("Sid") != NEVER_OVER_A_SEALED_FILE["Sid"]]}
+    document = json.dumps(unsealed).replace("$", "~")
     return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 

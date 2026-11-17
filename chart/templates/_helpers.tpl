@@ -712,7 +712,9 @@ securityContext:
 {{- end -}}
 
 {{- define "lance.objectStorePolicy.catalog" -}}
-{{- toJson (list (dict "Sid" "TheWholeDataPlaneItGoverns" "Effect" "Allow" "Action" (list "s3:ListBucket" "s3:GetBucketLocation" "s3:ListAllMyBuckets" "s3:GetObject" "s3:PutObject" "s3:DeleteObject" "s3:AbortMultipartUpload" "s3:CreateBucket" "s3:DeleteBucket") "Resource" (list "arn:aws:s3:::*" "arn:aws:s3:::*/*"))) -}}
+{{- toJson (list
+  (dict "Sid" "TheWholeDataPlaneItGoverns" "Effect" "Allow" "Action" (list "s3:ListBucket" "s3:GetBucketLocation" "s3:ListAllMyBuckets" "s3:GetObject" "s3:PutObject" "s3:PutObjectTagging" "s3:DeleteObject" "s3:AbortMultipartUpload" "s3:CreateBucket" "s3:DeleteBucket") "Resource" (list "arn:aws:s3:::*" "arn:aws:s3:::*/*"))
+  (dict "Sid" "NeverOverASealedFile" "Effect" "Deny" "Action" (list "s3:PutObject") "Resource" (list "arn:aws:s3:::*/*") "Condition" (dict "Null" (dict "s3:ExistingObjectTag/rask-sealed" "false")))) -}}
 {{- end -}}
 
 {{- define "lance.objectStorePolicy.lineage" -}}

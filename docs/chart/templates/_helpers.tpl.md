@@ -716,7 +716,11 @@ ONE IDENTITY'S CANNED POLICY, as IAM JSON, which the store grants every session 
 component's statements are a define of their own, `lance.objectStorePolicy.<component>`, chosen by name, so a component
 with none fails the render as an undefined template.
 
-- `catalog`: the whole data plane it governs, buckets included, since every vend is a session policy narrowed from it.
+- `catalog`: the whole data plane it governs, buckets included, since every vend is a session policy narrowed from it,
+  and `PutObjectTagging`, with which it seals each file a commit adds (`rask-sealed`, `lakehouse.file_identities.as_stored`,
+  ADR 0242). Its Deny `NeverOverASealedFile` refuses a put over a sealed key, to the catalog's own IO and to every session
+  vended from it, which a session policy can only narrow: measured on RustFS 1.0.3 (2026-11-17), a put, a multipart
+  upload's create, part and complete, and a copy onto a sealed key answer 403 AccessDenied.
 - `lineage`: list, get and delete under `<control bucket>/_lineage_outbox/`, the one outbox it drains, and get and put on
   exactly `<control bucket>/_timers/lineage-relay.json`, its relay timer's claim record.
 - `maintenance`: `ListAllMyBuckets`; list and `GetBucketLocation` on every bucket; get on each table's history and no

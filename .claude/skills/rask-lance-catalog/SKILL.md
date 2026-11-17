@@ -1041,13 +1041,20 @@ governing their data. The project-scoped surface is the console's project page, 
   reclaim's own holder objects `reclaim-*`, never a ref writer's hold or an erasure release's mark; ADR 0233 §9, measured
   on RustFS 1.0.3: every other key, listing and table refused `AccessDenied`) and its committed-file records `_file_identities/<uuid>/*`
   (get/delete) (`vending.TableRecords`, [[LH-219]]; the fence's grant costs 484 characters, so a maintain vend at a
-  63-character bucket fits a table prefix of 182, against a write vend's 89), and get/delete on the table's own data directories, those of its declared bases its base record holds as
+  63-character bucket fits a table prefix of 182, against a write vend's 71), and get/delete on the table's own data directories, those of its declared bases its base record holds as
   `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. The warehouse scope
   probe signs with `probe` (`vending.SessionTier`): get, put and delete in its probe prefix, which no door vends, since a
   door's `tier` query takes only `vending.Tier`. The management vend door checks the one rung its
-  tier names, never either. A put over an existing key is the residue no session policy can refuse, so it is DETECTED
-  ([[LH-419]], ADR 0184): every catalog commit records each file it adds under the table's root (data files, blob sidecars,
-  deletion files, index files and its transaction file), with the ETag and size the store answers, before its version is
+  tier names, never either. A put over a committed file is REFUSED BY THE STORE (ADR 0242): every catalog commit SEALS
+  each file it adds under the table's root (data files, blob sidecars, deletion files, index files and its transaction
+  file) with the object tag `rask-sealed=true` (`lakehouse.stored_objects.seal`, `table_layout.SEALED_TAG`), and the
+  write tier's session policy (`vending.NEVER_OVER_A_SEALED_FILE`, 167 characters: a write vend at a 63-character
+  bucket fits a table prefix of 71, 45 with a KMS key) and the catalog's own canned policy deny `s3:PutObject` over a key
+  holding it, which RustFS 1.0.3 enforces for a put, a multipart upload's create, part and complete, and a copy onto it
+  (measured 403; `tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py` in
+  `make lifecycle-rustfs-check`). No vended tier may tag or untag. AWS S3 does not evaluate `s3:ExistingObjectTag` on
+  PutObject, so there the overwrite still lands and is only DETECTED ([[LH-419]], ADR 0184): every catalog commit records
+  each file it adds, right after sealing it, with the ETag and size the store answers, before its version is
   announced (`lakehouse.file_identities`, `_file_identities/<table
   uuid>/<transaction uuid>.json`, written by `version/create` before it judges a stock commit's files, by
   `commit_stamped` before its finalize, and by the create door and an unkeyed `/insert`, which Lance commits itself,
@@ -1061,9 +1068,10 @@ governing their data. The project-scoped surface is the console's project page, 
   acted on, and the table's daily recheck backs up an event that never arrives. A recorded file
   held with another ETag or size, or gone while a retained version names it, is named in `overwritten_files`, logged
   `committed_file_overwritten` and counted `maintenance.files.overwritten`, which pages (`CommittedFileOverwritten`). A
-  record is forgotten only once no retained version names its files and the store holds none of them. The platform store keeps object versions to restore it (`rask-rustfs` § 8). Prevention
-  waits on upstream: stock pylance sends `If-None-Match` only on manifests, and object_store has no conditional
-  multipart. A file named through a base is not recorded, since no vend puts there, and a registered table's files are
+  record is forgotten only once no retained version names its files and the store holds none of them. The platform store keeps object versions to restore it (`rask-rustfs` § 8). A
+  requirement of `If-None-Match` is no answer: stock pylance sends it only on final manifests (measured behind a
+  counting proxy), and object_store has no conditional multipart. A one-call write (the create door, an unkeyed
+  `/insert`) seals just after its version lands, a window another holder of the table's write vend can put in. A file named through a base is not recorded, since no vend puts there, and a registered table's files are
   recorded only from its first commit through the catalog.
   **Each vend is a session of its own** ([[XC-083]], ADR 0170): the catalog exchanges its OWN projected ServiceAccount
   token through STS `AssumeRoleWithWebIdentity` with that session policy, named for the verified caller

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # lifecycle_on_rustfs_check.sh: run the table lifecycle's, the namespace cascade's, the stock create's and the history
-# fence's race tests (ADR 0227, ADR 0233)
+# fence's race tests (ADR 0227, ADR 0233), and the store's refusal of a vended write credential's put over a committed
+# file (ADR 0242),
 # with the catalog's root and control root on a REAL S3 store, so every fence, claim and record is arbitrated by the
 # store's own conditional writes (put-if-not-exists, If-Match) rather than the local root's file lock.
 #
@@ -56,4 +57,5 @@ uv run --no-sync pytest \
   tests/integration/test_a_cascade_keeps_what_it_answered.py \
   tests/integration/test_a_stock_create_and_a_catalog_create_of_one_name_never_both_land.py \
   tests/integration/test_a_tables_ref_writes_share_its_history.py \
+  tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py \
   -k s3 -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"

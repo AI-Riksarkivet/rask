@@ -417,8 +417,11 @@ handful of races in tests; nothing checks the doors against each other.
      `count_rows` still answered from the manifest. Its delete of that file and its put of `_versions/2.manifest` were
      refused (403). That is corruption across principals, the overwrite ADR 0157 records as open for every write
      credential, reaching across a lapse: it is what `RedeclareRenews` and the bound close for a declaration, since no
-     other principal's create can fence the claim before the declarer's last credential has expired. A write
-     credential on a written table still reaches every committed data file of its own table (ADR 0157).
+     other principal's create can fence the claim before the declarer's last credential has expired. A put over a
+     committed file by a write credential on a written table is now refused by the store: the catalog seals each file a
+     commit adds before its version lands, and the write tier's session policy denies a put over a sealed key
+     (ADR 0242; measured 403 on RustFS 1.0.3 for a put, a multipart upload and a copy onto one, through
+     `tests/integration/test_the_store_refuses_a_put_over_a_committed_file.py`).
 
    **What review of §9 found, each FIXED model first (2026-11-17).** An independent review found no safety defect in the
    guards above (every interleaving it built ended with at most one writer landing) and blocked the merge on these:

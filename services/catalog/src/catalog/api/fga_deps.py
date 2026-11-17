@@ -1307,8 +1307,9 @@ async def spec_vend_tier(
     resolved for the table, which is the one its namespace path's tier is read through. ``can_read_data`` with
     ``can_maintain``, a compaction job's rungs, opens the write tier too: its puts are what a compaction stages, and
     ``version/create`` admits a maintainer's commit for a compaction's two operations alone (ADR 0162, ADR 0174). Those
-    puts reach what a writer's do, so a put over a committed data file is as open to it as to a writer: no session
-    policy refuses one (``vending.build_session_policy``). ``can_read_data`` alone opens the read tier. None of them, no
+    puts reach what a writer's do, and a put over a committed file is refused it as a writer is refused one: the store
+    refuses a put over a file the catalog sealed at its commit (``vending.build_session_policy``, ADR 0242).
+    ``can_read_data`` alone opens the read tier. None of them, no
     credential: the door still answers, because describing a table is a metadata read. Maintain is never vended here;
     it is the maintenance identity's (LH-473). Through a read-only window (``maintenance_read_only``) a write-tier grant
     opens the read tier: the window refuses every write at the catalog's doors, and a write-tier credential would write

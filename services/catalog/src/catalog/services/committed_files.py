@@ -5,8 +5,8 @@ maintenance's sweep reads each one again: ``version/create`` reads them before i
 stamped commit (``dataplane.commit_stamped``) before its finalize, and a write Lance commits in one call (the create
 door's ``write_dataset``, an unkeyed ``/insert``) just after it lands (:func:`record_landed`).
 
-What a version adds against the version it follows on the same ref, each a file a writer's vend may put over
-(``table_layout.WRITER_PUT_GLOBS``): the data file of each fragment it holds anew (``data/*.lance``,
+What a version adds against the version it follows on the same ref, each a file a writer's vend may stage
+(``table_layout.WRITER_PUT_GLOBS``) and, once sealed here, never put over (ADR 0242): the data file of each fragment it holds anew (``data/*.lance``,
 ``lance_docs/lance/format/table/layout.md`` § Basic Layout), the blob sidecars beside it when the table has a blob column
 (``blob.md`` § Sidecar Resolution), each deletion file a fragment did not carry (``_deletions/``), the files of each index
 it adds (``_indices/<uuid>/``), and its own transaction file (``_transactions/<read version>-<uuid>.txn``, ``layout.md`` §

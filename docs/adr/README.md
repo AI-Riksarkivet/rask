@@ -246,3 +246,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0237](0237-a-service-tells-the-platform-about-itself-in-rust-as-in-python.md) |  | A service tells the platform about itself in Rust as in Python: its telemetry, metrics, audit trail and log lines (2026-11-17) | accepted |
 | [0238](0238-lineage-runs-as-one-rust-binary-started-and-stopped-as-the-python-service.md) |  | Lineage runs as one Rust binary, started, judged ready and stopped as the Python service is (2026-11-17) | accepted |
 | [0239](0239-one-chart-value-chooses-which-lineage-runs.md) |  | One chart value chooses which lineage runs, and the Rust one is built as an image of its own (2026-11-17) | accepted |
+| [0242](0242-the-store-refuses-a-put-over-a-committed-file.md) |  | The store refuses a put over a committed file: the catalog seals what a commit adds (2026-11-17) | accepted |

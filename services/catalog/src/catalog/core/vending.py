@@ -53,7 +53,7 @@ from lakehouse.objectfs import lance_storage_options
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.storage_options import StorageOptions
 from lakehouse.store_session import IssuedSession, WebIdentity
-from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
+from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, SEALED_CONDITION_KEY, WRITER_PUT_GLOBS
 
 
 if TYPE_CHECKING:
@@ -68,8 +68,8 @@ _VENDED_NOTHING: Final = "no credential was vended"
 #:
 #: * ``read`` — list and get the table.
 #: * ``write`` — a ``can_write_data`` managed-versioning writer: read the table, put what a commit needs
-#:   (data, transaction, deletion and index files, and a staged manifest), never a final manifest, a ref or
-#:   a delete. The catalog commits the version.
+#:   (data, transaction, deletion and index files, and a staged manifest), never a final manifest, a ref, a
+#:   delete or a put over a file a commit added (ADR 0242). The catalog commits the version.
 #: * ``maintain`` — the maintenance identity's reclaim (``can_vend_maintain``): get and delete anywhere in the prefix but
 #:   its refs, because cleanup deletes versions and what only they reference, and the table's own records a reclaim
 #:   writes on the control root (:class:`TableRecords`). It puts nothing of the table: the commits maintenance makes are
@@ -346,6 +346,25 @@ _TABLE_OBJECT_ACTIONS: Final[dict[SessionTier, tuple[str, ...]]] = {
     "write": _READ_ACTIONS,
     "maintain": _MAINTAIN_ACTIONS,
     "probe": _PROBE_ACTIONS,
+}
+#: The write tier's refusal of a put over a file a commit added (ADR 0242): the catalog seals each such file with
+#: :data:`SEALED_TAG` before its version lands (``lakehouse.file_identities.as_stored``), and the store refuses this
+#: session a ``PutObject`` whose key holds that tag. Measured on RustFS 1.0.3 (2026-11-17, a session the store's STS issued
+#: to a user holding the catalog's canned policy under this policy): a put, a put sending ``If-None-Match: *``, a
+#: ``CreateMultipartUpload``, an ``UploadPart`` and a ``CompleteMultipartUpload`` of an upload begun before the seal, and a
+#: ``CopyObject`` onto a sealed key each 403 AccessDenied, while a put and a multipart upload of a new key, and a put over
+#: the writer's own unsealed key, answer 200. RustFS reads the existing object's tags into the request's conditions for any
+#: object action a policy conditions on them (``rustfs@1.0.3:rustfs/src/storage/access.rs:1288-1370``).
+#:
+#: ``Null`` false is "the existing object carries the tag", so an absent object, or one no commit added, is not refused. The
+#: resource is every object: the session reaches no object outside its table's statements, so naming its prefix again
+#: would cost characters and narrow nothing. 146 characters of the compact policy.
+NEVER_OVER_A_SEALED_FILE: Final[dict[str, object]] = {
+    "Sid": "NeverOverASealedFile",
+    "Effect": "Deny",
+    "Action": ["s3:PutObject"],
+    "Resource": "arn:aws:s3:::*",
+    "Condition": {"Null": {SEALED_CONDITION_KEY: "false"}},
 }
 #: What S3 asks of the KMS key an object is encrypted with: ``kms:Decrypt`` to GET one, ``kms:GenerateDataKey`` to PUT one,
 #: and both for a multipart upload (AWS, "Using server-side encryption with AWS KMS keys") ([[LH-262]]).
@@ -864,10 +883,12 @@ def build_session_policy(
       that could put under ``_refs/`` could move a tag, forge a branch or fail every ref listing with a child
       prefix. The Deny is load-bearing, measured (LH-469, #594): the staged Allow also matches
       ``<n>.manifest-<uuid>.manifest``, a name pylance reads as final, and a session policy's explicit Deny
-      overrides any Allow on RustFS and on AWS S3 alike (Deny statements are evaluated first). The
-      ``tree/`` grant costs 20 characters of the table prefix a write credential fits within a 2,048-byte
-      session policy, the limit RustFS and AWS both enforce (109 to 89 at a 63-character bucket, counted on
-      the compact policy :class:`WebIdentityVendor` sends; a KMS key's grant costs 25 more, to 64, [[LH-262]]).
+      overrides any Allow on RustFS and on AWS S3 alike (Deny statements are evaluated first). A second
+      Deny, :data:`NEVER_OVER_A_SEALED_FILE`, refuses a put over any file a commit added, which the catalog
+      sealed before the version landed (ADR 0242). The ``tree/`` grant costs 20 characters of the table prefix
+      a write credential fits within a 2,048-byte session policy, the limit RustFS and AWS both enforce, and
+      the seal's Deny 18 more (109 to 89 to 71 at a 63-character bucket, counted on the compact policy
+      :class:`WebIdentityVendor` sends; a KMS key's grant costs 26 more, to 45, [[LH-262]]).
     * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get and delete on ``<prefix>/*``, since cleanup
       deletes versions and what only they reference. No put: a credential that could put a final manifest could commit
       around every door, so the commits maintenance makes are the catalog's, at its maintainer doors ([[LH-575]]). An
@@ -878,10 +899,13 @@ def build_session_policy(
     * ``probe``: get, put, delete and abort-upload on ``<prefix>/*``, for the warehouse scope probe's prefix, which holds
       no table.
 
-    WHAT A SESSION POLICY CANNOT REFUSE: a ``PutObject`` over an existing key. A writer's ``data/*`` grant
-    can therefore overwrite a committed data file's bytes in place; Lance's own commit is put-if-not-exists
-    (``lance_docs/lance/format/table/transaction.md``), but no policy condition makes a data-file put one. As an STS *session* policy
-    this can only RESTRICT the catalog's role (intersection-only), never widen it.
+    A PUT OVER A COMMITTED FILE IS REFUSED BY THE STORE, NOT BY A CONDITION THE WRITER SENDS. Lance's own commit is
+    put-if-not-exists (``lance_docs/lance/format/table/transaction.md``), but stock pylance 13.0.0 sends ``If-None-Match:
+    *`` on the final manifest alone (measured behind a counting proxy: a data file's put and its multipart upload, a
+    deletion, index and transaction file carry none), so a policy requiring the header (``s3:if-none-match``, which
+    RustFS 1.0.3 refuses as an unknown key) would refuse every stock write. The seal is the store's own answer instead:
+    the existing object's tag, which only the catalog puts (ADR 0242). As an STS *session* policy this can only
+    RESTRICT the catalog's role (intersection-only), never widen it.
 
     ``bases`` are the base paths the table's manifest declares, granted READ and never write, at either
     tier, and only when :func:`_base_is_sanctioned` allows it — inside the table's own vended scope, or
@@ -994,6 +1018,7 @@ def build_session_policy(
         statements.append(
             {"Sid": "NeverAFinalManifest", "Effect": "Deny", "Action": ["s3:PutObject"], "Resource": f"arn:aws:s3:::{ref_root}/{FINAL_MANIFEST_GLOB}"}
         )
+        statements.append(NEVER_OVER_A_SEALED_FILE)
     elif tier == "maintain" and branch:
         statements.append(
             {

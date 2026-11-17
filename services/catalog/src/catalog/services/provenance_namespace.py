@@ -17,8 +17,9 @@ version and a fragment per event, and Lance lists `_versions/` on every open. `L
 namespace's maintenance policy, the last versions maintenance's expiry keeps. A bring-your-own compaction job compacts
 its tables on `reader` and `maintainer`, what a compaction through `version/create` needs (ADR 0162), granted to its own
 identity at the namespace's access door ([[LH-563]]) and never `writer`, so its commits change how the tables are stored
-and never what they say. The write tier a spec door vends it can still put over a committed data file, as a writer's
-can: no session policy refuses a put over an existing key (`catalog.core.vending.build_session_policy`).
+and never what they say. The write tier a spec door vends it stages new files and is refused a put over a committed one,
+as a writer's is: the store refuses a put over a file the catalog sealed at its commit (ADR 0242,
+`catalog.core.vending.build_session_policy`).
 
 THE WRITERS ARE WHAT THE SETTINGS DECLARE, both ways, for the release's own accounts: recording lineage is the
 lakehouse's own, so a direct `writer` tuple on the namespace naming one of `LANCE_OWN_ACCOUNTS` that `LANCE_PROVENANCE_WRITERS`

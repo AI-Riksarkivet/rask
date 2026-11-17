@@ -26,6 +26,7 @@ from lakehouse.objectfs import fs_and_base
 from lakehouse.records import store_clock
 from lakehouse.storage.client import MAX_POOL_CONNECTIONS, S3Client
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
+from lakehouse.table_layout import SEALED_TAG
 
 
 #: The most keys one S3 DeleteObjects request takes.
@@ -175,6 +176,40 @@ def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[
     except BotoCoreError as exc:
         raise OSError(f"the store could not be reached listing {bucket}/{under}: {exc}") from exc
     return found
+
+
+def seal(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -> None:
+    """Tag each object at ``<uri>/<key>`` the store holds with :data:`lakehouse.table_layout.SEALED_TAG`, after which the
+    store refuses a write-tier credential, and the catalog's own identity, a put over it (ADR 0242); an absent one is
+    left alone. Sixteen at a time, as :func:`identities` reads them. A local root holds no tags and no policy, so it is
+    left as it is.
+
+    A seal replaces the object's tag set, which no writer of a Lance table sets, and sealing an object again is the same
+    write: a commit recorded twice seals its files twice.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, a seal.
+    """
+    if not keys or not on_s3(uri):
+        return
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
+    client = object_client(storage_options)
+
+    def tag(key: str) -> None:
+        full_key = f"{prefix}/{key}" if prefix else key
+        try:
+            client.put_object_tagging(Bucket=bucket, Key=full_key, Tagging={"TagSet": [{"Key": SEALED_TAG, "Value": "true"}]})
+        except ClientError as exc:
+            if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
+                return
+            raise OSError(f"the store refused sealing {bucket}/{full_key}: {exc}") from exc
+        except BotoCoreError as exc:
+            raise OSError(f"the store could not be reached sealing {bucket}/{full_key}: {exc}") from exc
+
+    with ThreadPoolExecutor(max_workers=min(_IDENTITY_READS, len(keys))) as pool:
+        list(pool.map(tag, keys))
 
 
 def _s3_identity(uri: str, storage_options: StorageOptions) -> Callable[[str], ObjectIdentity | None]:

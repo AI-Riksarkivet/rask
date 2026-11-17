@@ -30,6 +30,9 @@ left the table unopenable, "multiple manifest naming schemes"), and ``tree/*`` m
 name (``rust/lance-table/src/io/commit.rs`` at v13.0.0), so the Deny covers every key whose name ends in
 ``.manifest``. ``_refs/`` and main's version hint are granted nothing.
 
+A writer stages a file once, under a name it minted, and nothing legitimate writes it again: once a commit adds it, the
+catalog seals it (:data:`SEALED_TAG`), and the store refuses the write tier a put over it (ADR 0242).
+
 The catalog's vending door reads this module, so what a vended credential may write is named in one place.
 """
 
@@ -51,6 +54,13 @@ BRANCH_STAGING_GLOB: Final = f"{BRANCH_CONTAINER}/*"
 
 #: A final manifest at any depth, in both naming schemes, which only the catalog writes: putting one commits a version.
 FINAL_MANIFEST_GLOB: Final = "*.manifest"
+
+#: The object tag the catalog puts on each file a commit adds before its version lands (``file_identities.as_stored``,
+#: ADR 0242), and the object-tag condition key the write tier's and the catalog's own policies refuse a put over it by:
+#: a put, a multipart upload's create, part and complete, and a copy onto a key holding this tag are refused by the store
+#: (measured on RustFS 1.0.3, 2026-11-17). No vended credential may put, replace or remove an object's tags.
+SEALED_TAG: Final = "rask-sealed"
+SEALED_CONDITION_KEY: Final = f"s3:ExistingObjectTag/{SEALED_TAG}"
 
 #: Every tag and branch pointer, ``_refs/tags/`` and ``_refs/branches/`` (``lance_docs/lance/format/table/branch_tag.md``),
 #: which no vended credential puts or deletes. A tag exempts its version from ``cleanup_old_versions`` and a branch keeps
