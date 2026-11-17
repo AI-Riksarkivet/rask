@@ -31,7 +31,6 @@ from chart_yaml import FAST_LOADER
 
 from maintenance.services import queue
 from tests.unit import chart_render
-from tests.unit.chart_render import PREREQ_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,27 +40,16 @@ CHART = REPO / "chart"
 
 
 def _helm_template(*set_values: str) -> str:
-    """Render the chart, skipping the test if helm is not on PATH or in .localbin."""
-    import shutil
+    """The chart's render as text, on side-loaded images and the dev issuer, with each of ``set_values`` set.
 
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not Path(helm).exists():
-        pytest.skip("helm not available")
-    # Named `rask`: the chart's defaults name the release in the literals a subchart cannot template, and the render
-    # refuses any other (templates/openfga-authn.yaml).
-    argv = [helm, "template", "rask", str(CHART)]
-    # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
-    # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
-    argv += ["--set", "image.localImages=true"]
-    # The identity values every render needs since auth defaults ON (2026-08-06), and the ESO APIs the
-    # chart requires ([[XC-004]]). The chart refuses OIDC without an issuer ON PURPOSE — that refusal
-    # is what stops a forgotten values file installing an ungoverned estate. Supplying dev values HERE keeps
-    # every other render test testing its own subject rather than re-testing the guard.
-    argv += PREREQ_ARGS
-    argv += ["--set", "auth.oidc.issuer=http://localhost:8080/dex"]
-    for value in set_values:
-        argv += ["--set", value]
-    return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
+    Through the shared render (`chart_render.render_text`), which supplies the prerequisites every render needs and
+    names the release `rask`: the chart's defaults name the release in the literals a subchart cannot template, and
+    the render refuses any other (templates/openfga-authn.yaml).
+    """
+    # The shared render names its issuer with `--set-string`, which Helm applies after every `--set`, so an issuer is
+    # passed the same way: the dev issuer first, then the caller's own, which then wins.
+    sets = tuple(arg for value in set_values for arg in ("--set-string" if value.startswith("auth.oidc.issuer=") else "--set", value))
+    return chart_render.render_text("--set", "image.localImages=true", "--set-string", "auth.oidc.issuer=http://localhost:8080/dex", *sets)
 
 
 def test_every_first_party_deployment_is_hardened() -> None:
@@ -457,21 +445,12 @@ def test_the_object_store_carries_NO_credential_in_its_environment() -> None:
 
 #: The parsed chart, memoised on the render's arguments and parsed by libyaml.
 #:
-#: BOTH HALVES ARE PURE COST REMOVAL, measured 2026-09-09 against the real chart. The render is a pure
-#: function of its `--set` arguments and the chart does not change inside a session, yet a full
-#: `tests/unit` run made >=278 `helm template` invocations for only ~146 distinct argument sets — over
-#: half of them byte-identical recomputations, ~123s of subprocess thrown away. And helm was never the
-#: larger half: one render is 0.45s while `yaml.safe_load_all` over its 2.3 MB / 293-document output is
-#: 1.50s, against 0.15s for the `CSafeLoader` that was already installed in this venv and referenced
-#: nowhere in the repo — a 10x penalty, paid on every parse, ~400s of the directory's ~730s.
-#:
-#: CACHED HERE AND NOT ON `_helm_template`, deliberately: three of that function's callers need a real
-#: subprocess each time — one renders a DIFFERENT chart path out of a tmpdir, one passes `check=False`
-#: and asserts on the returncode, one expects `CalledProcessError`. Every caller of THIS function takes
-#: the default chart and the successful path, which is what makes memoising it safe.
+#: The render's text is cached by the shared helper (`chart_render.render_text`), and the parse is cached here: measured
+#: 2026-09-09 against the real chart, one render is 0.45s while `yaml.safe_load_all` over its 2.3 MB / 293-document
+#: output is 1.50s, against 0.15s for libyaml's `CSafeLoader`, and many gates here read the same render.
 #:
 #: The list is returned by reference, so a caller that MUTATES the documents would corrupt every later
-#: caller. None does — these gates read the render and assert on it.
+#: caller. None does: these gates read the render and assert on it.
 @functools.cache
 def _rendered_docs(*set_values: str) -> list[dict]:
     return [doc for doc in yaml.load_all(_helm_template(*set_values), Loader=FAST_LOADER) if isinstance(doc, dict)]

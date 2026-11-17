@@ -14,14 +14,8 @@ and polls nothing loses that step with the tag moved, the route 200 and every po
 from __future__ import annotations
 
 import pathlib
-import shutil
-import subprocess
 
-import pytest
-import yaml
-from chart_yaml import FAST_LOADER
-
-from tests.unit.chart_render import PREREQ_ARGS
+from tests.unit.chart_render import render
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -29,16 +23,8 @@ CHART = REPO / "chart"
 
 
 def _render(*set_values: str) -> list[dict]:
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not pathlib.Path(helm).exists():
-        pytest.skip("helm not available")
-    argv = [helm, "template", "rask", str(CHART), "--set", "image.localImages=true"]
-    argv += PREREQ_ARGS
-    argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
-    for value in set_values:
-        argv += ["--set", value]
-    out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-    return [doc for doc in yaml.load_all(out, Loader=FAST_LOADER) if isinstance(doc, dict)]
+    sets = tuple(arg for value in set_values for arg in ("--set", value))
+    return list(render("--set", "image.localImages=true", "--set-string", "auth.oidc.issuer=http://localhost:8080/dex", *sets))
 
 
 def _catalog_env(docs: list[dict]) -> dict[str, str]:

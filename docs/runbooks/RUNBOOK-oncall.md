@@ -585,7 +585,7 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
 - `CatalogWritesShedSustained` (warning): bulk Arrow-IPC writes answered 429 for 15 minutes. First check: the catalog's
   write load; then scale its replicas or raise `LANCE_MAX_CONCURRENT_WRITES`, watching pod memory.
 - `CatalogListingLoadReachedInteractiveFrequency` (warning): namespace, table or warehouse listing above 1 request/s for
-  30 minutes. Nothing is broken: re-read the per-route rates against LH-050's parked query-store design.
+  30 minutes. Nothing is broken: re-read the per-route rates against ADR 0217's parked query store (decision 3).
 - `CommittedFilesUnrecorded` (warning): a one-call commit's added files could not be recorded on the control root, so
   maintenance never checks them. First check: the `committed_files_unrecorded` ERROR line (location, version, the
   store's error), then the object store.

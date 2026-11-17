@@ -17,35 +17,23 @@ copies of a bucket list is how the first one drifted.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
-import pytest
 import yaml
 
-from tests.unit.chart_render import PREREQ_ARGS
+from tests.unit.chart_render import render
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-_BASE = [
-    "--set",
-    "image.localImages=true",
-    *PREREQ_ARGS,
-    "--set-string",
-    "auth.oidc.issuer=http://dex.local:5556",
-]
+#: The local-development render under the issuer this gate has always named.
+_BASE = ("--set", "image.localImages=true", "--set-string", "auth.oidc.issuer=http://dex.local:5556")
 _MAINTENANCE = ("rask-maintenance-worker",)
 
 
 def _render(*extra: str) -> list[dict]:
     """The chart rendered with `extra`. A render the chart REFUSES fails the test: skipping it would pass
     every assertion below on a render that never happened."""
-    if shutil.which("helm") is None:
-        pytest.skip("helm not available")
-    done = subprocess.run(["helm", "template", "rask", "chart/", *_BASE, *extra], cwd=_ROOT, capture_output=True, text=True, check=False)
-    assert done.returncode == 0, f"the chart refused the render: {done.stderr.strip()[-400:]}"
-    return [doc for doc in yaml.safe_load_all(done.stdout) if isinstance(doc, dict)]
+    return list(render(*_BASE, *extra))
 
 
 def _maintenance_env(docs: list[dict], env_name: str) -> dict[str, str]:

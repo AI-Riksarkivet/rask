@@ -176,6 +176,10 @@ nav = [
           "adr/0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md",
           "adr/0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md",
           "adr/0213-a-projects-administrators-are-everyone-its-admin-reaches-through-its-roles.md",
+          "adr/0214-the-e2e-lane-runs-the-telemetry-chain.md",
+          "adr/0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md",
+          "adr/0216-the-events-poll-reads-the-control-stream.md",
+          "adr/0217-four-behaviours-stand-as-the-spec-the-format-and-the-load-leave-them.md",
         ]},
         { "Superseded and retired" = [
           "adr/0005-p2-1-single-base-cascade-write.md",

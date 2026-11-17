@@ -23,41 +23,21 @@ render produces it.
 
 from __future__ import annotations
 
-import functools
 import pathlib
-import shutil
-import subprocess
 
 import pytest
-import yaml
-from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, PROD_ARGS
+from tests.unit.chart_render import PROD_ARGS, render
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
-_OIDC_ARGS = [
-    *PREREQ_ARGS,
-    "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
-]  # fmt: skip
-
 _DEFAULT_ARGS = ["--set", "image.localImages=true", "--set", "objectStore.enabled=true"]
 
 
-@functools.cache
 def _render(*extra: str) -> list[dict]:
-    """Cached on the verbatim flag tuple: five assertions here want three renders, not six.
-
-    [[XC-037]] counts this suite's hand-rolled `helm template` subprocesses; a new one that spawned a
-    process per assertion would be a row growing while it is open.
-    """
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not pathlib.Path(helm).exists():
-        pytest.skip("helm not available")
-    argv = [helm, "template", "rask", str(REPO / "chart"), *_OIDC_ARGS, *extra]
-    out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-    return [doc for doc in yaml.load_all(out, Loader=FAST_LOADER) if isinstance(doc, dict)]
+    """The chart under ``extra``, through the shared render, which caches on the flag tuple."""
+    return list(render(*extra))
 
 
 def _pod_specs(docs: list[dict]) -> list[tuple[str, dict]]:

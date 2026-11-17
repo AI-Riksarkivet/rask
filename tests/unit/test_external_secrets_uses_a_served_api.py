@@ -19,11 +19,7 @@ from __future__ import annotations
 
 import pathlib
 
-import pytest
-import yaml
-from chart_yaml import FAST_LOADER
-
-from tests.unit.chart_render import PREREQ_ARGS
+from tests.unit.chart_render import render
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -33,29 +29,8 @@ SERVED = "external-secrets.io/v1"
 
 
 def _rendered_eso() -> list[dict]:
-    import shutil
-    import subprocess
-
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not pathlib.Path(helm).exists():
-        pytest.skip("helm not available")
-    out = subprocess.run(  # noqa: S603
-        [
-            helm,
-            "template",
-            "rask",
-            str(REPO / "chart"),
-            "--set",
-            "image.localImages=true",
-            *PREREQ_ARGS,
-            "--set-string",
-            "auth.oidc.issuer=http://localhost:8080/dex",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    return [d for d in yaml.load_all(out, Loader=FAST_LOADER) if d and d.get("kind") in {"ExternalSecret", "SecretStore", "ClusterSecretStore"}]
+    docs = render("--set", "image.localImages=true", "--set-string", "auth.oidc.issuer=http://localhost:8080/dex")
+    return [d for d in docs if d.get("kind") in {"ExternalSecret", "SecretStore", "ClusterSecretStore"}]
 
 
 def test_every_eso_document_names_the_served_api() -> None:

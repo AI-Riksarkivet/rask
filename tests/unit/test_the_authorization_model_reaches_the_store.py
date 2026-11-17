@@ -21,31 +21,18 @@ there. Rendering it into a ConfigMap would have created the fourth copy this row
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
-from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS
+from tests.unit.chart_render import render
 
 
 REPO = Path(__file__).resolve().parents[2]
 
 
 def _render(*extra: str) -> list[dict]:
-    if not shutil.which("helm"):  # pragma: no cover - CI installs helm
-        pytest.skip("helm not on PATH")
-    cmd = ["helm", "template", "rask", str(REPO / "chart")]
-    cmd += PREREQ_ARGS
-    cmd += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
-    cmd += ["--set", "image.localImages=true", *extra]
-    done = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if done.returncode != 0:
-        raise RuntimeError(done.stderr)
-    return [d for d in yaml.load_all(done.stdout, Loader=FAST_LOADER) if d]
+    return list(render("--set-string", "auth.oidc.issuer=http://localhost:8080/dex", "--set", "image.localImages=true", *extra))
 
 
 def _jobs(docs: list[dict]) -> dict[str, dict]:
