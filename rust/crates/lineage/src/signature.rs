@@ -4,7 +4,7 @@
 //! trusts and what the estate provisions cannot drift. An empty signer set is an estate that does not enforce signing:
 //! nothing is verified, a facet the event carries is ignored, and nothing a signature would attest is admitted on it.
 
-use lakehouse_core::signing::json::Json;
+use lakehouse_core::pywire::json::Json;
 use lakehouse_core::signing::{KeysUnavailable, NotVerified, PublicKeySource, Refusal, VerifiedSignature, verify_event};
 use std::collections::BTreeSet;
 

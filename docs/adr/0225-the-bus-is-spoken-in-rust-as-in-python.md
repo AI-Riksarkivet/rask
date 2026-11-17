@@ -26,7 +26,8 @@ call, or the stream's deduplication and the consumer's redelivery stop meaning w
    | `envelope::lineage_envelope` | an OpenLineage event's id, source, type, subject and time | `cloud_events.lineage_envelope` |
    | `envelope::is_traceparent`, `is_tracestate`, `TraceContext::continuing` | which trace context is adopted | `context.is_traceparent`, `is_tracestate`, `continuing` |
    | `instant` | an `eventTime` read as `datetime.fromisoformat` reads it; a staged `time` read and written as pydantic does | the standard library and pydantic |
-   | `pywire` | JSON text as `json.dumps` writes it, a float as `repr`, a value as `str()` | the standard library |
+   | `lakehouse_core::pywire` | JSON text as `json.dumps` writes it, a float as `repr` | the standard library |
+   | `pystr` | a value as `str()` writes it, and whether Python reads it as false | the standard library |
    | `page::StreamPage` | where a read by sequence begins and whether it found a gap | `bus.StreamPage` |
    | `jetstream` | what a settlement is sent as (`+ACK`, `-NAK {"delay": ns}`, `+TERM`), what a reply subject says of a delivery, what the API answered | `bus._tell`, nats-py's `Msg` |
    | `bus::BusSettings` | the bus, user, token file, CA and session the chart names in `RASK_BUS_*` | `bus.BusSettings` |
@@ -110,9 +111,10 @@ call, or the stream's deduplication and the consumer's redelivery stop meaning w
 ## Line budget
 
 `rust/budget.json` gives `lakehouse-bus` 642 lines: the executing lines of `bus.py` (538) and `cloud_events.py` (104),
-counted without blanks, comments and docstrings. The crate is 1,155 lines, over it: the Python's JSON spelling,
+counted without blanks, comments and docstrings. The crate is 1,047 lines, over it: the Python's `str()` spelling,
 datetime grammars and pull protocol are its libraries' (the standard library, pydantic, nats-py) and count nothing,
-where the Rust carries each.
+where the Rust carries each. Its JSON text and float `repr` are `lakehouse_core::pywire`'s, which the edge key and
+canon-1 share.
 
 ## Not ported yet
 

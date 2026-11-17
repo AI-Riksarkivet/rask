@@ -11,14 +11,13 @@
 //! fail without saying anything about the signature, and it answers `Unavailable`, never a refusal.
 
 pub mod canon;
-pub mod json;
 pub mod nkey;
 
 use crate::events::{AUTHOR_FACET, SIGNATURE_FACET};
+use crate::pywire::json::{Json, PyStr};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey};
-use json::{Json, PyStr};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SIGNATURE_ALG: &str = "Ed25519";

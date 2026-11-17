@@ -1,7 +1,7 @@
 //! The core functions answer what the Python ones answer (`rust/vectors/lineage_functions.json`, ADR 0217 §5).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use lakehouse_core::{events, naming, pyjson};
+use lakehouse_core::{events, naming, pywire};
 use serde_json::Value;
 
 fn vectors(group: &str) -> Vec<Value> {
@@ -33,6 +33,6 @@ fn a_static_event_has_the_id_python_gives_it() {
 #[test]
 fn json_text_is_written_as_python_writes_it() {
     for case in vectors("pyjson") {
-        assert_eq!(pyjson::dumps(&case["value"]), case["text"].as_str().unwrap(), "{case}");
+        assert_eq!(pywire::dumps(&case["value"], pywire::COMPACT), case["text"].as_str().unwrap(), "{case}");
     }
 }

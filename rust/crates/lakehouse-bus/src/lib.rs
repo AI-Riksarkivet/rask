@@ -7,7 +7,7 @@ pub mod envelope;
 pub mod instant;
 pub mod jetstream;
 pub mod page;
-pub mod pywire;
+pub mod pystr;
 
 pub use bus::{Bus, BusSettings, Handler, HandlingPanicked, PublishError, Unavailable, publish_event};
 pub use envelope::{CloudEvent, TraceContext, lineage_envelope};

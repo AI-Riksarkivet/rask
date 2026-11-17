@@ -20,18 +20,14 @@ pub fn settle_payload(settlement: &Settlement) -> Vec<u8> {
     match settlement.outcome {
         Outcome::Taken => b"+ACK".to_vec(),
         Outcome::Again if settlement.delay.is_zero() => HANDED_BACK.to_vec(),
-        Outcome::Again => format!("-NAK {{\"delay\": {}}}", nanos(settlement.delay)).into_bytes(),
+        Outcome::Again => format!("-NAK {{\"delay\": {}}}", settlement.delay.as_nanos()).into_bytes(),
         Outcome::Parked => b"+TERM".to_vec(),
     }
 }
 
-fn nanos(duration: Duration) -> u128 {
-    duration.as_nanos()
-}
-
 /// The pull request for one message, which the bus holds open for `wait`.
 pub fn pull_request(wait: Duration) -> Vec<u8> {
-    json!({"batch": 1, "expires": nanos(wait)}).to_string().into_bytes()
+    json!({"batch": 1, "expires": wait.as_nanos()}).to_string().into_bytes()
 }
 
 /// The subject a pull on `consumer` of `stream` is published on.

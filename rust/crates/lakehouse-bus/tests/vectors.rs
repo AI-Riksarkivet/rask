@@ -2,8 +2,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use lakehouse_bus::envelope::{self, MAX_PAYLOAD_BYTES, Oversize, WARN_PAYLOAD_BYTES};
-use lakehouse_bus::{CloudEvent, StreamPage, TraceContext, lineage_envelope, pywire};
+use lakehouse_bus::{CloudEvent, StreamPage, TraceContext, lineage_envelope};
 use lakehouse_core::delivery::Delivery;
+use lakehouse_core::pywire;
 use serde_json::{Map, Value};
 
 fn vectors(group: &str) -> Vec<Value> {

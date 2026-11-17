@@ -14,7 +14,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use lakehouse_core::auth::issuer::Clock;
 use lakehouse_core::secrets::published::store_fetch;
 use lakehouse_core::secrets::{Budget, PublishedKeys, Refused, SecretStore, SecretStoreSettings, Session, Unanswered};
-use lakehouse_core::signing::json::{self, Json};
+use lakehouse_core::pywire::json::{self, Json};
 use lakehouse_core::signing::{NotVerified, RefusalReason, canon, nkey, signed_document, verify_event};
 use serde_json::{Value, json};
 use std::collections::hash_map::RandomState;

@@ -6,7 +6,7 @@
 use crate::model::{Dataset, Event, RunEvent};
 use lakehouse_core::events::{AUTHOR_FACET, BRANCH_IDENTIFIER, LANCE_FACET, SIGNATURE_FACET, dataset_uuids};
 use lakehouse_core::naming::is_external_source_namespace;
-use lakehouse_core::pyjson;
+use lakehouse_core::pywire;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -204,7 +204,7 @@ pub fn edges_of(event: &Event, catalog: &str) -> Vec<EdgeRow> {
             let (in_version, in_branch) = (version_of(source), lance_text(source, "ref"));
             let key = json!([run.run.run_id, in_table, in_version, in_branch, out_table, out_version, run.write_ref()]);
             rows.push(EdgeRow {
-                edge_key: format!("{:x}", Sha256::digest(pyjson::dumps(&key))),
+                edge_key: format!("{:x}", Sha256::digest(pywire::dumps(&key, pywire::COMPACT))),
                 run_id: run.run.run_id.clone(),
                 writer_run_id: writer.clone(),
                 author: run.author(),

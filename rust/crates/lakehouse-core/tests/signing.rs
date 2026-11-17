@@ -1,7 +1,7 @@
 //! An event's signature is judged as the Python verifier judges it (`rust/vectors/signing.json`, ADR 0217 §5).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use lakehouse_core::signing::json::{self, Json};
+use lakehouse_core::pywire::json::{self, Json};
 use lakehouse_core::signing::{NotVerified, VerifiedSignature, canon, nkey, signed_control_document, signed_document, verify_control_event, verify_event};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

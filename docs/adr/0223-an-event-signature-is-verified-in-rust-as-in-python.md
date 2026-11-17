@@ -20,7 +20,7 @@ takes destroys an honest event, since a refusal is final.
 
    | Rust | Decides | Python it answers for |
    | --- | --- | --- |
-   | `lakehouse_core::signing::json` | the document a text holds, read as `json.loads` reads it | CPython's `json` |
+   | `lakehouse_core::pywire::json` | the document a text holds, read as `json.loads` reads it | CPython's `json` |
    | `lakehouse_core::signing::canon` | canon-1: the bytes a signature covers, or that a value has none | `canon_1` |
    | `lakehouse_core::signing::nkey` | the raw key a published NKEY encodes, its key id, and how a list's `keys` field splits | `_decode_nkey`, `_kid_of`, `parse_published_keys` |
    | `lakehouse_core::signing` | the facet, the checks in their order, the verdict and its `RefusalReason`, for run and dataset events and for control events | `verify_signature`, `verify_control_signature` |

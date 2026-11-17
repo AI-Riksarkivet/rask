@@ -5,8 +5,9 @@
 //! holds is `docs/COMMIT-EVENTS.md` § The envelope on the bus.
 
 use crate::instant::{self, Instant};
-use crate::pywire;
+use crate::pystr;
 use lakehouse_core::events::{LANCE_FACET, dataset_uuids, static_event_id};
+use lakehouse_core::pywire;
 use serde_json::{Map, Value};
 
 /// The content type of a structured-mode CloudEvent: the whole envelope is the message body.
@@ -148,7 +149,7 @@ impl CloudEvent {
 
     /// The text an outbox stages the envelope as.
     pub fn staged_text(&self) -> String {
-        pywire::dumps(&Value::Object(self.wire()))
+        pywire::dumps(&Value::Object(self.wire()), pywire::DEFAULT)
     }
 
     /// This envelope carrying `staged`'s trace context: a relay's envelope, kept in the trace its event was staged under.
@@ -170,7 +171,7 @@ impl CloudEvent {
                 wire.insert("tracestate".to_owned(), Value::String(tracestate.clone()));
             }
         }
-        let body = pywire::dumps(&Value::Object(wire)).into_bytes();
+        let body = pywire::dumps(&Value::Object(wire), pywire::DEFAULT).into_bytes();
         if body.len() > MAX_PAYLOAD_BYTES {
             return Err(Oversize { bytes: body.len() });
         }
@@ -186,7 +187,7 @@ pub fn lineage_envelope(event: &Map<String, Value>) -> CloudEvent {
         source: text(event.get("producer")).unwrap_or_else(|| LINEAGE_SOURCE.to_owned()),
         kind: lineage_type(event),
         subject: written_table(event),
-        time: event.get("eventTime").and_then(|time| instant::from_isoformat(&pywire::py_str(time))),
+        time: event.get("eventTime").and_then(|time| instant::from_isoformat(&pystr::py_str(time))),
         dataschema: text(event.get("schemaURL")),
         data: event.clone(),
         traceparent: None,
@@ -200,17 +201,17 @@ fn is_dataset_change(event: &Map<String, Value>) -> bool {
 }
 
 fn run_state(event: &Map<String, Value>) -> String {
-    pywire::str_or(event.get("eventType"), UNDECLARED_STATE)
+    pystr::str_or(event.get("eventType"), UNDECLARED_STATE)
 }
 
 /// The identity of an OpenLineage event: a run event's run id, or the static id of a dataset change.
 fn event_identity(event: &Map<String, Value>) -> String {
     let run_id = event.get("run").and_then(Value::as_object).and_then(|run| run.get("runId"));
-    if let Some(run_id) = run_id.filter(|run_id| !pywire::falsy(run_id)) {
-        return pywire::py_str(run_id);
+    if let Some(run_id) = run_id.filter(|run_id| !pystr::falsy(run_id)) {
+        return pystr::py_str(run_id);
     }
     let dataset = event.get("dataset").and_then(Value::as_object);
-    let member = |key: &str| pywire::str_or(dataset.and_then(|dataset| dataset.get(key)), "");
+    let member = |key: &str| pystr::str_or(dataset.and_then(|dataset| dataset.get(key)), "");
     let operation = dataset
         .and_then(|dataset| dataset.get("facets"))
         .and_then(Value::as_object)
@@ -218,11 +219,11 @@ fn event_identity(event: &Map<String, Value>) -> String {
         .and_then(Value::as_object)
         .and_then(|lance| lance.get("operation"));
     static_event_id(
-        &pywire::str_or(event.get("producer"), ""),
+        &pystr::str_or(event.get("producer"), ""),
         &member("namespace"),
         &member("name"),
-        &pywire::str_or(operation, ""),
-        &pywire::str_or(event.get("eventTime"), ""),
+        &pystr::str_or(operation, ""),
+        &pystr::str_or(event.get("eventTime"), ""),
     )
 }
 
@@ -236,7 +237,7 @@ fn lineage_id(event: &Map<String, Value>) -> String {
         return format!("{identity}@{state}");
     }
     // A state that ends nothing can be told again as the run goes on, so each telling is its own event.
-    format!("{identity}@{state}@{}", pywire::str_or(event.get("eventTime"), ""))
+    format!("{identity}@{state}@{}", pystr::str_or(event.get("eventTime"), ""))
 }
 
 fn lineage_type(event: &Map<String, Value>) -> String {

@@ -23,14 +23,14 @@ may target by. In Python these are spread over `lineage.models`, `lineage.servic
    | `paging` | how much the next read of a filtered page takes, and where a follower continues | `_next_chunk`, `_forward_cursor` in the events endpoint |
 
    `rust/crates/lakehouse-core` holds what they share with the other services: `naming` (which datasets lie outside
-   the catalog), `events` (the facet names, a dataset's uuids, a static event's id) and `pyjson`.
+   the catalog), `events` (the facet names, a dataset's uuids, a static event's id) and `pywire`.
 2. **The catalog's dataset namespace is an argument.** Python reads it from the process's settings inside
    `is_external_source`; the Rust functions take it, so a decision is a function of what it is given.
 3. **The store stamps the time.** A feed row and an edge carry no `received_at` here; the store adds it when it
    writes them.
 4. **An edge's key hashes the bytes Python hashes.** The key is the SHA-256 of a JSON array, and Python writes every
-   character outside printable ASCII as an escape where `serde_json` writes UTF-8. `lakehouse_core::pyjson` writes
-   Python's form, so a table named outside ASCII has one edge key in both implementations while both write the table.
+   character outside printable ASCII as an escape where `serde_json` writes UTF-8. `lakehouse_core::pywire::dumps` with
+   `COMPACT` writes Python's form, so a table named outside ASCII has one edge key in both implementations while both write the table.
 5. **Parity is shown by vectors** (`scripts/gen_port_vectors.py` → `rust/vectors/`): 53 events, of which Python takes
    40, and 218 function cases. For every event the Rust answers are equal to Python's: whether it is taken, the stored
    JSON byte for byte, the feed row, every edge with its key, the targeting view and the column-lineage datasets. Two

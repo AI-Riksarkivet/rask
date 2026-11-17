@@ -1,7 +1,7 @@
 //! Lineage takes an arrived event on its signature as the Python door does (`rust/vectors/signing.json`, ADR 0217 §5).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use lakehouse_core::signing::json;
+use lakehouse_core::pywire::json;
 use lineage::signature::{Admission, Signing, attested, verify_arrived};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

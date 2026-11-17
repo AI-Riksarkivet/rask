@@ -13,7 +13,7 @@ use crate::jetstream::{self, ACK_PREFIX, ApiError, NO_MESSAGE_FOUND, PULL_EXPIRE
 use crate::page::StreamPage;
 use async_nats::connection::State;
 use async_nats::{Auth, AuthError, Client, ConnectOptions, Event, HeaderMap, Message, client::RequestErrorKind};
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use lakehouse_core::delivery::{Delivery, Lane, Verdict, judged};
 use std::collections::HashSet;
 use std::future::Future;
@@ -348,10 +348,8 @@ impl Bus {
                     }
                 }
             }
-            tokio::select! {
-                biased;
-                () = &mut stop => break,
-                () = std::future::ready(()) => {}
+            if (&mut stop).now_or_never().is_some() {
+                break;
             }
         }
         while let Some(ended) = handling.join_next().await {
@@ -457,13 +455,8 @@ async fn pull(client: &Client, stream: &str, consumer: &str) -> Result<Option<Me
         status => {
             let code = status.map_or_else(|| "no status".to_owned(), |code| code.to_string());
             let said = format!("{code} {}", answer.description.unwrap_or_default());
-            Err(clipped(
-                format!(
-                    "the bus ended a pull on {stream}/{consumer} with {}",
-                    said.split_whitespace().collect::<Vec<_>>().join(" ")
-                ),
-                300,
-            ))
+            let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
+            Err(clipped(format!("the bus ended a pull on {stream}/{consumer} with {said}"), 300))
         }
     }
 }
