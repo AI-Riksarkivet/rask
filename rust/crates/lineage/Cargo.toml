@@ -1,0 +1,18 @@
+[package]
+name = "lineage"
+version = "0.1.0"
+description = "The lineage service: the OpenLineage intake, the commit feed and the table-level edge list."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+lakehouse-core = { path = "../lakehouse-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

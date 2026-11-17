@@ -148,6 +148,27 @@ openapi-check: openapi
 	  || { echo "!! OpenAPI drift: a route or its rung changed without refreshing the spec, the operation table or the client. Commit the diff above."; exit 1; }
 	@echo "OpenAPI specs match the committed contract"
 
+# ---- the Rust plane (rust/, ADR 0217) ---------------------------------------
+# The port's gate. The vectors are what the Python functions answer for a corpus (scripts/gen_port_vectors.py) and the
+# Rust tests assert the same answers, so both are regenerated first: a Python function that changed fails the Rust
+# tests here. The ledger (docs/rust-port.json) is asked of the crates' own binaries and holds each crate to its line
+# budget (rust/budget.json).
+.PHONY: rust-vectors rust-port rust-check
+rust-vectors:
+	uv sync --all-packages
+	uv run --no-sync scripts/gen_port_vectors.py
+
+rust-port:
+	uv run --no-sync scripts/rust_port.py
+
+rust-check: rust-vectors rust-port
+	cd rust && cargo fmt --check
+	cd rust && cargo clippy --locked --all-targets -- -D warnings
+	cd rust && cargo test --locked
+	@git diff HEAD --exit-code -- rust/vectors docs/rust-port.json \
+	  || { echo "!! The port's vectors or ledger drifted: a Python function or a crate changed. Commit the diff above."; exit 1; }
+	@echo "The Rust plane agrees with the Python it replaces"
+
 # ---- the console image -----------------------------------------------------
 # The console is one static single-page app served by its own `serve.ts` (.docker/frontend.dockerfile). The build goes
 # through DAGGER (scripts/dagger-image.sh -> `dagger call image --name=frontend`), like every image in this repository;

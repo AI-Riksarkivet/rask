@@ -247,8 +247,8 @@ This repository holds **the lakehouse and its console, and nothing else** (owner
 deleted here and is recovered from git history at `64ef118a9` when it moves to a repository of its own. The
 notifications inbox is retired, not moved (ADR 0193).
 
-Two **language-pure planes** — **don't blur them**. Python lives at the repo root (`packages/` + `services/`); the JS/TS
-plane lives under `frontend/`, its own bun workspace root. There is no Polylith-style `projects/` layer: deployables
+Three **language-pure planes** — **don't blur them**. Python lives at the repo root (`packages/` + `services/`); the JS/TS
+plane lives under `frontend/`, its own bun workspace root; the Rust plane lives under `rust/`, its own Cargo workspace. There is no Polylith-style `projects/` layer: deployables
 build straight from the root uv workspace via `uv sync --package <name>`, one dockerfile per deployable in `.docker/`.
 
 - `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
@@ -318,6 +318,12 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     supplied by a provider the app installs, the lineage client and the OpenAPI types generated from
     `docs/*-openapi.json`), `console/src/lib/flow` (the graph views the governance pages draw with, and the project
     hierarchy) and `console/src/lib/dock` (the workbench's dock, on horizon-layout, ADR 0200).
+- `rust/` — the **Rust plane**, a Cargo workspace of its own (ADR 0217): the port of the lakehouse's services, one at
+  a time, lineage first. `rust/crates/lakehouse-core` is what every service runs on and depends on no Lance crate; a
+  service is a crate of its own. Nothing on the estate runs it yet. `make rust-check` is its gate: `cargo fmt`,
+  `clippy -D warnings`, the tests, the vectors (`rust/vectors/`, what the Python functions answer, written by
+  `scripts/gen_port_vectors.py`) and the ledger (`docs/rust-port.json`, which operations Rust serves and each crate's
+  lines against `rust/budget.json`). Each ported feature has an ADR naming what moved and what differs.
 - `tests/` — `tests/unit`, `tests/integration` and `tests/e2e-py` (the live suites) for the lakehouse; the console's
   browser suite is its own Playwright suite (`frontend/console/e2e`).
 - `scripts/` — **all** dev/ops scripts, shell + Python. **No production-state-changing CLIs** — data enters, and moves
