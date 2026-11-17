@@ -25,7 +25,8 @@ land. The Python argues this ordering in comments. A port that reorders two step
    (`lineage.api.relay._drain_outbox`). Any step may fail, any process may die between steps, and a write may land
    late.
 4. **What it proves, for one event of every kind with up to three failures (55,308 states) and for two interleaved
-   events with up to two (13.8 million):**
+   events with one (738,589 states, the two counted as interchangeable), both in the gate, about 16 seconds together.
+   Two events with two failures were checked once: 13.8 million states, four minutes, no error.**
    - *No loss:* an event its producer staged or published is always on its way, recorded, or kept where an admin
      finds it.
    - *Only allowed events are recorded*, and the relay keeps as refused only what was refused.

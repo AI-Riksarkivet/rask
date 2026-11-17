@@ -42,7 +42,7 @@
 (* pruning of old rows. A second copy the relay publishes of one event is  *)
 (* one message here: a third is handled as the second is.                  *)
 (***************************************************************************)
-EXTENDS Naturals, FiniteSets
+EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS Events,       \* the events a run of the model announces
           MaxAttempts,  \* deliveries an event is handled on before the lane parks it
@@ -312,4 +312,7 @@ EverythingComesToRest == <>[]Quiet
 
 \* Bounds the delivery count TLC explores; every increase past MaxAttempts costs a fault.
 Bounded == \A m \in Msgs : msg[m].attempt <= MaxAttempts + MaxFaults + 1
+
+\* Two events are interchangeable: a config that checks safety only may count a behaviour and its mirror once.
+Interchangeable == Permutations(Events)
 =============================================================================
