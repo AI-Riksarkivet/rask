@@ -1,0 +1,161 @@
+"""OpenFGA authenticates every caller by a projected ServiceAccount token, and every FGA client the chart renders presents one ([[XC-077]]).
+
+Measured live on helm rev 283: the deployed OpenFGA ran with no `OPENFGA_AUTHN_*` at all, the playground on and
+CORS `*`, so any pod, a user's workload included, could write `estate#admin` for itself or replace the model.
+
+The server half: OpenFGA runs OIDC with the audience the clients project and admits only their ServiceAccounts, fetches keys from the issuer mirror
+the chart renders (the k3s issuer refuses an unauthenticated fetch), accepts the cluster issuer as the tokens'
+`iss`, and serves no playground and no CORS origin. The client half: each container that names an OpenFGA
+address reads `RASK_FGA_TOKEN_FILE` from a projected token volume for that audience, and its account, qualified by
+the release namespace, is on OpenFGA's subject list, which names no other account. Whether the deployed server
+then answers an uncredentialed call 401 is the live probe's (`scratch/probe_openfga_authn.py`).
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import PurePosixPath
+
+import pytest
+
+from catalog.services.declaration import Declaration
+from tests.chart.chart_render import DEFAULT_ARGS, containers, env_of, render, render_text
+
+
+def _openfga(docs: tuple[dict, ...]) -> dict[str, str]:
+    return next(env_of(c) for workload, name, c in containers(docs) if workload == "Deployment/rask-openfga" and name == "openfga")
+
+
+def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playground() -> None:
+    docs = render(*DEFAULT_ARGS)
+    server = _openfga(docs)
+    host, port = server.get("OPENFGA_AUTHN_OIDC_ISSUER", "").removeprefix("http://").partition(":")[::2]
+    mirror_service = next((d for d in docs if d.get("kind") == "Service" and d["metadata"]["name"] == host), None)
+    mirror = next((env_of(c) for workload, _, c in containers(docs) if workload == f"Deployment/{host}"), {})
+
+    assert {k: server.get(k) for k in ("OPENFGA_AUTHN_METHOD", "OPENFGA_AUTHN_OIDC_AUDIENCE", "OPENFGA_PLAYGROUND_ENABLED")} == {
+        "OPENFGA_AUTHN_METHOD": "oidc",
+        "OPENFGA_AUTHN_OIDC_AUDIENCE": "rask-openfga",
+        "OPENFGA_PLAYGROUND_ENABLED": "false",
+    }
+    assert mirror_service is not None and [p["port"] for p in mirror_service["spec"]["ports"]] == [int(port)], f"no Service {host}:{port} for OpenFGA's issuer"
+    assert mirror.get("RASK_ISSUER_MIRROR_ISSUER") == server.get("OPENFGA_AUTHN_OIDC_ISSUER_ALIASES") == "https://kubernetes.default.svc.cluster.local"
+    assert server.get("OPENFGA_HTTP_CORS_ALLOWED_ORIGINS", "*") != "*"
+
+
+#: The accounts that write to OpenFGA ([[LH-442]], [[XC-011]]): the catalog, which also grants the estate's first tuples
+#: from its declaration, and the hook that publishes the model, whatever else the release runs. Every other governed
+#: service decides through the catalog.
+_WRITERS = {"catalog", "hooks"}
+
+
+def _projected(pod: dict, container: dict, path: str) -> set[tuple[str | None, str]]:
+    """The (audience, file) of the projected ServiceAccount token mounted where ``path`` lives."""
+    token = PurePosixPath(path)
+    mount = next((m for m in container.get("volumeMounts") or [] if PurePosixPath(m["mountPath"]) == token.parent), None)
+    volume = next((v for v in pod.get("volumes") or [] if mount and v["name"] == mount["name"]), {})
+    return {
+        (s["serviceAccountToken"].get("audience"), s["serviceAccountToken"]["path"])
+        for s in volume.get("projected", {}).get("sources", [])
+        if "serviceAccountToken" in s
+    }
+
+
+def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_service_decides_through_the_catalog() -> None:
+    docs = render(*DEFAULT_ARGS, "--set", "networkPolicy.enabled=true")
+    audience = _openfga(docs)["OPENFGA_AUTHN_OIDC_AUDIENCE"]
+    pods = {f"{d['kind']}/{d['metadata']['name']}": d["spec"]["template"]["spec"] for d in docs if d.get("kind") in {"Deployment", "Job"}}
+    subjects_ref = next(
+        e["valueFrom"]["configMapKeyRef"]
+        for workload, name, c in containers(docs)
+        if workload == "Deployment/rask-openfga" and name == "openfga"
+        for e in c.get("env") or []
+        if e["name"] == "OPENFGA_AUTHN_OIDC_SUBJECTS"
+    )
+    config_map = next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == subjects_ref["name"])
+    admitted = set(config_map["data"][subjects_ref["key"]].split(","))
+    # OpenFGA reads its subjects into its env at start, so only a change to its pod template reaches a running server:
+    # the pod names the clients it admits, and a change to them restarts it.
+    server_pod = next(d for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"] == "rask-openfga")["spec"]["template"]
+    named = (server_pod["metadata"].get("annotations") or {}).get("rask.dev/openfga-clients", "")
+    writers = {f"system:serviceaccount:default:rask-sa-{w}" for w in _WRITERS}
+    declared = Declaration.model_validate_json(
+        next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "rask-catalog-declaration")["data"]["declaration.json"]
+    )
+    seeded: dict[str, list[str]] = {}
+    for role in declared.estate.roles:
+        seeded.setdefault(role.principal, []).append(role.relation)
+    reaching = next(d for d in docs if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"] == "rask-openfga")["spec"]["ingress"][0]["from"]
+    reachers = {v for peer in reaching for e in peer["podSelector"]["matchExpressions"] for v in e["values"]}
+
+    openfga_clients, deciders, wrong = set(), {}, []
+    for workload, name, container in containers(docs):
+        env, pod = env_of(container), pods.get(workload, {})
+        account = f"system:serviceaccount:default:{pod.get('serviceAccountName')}"
+        if {"RASK_FGA_API_URL", "FGA_API_URL"} & env.keys():
+            openfga_clients.add(account)
+            if _projected(pod, container, env.get("RASK_FGA_TOKEN_FILE", "/unset")) != {(audience, "token")}:
+                wrong.append(f"{workload}/{name}: no projected {audience!r} token at RASK_FGA_TOKEN_FILE")
+        elif env.get("RASK_FGA_ENABLED") == "true":
+            deciders[f"kubernetes~{account}"] = f"{workload}/{name}"
+            if env.get("RASK_FGA_DECIDER_URL") != "http://rask-catalog:2333":
+                wrong.append(f"{workload}/{name}: decides through {env.get('RASK_FGA_DECIDER_URL')!r}, not the catalog")
+            if _projected(pod, container, env.get("RASK_FGA_DECIDER_TOKEN_FILE", "/unset")) != {("rask-catalog", "token")}:
+                wrong.append(f"{workload}/{name}: no projected 'rask-catalog' token at RASK_FGA_DECIDER_TOKEN_FILE")
+        if (
+            any(
+                s.get("audience") == audience
+                for v in pod.get("volumes") or []
+                for s in (v.get("projected") or {}).get("sources", [])
+                for s in [s.get("serviceAccountToken") or {}]
+            )
+            and account not in writers
+        ):
+            wrong.append(f"{workload}/{name}: projects a {audience!r} token, and {account} writes no tuple")
+
+    assert wrong == [], wrong
+    assert admitted == openfga_clients == writers == {f"system:serviceaccount:default:rask-sa-{c}" for c in named.split(",")}, (
+        f"OpenFGA admits {sorted(admitted)}; its clients are {sorted(openfga_clients)}; the writers are {sorted(writers)}; its pod names {named!r}"
+    )
+    deciding = {subject for subject, roles in seeded.items() if "decider" in roles}
+    assert deciders and set(deciders) == deciding, f"deciders {sorted(deciders)} vs the decision roles the declaration grants {sorted(deciding)}"
+    # The estate roles beside the decision roles are maintenance's, which reaches the store's grants only through the
+    # catalog: its reclaim of the trash and its drift reconciler ([[XC-084]]).
+    assert {subject: roles for subject, roles in seeded.items() if subject not in deciding} == {
+        "kubernetes~system:serviceaccount:default:rask-sa-maintenance": ["reclaimer", "reconciler"]
+    }, seeded
+    assert reachers == {"catalog", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"
+
+
+@pytest.mark.parametrize(
+    ("values", "refusal"),
+    [
+        pytest.param(
+            ("--set-string", "openfga.serviceAccount.name=other-openfga"),
+            'openfga.serviceAccount must be create=false, name="rask-openfga"',
+            id="another-account",
+        ),
+        pytest.param(
+            ("--set", "openfga.serviceAccount.create=true"), 'openfga.serviceAccount must be create=false, name="rask-openfga"', id="the-subcharts-own-account"
+        ),
+        pytest.param(
+            ("--set-string", r"openfga.podAnnotations.rask\.dev/openfga-account=another"),
+            'openfga.podAnnotations.rask.dev/openfga-account is "another", but OpenFGA runs as "rask-openfga"',
+            id="a-pod-template-naming-another-account",
+        ),
+        pytest.param(
+            ("--set-json", 'openfga.extraVolumes=[{"name":"openfga-config","secret":{"secretName":"other-infra-credentials"}}]'),
+            'mounts the Secret "other-infra-credentials" as openfga-config, but this release renders the datastore credentials as "rask-infra-credentials"',
+            id="another-releases-credentials",
+        ),
+    ],
+)
+def test_a_name_the_subchart_cannot_template_is_refused_unless_it_is_this_releases(values: tuple[str, ...], refusal: str) -> None:
+    """Subchart values cannot template, so the account OpenFGA runs as and the Secret holding its datastore DSN are
+    written out with the release's name. A render where either names anything else is refused: the pod would run as an
+    account holding an API token or one that does not exist, or keep the token of the account it started as ([[XC-156]]),
+    or start with no DSN ([[XC-036]])."""
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_text(*DEFAULT_ARGS, *values)
+
+    assert refusal in refused.value.stderr

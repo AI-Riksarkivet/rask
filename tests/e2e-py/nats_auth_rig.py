@@ -55,8 +55,8 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
 from lakehouse.bus import BusSettings
 from lakehouse.lineage.signing import SigningKey
+from tests.chart.chart_render import bus_sessions, containers, env_of, nats_users
 from tests.loopback import free_ports
-from tests.unit.chart_render import bus_sessions, containers, env_of, nats_users
 
 
 if TYPE_CHECKING:
@@ -88,7 +88,7 @@ _VIOLATION = re.compile(rf'\[ERR\] .*?cid:(\d+) - (?:"([^"]*)" - )?{_WHO} - (Pub
 #: A signer's subscription to the servers' authorization requests, as the broker traces it.
 _SIGNER_SUBSCRIBED = "<<- [SUB $SYS.REQ.USER.AUTH bus-signer"
 
-#: The namespace `tests.unit.chart_render.render` renders into (`helm template` with none given), which a ServiceAccount
+#: The namespace `tests.chart.chart_render.render` renders into (`helm template` with none given), which a ServiceAccount
 #: of the rig's own is in, beside the release's.
 NAMESPACE: Final = "default"
 #: What the lane renders the chart with besides the values file: the CA the bus's certificate chains to, named as the

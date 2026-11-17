@@ -1,0 +1,732 @@
+"""The dev OpenBao serves only a store its own pod seeded, and a signing key outlives the server holding it.
+
+[[XC-076]]. `server -dev` keeps its store in memory,
+so every new OpenBao server starts empty. A seed that reaches the store through the Service writes to
+whichever pod the Service routes to: during a rollout that is the outgoing pod, whose store is deleted with
+it, and the replacement serves nothing while every service logging in beside it is refused
+(the outage XC-005 records, 13 pods for 19 h).
+
+So the seed runs beside the server it seeds, writes only to 127.0.0.1 and writes the key the server's
+readiness reads last.
+
+[[LH-064]] puts an Ed25519 pair per signing identity through the same seed: `signing-public-<id>` (the public
+list) and `signing-key-<id>` (the seed). A `mint` init container generates the candidates on a memory volume;
+the seed chooses one pair per identity from the kept copy, else the store behind the Service (a key without
+its list refuses the seed, a list without its key is a rotation that prepends and keeps one previous), else
+the candidate; keeps it before the first write; and writes the public list first. A failed mint costs that
+identity its key and never the readiness key. No seed reaches an argument list or an output stream.
+
+[[XC-078]] puts the bus's trust root through it too (values.yaml `nats.auth`): an operator, its SYS account, the APP
+account every user belongs to and the AUTH account of the signer, which the server is configured with. The `mint` init
+container copies nsc and nk out of nats-box for the seed; the seed carries the root (`nats-root`, the operator's and the
+accounts' keys, every signing key's among them) and the route credential (`nats-route`) from the store behind the Service,
+else mints a root. Under it the seed gives each session user one scoped signing key in APP (role: the user, scope: its
+row) and issues no credential for it, and gives the signer its user, a bearer sentinel denied every subject (the server's
+`default_sentinel`), one signing key and the callout naming them (`nats-callout`, with each session user's scoped seed as
+`key-<user>`). It issues each static user of the table: a user keeps its key pair from this pod's store or the one behind
+the Service, and its JWT while the table grants it what the JWT does, so a reseed leaves no second credential that admits
+it; a grant the table changes is issued under the same key, and every credential the key was issued up to the stored JWT's
+issue time is revoked ([[XC-195]]), without touching the trust root. It writes `nats-user-<static user>`, `nats-server`,
+`nats-callout` and those two before the readiness key; a root it cannot read or use stops the seed, because a store that is
+Ready without its users hands the bus an empty config. The bundle is kept like the signing pairs.
+
+[[XC-195]] takes back what rask stops declaring. A bus user's JWT carries no expiry and its account stays trusted, so a
+`nats-user-<user>` the seed does not issue (a session user's among them), in this pod's store or the outgoing pod's, is
+revoked by its key in the APP account the server preloads, and its secret is deleted from this pod's store; a store role or policy the release no longer
+renders is deleted. A store holding nothing undeclared revokes and deletes nothing.
+
+[[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills one Secret per
+credential once (`<release>-dev-credential-<key>`, [[XC-164]]), the pod mounts them as one directory, and the seed writes
+each field from its file, so no credential is in the render, an argument list or an output stream. No workload's object-store
+identity is a secret at all: each signs with sessions its own ServiceAccount token is exchanged for ([[XC-084]]). A store
+missing a generated credential is never Ready. A rotated key of the mounted Secret reaches the
+store through the seed's loop, keeping the signing pairs and the bus root, because replacing the pod to re-seed
+would re-mint them.
+
+[[XC-131]] makes the dev store a fixture (deploy/fixtures/openbao) and keeps what to seed rask's: the chart renders the
+two scripts into `<release>-openbao-seed`, and the fixture's pod runs them, the mint as its init container and the seed
+beside the server. So the pod read here is the fixture's, running the scripts rask renders. A seed whose script rask
+changes mints a pair for any new identity and runs again, keeping each bus user's credential, since no rollout replaces the pod.
+
+The scripts run here against stand-ins for the bao, nk and nsc CLIs: the bao stand-in keeps two stores, the pod's
+own server and the one the Service routes to, the nk stand-in hands out generated pairs, and the nsc stand-in issues JWTs
+that carry the permissions it was given.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import io
+import json
+import os
+import stat
+import subprocess
+import tarfile
+from pathlib import Path
+from typing import Any, Final
+
+import pytest
+
+from lakehouse.governed.signing_key import signing_key_name
+from tests.chart import chart_render
+from tests.chart.chart_render import DEFAULT_ARGS, OBSERVABILITY_ARGS, REPO
+from tests.chart.openbao_standins import BAO, NK, NSC, install
+
+
+_OWN = "http://127.0.0.1:8200"
+_SENTINEL = "secret/openbao-seeded"
+
+#: The first sleep ends the run, unless the scenario restarts the server in place or rotates a mounted credential
+#: (as kubelet refreshes a mounted Secret): then the first sleep does that, and the second ends the run. On a restart
+#: empties the pod's own store (kept aside as before-restart, what the first seed wrote) and cuts the Service off, and the second ends the run.
+_SLEEP = """\
+#!/bin/sh
+n=$(cat "$STORES/sleeps" 2>/dev/null || echo 0)
+echo $((n + 1)) > "$STORES/sleeps"
+if [ -e "$STORES/restart" ] && [ "$n" -eq 0 ]; then mv "$STORES/local" "$STORES/before-restart"; rm -f "$STORES/local.state" "$STORES/local.tokens" "$STORES/local.kv"; : > "$STORES/served.refused"; exit 0; fi
+if [ -e "$STORES/rotate" ] && [ "$n" -eq 0 ]; then cp "$STORES/rotate" "$DEV_CREDENTIALS/postgres-password"; exit 0; fi
+if [ -e "$STORES/change" ] && [ "$n" -eq 0 ]; then cp -R "$STORES/local/secret" "$STORES/first-secret"; echo "# a later rask render" >> "$SEED_SCRIPT"; exit 0; fi
+exit 1
+"""
+
+_WRITES = ("kv put ", "kv metadata delete ", "auth ", "write ", "delete ", "policy ")
+
+#: What ESO's Password generators write, one Secret each (templates/external-secrets.yaml, `lance.devCredentials`), and the
+#: store secret each lands in: the store's root at a path of its own, which no service's store policy names (ADR 0168).
+_GENERATED = {
+    "object-store-secret-key": ("secret/object-store-root", "object-store-secret-key"),
+    "postgres-password": ("secret/postgres", "password"),
+}
+
+#: What the stand-in store answers an init with, and the administrator token id the fixture generates: none may reach an
+#: argument list or an output stream.
+_UNSEAL_KEY = "c3RhbmQtaW4gdW5zZWFsIGtleSB0aGF0IG11c3Qgc3RheQ=="
+_INIT_TOKEN = "s.standininittokenthatmustberevoked"
+_ADMIN_TOKEN = "Adm1nTokenTheFixtureGeneratesInCluster40"
+
+
+def _seed(docs: tuple[dict, ...]) -> tuple[str, dict]:
+    """The workload and container that seed the store, wherever the chart puts them: the one that writes its readiness key."""
+    [found] = [(workload, c) for workload, _, c in chart_render.containers(docs) if f"bao kv put {_SENTINEL} " in " ".join(c.get("command") or [])]
+    return found
+
+
+def _as_mounted(pod_spec: dict, container: dict, volume: str, source: Path, into: Path, *, carried: dict[str, list[str]] | None = None) -> Path:
+    """Deliver the keys in ``source`` as the pod's secret ``volume`` gives them to ``container``'s uid; absent when it cannot read them.
+
+    A projected volume delivers the keys each of its Secrets carries (``carried``: Secret -> keys), so a key no source Secret
+    holds is absent. kubelet writes a secret file owned by root, grouped to the pod's fsGroup when one is set, and ORs
+    group-read into a read-only volume's mode under an fsGroup. Measured 2026-10-10 on k3s with a uid-65532 container:
+    defaultMode 0400 and no fsGroup gave `-r-------- 0:0` and `Permission denied`; the same with fsGroup 65532 gave
+    `-r--r----- 0:65532` and the read succeeded. Leaving the file out, rather than chmodding a copy, keeps the refusal under a
+    root test runner.
+    """
+    into.mkdir()
+    found = [v for v in pod_spec["volumes"] if v["name"] == volume]
+    if not found:
+        return into
+    [mounted] = found
+    if projected := mounted.get("projected"):
+        mode: int = projected.get("defaultMode", 0o644)
+        keys = [key for s in projected["sources"] for key in (carried or {}).get(s["secret"]["name"], [])]
+    else:
+        secret = mounted["secret"]
+        mode = secret.get("defaultMode", 0o644)
+        keys = [item["key"] for item in secret["items"]] if secret.get("items") else [p.name for p in source.iterdir()]
+    fs_group = (pod_spec.get("securityContext") or {}).get("fsGroup")
+    uid = (container.get("securityContext") or {}).get("runAsUser", 0)
+    if fs_group is not None:
+        mode |= 0o440
+    readable = mode & (0o400 if uid == 0 else 0o040 if fs_group is not None else 0o004)
+    for key in keys:
+        if readable and (source / key).exists():
+            (into / key).write_bytes((source / key).read_bytes())
+    return into
+
+
+def _mounted_config_map(docs: tuple[dict, ...], pod_spec: dict, container: dict, path: str) -> dict[str, str]:
+    """The keys of the ConfigMap ``container`` mounts at ``path``, as the render holds them."""
+    [volume] = [m["name"] for m in container["volumeMounts"] if Path(m["mountPath"]) == Path(path)]
+    [name] = [v["configMap"]["name"] for v in pod_spec["volumes"] if v["name"] == volume]
+    found = [d["data"] for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == name]
+    assert found, f"the seed mounts ConfigMap {name} at {path}, which no release renders"
+    return dict(found[0])
+
+
+def _store(stores: Path, name: str, key: str) -> dict[str, str]:
+    path = stores / name / key
+    return dict(line.split("=", 1) for line in path.read_text().splitlines()) if path.exists() else {}
+
+
+def _signing_identities(docs: tuple[dict, ...]) -> list[str]:
+    """The key names of the identities the Deployments sign as (`signing_key_name`), from the env the chart renders on them.
+
+    The seed stores each pair under its identity's key name, which is the name a signer reads it by.
+    """
+    found = {
+        signing_key_name(env["RASK_SIGNING_IDENTITY"])
+        for _, _, container in chart_render.containers(docs)
+        if "RASK_SIGNING_IDENTITY" in (env := chart_render.env_of(container))
+    }
+    return sorted(found)
+
+
+def _arrange(case: str, ids: list[str], pool: list[Any], stores: Path, home: Path) -> tuple[dict[str, tuple[str, str] | None], dict[str, str]]:
+    """Lay out one signing scenario: what the Service holds, what the kept copy holds, and which `nk` calls fail.
+
+    Returns the pair the store must end up holding for each identity (None: nothing may be written for it) and the stand-in `nk`'s settings.
+    `pool` is four generated pairs per identity: [0] the mint candidate, [1] another source's pair, [2] and [3] older public keys.
+    """
+    n = len(ids)
+
+    def cand(i: int) -> Any:
+        return pool[i]
+
+    def other(i: int) -> Any:
+        return pool[n + i]
+
+    def older(i: int) -> Any:
+        return pool[2 * n + i]
+
+    def oldest(i: int) -> Any:
+        return pool[3 * n + i]
+
+    expected: dict[str, tuple[str, str] | None] = {identity: (cand(i).seed, cand(i).public) for i, identity in enumerate(ids)}
+    nk: dict[str, str] = {}
+    served = stores / "served" / "secret"
+
+    def serve(identity: str, *, seed: str | None = None, keys: str | None = None) -> None:
+        if seed is not None:
+            (served / f"signing-key-{identity}").write_text(f"seed={seed}\n")
+        if keys is not None:
+            (served / f"signing-public-{identity}").write_text(f"keys={keys}\n")
+
+    def keep(identity: str, half: str, content: str) -> None:
+        """A kept copy as an earlier run of the seed leaves it: written under umask 077."""
+        path = home / "seed" / f"{half}-{identity}"
+        path.write_text(content)
+        path.chmod(0o600)
+
+    first, second = ids[0], ids[1]
+    if case == "carried":
+        serve(first, seed=other(0).seed, keys=other(0).public)
+        serve(second, seed=other(1).seed, keys=f"{other(1).public},{older(1).public}")
+        expected[first], expected[second] = (other(0).seed, other(0).public), (other(1).seed, f"{other(1).public},{older(1).public}")
+    elif case == "rotated":
+        serve(first, keys=older(0).public)
+        serve(second, keys=f"{older(1).public},{oldest(1).public}")
+        expected[first], expected[second] = (cand(0).seed, f"{cand(0).public},{older(0).public}"), (cand(1).seed, f"{cand(1).public},{older(1).public}")
+    elif case == "kept":
+        for i, identity in enumerate(ids):
+            keep(identity, "signing-key", other(i).seed)
+            keep(identity, "signing-public", other(i).public)
+            expected[identity] = (other(i).seed, other(i).public)
+    elif case == "kept-half":
+        keep(first, "signing-key", other(0).seed)
+    elif case == "mint-failed":
+        nk, expected[second] = {"NK_FAIL": "2"}, None
+    elif case == "mint-garbled":
+        nk, expected[second] = {"NK_GARBAGE": "2"}, None
+    elif case == "key-without-list":
+        serve(first, seed=other(0).seed)
+        expected = dict.fromkeys(ids)
+    elif case == "malformed-pair":
+        serve(first, seed=other(0).seed[:-1], keys=other(0).public)
+        expected = dict.fromkeys(ids)
+    elif case == "malformed-list":
+        serve(first, keys="not-a-public-key")
+        expected = dict.fromkeys(ids)
+    return expected, nk
+
+
+def _claim(jwt: str) -> dict[str, Any]:
+    """The claim a stand-in JWT carries."""
+    body = jwt.split(".", 1)[1]
+    return json.loads(base64.b64decode(body + "=" * (-len(body) % 4)))
+
+
+#: When the outgoing pod issued the user whose grant the table has since changed.
+_REGRANTED_AT: Final = 1000
+
+
+def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str], regranted: tuple[str, Any] | None) -> dict[str, str]:
+    """Lay out what the store behind the Service holds of the bus credentials; returns the root and route the seed must carry.
+
+    Empty for a case that carries nothing. The served root is a trust root the stand-in minted earlier, as a surge finds it,
+    beside `regranted`'s user as that root issued it at `_REGRANTED_AT`, under a grant the table no longer gives it.
+    """
+    served = stores / "served" / "secret"
+    if case == "nats-root-malformed":
+        (served / "nats-root").write_text("nsc=not-a-root\n")
+    if case != "nats-carried":
+        return {}
+    root = tmp_path / "earlier-root"
+    root.mkdir()
+    for call in (["add", "operator", "-n", "rask", "--sys"], ["add", "account", "-n", "APP"]):
+        subprocess.run([str(tmp_path / "nsc"), "-H", str(root), *call], env=env, check=True, capture_output=True)  # noqa: S603
+    packed = io.BytesIO()
+    with tarfile.open(fileobj=packed, mode="w:gz") as tar:
+        tar.add(root, arcname=".")
+    (served / "nats-root").write_text(f"nsc={base64.b64encode(packed.getvalue()).decode()}\n")
+    (served / "nats-route").write_text("user=route\npassword=an-earlier-route-password\n")
+    if regranted:
+        user, pair = regranted
+        grant = {"pub": {"allow": ["dlq.wider.>"]}, "sub": {"allow": ["_INBOX.>"]}, "type": "user", "version": 2}
+        claim = {"iat": _REGRANTED_AT, "iss": (root / "APP.pub").read_text(), "name": user, "sub": pair.public, "nats": grant}
+        token = base64.b64encode(json.dumps(claim, separators=(",", ":")).encode()).decode().rstrip("=")
+        (served / f"nats-user-{user}").write_text(f"jwt=eyJ.{token}\nseed={pair.seed}\n")
+    return {
+        "operator": (root / "operator").read_text(),
+        "account": (root / "APP.pub").read_text(),
+        "password": "an-earlier-route-password",
+    }
+
+
+def _arrange_undeclared(case: str, stores: Path, event_signer: Any) -> dict[str, Any]:
+    """What an earlier render's seed left that this render no longer declares; returns each bus user's pair by name.
+
+    A bus user in this pod's store (an in-place seed of a changed render finds it there; `catalog`, a session user an earlier
+    render issued a credential) and one in the outgoing pod's behind the Service (a surge finds it there), each as the seed
+    writes it, and a reader's role and policy in this pod's store.
+    Empty for every other case.
+    """
+    if case != "undeclared":
+        return {}
+    left = {"catalog": (stores / "local", event_signer("catalog")), "departed": (stores / "served", event_signer("departed"))}
+    for user, (store, pair) in left.items():
+        # Compact, as nsc's JWTs are (Go's json.Marshal) and as the stand-in issues them.
+        claim = json.dumps({"iss": "A-an-earlier-account", "sub": pair.public, "pub": f"dlq.{user}", "subscribe": "_INBOX.>"}, separators=(",", ":"))
+        (store / "secret").mkdir(parents=True, exist_ok=True)
+        (store / "secret" / f"nats-user-{user}").write_text(f"jwt=eyJ.{base64.b64encode(claim.encode()).decode().rstrip('=')}\nseed={pair.seed}\n")
+    for kind in ("roles", "policies"):
+        (stores / f"local.{kind}").mkdir()
+        (stores / f"local.{kind}" / "rask-gone").write_text("{}")
+    return {user: pair for user, (_, pair) in left.items()}
+
+
+def _arrange_unreadable(case: str, stores: Path, users: dict[str, Any], event_signer: Any) -> tuple[str, Any] | None:
+    """A declared user whose secret in this pod's store holds its JWT, issued at `_REGRANTED_AT`, beside a seed that is no
+    seed; returns the user and the pair its JWT names. None for every other case."""
+    if case != "unreadable-seed":
+        return None
+    user, pair = min(users), event_signer("unreadable")
+    grant = {"pub": {"allow": [f"dlq.{user}"]}, "sub": {"allow": ["_INBOX.>"]}, "type": "user", "version": 2}
+    claim = {"iat": _REGRANTED_AT, "iss": "A-an-earlier-account", "name": user, "sub": pair.public, "nats": grant}
+    token = base64.b64encode(json.dumps(claim, separators=(",", ":")).encode()).decode().rstrip("=")
+    (stores / "local" / "secret").mkdir(parents=True, exist_ok=True)
+    (stores / "local" / "secret" / f"nats-user-{user}").write_text(f"jwt=eyJ.{token}\nseed=not-a-seed\n")
+    return user, pair
+
+
+def _signer_problems(docs: tuple[dict, ...], signer: dict[str, str], root: dict[str, str], accounts: dict[str, str], app: str, auth: str, users: dict) -> None:
+    """Each session user of the signer's table has one scoped signing key in APP, its role the user and its scope the
+    user's row, whose seed the signer holds as `key-<user>`, and no credential of its own; AUTH names the signer's user
+    and APP in its callout and signs with a key whose seed the signer holds; and the server's default sentinel is AUTH's
+    bearer user denied every subject."""
+    sessions = chart_render.bus_sessions(docs)["users"]
+    scopes = {scope["role"]: scope for scope in _claim(accounts[app])["nats"]["signing_keys"]}
+    assert set(scopes) == set(sessions), f"APP holds scoped keys for {sorted(scopes)}, and the signer's table names {sorted(sessions)}"
+    for user, row in sessions.items():
+        template = scopes[user]["template"]
+        assert (set(template["pub"]["allow"]), set(template["sub"]["allow"])) == (set(row["publish"]), set(row["subscribe"])), (
+            f"{user}'s signing key is scoped to {template}, not its row: the bus would enforce another grant than the table's"
+        )
+        assert signer.get(f"key-{user}", "").startswith("SA"), f"the signer holds no scoped seed for {user}, so it can sign no session"
+        assert user not in users, f"{user} is a session user and is issued a static credential beside its sessions"
+    assert {field.removeprefix("key-") for field in signer if field.startswith("key-")} == set(sessions), (
+        "the signer holds a key of a user that is no session user"
+    )
+    claim = _claim(accounts[auth])["nats"]
+    callout = _claim(signer["jwt"])
+    assert callout["iss"] == auth and claim["authorization"] == {"auth_users": [callout["sub"]], "allowed_accounts": [app]}, (
+        f"AUTH's callout names {claim['authorization']}, not the signer's user {callout['sub']} and APP"
+    )
+    assert len(claim["signing_keys"]) == 1 and signer.get("issuer_seed", "").startswith("SA"), (
+        f"AUTH signs with {claim['signing_keys']}, and the signer holds no seed"
+    )
+    sentinel = _claim(root.get("default_sentinel", "eyJ.e30"))
+    assert sentinel.get("iss") == auth and sentinel["nats"].get("bearer_token") and sentinel["nats"]["pub"] == sentinel["nats"]["sub"] == {"deny": [">"]}, (
+        f"the server's default sentinel is {sentinel}, not AUTH's bearer user denied every subject"
+    )
+
+
+@pytest.mark.parametrize(
+    ("overlay", "served", "local", "succeeds", "case"),
+    [
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "minted", id="minted-into-a-served-absence"),
+        pytest.param(("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")), "lacks", "", True, "minted", id="minted-with-eso"),
+        pytest.param(DEFAULT_ARGS, "refused", "", True, "minted", id="minted-when-nothing-serves"),
+        pytest.param(DEFAULT_ARGS, "forbidden", "", False, "minted", id="a-served-store-it-cannot-read-stops-the-seed"),
+        pytest.param(DEFAULT_ARGS, "lacks", "readonly", False, "minted", id="a-failed-write-stops-the-seed"),
+        pytest.param(DEFAULT_ARGS, "lacks", "restart", True, "minted", id="a-server-restarted-in-place-gets-the-same-keys"),
+        pytest.param(DEFAULT_ARGS, "lacks", "rotate", True, "minted", id="a-rotated-credential-reaches-the-store-in-place"),
+        pytest.param(DEFAULT_ARGS, "lacks", "change", True, "minted", id="a-seed-rask-changes-runs-again-in-place-keeping-its-keys-and-bus-root"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "carried", id="a-signing-pair-behind-the-service-is-carried"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "rotated", id="a-list-without-its-key-is-a-rotation-that-keeps-one-previous"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "kept", id="a-kept-pair-beats-a-new-mint-candidate"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "kept-half", id="half-a-kept-pair-is-not-kept"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "mint-failed", id="a-failed-mint-costs-that-identity-its-key-and-nothing-else"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "mint-garbled", id="a-mint-that-prints-no-key-pair-leaves-nothing-behind"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "key-without-list", id="a-key-without-its-list-stops-the-seed"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "malformed-pair", id="a-malformed-pair-behind-the-service-is-refused"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "malformed-list", id="a-malformed-list-is-not-rotated-onto"),
+        pytest.param(
+            DEFAULT_ARGS,
+            "lacks",
+            "",
+            True,
+            "nats-carried",
+            id="carried-bus-root-and-route-and-a-regranted-user-keeps-its-key-and-loses-its-old-grant",
+        ),
+        pytest.param(DEFAULT_ARGS, "lacks", "", True, "undeclared", id="a-bus-user-and-a-store-reader-rask-stops-declaring-are-revoked-and-deleted"),
+        pytest.param(
+            DEFAULT_ARGS, "lacks", "", True, "unreadable-seed", id="a-bus-user-whose-stored-seed-is-unreadable-is-issued-a-new-pair-and-its-old-key-revoked"
+        ),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "nats-root-malformed", id="a-bus-trust-root-it-cannot-use-stops-the-seed"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "nats-mint-failed", id="a-store-without-its-bus-users-is-never-ready"),
+        pytest.param(DEFAULT_ARGS, "lacks", "", False, "generated-missing", id="a-store-without-a-generated-credential-is-never-ready"),
+    ],
+)
+def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # noqa: PLR0913, PLR0915 — parametrized, one scenario per row
+    tmp_path: Path,
+    event_signer: Any,
+    overlay: tuple[str, ...],
+    served: str,
+    local: str,
+    succeeds: bool,  # noqa: FBT001
+    case: str,
+) -> None:
+    docs = chart_render.with_dev_store(chart_render.render(*overlay, *OBSERVABILITY_ARGS))
+    workload, container = _seed(docs)
+    env = chart_render.env_of(container)
+    [mint] = [c for _, name, c in chart_render.containers(docs) if name == "mint"]
+    ids = _signing_identities(docs)
+    assert len(ids) >= 2, f"the signers the chart renders are {ids}: the scenarios need two"
+    stores = tmp_path / "stores"
+    (stores / "served" / "secret").mkdir(parents=True)
+    if served in {"refused", "forbidden"}:
+        (stores / f"served.{served}").touch()
+    if local == "readonly":
+        (stores / "local.readonly").touch()
+    elif local == "restart":
+        (stores / "restart").touch()
+    elif local == "rotate":
+        (stores / "rotate").write_text("a-rotated-value-the-loop-must-store")
+    elif local == "change":
+        (stores / "change").touch()
+        # One store pod, and no rollout: the Service routes to this pod's own server.
+        (stores / "served" / "secret").rmdir()
+        (stores / "served").rmdir()
+        (stores / "local" / "secret").mkdir(parents=True)
+        (stores / "served").symlink_to(stores / "local")
+        (stores / "served.tokens").symlink_to(stores / "local.tokens")
+    if not (stores / "served.tokens").is_symlink():
+        # The outgoing pod a surge carries from was initialized by its own seed, with the same administrator token.
+        (stores / "served.tokens").write_text(f"{_ADMIN_TOKEN}\n")
+    install(tmp_path, bao=BAO, sleep=_SLEEP, nk=NK, nsc=NSC)
+    (tmp_path / "home" / "seed").mkdir(parents=True)
+    pool = [event_signer(f"pair-{i}") for i in range(4 * len(ids))]
+    expected, nk = _arrange(case, ids, pool, stores, tmp_path / "home")
+    undeclared = _arrange_undeclared(case, stores, event_signer)
+    users = chart_render.nats_users(docs)
+    # The seed issues the users in the table's order, after the mint's one nk call per signing identity.
+    bus_pairs = {user: event_signer(f"bus-{user}") for user in sorted(users)}
+    # The outgoing pod a surge carries from holds one user whose grant the table has since changed; nk mints no pair for it.
+    regranted = min(users) if case == "nats-carried" else None
+    unreadable = _arrange_unreadable(case, stores, users, event_signer)
+    minted = [pair for user, pair in bus_pairs.items() if user != regranted]
+    # The signer's own user, issued after the static users from the next pair.
+    callout = event_signer("bus-callout")
+    # A changed seed mints a candidate per identity again, and keeps every user it issued.
+    again = [event_signer(f"again-{i}") for i in range(len(ids))] if local == "change" else []
+    (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in [*pool[: len(ids)], *minted, callout, *again]))
+    scripts = tmp_path / "seed-scripts"
+    scripts.mkdir()
+    for name, text in chart_render.seed_scripts(docs).items():
+        (scripts / name).write_text(text)
+    signing_dir = tmp_path / "signing"
+    signing_dir.mkdir()
+    generated_dir = tmp_path / "dev-credentials"
+    generated_dir.mkdir()
+    generated = {key: hashlib.sha256(f"{tmp_path}-{key}".encode()).hexdigest()[:40] for key in _GENERATED}
+    for key, value in generated.items():
+        if not (case == "generated-missing" and key == "postgres-password"):
+            (generated_dir / key).write_text(value)
+    nats_tools = tmp_path / "nats-tools"
+    nats_tools.mkdir()
+    [server_pod] = [d["spec"]["template"]["spec"] for d in docs if f"{d.get('kind')}/{d.get('metadata', {}).get('name')}" == workload]
+    generators = {d["metadata"]["name"]: d["spec"]["secretKeys"] for d in docs if d.get("kind") == "Password"}
+    carried = {
+        d["spec"]["target"]["name"]: generators[d["metadata"]["name"]]
+        for d in docs
+        if d.get("kind") == "ExternalSecret" and d["metadata"]["name"] in generators
+    }
+    generated_dir = _as_mounted(server_pod, container, "dev-credentials", generated_dir, tmp_path / "dev-credentials-mounted", carried=carried)
+    root_dir = tmp_path / "root-token"
+    root_dir.mkdir()
+    (root_dir / Path(env["STORE_ROOT_TOKEN"]).name).write_text(_ADMIN_TOKEN)
+    [root_volume] = [m["name"] for m in container["volumeMounts"] if Path(m["mountPath"]) == Path(env["STORE_ROOT_TOKEN"]).parent]
+    root_dir = _as_mounted(server_pod, container, root_volume, root_dir, tmp_path / "root-token-mounted")
+    identities = tmp_path / "store-identities"
+    identities.mkdir()
+    for name, text in _mounted_config_map(docs, server_pod, container, env["STORE_IDENTITIES"]).items():
+        (identities / name).write_text(text)
+    store_keys = tmp_path / "store-keys"
+    store_keys.mkdir()
+    [service] = [d for d in docs if d.get("kind") == "Service" and f"Deployment/{d['metadata']['name']}" == workload]
+    service_addr = f"http://{service['metadata']['name']}:{service['spec']['ports'][0]['port']}"
+    here = {
+        "HOME": str(tmp_path / "home"),
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "STORES": str(stores),
+        "SERVICE_ADDR": service_addr,
+        "SIGNING_DIR": str(signing_dir),
+        "DEV_CREDENTIALS": str(generated_dir),
+        "NATS_TOOLS": str(nats_tools),
+        "NK_PAIRS": str(tmp_path / "pairs"),
+        "NK_STATE": str(tmp_path / "nk-calls"),
+        "NK_FAIL": "",
+        "NK_GARBAGE": "",
+        "NSC_CALLS": str(tmp_path / "nsc-calls"),
+        "NSC_FAIL": "1" if case == "nats-mint-failed" else "",
+        "SEED_SCRIPT": str(scripts / "open-and-seed.sh"),
+        "SEED_DIR": str(scripts),
+        "STORE_IDENTITIES": str(identities),
+        "STORE_ROOT_TOKEN": str(root_dir / Path(env["STORE_ROOT_TOKEN"]).name),
+        "STORE_KEYS": str(store_keys),
+        "STANDIN_UNSEAL_KEY": _UNSEAL_KEY,
+        "STANDIN_INIT_TOKEN": _INIT_TOKEN,
+        **nk,
+    }
+    carried = _arrange_nats(
+        case,
+        stores,
+        tmp_path,
+        {**os.environ, **here, "NSC_FAIL": "", "NSC_CALLS": str(tmp_path / "earlier-calls")},
+        (regranted, bus_pairs[regranted]) if regranted else None,
+    )
+
+    def run(script_container: dict) -> subprocess.CompletedProcess[str]:
+        argv = ["sh", "-c", script_container["command"][-1]]
+        return subprocess.run(
+            argv, env={**os.environ, **chart_render.env_of(script_container), **here}, capture_output=True, text=True, timeout=60, check=False
+        )  # noqa: S603
+
+    minted = run(mint)
+    modes = {p.name: oct(stat.S_IMODE(p.stat().st_mode)) for p in signing_dir.iterdir() if stat.S_IMODE(p.stat().st_mode) != 0o400}
+    if local == "change":
+        # As the pod runs it: from the file the ConfigMap mounts, which is what the seed watches.
+        ran = subprocess.run(
+            ["sh", str(scripts / "open-and-seed.sh")],
+            env={**os.environ, **chart_render.env_of(container), **here},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )  # noqa: S603, S607
+    else:
+        ran = run(container)
+
+    assert minted.returncode == 0, f"a failed mint must not stop the pod: exit {minted.returncode}: {minted.stderr[-1000:]}"
+    assert not modes, f"mint candidates must be mode 0400 for their owner alone: {modes}"
+    assert users, "the seed issues no NATS user, so no pub/sub client can authenticate"
+    calls_text = (stores / "calls").read_text() if (stores / "calls").exists() else ""
+    calls = calls_text.splitlines()
+    nsc_calls = (tmp_path / "nsc-calls").read_text() if (tmp_path / "nsc-calls").exists() else ""
+    streams = minted.stdout + minted.stderr + ran.stdout + ran.stderr + calls_text + nsc_calls
+    signer = _store(stores, "local", "secret/nats-callout")
+    scoped = [value for field, value in signer.items() if field.startswith("key-") or field == "issuer_seed"]
+    leaked = [pair.seed for pair in [*pool, *bus_pairs.values(), *undeclared.values(), callout] if pair.seed in streams] + [
+        seed for seed in scoped if seed in streams
+    ]
+    assert not leaked, "a private seed reached an output stream, a bao argument list or an nsc argument list"
+    exposed = [key for key, value in generated.items() if value in streams]
+    assert not exposed, f"the generated {exposed} reached an output stream or a bao argument list"
+    store_tokens = [
+        name for name, value in (("unseal key", _UNSEAL_KEY), ("init token", _INIT_TOKEN), ("administrator token", _ADMIN_TOKEN)) if value in streams
+    ]
+    assert not store_tokens, f"the store's {store_tokens} reached an output stream or a bao argument list"
+    writes = [call for call in calls if call.split(" ", 1)[1].startswith(_WRITES)]
+    assert writes or not succeeds, "the seed wrote nothing"
+    assert all(call.startswith(f"{_OWN} ") for call in writes), (
+        f"writes reached {sorted({call.split(' ', 1)[0] for call in writes} - {_OWN})}, the Service's pick of OpenBao pod, not the server beside the seed"
+    )
+    assert workload == "Deployment/rask-openbao", f"the seed runs in {workload}, so 127.0.0.1 is not the server it seeds"
+    assert (ran.returncode == 0) is succeeds, f"exit {ran.returncode}: {ran.stderr[-2000:]}"
+    seeded = [call for call in writes if call.startswith(f"{_OWN} kv put {_SENTINEL} ")]
+    if not succeeds:
+        assert not seeded, f"the seed stopped but still marked the store ready: {seeded}"
+        written = [
+            identity
+            for identity in ids
+            if _store(stores, "local", f"secret/signing-key-{identity}") or _store(stores, "local", f"secret/signing-public-{identity}")
+        ]
+        assert not written, f"a pair was written for {written} after the seed refused it"
+        assert not (tmp_path / "home" / "seed" / f"signing-key-{ids[0]}").exists(), (
+            "the refused pair was kept, so every restart reads it back and refuses again"
+        )
+        if case.startswith("nats-"):
+            bus = [call for call in writes if " kv put secret/nats-" in call]
+            assert not bus, f"bus credentials were written from a trust root the seed refused: {bus}"
+        return
+    assert writes[-1].startswith(f"{_OWN} kv put {_SENTINEL} "), f"the readiness key is not the last write: {writes[-1]}"
+
+    if local == "rotate":
+        generated["postgres-password"] = (stores / "rotate").read_text()
+    assert {key: _store(stores, "local", path).get(field) for key, (path, field) in _GENERATED.items()} == generated, (
+        "the store does not hold the credentials ESO generated"
+    )
+    assert (stores / "local.tokens").read_text().split() == [_ADMIN_TOKEN], "the store answers a token beside its administrator: the init token was not revoked"
+    assert (store_keys / "unseal-key").read_text() == _UNSEAL_KEY and stat.S_IMODE((store_keys / "unseal-key").stat().st_mode) == 0o600, (
+        "the unseal key is not kept for its owner alone, so a sealed store could not be unsealed"
+    )
+    assert not (store_keys / "init").exists(), "the init answer, with its root token, outlives the init"
+    documents = {name: (identities / name).read_text() for name in os.listdir(identities)}
+    applied = {
+        f"{kind}-{p.name}.json": p.read_text()
+        for kind, held in (("policy", stores / "local.policies"), ("role", stores / "local.roles"))
+        if held.is_dir()
+        for p in held.iterdir()
+    }
+    assert documents and applied == documents, f"the store holds {sorted(applied)}, not the policies and roles rask renders: {sorted(documents)}"
+    assert len(seeded) == (2 if local in {"restart", "rotate", "change"} else 1), f"seeds that completed: {len(seeded)}"
+
+    root = _store(stores, "local", "secret/nats-server")
+    route = _store(stores, "local", "secret/nats-route")
+    assert root.get("operator", "").startswith("eyJ") and root.get("system_account"), f"the store holds no trust root for the server: {root}"
+    accounts = json.loads(root.get("resolver_preload", "{}"))
+    assert root["system_account"] in accounts and len(accounts) == 3, f"the server would preload {sorted(accounts)}, not the SYS, APP and AUTH accounts"
+    assert route.get("user") and route.get("password"), f"the store holds no route credential: {route}"
+    app, auth = signer.get("app_account", ""), signer.get("auth_account", "")
+    assert {app, auth} == set(accounts) - {root["system_account"]}, f"the signer is told APP {app} and AUTH {auth}, not the accounts the server preloads"
+    _signer_problems(docs, signer, root, accounts, app, auth, users)
+    revoked = _claim(accounts[app])["nats"]["revocations"]
+    assert set(revoked) == {"*"} | {pair.public for pair in undeclared.values()} | ({bus_pairs[regranted].public} if regranted else set()) | (
+        {unreadable[1].public} if unreadable else set()
+    ), (
+        f"the APP account the server preloads revokes {sorted(revoked)}: a user rask stops declaring, or a grant it narrowed, keeps admitting,"
+        " or a declared user is refused"
+    )
+    oldest = min(_claim(_store(stores, "local", f"secret/nats-user-{user}")["jwt"])["iat"] for user in users)
+    assert revoked["*"] == oldest - 1, (
+        f"the APP account refuses every credential issued up to {revoked['*']}, not up to the one before the oldest a declared user holds"
+        f" ({oldest}): a credential an earlier seed replaced keeps admitting, or a declared one is refused"
+    )
+    if regranted:
+        assert revoked[bus_pairs[regranted].public] == _REGRANTED_AT, (
+            f"{regranted}'s key is revoked up to {revoked[bus_pairs[regranted].public]}, not up to the credential it replaces: the old grant"
+            " keeps admitting, or the new credential is refused with it"
+        )
+    if unreadable:
+        assert revoked[unreadable[1].public] == _REGRANTED_AT, (
+            f"the key {unreadable[0]}'s unreadable secret names is revoked up to {revoked[unreadable[1].public]}, not up to its JWT"
+        )
+    issued_as = dict(line.removeprefix("NATS user ").split(": ", 1) for line in ran.stdout.splitlines() if line.startswith("NATS user "))
+    how = {regranted: "reissued", **({unreadable[0]: "replaced"} if unreadable else {})}
+    assert issued_as == {user: "kept" if local == "change" else how.get(user, "minted") for user in [*users, "callout", "sentinel"]}, (
+        f"the seed issued the bus users as {issued_as}"
+    )
+    if local == "change":
+        assert signer == _store(stores, "first-secret", "nats-callout"), "a seed rask changed gave the signer another key, though nothing it declares changed"
+    kept = sorted(user for user in undeclared if _store(stores, "local", f"secret/nats-user-{user}"))
+    assert not kept, f"this pod's store still serves {kept}, users rask no longer declares"
+    told = [line for line in ran.stdout.splitlines() if line.startswith(("revoked NATS user ", "deleted "))]
+    assert sorted(line.split(",")[0] for line in told) == sorted(
+        [
+            *(f"revoked NATS user {user} ({pair.public})" for user, pair in undeclared.items()),
+            *(["deleted secret/nats-user-catalog", "deleted the store policy rask-gone", "deleted the store role rask-gone"] if undeclared else []),
+        ]
+    ), f"the seed logs {told}, not each revocation and deletion by name"
+    assert _store(stores, "local", "secret/nats-root").get("nsc"), (
+        "the trust root's keys were not stored, so the next rollout mints a root the server does not trust"
+    )
+    if local == "change":
+        assert root == _store(stores, "first-secret", "nats-server"), (
+            "a seed rask changed gave the bus another trust root or account, though nothing it declares changed"
+        )
+        reissued = sorted(user for user in users if _store(stores, "local", f"secret/nats-user-{user}") != _store(stores, "first-secret", f"nats-user-{user}"))
+        assert not reissued, f"a seed rask changed issued {reissued} another credential while the one it held still admits"
+    if carried:
+        assert root["operator"] == carried["operator"] and route["password"] == carried["password"], (
+            "the trust root or the route credential behind the Service was replaced, so the running server refuses every new client"
+        )
+    for user, (publish, subscribe) in users.items():
+        issued = _store(stores, "local", f"secret/nats-user-{user}")
+        claim = _claim(issued.get("jwt", "eyJ.e30"))
+        assert issued.get("seed") == bus_pairs[user].seed and claim.get("sub") == bus_pairs[user].public, f"nats-user-{user} is not the pair issued for it"
+        assert (set(claim["nats"]["pub"]["allow"]), set(claim["nats"]["sub"]["allow"])) == (publish, subscribe), (
+            f"{user} was issued {claim}, not the table's permissions: a subject lost its $ or its wildcard on the way to nsc"
+        )
+        assert claim["iss"] == (carried.get("account") or claim["iss"]) and claim["iss"] in accounts, (
+            f"{user} is issued by an account the server does not preload"
+        )
+
+    for identity in ids:
+        pair = expected[identity]
+        stored = (
+            _store(stores, "local", f"secret/signing-key-{identity}").get("seed"),
+            _store(stores, "local", f"secret/signing-public-{identity}").get("keys"),
+        )
+        assert stored == (pair or (None, None)), f"{case}: {identity} holds {stored}, not {pair}"
+        public_put = next((i for i, call in enumerate(calls) if f" kv put secret/signing-public-{identity} " in call), None)
+        key_put = next((i for i, call in enumerate(calls) if f" kv put secret/signing-key-{identity} " in call), None)
+        if pair is None:
+            assert public_put is None and key_put is None, f"{identity} had no pair to write and was written anyway"
+            continue
+        assert public_put is not None and key_put is not None and public_put < key_put, (
+            f"{identity}: the public list must be written before the key it publishes"
+        )
+        for half, content in (("signing-key", pair[0]), ("signing-public", pair[1])):
+            keep = tmp_path / "home" / "seed" / f"{half}-{identity}"
+            assert keep.read_text() == content, f"{identity}: the {half} half was not kept, so a restart in place re-seeds another pair"
+            assert stat.S_IMODE(keep.stat().st_mode) == 0o600, f"{keep.name} is mode {oct(stat.S_IMODE(keep.stat().st_mode))}"
+    assert not list(signing_dir.iterdir()), f"mint candidates outlive the seed: {sorted(p.name for p in signing_dir.iterdir())}"
+
+    [deployment] = [doc for doc in docs if f"{doc.get('kind')}/{doc['metadata']['name']}" == workload]
+    pod = deployment["spec"]["template"]["spec"]
+    rolling = deployment["spec"].get("strategy") or {}
+    assert (rolling.get("type"), rolling.get("rollingUpdate", {}).get("maxUnavailable"), rolling.get("rollingUpdate", {}).get("maxSurge")) == (
+        "RollingUpdate",
+        0,
+        1,
+    ), f"the rollout is {rolling}: unless the outgoing pod serves until its replacement is Ready, there is nothing to carry the pairs from"
+    [volume] = [v for v in pod["volumes"] if v["name"] == "signing"]
+    assert volume["emptyDir"].get("medium") == "Memory" and volume["emptyDir"].get("sizeLimit"), (
+        f"the candidate volume is {volume}: seeds would reach node disk"
+    )
+    mounted = {c["name"] for c in [*pod["initContainers"], *pod["containers"]] if any(m["name"] == "signing" for m in c.get("volumeMounts") or [])}
+    assert mounted == {"mint", "seed"}, f"the candidate volume is mounted by {sorted(mounted)}, so a container that never needs a seed can read one"
+    tools = {
+        c["name"]: m.get("readOnly", False)
+        for c in [*pod["initContainers"], *pod["containers"]]
+        for m in c.get("volumeMounts") or []
+        if m["mountPath"] == env["NATS_TOOLS"]
+    }
+    assert tools == {"mint": False, "seed": True}, f"the NATS tools are mounted as {tools}: the mint copies them and the seed only runs them"
+    assert {p.name for p in nats_tools.iterdir()} == {"nsc", "nk"}, "the mint did not hand the seed the tools it issues bus users with"
+    policies = [
+        d
+        for d in chart_render.render(*overlay, "--set", "networkPolicy.enabled=true")
+        if d.get("kind") == "NetworkPolicy" and d["spec"]["podSelector"].get("matchLabels") == {"app.kubernetes.io/component": "openbao"}
+    ]
+    admitted = {
+        value
+        for policy in policies
+        for rule in policy["spec"]["ingress"]
+        for source in rule["from"]
+        for expr in source.get("podSelector", {}).get("matchExpressions", [])
+        for value in expr["values"]
+    }
+    assert policies and "openbao" in admitted, f"the OpenBao lock admits {sorted(admitted)}: a seed cannot read the outgoing pod through it"
+    signers = {
+        doc["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/component"]
+        for doc in docs
+        if doc.get("kind") == "Deployment" and any("RASK_SIGNING_IDENTITY" in chart_render.env_of(c) for c in doc["spec"]["template"]["spec"]["containers"])
+    }
+    assert signers and signers <= admitted, f"the OpenBao lock does not admit the signers {sorted(signers - admitted)}: they cannot read their own keys"
+    [server] = [c for c in pod["containers"] if c["name"] == "openbao"]
+    assert server["readinessProbe"]["httpGet"] == {"path": "/v1/sys/health", "port": 8200}, f"the server's readiness is {server['readinessProbe']}"
+    assert container["readinessProbe"]["exec"]["command"] == ["bao", "kv", "get", "-field=pod", _SENTINEL], (
+        f"the pod is Ready on {container['readinessProbe']}, not on the key the seed writes last"
+    )

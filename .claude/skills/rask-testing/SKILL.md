@@ -39,7 +39,7 @@ reverted, and the commit message carries the delta.
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | One member's code, through its app or public API  | `packages/<m>/tests`, `services/<m>/tests`, so deleting a member deletes its tests and `make test` stays green (XC-183) |
 | Several members in one flow, or a fixture from `tests/integration/conftest.py` (`real_ns_client`) | `tests/integration`: a conftest's fixtures reach only the tests beneath it |
-| The rendered chart, or a fixture's render         | `tests/unit`, through `tests/unit/chart_render.py` (`render_fixture` for `deploy/fixtures/<name>`) |
+| The rendered chart, or a fixture's render         | `tests/chart`, through `tests/chart/chart_render.py` (`render_fixture` for `deploy/fixtures/<name>`) |
 | A deployed stack                                  | `tests/e2e-py`, run by the e2e-stack lane unless it carries a marker the lane leaves out: § Wiring |
 
 ## Wiring
@@ -91,9 +91,9 @@ consequences it does not spell out.
   an explicit `bash scripts/e2e_live.sh -m phase1 --require-live --chaos` or `make e2e-chaos`. A drill acts through
   `tests/e2e-py/chaos.py`, which takes each dependency down without destroying what it holds, and restores it in a
   `finally`.
-- **`--import-mode=importlib`.** The `from test_invariants import ...` lines in `tests/unit` resolve
-  only because `tests/unit/conftest.py` inserts that directory into `sys.path`; don't copy them. A
-  shared helper goes in a plain module, as `tests/unit/chart_render.py` does (`writing-python` →
+- **`--import-mode=importlib`.** The `from test_invariants import ...` lines in `tests/chart` resolve
+  only because `tests/chart/conftest.py` inserts that directory into `sys.path`; don't copy them. A
+  shared helper goes in a plain module, as `tests/chart/chart_render.py` does (`writing-python` →
   `references/testing.md` § Fixtures).
 - **Markers.** `e2e` means a live stack: `tests/e2e-py/conftest.py` applies it to everything collected there, and each
   per-suite selector (`cas`, `nats_auth`, ...) rides on top of it; `make test` and CI deselect it. `strict_markers = true`
@@ -118,9 +118,10 @@ consequences it does not spell out.
 | Lane                                              | What it runs                                                                                                      |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `make test`                                       | (`make test`, `check-fast` and `coverage` first export `.localbin/openfga` through Dagger, `make openfga`) `-m "not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process) |
-| `make check-fast`                                 | `tests/unit tests/integration` at `-n 16`, with no marker filter. `--dist loadfile`, because three suites are parallel-unsafe at the file level (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) |
+| `make check-fast`                                 | `tests/unit tests/chart tests/integration` at `-n 16`, with no marker filter. `--dist loadfile`, because three suites are parallel-unsafe at the file level (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) |
 | `make coverage`                                   | `-m "not e2e" --cov`, on request only                                                                             |
-| CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed |
+| CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter without `tests/chart`, serially, with `--timeout=300 --timeout-method=thread`, helm installed |
+| CI: `dagger call chart-tests` (`.dagger/test.go`, ms-gates leg `chart-tests`) | `tests/chart`, the chart's render tests, in the same container ([[XC-172]]) |
 | CI: `dagger call governance-chain` | a real Dex, OpenFGA, catalog and lineage as Dagger services on RustFS, asserting through `tests/e2e-py/test_governance_e2e.py` under `--require-live` (the e2e-stack lane runs the same module on the chart's render). The catalog holds no store key, as the chart's does not: it exchanges a ServiceAccount token a stand-in issuer signs (`scripts/lane_store_issuer.py`, `.dagger/store_identity.go`) at the store's STS for the canned policy the chart renders for it ([[XC-081]]) |
 | CI: `dagger call rustfs-lifecycle`, `dagger call smoke-rustfs` | `tests/e2e-py/test_e2e.py` under `--require-live` against a catalog whose bytes are on RustFS, booted on the exchanged session as governance-chain's is, and `scripts/smoke_rustfs.py` through `lakehouse.storage` |
 | CI: `dagger call rustfs-provisioning` (= `make rustfs-provisioning`) | `tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py`, `tests/e2e-py/test_a_reclaim_session_deletes_one_tables_bytes_and_nothing_else.py`, `tests/e2e-py/test_the_storage_probe_finds_rustfs_refusing_a_writer_the_final_manifest.py` (the warehouse storage probe under sessions the catalog's own policies narrow, [[LH-511]]), `tests/e2e-py/test_a_writers_session_rewrites_a_table_holding_external_blob_pointers.py` (a compaction's rewrite under a write-tier session, which is refused the external objects its blob pointers name, [[LH-410]]) and `tests/e2e-py/test_the_store_answers_maintenance_which_buckets_send_store_events.py` and `tests/e2e-py/test_maintenance_s3_e2e.py`, which makes and removes buckets no identity on the shared estate may (marker `rustfs_provisioning`) under `--require-live`: the provisioning hook's `scripts/rustfs_admin.py`, the purge under a reclaim session's policy, and the hourly audit's read of each bucket's event configuration under maintenance's rendered canned policy, against a throwaway RustFS booted as the fixture boots it (root pair from files, a NATS notify target, helm for the render; `tests/e2e-py/throwaway_rustfs.py`, fixture `rustfs_store` in `tests/e2e-py/conftest.py`); the e2e-stack lane leaves the marker out, since it provisions IAM on the store it runs against |
@@ -177,7 +178,7 @@ from the root conftest.
 | A timer's tick, when what one tick does is the claim | no route and no clock: under `with TestClient(app) as client:` call the tick on the app's loop, the catalog's as `client.portal.call(module.tick, Tick(app, settings, clock=..., control=...))` (`catalog.api.ticks.Tick`; `clock` judges a due time, `control` is the emitter it announces on) and lineage's as `client.portal.call(relay.tick, app, settings)`. Whether one replica claims a window is the timer's own test's claim (`packages/lakehouse/tests/test_a_timer_runs_once_per_window_whatever_the_replica_count.py`) |
 | OpenFGA, authz not the claim  | `RASK_FGA_ENABLED` / `RASK_OIDC_ENABLED` left at their default, off; with FGA off the checker allows everything. Where a route needs a named subject or a decision, override that service's `current_subject` / `get_checker` |
 | OpenFGA, authz is the claim   | a real OpenFGA in the offline suite: root `conftest.py::openfga_store`, a store of the test's own on the pinned server, and for the catalog `services/catalog/tests/conftest.py::governed_catalog` (`references/fixtures.md` § The catalog with authorization on). Beyond one service: the model's `.fga.yaml` suite (`make fga-test`), a real Dex and OpenFGA via `dagger call governance-chain`, or on a deployed estate criterion 2's principal × door matrix (`tests/e2e-py/test_the_catalog_is_correct.py`). A live leg that is refused asserts through `tests/e2e-py/refusals.py::assert_refused`: the status and the spec code (`lance_namespace.ErrorCode`), what the door could change read before and after, and no name in the body the caller did not send. Fake the client only for a transport or fail-closed leg |
-| The chart                     | `tests/unit/chart_render.py`: `references/fixtures.md` § The chart                                          |
+| The chart                     | `tests/chart/chart_render.py`: `references/fixtures.md` § The chart                                          |
 | Evidence no door can write (a committed manifest that does not decode, a registry record that is not JSON), on a deployed estate | `tests/e2e-py/plant.py::planted`: written from inside the catalog pod under its own store session, on a scratch object of the test's own, put back and read back equal when the block ends (owner, 2026-11-13: committed legs plant this way) |
 
 ## Skips and prose

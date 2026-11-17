@@ -11,5 +11,5 @@ A CHANGED BOOTSTRAP INPUT IS ONE ARGO CD SEES ([[XC-164]]). Argo CD leaves its h
 the Application Synced and no auto-sync would run the Job that applies it. This plain ConfigMap holds, per bootstrap
 template, a digest of its Jobs' specs: a changed input changes it, the Application goes OutOfSync, and the sync runs
 every hook again. Under Helm every upgrade runs the hooks anyway, and the ConfigMap is inert.
-`tests/unit/test_a_bootstrap_jobs_input_change_is_one_argo_cd_sees.py` holds that an input changes exactly its
+`tests/chart/test_a_bootstrap_jobs_input_change_is_one_argo_cd_sees.py` holds that an input changes exactly its
 template's digest and that every template rendering an Argo CD hook is digested here.

@@ -101,7 +101,7 @@ With store events on, the liveness probe also restarts the store when its bus cr
 every 4 s) with the new file already mounted, and published no store event until it restarted. `postStart` records the
 credential's sha256 in `/tmp/bus-credential-at-start` (the digest only: the credential stays in the Secret's volume),
 and the probe fails once the mounted file's digest differs, so the kubelet restarts the container onto the new file.
-Pinned by `tests/unit/test_the_dev_store_restarts_when_its_bus_credential_is_reissued.py`.
+Pinned by `tests/chart/test_the_dev_store_restarts_when_its_bus_credential_is_reissued.py`.
 
 ## `name: tmp`
 

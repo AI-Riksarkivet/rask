@@ -221,7 +221,7 @@ jobs_missing=$(awk '
 # overlay 2026-10-15, with the prerequisites outside the release (ADR 0153): 21 workloads naming 12 of the 17
 # ServiceAccounts rendered; the other five belong to components the overlay leaves off. The per-pod verdict
 # (no idle token, no secret grant to their SAs) is
-# tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
+# tests/chart/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 workloads=$(grep -cE '^kind: (Deployment|StatefulSet|DaemonSet|Job|CronJob)$' "$OUT" || true)
 named=$(grep -E '^ +serviceAccountName: ' "$OUT" | awk '{print $2}' | tr -d '"' | sort)
 named_count=$(grep -c . <<<"$named" || true)

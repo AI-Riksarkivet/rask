@@ -48,7 +48,7 @@ only the probes answer a caller with no credential. A docs page (`docs.enabled`)
 relative URL, so it works under any public prefix. **Adding a
 door at a service's root** is one path in its `rask.apiRoutes` row (`prefix`, `component`, `service`, `port`, `rewrite`
 true to land each path on itself, false to forward unchanged, `paths`); the offline render gate
-`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` boots each app under its rendered env and fails
+`tests/chart/test_the_cluster_route_names_one_backend_per_api_prefix.py` boots each app under its rendered env and fails
 until the row lists it. The same row also renders that
 component's `<release>-edge-<component>` NetworkPolicy, so the route and the admission cannot drift apart. The live
 proof that every row reaches its service is `tests/e2e-py/test_the_cluster_route_reaches_each_service.py` (marker

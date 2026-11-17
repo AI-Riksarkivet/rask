@@ -1,7 +1,7 @@
 """Each app reads only its own secrets, from the store and as itself, and the store refuses another app's.
 
 [[XC-165]] (#659), [[XC-199]] (#787), read back on the deployed estate. The render holds the same claim offline
-(`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`); this asks the running layers:
+(`tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`); this asks the running layers:
 
 - the app's own login: inside the pod of each Deployment an app runs (the catalog's, lineage's and the maintenance
   worker's), the process's own read (`lakehouse.governed.secrets`, with the store, the role and the projected token its

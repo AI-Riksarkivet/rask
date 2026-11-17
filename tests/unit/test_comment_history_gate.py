@@ -64,7 +64,7 @@ def test_rationale_that_explains_a_past_shape_is_accepted(body: str) -> None:
 
 PROVENANCE_SAMPLES = [
     "# Measured 2026-08-26: the chart export alone takes 238 s, which is why this path caches.\n",
-    "# Pinned by tests/unit/test_invariants.py::test_every_declared_application_is_provided.\n",
+    "# Pinned by tests/chart/test_invariants.py::test_every_declared_application_is_provided.\n",
 ]
 
 

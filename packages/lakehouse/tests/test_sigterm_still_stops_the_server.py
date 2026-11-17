@@ -262,7 +262,7 @@ def test_a_SECOND_arm_in_one_process_is_REFUSED_and_SIGTERM_still_stops_the_serv
 
 def test_an_ASYNC_request_that_OUTLIVES_the_bound_is_cancelled_and_the_teardown_runs(tmp_path: Path) -> None:
     """The chart renders `--timeout-graceful-shutdown` so the lifespan teardown runs before the kubelet's
-    SIGKILL (`tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`). That holds only if uvicorn
+    SIGKILL (`tests/chart/test_uvicorn_drains_inside_its_pods_grace_period.py`). That holds only if uvicorn
     still applies its bound once the drain has handed it SIGTERM: at the bound it cancels the async request
     still running, and then runs the lifespan teardown.
 

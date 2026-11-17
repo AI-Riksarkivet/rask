@@ -85,7 +85,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   login: only the store pod, the dev secret store that seeds it, the provisioning hook and the fixture's bucket-events
   job (the dev store's operator stand-in for its change events, `deploy/fixtures/rustfs`) read it. It sits at
   `secret/object-store-root`, which only ESO's store policy reads, and in a Secret of its own,
-  `<release>-object-store-root`; `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows every
+  `<release>-object-store-root`; `tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows every
   path the chart hands a secret through. Every plane presents its ServiceAccount token instead, the backups
   included. The dev OpenBao publishes no token: each service logs in as
   its own ServiceAccount and reads only its own secrets, and the store's administrator token is generated in-cluster and held by its seed (ADR 0169).
@@ -131,7 +131,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   role policy, and any pod may project a token for any audience as its own ServiceAccount
   (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`). Without it the token's `groups` claim is mapped to
   policies too (`OIDC_DEFAULT_GROUPS_CLAIM`, `rustfs@1.0.3:crates/config/src/constants/oidc.rs:102`); a ServiceAccount
-  token carries none. `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` fails a fixture render that
+  token carries none. `tests/chart/test_a_provisioned_identity_is_one_the_service_uses.py` fails a fixture render that
   sets a role policy. See `references/security.md` § Web identity.
 - **There is one listener for S3, admin and internode RPC** (`:9000`): the admin API (`/rustfs/admin`, alias
   `/minio/admin`), the Iceberg REST catalog (`/iceberg/v1`, `/_iceberg/v1`) and peer RPC share it

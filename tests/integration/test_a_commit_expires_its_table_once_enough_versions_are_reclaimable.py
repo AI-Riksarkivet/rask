@@ -257,8 +257,9 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
     assert in_flight in held
     due = outcome.next_due
     assert due is not None, "the pass scheduled no next pass"
-    # The store stamps a put to the second, so the grace's end comes up to a second before the pass's clock adds it up.
-    assert abs(due - now - next_pass) < timedelta(seconds=2), f"the table's next pass is {due - now} out"
+    # A grace runs from when the store stamped the manifest, which is before the pass began by however long the test took
+    # to reach it (seconds on a loaded host) and is stamped to the second; a recheck runs from the pass's own clock.
+    assert timedelta(seconds=-60) < due - now - next_pass < timedelta(seconds=2), f"the table's next pass is {due - now} out"
     assert lance.dataset(task.location, storage_options=store.in_clear()).version == THRESHOLD
 
 

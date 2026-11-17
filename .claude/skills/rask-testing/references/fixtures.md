@@ -167,7 +167,7 @@ dagger core container from --address="$IMG" with-exposed-port --port=4222 \
 
 ## The chart
 
-`from tests.unit.chart_render import DEFAULT_ARGS, render`. `render(*flags)` returns the parsed
+`from tests.chart.chart_render import DEFAULT_ARGS, render`. `render(*flags)` returns the parsed
 manifests and is cached per verbatim flag tuple, once per xdist worker. `render_text(*flags)` returns
 Helm's raw stdout; use it for size budgets, because parsing drops comments. The result is a tuple
 because it is shared: never mutate it. Render through this module rather than a `subprocess` helm of

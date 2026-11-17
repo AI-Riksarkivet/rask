@@ -94,7 +94,7 @@ nats-server 2.15.2 answered an unchanged config and a refused one the same way (
 holds `$JS.API.STREAM.UPDATE` for exactly the streams it edits, so an operator-mode bus admits the edits and nothing
 wider; the `nats-auth` lane runs this Job as that user against such a bus. `allow_direct: true` is in the declared config
 because `nats stream add --defaults` sets it, so a stream created that way edits to no change, and a config without it
-would turn it off. `tests/unit/test_the_stream_job_converges_each_stream_to_its_declared_config.py` runs the script against a
+would turn it off. `tests/chart/test_the_stream_job_converges_each_stream_to_its_declared_config.py` runs the script against a
 stand-in CLI; the GitOps lane reads a running bus back after a change.
 
 RETENTION IS A FAN-OUT CORRECTNESS INVARIANT on a stream several consumers read (LINEAGE is read by `lineage-ingest`
@@ -182,7 +182,7 @@ and never creates it, and `admin` holds UPDATE for it as for every stream this J
 A running maintenance task stays with its worker only while the worker's in-progress acknowledgement reaches the broker
 inside the `maintenance-worker` consumer's ack wait; once one is late, JetStream delivers the task to another replica
 while the first is still passing the table. So the render refuses a heartbeat past half the ack wait, naming both values
-(`tests/unit/test_invariants.py::test_a_queue_value_the_worker_cannot_run_with_fails_the_render`). The worker's side is
+(`tests/chart/test_invariants.py::test_a_queue_value_the_worker_cannot_run_with_fails_the_render`). The worker's side is
 `tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py`: a live worker's task stayed
 with it for three ack waits, a killed one's moved to the other, and one the bus stopped answering ended itself before its
 task moved.

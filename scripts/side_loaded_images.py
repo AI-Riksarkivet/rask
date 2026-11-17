@@ -26,7 +26,7 @@ their `.docker/<stem>.dockerfile` are `lance-rest-catalog` (`rest-catalog`) and 
 (`frontend`).
 
 Usage:  helm template ... | uv run python scripts/side_loaded_images.py --tag dev
-Pinned by `tests/unit/test_a_stack_builds_every_image_it_side_loads.py`, which imports the two
+Pinned by `tests/chart/test_a_stack_builds_every_image_it_side_loads.py`, which imports the two
 functions below so the gate and the stack scripts cannot hold different answers.
 """
 

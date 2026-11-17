@@ -1,15 +1,14 @@
 # 0217. Four behaviours stand as the spec, the format and the measured load leave them (2026-11-17)
 
-**Status:** accepted for decisions 1 to 3; decision 4 is **proposed**, pending the owner's answer. Source: XC-217
-(#840), the backlog audit's leftovers, which found four behaviours with no record: LH-035 (#172), LH-041 (#173), LH-050
-(#178) and LOW-029 (#187).
+**Status:** accepted. Source: XC-217 (#840), the backlog audit's leftovers, which found four behaviours with no record:
+LH-035 (#172), LH-041 (#173), LH-050 (#178) and LOW-029 (#187). Decision 4 was put to the owner with its two
+alternatives and chosen on 2026-11-17 ("Keep planning again").
 
 ## Context
 
 Each of the four is how the catalog already behaves. Three follow from a limit: the spec has no such field, the format
 offers no such write, the load does not ask for it. The fourth, what a merge does when another writer took its version,
-has a real alternative and changes what a caller of the merge door is answered, so it is recorded as it stands and left
-for the owner. The evidence was re-measured on 2026-11-17 on pylance 13.0.0, lance-namespace 0.11.1 and the vendored
+has a real alternative and changes what a caller of the merge door is answered, so it was the owner's to decide. The evidence was re-measured on 2026-11-17 on pylance 13.0.0, lance-namespace 0.11.1 and the vendored
 `lance_docs/ns_catalog/spec.yaml`.
 
 ## Decision
@@ -41,8 +40,8 @@ for the owner. The evidence was re-measured on 2026-11-17 on pylance 13.0.0, lan
    `CatalogListingLoadReachedInteractiveFrequency` (`deploy/alerting/rules.yml`) fires when those listings are served
    above 1 request a second for 30 minutes, which is when this decision is to be reopened.
 
-4. **Proposed: a merge that lost its version is planned again on the rows that won, and commits** (LOW-029). This is
-   what the merge door does today. It plans `MergeInsertBuilder.execute_uncommitted` on the ref's latest version and
+4. **A merge that lost its version is planned again on the rows that won, and commits** (LOW-029). The merge door
+   plans `MergeInsertBuilder.execute_uncommitted` on the ref's latest version and
    finalizes it as exactly the next version (`dataplane.commit_stamped`). A merge whose version another writer took is
    planned again on the new latest, so it reads the winner's rows before it writes; it takes the ref's commit turn for
    its remaining attempts where the turn is free (ADR 0186), and after ten lost attempts it answers 409 code 14. A
@@ -51,8 +50,8 @@ for the owner. The evidence was re-measured on 2026-11-17 on pylance 13.0.0, lan
    told. What the door never does is commit a merge planned on rows it did not read: the detached finalize refuses a
    version that is taken.
 
-   The alternative is to answer the second merge 409 code 14 when the rows it matched changed under it, and let the
-   caller decide. Lance detects a conflict for `merge_insert` per fragment and retries
+   The alternatives the owner turned down: answering every merge that lost its version 409 code 14, which refuses a
+   merge that raced a write to other rows; and answering 409 only when the rows it matched changed under it. Lance detects a conflict for `merge_insert` per fragment and retries
    (`lance_docs/lance/guide/performance.md` § Fragment Sizing and § Conflict Handling), so a door built that way could
    refuse only a merge whose fragments another writer rewrote, not every merge that raced a write. A caller can
    already state its own precondition: `when_matched_update_all_filt` (`spec.yaml`) is a condition on the matched row,
@@ -62,5 +61,5 @@ for the owner. The evidence was re-measured on 2026-11-17 on pylance 13.0.0, lan
 ## Consequences
 
 - The alert's text and its promtool expectations name this entry (decision 3) where they named the backlog row.
-- Under decision 4 as proposed, a caller that wants optimistic concurrency on a row supplies the condition; the catalog
+- Under decision 4, a caller that wants optimistic concurrency on a row supplies the condition; the catalog
   adds no version column, since the platform names no column (ADR 0212).

@@ -1,0 +1,106 @@
+"""Every lakehouse container bounds glibc's arena count, because the default is sized by the HOST.
+
+THE DEFECT, measured live 2026-09-21 on the deployed estate ([[LH-183]]). `rask-maintenance` was
+OOMKilled against its 512Mi limit, and neither suspect held: `sys.getallocatedblocks()` was flat across
+seven ticks, and the Lance session held 14.6 MB of its 204.8 MB cap for five consecutive ticks while
+RSS went 192 -> 403Mi. Reading `/proc/1/maps` out of the pod and parsing it OUTSIDE the container
+named the remainder:
+
+    pod                arenas (60-68MB anon)   stacks (8-9MB)   anon virtual
+    catalog                     34                  103            6,835 MB
+    media-to-silver             40                  101            6,619 MB
+    medallion-producer          41                  109            6,996 MB
+    lineage                     42                  110            6,782 MB
+    bronze-to-silver            44                  109            6,925 MB
+    silver-to-gold              44                  108            6,924 MB
+    maintenance                 59                  117            8,797 MB
+
+Those 60-68 MB reservations are glibc secondary arenas -- `HEAP_MAX_SIZE` is 64 MB on 64-bit. glibc
+sizes its arena cap from `sysconf(_SC_NPROCESSORS_ONLN)`, the HOST's core count, and a cgroup CPU
+*quota* does not reduce visible CPUs: measured in these containers, `nproc` reads **64** while
+`cpu.max` reads `100000 100000`, one CPU. Lance sizes its own pools to the quota, while numpy's OpenBLAS
+and pyarrow's CPU pool size to the visible CPUs, which the image bounds with `OMP_NUM_THREADS`
+(`lance_docs/PROVENANCE.md` § The thread pools). Arenas are how threads become resident bytes, and with
+both bounded a lakehouse process still runs dozens: gRPC's event engine alone held 16 in each (read from
+the host's /proc on helm rev 18, 2026-10-31).
+
+IT IS FRAGMENTATION, NOT A LEAK, which is why no retaining object was ever found. Each arena keeps its
+own free lists and is trimmed independently, and memory freed in one is never handed to another, so RSS
+settles at the SUM of per-arena high-water marks: it climbs monotonically and plateaus only once every
+arena has seen its worst case.
+
+THE LEVER IS PROVEN, NOT ASSUMED: a control ships once it is measured moving what it names, in the
+process it bounds. So `MALLOC_ARENA_MAX` was measured before it was shipped -- 64 threads each forcing
+arena growth, counting 64MB mappings in `/proc/self/maps`:
+
+    Ubuntu glibc 2.39 (host)          unset -> 64 arenas    =2 -> 1    =1 -> 0
+    Debian glibc 2.41 (THE IMAGE)     unset -> 65 arenas    =2 -> 1
+
+The second row ran in `localhost:5000/lance-rest-catalog:heap-blocks`, the image these pods run, in a
+THROWAWAY pod -- never by exec into the pod under study, which shares its cgroup and corrupts the
+reading it is taking.
+
+WHY 2 AND NOT 1. One arena serialises every allocation in a 100+ thread process on the main arena's
+lock. Two is the conventional container setting and already collapses 65 reservations to one secondary.
+
+NOT A SECRET, so the never-through-env rule does not reach it: this is a libc tunable with no
+confidentiality, read by glibc at startup and by nothing else.
+
+`MALLOC_ARENA_MAX` ONLY GOVERNS GLIBC, SO ARROW MUST ALLOCATE THROUGH GLIBC. Bounding the arenas alone
+drove the arena count 60 -> 0 on the maintenance worker and changed the RSS trend by nothing: the pod
+still died `OOMKilled, exit 137`, after 442m35s against a pre-fix 86m52s. Measured on the live process
+afterwards, two allocators besides glibc are resident and neither is reachable by that tunable:
+**mimalloc**, via pyarrow (`pa.default_memory_pool().backend_name` is `mimalloc` on pyarrow 25.0.0, and
+`arrow::mimalloc_memory_pool` is a symbol in the shipped `libarrow.so.2500`), and **jemalloc**, via
+duckdb (76 jemalloc references in its extension module and a live `jemalloc_bg_thd` thread).
+`ARROW_DEFAULT_MEMORY_POOL=system` routes Arrow's allocations through plain `malloc`, which
+`MALLOC_ARENA_MAX` then governs; the name was verified against the shipped `libarrow.so.2500` with
+`strings`. Both names ship together or neither does: the arena bound without the pool routing is the
+configuration already measured not to work, and it looks correct.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from tests.chart.chart_render import DEFAULT_ARGS, containers, env_of, render
+
+
+#: The lakehouse container names FOCUS covers. Each was measured above; each runs the same image family
+#: on the same 64-core node under a one-CPU quota. The assertion below walks every container bearing a
+#: name rather than the first, so a per-deployment regression cannot hide behind a sibling that still
+#: renders the bound.
+LAKEHOUSE = frozenset({"catalog", "lineage", "worker"})
+
+#: The ceiling this gate enforces. 2 is what was measured; the bar is `<= 4` so a later tuning pass has
+#: room to trade lock contention against fragmentation without editing this file, while a container
+#: that silently returns to the host-sized default still fails.
+MAX_ARENAS = 4
+
+
+def _lakehouse_containers() -> list[tuple[str, str, dict]]:
+    return [row for row in containers(render(*DEFAULT_ARGS)) if row[1] in LAKEHOUSE]
+
+
+@pytest.mark.parametrize("service", sorted(LAKEHOUSE))
+def test_the_container_bounds_its_arena_count(service: str) -> None:
+    """RED before the fix: all four rendered no `MALLOC_ARENA_MAX`, and the pods carried none."""
+    rows = [(where, env_of(c)) for where, name, c in _lakehouse_containers() if name == service]
+    assert rows, f"no rendered container named {service}"
+
+    for where, env in rows:
+        assert "MALLOC_ARENA_MAX" in env, (
+            f"{where}/{service} sets no MALLOC_ARENA_MAX, so glibc sizes its arena cap from the host's "
+            f"cores (64 here) against a one-CPU quota; measured 34-59 live arenas of 64MB each"
+        )
+        value = env["MALLOC_ARENA_MAX"]
+        assert value.isdigit(), f"{where}/{service} sets MALLOC_ARENA_MAX={value!r}, which glibc cannot parse as a count"
+        assert 1 <= int(value) <= MAX_ARENAS, f"{where}/{service} sets MALLOC_ARENA_MAX={value}, outside the stated budget of 1..{MAX_ARENAS}"
+
+
+def test_the_two_names_ship_TOGETHER() -> None:
+    """Either alone is the configuration already measured not to work, and it looks correct."""
+    envs = [(where, env_of(c)) for where, _name, c in _lakehouse_containers()]
+    half = [where for where, env in envs if bool(env.get("MALLOC_ARENA_MAX")) != bool(env.get("ARROW_DEFAULT_MEMORY_POOL"))]
+
+    assert not half, f"these carry one of the pair and not the other, which is the shape that fooled this row once: {half}"

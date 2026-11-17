@@ -43,7 +43,7 @@ const promVersion = "2.55.1"
 
 // helmBinary is the pinned helm executable on its own, so every lane that needs helm gets the SAME one.
 // Extracted 2026-08-03 when the pytest lane gained helm too (test.go): the thirteen chart-render
-// invariants in tests/unit/test_invariants.py had been calling `pytest.skip("helm not available")` on
+// invariants in tests/chart/test_invariants.py had been calling `pytest.skip("helm not available")` on
 // every CI run because .dagger/base() is a uv image with no helm — a silent hole, since a skipped test
 // reads as a passing suite. Two independently-curled helm installs would let the render gates and the
 // pytest invariants disagree about the same chart under different Helm minors, which is exactly what
@@ -181,7 +181,7 @@ func (m *Rask) Charts(
 // gate render" instead of one per gate drifting apart.
 //
 // image.repository, NOT image.localImages. The alternative satisfies the same guard, and every one of
-// the thirteen chart-render invariants in tests/unit/test_invariants.py takes it (`_helm_template()`
+// the thirteen chart-render invariants in tests/chart/test_invariants.py takes it (`_helm_template()`
 // appends `--set image.localImages=true` unconditionally, :401). That is the SIDE-LOAD path — what
 // `make k3s-import` produces for a local kind/k3s node. It means the production path, where every image
 // reference is a real registry address, is rendered by NO test in the estate. This gate is where that

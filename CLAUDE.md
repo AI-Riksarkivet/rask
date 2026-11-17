@@ -318,7 +318,7 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     supplied by a provider the app installs, the lineage client and the OpenAPI types generated from
     `docs/*-openapi.json`), `console/src/lib/flow` (the graph views the governance pages draw with, and the project
     hierarchy) and `console/src/lib/dock` (the workbench's dock, on horizon-layout, ADR 0200).
-- `tests/` — `tests/unit`, `tests/integration` and `tests/e2e-py` (the live suites) for the lakehouse; the console's
+- `tests/` — `tests/unit`, `tests/chart` (the chart's render tests), `tests/integration` and `tests/e2e-py` (the live suites) for the lakehouse; the console's
   browser suite is its own Playwright suite (`frontend/console/e2e`).
 - `scripts/` — **all** dev/ops scripts, shell + Python. **No production-state-changing CLIs** — data enters, and moves
   between tables, only through the catalog's namespace doors.
@@ -409,7 +409,7 @@ Key facts that aren't obvious from any single file:
 ## Conventions
 
 - **The console calls `/api/*` same-origin, in development too.** `vite dev` proxies `/api` to `RASK_EDGE_URL` (default `http://localhost:8080`, an edge: `make dev-k3s` port-forwards k3s Traefik's Service there); the built app is served by `serve.ts` behind the platform's Gateway. See `.claude/skills/rask-services-fleet` and `rask-frontend`.
-- **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are globbed (`testpaths` names `packages/*/tests`, `services/*/tests` and the three root suites), not discovered from the rootdir.
+- **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are globbed (`testpaths` names `packages/*/tests`, `services/*/tests` and the four root suites), not discovered from the rootdir.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
 - **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across the console and every package under `frontend/packages`. Prettier is gone.
 - **The JS workspace runs plain bun scripts** (`frontend/package.json`): `build` builds the console (which compiles `@rask/ui` from source), and `check`/`lint`/`fmt`/`fmt:check`/`test` run each member's own script through `bun run --filter '*'`. The members are the console and `@rask/ui`; code with one consumer lives in that consumer (ADR 0201). Only `knip` stays root-level, because it analyses the whole JS graph at once.

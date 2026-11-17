@@ -142,7 +142,7 @@ from maintenance.services.queue import (
     sample_queue,
 )
 from maintenance.services.store_events import StoreEvents
-from tests.unit.chart_render import DEFAULT_ARGS, render
+from tests.chart.chart_render import DEFAULT_ARGS, render
 
 
 pytestmark = pytest.mark.nats_auth

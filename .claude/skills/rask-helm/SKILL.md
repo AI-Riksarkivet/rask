@@ -197,7 +197,7 @@ provisioned by its operator and attested by `signing.provisioned`).
   `catalog-declaration-converge` timer (`catalog.declarationConverge.periodSeconds`, 60 s) converges the estate onto it.
   Read a declared change back on the catalog (`managed_by: "git"` on the project or warehouse read, the
   `declaration_converged` log line), not on the Deployment's revision: none moves. `docs/OPERATORS.md` § 2 is the
-  procedure. Pinned by `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`.
+  procedure. Pinned by `tests/chart/test_the_chart_declares_the_tenants_the_catalog_converges.py`.
 - **`services.lineage.provenanceNamespace` must name a namespace of the estate's own warehouse**
   (`lance_catalog$<namespace>`, default `lance_catalog$provenance`): `lance.provenanceNamespace` fails the render on
   any other, and the catalog refuses to boot on one. The first segment of every name is its warehouse ([[LH-593]]).
@@ -213,7 +213,7 @@ provisioned by its operator and attested by `signing.provisioned`).
 - **A container passes `args`, never `command`.** A container's `command` replaces its image's ENTRYPOINT, and each
   image's ENTRYPOINT is its tini, so the charts pass uvicorn's command line only as `args` ([[LH-313]]): as PID 1, uvicorn
   loses its closing SIGTERM re-raise and no SIGKILL sent from inside the pod reaches it, which criterion 5's catalog
-  drill needs (`tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`). Keeping the image's init this way holds
+  drill needs (`tests/chart/test_uvicorn_drains_inside_its_pods_grace_period.py`). Keeping the image's init this way holds
   whatever renders the pod, the chart now and an operator later.
 - **`serviceAccount.automount: false`** unless the pod genuinely calls the Kubernetes API. Here it is
   not a switch: every first-party pod runs as its own SA from `templates/security-sa.yaml`, tokenless
@@ -281,7 +281,7 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   hooks before the manifest creates it (measured 2026-10-02 on rev 259: `serviceaccount "rask-sa-jobs" not
   found`, the release stuck `pending-upgrade`): create it by hand first and let `make k3s-up`'s
   `--take-ownership` adopt it. The gate is the identity test of
-  `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`: the `identities rendered as hooks`
+  `tests/chart/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`: the `identities rendered as hooks`
   bucket, and a pre-upgrade hook may run only as an SA in its `_ESTABLISHED` set, so naming a new one is a
   deliberate edit there, which is the reminder to pre-create it.
 - **A hook that removes what git no longer declares runs post-upgrade** ([[XC-083]], ADR 0170).
@@ -302,7 +302,7 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   every mode in the ConfigMap `<release>-object-store-identities`, one `<release>-sa-<component>.json` per identity
   (`lance.objectStoreIdentities`, `lance.objectStorePolicy`); the hook writes each under its account
   (`lance.saAccount`), the token's `sub`, and binds no user to any, and a platform store's operator creates them.
-  `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds each workload's token, its policy and the
+  `tests/chart/test_a_provisioned_identity_is_one_the_service_uses.py` holds each workload's token, its policy and the
   store's provider equal.
 - **Changing the dev OpenBao's pod spec empties its store**, because its server keeps it in memory. The server is not
   `server -dev` (which prints its root token and unseal key to its log): it starts uninitialized, and the seed beside
@@ -395,7 +395,7 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   `<release>-<app>` is ESO's (`externalSecrets.role`); a ServiceAccount that is no name, one the lakehouse renders
   (`lance.serviceAccounts`) or `default`; and an empty or non-name secret list. An external reader gets a
   store role and policy. The gate is
-  `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
+  `tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 - **OpenFGA and its Postgres are optional, and production names the platform's** ([[XC-132]]): `openfga.enabled` and
   `age.enabled` off, `auth.fgaApiUrl` and `age.externalHost` set (the render refuses either empty). Every FGA client
   dials `lance.openfgaUrl` and every Postgres client `lance.ageConnectHost` (on the AGE-on-CNPG path, `lance-pg-rw`);
@@ -417,10 +417,10 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   volume, mount) under the condition its URL has, and `lance.openfgaSubjects` must list its account under
   the same condition. A list-valued `OPENFGA_*` env is comma-joined (measured on v1.18.3). An operator tool
   mints a token with `kubectl create token <release>-sa-hooks --audience rask-openfga`. The gate is
-  `tests/unit/test_openfga_admits_only_a_projected_service_account_token.py`; `openfga-authn.yaml` fails
+  `tests/chart/test_openfga_admits_only_a_projected_service_account_token.py`; `openfga-authn.yaml` fails
   the render when OpenFGA's audience, issuer alias or subject source drifts from the clients'.
 - **The gate is the render, judged by what each role grants**, so a new subchart that binds a
   secret-reading or token-reviewing role to `default` fails without anyone listing it:
-  `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`. A `User` subject
+  `tests/chart/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`. A `User` subject
   named `system:serviceaccount:<ns>:<sa>` counts as that SA. The gate carries its own mutation check:
   a template binding a `secrets: get` Role to `default` must fail it.

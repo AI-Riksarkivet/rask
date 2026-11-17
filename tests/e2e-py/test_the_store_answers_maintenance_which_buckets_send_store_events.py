@@ -24,7 +24,7 @@ from throwaway_rustfs import ThrowawayStore, admin, s3_client
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.bucket_events import report_bucket_events
-from tests.unit.chart_render import DEFAULT_ARGS, render
+from tests.chart.chart_render import DEFAULT_ARGS, render
 
 
 pytestmark = pytest.mark.rustfs_provisioning

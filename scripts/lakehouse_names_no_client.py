@@ -6,7 +6,7 @@ the client's own tree. A rule about what files say is a lint, so this runs in `m
 
 WHAT IS THE LAKEHOUSE'S. Its workspace members, its console (the `frontend` workspace and its image's dockerfile), its
 product chart (less the vendored upstream CRDs), the overlays and alert rules it deploys with, the platform's development
-fixtures, and its root suites (`tests/unit`, `tests/integration`, `tests/e2e-py`): a lakehouse test that names a client
+fixtures, and its root suites (`tests/unit`, `tests/chart`, `tests/integration`, `tests/e2e-py`): a lakehouse test that names a client
 depends on it, so deleting the client turns `make test` red. Repository tooling (`.dagger`, `scripts`, the Makefile),
 `docs` and the agent instructions are not the product, and this repository hosts no client for them to build.
 
@@ -45,12 +45,12 @@ LAKEHOUSE_CONSOLE = ("frontend", ".docker/frontend.dockerfile")
 #: The rest of what the lakehouse deploys with.
 LAKEHOUSE_DEPLOY = ("chart", "deploy/values-local.yaml", "deploy/values-prod.yaml", "deploy/alerting")
 #: The lakehouse's root suites.
-LAKEHOUSE_TESTS = ("tests/unit", "tests/integration", "tests/e2e-py")
+LAKEHOUSE_TESTS = ("tests/unit", "tests/chart", "tests/integration", "tests/e2e-py")
 #: Vendored upstream files the lakehouse does not write.
 VENDORED = ("chart/crds-bootstrap/", "/charts/")
 #: The gates' own tests, the product chart's render gate and this lint's: each names a client to show it is refused, as
 #: `AMBIGUOUS` and `DEPARTED` here do, and reads no client's file, so deleting every client leaves them green.
-CLIENT_GATES = ("tests/unit/test_the_product_chart_renders_no_client.py", "tests/unit/test_the_no_client_lint_sees_a_departed_client.py")
+CLIENT_GATES = ("tests/chart/test_the_product_chart_renders_no_client.py", "tests/unit/test_the_no_client_lint_sees_a_departed_client.py")
 
 #: The clients that have left the repository. These are the client names the lint, as it stood at `64ef118a9`, read off
 #: that tree (its services, packages, runners, microfrontends and fixtures outside the lakehouse and the platform; git

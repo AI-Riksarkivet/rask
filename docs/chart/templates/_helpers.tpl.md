@@ -349,7 +349,7 @@ publish and subscribe lists. Only session users are listed.
 EVERY DURABLE CONSUMER A SERVICE PULLS, IN ONE DERIVATION ([[XC-199]]), as a JSON list of {stream, name, config}. Its
 readers must agree: the stream Job's declare phase converges each consumer to its config, its retire phase removes a
 consumer of this release that the list no longer names (`nats-stream-job.yaml.md`), and
-`tests/unit/test_every_bus_user_may_do_what_its_service_is_configured_to.py` fails a render whose consumers a bus user
+`tests/chart/test_every_bus_user_may_do_what_its_service_is_configured_to.py` fails a render whose consumers a bus user
 cannot pull. Every consumer is a pull consumer with explicit acks; no service creates, edits or deletes one, and its bus
 user holds only `$JS.API.CONSUMER.MSG.NEXT.<stream>.<consumer>` and `$JS.ACK.<stream>.<consumer>.>` on it. Each
 config carries the release's mark, `metadata: {"rask.dev/release": "<release name>"}`, which is what makes a consumer
@@ -749,7 +749,7 @@ are all the claim needs; no list and no delete, and no other timer's record, so 
 block a catalog timer's window. Rendered only with `services.lineage.relay.enabled`, so a lineage that runs no relay
 holds no write at the store. A store answers the read of a missing key as forbidden to an identity that may not list
 (S3 does), which the timer takes as no claim: its create-if-absent write is the store's answer to whether one exists.
-Pinned by `tests/unit/test_scoped_policies_reach_runtime_minted_warehouses.py`.
+Pinned by `tests/chart/test_scoped_policies_reach_runtime_minted_warehouses.py`.
 
 ## `{{- define "lance.objectStoreSessionEnv" -}}`
 
@@ -957,7 +957,7 @@ one bound that applies actually fires here.
 The audience every lakehouse workload's store token is projected for, `objectStore.identity.audience` (ADR 0170). One
 value names both halves: the token each store-reaching pod mounts (`lance.identityTokens`) and the client id the store trusts as its
 identity provider's (`deploy/fixtures/rustfs` `identityProvider.clientId`, which
-`tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds equal). `required`: a blank audience would
+`tests/chart/test_a_provisioned_identity_is_one_the_service_uses.py` holds equal). `required`: a blank audience would
 leave every workload no identity at the store, and no workload holds a key pair to fall back to.
 
 ## `{{- define "lance.secretNamePattern" -}}^[a-z0-9][a-z0-9-]{0,252}${{- end -}}`
@@ -982,7 +982,7 @@ refused at runtime, or granted past its owner, so nothing restates it.
 
 No lakehouse service reads a bus credential: each is a session user that presents its ServiceAccount token to the bus
 (`lance.busEnv`, [[XC-199]]), so no `nats-user-<app>` is in any app's `api` list. Pinned by
-`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
+`tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 
 The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
 (a signer's public key), never a copy, so a rotation writes one place. The verifier
@@ -999,7 +999,7 @@ per identity (`nats-user-<name>`, for every static user of the issued table incl
 (the seed-only names are listed here, beside the ones the table and `lance.esoReads` derive) or another reader's id, a
 role `<release>-<app>` equal to ESO's (`externalSecrets.role`, whose policy and role keys the identities ConfigMap
 would carry twice), a ServiceAccount the lakehouse renders or `default` (`lance.serviceAccounts`), and an empty or
-non-name secret list. Pinned by tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py.
+non-name secret list. Pinned by tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py.
 
 ## `{{- define "lance.esoReads" -}}`
 
@@ -1117,7 +1117,7 @@ reserved 65 arenas unset and 1 at `MALLOC_ARENA_MAX=2`. Two rather than one beca
 serialises every allocation in a 100+ thread process on one lock.
 
 NOT A SECRET: a libc tunable with no confidentiality, read by glibc at startup and by nothing else.
-Pinned by `tests/unit/test_the_lakehouse_bounds_its_allocator_arenas.py`.
+Pinned by `tests/chart/test_the_lakehouse_bounds_its_allocator_arenas.py`.
 
 ## `{{- define "lance.signers" -}}`
 
@@ -1205,6 +1205,6 @@ The rows mirror the gates of the templates that render each backend: catalog and
 (services.yaml), so the route never names a Service that did not render.
 
 A new door a service mounts at its root is a path in its row; the gate in
-`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` fails until it is, and fails on a path that
+`tests/chart/test_the_cluster_route_names_one_backend_per_api_prefix.py` fails until it is, and fails on a path that
 reaches only the pod's probes. A client's own prefixes are not rows: its
 release publishes them with an HTTPRoute of its own.

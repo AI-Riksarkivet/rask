@@ -7,7 +7,7 @@ description: "The ruling that the lakehouse runs no Dapr, and where each need a 
 
 **The ruling** ([[XC-199]], #787, ADR 0207): the lakehouse runs no Dapr. No lakehouse pod runs a sidecar, the product
 chart renders no `dapr.io` object and no `dapr.io/` annotation or label in any mode, the repository installs no Dapr
-control plane, and no lakehouse package imports `dapr`. `tests/unit/test_invariants.py::test_no_lakehouse_pod_runs_a_sidecar_and_the_chart_renders_no_dapr_object`
+control plane, and no lakehouse package imports `dapr`. `tests/chart/test_invariants.py::test_no_lakehouse_pod_runs_a_sidecar_and_the_chart_renders_no_dapr_object`
 holds the render to it in the default, local and production modes.
 
 ## Where each need is met

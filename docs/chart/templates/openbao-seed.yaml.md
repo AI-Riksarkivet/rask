@@ -183,7 +183,7 @@ can forge any credential the catalog vends (ADR 0168). No service reads it: no r
 ESO writes it into `<release>-object-store-root` for the store and the provisioning hook alone. Both halves sit in one
 object, as the store's non-optional secret volume needs them. No other secret here holds an object-store key: every
 lakehouse workload's store identity is its ServiceAccount token ([[XC-084]], ADR 0170).
-`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows it through every path a pod reads a
+`tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows it through every path a pod reads a
 secret by.
 
 ## `i="$HOME/seed/commit-id-key"`

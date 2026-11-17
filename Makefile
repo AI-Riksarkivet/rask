@@ -785,7 +785,7 @@ e2e-compaction:     ## Maintenance proof: a deployed commit's pass (needs LANCE_
 	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_CREDENTIALS)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_CREDENTIALS=$(LANCE_E2E_CREDENTIALS) uv run pytest tests/e2e-py -m compaction -v --require-live
-# THE ITERATION LOOP, and the measurement that made it a target. `tests/unit` + `tests/integration` is
+# THE ITERATION LOOP, and the measurement that made it a target. `tests/unit` + `tests/chart` + `tests/integration` is
 # what every change runs before it is pushed, and it took 9m57s serially on a 64-core machine. Measured
 # 2026-09-19 at `-n 16 --dist loadfile`: **1m17s, 4,947 passed, zero failures** — 7.7x, because the
 # suite is a broad front with no hotspot (the slowest single test is 14.1s).
@@ -797,7 +797,7 @@ e2e-compaction:     ## Maintenance proof: a deployed commit's pass (needs LANCE_
 # `-n 16` rather than `auto`: `auto` takes all 64 cores and the run is IO-bound long before that —
 # measured, 16 workers already reach the wall-clock floor while leaving the machine usable.
 check-fast: $(OPENFGA_BIN) ## The pre-push suite in parallel — 1m17s against 9m57s serial
-	uv run pytest tests/unit tests/integration -q -n 16 --dist loadfile
+	uv run pytest tests/unit tests/chart tests/integration -q -n 16 --dist loadfile
 
 # REQUIRES its targets, rather than skipping into a green: every test in this suite skips without
 # RASK_E2E_EDGE_URL, the other-audience cases without LANCE_E2E_DEX, and a live drive with no live target is a failed

@@ -35,7 +35,7 @@ GUARDS = frozenset(
     {
         "pyproject.toml",
         ".importlinter",
-        "tests/unit/test_invariants.py",
+        "tests/chart/test_invariants.py",
         "scripts/the_lakehouse_runs_no_dapr.py",
         "tests/unit/test_the_lakehouse_runs_no_dapr.py",
     }

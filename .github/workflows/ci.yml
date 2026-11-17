@@ -52,9 +52,9 @@ jobs:
   # pytest stands alone because it is the only gate the e2e legs actually depend on (`needs: ms-test`
   # below). Inside the matrix, e2e would wait on ruff and formatting to decide whether to run.
   #
-  # Runs the whole offline suite (`-m "not e2e"`), which INCLUDES the claim-lint
-  # invariants (tests/unit/test_invariants.py) and the tests/e2e-py collection gate
-  # (tests/unit/test_e2e_collection_gate.py) — those gates are folded in here, not lost.
+  # Runs the offline suite (`-m "not e2e"`) without the chart's render tests, which the `chart-tests`
+  # gate runs (tests/chart, the claim-lint invariants of tests/chart/test_invariants.py among them). The
+  # tests/e2e-py collection gate (tests/unit/test_e2e_collection_gate.py) is folded in here.
   ms-test:
     runs-on: ubuntu-latest
     steps:
@@ -85,6 +85,9 @@ jobs:
   #   charts    helm lint + full render, the networkPolicy / security-hardening
   #             `--set` render-and-grep invariants, the prod-overlay HA/security render, and the
   #             promtool alert-rules validate-and-fire proof. `dagger call charts` == `make charts`.
+  #   chart-tests
+  #             the chart's render tests (tests/chart): pytest over the product chart's and the fixtures'
+  #             renders with the pinned helm. The `test` job runs every other testpath and leaves these out.
   #   alert-rules-drill
   #             the OTHER half of the alert proof, and it is not a duplicate of the one above.
   #             promtool is PROMETHEUS; vmalert queries GreptimeDB, and the two do not accept the same
@@ -116,7 +119,7 @@ jobs:
         # serving this tree's chart, then one changed input converging on the next automated sync ([[XC-164]]).
         # release-handoff: a release joins and signs only the images its scan returned, after their tags were moved, and
         # a chart is installed only as the archive whose signature was verified ([[XC-215]], [[XC-216]]).
-        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty, gitops-from-empty, release-handoff]
+        gate: [lint, typecheck, openapi, charts, chart-tests, alert-rules-drill, go-fmt, nats-auth, install-from-empty, gitops-from-empty, release-handoff]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger

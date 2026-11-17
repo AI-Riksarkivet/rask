@@ -65,7 +65,7 @@ An unmatched `/api/*` path falls to the console's `/` rule, whose server answers
 `console.enabled: false` it is the Gateway's own 404: no rule, no backend. A 401 or 403 always comes from
 the service the prefix names.
 
-The offline gate is `tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` (the render);
+The offline gate is `tests/chart/test_the_cluster_route_names_one_backend_per_api_prefix.py` (the render);
 the live one is `tests/e2e-py/test_the_cluster_route_reaches_each_service.py` (marker `edge`,
 `make e2e-edge RASK_E2E_EDGE_URL=…`). The render gate boots each app under the env its pod renders and fails when the
 route publishes a route the pod answers only for its platform, leaves a door the app mounts unpublished, or names a

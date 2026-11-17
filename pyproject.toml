@@ -279,7 +279,7 @@ exclude = [
 # adding the directory is a separate act from adding the file, and a suite outside the list is green by
 # absence (measured 2026-08-09: three landed regression suites in services/catalog and services/lineage
 # had never run). pytest expands a glob in `testpaths` (measured, pytest 9.1.1).
-testpaths = ["packages/*/tests", "services/*/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+testpaths = ["packages/*/tests", "services/*/tests", "tests/unit", "tests/chart", "tests/integration", "tests/e2e-py"]
 # NO `--cov` HERE. It ran on EVERY pytest invocation in the estate and nothing read the result: no
 # `fail_under`, no xml report, no artifact upload, no threshold in `ci.yml` or `.dagger/` — so the
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when

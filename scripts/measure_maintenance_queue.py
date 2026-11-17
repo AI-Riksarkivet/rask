@@ -27,7 +27,7 @@ from nats_auth_rig import RENDER_ARGS, VALUES_ENV, Rig, Tools, bus_users, stream
 from pydantic import BaseModel
 
 from maintenance.services.queue import TASKS_STREAM, Task, TaskQueue, Worker
-from tests.unit.chart_render import DEFAULT_ARGS, render
+from tests.chart.chart_render import DEFAULT_ARGS, render
 
 
 REPO: Final = Path(__file__).resolve().parents[1]

@@ -574,7 +574,7 @@ tables are never declared.
   writes OpenFGA: only the catalog and the model hook hold a `rask-openfga` token.
 
 Pinned by `tests/integration/test_the_catalog_converges_what_git_declares.py` (the real app, a real OpenFGA, moto, the
-tick run on the app's loop as its timer runs it), `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`
+tick run on the app's loop as its timer runs it), `tests/chart/test_the_chart_declares_the_tenants_the_catalog_converges.py`
 (the render: the default project `default`, administered by `auth.bootstrapAdmin` when it names no admin, and the
 estate's admin and roles) and, live,
 `tests/e2e-py/test_the_estate_is_what_git_declares.py`. `docs/OPERATORS.md` § 2 is the operator's procedure.

@@ -11,8 +11,8 @@ These SAs carry no grant except issuer discovery below; a pod that calls the API
 RBAC-bound SA in its template. The list (`lance.saComponents`) names each component the chart runs, and a key under `.Values.services` adds
 none, so a release's values cannot render an identity for a service the chart does not run, such as a client's key a
 release kept. A pod names its SA with this file's prefix (lance.fullname), which follows the release name where
-rask.fullname does not. Pinned by tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py, and
-the stale client key by tests/unit/test_the_product_chart_renders_no_client.py.
+rask.fullname does not. Pinned by tests/chart/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py, and
+the stale client key by tests/chart/test_the_product_chart_renders_no_client.py.
 
 ## `name: {{ .Release.Name }}-openfga`
 
@@ -29,7 +29,7 @@ still holds its token, so every later hook on it is refused, and it does not exi
 exists from the revision that introduces it on, so a pre-upgrade hook on any later upgrade finds it. The one upgrade
 that introduces an ordinary SA runs its pre-upgrade hooks before the manifest creates it (measured 2026-10-02, rev
 259: `serviceaccount "rask-sa-jobs" not found`): create it once beforehand and let `make k3s-up`'s
-`--take-ownership` adopt it. Pinned by tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
+`--take-ownership` adopt it. Pinned by tests/chart/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 
 ## `apiVersion: rbac.authorization.k8s.io/v1`
 

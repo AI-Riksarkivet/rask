@@ -18,7 +18,7 @@ uvicorn 0.51.0), and it drops a SIGKILL sent from inside the PID 1's own namespa
 The chart therefore passes uvicorn's whole command line as `args`, which the image's ENTRYPOINT runs, so the init
 survives whatever renders the pod: `opentelemetry-instrument` first when tracing is on, then `uvicorn`, the module, bind
 address, port and graceful-shutdown flag (`rask.shutdownArg`, sized from the pod's termination grace), one per line.
-Pinned by `tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`; XC-095's catalog drill proves the PID 1 on
+Pinned by `tests/chart/test_uvicorn_drains_inside_its_pods_grace_period.py`; XC-095's catalog drill proves the PID 1 on
 the kind lane.
 
 `rask.proxyHeaderArgs` adds `--proxy-headers --forwarded-allow-ips=<forwardedAllowIps>`: the
@@ -107,7 +107,7 @@ The catalog REFUSES an invalid pairing at boot rather than passing it on.
 The catalog announces every committed write on the bus. `lance.busEnv` renders `RASK_BUS_URL` and `RASK_BUS_USER` in
 every render, since `nats.url` is required, and a catalog told to emit on the bus with no bus named refuses to start
 (`catalog.core.config`), so the switch is on wherever the catalog runs. Pinned by
-`tests/unit/test_invariants.py::test_the_catalog_is_switched_to_publish_on_the_bus_it_is_named`.
+`tests/chart/test_invariants.py::test_the_catalog_is_switched_to_publish_on_the_bus_it_is_named`.
 
 ## `- { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }`
 
@@ -173,7 +173,7 @@ While an HPA scales a service, its Deployment renders no `replicas`: a rendered 
 self-heal would set it back each time the HPA moved it, so the two would flap ([[XC-164]]). Without the field the
 Deployment keeps the count the HPA last set. Turning autoscaling on in an existing release removes the field, which sets
 the Deployment to one replica until the HPA scales it back to `autoscaling.minReplicas`, within its first sync period.
-`tests/unit/test_an_autoscaled_service_leaves_its_replica_count_to_the_autoscaler.py` holds it.
+`tests/chart/test_an_autoscaled_service_leaves_its_replica_count_to_the_autoscaler.py` holds it.
 
 ## `- { name: LANCE_FGA_MAINTAINERS, value: {{ include "lance.fgaMaintainers" $root | quote }} }`
 
@@ -221,7 +221,7 @@ uvicorn 0.51.0), and it drops a SIGKILL sent from inside the PID 1's own namespa
 The chart therefore passes uvicorn's whole command line as `args`, which the image's ENTRYPOINT runs, so the init
 survives whatever renders the pod: `opentelemetry-instrument` first when tracing is on, then `uvicorn`, the module, bind
 address, port and graceful-shutdown flag (`rask.shutdownArg`, sized from the pod's termination grace), one per line.
-Pinned by `tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`; XC-095's catalog drill proves the PID 1 on
+Pinned by `tests/chart/test_uvicorn_drains_inside_its_pods_grace_period.py`; XC-095's catalog drill proves the PID 1 on
 the kind lane.
 
 `rask.proxyHeaderArgs` adds `--proxy-headers --forwarded-allow-ips=<forwardedAllowIps>`: the

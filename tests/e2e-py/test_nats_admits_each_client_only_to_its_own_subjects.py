@@ -112,7 +112,7 @@ from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, Cl
 from lakehouse.supervision import Supervisor
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
-from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render, render_fixture
+from tests.chart.chart_render import DEFAULT_ARGS, containers, env_of, render, render_fixture
 
 
 pytestmark = pytest.mark.nats_auth

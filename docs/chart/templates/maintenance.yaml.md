@@ -27,7 +27,7 @@ repeats none.
 `lifecycle.maintenanceTerminationGracePeriodSeconds`, longer than the fleet's: a stopping worker lets the pass it is
 running finish for `maintenance.queue.drainSeconds` rather than leave it to be delivered again. The render refuses a
 drain the grace cannot hold after preStop and the teardown, since a replica killed mid-pass is what the drain exists to
-avoid. Held by `tests/unit/test_invariants.py::test_a_queue_value_the_worker_cannot_run_with_fails_the_render`.
+avoid. Held by `tests/chart/test_invariants.py::test_a_queue_value_the_worker_cannot_run_with_fails_the_render`.
 
 ## `- { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root)...`
 

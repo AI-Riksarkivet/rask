@@ -56,7 +56,7 @@ fetches it from
 ONE object: the store mounts both as files from a non-optional secret volume, so a pair split across two sources is a
 pod that cannot start rather than one that signs wrongly. No lakehouse workload reads a store key from this file or any
 other: each one's store identity is its ServiceAccount token ([[XC-084]]). A platform's S3 has no such Secret here: its
-operator holds its root and provisions rask's identities. `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`
+operator holds its root and provisions rask's identities. `tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`
 gates who reads it.
 
 ## `{{- if hasKey (include "lance.natsFiles" . | fromJson) "object-store-bus-creds" }}`

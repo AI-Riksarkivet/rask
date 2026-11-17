@@ -9,7 +9,7 @@ EVERY IDENTITY THAT READS THE SECRET STORE, AS DOCUMENTS, IN EVERY MODE ([[XC-16
 app in `lance.storeReads`, and ESO's, as `role-<name>.json` and `policy-<name>.json`. The dev store's seed applies them
 as they are (openbao-seed.yaml, which mounts this ConfigMap as `STORE_IDENTITIES`), a platform store's operator creates
 the same roles and policies from a production render, and the render gate
-(`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`) reads the same documents to decide who can
+(`tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`) reads the same documents to decide who can
 read each secret. They are not in the seed's own ConfigMap because that renders only with `openbao.enabled`, and the
 platform's store needs them most.
 

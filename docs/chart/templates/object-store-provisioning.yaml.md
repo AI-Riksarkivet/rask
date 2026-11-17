@@ -11,7 +11,7 @@ workload's canned policy under its ServiceAccount's account name, the documents 
 declares (`object-store-identities.yaml`): the catalog, lineage, maintenance and each backup CronJob that is on. No user holds a
 policy: the store grants one to the token the account's pod projects (ADR 0170, ADR 0197), so the run makes no user and
 reads no secret but the root's. It is the only workload that presents the root (ADR 0168;
-`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`). A platform's S3 gets neither from rask: its
+`tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`). A platform's S3 gets neither from rask: its
 operator makes the buckets and creates the policies from the same ConfigMap.
 
 IDEMPOTENT, CALL BY CALL, on RustFS's native admin API (`scripts/rustfs_admin.py`): `add-canned-policy` replaces a policy
