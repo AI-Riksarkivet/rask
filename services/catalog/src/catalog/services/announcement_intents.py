@@ -134,6 +134,24 @@ class TagGone(BaseModel):
     tag: str
 
 
+class RefOnARelease(BaseModel):
+    """A ref the person told put on a table landed while the erasure release that takes it stands: the tag or branch
+    ``name`` stands at the table at ``location``, naming ``(branch, version)`` (a tag's version, a branch's parent), and
+    the release's record at ``key`` holds ``due_at`` (ADR 0233 §9)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["ref_on_a_release"] = "ref_on_a_release"
+    key: str
+    due_at: str
+    location: str
+    ref: Literal["tag", "branch"]
+    name: str
+    #: The branch the tag's version is on, or the branch the branch was cut from; ``None`` for main.
+    branch: str | None
+    version: int
+
+
 class RoleEnded(BaseModel):
     """A role's end landed: ``project`` no longer holds the role standing."""
 
@@ -144,7 +162,9 @@ class RoleEnded(BaseModel):
     role: str
 
 
-type Evidence = Annotated[TupleGone | TupleHeld | NameResolves | NamespaceResolves | RecordGone | RecordHeld | RoleEnded | TagGone, Field(discriminator="kind")]
+type Evidence = Annotated[
+    TupleGone | TupleHeld | NameResolves | NamespaceResolves | RecordGone | RecordHeld | RefOnARelease | RoleEnded | TagGone, Field(discriminator="kind")
+]
 
 
 class ControlMessage(BaseModel):

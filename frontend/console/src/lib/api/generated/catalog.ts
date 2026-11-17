@@ -3285,6 +3285,11 @@ export interface paths {
          *     changes an object; a branch appearing changes an object, so it joins the 31 members that name
          *     nobody, so no notifier targets it. A console invalidating a branch list is
          *     the consumer this serves.
+         *
+         *     A BRANCH AN ERASURE'S RELEASE WILL TAKE IS TOLD OF TO ITS CALLER (ADR 0233 §9): when a release scheduled on the table
+         *     takes the branch (it is cut from a version holding the erased subject, or from a branch the release recreates), its
+         *     commits are lost when the release recreates it at main's head, so the caller receives a targeted
+         *     `erasure_release_scheduled` naming the branch and the release's deadline, filed before the branch is created.
          */
         post: operations["create_table_branch_v1_table__id__branches_create_post"];
         delete?: never;
@@ -4027,6 +4032,10 @@ export interface paths {
          *
          *     A TAG IS HOW A PIPELINE MARKS A VERSION READY (`lance_docs/lance/guide/tags_and_branches.md`), under a name it
          *     chooses, so each of the three ref mutations is announced: a reader holding "tag -> version" learns it moved.
+         *
+         *     A TAG AN ERASURE'S RELEASE WILL TAKE IS TOLD OF TO ITS CALLER (ADR 0233 §9): when a release scheduled on the table takes
+         *     the tag (its version holds the erased subject, or it is on a branch the release recreates), the caller receives a
+         *     targeted `erasure_release_scheduled` naming the tag and the release's deadline, filed before the tag is written.
          */
         post: operations["create_table_tag_v1_table__id__tags_create_post"];
         delete?: never;
@@ -4098,7 +4107,8 @@ export interface paths {
          *
          *     A MOVE IS NOT A CREATE. The name survives and the version under it changes, so a consumer holding
          *     "tag -> version" has stale state with no failing read to discover it by; `version` rides in `extra`
-         *     so it can be corrected without a re-read.
+         *     so it can be corrected without a re-read. A tag moved onto a version an erasure's release will take is told of to the
+         *     caller as a created one is.
          */
         post: operations["update_table_tag_v1_table__id__tags_update_post"];
         delete?: never;

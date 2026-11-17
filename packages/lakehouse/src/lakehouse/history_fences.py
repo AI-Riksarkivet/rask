@@ -7,18 +7,28 @@ branch's files. Nothing in Lance orders a ref written meanwhile with the reclaim
 or branch created on version 2 a few milliseconds into ``cleanup_old_versions(older_than=0)`` on a local store: the tag
 named a deleted version in 20 of 60 races, and the branch could not be read in 9 of 60.
 
-SO THE TWO NEVER OVERLAP ON ONE TABLE. Each takes the table's history fence first (:class:`TableHistory`): one record
-per table on the control root, keyed by the table's uuid (ADR 0173 §8), listing who holds it now. Holders of one kind
-share it, since what the fence closes is a ref written while a reclaim runs, never two reclaims or two ref writes; a
-holder of the other kind refuses the take (:class:`HistoryFencedError`), and the caller answers 409 or leaves its
-reclaim for the next tick. The store picks the
-winner: a take is a create-if-absent or a replace under the ETag it read (:mod:`lakehouse.records`), as a
-location claim's is.
+SO THE TWO NEVER OVERLAP ON ONE TABLE. Each takes the table's history fence first (:class:`TableHistory`), kept as one
+object per holder beneath the table's directory on the control root, keyed by the table's uuid (ADR 0173 §8,
+:func:`fence_directory`). Holders of one kind share it, since what the fence closes is a ref written while a reclaim
+runs, never two reclaims or two ref writes; a holder of the other kind refuses the take (:class:`HistoryFencedError`),
+and the caller answers 409 or leaves its reclaim for the next tick. The store picks the winner
+(:class:`lakehouse.fences.HolderFence`, ``specs/catalog/Fence.tla``).
+
+REF WRITES NEVER REFUSE REF WRITES. Every tag and branch write takes the fence, so ref writes share it whatever their
+number, each writing an object of its own. Measured on RustFS 1.0.3 with one record per table that every take replaced
+under its ETag: 7 to 9 of 16, and 36 to 39 of 64, concurrent tag writes on one table answered 409 with nothing excluding
+them (ADR 0233 §9).
 
 AN ERASURE'S RELEASE HOLDS IT ALONE (ADR 0233). The release deletes the refs standing on an erased subject's versions,
 recreates the branches it deleted and reclaims what they kept, and a ref written anywhere in that span could pin a
 version it is about to delete or keep a residual it has just let go: :attr:`HistoryWork.RELEASE` excludes every other
 kind, and its own.
+
+AND ITS SCHEDULING EXCLUDES EVERY REF WRITE (ADR 0233 §9). Whoever puts a ref the release will take, once the release is
+recorded, is told at that ref's write (``catalog.services.erasure_release``), which reads the release's mark in the
+fence's directory off its own take's listing. The verification writes that mark and then the release's record while it
+holds the fence as :attr:`HistoryWork.SCHEDULE`, which no ref write shares: a ref write either finished before the
+record stood, or its take came after the mark and saw it.
 
 A BRANCH CREATE HOLDS IT ALONE ([[LH-413]]). Lance joins a branch name onto ``tree/`` verbatim and keeps each ref in its own
 file (``lance_docs/lance/format/table/branch_tag.md`` § Branch Dataset Layout, § Branch Metadata Path), so ``a`` and
@@ -49,19 +59,33 @@ from datetime import timedelta
 from enum import StrEnum
 from typing import ClassVar, Final
 
-from lakehouse import control_prefixes
-from lakehouse.fences import FenceRecord, Holder, RecordFence
-from lakehouse.record_store import record_key
+from lakehouse import control_prefixes, stored_objects
+from lakehouse.fences import Holder, HolderFence, HolderRecord
+from lakehouse.record_store import record_name
+from lakehouse.storage_options import StorageOptions
 
 
 PREFIX: Final = control_prefixes.HISTORY_FENCES
 
-__all__ = ["HOLD", "PREFIX", "HistoryFence", "HistoryFencedError", "HistoryWork", "Holder", "TableHistory", "fence_key"]
+__all__ = ["HOLD", "PREFIX", "HistoryFencedError", "HistoryHolder", "HistoryWork", "Holder", "TableHistory", "end", "fence_directory"]
 
 
-def fence_key(table_uuid: str) -> str:
-    """The key of the table ``table_uuid``'s fence record on the control root."""
-    return record_key(PREFIX, "table", table_uuid)
+def fence_directory(table_uuid: str) -> str:
+    """The key of the directory of the table ``table_uuid``'s history fence on the control root: one object per holder,
+    and the marks of the work coming to the table's history, beneath it."""
+    return f"{PREFIX}/{record_name('table', table_uuid).removesuffix('.json')}"
+
+
+def end(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
+    """Delete every object of the table ``table_uuid``'s history fence, holders and marks, as the table ends; whether any
+    stood. Writes no directory marker (:func:`stored_objects.delete_objects`).
+
+    Raises:
+        OSError: The store refused the listing or a delete.
+    """
+    listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{fence_directory(table_uuid)}", storage_options)
+    stored_objects.delete_objects(control_root, storage_options, [stored.path for stored in listed])
+    return bool(listed)
 
 
 #: How long a take, and each renewal of it, holds the fence: three renewal intervals, and short enough that a holder that
@@ -80,45 +104,53 @@ class HistoryWork(StrEnum):
     BRANCH = "branch"
     #: An erasure's release: deletes refs, recreates branches and reclaims, so it shares the table with no other work.
     RELEASE = "release"
+    #: Writes an erasure release's mark and then its record: no ref write may land between the two unseen.
+    SCHEDULE = "schedule"
+
+
+#: The kinds that keep refs off the table's history while they hold it: they delete versions, or write what a ref write
+#: must see before it lands. They share it with their own kind and with each other.
+_REF_FREE: Final = frozenset({HistoryWork.RECLAIM, HistoryWork.SCHEDULE})
+_REF_WRITES: Final = frozenset({HistoryWork.REFS, HistoryWork.BRANCH})
 
 
 def _excludes(held: HistoryWork, work: HistoryWork) -> bool:
-    """Whether a holder doing ``held`` refuses a take for ``work``: work of the other kind, a second branch create, or
-    anything beside a release."""
+    """Whether a holder doing ``held`` refuses a take for ``work``: a ref write beside a reclaim or a scheduling, a second
+    branch create, or anything beside a release."""
     if HistoryWork.RELEASE in (held, work):
         return True
     if held is work:
         return work is HistoryWork.BRANCH
-    return HistoryWork.RECLAIM in (held, work)
+    return {held, work} & _REF_FREE != set() and {held, work} & _REF_WRITES != set()
 
 
-class HistoryFence(FenceRecord):
-    """The fence's record, naming its table by uuid: the record every take, renewal and release reads and writes."""
+class HistoryHolder(HolderRecord):
+    """One holder's object, naming the table it fences by uuid."""
 
     uuid: str
 
 
 class HistoryFencedError(Exception):
-    """The table's history is held by work that excludes this take's, or by too many writers at once to join."""
+    """The table's history is held by work that excludes this take's."""
 
 
-class TableHistory(RecordFence):
+class TableHistory(HolderFence):
     """Where one table's history fence is kept: the control root, the credential that writes there, and the table's uuid.
 
-    One record per table, since a maintain-tier vend may write that key of the control root and no other
-    (``catalog.core.vending.TableRecords``): ref writes on one table contend for it, and a take that loses every round to
-    them is refused. It ends with the table's other records (:mod:`lakehouse.object_records`).
+    A maintain-tier vend reaches this directory and no other of the control root: it lists it, reads every object in it,
+    and writes and deletes only a reclaim's holder objects (``catalog.core.vending.TableRecords``), so a lapsed holder of
+    another kind is swept by the catalog's next take, never by maintenance. It ends with the table (:func:`end`).
     """
 
     log_name: ClassVar[str] = "history_fence"
     stored_field: ClassVar[str] = "uuid"
-    record_model: ClassVar[type[FenceRecord]] = HistoryFence
+    holder_model: ClassVar[type[HolderRecord]] = HistoryHolder
 
     table_uuid: str
 
     @property
-    def key(self) -> str:
-        return fence_key(self.table_uuid)
+    def directory(self) -> str:
+        return fence_directory(self.table_uuid)
 
     @property
     def subject(self) -> str:

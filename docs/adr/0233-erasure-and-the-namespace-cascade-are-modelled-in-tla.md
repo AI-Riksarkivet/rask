@@ -4,7 +4,8 @@
 both rest on. Both describe the Python catalog as it runs, before it is ported (ADR 0217 §5). The eight findings are
 fixed, model first (§6); the eighth by ADR 0227 §8, and a ninth, found by review in the cascade's table step, with it.
 A review of the erasure and cascade fixes found three more defects, a fourth by measurement, a fifth on reading, and
-guards no test held, all fixed model first (§8). The owner decided two questions on 2026-11-17, and one is left (§9).
+guards no test held, all fixed model first (§8). The owner decided two questions on 2026-11-17; both are built, and so is
+the third item §9 had left open, the history fence's contention, model first (§9).
 
 ## Context
 
@@ -41,16 +42,18 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
 
 3. **What the gate proves** (`make tla-check`, four workers):
    - `Erasure.cfg` (one verification, branch B, a derived table, a branch cut from B, a drop and undrop, two
-     failures): 33,135 states.
+     failures): 61,977 states.
    - `ErasureConcurrent.cfg` (two verifications at once, no failure): 116,457 states.
-   - `ErasureRefsInTheGrace.cfg` (a tag and a branch another caller makes on any retained version, one failure):
-     53,529 states.
+   - `ErasureRefsInTheGrace.cfg` (a tag and a branch another caller makes on any retained version, its door in steps
+     and able to die between them, one failure): 142,501 states.
    - `ErasureClone.cfg` (a clone another caller registers on any retained version, branch B, one failure): 5,193 states.
    - `ErasureNoticeRace.cfg` (two verifications at once, one failure, the invariants): 244,980 states.
    - `ErasureNoticeNoReverify.cfg` (no verification comes again, one failure): 1,014 states.
    - `ErasureWide.cfg` and `ErasureNoticeRaceWide.cfg`, ON DEMAND (two verifications with one failure and a branch cut
      from B; two verifications with two failures and the liveness).
    - `Fence.cfg` (two adds, two drops, a holder sharing with nobody, any hold lapsing): 4,096 states.
+   - `FenceHistory.cfg` (a table's history: two ref writes, a reclaim, two branch creates and a release, any hold
+     lapsing): 22,528 states.
    - `Cascade.cfg` (the recoverable cascade beside a create on the backend as measured, the namespace undrop and the
      purge, no failure): 192 states.
    - `CascadeFaults.cfg` (the same with up to two failures and a warehouse delete, held to every invariant):
@@ -69,17 +72,22 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
    - `OnlyTagsOverTheSubjectAreDropped`: a tag is dropped only once every head is clean, and only over a version a read
      answers the subject from.
    - `NoticeOnlyForARecordedRelease`: nobody is told of a release the catalog did not record, nor of a deadline no
-     recorded release names.
+     recorded release names, a ref's creator included.
+   - `ACreatorIsToldBeforeTheRelease`: whoever put a ref the release takes while its record stood was told, with that
+     record's deadline, before the release ran (§9).
    - `EveryReleasedBranchComesBack`: the release recreates every branch it deleted.
    - `NoCloneIsBroken`: a registered clone's version is never deleted while the clone stands.
    - `ErasedOnceReleased` (liveness): once released, the release and cleanup leave the subject in no version and no
      branch head, whatever ref another caller made, once every clone holding it has ended (A6).
    - `EveryObligationIsReleased`, `EveryReleaseFinishes`, `EveryDroppedTagIsAnnounced` (liveness), whatever request dies,
-     and `EveryoneIsTold`: every recorded release's deadline is told.
+     and `EveryoneIsTold`: every recorded release's deadline is told, and every creator owed a notice is told while
+     the ref stands.
    - `AHeldReleaseIsReported` (liveness): a release a clone holds says so, unless the clone ends first.
 
-   `specs/catalog/Fence.tla` models one fence: adds, drops and a kind that shares with nobody, each holder writing an
-   object of its own and listing the others, any hold lapsing while its holder works. `Exclusive`: two holders of kinds
+   `specs/catalog/Fence.tla` models one fence: adds, drops, branch creates (sharing with adds alone) and a kind that
+   shares with nobody, each holder writing an object of its own and listing the others, any hold lapsing while its
+   holder works. A namespace's fence has adds and drops; a table's history has ref writes (adds), reclaims and
+   schedulings (drops), branch creates and releases. `Exclusive`: two holders of kinds
    that exclude each other never hold it at once; `NoLastStepBesideAnExcluder`: no last step is taken beside one admitted
    since.
 
@@ -233,7 +241,11 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
    people receive `erasure_release_scheduled` again with `extra.held_by_clones` (§8.1). A notice may arrive again under
    the same `event_id`, always naming the deadline of the release that stands (§8.3). A warehouse delete whose hold of
    its fence lapsed answers partial 409 code 14 and keeps the warehouse for its re-issue (§8.5). Each costs a few
-   control-root round trips per add or drop.
+   control-root round trips per add or drop. Ref writes on one table no longer refuse each other, and a tag or branch
+   write answers 409 code 14 for the moment a verification records a release on the table; whoever puts a ref a
+   scheduled release will take receives `erasure_release_scheduled` naming it in `extra.ref`, and a verification that
+   ref writes keep from recording its release answers the `release` surface failed with the obligation open (§9). A
+   maintain-tier vend lists its table's history-fence directory and writes only a reclaim's holds there (§9).
 
 8. **Found by review of the fixes (commit `7dcc463`), each FIXED, model first.** Each guard is removed by a config that
    must fail, and its test fails without the guard (each removal run on 2026-11-17, the result named).
@@ -289,10 +301,8 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
       creates answered 200 (1.9 s and 8.0 s), and 16 of 16 and 64 of 64 takes held. Proved needed by
       `FenceNoRecheck.cfg` (`Exclusive`), held by `Fence.cfg`; tested by
       `packages/lakehouse/tests/test_a_namespaces_adds_share_its_fence_and_its_drop_excludes_them.py`, red at `7dcc463`
-      (1, 3 and 6 of 32 adds refused on a local root in three runs). The history fence keeps its one record: a
-      maintain-tier vend may write that key and no other (`vending.TableRecords`), and moving it to holder objects would
-      grant the vend a listing and a delete under the table's fence directory. Its ref writes still contend: 4 of 16 and
-      43 of 64 concurrent ref-write takes on one table were refused on the same store. That is left as measured (§9).
+      (1, 3 and 6 of 32 adds refused on a local root in three runs). The history fence kept its one record then, its
+      ref writes contending as measured; it moved to holder objects since (§9).
    5. **A holder whose hold lapsed went on to its last step. FIXED, guard F2 of the fence model.** Read from the code:
       `Fence.held` renews in a thread and logs a lost hold, while the block runs on; the warehouse delete then removed
       the warehouse's record although a trash record could have been filed under it after its hold lapsed. The delete
@@ -329,16 +339,113 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
      names the clone's location only.
    - **A branch or tag made on a residual during the grace: DECIDED, "Tell the creator"** (owner, 2026-11-17, through the
      question tool): whoever creates it gets the release's `erasure_release_scheduled`, with the due time, at creation,
-     filed before the ref as the other notices are. NOT BUILT in this change: until it is, a branch cut from a residual
-     loses its own commits when the release recreates it at main's head, and its creator is not among those told.
-   - **The history fence's ref writes contend** (§8.4): concurrent tag or branch writes on one table can be refused 409
-     although nothing excludes them, 43 of 64 measured. Moving the history fence to holder objects closes it at the cost
-     of a listing and a delete under the table's fence directory in the maintain-tier vend.
+     filed before the ref as the other notices are. **BUILT, guards G6 and G7 of the erasure model** (below).
+   - **The history fence's ref writes contended** (§8.4): concurrent tag or branch writes on one table were refused 409
+     although nothing excluded them. **FIXED** (below).
+
+   1. **Tell the creator. FIXED, guards G6 and G7 of the erasure model.** Every door that puts a ref on a version, and
+      what each does now:
+      - `tags/create`, `tags/update` (`dataplane.create_tag`, `update_tag`) and `branches/create`
+        (`dataplane.create_branch`): each holds the table's history (as a ref write, or a branch create) and asks its
+        `before_ref` inside the hold, before the ref (`dataplane.BeforeRef`, `api/ref_notices.putting_ref`). The hold's
+        take lists the fence's directory, which carries a mark per release scheduled on the table
+        (`erasure-release.<id>.json`, `fences.MARK_NAME`, `erasure_release.mark_key`); for each mark the door reads the
+        release's record once (`erasure_release.RefNotices`) and judges whether the release takes the ref as its next
+        tick reads the table (`erasure_release.takes`, which shares `_taken_branches` with `_plan`): a tag on a residual
+        or on a branch the release takes, a branch cut from either, never a clone's tag. When it does, the door files the
+        caller's `erasure_release_scheduled` on the release's own target (`notice_target`) before the ref
+        (`erasure_release.creator_notice`): `extra.subject` the caller (`fga.user_object` of the verified token's
+        subject, never a role literal), `extra.ref` (`tag:<name>`, `branch:<name>`), `extra.on` (`<branch or
+        main>@<version>`), the release's `extra.due_at`, `refs` and `release_id`, `object_id` the table's `table:<uuid>`,
+        `actor` the erasure's requester, under an `event_id` fixed by the release, the person and the ref. It lands once
+        the ref stands where it was put and the record with its `due_at` stands (`announcement_intents.RefOnARelease`,
+        judged by `Announcer.landed`). The door sends it after the ref (`Announcer.send_filed`); a write that failed sends
+        only what landed (`Announcer.send_landed`); a door that died leaves it to the catalog's finish; and the release
+        tick leaves the release alone while any filing on its target stands (`release_due`, as for every notice). A
+        caller no token names is told nothing. The control lane's event carries no `author.sub` or `lance.project`
+        (those are the lineage lane's): its targeting fields are `extra.subject` and `object_id`.
+      - The verification records the release while it holds the table's history as a scheduling
+        (`HistoryWork.SCHEDULE`, which excludes ref writes and branch creates as a reclaim does): it writes the mark,
+        confirms its hold, and creates the record (`erasure_release.schedule`). A ref door either ended before the record
+        stood, or its take listed the mark. A scheduling that ref writes keep out at five takes answers the `release`
+        surface failed, and the obligation stays open for the next verification. The release's end deletes its record,
+        then its mark (`_finish`); a ref door that finds a mark whose record is gone removes it, since no scheduling can
+        hold the table's history beside its own hold.
+      - A registered clone (`clone_sources.take`, through the register door): its tag is never taken (G4), so nothing is
+        filed for it; while it holds the release, the release's own people hear `extra.held_by_clones` each tick, and the
+        clone's owner hears nothing of its own, as before (wait and report).
+      - `version/create` puts no ref: it commits onto a branch the table already lists and answers 404 code 22 for any
+        other ("A branch is created through CreateTableBranch"). It was not changed. `restore` commits a version; the
+        release's own recreates are the release's.
+      - Straight to the store, on a vended credential: none can write a ref. No tier is granted anything under the
+        table's `_refs/` (`lakehouse.table_layout.REFS_GLOB`): `read` gets only; `write` puts only `WRITER_PUT_GLOBS`
+        under the ref it writes (and, for the table's own credential, `tree/*`), with an explicit Deny on every final
+        manifest (`vending.build_session_policy`); `maintain` gets and deletes, with an explicit Deny of delete on
+        `_refs/*`. Lance keeps every tag and branch pointer at the dataset root's `_refs/`
+        (`lance_docs/lance/format/table/branch_tag.md` § Branch Metadata Path, § Tag Storage), which no put glob reaches,
+        and a session policy only narrows the catalog's canned policy. No narrowing was needed.
+      Round trips, measured on the pinned RustFS 1.0.3 through the tag door (botocore requests to the control root): a
+      tag on a table with no release scheduled makes 7 (the fence's two listings, its holder's create, read and delete,
+      and two reads the door made before), none of them the notice path's; one on a table whose release does not take
+      the tag adds one read (the release's record); one the release takes adds that read, the filing's put and its
+      delete. The judgement also lists the table's branches through pylance, once, only where a mark stands. Proved
+      needed by `ErasureCreatorUntold.cfg` (G6: sent after the ref with nothing filed, the door dying between the two)
+      and `ErasureCreatorRace.cfg` (G7: the record written without the hold beside a door that read no release), each
+      failing `ACreatorIsToldBeforeTheRelease`; held by `Erasure.cfg`, `ErasureRefsInTheGrace.cfg` and, on demand,
+      `ErasureWide.cfg`, with the creators in `EveryoneIsTold`. Tested by
+      `services/catalog/tests/test_an_erasure_keeps_what_it_answered.py::test_whoever_puts_a_ref_the_release_takes_is_told_before_it_runs`:
+      another principal tags version 2, or cuts a branch from it, in the grace, and its notice is on the bus with the
+      record's `due_at` before the release runs; red at `4c76afd` (told nothing). Its case
+      `its-door-fails-after-the-tag` is red with the filing removed (sent after the ref only) and red with the tick's
+      wait removed; its case `a-tag-written-while-the-release-is-recorded` is red with the scheduling's hold removed (the
+      door read the mark, found no record yet, wrote its tag and was told nothing).
+   2. **Ref writes on one table refused each other. FIXED, the history fence on holder objects.** Reproduced first
+      through the catalog's tag door on the pinned RustFS 1.0.3
+      (`tests/integration/test_a_tables_ref_writes_share_its_history.py`, the `s3` case of `race_ns_client`): of 16
+      concurrent tag writes on one table 7, 8 and 9 answered 409 code 14 in three runs ("8 attempts to hold this
+      table's history for a refs each lost to another writer"), and of 64, 39 and 36, with no reclaim running. The
+      history fence now keeps one object per holder beneath the table's directory (`history_fences.TableHistory` on
+      `fences.HolderFence`, `fence_directory`), as the namespace fence does (§8.4); the record fence is gone. Which kinds
+      exclude which is kept exactly (`history_fences._excludes`): ref writes share with ref writes, reclaims with
+      reclaims, a branch create with ref writes alone, a release with nobody; the scheduling added above shares with
+      reclaims and itself. Measured again: 16 of 16 and 64 of 64 answered 200. `Fence.tla` takes the history fence's
+      kinds (adds, drops, branch creates, solos) and `FenceHistory.cfg` holds `Exclusive` and
+      `NoLastStepBesideAnExcluder` for them; without the second listing it fails `Exclusive`, as `FenceNoRecheck.cfg`
+      shows for the namespace fence. The test is red at `4c76afd` on RustFS; on a local root contention never refused a
+      take (0 of 64 in three runs), so its `dir` case passes either way.
+      **The maintain-tier vend's grant** (`vending.TableRecords.maintain_statements`), which a reclaim signs its hold's
+      writes with. Before: get and put on the one key `_history_fences/table-<digest>.json`. After: `s3:ListBucket` on
+      the control bucket with `s3:prefix` exactly `<root>/_history_fences/table-<digest>/` (`StringLike`, no wildcard),
+      get on `<that directory>/*`, and put and delete only on `<that directory>/reclaim-*`, the holder objects of the one
+      kind maintenance takes. It lists and reads its own table's fence and writes only its own kind's holds: it cannot
+      remove or rewrite a ref writer's or a release's hold, nor a release's mark (before, a put on the one record could
+      rewrite every holder in it), and a lapsed holder of another kind it meets is left for the catalog's next take to
+      sweep (`HolderFence._sweep` never raises). Still a session policy under the catalog's own identity, 900 s; the
+      catalog's canned policy and every other identity's are unchanged, and no chart value changed. Measured on RustFS
+      1.0.3 with STS AssumeRole by a non-root user holding the catalog's canned policy and the vend's own session
+      policy: the vend takes, renews and releases a reclaim's hold; it lists its fence directory, and is refused
+      `AccessDenied` listing the same prefix without its slash, `_history_fences/`, another table's directory and the
+      control root; it reads a ref writer's hold and the mark, and is refused putting, overwriting or deleting either,
+      putting a reclaim hold in another table's directory, reading another table's hold, putting beside the directory,
+      and reading or writing the trash. The grant costs 484 characters of the 2,048 a session policy takes: at a
+      63-character bucket a maintain vend now fits a table prefix of 182 characters, against 333 before, and a write vend
+      fits 89, so no table a writer can be vended loses its maintain vend. An uncontended ref write makes one more
+      control-root request than with the record (7 against 6, measured as above).
+      **The old single records** (`_history_fences/table-<digest>.json`) are inert: no code reads that key, a listing of
+      the directory `table-<digest>/` does not show it, and nothing removes it; one small object per table that ever
+      had a ref written or reclaimed, on a pre-production estate. A table's end now deletes its fence directory, holders
+      and marks (`history_fences.end`, through `object_records.end_object_records`).
+   - **Left open, for the owner:** a commit onto a branch the release will recreate (`version/create`, or `insert`
+     and `merge_insert` naming a branch) is lost with it, and its committer, who may be neither the branch's creator
+     nor an owner, is told nothing; telling them would put a release read on every commit to a table with a release
+     scheduled. A ref put before the release is recorded, while the obligation is open, is named by the verification's
+     pins, and its creator is told only as the requester or an owner; the ruling named the grace period.
 
 ## The four facts
 
 - **GitOps:** nothing here is declared in git; the obligations, releases, trash and fences are records on the control
-  root, and each fix leaves no record a reconcile of git would have to end: a fence lapses on the store's clock, the
+  root, the maintain vend's scope is rendered by the catalog's code from the table's uuid and never granted by hand, and
+  each fix leaves no record a reconcile of git would have to end (a release's mark goes with its record): a fence lapses on the store's clock, the
   trash no longer outlives its warehouse, and a namespace fence's holder objects go with their holders, a lapsed one
   swept by the next take (§8.4).
 - **Cloud native:** each loop stays resumable by re-issue, the cloud-native answer to a dying pod: G2 and G3 of the
@@ -348,11 +455,15 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
   store, which every replica sees; no lock lives in a process, and F2 makes a holder that lost its fence stop.
 - **Lance-namespace/table-idiomatic:** the erasure rests on Lance's own refs and cleanup, a clone on Lance's own tag
   (G4 never takes it), and the namespace fence holds apart two `__manifest` commits the `dir` catalog does not order, as
-  measured, leaving each to Lance's own check.
+  measured, leaving each to Lance's own check. Which refs a release takes is read off Lance's own ref listing, as the
+  release's tick reads it (§9), and no vended credential is granted anything under `_refs/`, per the layout Lance fixes.
 - **Zero trust:** G1 of the erasure means no caller holding a tag or branch write can keep an erased subject, which the
   release exists to prevent ("an erasure that can be blocked is not an erasure", `erasure_release.py`); a registered
   clone holds it only while its owner keeps it, and says so (G4, §9). The fences are written under the catalog's own
-  credential; no new grant, and the maintain-tier vend is unchanged.
+  credential, except a reclaim's hold, which maintenance writes under its table's maintain-tier vend: that vend now
+  lists its own table's fence directory and writes only reclaim holds in it (§9), narrower in what it may write than the
+  one record it could rewrite before, and refused everywhere else, as measured. A ref's creator is told under the
+  identity the catalog verified, and only of a release that takes that ref (G6).
 
 ## Not modelled
 
@@ -372,4 +483,7 @@ the release's own ref announcements.
   about 85 s, and with the configs that must fail about two minutes; the whole `make tla-check` about four. The configs
   §8 adds: `ErasureClone.cfg` (5,193 states), `ErasureNoticeRace.cfg` (244,980 states, invariants, about 20 s),
   `ErasureNoticeNoReverify.cfg` (1,014), `Fence.cfg` (4,096), and the five that must fail, each in seconds;
-  `ErasureNoticeRaceWide.cfg` is on demand (1,222,016 states, about fourteen minutes on two cores).
+  `ErasureNoticeRaceWide.cfg` is on demand (1,222,016 states, about fourteen minutes on two cores). §9 grows
+  `Erasure.cfg` to 61,977 states and `ErasureRefsInTheGrace.cfg` to 142,501 (about two and a half minutes with its
+  liveness), and adds `FenceHistory.cfg` (22,528) and the two configs that must fail, each in seconds; the whole
+  `make tla-check` took 17 minutes on four cores shared with other work, 2026-11-17.

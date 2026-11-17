@@ -37,12 +37,14 @@ from catalog.services.announcement_intents import (
     NamespaceResolves,
     RecordGone,
     RecordHeld,
+    RefOnARelease,
     RoleEnded,
     Standing,
     TagGone,
     TupleGone,
     TupleHeld,
 )
+from catalog.services.dataplane import recorded_branch
 from lakehouse import records
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.control_events import CatalogControlEvent
@@ -222,6 +224,18 @@ class Announcer:
             await self._send(announcement.message, authorization=self._authorization)
         await self._settle(key)
 
+    async def send_landed(self, key: str, announcements: Sequence[Announcement]) -> None:
+        """Send each of ``announcements``, which this request filed under ``key`` before a change that may or may not have
+        landed (it failed), whose change the store shows landed, then remove the filing.
+
+        Raises:
+            ServiceUnavailableError: The store or OpenFGA did not answer; the filing stands for the finish.
+        """
+        for announcement in announcements:
+            if await self.landed(announcement.evidence):
+                await self._send(announcement.message, authorization=self._authorization)
+        await self._settle(key)
+
     async def landed(self, evidence: Evidence) -> bool:
         """Whether the store shows the change ``evidence`` names landed.
 
@@ -251,6 +265,14 @@ class Announcer:
             case TagGone(location=location, tag=tag):
                 try:
                     return not await run_in_threadpool(_tag_stands, location, self._settings.storage_options(plane="data"), tag)
+                except OSError as exc:
+                    raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
+            case RefOnARelease(key=key):
+                found = await self._read(lambda root, so: records.read_json(root, so, key))
+                if found is None or found[0].get("due_at") != evidence.due_at:
+                    return False
+                try:
+                    return await run_in_threadpool(_ref_stands, evidence, self._settings.storage_options(plane="data"))
                 except OSError as exc:
                     raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
 
@@ -330,6 +352,25 @@ def _tag_stands(location: str, so: StorageOptions, tag: str) -> bool:
         # pylance answers a location holding no dataset with a ValueError naming it (measured on 13.0.0).
         return False
     return tag in (dataset.tags.list() or {})
+
+
+def _ref_stands(evidence: RefOnARelease, so: StorageOptions) -> bool:
+    """Whether the tag or branch ``evidence`` names stands at its table, where it was put: a tag naming its version on its
+    branch, a branch cut from its parent at its version. None does once the dataset is gone from there.
+
+    Raises:
+        OSError: The store did not answer.
+    """
+    try:
+        dataset = lance.dataset(evidence.location, storage_options=so.in_clear())
+    except ValueError:
+        # pylance answers a location holding no dataset with a ValueError naming it (measured on 13.0.0).
+        return False
+    if evidence.ref == "tag":
+        entry = (dataset.tags.list() or {}).get(evidence.name)
+        return entry is not None and (recorded_branch(entry.get("branch")), entry.get("version")) == (evidence.branch, evidence.version)
+    meta = (dataset.branches.list() or {}).get(evidence.name)
+    return meta is not None and (recorded_branch(meta.get("parent_branch")), meta.get("parent_version")) == (evidence.branch, evidence.version)
 
 
 def _as_filed(announcement: Announcement, reused: Mapping[str, Announcement]) -> Announcement:

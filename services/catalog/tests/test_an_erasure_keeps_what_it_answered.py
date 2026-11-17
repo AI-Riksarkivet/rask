@@ -52,6 +52,8 @@ _PREDICATE = "pii = 'alice'"
 _TABLE_ID = ["db", "subjects"]
 _TABLE = "db$subjects"
 _REQUESTER, _OWNER = "user:dex~alice%40corp", "user:dex~olivia"
+#: Another caller, who puts a ref on the table in the grace period.
+_CREATOR_LOGIN, _CREATOR = "bob@corp", "user:dex~bob%40corp"
 
 
 def _rows(*names: str) -> pa.Table:
@@ -102,8 +104,17 @@ class _Clock:
 class _Catalog:
     """The erasure, tag, branch and finish doors on one app, and the release's tick over it."""
 
-    def __init__(self, client: TestClient, release: Callable[[], release_tick.ErasureReleaseTick], control_root: str) -> None:
-        self.client, self.release, self.control_root = client, release, control_root
+    def __init__(self, client: TestClient, release: Callable[[], release_tick.ErasureReleaseTick], control_root: str, signed_in: list[str]) -> None:
+        self.client, self.release, self.control_root, self._signed_in = client, release, control_root, signed_in
+
+    @contextmanager
+    def signed_in_as(self, login: str) -> Generator[None]:
+        """Each request in the block authenticated as ``login`` at the estate's Dex."""
+        self._signed_in.append(login)
+        try:
+            yield
+        finally:
+            self._signed_in.pop()
 
     def record(self) -> str:
         response = self.client.post(f"/management/v1/table/{_TABLE}/erasure", json={"predicate": _PREDICATE, "retain_days": 0})
@@ -151,8 +162,9 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, emitter: _Recorder, clock: _
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
+    signed_in = ["alice@corp"]
     application.dependency_overrides[authenticate] = lambda: PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice@corp"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+        principal=Principal(idp_id="dex", subject=signed_in[-1]), claims=IDToken(iss="i", sub=signed_in[-1], aud="lance", exp=1, iat=1)
     )
     application.dependency_overrides[get_control_emitter] = lambda: emitter
     application.dependency_overrides[door.get_table_owners] = lambda: _owners
@@ -164,7 +176,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, emitter: _Recorder, clock: _
             assert client.portal is not None, "the release ticks inside the app's lifespan"
             return client.portal.call(release_tick.tick, Tick(application, settings, clock=clock, control=cast(Any, emitter)))
 
-        yield _Catalog(client, release, settings.registry_root)
+        yield _Catalog(client, release, settings.registry_root, signed_in)
 
 
 def _fails_once(monkeypatch: pytest.MonkeyPatch, owner: object, name: str) -> None:
@@ -234,6 +246,67 @@ def test_a_released_erasure_whose_release_ran_leaves_the_subject_on_no_ref(
     dataset = open_by_name(ns, StorageOptions(), _TABLE_ID)
     versions = [entry["version"] for entry in dataset.versions()]
     assert 2 not in versions, f"the release ran and version 2 stands ({versions}); the {ref} write answered {answered}, tags {dataset.tags.list()}"
+
+
+@pytest.mark.parametrize(
+    ("ref", "when"),
+    [
+        pytest.param("tag", "in-the-grace", id="a-tag-made-in-the-grace"),
+        pytest.param("branch", "in-the-grace", id="a-branch-cut-in-the-grace"),
+        pytest.param("tag", "its-door-fails-after-the-ref", id="its-door-fails-after-the-tag"),
+        pytest.param("tag", "while-the-release-is-recorded", id="a-tag-written-while-the-release-is-recorded"),
+    ],
+)
+def test_whoever_puts_a_ref_the_release_takes_is_told_before_it_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    erasure_job: Any,  # noqa: ANN401 — conftest.ErasureJob
+    ref: str,
+    when: str,
+) -> None:
+    # The owner's ruling (ADR 0233 §9): another caller puts a tag on version 2, or cuts a branch from it, and the release
+    # will take it. The ref door reads the release its hold's take found marked, files the caller's notice before the ref
+    # and sends it after (G6): a door that fails after its ref leaves the notice to the finish, and the release waits for
+    # it. A ref written while the verification records the release meets its hold (G7): it is refused, or told.
+    ns = _tagged_over_a_plain_delete(tmp_path / "data")
+    emitter, clock = _Recorder(), _Clock()
+    path, body = _REF_WRITES[ref]
+    answered: list[int] = []
+
+    def _write() -> None:
+        with catalog.signed_in_as(_CREATOR_LOGIN):
+            answered.append(catalog.client.post(f"/v1/table/{_TABLE}/{path}", json=body).status_code)
+
+    with _catalog(ns, tmp_path, emitter=emitter, clock=clock) as catalog:
+        obligation = catalog.record()
+        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
+        if when == "while-the-release-is-recorded":
+            real_create, pending = erasure_release.create_json, [True]
+
+            def _create_beside_a_ref_write(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the wrapped function's own types
+                if pending:
+                    pending.clear()
+                    _write()
+                return real_create(*args, **kwargs)
+
+            monkeypatch.setattr(erasure_release, "create_json", _create_beside_a_ref_write)
+        catalog.settled(obligation)
+        recorded = erasure_release.scheduled(catalog.control_root, StorageOptions(), obligation)
+        assert recorded is not None, "precondition: the release is scheduled"
+        if when == "its-door-fails-after-the-ref":
+            _fails_once(monkeypatch, Announcer, "send_filed")
+        if when != "while-the-release-is-recorded":
+            _write()
+        clock.now = recorded.due_at + timedelta(seconds=1)
+        if when == "its-door-fails-after-the-ref":
+            catalog.release()
+            monkeypatch.setattr(announcement_intents, "LEASE", timedelta(0))
+            catalog.finish()
+        told = [(event.extra["subject"], event.extra["due_at"]) for event in emitter.actions("erasure_release_scheduled") if event.extra["subject"] == _CREATOR]
+        catalog.release()
+
+    expected = [] if answered == [409] else [(_CREATOR, recorded.due_at.isoformat())]
+    assert told == expected, f"the {ref} write answered {answered}, and before the release ran its caller was told {told}"
 
 
 def test_a_release_never_takes_a_registered_clones_tag(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob

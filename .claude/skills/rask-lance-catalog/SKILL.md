@@ -1028,8 +1028,11 @@ governing their data. The project-scoped surface is the console's project page, 
   `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_vend_maintain`) gets and deletes on the whole prefix for
   cleanup and puts nothing of the table (ADR 0204, [[LH-575]]: maintenance's commits are the catalog's, at its maintainer
   doors), with an explicit Deny of delete on `<prefix>/_refs/*` (`lakehouse.table_layout.REFS_GLOB`), plus, on
-  the control root, the table's history fence (get/put) and its committed-file records `_file_identities/<uuid>/*`
-  (get/delete) (`vending.TableRecords`, [[LH-219]]), and get/delete on the table's own data directories, those of its declared bases its base record holds as
+  the control root, the table's history fence directory (list it, get every object in it, put and delete only a
+  reclaim's own holder objects `reclaim-*`, never a ref writer's hold or an erasure release's mark; ADR 0233 §9, measured
+  on RustFS 1.0.3: every other key, listing and table refused `AccessDenied`) and its committed-file records `_file_identities/<uuid>/*`
+  (get/delete) (`vending.TableRecords`, [[LH-219]]; the fence's grant costs 484 characters, so a maintain vend at a
+  63-character bucket fits a table prefix of 182, against a write vend's 89), and get/delete on the table's own data directories, those of its declared bases its base record holds as
   `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. The warehouse scope
   probe signs with `probe` (`vending.SessionTier`): get, put and delete in its probe prefix, which no door vends, since a
   door's `tier` query takes only `vending.Tier`. The management vend door checks the one rung its
@@ -1244,15 +1247,23 @@ governing their data. The project-scoped surface is the console's project page, 
   20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
   `tags/update`, `branches/create`) holds the fence,
-  one record per table uuid under `_history_fences/`, naming it under `uuid` (a record that does not parse raises
-  `fences.FenceUnreadableError`, naming it; one a release emptied stays until its table's records end, since the store
-  offers no conditional delete); holders of one kind share it, though many ref writes at once can lose every round to each
-  other (43 of 64 measured, ADR 0233 §9), the other kind is refused 409 code
+  one object per holder under the table's directory `_history_fences/table-<digest>/` (`fences.HolderFence`,
+  `history_fences.fence_directory`; a holder object that does not parse raises `fences.FenceUnreadableError`, naming
+  it; the directory ends with the table, `history_fences.end`); holders of one kind share it whatever their number,
+  never contending for a write (measured on RustFS 1.0.3 through the tag door: 16 of 16 and 64 of 64 concurrent tag writes
+  answered 200, against 7 to 9 of 16 and 36 to 39 of 64 refused with one record per table, ADR 0233 §9,
+  `tests/integration/test_a_tables_ref_writes_share_its_history.py`), the other kind is refused 409 code
   14 (`DoorTable.history_held`), and a fenced expiry is `skipped="history_fenced"`, its table's pass tried again after
   `retrySeconds` (`table_pass._dataset_due_at`). A branch create holds the kind `branch`, which also excludes another
   branch create, so two creates of nesting names on one table take turns and each judges a listing no other create
   changes (ADR 0179, [[LH-413]]). An erasure's release holds the kind `release`, which excludes every kind, its own
-  included, from its plan to its reclaim (ADR 0233). A hold lapses after 15 minutes on the store's clock.
+  included, from its plan to its reclaim (ADR 0233). The verification records a release while it holds the kind
+  `schedule` (which, as a reclaim does, excludes every ref write), writing the release's mark in the fence's directory
+  (`erasure-release.<id>.json`, `fences.MARK_NAME`) and then its record; every ref write's take lists the directory, so
+  a ref door that sees a mark reads that release and, when the release will take its ref, files and sends the caller an
+  `erasure_release_scheduled` naming the ref (`erasure_release.RefNotices`, `api/ref_notices.putting_ref`, ADR 0233 §9).
+  A table with no release scheduled carries no mark, and its ref writes read nothing more. A hold lapses after 15
+  minutes on the store's clock.
   Pinned by `services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py` and
   `tests/integration/test_no_reclaim_deletes_a_version_while_a_ref_is_written.py`.
 - **An erasure is an obligation a bring-your-own job fulfils and the catalog verifies** ([[LH-493]], ADR 0163).

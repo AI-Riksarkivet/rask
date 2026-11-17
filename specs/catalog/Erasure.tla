@@ -108,6 +108,22 @@
 (*       removes it: a second verification files its own deadline, meets   *)
 (*       the record, dies, and the finish sends its filing                 *)
 (*       (NoticeOnlyForARecordedRelease).                                  *)
+(*   G6. Whoever puts a ref the release takes, once its record stands,   *)
+(*       is told before it runs (the owner's ruling, ADR 0233 §9): the ref *)
+(*       door reads the release under its hold of the table's history, files *)
+(*       the creator's notice before the ref (announcement_intents, landed  *)
+(*       once the ref and the record with its deadline stand), sends it     *)
+(*       after; the finish sends what a dead door filed, and the release   *)
+(*       tick waits while a filing stands (erasure_release.release_due).   *)
+(*       ErasureCreatorUntold removes it: the door sends after the ref with *)
+(*       nothing filed, dies between the two, and the release takes the   *)
+(*       ref of a creator nobody told (ACreatorIsToldBeforeTheRelease).    *)
+(*   G7. The verification writes the release's mark and its record while  *)
+(*       it holds the table's history as a scheduling, which no ref write  *)
+(*       shares (HistoryWork.SCHEDULE): a ref door either finished before  *)
+(*       the record stood or read it. ErasureCreatorRace removes it: a door *)
+(*       reads no release, the record is written, its ref lands, and its   *)
+(*       creator is never told (ACreatorIsToldBeforeTheRelease).           *)
 (*   ErasureRestore is a limit, not a guard: a restore of a residual made  *)
 (*   once the obligation is released brings the subject back to main's     *)
 (*   head (the release's `bound` names it in words).                       *)
@@ -141,7 +157,9 @@ CONSTANTS Verifiers,     \* the verification requests that may run at once
           NoticeFiled,   \* G2
           TagsFiled,     \* G3
           CloneWaits,    \* G4
-          NoticeOfTheStanding  \* G5
+          NoticeOfTheStanding, \* G5
+          CreatorTold,   \* G6
+          ScheduleHeld   \* G7
 
 Versions == 1..4
 Tags     == {"t0", "t1", "t2", "tc"}
@@ -172,11 +190,20 @@ VARIABLES retained,   \* main's versions with their files on storage
           held,                  \* the release found a clone holding it and said so (G4)
           cut, copied, restored, dropDone,
           badDrop, releasedOn, reopened,  \* history: a tag dropped wrongly; the evidence a release was made on; a released obligation written open
-          faults
+          faults,
+          cpc, ckind, cver, cdl, \* the ref door another caller runs: its step, the ref it makes and where, the deadline it read
+          cfiled,                \* the creators' notices filed: by the door, or "left" once it ended (G6)
+          ctold,                 \* the creators told, each with the deadline told
+          cowed,                 \* the creators owed a notice: a ref the release takes landed while a record with that deadline stood
+          untold                 \* history: the release ran while a creator it costs was untold
 
-vars == <<retained, subj, head, tags, br, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl,
+\* Everything but the ref door's and the faults.
+Base == <<retained, subj, head, tags, br, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl,
           rel, due, rpc, rplan, dropped, announced, toldDl, recDls, nfiled, tfiled, gone, deletedByRelease, clone, cloned, held,
-          cut, copied, restored, dropDone, badDrop, releasedOn, reopened, faults>>
+          cut, copied, restored, dropDone, badDrop, releasedOn, reopened>>
+CVars == <<cpc, ckind, cver, cdl, cfiled, ctold, cowed, untold>>
+CKeep == UNCHANGED CVars
+vars == <<Base, faults, CVars>>
 
 Init ==
   /\ retained = {1, 2}
@@ -200,6 +227,8 @@ Init ==
   /\ cut = FALSE /\ copied = FALSE /\ restored = FALSE /\ dropDone = FALSE
   /\ badDrop = FALSE /\ releasedOn = TRUE /\ reopened = FALSE
   /\ faults = 0
+  /\ cpc = "idle" /\ ckind = "tag" /\ cver = 0 /\ cdl = "none"
+  /\ cfiled = {} /\ ctold = {} /\ cowed = {} /\ untold = FALSE
 
 Fault   == faults < MaxFaults /\ faults' = faults + 1
 NoFault == faults' = faults
@@ -220,6 +249,11 @@ Erased == (\A v \in retained : ~Holds(v)) /\ (\A b \in Branches : br[b].on => ~b
 
 ReclaimRunning == \E p \in Verifiers : vpc[p] = "delete"
 ReleaseRunning == rpc # "idle"
+\* The ref door holds the table's history as a ref write from its read of the release to its last step.
+CreatorHolds == cpc # "idle"
+\* A ref another caller makes stands: tag t2, or branch C.
+Stands(r) == IF r = "t2" THEN tags["t2"] # 0 ELSE br["C"].on
+RefOf(k) == IF k = "tag" THEN "t2" ELSE "C"
 
 \* A filed notice lands, and a finish sends it, while the record stands, and with G5 only while it is the record the notice
 \* describes (RecordHeld with the record's due_at).
@@ -231,7 +265,7 @@ Mine(p) == {f \in nfiled : f.by = p}
 
 JobKeep == UNCHANGED <<vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, rel, due, rpc, rplan,
                        dropped, announced, toldDl, recDls, nfiled, tfiled, gone, deletedByRelease, clone, cloned, held,
-                       cut, copied, restored, dropDone, badDrop, releasedOn, reopened>>
+                       cut, copied, restored, dropDone, badDrop, releasedOn, reopened>> /\ CKeep
 
 JobMain ==
   /\ ob = "open" /\ live /\ Holds(head) /\ 3 \notin retained \cup gone /\ NoFault
@@ -246,7 +280,7 @@ JobBranch(b) ==
 ---------------------------------------------------------------------------
 \* A verification (verify_erasure). The door resolves the table, so it runs only while the table is registered.
 
-VKeep == UNCHANGED <<subj, live, followed, due, rpc, rplan, toldDl, recDls, deletedByRelease, clone, cloned, held, cut, copied, restored, dropDone>>
+VKeep == UNCHANGED <<subj, live, followed, due, rpc, rplan, toldDl, recDls, deletedByRelease, clone, cloned, held, cut, copied, restored, dropDone>> /\ CKeep
 VUnchanged == VKeep /\ UNCHANGED <<badDrop, nfiled, tfiled, vdl>>
 Go(p, s) == vpc' = [vpc EXCEPT ![p] = s]
 
@@ -290,7 +324,7 @@ VTagDrop(p) ==
 \* refs once, then deletes against that reading (history_fences.py, "LANCE READS A TABLE'S REFS ONCE PER RECLAIM").
 VReclaimRead(p) ==
   /\ vpc[p] = "reclaim" /\ NoFault
-  /\ Fenced => ~ReleaseRunning
+  /\ Fenced => ~ReleaseRunning /\ ~CreatorHolds
   /\ IF vclean[p] /\ ~Holds(head)
        THEN vdel' = [vdel EXCEPT ![p] = {v \in retained : v # head /\ ~Pinned(v)}] /\ Go(p, "delete")
        ELSE vdel' = [vdel EXCEPT ![p] = {}] /\ Go(p, "verify")
@@ -324,7 +358,7 @@ VEmit(p) ==
 
 Releasing(p) == vsettled[p] /\ vpins[p] # {}
 
-NKeep == UNCHANGED <<badDrop, tfiled, retained, head, tags, br, ob, vclean, vdel, vpins, vres, vdropped, vevid, dropped, announced, gone, releasedOn, reopened>>
+NKeep == UNCHANGED <<badDrop, tfiled, retained, head, tags, br, ob, vclean, vdel, vpins, vres, vdropped, vevid, dropped, announced, gone, releasedOn, reopened>> /\ CKeep
 
 \* G2: the release's notices are filed before its record is written. With G5 the release that stands is read first: one
 \* that stands is taken (_take_the_earlier_release, while it names every pin) and its own notices filed, its deadline
@@ -341,7 +375,9 @@ VNoticeFile(p) ==
             /\ vdl' = [vdl EXCEPT ![p] = p] /\ Go(p, "schedule") /\ UNCHANGED vsettled
   /\ VKeep /\ NKeep /\ UNCHANGED rel
 
-\* _schedule_release: the record, under the obligation's id, created only where none stands. One there already was
+\* _schedule_release: the record, under the obligation's id, created only where none stands, and with G7 written with its
+\* mark under a hold of the table's history no ref write shares: refused while a ref door holds it, the release is not
+\* recorded, its filing removed, and the obligation stays open for the next verification. One there already was
 \* written by another verification: without G5 it is taken while it names every pin, and its people are told again
 \* under the ids the first telling used, while this verification's own filing, naming its own deadline, stands until its
 \* notices go; with G5 its own filing is removed, never landing, and it reads again what stands.
@@ -349,9 +385,12 @@ VSchedule(p) ==
   /\ vpc[p] = "schedule" /\ NoFault
   /\ IF Releasing(p)
        THEN IF ~rel.on
-              THEN /\ rel' = [NoRel EXCEPT !.on = TRUE, !.refs = vpins[p], !.res = vres[p], !.dl = p]
-                   /\ recDls' = recDls \cup {p}
-                   /\ UNCHANGED <<vsettled, nfiled, vdl>> /\ Go(p, "notify")
+              THEN IF ScheduleHeld /\ CreatorHolds
+                     THEN /\ vsettled' = [vsettled EXCEPT ![p] = FALSE] /\ nfiled' = nfiled \ Mine(p) /\ Go(p, "settle")
+                          /\ UNCHANGED <<rel, recDls, vdl>>
+                     ELSE /\ rel' = [NoRel EXCEPT !.on = TRUE, !.refs = vpins[p], !.res = vres[p], !.dl = p]
+                          /\ recDls' = recDls \cup {p}
+                          /\ UNCHANGED <<vsettled, nfiled, vdl>> /\ Go(p, "notify")
               ELSE IF NoticeOfTheStanding
                      THEN /\ nfiled' = nfiled \ Mine(p) /\ Go(p, "nfile")
                           /\ UNCHANGED <<rel, vsettled, vdl, recDls>>
@@ -397,7 +436,7 @@ VDies(p) ==
 \* announcement whose change landed goes out, and the filing is removed.
 FinishKeep == UNCHANGED <<retained, subj, head, tags, br, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl,
                           rel, due, rpc, rplan, dropped, recDls, gone, deletedByRelease, clone, cloned, held, cut, copied, restored, dropDone,
-                          badDrop, releasedOn, reopened>>
+                          badDrop, releasedOn, reopened>> /\ CKeep
 
 FinishTags ==
   /\ tfiled["left"] # {} /\ NoFault
@@ -416,8 +455,10 @@ FinishNotice ==
 \* The release tick (erasure_release._release), once the grace period has ended. It holds the history fence from its plan
 \* to its last step (A3); with G1 as a release, which no ref write shares.
 
-RUnchanged == UNCHANGED <<subj, head, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, dropped, announced,
+RUnchanged0 == UNCHANGED <<subj, head, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, dropped, announced,
                           toldDl, recDls, nfiled, tfiled, clone, cloned, cut, copied, restored, dropDone, badDrop, releasedOn, reopened>>
+                          /\ UNCHANGED <<cpc, ckind, cver, cdl, cfiled, ctold, cowed>>
+RUnchanged == RUnchanged0 /\ UNCHANGED untold
 
 GraceEnds ==
   /\ rel.on /\ ~due /\ NoFault
@@ -445,8 +486,12 @@ RClaim ==
   LET fresh == Subtree(NamedBranches \cup rel.plan \cup TaintedSet)
       ts == {t \in NamedTags \cup rel.tags : tags[t] # 0} \cup ResidualTags IN
   /\ rel.on /\ due /\ rpc = "idle" /\ ~ReclaimRunning /\ NoFault
+  /\ Fenced => ~CreatorHolds
   /\ NoticeFiled => nfiled = {}
+  \* G6: the tick waits while a creator's notice is filed.
+  /\ CreatorTold => cfiled = {}
   /\ ~CloneHolds
+  /\ untold' = (untold \/ \E x \in cowed : x \notin ctold /\ Stands(x.ref))
   /\ IF rel.phase = "recreating"
        THEN /\ rel' = [rel EXCEPT !.plan = @ \cup TaintedSet]
             /\ UNCHANGED rplan /\ rpc' = IF Sweep THEN "delete" ELSE "recreate"
@@ -456,7 +501,7 @@ RClaim ==
                    /\ UNCHANGED rplan /\ rpc' = "delete"
               ELSE /\ rel' = [rel EXCEPT !.phase = "deleting", !.tags = @ \cup ts, !.at = IF rel.phase = "pending" THEN head ELSE @]
                    /\ rplan' = fresh /\ rpc' = "delete"
-  /\ UNCHANGED <<retained, tags, br, gone, deletedByRelease, due, held>> /\ RUnchanged
+  /\ UNCHANGED <<retained, tags, br, gone, deletedByRelease, due, held>> /\ RUnchanged0
 
 \* G4: held by a clone, the tick changes nothing, records why on the obligation and tells the release's people
 \* (_held_by_clones); a later tick reads again.
@@ -534,34 +579,86 @@ RDies ==
 
 Cleanup ==
   LET old == {v \in retained : v # head /\ ~Pinned(v)} IN
-  /\ live /\ old # {} /\ ~ReleaseRunning /\ ~ReclaimRunning /\ NoFault
+  /\ live /\ old # {} /\ ~ReleaseRunning /\ ~ReclaimRunning /\ ~(Fenced /\ CreatorHolds) /\ NoFault
   /\ retained' = retained \ old /\ gone' = gone \cup old
   /\ UNCHANGED <<subj, head, tags, br, live, ob, followed, vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, rel, due, rpc, rplan,
                  dropped, announced, toldDl, recDls, nfiled, tfiled, deletedByRelease, clone, cloned, held, cut, copied, restored, dropDone,
-                 badDrop, releasedOn, reopened>>
+                 badDrop, releasedOn, reopened>> /\ CKeep
 
 ---------------------------------------------------------------------------
 \* Other callers.
 
 Others == UNCHANGED <<vpc, vclean, vdel, vpins, vres, vsettled, vdropped, vevid, vdl, rel, due, rpc, rplan, dropped, announced, toldDl, recDls,
-                      nfiled, tfiled, gone, deletedByRelease, held, badDrop, releasedOn, reopened, ob>>
+                      nfiled, tfiled, gone, deletedByRelease, held, badDrop, releasedOn, reopened, ob>> /\ CKeep
 
-\* create_tag, under the history fence as a ref write (A3): never while a reclaim runs, nor (G1) while a release does.
-CopyTag(v) ==
-  /\ CopyTags /\ ~copied /\ v \in retained /\ live /\ NoFault
-  /\ Fenced => ~ReclaimRunning /\ (Sweep => ~ReleaseRunning)
-  /\ tags' = [tags EXCEPT !["t2"] = v] /\ copied' = TRUE
-  /\ UNCHANGED <<retained, subj, head, br, live, followed, clone, cloned, cut, restored, dropDone>> /\ Others
+\* create_tag and create_branch (C cut from main or from B), one door at a time, under the history fence as a ref write
+\* from its read of the release to its last step (A3): never while a reclaim runs, nor (G1) while a release does. The door
+\* reads the release that stands and judges whether it takes the ref; with G6 it files the creator's notice first, landed
+\* once the ref and that record stand, and sends it after the ref; without G6 it sends it after the ref, filing nothing.
+\* Whether the release that stands takes the ref k made on main version v (0: C cut from B), as its next tick reads the
+\* table (erasure_release.takes, the same reading as _plan): a tag or a branch on a residual, or a branch cut from one the
+\* release takes.
+TaintedAt(v) == Sweep /\ IF v = 0 THEN br["B"].on /\ br["B"].fork \in rel.res ELSE v \in rel.res
+Takes(k, v) ==
+  /\ rel.on
+  /\ IF k = "tag" THEN Sweep /\ v \in rel.res
+     ELSE \/ TaintedAt(v)
+          \/ v = 0 /\ rel.phase # "recreating" /\ Reread /\ br["B"].on /\ ("B" \in NamedBranches \/ "B" \in rel.plan \/ Tainted("B"))
 
-\* create_branch, under the history fence as a branch write: never while a reclaim or a release runs.
-CutBranch ==
-  /\ Cuts # "none" /\ ~cut /\ ~br["C"].on /\ live /\ NoFault
-  /\ Fenced => ~ReclaimRunning /\ ~ReleaseRunning
-  /\ IF Cuts = "B"
-       THEN br["B"].on /\ br' = [br EXCEPT !["C"] = [on |-> TRUE, fork |-> 0, dirty |-> br["B"].dirty]]
-       ELSE \E v \in retained : br' = [br EXCEPT !["C"] = [on |-> TRUE, fork |-> v, dirty |-> Holds(v)]]
-  /\ cut' = TRUE
-  /\ UNCHANGED <<retained, subj, head, tags, live, followed, clone, cloned, copied, restored, dropDone>> /\ Others
+CStill == UNCHANGED Base
+
+CBegin(k, v) ==
+  /\ cpc = "idle" /\ live /\ NoFault
+  /\ IF k = "tag"
+       THEN CopyTags /\ ~copied /\ v \in retained /\ (Fenced => ~ReclaimRunning /\ (Sweep => ~ReleaseRunning))
+       ELSE /\ Cuts # "none" /\ ~cut /\ ~br["C"].on /\ (Fenced => ~ReclaimRunning /\ ~ReleaseRunning)
+            /\ IF Cuts = "B" THEN v = 0 /\ br["B"].on ELSE v \in retained
+  /\ ckind' = k /\ cver' = v
+  /\ cdl' = IF Takes(k, v) THEN rel.dl ELSE "none"
+  /\ cpc' = IF CreatorTold /\ Takes(k, v) THEN "file" ELSE "land"
+  /\ UNCHANGED <<cfiled, ctold, cowed, untold>> /\ CStill
+
+CFile ==
+  /\ cpc = "file" /\ NoFault
+  /\ cfiled' = cfiled \cup {[by |-> "door", ref |-> RefOf(ckind), dl |-> cdl]}
+  /\ cpc' = "land"
+  /\ UNCHANGED <<ckind, cver, cdl, ctold, cowed, untold>> /\ CStill
+
+CLand ==
+  /\ cpc = "land" /\ NoFault
+  /\ IF ckind = "tag"
+       THEN tags' = [tags EXCEPT !["t2"] = cver] /\ copied' = TRUE /\ UNCHANGED <<br, cut>>
+       ELSE /\ br' = [br EXCEPT !["C"] = IF cver = 0 THEN [on |-> TRUE, fork |-> 0, dirty |-> br["B"].dirty]
+                                                    ELSE [on |-> TRUE, fork |-> cver, dirty |-> Holds(cver)]]
+            /\ cut' = TRUE /\ UNCHANGED <<tags, copied>>
+  /\ cowed' = IF Takes(ckind, cver) THEN cowed \cup {[ref |-> RefOf(ckind), dl |-> rel.dl]} ELSE cowed
+  /\ cpc' = IF cdl # "none" THEN "send" ELSE "idle"
+  /\ UNCHANGED <<ckind, cver, cdl, cfiled, ctold, untold>>
+  /\ UNCHANGED <<retained, subj, head, live, followed, clone, cloned, restored, dropDone, vpc, vclean, vdel, vpins, vres, vsettled,
+                 vdropped, vevid, vdl, rel, due, rpc, rplan, dropped, announced, toldDl, recDls, nfiled, tfiled, gone,
+                 deletedByRelease, held, badDrop, releasedOn, reopened, ob>>
+
+CSend ==
+  /\ cpc = "send" /\ NoFault
+  /\ ctold' = ctold \cup {[ref |-> RefOf(ckind), dl |-> cdl]}
+  /\ cfiled' = {f \in cfiled : f.by # "door"}
+  /\ cpc' = "idle"
+  /\ UNCHANGED <<ckind, cver, cdl, cowed, untold>> /\ CStill
+
+\* The door ends between two steps; what it filed stands, and its hold lapses.
+CDies ==
+  /\ cpc # "idle" /\ Fault
+  /\ cfiled' = {IF f.by = "door" THEN [f EXCEPT !.by = "left"] ELSE f : f \in cfiled}
+  /\ cpc' = "idle"
+  /\ UNCHANGED <<ckind, cver, cdl, ctold, cowed, untold>> /\ CStill
+
+\* The finish sends what a dead door filed, where its ref and the record with its deadline stand, and removes the filing.
+FinishCreator ==
+  /\ \E f \in cfiled :
+       /\ f.by = "left" /\ NoFault
+       /\ ctold' = IF Stands(f.ref) /\ rel.on /\ rel.dl = f.dl THEN ctold \cup {[ref |-> f.ref, dl |-> f.dl]} ELSE ctold
+       /\ cfiled' = cfiled \ {f}
+  /\ UNCHANGED <<cpc, ckind, cver, cdl, cowed, untold>> /\ CStill
 
 \* register_table of a shallow clone of a retained version: the catalog tags it under the history fence as a ref write
 \* (clone_sources.take_tags), never while a reclaim or a release runs.
@@ -613,13 +710,15 @@ Work ==
   \/ FinishTags \/ FinishNotice
   \/ GraceEnds \/ RSteps
   \/ Cleanup \/ Undrop \/ Follow \/ EndClone
+  \/ CFile \/ CLand \/ CSend \/ FinishCreator
 
 Next ==
   \/ Work
   \/ \E p \in Verifiers : VDies(p)
-  \/ RDies
-  \/ \E v \in Versions : CopyTag(v) \/ RegisterClone(v)
-  \/ CutBranch \/ Restore \/ Drop
+  \/ RDies \/ CDies
+  \/ \E v \in Versions : RegisterClone(v)
+  \/ \E k \in {"tag", "branch"}, v \in Versions \cup {0} : CBegin(k, v)
+  \/ Restore \/ Drop
 
 Fair ==
   /\ WF_vars(JobMain) /\ \A b \in Branches : WF_vars(JobBranch(b))
@@ -631,6 +730,8 @@ Fair ==
   \* later window (G2).
   /\ WF_vars(GraceEnds) /\ SF_vars(RSteps)
   /\ WF_vars(Cleanup) /\ WF_vars(Undrop) /\ WF_vars(Follow)
+  \* A ref door runs to its end once started, and the finish sends what a dead one filed (G6).
+  /\ WF_vars(CFile \/ CLand \/ CSend) /\ WF_vars(FinishCreator)
   \* A6: a clone's owner, told it holds a release, ends it.
   /\ IF ClonesEnd THEN WF_vars(EndClone) ELSE TRUE
 
@@ -663,7 +764,11 @@ ADerivedTableIsFollowed == (ob = "released" /\ HasDerived) => followed
 OnlyTagsOverTheSubjectAreDropped == ~badDrop
 
 \* People are told only of a release the catalog recorded, and only with the deadline a recorded release names (G5).
-NoticeOnlyForARecordedRelease == toldDl \subseteq recDls
+NoticeOnlyForARecordedRelease == toldDl \subseteq recDls /\ \A x \in ctold : x.dl \in recDls
+
+\* Whoever made a ref the release takes, once its record stood, was told of it, with that record's deadline, before the
+\* release ran (G6, G7).
+ACreatorIsToldBeforeTheRelease == ~untold
 
 \* The release brings back every branch it deleted, once it has finished.
 EveryReleasedBranchComesBack == (~rel.on /\ deletedByRelease # {}) => \A b \in deletedByRelease : br[b].on
@@ -680,7 +785,9 @@ EveryObligationIsReleased == <>(ob = "released")
 \* A recorded release is finished, whatever tick dies.
 EveryReleaseFinishes == rel.on ~> ~rel.on
 \* Everyone a release costs is told of it, with the deadline its record names, before it runs.
-EveryoneIsTold == \A d \in Verifiers : (d \in recDls) ~> (d \in toldDl)
+EveryoneIsTold ==
+  /\ \A d \in Verifiers : (d \in recDls) ~> (d \in toldDl)
+  /\ \A r \in {"t2", "C"}, d \in Verifiers : ([ref |-> r, dl |-> d] \in cowed) ~> ([ref |-> r, dl |-> d] \in ctold \/ ~Stands(r))
 \* Every tag a verification deletes is announced.
 EveryDroppedTagIsAnnounced == \A t \in Tags : (t \in dropped) ~> (t \in announced)
 \* A release a clone holds says so, unless the clone ends or the release finishes first (G4).

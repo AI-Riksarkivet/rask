@@ -21,8 +21,10 @@ from lance_namespace import (
     ListTableBranchesResponse,
 )
 
-from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOptionsDep
+from catalog.api.announcing import AnnouncerDep
+from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import ListLimit
+from catalog.api.ref_notices import putting_ref
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
@@ -57,6 +59,8 @@ async def create_table_branch(
     table: DoorTableDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
+    settings: SettingsDep,
+    announcer: AnnouncerDep,
     token: CurrentToken = None,
 ) -> CreateTableBranchResponse:
     """Create a branch from main (or a source branch/version) — wraps pylance ``create_branch``.
@@ -66,10 +70,17 @@ async def create_table_branch(
     changes an object; a branch appearing changes an object, so it joins the 31 members that name
     nobody, so no notifier targets it. A console invalidating a branch list is
     the consumer this serves.
+
+    A BRANCH AN ERASURE'S RELEASE WILL TAKE IS TOLD OF TO ITS CALLER (ADR 0233 §9): when a release scheduled on the table
+    takes the branch (it is cut from a version holding the erased subject, or from a branch the release recreates), its
+    commits are lost when the release recreates it at main's head, so the caller receives a targeted
+    `erasure_release_scheduled` naming the branch and the release's deadline, filed before the branch is created.
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(dataplane.create_branch, table, so, body)
+    response = await putting_ref(
+        lambda before_ref: dataplane.create_branch(table, so, body, before_ref=before_ref), table=table, settings=settings, announcer=announcer, token=token
+    )
     # AFTER the data-plane call, never before — the rule `namespaces.py` states: a change that did not
     # happen is never announced, so a refused create emits nothing.
     await emit_control(

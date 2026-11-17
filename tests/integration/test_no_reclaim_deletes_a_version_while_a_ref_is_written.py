@@ -29,7 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from lakehouse import history_fences, maintenance_due, maintenance_policies, records, trash
+from lakehouse import history_fences, maintenance_due, maintenance_policies, records, stored_objects, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
 from lakehouse.governed.store_credential import S3KeyPair
@@ -148,10 +148,14 @@ def test_no_reclaim_deletes_a_version_while_a_ref_write_holds_the_tables_history
 
 def _past_the_holds_first_take(estate: _Estate) -> None:
     """Wait until the store's clock, which judges a hold, passes the end the reclaim's first take of the history had."""
-    key = history_fences.fence_key(estate.table_uuid)
+    directory = history_fences.fence_directory(estate.table_uuid)
+    held = stored_objects.list_under(f"{estate.root.rstrip('/')}/{directory}", estate.key)
+    assert held, "precondition: the reclaim holds the table's history"
+    key = f"{directory}/{held[0].path.rsplit('/', 1)[-1]}"
     first = records.read_json_at(estate.root, estate.key, key).stored
-    assert first is not None, "precondition: the reclaim holds the table's history"
-    ends = max(history_fences.Holder.model_validate(holder).taken_at for holder in first.record["holders"]) + history_fences.HOLD
+    holder = history_fences.HistoryHolder.model_validate(first.record).holder if first is not None else None
+    assert holder is not None, "precondition: the reclaim holds the table's history"
+    ends = holder.taken_at + history_fences.HOLD
     deadline = time.monotonic() + 30
     while records.read_json_at(estate.root, estate.key, key).at <= ends:
         assert time.monotonic() < deadline, "the store's clock did not pass the first take's hold"

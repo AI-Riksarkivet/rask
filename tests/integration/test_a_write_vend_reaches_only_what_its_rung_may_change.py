@@ -208,23 +208,37 @@ def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(
     """The reclaim holds its table's history fence and forgets the records of its committed files under the vend
     (`lakehouse.history_fences`, `lakehouse.file_identities`), so the vend reaches those two of its own table; it puts no
     committed-file record, since one it could put would record a replaced file as committed, and reaches no other table's.
-    The control root here is the table's bucket."""
+    Of the fence's directory it reads every object and writes and deletes only a reclaim's own holder objects: never a ref
+    writer's hold, nor the mark of a scheduled erasure release (ADR 0233 §9). The control root here is the table's bucket;
+    its listing is scoped by an `s3:prefix` condition this evaluator does not read, which RustFS enforces (measured, ADR
+    0233 §9)."""
     mine, other = estate.table_uuid(), uuid.uuid4().hex
+    fence, token = history_fences.fence_directory(mine), uuid.uuid4().hex
 
     _, policy = estate.vend("maintain")
 
     asked = {
-        "holds-its-fence": ("s3:PutObject", history_fences.fence_key(mine)),
+        "holds-its-fence": ("s3:PutObject", f"{fence}/reclaim-{token}.json"),
+        "releases-its-hold": ("s3:DeleteObject", f"{fence}/reclaim-{token}.json"),
+        "reads-a-ref-writers-hold": ("s3:GetObject", f"{fence}/refs-{token}.json"),
         "forgets-its-records": ("s3:DeleteObject", f"{file_identities.records_of(mine)}/txn.json"),
         "records-no-file": ("s3:PutObject", f"{file_identities.records_of(mine)}/txn.json"),
-        "holds-no-other-fence": ("s3:PutObject", history_fences.fence_key(other)),
+        "removes-no-ref-writers-hold": ("s3:DeleteObject", f"{fence}/refs-{token}.json"),
+        "rewrites-no-release-mark": ("s3:PutObject", f"{fence}/erasure-release.{token}.json"),
+        "removes-no-release-mark": ("s3:DeleteObject", f"{fence}/erasure-release.{token}.json"),
+        "holds-no-other-fence": ("s3:PutObject", f"{history_fences.fence_directory(other)}/reclaim-{token}.json"),
         "forgets-no-other-records": ("s3:DeleteObject", f"{file_identities.records_of(other)}/txn.json"),
     }
     granted = {name: _permits(policy, action, estate.bucket, key) for name, (action, key) in asked.items()}
     assert granted == {
         "holds-its-fence": True,
+        "releases-its-hold": True,
+        "reads-a-ref-writers-hold": True,
         "forgets-its-records": True,
         "records-no-file": False,
+        "removes-no-ref-writers-hold": False,
+        "rewrites-no-release-mark": False,
+        "removes-no-release-mark": False,
         "holds-no-other-fence": False,
         "forgets-no-other-records": False,
     }, policy

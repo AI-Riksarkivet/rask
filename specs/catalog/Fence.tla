@@ -11,7 +11,11 @@
 (* write distinct keys, so they never contend for one write and a take is *)
 (* refused only by what Excluded names, never by contention: an add        *)
 (* beneath a namespace and a ref write on a table go through whatever      *)
-(* their number. The store is the object store: a write is seen by every   *)
+(* their number. Two fences are kept so: a namespace's (an add, a drop)    *)
+(* and a table's history (lakehouse/history_fences.py: a ref write shares  *)
+(* with ref writes; a reclaim, and a release's scheduling, with their own  *)
+(* kind; a branch create with ref writes alone; a release with nobody).    *)
+(* The store is the object store: a write is seen by every                 *)
 (* listing that starts after it (S3's strong read-after-write and list     *)
 (* consistency), each write and each listing one step here.                *)
 (*                                                                         *)
@@ -42,15 +46,18 @@
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS Adds,     \* holders of a kind that shares the fence with its own (an add, a ref write)
-          Drops,    \* holders of the other kind, sharing with each other (a drop, a reclaim)
-          Solos,    \* holders of a kind that shares with nobody, its own included (a branch create, a release)
+          Drops,    \* holders of the other kind, sharing with each other (a drop; a reclaim, a release's scheduling)
+          Branches, \* holders sharing with Adds alone (a branch create; none on a namespace's fence)
+          Solos,    \* holders of a kind that shares with nobody, its own included (a release)
           Lapses,   \* a hold may run out while its holder works
           Recheck,  \* F1
           Confirm   \* F2
 
-Holders == Adds \cup Drops \cup Solos
-Kind(h) == IF h \in Adds THEN "add" ELSE IF h \in Drops THEN "drop" ELSE "solo"
-Excludes(h, g) == h # g /\ (Kind(h) = "solo" \/ Kind(g) = "solo" \/ Kind(h) # Kind(g))
+Holders == Adds \cup Drops \cup Branches \cup Solos
+Kind(h) == CASE h \in Adds -> "add" [] h \in Drops -> "drop" [] h \in Branches -> "branch" [] OTHER -> "solo"
+\* Which kinds exclude which: the namespace fence's add against drop, and history_fences._excludes.
+KindsExclude(k, l) == "solo" \in {k, l} \/ {k, l} = {"add", "drop"} \/ {k, l} = {"branch", "drop"} \/ (k = "branch" /\ l = "branch")
+Excludes(h, g) == h # g /\ KindsExclude(Kind(h), Kind(g))
 
 VARIABLES pc,       \* each holder: "idle", "write", "check", "work", "last"
           stored,   \* the holder objects on the store whose hold stands

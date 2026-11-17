@@ -2,23 +2,23 @@
 
 The doors' side, a ref write refused while a reclaim holds the fence and every reclaim refused while a ref write does,
 is pinned in ``services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py`` and
-``tests/integration/test_no_reclaim_deletes_a_version_while_a_ref_is_written.py``. Here, on a local control root, the
-fence's own rules: holders of one kind share it, a hold that lapsed because its holder crashed does not refuse the
-other kind, and the record a release leaves, its holders emptied, is taken again (ADR 0233). That a released hold frees
-it is what every door test writing a ref and then reclaiming relies on.
+``tests/integration/test_no_reclaim_deletes_a_version_while_a_ref_is_written.py``; that many ref writes share it through
+the tag door, on a real S3 store, in ``tests/integration/test_a_tables_ref_writes_share_its_history.py``. Here, on a
+local control root, the fence's own rules: holders of one kind share it, each holding an object of its own (ADR 0233
+§9), a hold that lapsed because its holder crashed does not refuse the other kind, and a released hold frees it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from lakehouse import history_fences, records
+from lakehouse import history_fences, records, stored_objects
 from lakehouse.fences import FenceUnreadableError
-from lakehouse.history_fences import HistoryFence, HistoryWork, TableHistory
+from lakehouse.history_fences import HistoryHolder, HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
 
 
@@ -37,7 +37,6 @@ def _taken(work: HistoryWork, hold: timedelta) -> Before:
 
 
 def _released(history: TableHistory, _monkeypatch: pytest.MonkeyPatch) -> None:
-    # What a release writes once its holder is gone: the record stays, naming the table, its holders emptied.
     history.release(history.take(HistoryWork.RECLAIM))
 
 
@@ -46,7 +45,7 @@ def _released(history: TableHistory, _monkeypatch: pytest.MonkeyPatch) -> None:
     [
         pytest.param(_taken(HistoryWork.REFS, history_fences.HOLD), HistoryWork.REFS, [HistoryWork.REFS, HistoryWork.REFS], id="ref-writes-share-it"),
         pytest.param(_taken(HistoryWork.RECLAIM, timedelta(0)), HistoryWork.REFS, [HistoryWork.REFS], id="a-lapsed-hold-frees-it"),
-        pytest.param(_released, HistoryWork.REFS, [HistoryWork.REFS], id="the-record-a-release-left-is-taken-again"),
+        pytest.param(_released, HistoryWork.REFS, [HistoryWork.REFS], id="a-released-hold-frees-it"),
     ],
 )
 def test_a_take_joins_a_hold_of_its_own_kind_or_replaces_a_lapsed_one(
@@ -57,17 +56,24 @@ def test_a_take_joins_a_hold_of_its_own_kind_or_replaces_a_lapsed_one(
 
     history.take(then)
 
-    fence = records.read_json(history.control_root, StorageOptions(), history.key)
-    assert fence is not None
-    assert fence[0]["uuid"] == _UUID, f"the record names its table under {sorted(fence[0])}"
-    assert [holder.work for holder in HistoryFence.model_validate(fence[0]).holders] == held_by
+    # Each live hold, as the fence's directory holds one object per holder.
+    held: list[str] = []
+    for listed in stored_objects.list_under(f"{tmp_path}/{history.directory}", StorageOptions()):
+        stored = records.read_json(history.control_root, StorageOptions(), f"{history.directory}/{listed.path.rsplit('/', 1)[-1]}")
+        assert stored is not None
+        holder = HistoryHolder.model_validate(stored[0])
+        assert holder.uuid == _UUID, f"the holder names {holder.uuid}"
+        if holder.holder is not None and holder.holder.expires_at > datetime.now(UTC):
+            held.append(holder.holder.work)
+    assert sorted(held) == held_by
 
 
-def test_a_record_that_does_not_parse_is_refused_by_name(tmp_path: Path) -> None:
+def test_a_holder_that_does_not_parse_is_refused_by_name(tmp_path: Path) -> None:
     history = TableHistory(control_root=str(tmp_path), storage_options={}, table_uuid=_UUID)
-    records.create_json(history.control_root, StorageOptions(), history.key, {"uuid": _UUID, "holders": "every one"})
+    key = f"{history.directory}/{HistoryWork.RECLAIM}-{'0' * 32}.json"
+    records.create_json(history.control_root, StorageOptions(), key, {"uuid": _UUID, "holder": "every one"})
 
     with pytest.raises(FenceUnreadableError) as refused:
         history.take(HistoryWork.REFS)
 
-    assert history.key in str(refused.value), f"the refusal does not name the record: {refused.value}"
+    assert key in str(refused.value), f"the refusal does not name the holder: {refused.value}"

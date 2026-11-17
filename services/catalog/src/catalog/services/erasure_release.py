@@ -52,6 +52,19 @@ next verification that meets the record, or the catalog's finish, which maintena
 only while the record it was built from stands, its ``due_at`` included, so no copy of an id names another deadline. A tick
 leaves a release alone while a filing of its notices stands, so it never runs before everyone it costs is told.
 
+**AND WHOEVER PUTS A REF THE RELEASE WILL TAKE IS TOLD AT THE REF'S WRITE** (owner, 2026-11-17: "Tell the creator", ADR
+0233 §9). A tag or a branch put on a residual, or a branch cut from one the release takes, during the grace period loses
+its work to the release. The verification writes the release's mark in the table's history fence (:func:`mark_key`) and then
+its record, while it holds the table's history as a scheduling (:attr:`HistoryWork.SCHEDULE`), which no ref write
+shares (:func:`schedule`). Every ref door holds the table's history, and its take lists the fence's directory: a door
+whose listing shows a mark reads that release's record (:class:`RefNotices`), judges whether the release takes its ref
+as the release's next tick will read the table (:func:`takes`), and when it does files the creator's notice on the
+release's own target before the ref, under an id fixed by the release, the person and the ref (:func:`creator_notice`),
+landed once the ref and the record with its ``due_at`` stand. The door sends it after the ref, the finish sends what a
+door that ended filed, and the tick leaves the release alone while it is filed, as it does every notice. A table with no
+release scheduled carries no mark, and its ref writes read nothing more. A registered clone's tag is never taken
+(below), so its register files nothing, and its owner hears of the release only as its people do.
+
 **ONE CLAIM PER RELEASE ACROSS REPLICAS.** A tick that outlasts its window can overlap the next on another replica, so
 a tick claims a record by an ETag-guarded write (:func:`lakehouse.records.mutate_json`) carrying a lease; a replica that
 loses the write, or finds the lease live, leaves the record alone.
@@ -63,22 +76,24 @@ place the identifier is written ([[LH-281]]). The release needs only the refs, w
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Literal, Protocol
+from typing import Any, Final, Literal, Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services import announcement_intents, erasure_obligations
-from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld
-from catalog.services.dataplane import recorded_branch
+from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld, RefOnARelease
+from catalog.services.dataplane import PlacedRef, recorded_branch
 from catalog.services.erasure import ErasureReport, Pin, SurfaceResult, held_by_a_clone, reclaim_refs
-from lakehouse import clone_sources, control_prefixes
+from lakehouse import clone_sources, control_prefixes, history_fences, stored_objects
 from lakehouse.control_events import CatalogControlEvent
+from lakehouse.fences import mark_name
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse.record_store import delete_record, list_records
+from lakehouse.record_store import delete_record, list_records, put_record
 from lakehouse.records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
 from lakehouse.storage_options import StorageOptions
 
@@ -91,6 +106,14 @@ RELEASE_PREFIX = control_prefixes.ERASURE_RELEASES
 #: (a handful of ref deletes and creates), so a slow tick is not overtaken; a tick that fails hands its lease
 #: back at once, so this bounds only a replica that died holding one.
 LEASE = timedelta(minutes=15)
+
+#: The kind of a release's mark in its table's history fence (:func:`lakehouse.fences.mark_name`).
+MARK_KIND: Final = "erasure-release"
+
+#: How many takes of the table's history a scheduling makes, a short wait between each, before it answers the release
+#: unrecorded: a ref write holds it for the seconds its write takes.
+_SCHEDULE_TAKES: Final = 5
+_SCHEDULE_WAIT: Final = 0.2
 
 
 type RefAction = Literal["table_tag_deleted", "table_branch_deleted", "table_branch_created"]
@@ -244,19 +267,114 @@ def _scheduled(record: ReleaseRecord, subject: str, *, object_id: str) -> Catalo
     )
 
 
+def mark_key(table_uuid: str, release_id: str) -> str:
+    """The key of the mark the release ``release_id`` keeps in its table's history fence while it is scheduled."""
+    return f"{history_fences.fence_directory(table_uuid)}/{mark_name(MARK_KIND, release_id)}"
+
+
 def schedule(control_root: str, storage_options: StorageOptions, record: ReleaseRecord) -> None:
-    """Write ``record`` where the release tick finds it; raises when the store does not take it.
+    """Write ``record``'s mark in its table's history fence, then ``record`` where the release tick finds it, both while
+    the table's history is held as a scheduling, which no ref write shares: a ref write either ended before the record
+    stood, or its take listed the mark (G7 of ``specs/catalog/Erasure.tla``). The hold is confirmed before the record, so a
+    scheduling whose hold lapsed records nothing.
 
     Raises:
-        RecordExistsError: A release under the same id is already scheduled.
+        RecordExistsError: A release under the same id is already scheduled; its mark stands, the same as this one's.
+        HistoryFencedError: Ref writes held the table's history at every take, or the hold lapsed; nothing is recorded.
     """
-    create_json(control_root, storage_options, record_key(record.release_id), record.model_dump(mode="json"))
+    history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=record.table_uuid)
+    for attempt in range(_SCHEDULE_TAKES):
+        try:
+            with history.hold_for(HistoryWork.SCHEDULE, renewed=False) as hold:
+                put_record(control_root, storage_options, mark_key(record.table_uuid, record.release_id), {"release_id": record.release_id})
+                hold.confirm()
+                create_json(control_root, storage_options, record_key(record.release_id), record.model_dump(mode="json"))
+                return
+        except HistoryFencedError:
+            if attempt + 1 == _SCHEDULE_TAKES:
+                raise
+            time.sleep(_SCHEDULE_WAIT * (attempt + 1))
 
 
 def scheduled(control_root: str, storage_options: StorageOptions, release_id: str) -> ReleaseRecord | None:
     """The release scheduled under ``release_id``, or None when none is (never scheduled, or already run)."""
     found = read_json(control_root, storage_options, record_key(release_id))
     return None if found is None else ReleaseRecord.model_validate(found[0])
+
+
+def takes(record: ReleaseRecord, dataset: _Dataset, ref: PlacedRef) -> bool:
+    """Whether ``record``'s release takes ``ref`` once it stands on ``dataset``'s table, as its next tick reads the table
+    (:func:`_plan`): a tag on a residual version or on a branch the release takes, or a branch cut from either. Never a
+    registered clone's tag, which only the clone's end releases."""
+    if ref.kind == "tag" and ref.name.startswith(clone_sources.TAG_PREFIX):
+        return False
+    subtree, residual, _forks = _taken_branches(dataset, record)
+    return (ref.branch, ref.version) in residual or (ref.branch is not None and ref.branch in subtree)
+
+
+def creator_notice(record: ReleaseRecord, subject: str, ref: PlacedRef, *, location: str, object_id: str) -> Announcement:
+    """The notice telling ``subject``, who puts ``ref`` on the table, that ``record``'s release will take it: under an id fixed
+    by the release, the person and the ref, so a retry, the door and the finish send one event, and landed once the ref
+    stands where it was put and ``record`` itself stands, its ``due_at`` included (ADR 0233 §9)."""
+    event = _scheduled(record, subject, object_id=object_id)
+    told = event.model_copy(
+        update={
+            "event_id": uuid5(NAMESPACE_URL, f"erasure_release_scheduled/{record.release_id}/{subject}/{ref.kind}:{ref.name}").hex,
+            "extra": {**event.extra, "ref": f"{ref.kind}:{ref.name}", "on": f"{ref.branch or 'main'}@{ref.version}"},
+        }
+    )
+    landed = RefOnARelease(
+        key=record_key(record.release_id),
+        due_at=record.model_dump(mode="json")["due_at"],
+        location=location,
+        ref=ref.kind,
+        name=ref.name,
+        branch=ref.branch,
+        version=ref.version,
+    )
+    return Announcement(evidence=landed, message=ControlMessage(event=told))
+
+
+class RefNotices:
+    """What one ref door files for the person who puts its ref, from inside its hold of the table's history: for each
+    release the hold's take found marked and whose record stands, the creator's notice, when that release takes the ref.
+
+    Each filing is made before the ref is written, and kept in :attr:`filed` for the door to send once the ref is written,
+    or to judge when the write failed.
+    """
+
+    def __init__(self, control_root: str, storage_options: StorageOptions, *, table_uuid: str, subject: str, object_id: str) -> None:
+        self._control_root, self._storage_options = control_root, storage_options
+        self._table_uuid, self._subject, self._object_id = table_uuid, subject, object_id
+        #: Each filing's key and what it holds.
+        self.filed: list[tuple[str, list[Announcement]]] = []
+
+    def __call__(self, marks: frozenset[tuple[str, str]], dataset: _Dataset, ref: PlacedRef) -> None:
+        """File the notice of each marked release that takes ``ref``.
+
+        One read of each marked release's record, and nothing for a table none is marked on. A mark whose record is gone
+        is removed: its release has run, and no scheduling holds the table's history beside this door's hold, so no
+        record is about to be written under it.
+
+        Raises:
+            OSError: The store refused a read or a filing; nothing is filed for the release it was reading, and the ref is
+                not written.
+        """
+        for kind, release_id in sorted(marks):
+            if kind != MARK_KIND:
+                continue
+            record = scheduled(self._control_root, self._storage_options, release_id)
+            if record is None:
+                stored_objects.remove_object(self._control_root, self._storage_options, mark_key(self._table_uuid, release_id))
+                continue
+            if record.table_uuid != self._table_uuid or not takes(record, dataset, ref):
+                continue
+            told = [creator_notice(record, self._subject, ref, location=str(dataset.uri), object_id=self._object_id)]
+            key = announcement_intents.file(
+                self._control_root, self._storage_options, door="erasure_release_creator", target=notice_target(release_id), announcements=told
+            )
+            self.filed.append((key, told))
+            log.info("erasure_release_creator_filed", extra={"release": release_id, "table": record.table, "ref": f"{ref.kind}:{ref.name}"})
 
 
 def completion_bound(due_at: datetime, cleanup_window_days: int) -> str:
@@ -359,7 +477,7 @@ def _release(
         _reclaim(dataset, claimed, storage_options=table_options)
     if record.held_by_clones:
         _report_held(control_root, storage_options, record.release_id, [])
-    _finish(control_root, storage_options, record.release_id)
+    _finish(control_root, storage_options, record)
     log.info(
         "erasure_release_done",
         extra={"release": record.release_id, "table": record.table, "tags": claimed.tags, "branches": [step.branch for step in claimed.plan]},
@@ -385,11 +503,10 @@ def _report_held(control_root: str, storage_options: StorageOptions, release_id:
         log.warning("erasure_release_obligation_unrecorded", extra={"release": release_id})
 
 
-def _plan(dataset: _Dataset, record: ReleaseRecord) -> tuple[list[str], list[Recreate], list[str]]:
-    """The tags to delete and the branches to recreate top-down, read from the table as it stands now: before the deletes,
-    what the record names and every ref standing on a residual; once they are done, only what stands on a residual. And
-    the registered clones' tags among them, which no release deletes: one on a residual, or on a branch this would delete,
-    holds the release."""
+def _taken_branches(dataset: _Dataset, record: ReleaseRecord) -> tuple[set[str], set[tuple[str | None, int | None]], dict[str, str | None]]:
+    """The branches ``record``'s release takes, read from the table as it stands now: before the deletes, what the record
+    names and every branch cut from a residual, with their subtrees; once they are done, only what stands on a residual.
+    With the residual versions as ``(branch, version)``, and each branch's parent."""
     listed_branches = dataset.branches.list() or {}
     forks = {str(name): recorded_branch(meta.get("parent_branch")) for name, meta in listed_branches.items()}
     residual = {_reference(name) for name in record.residual}
@@ -407,6 +524,15 @@ def _plan(dataset: _Dataset, record: ReleaseRecord) -> tuple[list[str], list[Rec
         children = {name for name, fork in forks.items() if fork == parent} - subtree
         subtree |= children
         frontier.extend(children)
+    return subtree, residual, forks
+
+
+def _plan(dataset: _Dataset, record: ReleaseRecord) -> tuple[list[str], list[Recreate], list[str]]:
+    """The tags to delete and the branches to recreate top-down, read from the table as it stands now: before the deletes,
+    what the record names and every ref standing on a residual; once they are done, only what stands on a residual. And
+    the registered clones' tags among them, which no release deletes: one on a residual, or on a branch this would delete,
+    holds the release."""
+    subtree, residual, forks = _taken_branches(dataset, record)
     listed = dataset.tags.list() or {}
     recorded = set() if record.phase == "recreating" else {ref.split(":", 1)[1] for ref in record.refs if ref.startswith("tag:")} | set(record.tags)
     standing = {
@@ -519,5 +645,7 @@ def _hand_back(control_root: str, storage_options: StorageOptions, release_id: s
         log.warning("erasure_release_hand_back_failed", extra={"release": release_id, "error": str(exc)})
 
 
-def _finish(control_root: str, storage_options: StorageOptions, release_id: str) -> None:
-    delete_record(control_root, storage_options, record_key(release_id))
+def _finish(control_root: str, storage_options: StorageOptions, record: ReleaseRecord) -> None:
+    """End the release: its record, then its mark, so no ref door reads a mark whose record it could find again."""
+    delete_record(control_root, storage_options, record_key(record.release_id))
+    stored_objects.remove_object(control_root, storage_options, mark_key(record.table_uuid, record.release_id))

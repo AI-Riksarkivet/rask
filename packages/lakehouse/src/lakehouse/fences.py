@@ -3,20 +3,24 @@ with.
 
 Two fences are built on it: a table's history (:mod:`lakehouse.history_fences`, a reclaim against a write of its refs)
 and a namespace's rows (:mod:`lakehouse.namespace_fences`, a drop against an add beneath it). Each says which kinds of
-work exclude which (:meth:`Fence.excludes`), how long a hold lasts, how a refusal reads, and how its holders are stored:
+work exclude which (:meth:`Fence.excludes`), how long a hold lasts and how a refusal reads.
 
-- :class:`RecordFence` keeps one record per object listing its live holders, each take or release a replace of it under
-  the ETag it read. Holders that share the fence contend for that one write, so a take running beside many of its own
-  kind can lose every round (:data:`_ATTEMPTS`) and be refused although nothing excludes it. The table's history is kept
-  so, since a maintain-tier vend may write its table's record and no other key.
-- :class:`HolderFence` keeps one object per holder beneath the object's directory. A take writes its own, under a key no
-  other holder writes, then lists the directory, and yields when the listing shows a live holder of a kind its own
-  excludes (``specs/catalog/Fence.tla``): holders that share the fence never contend, and a take is refused only by a
-  holder that excludes it. The namespace's fence is kept so, since every create beneath a namespace takes it.
+ONE OBJECT PER HOLDER (:class:`HolderFence`), beneath the fenced object's directory. A take writes its own, under a key
+no other holder writes, then lists the directory, and yields when the listing shows a live holder of a kind its own
+excludes (``specs/catalog/Fence.tla``): holders that share the fence never contend for a write, and a take is refused
+only by a holder that excludes it. Measured on RustFS 1.0.3 with one shared record per object instead, each take a
+replace of it under the ETag it read: 8 of 16, and 39 of 64, concurrent creates into one namespace, and 7 to 9 of 16,
+and 36 to 39 of 64, concurrent tag writes on one table, answered 409 with nothing excluding them, each take having lost
+its eight rounds to writers of its own kind (ADR 0233).
 
 THE STORE PICKS THE WINNER. Every write is a create-if-absent or a replace under the ETag its writer read
 (:mod:`lakehouse.records`), and the store shows a write to every listing and read that starts after it, so of two takes
 that exclude each other at least one sees the other and refuses itself.
+
+A DIRECTORY MAY CARRY MARKS (:data:`MARK_NAME`): objects named ``<kind>.<id>.json`` that no take sweeps or judges, and
+that every take's second listing hands its holder (:attr:`Hold.marks`), so work coming to the fenced object is seen by
+every holder admitted after its mark was written, at no round trip of its own. A table's history carries the mark of each
+erasure release scheduled on it (``catalog.services.erasure_release``).
 
 A HOLD IS KEPT FOR AS LONG AS ITS WORK RUNS ([[LH-575]]). :meth:`Fence.held` renews its hold every third of the hold
 while its block runs: two renewals that fail in a row leave a third inside the hold. A holder that crashed renews nothing,
@@ -46,7 +50,7 @@ from datetime import datetime, timedelta
 from typing import Any, ClassVar, Final
 
 from lance_namespace import InternalError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict
 
 from lakehouse import records, stored_objects
 from lakehouse.storage_options import StorageOptions
@@ -54,8 +58,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-#: How many read-and-write rounds a record fence's take or release runs against holders of its own kind writing at once,
-#: and how many a renewal runs against a sweep of its own lapsed holder object.
+#: How many read-and-write rounds a renewal runs against a sweep of its own lapsed holder object.
 _ATTEMPTS: Final = 8
 
 
@@ -69,8 +72,18 @@ class Holder(BaseModel):
 
 
 class FenceUnreadableError(InternalError):
-    """A fence's stored record, or a holder's object, does not parse as one: no take of the fence can judge it, so none
-    is admitted until the object is repaired or removed."""
+    """A holder's object does not parse as one: no take of the fence can judge it, so none is admitted until the object
+    is repaired or removed."""
+
+
+class Taken(BaseModel):
+    """One take of a fence: its token, and the marks its last listing of the fence's directory showed (:data:`MARK_NAME`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    token: str
+    #: Each mark as ``(kind, id)``.
+    marks: frozenset[tuple[str, str]] = frozenset()
 
 
 class Fence(BaseModel):
@@ -112,6 +125,16 @@ class Fence(BaseModel):
 
     def take(self, work: str) -> str:
         """Hold the fence for ``work``; the token :meth:`release` ends the hold with.
+
+        Raises:
+            Exception: :meth:`refused`'s error: work that excludes ``work`` holds it.
+            FenceUnreadableError: A stored holder does not parse; nothing was taken.
+            botocore.exceptions.ClientError: The store refused a read or a write.
+        """
+        return self.taking(work).token
+
+    def taking(self, work: str) -> Taken:
+        """:meth:`take`, with the marks the take's last listing showed.
 
         Raises:
             Exception: :meth:`refused`'s error: work that excludes ``work`` holds it.
@@ -182,8 +205,9 @@ class Fence(BaseModel):
             Exception: :meth:`refused`'s error: work that excludes ``work`` holds it; the block did not run.
             botocore.exceptions.ClientError: The store refused the take.
         """
-        token = self.take(work)
-        hold = Hold(self, token, work)
+        taken = self.taking(work)
+        token = taken.token
+        hold = Hold(self, token, work, marks=taken.marks)
         if not renewed:
             try:
                 yield hold
@@ -202,10 +226,14 @@ class Fence(BaseModel):
 
 
 class Hold:
-    """One holder's take of a fence, which its block may confirm before a step that must not land once the hold lapsed."""
+    """One holder's take of a fence, which its block may confirm before a step that must not land once the hold lapsed,
+    and the marks the fence's directory carried when it was taken."""
 
-    def __init__(self, fence: Fence, token: str, work: str) -> None:
+    def __init__(self, fence: Fence, token: str, work: str, *, marks: frozenset[tuple[str, str]] = frozenset()) -> None:
         self._fence, self._token, self._work = fence, token, work
+        #: Each mark (:data:`MARK_NAME`) the take's last listing showed, as ``(kind, id)``: written before this holder was
+        #: admitted by work that excludes this holder's, or written beside it by work that shares with it.
+        self.marks = marks
 
     def confirm(self) -> None:
         """Renew the hold now, so a single step taken next lands inside it; refuse when it has lapsed (two renewals failed,
@@ -220,129 +248,23 @@ class Hold:
             raise self._fence.refused(f"the hold of {self._fence.what} for a {self._work} lapsed before its last step; nothing more was done, retry")
 
 
-class FenceRecord(BaseModel):
-    """A record fence's stored record: its live holders, none of which excludes another. Each fence kind's own record
-    adds the field that names its object, its :attr:`Fence.stored_field` (:attr:`RecordFence.record_model`)."""
-
-    holders: list[Holder] = []
-
-
-class RecordFence(Fence):
-    """A fence kept as one record per object on the control root, at :attr:`key`, listing its live holders."""
-
-    #: The stored record, which names the object under :attr:`Fence.stored_field`.
-    record_model: ClassVar[type[FenceRecord]] = FenceRecord
-
-    @property
-    def key(self) -> str:
-        """The fence record's key on the control root."""
-        raise NotImplementedError
-
-    def _holders(self, record: dict[str, Any] | None) -> list[Holder]:
-        """Every holder ``record`` lists.
-
-        Raises:
-            FenceUnreadableError: It is no record of this fence: it does not parse as :attr:`record_model`, or it names
-                another object.
-        """
-        if record is None:
-            return []
-        try:
-            parsed = self.record_model.model_validate(record)
-        except ValidationError as exc:
-            raise self._unreadable(self.key, exc) from exc
-        if (named := getattr(parsed, self.stored_field, None)) != self.subject:
-            raise self._unreadable(self.key, ValueError(f"its {self.stored_field!r} names {named!r}, not {self.subject!r}"))
-        return parsed.holders
-
-    def _record(self, holders: list[Holder]) -> dict[str, Any]:
-        return self.record_model.model_validate({self.stored_field: self.subject, "holders": holders}).model_dump(mode="json")
-
-    def _read(self) -> records.StoreRead:
-        try:
-            return records.read_json_at(self.control_root, self.storage_options, self.key)
-        except ValueError as exc:  # bytes that are no JSON
-            raise self._unreadable(self.key, exc) from exc
-
-    def take(self, work: str) -> str:
-        """Hold the fence for ``work``; the token :meth:`release` ends the hold with.
-
-        Raises:
-            Exception: :meth:`refused`'s error: work that excludes ``work`` holds it, or the take lost every round to writers
-                it shares with.
-            FenceUnreadableError: The record does not parse; nothing was taken.
-            botocore.exceptions.ClientError: The store refused a read or a write.
-        """
-        for _ in range(_ATTEMPTS):
-            read = self._read()
-            now = read.at
-            holders = [holder for holder in self._holders(read.stored.record if read.stored else None) if holder.expires_at > now]
-            if other := next((holder for holder in holders if self.excludes(holder.work, work)), None):
-                raise self.refused(f"a {other.work} holds {self.what} until {other.expires_at.isoformat()}, so no {work} may start; retry once it ends")
-            mine = Holder(token=uuid.uuid4().hex, work=str(work), taken_at=now, expires_at=now + self.hold())
-            fence = self._record([*holders, mine])
-            try:
-                if read.stored is None:
-                    records.create_json(self.control_root, self.storage_options, self.key, fence)
-                else:
-                    records.replace_json(self.control_root, self.storage_options, self.key, fence, etag=read.stored.etag)
-            except (records.RecordExistsError, records.RecordChangedError):
-                continue
-            return mine.token
-        raise self.refused(f"{_ATTEMPTS} attempts to hold {self.what} for a {work} each lost to another writer; retry")
-
-    def release(self, token: str) -> None:
-        """End the hold ``token`` names. Never raises: a hold this cannot end lapses after :meth:`hold`.
-
-        The record stays, its holders emptied: the store offers no conditional delete, and an unconditional one could
-        remove a take that landed after the read. It ends with its object's other records.
-        """
-        try:
-            for _ in range(_ATTEMPTS):
-                read = self._read()
-                now = read.at
-                if read.stored is None:
-                    return
-                holders = self._holders(read.stored.record)
-                mine = next((holder for holder in holders if holder.token == token), None)
-                if mine is None:
-                    log.warning(f"{self.log_name}_hold_gone", extra={"subject": self.subject})
-                    return
-                if mine.expires_at <= now:
-                    log.error(f"{self.log_name}_outlived", extra={"subject": self.subject, "work": mine.work, "held_since": mine.taken_at.isoformat()})
-                kept = self._record([holder for holder in holders if holder.token != token and holder.expires_at > now])
-                try:
-                    records.replace_json(self.control_root, self.storage_options, self.key, kept, etag=read.stored.etag)
-                except records.RecordChangedError:
-                    continue
-                return
-            log.warning(f"{self.log_name}_not_released", extra={"subject": self.subject, "reason": "every attempt lost to another writer"})
-        except Exception as exc:
-            log.warning(f"{self.log_name}_not_released", extra={"subject": self.subject, "reason": f"{type(exc).__name__}: {exc}"[:300]})
-
-    def renew(self, token: str) -> bool:
-        for _ in range(_ATTEMPTS):
-            read = self._read()
-            now = read.at
-            if read.stored is None:
-                return False
-            holders = self._holders(read.stored.record)
-            live = [holder for holder in holders if holder.expires_at > now]
-            mine = next((holder for holder in live if holder.token == token), None)
-            if mine is None:
-                return False
-            others = [holder for holder in live if holder.token != token]
-            renewed = self._record([*others, mine.model_copy(update={"expires_at": now + self.hold()})])
-            try:
-                records.replace_json(self.control_root, self.storage_options, self.key, renewed, etag=read.stored.etag)
-            except records.RecordChangedError:
-                continue
-            return True
-        raise records.RecordChangedError(f"{_ATTEMPTS} attempts to renew a hold of {self.what} each lost to another writer")
-
-
 #: A holder's object name: its token, which is its kind of work and a hex id.
 _HOLDER_NAME: Final = re.compile(r"(([a-z]+)-[0-9a-f]{32})\.json")
+
+#: A mark's object name, ``<kind>.<id>.json``, which no holder's name matches.
+MARK_NAME: Final = re.compile(r"([a-z-]+)\.([0-9a-f]{32})\.json")
+
+
+def mark_name(kind: str, mark_id: str) -> str:
+    """The object name of the mark ``(kind, mark_id)`` beneath a fence's directory.
+
+    Raises:
+        ValueError: The pair is no mark's (:data:`MARK_NAME`).
+    """
+    name = f"{kind}.{mark_id}.json"
+    if MARK_NAME.fullmatch(name) is None:
+        raise ValueError(f"{kind!r} and {mark_id!r} name no mark")
+    return name
 
 
 class HolderRecord(BaseModel):
@@ -387,9 +309,9 @@ class HolderFence(Fence):
             raise self._unreadable(key, ValueError(f"its {self.stored_field!r} names {named!r}, not {self.subject!r}"))
         return read, parsed.holder
 
-    def _excluding(self, work: str, *, mine: str | None) -> tuple[Holder | None, datetime]:
-        """A live holder of a kind ``work`` excludes, other than ``mine``, as one listing of the directory shows them, and the
-        store's clock at that listing; holders lapsed a whole hold ago are swept on the way.
+    def _excluding(self, work: str, *, mine: str | None) -> tuple[Holder | None, datetime, frozenset[tuple[str, str]]]:
+        """A live holder of a kind ``work`` excludes, other than ``mine``, as one listing of the directory shows them, the
+        store's clock at that listing, and the marks it shows; holders lapsed a whole hold ago are swept on the way.
 
         Raises:
             FenceUnreadableError: An excluding holder's object does not parse.
@@ -397,8 +319,13 @@ class HolderFence(Fence):
         """
         listing = stored_objects.list_under_at(f"{self.control_root.rstrip('/')}/{self.directory}", self.storage_options)
         found: Holder | None = None
+        marks: set[tuple[str, str]] = set()
         for listed in listing.objects:
-            named = _HOLDER_NAME.fullmatch(listed.path.rsplit("/", 1)[-1])
+            name = listed.path.rsplit("/", 1)[-1]
+            if (marked := MARK_NAME.fullmatch(name)) is not None:
+                marks.add((marked.group(1), marked.group(2)))
+                continue
+            named = _HOLDER_NAME.fullmatch(name)
             if named is None or named.group(1) == mine:
                 continue
             token = named.group(1)
@@ -411,7 +338,7 @@ class HolderFence(Fence):
                 _read, holder = self._read(self._key(token))
                 if holder is not None and holder.expires_at > listing.at:
                     found = holder
-        return found, listing.at
+        return found, listing.at, frozenset(marks)
 
     def _sweep(self, token: str) -> None:
         """Remove a lapsed holder's object: marked swept under the ETag read, then deleted, so a renewal that landed after
@@ -427,8 +354,8 @@ class HolderFence(Fence):
         except Exception as exc:
             log.warning(f"{self.log_name}_not_swept", extra={"subject": self.subject, "key": key, "reason": f"{type(exc).__name__}: {exc}"[:300]})
 
-    def take(self, work: str) -> str:
-        """Hold the fence for ``work``; the token :meth:`release` ends the hold with.
+    def taking(self, work: str) -> Taken:
+        """Hold the fence for ``work``: the token :meth:`release` ends the hold with, and the marks the second listing showed.
 
         One listing first: a live holder of a kind ``work`` excludes refuses it with nothing written. Then this take's own
         object, and a second listing: one that shows such a holder now refuses it too, its object removed. Of two takes
@@ -440,21 +367,21 @@ class HolderFence(Fence):
             FenceUnreadableError: An excluding holder's object does not parse; nothing was taken.
             botocore.exceptions.ClientError: The store refused a read, a listing or a write.
         """
-        other, now = self._excluding(work, mine=None)
+        other, now, _marks = self._excluding(work, mine=None)
         if other is not None:
             raise self.refused(f"a {other.work} holds {self.what} until {other.expires_at.isoformat()}, so no {work} may start; retry once it ends")
         token = f"{work}-{uuid.uuid4().hex}"
         mine = Holder(token=token, work=str(work), taken_at=now, expires_at=now + self.hold())
         records.create_json(self.control_root, self.storage_options, self._key(token), self._object(mine))
         try:
-            other, _at = self._excluding(work, mine=token)
+            other, _at, marks = self._excluding(work, mine=token)
         except Exception:
             stored_objects.remove_object(self.control_root, self.storage_options, self._key(token))
             raise
         if other is not None:
             stored_objects.remove_object(self.control_root, self.storage_options, self._key(token))
             raise self.refused(f"a {other.work} took {self.what} beside this {work}, which yields to it; retry once it ends")
-        return token
+        return Taken(token=token, marks=marks)
 
     def renew(self, token: str) -> bool:
         key = self._key(token)

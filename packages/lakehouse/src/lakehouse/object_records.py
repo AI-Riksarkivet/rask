@@ -33,7 +33,6 @@ from lakehouse.storage_options import StorageOptions
 OBJECT_RECORD_PREFIXES: Final = (
     protection.PREFIX,
     maintenance_policies.PREFIX,
-    history_fences.PREFIX,
     commit_turns.PREFIX,
     commit_records.MARKS_PREFIX,
     control_prefixes.LABELS,
@@ -45,8 +44,9 @@ def end_object_records(control_root: str, storage_options: StorageOptions, kind:
     """Delete every record the object ``uuid`` names holds, and return the prefixes of the records that existed.
 
     A table also holds one record per stock commit whose author the catalog recorded (:mod:`commit_records`), one per
-    commit that added a file (:mod:`file_identities`) and maintenance's stamps (:func:`maintenance_policies.end_table_state`),
-    each under a directory of its uuid, which go with the rest.
+    commit that added a file (:mod:`file_identities`), maintenance's stamps (:func:`maintenance_policies.end_table_state`)
+    and its history fence's holders and marks (:func:`history_fences.end`), each under a directory of its uuid, which go
+    with the rest.
     """
     ended: list[str] = []
     for prefix in OBJECT_RECORD_PREFIXES:
@@ -58,4 +58,6 @@ def end_object_records(control_root: str, storage_options: StorageOptions, kind:
         ended.append(file_identities.PREFIX)
     if kind == "table" and maintenance_policies.end_table_state(control_root, storage_options, uuid):
         ended.append(maintenance_policies.STATE_PREFIX)
+    if kind == "table" and history_fences.end(control_root, storage_options, uuid):
+        ended.append(history_fences.PREFIX)
     return ended

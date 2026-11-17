@@ -50,6 +50,7 @@ from openfga_sdk import OpenFgaClient
 
 from lakehouse import location_claims
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.fences import Taken
 from lakehouse.namespace_fences import NamespaceFence, NamespaceWork
 
 
@@ -221,15 +222,15 @@ def _land_before(scene: _Scene, method: str, rival: Callable[[], object]) -> Non
 def _the_destination_is_dropped_as_the_name_is_registered(scene: _Scene) -> None:
     # As the rename is about to register the name: before the register holds the destination's namespace fence, since a
     # drop sent once it holds it is refused (ADR 0233), and the register then finds no namespace to add the name into.
-    real, pending = NamespaceFence.take, [True]
+    real, pending = NamespaceFence.taking, [True]
 
-    def _take(fence: NamespaceFence, work: str) -> str:
+    def _taking(fence: NamespaceFence, work: str) -> Taken:
         if pending and fence.name == "lance_catalog$managed" and work == NamespaceWork.ADD:
             pending.clear()
             _ok(scene.estate, "/v1/namespace/lance_catalog$managed/drop", json={})
         return real(fence, work)
 
-    scene.monkeypatch.setattr(NamespaceFence, "take", _take)
+    scene.monkeypatch.setattr(NamespaceFence, "taking", _taking)
 
 
 def _the_backend_does_not_detach_the_source(scene: _Scene) -> None:

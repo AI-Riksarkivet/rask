@@ -50,6 +50,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 | `If-Match` with a stale ETag → 412 (R10) | measured |
 | Lance creates and appends through a vended session credential; writing outside the prefix is refused (R15) | measured |
 | pyarrow 25 multipart (a service's own pyarrow writes, on its own session) (R12) | measured on 1.0.1 and 1.0.3; refused by 1.0.0-alpha.60 |
+| A maintain-tier vend's session reaches its table's history-fence directory and nothing else of the control root: a ListBucket `s3:prefix` `StringLike` of exactly `<dir>/` (the same prefix without its slash, the parent and another table's refused), get on `<dir>/*`, put and delete only on `<dir>/reclaim-*` (a ref writer's hold and an erasure release's mark refused) | measured on 1.0.3, 2026-11-17, STS AssumeRole by a non-root user with the catalog's canned policy (ADR 0233 §9) |
 | A prefix-scoped session is refused pyarrow's `HeadBucket` (an unprefixed `s3:ListBucket`) | measured (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`) |
 | Conditional CompleteMultipartUpload (R11) | source only (`rustfs@1.0.3:crates/ecstore/src/set_disk/ops/multipart.rs:2702-2742`) |
 | Warehouse purge: DeleteObjects then DeleteBucket (R13) | not measured |

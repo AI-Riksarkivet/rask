@@ -187,6 +187,14 @@ named the table by its id.
   never a registered clone's tag. While a clone's tag stands on such a version the release waits, past `extra.due_at` if
   need be, and each tick that finds it waiting tells its people again: `erasure_release_scheduled` with
   `extra.held_by_clones` naming the clones' tags, under an `event_id` fixed by the release, the person and those tags.
+  Whoever puts a ref the release will take while it is scheduled (`tags/create`, `tags/update` or `branches/create`: a
+  tag on a version that held the subject or on a branch the release recreates, a branch cut from either) is told at that
+  write: `erasure_release_scheduled` with `extra.subject` the caller, `extra.ref` (`tag:<name>` or `branch:<name>`) and
+  `extra.on` (`<branch or main>@<version>`) beside the release's `extra.due_at`, under an `event_id` fixed by the release,
+  the person and the ref. The door files it before the ref and sends it once the ref is written; one a door that ended
+  did not send is sent by the catalog's finish while the ref and the release stand, and the release does not run while
+  it is filed. A caller no token names is told nothing; a registered clone's tag is never taken, so a clone's register
+  files nothing ([ADR 0233](adr/0233-erasure-and-the-namespace-cascade-are-modelled-in-tla.md) §9).
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
   commits. Order the writes of one table by `rask_lance.version`, not by `seq`.
 - The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), and longer for a row the
@@ -234,7 +242,7 @@ percent-encoded, which `fga.subject_of` decodes, or a userset):
 | `action` | `extra.subject` |
 | --- | --- |
 | `grant_added`, `grant_revoked` | the principal or userset the grant names; `extra.relation` is the rung and `object_id` the object |
-| `erasure_release_scheduled` | one event per person the release costs (the erasure's requester and each table owner), with the deadline in `extra.due_at`; its `event_id` is the same however often it is sent. Sent again with `extra.held_by_clones` while registered clones hold the release, under an `event_id` of its own per person and clones |
+| `erasure_release_scheduled` | one event per person the release costs (the erasure's requester and each table owner), with the deadline in `extra.due_at`; its `event_id` is the same however often it is sent. Sent again with `extra.held_by_clones` while registered clones hold the release, under an `event_id` of its own per person and clones. And to whoever puts a ref the release will take while it stands, naming the ref in `extra.ref`, under an `event_id` of its own per person and ref |
 | `principal_deleted` | the principal the estate admin offboarded: nobody is left to tell, so a notifier erases what it keeps for them |
 
 ### What a notifier asks

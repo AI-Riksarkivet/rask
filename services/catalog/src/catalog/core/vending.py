@@ -168,10 +168,18 @@ class VendedSession(BaseModel):
 class TableRecords(BaseModel):
     """Where one table's records are kept on the control root, which its maintain-tier vend may write ([[LH-219]]).
 
-    Maintenance signs every write of a reclaim with the table's vend, so the vend reaches the table's history fence, to
-    get and put (:mod:`lakehouse.history_fences`), and the records of its committed files, to get and delete
+    Maintenance signs every write of a reclaim with the table's vend, so the vend reaches the table's history fence
+    (:mod:`lakehouse.history_fences`) and the records of its committed files, to get and delete
     (:mod:`lakehouse.file_identities`). It never puts one of those: a holder that could would record a replaced file as
     the one committed. No other record on the control root, and none of another table.
+
+    THE FENCE'S DIRECTORY, AND OF IT ONLY A RECLAIM'S OWN OBJECTS ARE WRITTEN. A take lists the table's fence directory
+    and reads the holders it judges, then creates its own holder object, renews it and deletes it
+    (:class:`lakehouse.fences.HolderFence`): the vend lists exactly that directory, gets every object in it, and puts and
+    deletes only objects named as a reclaim's holder (``reclaim-<token>.json``), the one kind maintenance takes. It cannot
+    remove or rewrite a ref writer's or a release's hold, nor an erasure release's mark (``erasure_release``), so a
+    compromised maintenance pod cannot admit its reclaim beside a ref write or hide a scheduled release from a ref's
+    writer; a lapsed holder of another kind it meets is left to the catalog's next take, which sweeps it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -189,12 +197,22 @@ class TableRecords(BaseModel):
         """
         _reject_iam_policy_syntax("table uuid", self.table_uuid)
         root = _policy_path(self.control_root, "control root")
+        bucket, _, root_key = root.partition("/")
+        fence = "/".join(part for part in (root_key, history_fences.fence_directory(self.table_uuid)) if part)
         return [
             {
-                "Sid": "HistoryFence",
+                "Sid": "ListFence",
                 "Effect": "Allow",
-                "Action": ["s3:GetObject", "s3:PutObject"],
-                "Resource": f"arn:aws:s3:::{root}/{history_fences.fence_key(self.table_uuid)}",
+                "Action": ["s3:ListBucket"],
+                "Resource": f"arn:aws:s3:::{bucket}",
+                "Condition": {"StringLike": {"s3:prefix": f"{fence}/"}},
+            },
+            {"Sid": "ReadFence", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": f"arn:aws:s3:::{bucket}/{fence}/*"},
+            {
+                "Sid": "HoldFence",
+                "Effect": "Allow",
+                "Action": ["s3:PutObject", "s3:DeleteObject"],
+                "Resource": f"arn:aws:s3:::{bucket}/{fence}/{history_fences.HistoryWork.RECLAIM}-*",
             },
             {
                 "Sid": "CommittedFileRecords",

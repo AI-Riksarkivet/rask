@@ -40,6 +40,7 @@ from catalog.services import contracts, native
 from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
 from lakehouse.base_refs import decoded_path
+from lakehouse.fences import Hold
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 from lakehouse.storage_options import StorageOptions
@@ -408,9 +409,10 @@ class DoorTable:
         return _checked(lambda: opener(self.location, so, self.segments, version=version, branch=branch), self.require_held)
 
     @contextmanager
-    def history_held(self, work: history_fences.HistoryWork) -> Generator[None]:
-        """The table's history held for ``work`` while the block runs: no reclaim deletes a version while a tag or branch
-        is written, and no ref is written while a reclaim runs ([[LH-308]], :mod:`lakehouse.history_fences`).
+    def history_held(self, work: history_fences.HistoryWork) -> Generator[Hold]:
+        """The table's history held for ``work`` while the block runs, its :class:`lakehouse.fences.Hold` handed to the block
+        (the marks its take saw): no reclaim deletes a version while a tag or branch is written, and no ref is written while
+        a reclaim runs ([[LH-308]], :mod:`lakehouse.history_fences`).
 
         Raises:
             ConcurrentModificationError: Work that excludes ``work`` holds the history (another kind, or another branch
@@ -421,8 +423,8 @@ class DoorTable:
             control_root=self._claims.control_root, storage_options=self._claims.storage_options, table_uuid=self._resolved.require_uuid()
         )
         try:
-            with history.held(work):
-                yield
+            with history.hold_for(work) as hold:
+                yield hold
         except history_fences.HistoryFencedError as exc:
             log.info("table_history_fenced", extra={"table": self.segments, "work": work, "reason": str(exc)})
             raise ConcurrentModificationError(f"table {fga.canonical_object_id(self.segments)}: {exc}") from exc
