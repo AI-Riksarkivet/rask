@@ -29,3 +29,7 @@ d9df63af574ac39b9b428630037e8c50bb4dc198aa8d9ed982de0149ecb7485e  https://github
 86c727b5790288ef1fc590319ef3d5486f05f7f5d644c73a72c047d80c595e3c  https://github.com/openfga/openfga/releases/download/v1.18.3/openfga_1.18.3_linux_amd64.tar.gz
 62f90aee3d8b3487011e207b0b83b714b334a5b3983fe21c1daa5eef1a4656d2  https://github.com/openfga/openfga/releases/download/v1.18.3/openfga_1.18.3_linux_arm64.tar.gz
 d805141e5de99f6742315af2ec8f0111e887f3e0819fdb1fd3fcac9ef983f26f  https://github.com/openbao/openbao/releases/download/v2.2.0/bao_2.2.0_Linux_x86_64.tar.gz
+67cb8e10bc6f0c4b47f75a728529a20953dbae2a4f9a4a52ae8517d65ae303ff  https://github.com/nats-io/nats-server/releases/download/v2.15.2/nats-server-v2.15.2-linux-amd64.tar.gz
+bc2c788dcbf2849af749564e06a0d48c19bced851f2d68a2e21c54d078949b28  https://github.com/nats-io/nats-server/releases/download/v2.15.2/nats-server-v2.15.2-linux-arm64.tar.gz
+9c45b23c19498692e81cd39c75e8382f0e6ff59c0d5b9470e32fe6640afa4446  https://github.com/nats-io/nats-server/releases/download/v2.15.2/nats-server-v2.15.2-darwin-amd64.tar.gz
+cbd2219d01502c38733485ac684269da585ee479fa3b1377264beecdefdf9e9d  https://github.com/nats-io/nats-server/releases/download/v2.15.2/nats-server-v2.15.2-darwin-arm64.tar.gz

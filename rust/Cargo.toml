@@ -14,9 +14,13 @@ arrow-array = "58"
 arrow-ipc = "58"
 arrow-schema = "58"
 arrow-select = "58"
-axum ={ version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# The bus client over rustls with the aws-lc provider reqwest also uses. No JetStream helpers: every JetStream call the
+# lakehouse makes is a request on a subject its bus user is granted, written out where it is made.
+async-nats = { version = "0.52", default-features = false, features = ["aws-lc-rs", "nuid"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
 ed25519-dalek = "2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 http-body-util = "0.1"
 jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto"] }
 percent-encoding = "2"
