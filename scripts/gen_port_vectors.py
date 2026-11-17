@@ -466,6 +466,7 @@ def main() -> None:
     from _port_delivery_vectors import delivery_vectors
     from _port_relay_vectors import relay_vectors
     from _port_signing_vectors import signing_vectors
+    from _port_store_vectors import store_vectors
     from _port_tables_vectors import tables_vectors
 
     shell = {"limits": [{"max_body_bytes": _MAX_BODY_BYTES, "deadline_seconds": _DEADLINE_SECONDS}], "exchanges": asyncio.run(_shell_vectors())}
@@ -480,6 +481,7 @@ def main() -> None:
         ("relay", relay_vectors()),
         ("signing", signing_vectors()),
         ("tables", tables_vectors()),
+        ("store", store_vectors()),
     ):
         (_OUT / f"{name}.json").write_text(_one_entry_a_line(vectors))
         print(f"wrote rust/vectors/{name}.json")

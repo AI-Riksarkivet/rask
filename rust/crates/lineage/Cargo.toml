@@ -8,18 +8,26 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 lakehouse-core = { path = "../lakehouse-core" }
+lakehouse-tables = { path = "../lakehouse-tables" }
 percent-encoding = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+arrow-ipc = { workspace = true }
+arrow-select = { workspace = true }
 axum = { workspace = true }
+base64 = { workspace = true }
 tokio = { workspace = true }
+uuid = { workspace = true }
 
 [lints]
 workspace = true

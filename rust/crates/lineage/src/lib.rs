@@ -7,6 +7,7 @@ pub mod model;
 pub mod paging;
 pub mod relay;
 pub mod signature;
+pub mod store;
 pub mod targeting;
 
 /// The operations this crate serves, as `(method, path)` of `docs/operations.json`.
