@@ -586,6 +586,7 @@ def declare_table(
     holder: str,
     table_uuid: str | None = None,
     before_register: Callable[[str, str], None] | None = None,
+    fence_for: str | None = None,
 ) -> str:
     """Declare ``segments`` at ``<root>/<table uuid>``, where a table the catalog makes lives, and answer that location ([[LH-520]]).
 
@@ -605,6 +606,8 @@ def declare_table(
 
     A failure after the claim removes the marker and releases the claim; what ``before_register`` wrote is its caller's to
     take back. ``claims`` is ``None`` for a caller outside governance (a test building a fixture), which takes no claim.
+    ``fence_for`` is a create's token: the claim is taken fenced for it, and the create lifts the fence once its data is
+    committed (:func:`create_table`).
 
     Raises:
         InvalidInputError: ``segments`` names a table outside every namespace: the `dir` backend resolves a root-level
@@ -618,7 +621,7 @@ def declare_table(
     location = f"{root.rstrip('/')}/{minted}"
     if claims is not None:
         try:
-            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=minted)
+            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=minted, fence_for=fence_for)
         except location_claims.LocationHeldError:
             raise ConcurrentModificationError(f"the location minted for table {holder} is held by another table; retry to be given another") from None
     try:
@@ -742,8 +745,10 @@ def create_table(
     version of it that keeps the table's provenance — :func:`provenance_guard.keep_provenance` — while its
     history stays readable, ``Create`` conflicts). A *declared-only* table — one that exists in the namespace but was never
     written (a bare ``POST /declare``, or a declare→write that crashed before the write) — has no readable
-    dataset, so every mode simply lands the first data version into its already-declared location; this keeps
-    the multi-step create idempotent and crash-safe, and never opens a table that isn't there (which 500'd).
+    dataset, so every mode lands the first data version into its already-declared location once it holds the
+    declaration's claim fenced (:func:`_fence_the_declaration`); this keeps the multi-step create idempotent and
+    crash-safe, and never opens a table that isn't there (which 500'd). A declaration a create is still writing is that
+    create's, and a second create of the name answers 409 ConcurrentModification (ADR 0227).
     A brand-new table is declared at ``<root>/<table uuid>`` (:func:`declare_table`, ADR 0173 §5), the namespace
     connection's ``root``, then written at ``data_storage_version="2.2"`` (lance_docs/lance/guide/blob.md — Version
     Compatibility). Any failed fresh write is rolled back with ``drop_table`` so the name stays retryable rather than
@@ -778,7 +783,9 @@ def create_table(
     call finds under the name (written, or declared by an earlier request), which holds its own grants.
 
     Raises:
-        ConcurrentModificationError: The table an ``Overwrite`` resolved changed since.
+        ConcurrentModificationError: The table an ``Overwrite`` resolved changed since, or another request is creating
+            or acting on the table declared under the name.
+        TableAlreadyExistsError: A written table holds the name under ``Create``.
     """
     if registry is not None and not holder:
         raise ValueError("a governed create names the table that holds its location and data directories")
@@ -829,15 +836,37 @@ def create_table(
 
     # BEFORE the declare, so a refused create leaves no name behind ([[LH-243]]).
     primary_keys.refuse_repeats_within(table, primary_keys.declared_key(table.schema), door="create")
-    if existing is not None and only_declared:  # declared, no data yet → write into it (all modes)
-        if overwriting is not None:
-            overwriting.require_held()
-        if registry is not None:
-            table_claims.take(ns, _claim_store(registry), existing, holder, segments)
+    # THE CREATE HOLDS ITS TABLE'S CLAIM FENCED UNTIL ITS DATA IS COMMITTED (ADR 0227): a declaration it makes is claimed
+    # fenced, one an earlier request made is fenced before it is written into, and the fence is lifted once the write
+    # ends. So a second create of the name answers 409 rather than writing at this one's location as though the
+    # declaration were its own, where Lance's create would land over these rows or its rollback, a DropTable by name,
+    # would drop them; and no drop, rename or undrop acts on a table still being written.
+    fence = uuid.uuid4().hex if registry is not None else None
+    fenced_at: str | None = None
+    try:
+        if existing is not None and only_declared:  # declared, no data yet → write into it (all modes)
+            if overwriting is not None:
+                overwriting.require_held()
+            if registry is not None and fence is not None:
+                fenced_at = existing
+                _fence_the_declaration(ns, so, _claim_store(registry), existing, segments, holder=holder, token=fence)
+            location = existing
+        else:
+            location = declare_table(
+                ns,
+                so,
+                segments,
+                root=root,
+                claims=None if registry is None else _claim_store(registry),
+                holder=holder,
+                before_register=before_register,
+                fence_for=fence,
+            )
+            fenced_at = location
         return _write_blob_into(
             ns,
-            _named_by_its_uuid(table, existing, registry),
-            existing,
+            _named_by_its_uuid(table, location, registry),
+            location,
             so,
             segments,
             properties,
@@ -850,26 +879,28 @@ def create_table(
             recorded_author=recorded_author,
             before_commit=before_commit,
         )
+    finally:
+        if registry is not None and fence is not None and fenced_at is not None:
+            table_claims.lift_fence(_claim_store(registry), table_claims.DoorFence(location=fenced_at, token=fence))
 
-    location = declare_table(
-        ns, so, segments, root=root, claims=None if registry is None else _claim_store(registry), holder=holder, before_register=before_register
-    )
-    return _write_blob_into(
-        ns,
-        _named_by_its_uuid(table, location, registry),
-        location,
-        so,
-        segments,
-        properties,
-        allow_external=allow_external,
-        external_blob_bases=external_blob_bases,
-        data_bases=data_bases,
-        registry=registry,
-        holder=holder,
-        transaction_properties=transaction_properties,
-        recorded_author=recorded_author,
-        before_commit=before_commit,
-    )
+
+def _fence_the_declaration(
+    ns: LanceNamespace, so: StorageOptions, store: location_claims.ClaimStore, location: str, segments: list[str], *, holder: str, token: str
+) -> None:
+    """Fence the claim of the table an earlier request declared at ``location`` for this create, then probe again under
+    the fence: the name still describes ``location`` and holds no version. Nothing is written before this answers, so a
+    refusal rolls nothing back.
+
+    Raises:
+        ConcurrentModificationError: Another request fences the claim or changed it, or the declaration is gone.
+        TableAlreadyExistsError: A create that finished since the probe wrote the table.
+    """
+    table_claims.fence_declared(ns, store, location, holder=holder, segments=segments, token=token)
+    described = _existing_location(ns, segments)
+    if described is None or decoded_path(described) != decoded_path(location):
+        raise ConcurrentModificationError(f"table {holder} changed while this request was being served; describe it and retry")
+    if holds_a_version(location, so):
+        raise TableAlreadyExistsError(f"Table already exists: {'$'.join(segments)}")
 
 
 def _before_commit(hook: Callable[[str], None] | None, location: str, registry: base_registry.BaseRegistry | None) -> None:

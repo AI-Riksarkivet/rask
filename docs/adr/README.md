@@ -233,7 +233,7 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0224](0224-a-delivery-is-settled-and-an-event-judged-in-rust-by-the-models-steps.md) |  | A delivery is settled and an event judged in Rust by the model's steps (2026-11-17) | accepted |
 | [0225](0225-the-bus-is-spoken-in-rust-as-in-python.md) |  | The bus is spoken in Rust as in Python: one envelope, one credential, one settlement (2026-11-17) | accepted |
 | [0226](0226-lineage-is-authorized-in-rust-as-in-python.md) |  | Lineage is authorized in Rust as in Python (2026-11-17) | accepted |
-| [0227](0227-the-table-lifecycle-is-modelled-in-tla-before-the-catalog-is-ported.md) |  | The table lifecycle is modelled in TLA+ before the catalog is ported; six races found (2026-11-17) | accepted |
+| [0227](0227-the-table-lifecycle-is-modelled-in-tla-before-the-catalog-is-ported.md) |  | The table lifecycle is modelled in TLA+ before the catalog is ported; seven races found and fixed (2026-11-17) | accepted |
 | [0228](0228-lineages-store-is-ported-to-rust-on-the-tables-the-python-store-writes.md) |  | Lineage's store is ported to Rust, writing the same tables the Python store writes (2026-11-17) | accepted |
 | [0229](0229-a-committed-write-and-its-announcement-are-modelled-in-tla.md) |  | A committed write and its announcement are modelled in TLA+ (2026-11-17) | accepted |
 | [0230](0230-a-service-reads-its-secrets-in-rust-as-in-python.md) |  | A service reads its secrets in Rust as in Python, and a verifier the keys its signers publish (2026-11-17) | accepted |

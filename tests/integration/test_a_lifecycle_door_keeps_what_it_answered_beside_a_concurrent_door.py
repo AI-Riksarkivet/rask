@@ -6,9 +6,8 @@ the Lance write, the trash clear), the other door runs whole, the held request i
 what a client then reads over HTTP. A failure the trace needs (a rename's register, a create's write, a recoverable
 drop's deregister) is the backend or Lance raising at that step.
 
-Every test is marked xfail, strictly: each reproduces a defect of the catalog, confirmed 2026-11-17, whose fix is the
-owner's to schedule. The day a fix lands the test passes and the strict marker turns the run red, so the marker goes
-with the fix. ``raises=AssertionError`` keeps a scenario that no longer sets up (``pytest.fail``) a failure of its own.
+Each test pins the guard ADR 0227 names for its finding: the trace the model found is driven step by step, and the
+claim holds because the guard refuses one of the two requests with 409 or keeps what the other answered for.
 """
 
 from __future__ import annotations
@@ -30,10 +29,6 @@ T = "lance_catalog$ns1$t"
 ARROW = {"Content-Type": ARROW_STREAM_MEDIA_TYPE}
 #: How long one request waits for the one it is interleaved with: far above what either takes, so it only bounds a hang.
 WAIT = 30
-
-
-def _confirmed(finding: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"{finding}: ADR 0227, confirmed 2026-11-17; the fix is the owner's to schedule")
 
 
 class _Gate:
@@ -175,7 +170,6 @@ def _held_writes(monkeypatch: pytest.MonkeyPatch, *gates: _Gate, streamed: _Gate
     monkeypatch.setattr(lance, "write_dataset", _write)
 
 
-@_confirmed("TableLifecycleCreateRace")
 def test_a_create_answered_200_stands_when_a_second_create_of_its_name_fails(namespace: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     # The second create probes while the first is declared and unwritten, so it takes the declared path and writes at
     # the first's location once the first has committed there: Lance refuses it, and its rollback is a DropTable by name.
@@ -194,7 +188,6 @@ def test_a_create_answered_200_stands_when_a_second_create_of_its_name_fails(nam
     assert _table(namespace)[1] == 3, f"the table the first create answered 200 for is gone; the second answered {second.status}: {second.body}"
 
 
-@_confirmed("TableLifecycleCreateBothAnswered")
 def test_of_two_creates_of_one_name_only_the_one_whose_rows_the_table_holds_answers_200(namespace: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     # The second create passes Lance's check for a dataset before the first commits and commits after it: Lance lands it
     # as the table's next version, over the first's rows.
@@ -214,7 +207,6 @@ def test_of_two_creates_of_one_name_only_the_one_whose_rows_the_table_holds_answ
     assert [rows for rows, status in answered.items() if status == 200] == [held], f"answered {answered}, and the table holds {held} rows"
 
 
-@_confirmed("TableLifecycleUndropOverDestroyed")
 def test_an_undrop_answered_200_never_names_destroyed_bytes(namespace: TestClient, written: str) -> None:
     held = _holding()
     # A recoverable drop whose deregister fails leaves its trash record on the live table, as one that dies there does.
@@ -234,7 +226,6 @@ def test_an_undrop_answered_200_never_names_destroyed_bytes(namespace: TestClien
     )
 
 
-@_confirmed("TableLifecycleSoftDropWrongRow")
 def test_a_recoverable_drop_answered_200_leaves_every_table_it_detached_restorable(
     namespace: TestClient, written: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -243,7 +234,8 @@ def test_a_recoverable_drop_answered_200_leaves_every_table_it_detached_restorab
     creates = _Gate(fail=OSError("the store is away"))
     _held_writes(monkeypatch, creates)
     # The rename detaches the table and is held at its register; a create of the freed name is held at its write; the
-    # recoverable drop resolves the created table, files its record and is held at its deregister.
+    # recoverable drop resolves the created table, which the create holds fenced while it writes, and answers 409 there
+    # rather than filing its record and detaching whatever row the name holds at its deregister.
     rename = _Request(lambda: namespace.post(f"/v1/table/{T}/rename", json={"new_table_name": "t2"}))
     rename.reaches(renames)
     create = _Request(lambda: _create(namespace, [9]))
@@ -252,21 +244,19 @@ def test_a_recoverable_drop_answered_200_leaves_every_table_it_detached_restorab
     drop = _Request(lambda: namespace.post(f"/v1/table/{T}/drop", json={}))
     drop.reaches(detaches)
     # The create's write fails and its rollback removes its row; the rename's register fails and it puts the table back
-    # under the name; the drop then detaches the row the name holds.
+    # under the name; a drop held at its deregister then detaches the row the name holds.
     creates.release.set()
     create.answer()
     renames.release.set()
     rename.answer()
     detaches.release.set()
-    if drop.answer() != 200:
-        pytest.fail(f"the recoverable drop answered {drop.status}: {drop.body}")
+    drop.answer()
     restored = namespace.post(f"/management/v1/table/{T}/undrop")
 
     named = {name: _table(namespace, name) for name in (T, "lance_catalog$ns1$t2")}
     assert (written, 3) in named.values(), f"the table no name and no trash record keeps: undrop answered {restored.status_code}, the names hold {named}"
 
 
-@_confirmed("TableLifecycleUndropRace")
 def test_an_undrop_answered_200_restores_the_dropped_table_under_its_name(namespace: TestClient, written: str) -> None:
     if (dropped := namespace.post(f"/v1/table/{T}/drop", json={})).status_code != 200:
         pytest.fail(f"the recoverable drop answered {dropped.status_code}: {dropped.text}")
@@ -283,7 +273,6 @@ def test_an_undrop_answered_200_restores_the_dropped_table_under_its_name(namesp
     )
 
 
-@_confirmed("TableLifecycleUndropClearsRedrop")
 def test_a_recoverable_drop_answered_200_can_be_undropped(namespace: TestClient, written: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from lakehouse import trash
 
@@ -311,7 +300,6 @@ def test_a_recoverable_drop_answered_200_can_be_undropped(namespace: TestClient,
     )
 
 
-@_confirmed("TableLifecycleProtectRace")
 def test_a_table_whose_protection_answered_200_is_not_destroyed_by_a_drop_without_force(namespace: TestClient, written: str) -> None:
     held = _holding()
     # The drop has read the protection record, fenced the claim and judged the bytes; it is held at its deregister.

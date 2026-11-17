@@ -681,7 +681,9 @@ def take(
     return location_claims.take(store, location, table, segments, previous=previous, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim))
 
 
-def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str], table_uuid: str) -> LocationClaim:
+def claim_new_table(
+    ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str], table_uuid: str, fence_for: str | None = None
+) -> LocationClaim:
     """Make a table this request brings into being the holder of ``location``, under the uuid its door minted (ADR 0173 §2).
 
     The door mints ``table_uuid`` before the claim: a declaration because the location it declares is named after it
@@ -692,6 +694,10 @@ def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, tab
     name is free again, its location is not ([[LH-525]]). A table attached where an earlier one was
     destroyed, deregistered or is gone is given a new uuid, and nothing granted to the earlier table reaches it.
 
+    ``fence_for`` is the token of a create, which takes the claim fenced for itself and lifts the fence once its data is
+    committed (:func:`lift_fence`): until then no drop, rename, deregister, undrop or second create acts on the table it
+    is still writing (ADR 0227).
+
     Raises:
         LocationHeldError: Another table holds the location.
     """
@@ -701,9 +707,89 @@ def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, tab
         table,
         segments,
         uuid=table_uuid,
+        token=fence_for,
+        fenced=fence_for is not None,
         is_gone=lambda claim: holder_is_gone(ns, store, claim),
         is_kept=lambda claim: kept_in_trash(store, claim),
     )
+
+
+def fence_declared(ns: LanceNamespace, store: ClaimStore, location: str, *, holder: str, segments: list[str], token: str) -> DoorFence:
+    """Fence the claim of a table another request declared at ``location``, for the create ``token`` that writes its
+    first version there (ADR 0227).
+
+    A create writes into a declaration only while no other request acts on it: a create still writing it holds it
+    fenced, so the second of two creates of one name answers 409 here, never writing at the first's location as though
+    the declaration were its own. The write is one conditional write under the ETag of the claim it reads
+    (:func:`lakehouse.location_claims.fence`). A declaration at rest (a bare declare, or a create whose process died
+    and whose fence lapsed) is fenced and written into.
+
+    Raises:
+        ConcurrentModificationError: Another request fences the claim, the claim changed under the fence, it was
+            released, or another table holds it.
+    """
+    found = location_claims.read(store, location)
+    if found is not None and found.claim.released_at is not None:
+        raise ConcurrentModificationError(f"table {holder} changed while this request was being served; describe it and retry")
+    try:
+        location_claims.fence(store, location, found, table=holder, segments=segments, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim))
+    except (location_claims.ClaimChangedError, location_claims.LocationHeldError):
+        raise ConcurrentModificationError(f"table {holder} is being created or changed by another request; describe it and retry") from None
+    return DoorFence(location=location, token=token)
+
+
+class KeptClaimRefusedError(InvalidTableStateError):
+    """The claim a recoverable drop kept for a trashed table is released, or another table holds it (the spec's code 19)."""
+
+
+def fence_kept(ns: LanceNamespace, store: ClaimStore, location: str, *, holder: str, segments: list[str], uuid: str) -> DoorFence:
+    """Fence the claim a recoverable drop kept at ``location`` for the trashed table ``uuid``, for the undrop that
+    restores it (ADR 0227).
+
+    The drop kept the claim held by ``holder`` with the table's uuid; the undrop fences it before it registers, under
+    the ETag of the claim it reads, and lifts the fence once its trash record is cleared. While the fence stands no
+    drop, rename or create acts on the table: a destroying drop cannot delete the bytes the undrop then registers, and a
+    recoverable drop cannot file the record the undrop then clears.
+
+    Raises:
+        ConcurrentModificationError: Another request fences the claim, or it changed under the fence.
+        KeptClaimRefusedError: The claim is released, absent, or held by another table or another uuid: the trashed
+            table's location is no longer kept for it.
+    """
+    found = location_claims.read(store, location)
+    if found is None or found.claim.released_at is not None or found.claim.table != holder or found.claim.uuid != uuid:
+        log.warning("undrop_refused_unkept_location", extra={"table": holder, "location": location, "holder": found.claim.table if found else None})
+        raise KeptClaimRefusedError(f"cannot undrop {holder}: its location is no longer kept for it")
+    token = uuid4().hex
+    try:
+        location_claims.fence(store, location, found, table=holder, segments=segments, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim))
+    except (location_claims.ClaimChangedError, location_claims.LocationHeldError):
+        raise ConcurrentModificationError(f"cannot undrop {holder}: another request is acting on it; retry") from None
+    return DoorFence(location=location, token=token)
+
+
+def require_unfenced(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable) -> None:
+    """Refuse a door's answer unless the name still resolves to the location under the claim its resolution read, and
+    no request fences that claim (ADR 0227).
+
+    For a door that writes a record a fencing door reads once it holds its fence: the protection door writes its record
+    first and asks this after, as a drop writes its fence first and reads protection after, so of the two one sees what
+    the other wrote. A drop that fenced before this answers the door 409 here, and one fencing after reads the record.
+
+    Raises:
+        TableNotFoundError: The name named no table.
+        TableChangedError: The name resolves elsewhere or to nothing now, or the claim changed.
+        ConcurrentModificationError: Another request fences the claim.
+    """
+    now = resolve(ns, store, table.segments)
+    if table.location is None:
+        raise TableNotFoundError(f"table not found: {fga.canonical_object_id(table.segments)}")
+    if now.location != table.location or _etag(now.claim) != _etag(table.claim):
+        log.warning("door_table_changed", extra={"table": table.segments, "location": table.location, "resolves_to": now.location})
+        raise TableChangedError(f"table {fga.canonical_object_id(table.segments)} changed while this request was being served; describe it and retry")
+    held = now.claim.claim if now.claim is not None else None
+    if held is not None and held.fence is not None and held.fenced_against(None, location_claims.store_now(store, table.location)):
+        raise ConcurrentModificationError(f"table {fga.canonical_object_id(table.segments)} is being acted on by another request; retry")
 
 
 def require_no_other_holder(ns: LanceNamespace, store: ClaimStore, location: str, table: str) -> None:

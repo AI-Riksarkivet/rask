@@ -290,6 +290,7 @@ def take(
     token: str | None = None,
     uuid: str | None = None,
     is_kept: Callable[[LocationClaim], bool] = lambda _claim: False,
+    fenced: bool = False,
 ) -> LocationClaim:
     """Make ``table`` the holder of ``location``, and answer the claim it then holds.
 
@@ -312,17 +313,27 @@ def take(
     name, a retry keeps the whole claim, and a gone holder's claim was kept for this same table under a name it no
     longer has (a rename interrupted between its hand-over and its deregister).
 
+    ``fenced`` writes the claim fenced for request ``token`` (:func:`fence`): a create brings its table into being under
+    the fence and writes its data before it lifts it, so no other request takes, fences or hands over the claim of a
+    table still being created (ADR 0227).
+
     Raises:
         LocationFencedError: Another request is acting on the location's holder.
         LocationHeldError: Another table holds the location.
         records.RecordChangedError: The claim kept changing under the hand-over.
+        ValueError: ``fenced`` names no ``token`` to fence the claim for.
     """
+    if fenced and token is None:
+        raise ValueError("a fenced take names the request it fences the claim for")
     key = claim_key(location)
     # Read first, so even a create is stamped on the store's clock; each round re-judges the claim another taker wrote.
     for _ in range(_TAKE_ATTEMPTS):
         found = records.read_json_at(store.control_root, store.storage_options, key)
+        mark = ClaimFence(token=token, at=found.at) if fenced and token is not None else None
         if found.stored is None:
-            fresh = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=uuid, claimed_at=found.at, token=token)
+            fresh = LocationClaim(
+                location=decoded_path(location), table=table, segments=list(segments), uuid=uuid, claimed_at=found.at, token=token, fence=mark
+            )
             try:
                 records.create_json(store.control_root, store.storage_options, key, fresh.model_dump(mode="json"))
             except records.RecordExistsError:
@@ -332,6 +343,8 @@ def take(
         held = _taken(current, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=uuid, is_kept=is_kept, now=found.at)
         if held is current:
             return current
+        if mark is not None:
+            held = held.model_copy(update={"fence": mark})
         try:
             records.replace_json(store.control_root, store.storage_options, key, held.model_dump(mode="json"), etag=found.stored.etag)
         except records.RecordChangedError:

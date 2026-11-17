@@ -279,11 +279,13 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
 
     settings = _settings(tmp_path)
     so = settings.storage_options()
+    ns: Any = _RecordingNamespace()
     result = asyncio.run(
         t_ep.set_table_protection(
             id="bronze$pages",
             body=t_ep.SetProtectionRequest(protected=True),
             table=_resolved(settings),
+            ns=ns,  # structural stand-in, recorded not mocked
             settings=settings,
             token=None,
             control=NoopControlEmitter(),
@@ -296,6 +298,7 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
             id="bronze$pages",
             body=t_ep.SetProtectionRequest(protected=False),
             table=_resolved(settings),
+            ns=ns,  # structural stand-in, recorded not mocked
             settings=settings,
             token=None,
             control=NoopControlEmitter(),
