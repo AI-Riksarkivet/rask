@@ -1199,7 +1199,8 @@ async def register_table(
     context = table_bases.RegistrationContext(
         root=root,
         registry=base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options()),
-        configured=settings.external_blob_base_list,
+        # What a declared base may be admitted inside: the entries approved for this table's warehouse ([[LH-410]]).
+        configured=settings.external_blob_bases_for(parse_identifier(id)[0]),
         data_allowlist=settings.multibase_data_base_list,
         governed=GovernedStorage.from_settings(settings),
         holder=fga.canonical_object_id(parse_identifier(id)),
@@ -1208,7 +1209,9 @@ async def register_table(
         body.location,
         root=root,
         control_root=settings.registry_root,
-        configured=[*context.configured, *context.data_allowlist],
+        # Every approved entry, whichever warehouse it is approved for: a table registered inside one would be vended
+        # the bytes that base's pointers name.
+        configured=[*settings.external_blob_base_list, *context.data_allowlist],
     )
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.

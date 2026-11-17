@@ -282,9 +282,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | signing.doors | string | `"enforce"` | Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted. |
 | signing.enforce | bool | `true` | Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |
-| vending.allowExternalBlobs | bool | `false` | Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default. |
 | vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. https on a real deployment: the render refuses an http one. |
-| vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base. |
+| vending.externalBlobBases | object | `{}` | Approved external blob bases, each with the warehouse ids whose tables may register a base inside it (LANCE_EXTERNAL_BLOB_BASES). Empty approves none. |
 | vending.mode | string | `"web_identity"` | How the catalog vends storage credentials for direct object I/O: `web_identity` (default, its own token exchanged for a per-table session) or `mode_b` (none, server-mediated). |
 | vending.ttlSeconds | int | `900` | Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS). |

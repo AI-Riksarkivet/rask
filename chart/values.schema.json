@@ -1693,10 +1693,6 @@
         "vending": {
             "type": "object",
             "properties": {
-                "allowExternalBlobs": {
-                    "description": "Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`.",
-                    "type": "boolean"
-                },
                 "encryption": {
                     "description": "Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default.",
                     "type": "object",
@@ -1707,8 +1703,15 @@
                     "type": "string"
                 },
                 "externalBlobBases": {
-                    "description": "Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base.",
-                    "type": "string"
+                    "description": "Approved external blob bases, each with the warehouse ids whose tables may register a base inside it (LANCE_EXTERNAL_BLOB_BASES). Empty approves none.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "string"
+                        }
+                    }
                 },
                 "mode": {
                     "description": "How the catalog vends storage credentials for direct object I/O: `web_identity` (default, its own token exchanged for a per-table session) or `mode_b` (none, server-mediated).",

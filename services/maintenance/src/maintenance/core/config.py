@@ -366,7 +366,8 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: base, which no vend grants. The base-reference pre-pass judges each declared base against these
     #: and the catalog's base record, so an unset value here turns every table's blob base into a record
     #: read and, for a table with no record, a finding that protects nothing.
-    external_blob_bases: str = Field(default="", validation_alias="LANCE_EXTERNAL_BLOB_BASES")
+    #: A JSON object, each approved base with the warehouses it is approved for ([[LH-410]]); maintenance reads the bases.
+    external_blob_bases: dict[str, list[str]] = Field(default_factory=dict, validation_alias="LANCE_EXTERNAL_BLOB_BASES")
     #: The estate's own warehouse, under the name the catalog reads it by (``RASK_FGA_DEFAULT_WAREHOUSE_OBJECT``,
     #: ``warehouse:<id>``): its id is the first segment of every name on the estate's own root, which has no registry
     #: record ([[LH-593]]). A table under it is maintained when its bucket is a configured one.
@@ -397,8 +398,8 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
 
     @property
     def external_blob_base_list(self) -> list[str]:
-        """The configured external blob bases, parsed as the catalog parses them."""
-        return [base.strip() for base in self.external_blob_bases.split(",") if base.strip()]
+        """The configured external blob bases, whichever warehouse each is approved for."""
+        return [base.strip() for base in self.external_blob_bases if base.strip()]
 
     @property
     def resolved_control_root(self) -> str:

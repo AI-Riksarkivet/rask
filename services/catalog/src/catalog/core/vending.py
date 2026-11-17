@@ -741,7 +741,7 @@ def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) ->
     A vended session policy grants READ on every declared base it can address, so vending for a table
     that planted another table's root hands its holder that table's bytes for the credential's lifetime.
     Judged by the same predicate as every read (:func:`catalog.core.base_judge.require_sanctioned_bases`):
-    the table's own root, a configured external blob base, or its record. The operator's allowlists stay
+    the table's own root, or its record. The operator's allowlists stay
     the policy's own second check (:func:`build_session_policy`), and gate what a create or register may
     record.
 
@@ -749,7 +749,8 @@ def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) ->
     file stays under the table's own root, and only blob descriptors name objects through it — and it is
     authorized per table and per object at the create door, while a credential's unit is a prefix: a
     configured base can hold every tenant's objects, so granting it would hand every vend all of them. Its bytes are served by the catalog's blob door instead. So the answer drops each
-    base judged CONFIGURED, or RECORDED as ``external_blob``, from what the policy is asked to grant.
+    base RECORDED as ``external_blob`` (or judged CONFIGURED, where a judge is given approved entries) from what the
+    policy is asked to grant.
 
     Returns:
         The vendable bases, in the spelling and order of ``facts.base_uris``, with the table's own data directories among

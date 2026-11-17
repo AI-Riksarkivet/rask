@@ -45,7 +45,6 @@ def test_write_threads_data_bases_into_write_dataset() -> None:
             "s3://root/tbl",
             _SO,
             mode="create",
-            allow_external=False,
             external_blob_bases=[],
             data_bases=dataplane.table_data_bases(["s3://b1", "s3://b2/data"], "t-1"),
         )
@@ -65,7 +64,6 @@ def test_external_and_data_bases_compose() -> None:
             "s3://root/tbl",
             _SO,
             mode="create",
-            allow_external=False,
             external_blob_bases=["s3://media"],
             data_bases=dataplane.table_data_bases(["s3://b1"], "t-1"),
         )
@@ -84,7 +82,6 @@ def test_overwrite_registers_none_but_targets_when_resupplied() -> None:
             "s3://root/tbl",
             _SO,
             mode="overwrite",
-            allow_external=False,
             external_blob_bases=[],
             data_bases=[dataplane.DataBase(path="s3://b1/t-1", name="b1")],
         )

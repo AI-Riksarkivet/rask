@@ -410,7 +410,6 @@ def _write_blob(
     so: StorageOptions,
     *,
     mode: str,
-    allow_external: bool,
     external_blob_bases: list[str],
     data_bases: list[DataBase] | None = None,
     properties: dict[str, str] | None = None,
@@ -418,9 +417,8 @@ def _write_blob(
 ) -> lance.LanceDataset:
     """Write a table at file format 2.2 with stable row ids.
 
-    ``allow_external`` opts into ``Blob.from_uri`` columns ANYWHERE outside the dataset root (blanket bypass);
-    ``external_blob_bases`` registers approved base URIs so external pointers UNDER a registered base are
-    accepted with the bypass left off — the safer allowlist posture (lance_docs/lance/guide/blob.md). ``data_bases``
+    ``external_blob_bases`` registers the base the table's external pointers must lie under
+    (lance_docs/lance/guide/blob.md); a ``Blob.from_uri`` pointer outside every registered base is refused. ``data_bases``
     (#3-B) are the table's own directories under approved DATA-distribution bases, which the fragments
     round-robin across (the Uber pattern): :func:`table_data_bases` on a create,
     :func:`registered_data_bases` on an overwrite, which reuses the bases the table registered at create."""
@@ -459,18 +457,20 @@ def _write_blob(
             enable_stable_row_ids=CREATE_FORMAT.stable_row_ids,
             initial_bases=initial_bases,
             target_bases=target_bases,
-            allow_external_blob_outside_bases=allow_external,
+            # Never ([[LH-410]]): a pointer outside every registered base is one its writer chose freely, which the blob
+            # door would read with the catalog's own identity and network position.
+            allow_external_blob_outside_bases=False,
             transaction_properties=transaction_properties,
         )
     except OSError as exc:
         # An external-pointer blob outside every registered base (and the blanket flag off) is a client
         # error, not a 500 — surface a clear 400. Match lance's specific phrase (NOT a bare "external"), so a
         # genuine infra OSError on a path that merely contains the word "external" still surfaces as a 500.
-        if not allow_external and "outside registered external bases" in str(exc).lower():
+        if "outside registered external bases" in str(exc).lower():
             raise InvalidInputError(
                 "blob column references an external object outside the dataset root and any registered "
-                "external base; configure LANCE_EXTERNAL_BLOB_BASES with the approved base(s), or "
-                "LANCE_ALLOW_EXTERNAL_BLOBS for the blanket bypass, to accept Blob.from_uri columns"
+                "external base; name the base on the create (external_blob_base), inside a base "
+                "LANCE_EXTERNAL_BLOB_BASES approves for the table's warehouse"
             ) from exc
         # A CREATE THAT LANDS ON OCCUPIED BYTES IS A CONFLICT, NOT AN INTERNAL FAILURE
         # ([[LH-164]]). `spec.yaml:1461` declares `ConflictErrorResponse` on `CreateTable`, so a
@@ -738,7 +738,6 @@ def create_table(
     root: str,
     mode: str | CreateMode | None = None,
     properties: dict[str, str] | None = None,
-    allow_external_blobs: bool = False,
     external_blob_bases: list[str] | None = None,
     data_bases: list[str] | None = None,
     registry: base_registry.BaseRegistry | None,
@@ -761,9 +760,8 @@ def create_table(
     idempotency claim, so a body that is not an Arrow stream is refused 400 with nothing written.
 
     Runs off the event loop (blocking Lance/S3 IO), so the endpoint stays a single delegated call.
-    ``allow_external_blobs`` permits ``Blob.from_uri`` columns pointing ANYWHERE outside
-    the dataset root (the blanket bypass); ``external_blob_bases`` is the safer allowlist — external
-    pointers are accepted only under one of these registered bases, with the blanket bypass left off.
+    ``external_blob_bases`` are the external bases the table registers: ``Blob.from_uri`` pointers are
+    accepted only under one of them.
     ``data_bases`` (#3-B) spreads the table's fragments across N approved buckets (Lance multi-base);
     empty (the default) → a single-base write.
 
@@ -811,7 +809,6 @@ def create_table(
     """
     if registry is not None and not holder:
         raise ValueError("a governed create names the table that holds its location and data directories")
-    allow_external = allow_external_blobs
     external_blob_bases = external_blob_bases or []
     normalized = CreateMode.parse(mode)
     existing = overwriting.location if overwriting is not None else _existing_location(ns, segments)
@@ -842,7 +839,6 @@ def create_table(
                 existing,
                 so,
                 mode="overwrite",
-                allow_external=allow_external,
                 external_blob_bases=external_blob_bases,
                 data_bases=registered_data_bases(data_bases, current) if data_bases else None,
                 properties=properties,
@@ -870,7 +866,6 @@ def create_table(
             so,
             segments,
             properties,
-            allow_external=allow_external,
             external_blob_bases=external_blob_bases,
             data_bases=data_bases,
             registry=registry,
@@ -897,7 +892,6 @@ def create_table(
         so,
         segments,
         properties,
-        allow_external=allow_external,
         external_blob_bases=external_blob_bases,
         data_bases=data_bases,
         registry=registry,
@@ -992,7 +986,6 @@ def _write_blob_into(
     segments: list[str],
     properties: dict[str, str] | None,
     *,
-    allow_external: bool,
     external_blob_bases: list[str],
     data_bases: list[str] | None = None,
     registry: base_registry.BaseRegistry | None,
@@ -1044,7 +1037,6 @@ def _write_blob_into(
             location,
             so,
             mode="create",
-            allow_external=allow_external,
             external_blob_bases=external_blob_bases,
             data_bases=own_bases,
             properties=properties,

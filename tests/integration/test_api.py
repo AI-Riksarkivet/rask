@@ -138,7 +138,6 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         root,
         mode=None,
         properties=None,
-        allow_external_blobs=False,
         external_blob_bases=None,
         data_bases=None,
         registry=None,
@@ -154,7 +153,6 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         seen["root"] = root  # [[LH-520]] where a table this create brings into being is declared under its uuid
         seen["registry"] = registry  # [[LH-279]] the door hands the write the control root to record its bases in
         seen["mode"] = mode
-        seen["allow_external_blobs"] = allow_external_blobs  # proves the endpoint forwards the setting
         seen["external_blob_bases"] = external_blob_bases  # the allowlist is forwarded too
         seen["data_bases"] = data_bases  # #3-B: no ?data_base → None (backward-compatible)
         # An overwrite writes a version into the table it replaces, at the location that table's claim records.
@@ -179,7 +177,6 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         "segments": ["lance_catalog", "media", "clips"],
         "root": get_settings().root,
         "mode": "overwrite",
-        "allow_external_blobs": False,
         "external_blob_bases": [],
         "data_bases": None,
     }

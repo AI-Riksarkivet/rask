@@ -577,22 +577,16 @@ vending:
   # so a store without the grant is refused 400 rather than found at the first table's first write.
   # -- Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default.
   encryption: {} # @schema additionalProperties: true
-  # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on create.
-  # Off by default: (1) external bytes live outside the lakehouse (Lance's GC can't protect them, a source
-  # delete dangles the pointer); (2) SSRF — a client-controlled pointer URI is fetched server-side by the
-  # cascade's read_blobs, so an arbitrary URI (cloud metadata / internal host) becomes a read primitive.
-  # Enable only for a trusted producer. Managed/inline blobs (bytes copied in) always work regardless.
-  # -- Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`.
-  allowExternalBlobs: false
-  # The SAFER alternative to the blanket flag: a comma-separated allowlist of approved external base URIs
-  # (e.g. "s3://media-bucket/approved,s3://other/base"). External Blob.from_uri pointers are accepted ONLY
-  # under a registered base, with the blanket bypass left off — a curated media source without the SSRF door.
-  # Empty approves no base, so a create naming one is refused and a plain create registers none.
-  # One value, rendered as LANCE_EXTERNAL_BLOB_BASES into every reader of it: the catalog's create and read
-  # doors and maintenance. A base inside it needs no base-record
-  # entry ([[LH-279]]), so a reader without it would treat each table's blob base as unrecorded.
-  # -- Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base.
-  externalBlobBases: ""
+  # Where a blob column's external pointers (Blob.from_uri) may lead, and for which warehouses. The blob door reads a
+  # pointer with the catalog's own identity and network position, so no value admits a pointer its writer chooses
+  # freely: a create registers one base, on request, inside an entry approved here for the table's warehouse. Each
+  # key is a base URI and its value the warehouse ids approved for it, e.g.
+  #   externalBlobBases: { "s3://media-bucket/approved/": ["acme"] }
+  # Empty approves no base, so a create naming one is refused and a plain create registers none. Managed and inline
+  # blobs (bytes copied in) always work. Rendered as LANCE_EXTERNAL_BLOB_BASES (a JSON object) into the catalog and
+  # maintenance, which reads the bases to judge what a table's declared bases protect.
+  # -- Approved external blob bases, each with the warehouse ids whose tables may register a base inside it (LANCE_EXTERNAL_BLOB_BASES). Empty approves none.
+  externalBlobBases: {} # @schema additionalProperties: {type: array, items: {type: string}, minItems: 1}
 
 # === Catalog request limits =======================================================================
 catalog:

@@ -82,6 +82,7 @@ def requested_external_blob_base(
     schema: pa.Schema,
     *,
     approved: Sequence[str],
+    warehouse: str,
     governed: GovernedStorage,
 ) -> str | None:
     """The one external blob base a create registers, or ``None`` when it asks for none ([[LH-209]]).
@@ -95,6 +96,9 @@ def requested_external_blob_base(
     ``lance_docs/lance/guide/blob.md`` § blob v2: "external blob URIs must map to a registered non-dataset-root base
     path"). Registering every ``LANCE_EXTERNAL_BLOB_BASES`` entry on every create would let every table
     point at every object under them.
+
+    ``approved`` are the entries approved for ``warehouse``, the table's own ([[LH-410]]): an external source approved
+    for one tenant's tables is not one another tenant's creator may register a base over.
 
     The base is authorized by WHERE IT IS as well as by the allowlist, because Lance resolves every
     pointer as a path relative to it (``blob_id`` > 0), so whatever the base covers, every pointer
@@ -114,7 +118,9 @@ def requested_external_blob_base(
     if not blobs.schema_has_blob(schema):
         raise InvalidInputError(f"the create names external blob base {base!r} and the table has no blob column to point through it")
     if not names_a_location(base) or not any(location_in_store(entry, base) for entry in approved):
-        raise InvalidInputError(f"external blob base {base!r} is not inside an approved external blob base (LANCE_EXTERNAL_BLOB_BASES)")
+        raise InvalidInputError(
+            f"external blob base {base!r} is not inside an external blob base approved for warehouse {warehouse!r} (LANCE_EXTERNAL_BLOB_BASES)"
+        )
     if governed.covers(base):
         raise InvalidInputError(
             f"external blob base {base!r} overlaps storage the catalog governs, so a pointer through it could name another table's, model's or tenant's bytes"
@@ -537,7 +543,7 @@ class RegistrationContext(BaseModel):
     root: str
     #: Where the base records live.
     registry: base_registry.BaseRegistry
-    #: ``LANCE_EXTERNAL_BLOB_BASES`` — sanctioned by configuration.
+    #: The ``LANCE_EXTERNAL_BLOB_BASES`` entries approved for the registering table's warehouse ([[LH-410]]).
     configured: list[str]
     #: ``LANCE_MULTIBASE_DATA_BASES`` — admitted while the record is first written.
     data_allowlist: list[str]

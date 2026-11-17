@@ -57,7 +57,7 @@ def test_a_collision_answers_conflict_and_names_the_location(monkeypatch: pytest
     monkeypatch.setattr(dataplane.lance, "write_dataset", _write_raising(f"Dataset already exists: {uri}"))
 
     with pytest.raises(TableAlreadyExistsError) as caught:
-        dataplane._write_blob(_arrow_table(), uri, StorageOptions(), mode="create", allow_external=False, external_blob_bases=[])
+        dataplane._write_blob(_arrow_table(), uri, StorageOptions(), mode="create", external_blob_bases=[])
 
     detail = str(caught.value)
     assert uri in detail, f"the conflict does not name the location it collided on: {detail!r}"
@@ -69,6 +69,6 @@ def test_an_unrelated_os_error_is_still_a_500(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(dataplane.lance, "write_dataset", _write_raising("Connection reset by peer"))
 
     with pytest.raises(OSError) as caught:
-        dataplane._write_blob(_arrow_table(), "s3://b/t", StorageOptions(), mode="create", allow_external=False, external_blob_bases=[])
+        dataplane._write_blob(_arrow_table(), "s3://b/t", StorageOptions(), mode="create", external_blob_bases=[])
 
     assert not isinstance(caught.value, TableAlreadyExistsError), "an infra OSError was mislabelled a conflict"

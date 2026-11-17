@@ -85,7 +85,6 @@ def _settings() -> SimpleNamespace:
         # The base judge's two inputs ([[LH-279]]). These tables declare no base outside their own root,
         # so the record is never read and the control root is never reached.
         registry_root="/nonexistent/control",
-        external_blob_base_list=[],
         # [[LH-209]] What the judge holds a configured base against: governed roots and buckets. None here.
         root="",
         reserved_bucket_set=frozenset(),

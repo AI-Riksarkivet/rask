@@ -212,7 +212,7 @@ def open_resolved_dataset(
     THE CHECKED OPEN ([[LH-279]]): the handle's own ``base_paths`` — the ref actually opened, after the
     version pin and the branch checkout, read in memory at no request — are judged by
     :func:`catalog.core.base_judge.require_sanctioned_bases`, which raises ``InvalidTableStateError``
-    (code 19) for a base that is not the table's own, not configured and not recorded. A branch is judged
+    (code 19) for a base that is not the table's own and not recorded. A branch is judged
     as well as main: a base planted on ``tree/<b>`` is invisible from main (lh279 m7).
 
     Every door that reads or writes a table's ROWS opens through here. A door that reads or changes only

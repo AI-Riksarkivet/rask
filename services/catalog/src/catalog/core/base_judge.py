@@ -5,15 +5,17 @@ A MANIFEST'S BASE LIST IS A WRITER'S CLAIM. Any holder of the table's write vend
 measured on pylance 12.0.0 (lh279 m2), a table that planted another table's root answered a query with
 the other table's rows, and a vend for it would have granted READ on that root. So the doors that hand
 out a table's rows or a credential for them ask :func:`lakehouse.base_registry.judge_bases`
-first — its own root, a configured external blob base, or the catalog's record — and refuse the rest with
+first — its own root, or the catalog's record — and refuse the rest with
 ``InvalidTableStateError`` (code 19, 409): the caller holds the rung, the TABLE is in a state no read
 should serve. A 403 would send an operator to FGA tuples that are not what is wrong.
 
 THE JUDGE IS DEPLOYMENT CONFIGURATION, installed once by the lifespan: the control root the records live
-on and ``LANCE_EXTERNAL_BLOB_BASES``, the same two values the create and register doors write the record
-against. A door that holds ``Settings`` builds its own through :meth:`BaseJudge.from_settings` — the same
-constructor — and the dataset seam in :mod:`catalog.core.namespace`, which takes no settings, builds the
-installed one. A dataset declaring only bases inside its own root is answered without either.
+on. ``LANCE_EXTERNAL_BLOB_BASES`` approves each external base for named warehouses, which is asked where a base
+is admitted (a create naming one, a registration) and recorded there ([[LH-410]]); the doors that read or vend
+judge by the record alone, so a base inside an approved entry that no door admitted has no standing. A door that
+holds ``Settings`` builds its own through :meth:`BaseJudge.from_settings` — the same constructor — and the
+dataset seam in :mod:`catalog.core.namespace`, which takes no settings, builds the installed one. A dataset
+declaring only bases inside its own root is answered without either.
 """
 
 from __future__ import annotations
@@ -75,10 +77,12 @@ def _governed_bucket(settings: Settings, bucket: str) -> bool:
 
 
 class BaseJudge(BaseModel):
-    """What a declared base is judged against: the catalog's record, and the configured external blob bases."""
+    """What a declared base is judged against: the catalog's record, and, where a registration is being admitted, the
+    external blob bases approved for its warehouse."""
 
     registry: base_registry.BaseRegistry
-    #: ``LANCE_EXTERNAL_BLOB_BASES`` — sanctioned by configuration as plain (pointer) bases.
+    #: The ``LANCE_EXTERNAL_BLOB_BASES`` entries a plain (pointer) base may be admitted inside: those approved for the
+    #: registering table's warehouse at the register door, none at a door that reads or vends.
     configured: list[str]
     #: Where a configured base earns no standing ([[LH-209]]): a plain base inside a configured entry that
     #: covers governed storage is sanctioned only by the table's record. ``None`` judges configuration alone.
@@ -106,7 +110,10 @@ class BaseJudge(BaseModel):
         """The judge a catalog configured by ``settings`` answers with — the lifespan's and every door's."""
         return cls(
             registry=base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options()),
-            configured=settings.external_blob_base_list,
+            # The record alone ([[LH-410]]): an approved external base is approved for named warehouses, and that is
+            # asked where a base is admitted (a create naming one, a registration), which records it. A base no record
+            # holds is one no door admitted, whatever approved entry it lies inside.
+            configured=[],
             governed=GovernedStorage.from_settings(settings),
         )
 
@@ -115,8 +122,9 @@ class BaseJudge(BaseModel):
 
         A configured entry can cover governed storage, so CONFIGURED standing there would let a holder of a
         table's write credential ``add_bases`` a prefix holding another tenant's bytes and have the blob door
-        serve them. Only the read and register doors that authorize ask this; the maintenance and lineage
-        protection passes keep configuration's standing, which only ever protects bytes from reclaim.
+        serve them. It acts where a judge is given approved entries, the register door's admission; a door that
+        reads or vends is given none and judges by the record alone. The maintenance and lineage protection passes
+        keep configuration's standing, which only ever protects bytes from reclaim.
         """
         judged = base_registry.judge_bases(location, refs, configured=self.configured, load_record=partial(self.read_record, location))
         governed = self.governed
@@ -172,7 +180,8 @@ def require_sanctioned_bases(location: str, refs: Sequence[BasePathRef], *, judg
     own. ``judge`` ``None`` means "the installed one", fetched only when a base lies outside the root.
 
     Raises:
-        InvalidTableStateError: A base is not the table's own, not configured and not in its record. The
+        InvalidTableStateError: A base is not the table's own and not in its record (nor, for a judge given approved
+            entries, inside one). The
             message names the bases and the remedy: restore the table to a version before the base
             arrived (``Restore`` rolls the base list back), or drop it.
         ServiceUnavailableError: The table's record exists and cannot be read, or no judge is installed.
@@ -184,8 +193,8 @@ def require_sanctioned_bases(location: str, refs: Sequence[BasePathRef], *, judg
     if refused := [judgement.ref.path for judgement in judged if judgement.standing is base_registry.BaseStanding.UNRECORDED]:
         log.warning("table_refused_unrecorded_bases", extra={"location": location, "bases": refused[:_NAMED_BASES]})
         raise InvalidTableStateError(
-            f"the table declares base(s) {refused[:_NAMED_BASES]} that are not inside its own location, not a configured external "
-            "blob base and not in the catalog's record for it. A manifest's base list can be extended by any holder of the "
+            f"the table declares base(s) {refused[:_NAMED_BASES]} that are not inside its own location "
+            "and not in the catalog's record for it. A manifest's base list can be extended by any holder of the "
             "table's write credential, so the catalog serves no read or credential through a base it did not sanction. "
             "Restore the table to a version from before the base was added, or drop it."
         )

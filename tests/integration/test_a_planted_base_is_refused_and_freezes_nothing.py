@@ -138,7 +138,7 @@ class _Estate:
                 "s3_bucket": self.bucket,
                 "policy_root": self.root,
                 "control_root": self.root,
-                "LANCE_EXTERNAL_BLOB_BASES": self.models,
+                "LANCE_EXTERNAL_BLOB_BASES": {self.models: ["lance_catalog"]},
                 **extra,
             }
         )
@@ -155,7 +155,7 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
         "LANCE_S3_ENDPOINT": moto_url,
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
-        "LANCE_EXTERNAL_BLOB_BASES": f"s3://{bucket}/models/",
+        "LANCE_EXTERNAL_BLOB_BASES": json.dumps({f"s3://{bucket}/models/": ["lance_catalog"]}),
         "LANCE_MULTIBASE_DATA_BASES": f"s3://{bucket}/second/data",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "LANCE_TRASH_GRACE_DAYS": "1",

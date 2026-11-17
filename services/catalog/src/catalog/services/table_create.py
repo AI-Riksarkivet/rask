@@ -202,7 +202,8 @@ async def create_governed_table(
         table_bases.requested_external_blob_base,
         shape.external_blob_base,
         table.schema,
-        approved=settings.external_blob_base_list,
+        approved=settings.external_blob_bases_for(parse_identifier(id)[0]),
+        warehouse=parse_identifier(id)[0],
         governed=GovernedStorage.from_settings(settings),
     )
     segments = parse_identifier(id)
@@ -257,7 +258,6 @@ async def create_governed_table(
         # the create's own conflict, never overwritten without the `can_drop` asked above ([[LH-530]]).
         mode=mode if overwrote_existing or mode is not CreateMode.OVERWRITE else CreateMode.CREATE,
         properties=shape.properties,
-        allow_external_blobs=settings.allow_external_blobs,
         external_blob_bases=[external_base] if external_base else [],
         data_bases=data_base or None,
         registry=registry,

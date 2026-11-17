@@ -166,7 +166,7 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_EXTERNAL_BLOB_BASES": f"s3://{bucket}/models/,s3://{bucket}-corpus/media/",
+        "LANCE_EXTERNAL_BLOB_BASES": json.dumps({f"s3://{bucket}/models/": ["lance_catalog"], f"s3://{bucket}-corpus/media/": ["lance_catalog"]}),
     }.items():
         monkeypatch.setenv(key, value)
     from catalog.core.config import get_settings
@@ -235,8 +235,8 @@ def _bronze_with_a_base(estate: _Estate, *, nested: bool = False) -> _Staged:
 
 
 def _bronze_with_a_planted_base(estate: _Estate) -> _Staged:
-    """A bronze table with its own external base, to which the writer then adds another table's source prefix inside the
-    same approved entry: sanctioned by configuration for reads, never recorded for this table."""
+    """A bronze table with its own external base, to which a writer past every door then adds another table's source
+    prefix inside the same approved entry: no door admitted it, so the table's record does not hold it."""
     staged = _bronze_with_a_base(estate)
     victim = f"s3://{estate.bucket}-corpus/media/victim/"
     estate.open(staged.location).add_bases([lance.DatasetBasePath(victim, name="planted", is_dataset_root=False)])
@@ -413,12 +413,6 @@ def _missing_sidecar(sidecar_id: int) -> Callable[[_Staged], list[dict[str, Any]
         ),
         pytest.param(_bronze_with_a_base, _external("{base}absent.bin"), "which does not exist", id="external-blob-missing-target"),
         pytest.param(
-            _bronze_with_a_planted_base,
-            _external("s3://{bucket}-corpus/media/victim/scan.bin"),
-            "an external blob is a path relative to",
-            id="external-blob-at-another-tables-object-through-a-planted-base",
-        ),
-        pytest.param(
             _bronze,
             _external("s3://{bucket}/elsewhere/secret.bin"),
             "/elsewhere/secret.bin' as an external blob, and the table has no external blob base",
@@ -445,6 +439,23 @@ def test_a_forged_fragment_is_refused_and_the_table_is_unchanged(
     assert estate.open(staged.location).version == before, "the refused commit still minted a version"
     assert estate.ids(staged.location) == rows
     assert estate.version_residue(staged.location) == []
+
+
+def test_a_commit_through_a_base_planted_inside_an_approved_entry_is_refused_on_the_base(estate: _Estate) -> None:
+    """An approved entry admits a base where a door records it, for the warehouse it is approved for ([[LH-410]]). A
+    base a writer planted inside one past every door is in no record, so the commit pointing at another table's object
+    through it is refused on the base itself, before any descriptor is read."""
+    staged = _bronze_with_a_planted_base(estate)
+    before, rows = estate.open(staged.location).version, estate.ids(staged.location)
+    fragments = _external("s3://{bucket}-corpus/media/victim/scan.bin")(staged)
+
+    resp = _commit(staged, fragments, before)
+
+    assert resp is not None, "the forged commit was finalized"
+    assert (resp.status_code, resp.json().get("code")) == (409, 19), resp.text
+    assert "not in the catalog's record for it" in resp.json()["detail"], resp.text
+    assert estate.open(staged.location).version == before, "the refused commit still minted a version"
+    assert estate.ids(staged.location) == rows
 
 
 def test_a_blob_written_into_a_fragment_the_table_holds_is_judged_as_a_new_fragments_blob_is(estate: _Estate) -> None:

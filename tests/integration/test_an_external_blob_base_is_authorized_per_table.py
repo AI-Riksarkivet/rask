@@ -91,7 +91,15 @@ def estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
         "LANCE_VENDING_MODE": "web_identity",
         "LANCE_S3_STS_ENDPOINT": moto_url,
         "LANCE_S3_ASSUME_ROLE_ARN": "arn:aws:iam::000000000000:role/lance-vend",
-        "LANCE_EXTERNAL_BLOB_BASES": f"s3://{bucket}/models/,s3://{corpus}/media/",
+        # Each approved base names the warehouses it is approved for ([[LH-410]]): `rented/` is another warehouse's.
+        "LANCE_EXTERNAL_BLOB_BASES": json.dumps(
+            {
+                f"s3://{bucket}/models/": ["lance_catalog"],
+                f"s3://{corpus}/media/": ["lance_catalog"],
+                f"s3://{corpus}/rented/": ["another-tenants-warehouse"],
+                f"s3://{bucket}/leased/": ["another-tenants-warehouse"],
+            }
+        ),
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("LANCE_S3_ACCESS_KEY_ID", raising=False)
@@ -136,12 +144,17 @@ def test_a_create_is_vended_nothing_outside_its_table_prefix(estate: _Estate, re
     [
         pytest.param(None, "outside the dataset root and any registered external base", id="a-create-naming-no-base"),
         pytest.param("s3://{bucket}/models/victim/", "overlaps storage the catalog governs", id="a-create-naming-the-model-tree"),
+        pytest.param(
+            "s3://{corpus}/rented/pages/",
+            "not inside an external blob base approved for warehouse 'lance_catalog'",
+            id="a-create-naming-a-base-approved-for-another-warehouse",
+        ),
     ],
 )
 def test_a_create_pointing_at_another_tenants_object_is_refused(estate: _Estate, requested: str | None, refusal: str) -> None:
     rows = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([Blob.from_uri(estate.victim)])})
 
-    created = estate.create("lance_catalog$db$thief", rows, requested.format(bucket=estate.bucket) if requested else None)
+    created = estate.create("lance_catalog$db$thief", rows, requested.format(bucket=estate.bucket, corpus=estate.corpus) if requested else None)
 
     assert (created.status_code, created.json().get("code")) == (400, _INVALID_INPUT), created.text
     assert refusal in created.json()["detail"], created.text
@@ -193,3 +206,40 @@ def test_a_base_over_the_model_tree_is_sanctioned_by_nothing_but_a_record(estate
 
     assert (served.status_code, registered.status_code) == (409, 400), (served.content[:200], registered.text)
     assert (served.json()["code"], registered.json()["code"]) == (_INVALID_TABLE_STATE, _INVALID_INPUT)
+
+
+def test_a_registration_reaches_no_base_approved_for_another_warehouse(estate: _Estate) -> None:
+    """The register door admits a declared base inside an entry approved for its table's warehouse, and no table at a
+    location inside any approved entry ([[LH-410]]): a dataset declaring a base under another warehouse's entry is
+    refused, and so is one registered inside another warehouse's entry, whose vend would grant what that base holds."""
+    rented = lance.DatasetBasePath(f"s3://{estate.corpus}/rented/pages/", name="rented", is_dataset_root=False)
+    rows = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([b"own"])})
+    lance.write_dataset(
+        rows,
+        f"s3://{estate.bucket}/pointing",
+        initial_bases=[rented],
+        storage_options=estate.key.in_clear(),
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+    )
+
+    declaring = estate.client.post("/v1/table/lance_catalog$db$pointing/register", json={"location": "pointing"})
+    inside = estate.client.post("/v1/table/lance_catalog$db$squatter/register", json={"location": "leased/squatter"})
+
+    assert (declaring.status_code, declaring.json().get("code")) == (400, _INVALID_INPUT), declaring.text
+    assert "not inside the table's own location" in declaring.json()["detail"], declaring.text
+    assert (inside.status_code, inside.json().get("code")) == (400, _INVALID_INPUT), inside.text
+    assert "overlaps a configured base" in inside.json()["detail"], inside.text
+    for table in ("pointing", "squatter"):
+        assert estate.client.post(f"/v1/table/lance_catalog$db${table}/describe", json={}).status_code == 404
+
+
+def test_an_approved_base_naming_no_warehouse_is_refused_when_the_settings_are_read() -> None:
+    """An approved base open to every warehouse is what the scoping exists to end ([[LH-410]]), so a deployment
+    declaring one does not boot."""
+    from pydantic import ValidationError
+
+    from catalog.core.config import Settings
+
+    with pytest.raises(ValidationError, match="name none"):
+        Settings(s3_access_key_id="k", s3_secret_access_key="s", external_blob_bases={"s3://ext/media/": []})

@@ -14,7 +14,7 @@ import re
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 
-from pydantic import AfterValidator, Field, model_validator
+from pydantic import AfterValidator, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.bus import BusSettings
@@ -457,28 +457,33 @@ class Settings(
     #: and the schemas shipped openly. A security default every deployment must remember to disable is
     #: one nobody disables. Turn it on per-environment (the chart's dev values do).
     docs_enabled: bool = Field(default=False, alias="LANCE_REST_DOCS")
-    # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on
-    # create. Default off for two reasons: (1) an external pointer's bytes live outside the lakehouse, so
-    # Lance's version-aware GC can't protect them and a source delete dangles the pointer; (2) SSRF — the
-    # client controls the pointer URI and a reader's read_blobs would fetch it with the catalog's
-    # network position + creds, so an arbitrary URI (cloud metadata, internal host) becomes a
-    # server-side read primitive. Enable only for a trusted producer; Lance's REGISTERED EXTERNAL BASES
-    # (approved base paths) are the finer-grained alternative. Managed/inline blobs (bytes in) always work.
-    allow_external_blobs: bool = Field(default=False, alias="LANCE_ALLOW_EXTERNAL_BLOBS")
-    # The SAFER external-blob posture: a comma-separated allowlist of approved base URIs. A create that
-    # names an external base (the door's ``external_blob_base`` parameter) registers that ONE base, and only
-    # when it lies inside one of these and outside every governed root and bucket
-    # (``table_bases.requested_external_blob_base``); a create that names none registers none. External
-    # ``Blob.from_uri`` pointers then resolve only under that base, while
-    # ``allow_external_blob_outside_bases`` stays False. Read beside that by the base judge: a plain base
-    # declared inside one of these is sanctioned for reads and never granted by a vend ([[LH-209]]).
-    # Empty = no external bases.
-    external_blob_bases: str = Field(default="", alias="LANCE_EXTERNAL_BLOB_BASES")
+    # WHERE AN EXTERNAL BLOB POINTER MAY LEAD, AND FOR WHOM ([[LH-209]], [[LH-410]]). A blob-v2 column may hold
+    # ``Blob.from_uri`` pointers at objects outside the table, which the blob door then reads with the catalog's own
+    # identity and network position, so a pointer a creator chooses freely is a server-side read of whatever the
+    # catalog can reach: there is no setting that admits one. Each key is an approved base URI and its value the
+    # warehouses whose tables may register a base inside it, so an external source approved for one tenant is not one
+    # every creator may point at. A create that names an external base (the door's ``external_blob_base`` parameter)
+    # registers that ONE base, and only when it lies inside an entry approved for the table's warehouse and outside
+    # every governed root and bucket (``table_bases.requested_external_blob_base``); a create that names none
+    # registers none. Empty approves no base. Managed and inline blobs (bytes in) always work.
+    external_blob_bases: dict[str, list[str]] = Field(default_factory=dict, alias="LANCE_EXTERNAL_BLOB_BASES")
+
+    @field_validator("external_blob_bases")
+    @classmethod
+    def _each_base_names_its_warehouses(cls, bases: dict[str, list[str]]) -> dict[str, list[str]]:
+        unscoped = sorted(base for base, warehouses in bases.items() if not base.strip() or not warehouses or not all(w.strip() for w in warehouses))
+        if unscoped:
+            raise ValueError(f"LANCE_EXTERNAL_BLOB_BASES: each approved base names the warehouses it is approved for, and {unscoped} name none")
+        return {base.strip(): [w.strip() for w in warehouses] for base, warehouses in bases.items()}
 
     @property
     def external_blob_base_list(self) -> list[str]:
-        """The registered external-blob base URIs (parsed from the comma-separated allowlist)."""
-        return [b.strip() for b in self.external_blob_bases.split(",") if b.strip()]
+        """Every approved external blob base, whichever warehouse it is approved for: what no registration may overlap."""
+        return list(self.external_blob_bases)
+
+    def external_blob_bases_for(self, warehouse: str) -> list[str]:
+        """The external blob bases approved for tables of ``warehouse``."""
+        return [base for base, warehouses in self.external_blob_bases.items() if warehouse in warehouses]
 
     # #3-B Lance multi-base DATA distribution: a comma-separated ALLOWLIST of approved data-base URIs a
     # create may spread its fragments across (the Uber pattern — one table's data round-robins over N

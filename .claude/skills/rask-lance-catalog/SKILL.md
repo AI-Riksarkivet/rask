@@ -953,16 +953,22 @@ governing their data. The project-scoped surface is the console's project page, 
   overlaps and bases).
 - **An external blob base is per table, on request, and never vended** ([[LH-209]]). A create registers
   one only when the request names it in the door's `external_blob_base` query parameter (never a
-  schema or property key, which LH-208 refuses), inside a `LANCE_EXTERNAL_BLOB_BASES` entry and outside every governed root and bucket (the catalog
-  and control roots, reserved and warehouse-claimed buckets:
-  `table_bases.requested_external_blob_base`); a plain create registers none, so Lance refuses its
-  `Blob.from_uri` rows. `version/create` accepts a kind-3 descriptor only through a base the table's RECORD holds
+  schema or property key, which LH-208 refuses), inside a `LANCE_EXTERNAL_BLOB_BASES` entry approved for the table's
+  warehouse and outside every governed root and bucket (the catalog and control roots, reserved and warehouse-claimed
+  buckets: `table_bases.requested_external_blob_base`); a plain create registers none, so Lance refuses its
+  `Blob.from_uri` rows. **Each approved base names its warehouses, and nothing admits a free pointer** ([[LH-410]]):
+  `LANCE_EXTERNAL_BLOB_BASES` is a JSON object, base URI to warehouse ids (chart `vending.externalBlobBases`, a map
+  whose schema refuses an entry naming none), so a source approved for one tenant is not one another tenant's creator
+  registers a base over; there is no `LANCE_ALLOW_EXTERNAL_BLOBS`, since the blob door reads a pointer with the
+  catalog's own identity and network position. `version/create` accepts a kind-3 descriptor only through a base the table's RECORD holds
   as `external_blob`, never one merely configured or in the manifest. A vend drops every pointer base
-  (judged CONFIGURED, or recorded `external_blob`) from the grant and still vends direct; external bytes
-  are served by the blob door. A plain base inside a configured entry is CONFIGURED at the read/vend/blob doors
-  and the register door only when it covers no governed storage (`BaseJudge.judge`, `GovernedStorage`), so a
-  planted `models/<victim>/` base is sanctioned by the record or by nothing; maintenance and lineage keep the
-  unnarrowed standing for protection. A pipeline deriving a table from one names its upstream's base as
+  (recorded `external_blob`) from the grant and still vends direct; external bytes
+  are served by the blob door. The doors that read or vend judge a base by the table's record alone
+  (`BaseJudge.from_settings`): an approved entry admits a base only where a door records it, the create naming it or
+  the register door, which asks the entries approved for the table's warehouse and no governed storage
+  (`BaseJudge.judge`, `GovernedStorage`). A base planted inside an approved entry past every door is therefore
+  sanctioned by nothing and refuses the table (409 code 19); maintenance and lineage keep configuration's standing
+  for protection. A pipeline deriving a table from one names its upstream's base as
   `external_blob_base` on the create. `vend_sanctioned_bases` is gone: the vendor's allowlist is
   `LANCE_MULTIBASE_DATA_BASES` alone. Pinned by
   `tests/integration/test_an_external_blob_base_is_authorized_per_table.py` and the planted-base case of

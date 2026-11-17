@@ -26,6 +26,7 @@ and the failing deregister that forces the partial-apply path.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -318,7 +319,7 @@ class TestThePublicDoor:
 
         external = tmp_path / "source"
         external.mkdir()
-        monkeypatch.setenv("LANCE_EXTERNAL_BLOB_BASES", f"file://{external}/")
+        monkeypatch.setenv("LANCE_EXTERNAL_BLOB_BASES", json.dumps({f"file://{external}/": ["lance_catalog"]}))
         get_settings.cache_clear()
         _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1], version="2.2", initial_bases=[lance.DatasetBasePath(str(external), "source")])

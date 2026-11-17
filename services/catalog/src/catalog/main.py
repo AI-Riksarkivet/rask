@@ -234,7 +234,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         sanctioned_bases=settings.multibase_data_base_list,
     )
     # [[LH-279]] WHAT EVERY TABLE READ JUDGES A DECLARED BASE AGAINST: the control root the create and
-    # register doors write each table's base record to, and the configured external blob bases. Installed
+    # register doors write each table's base record to. Installed
     # as the settings it is built from, so each read signs its record reads with the pair in force, and
     # cleared at shutdown so nothing in this process outlives the app that configured it.
     base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))

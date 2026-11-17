@@ -145,7 +145,8 @@ async def create_table(
 
     ``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob
     columns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``
-    entry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted → no
+    entry approved for the table's warehouse and outside governed storage
+    (``table_bases.requested_external_blob_base``). Omitted → no
     external base, and a pointer in the rows is refused.
 
     The run the request's Context names (:mod:`catalog.core.run_context`) is stamped into the commit and its inputs

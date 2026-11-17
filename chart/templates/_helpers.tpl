@@ -1321,7 +1321,7 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- end -}}
 
 {{- define "lance.externalBlobBases" -}}
-{{ .Values.vending.externalBlobBases }}
+{{ .Values.vending.externalBlobBases | default dict | toJson }}
 {{- end }}
 
 {{- define "rask.catalogPublicPrefix" -}}/api/catalog{{- end -}}
