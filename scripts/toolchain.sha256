@@ -33,3 +33,6 @@ d805141e5de99f6742315af2ec8f0111e887f3e0819fdb1fd3fcac9ef983f26f  https://github
 bc2c788dcbf2849af749564e06a0d48c19bced851f2d68a2e21c54d078949b28  https://github.com/nats-io/nats-server/releases/download/v2.15.2/nats-server-v2.15.2-linux-arm64.tar.gz
 9c45b23c19498692e81cd39c75e8382f0e6ff59c0d5b9470e32fe6640afa4446  https://github.com/nats-io/nats-server/releases/download/v2.15.2/nats-server-v2.15.2-darwin-amd64.tar.gz
 cbd2219d01502c38733485ac684269da585ee479fa3b1377264beecdefdf9e9d  https://github.com/nats-io/nats-server/releases/download/v2.15.2/nats-server-v2.15.2-darwin-arm64.tar.gz
+29a083f156fe1a246f0336afe16ff77fffe587628e97339448d8f4fba38dba54  https://github.com/rustfs/rustfs/releases/download/1.0.3/rustfs-linux-x86_64-musl-v1.0.3.zip
+28e973c6e630dfa1c7a6d7af86b360e598a34c476d34a0dcbcfbeb70b1f06747  https://github.com/rustfs/rustfs/releases/download/1.0.3/rustfs-linux-aarch64-musl-v1.0.3.zip
+9ec6f2ad89df88db9b8889f59e37bb27f6b67c61ee8a97968dd90aaa2ac4dd30  https://github.com/rustfs/rustfs/releases/download/1.0.3/rustfs-macos-aarch64-v1.0.3.zip

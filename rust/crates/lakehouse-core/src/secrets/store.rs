@@ -159,7 +159,7 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn python_whitespace(character: char) -> bool {
+pub(crate) fn python_whitespace(character: char) -> bool {
     character.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
 }
 

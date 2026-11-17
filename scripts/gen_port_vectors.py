@@ -465,6 +465,7 @@ def main() -> None:
     from _port_authz_vectors import authz_vectors
     from _port_bus_vectors import bus_vectors
     from _port_delivery_vectors import delivery_vectors
+    from _port_outbox_vectors import outbox_vectors
     from _port_relay_vectors import relay_vectors
     from _port_secrets_vectors import secrets_vectors
     from _port_signing_vectors import signing_vectors
@@ -486,6 +487,7 @@ def main() -> None:
         ("signing", signing_vectors()),
         ("tables", tables_vectors()),
         ("store", store_vectors()),
+        ("outbox", outbox_vectors()),
     ):
         (_OUT / f"{name}.json").write_text(_one_entry_a_line(vectors))
         print(f"wrote rust/vectors/{name}.json")

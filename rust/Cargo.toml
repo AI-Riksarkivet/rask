@@ -19,11 +19,16 @@ arrow-select = "58"
 async-nats = { version = "0.52", default-features = false, features = ["aws-lc-rs", "nuid"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
+# Calendar time for a SigV4 stamp and a listing's `LastModified`; already in the lock through the Arrow crates.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 ed25519-dalek = "2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+hmac = "0.12"
 http-body-util = "0.1"
 jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto"] }
 percent-encoding = "2"
+# The XML an S3 store and its STS answer in, read into typed structs.
+quick-xml = { version = "0.38", features = ["serialize"] }
 # rustls over the platform's trust store; a private issuer's CA replaces that store for its own fetches.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
