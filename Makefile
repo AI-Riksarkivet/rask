@@ -196,6 +196,12 @@ tla-check:
 tla-check-full:
 	bash scripts/tla_check.sh --full
 
+# The table lifecycle's and the cascade's race tests (ADR 0227) with the catalog's root and control root on a real S3
+# store's conditional writes: the pinned RustFS, run as a process (scripts/rustfs_server.sh), no container.
+.PHONY: lifecycle-rustfs-check
+lifecycle-rustfs-check:
+	bash scripts/lifecycle_on_rustfs_check.sh
+
 # ---- the console image -----------------------------------------------------
 # The console is one static single-page app served by its own `serve.ts` (.docker/frontend.dockerfile). The build goes
 # through DAGGER (scripts/dagger-image.sh -> `dagger call image --name=frontend`), like every image in this repository;

@@ -24,6 +24,17 @@
 (*   undrop   endpoints/tables.py undrop_table                             *)
 (*   rename   endpoints/tables.py rename_table, dataplane.rename_table     *)
 (*   protect  endpoints/tables.py set_table_protection                     *)
+(*   cascade  endpoints/namespaces.py drop_namespace's table step: the     *)
+(*            listing and _require_descendants_unprotected, then           *)
+(*            _destroy_listed_table or _trash_listed_table (resolve,       *)
+(*            fence_listed, protection read again, the drop's effects)     *)
+(*   nsundrop endpoints/namespaces.py undrop_namespace's table step, which *)
+(*            is the table undrop's own (tables.restore_kept_table),       *)
+(*            admitted by the namespace's record with no standing check    *)
+(*   stock    a stock client's create: the declare door                    *)
+(*            (dataplane.declare_table, its claim unfenced), its own Lance *)
+(*            write on vended credentials, and its first commit through    *)
+(*            version/create (endpoints/versions.py), put-if-not-exists    *)
 (*   release  endpoints/trash_reclaim.py release_trash                     *)
 (*   purge    maintenance/services/purge.py _purge_one, with the catalog's *)
 (*            vend_reclaim_credentials and end_trash doors                 *)
@@ -58,11 +69,18 @@
 (*       next version, over the other's rows (measured on pylance 13       *)
 (*       through the catalog, TableLifecycleCreateBothAnswered). Two steps *)
 (*       here, CWrite and CCommit.                                         *)
-(*   A5. A fence whose request has ended lapses after LEASE (Lapse), and   *)
-(*       no request outlives its LEASE. LEASE is otherwise not modelled:   *)
-(*       a claim held under another name refuses every take and fence      *)
-(*       here, where the code lets one whose holder is gone be taken past  *)
-(*       its lease (location_claims._taken, holder_is_gone).              *)
+(*   A5. A fence lapses LEASE after it was last written (Lapse): at once  *)
+(*       here once its request has ended, and, with LiveLapse, while its   *)
+(*       request still runs a step that can outlast LEASE (LongSteps: a    *)
+(*       create's Lance write, a destroy's delete). What is assumed is     *)
+(*       narrower: a step that RENEWED its fence (a create's commit and    *)
+(*       its rollback, CreateRenewsFence) ends within LEASE, one object    *)
+(*       write after the renewal. TableLifecycleCommitOutlastsLease lets   *)
+(*       the fence lapse inside the commit, and OneCreateCommitsPerTable   *)
+(*       fails. LEASE is otherwise not modelled: a claim held under        *)
+(*       another name refuses every take and fence here, where the code    *)
+(*       lets one whose holder is gone be taken past its lease             *)
+(*       (location_claims._taken, holder_is_gone).                         *)
 (*                                                                         *)
 (* GUARDS, each a step of the design the seven findings of ADR 0227      *)
 (* showed it needs; `Off` names those a config removes, and each such     *)
@@ -90,12 +108,28 @@
 (*   ProtectChecksFence  the protection door writes its record, then      *)
 (*       answers 409 unless the name still describes the location under   *)
 (*       the claim it resolved, unfenced. TableLifecycleProtectUnchecked. *)
+(* and the four review found (ADR 0227 §8):                               *)
+(*   CascadeRereadsProtection  a cascade reads each table's protection    *)
+(*       again once it holds that table's fence.                          *)
+(*       TableLifecycleCascadeProtectRace.                                *)
+(*   CreateRenewsFence  a create renews its fence, conditional on its own *)
+(*       token under the ETag it reads, right before its commit and its   *)
+(*       rollback; a fence another request holds now answers 409 and      *)
+(*       nothing is committed or rolled back. TableLifecycleCreateLapse.  *)
+(* The namespace undrop's table step runs UndropFence, UndropHoldsFence   *)
+(* and UndropOwnConflict, the table undrop's own steps:                   *)
+(* TableLifecycleNsUndropRace removes the last.                           *)
 (*                                                                         *)
-(* NOT MODELLED: namespaces and cascades; deregister and register as       *)
-(* doors of their own; Overwrite and ExistOk creates; idempotency keys;    *)
-(* the announcements; base records, data directories and clone endings;    *)
-(* `force`, which turns protection off on purpose; a lease's clock; a      *)
-(* purge refusal retried on a later tick (a noted refusal stays noted).    *)
+(* A FINDING still open (TableLifecycleStockCreateRace): a stock client's *)
+(* declare takes no fence, so a catalog create fences its declaration,    *)
+(* and one of the two commits lands over the other's rows (A4).           *)
+(*                                                                         *)
+(* NOT MODELLED: namespaces' own rows (Cascade.tla); deregister and       *)
+(* register as doors of their own; Overwrite and ExistOk creates;         *)
+(* idempotency keys; the announcements; base records, data directories    *)
+(* and clone endings; `force`, which turns protection off on purpose; a   *)
+(* lease's clock beyond the lapse (A5); a purge refusal retried on a      *)
+(* later tick (a noted refusal stays noted).                               *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -105,10 +139,12 @@ CONSTANTS Ops1, Ops2, Ops3,   \* the operations each of the three callers may ru
           NameCAS,            \* A1: RegisterTable is put-if-not-exists on the name
           Fences,             \* A2: a door's fence and a rename's hand-over are conditional and respected
           SettleOutlastsRequests, \* A3: the release never lands while a request acting on the table still runs
+          LiveLapse,          \* A5: a fence lapses while its request still runs one of LongSteps
+          CommitOutlastsLease, \* A5 removed: a fence also lapses inside the commit its create renewed it for
           Off                 \* the guards removed, each to show the design needs it (GUARDS above)
 
 Guards == {"CreateFence", "CreateFenceHoldsDoors", "UndropFence", "UndropHoldsFence", "UndropOwnConflict",
-           "DropRereadsProtection", "ProtectChecksFence"}
+           "DropRereadsProtection", "ProtectChecksFence", "CascadeRereadsProtection", "CreateRenewsFence"}
 ASSUME Off \subseteq Guards
 On(g) == g \notin Off
 
@@ -120,12 +156,21 @@ None   == "-"
 Mint   == [p \in Procs |-> CASE p = "p1" -> "L1" [] p = "p2" -> "L2" [] p = "p3" -> "L3"]
 
 \* An operation is "<door>_<name>" or "rename_<from>_<to>".
-AllOps == {"none", "create_n1", "create_n2", "drop_n1", "softdrop_n1", "undrop_n1", "rename_n1_n2", "protect_n1"}
+AllOps == {"none", "create_n1", "create_n2", "drop_n1", "softdrop_n1", "undrop_n1", "rename_n1_n2", "protect_n1",
+           "cascade_n1", "softcascade_n1", "nsundrop_n1", "stock_n1"}
 Door(o)   == CASE o = "none" -> "none" [] o \in {"create_n1", "create_n2"} -> "create"
-                 [] o = "drop_n1" -> "drop" [] o = "softdrop_n1" -> "softdrop" [] o = "undrop_n1" -> "undrop"
-                 [] o = "rename_n1_n2" -> "rename" [] o = "protect_n1" -> "protect"
+                 [] o \in {"drop_n1", "cascade_n1"} -> "drop" [] o \in {"softdrop_n1", "softcascade_n1"} -> "softdrop"
+                 [] o \in {"undrop_n1", "nsundrop_n1"} -> "undrop"
+                 [] o = "rename_n1_n2" -> "rename" [] o = "protect_n1" -> "protect" [] o = "stock_n1" -> "stock"
 NameOf(o) == IF o = "create_n2" THEN "n2" ELSE "n1"
 Dest(o)   == "n2"
+\* A namespace cascade's table step: the drop's effects, after a listing that read protection before the resolution.
+Cascaded(o) == o \in {"cascade_n1", "softcascade_n1"}
+\* The steps a live request can stay in past LEASE: a create's Lance write (c_commit is the write before the commit), a
+\* destroy's delete; with CommitOutlastsLease also the commit after the create renewed its fence.
+LongSteps == {"c_commit", "d_delete"} \cup (IF CommitOutlastsLease THEN {"c_put"} ELSE {})
+\* A create renews its fence before its commit and its rollback (CreateRenewsFence), where it holds one (CreateFence).
+Renews == On("CreateFence") /\ On("CreateRenewsFence") /\ Fences
 
 VARIABLES rows,      \* __manifest: the <<name, location>> rows
           bytes,     \* what each location holds: none, the reservation marker, data, or deleted data
@@ -187,6 +232,8 @@ Goto(p, s) == pc' = [pc EXCEPT ![p] = s]
 Fault   == faults < MaxFaults /\ faults' = faults + 1
 NoFault == faults' = faults
 Bump(c) == [c EXCEPT !.ver = @ + 1]
+\* The guard that reads protection again under the fence, for the door p runs.
+Reprotects(p) == IF Cascaded(op[p]) THEN On("CascadeRereadsProtection") ELSE On("DropRereadsProtection")
 
 \* A fence another request holds: the claim refuses this request's fence, hand-over and take. Without
 \* CreateFenceHoldsDoors only a create respects a create's fence.
@@ -215,8 +262,10 @@ RequestInFlight(l) == \E p \in Procs : lloc[p] = l /\ pc[p] \notin {"start", "do
 Start(p) ==
   /\ pc[p] = "start" /\ NoFault
   /\ pc' = [pc EXCEPT ![p] = CASE Door(op[p]) = "none" -> "done" [] Door(op[p]) = "create" -> "c_probe"
+                                [] Cascaded(op[p]) -> "k_list"
                                 [] Door(op[p]) \in {"drop", "softdrop"} -> "d_resolve" [] Door(op[p]) = "undrop" -> "u_find"
-                                [] Door(op[p]) = "rename" -> "r_resolve" [] Door(op[p]) = "protect" -> "p_resolve"]
+                                [] Door(op[p]) = "rename" -> "r_resolve" [] Door(op[p]) = "protect" -> "p_resolve"
+                                [] Door(op[p]) = "stock" -> "x_probe"]
   /\ UNCHANGED <<store, op, locals, mpc, mloc, hist>>
 
 ---------------------------------------------------------------------------
@@ -319,32 +368,51 @@ CWrite(p) ==
   /\ Goto(p, IF bytes[lloc[p]] = "data" THEN "c_rb_drop" ELSE "c_commit")
   /\ UNCHANGED <<store, op, locals, mpc, mloc, hist>>
 
-\* The commit, once the rows are written, is not conditional on that check: a create committed at the location since
-\* is overwritten, this one landing as the table's next version (A4).
+\* The rows written (lance.fragment.write_fragments), dataplane._commit_under_fence renews the fence before the commit
+\* (CreateRenewsFence): one write under the ETag it reads, conditional on the fence being this request's. A fence another
+\* request holds now (this one's lapsed in the write, and a door took the claim) answers 409 ConcurrentModification, and
+\* nothing is committed or rolled back: the table is that request's now.
 CCommit(p) ==
+  LET l == lloc[p] IN
   /\ pc[p] = "c_commit" /\ NoFault
+  /\ IF Renews
+       THEN IF claim[l].fence # p
+              THEN Goto(p, "done") /\ UNCHANGED claim
+              ELSE Goto(p, "c_put") /\ claim' = [claim EXCEPT ![l] = Bump(@)]
+       ELSE Goto(p, "c_put") /\ UNCHANGED claim
+  /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, locals, mpc, mloc, hist>>
+
+\* The commit (LanceDataset.commit of the create's transaction) is not conditional on Lance's check: a create committed at
+\* the location since is overwritten, this one landing as the table's next version (A4).
+CPut(p) ==
+  /\ pc[p] = "c_put" /\ NoFault
   /\ bytes' = [bytes EXCEPT ![lloc[p]] = "data"]
   /\ overwritten' = IF bytes[lloc[p]] = "data" THEN overwritten \cup {lloc[p]} ELSE overwritten
   /\ Goto(p, "c_unfence")
   /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, protOk>>
 
 CWriteFails(p) ==
-  /\ pc[p] \in {"c_write", "c_commit"} /\ Fault
+  /\ pc[p] \in {"c_write", "c_commit", "c_put"} /\ Fault
   /\ Goto(p, "c_rb_drop")
   /\ UNCHANGED <<store, op, locals, mpc, mloc, hist>>
 
 \* _write_blob_into's rollback: `ns.drop_table(DropTableRequest(id=segments))`, the backend's DropTable BY NAME: it
 \* removes whatever row the name has now, then deletes that row's directory
 \* (lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md, DropTable, V2). TableNotFound is suppressed.
+\* With CreateRenewsFence the rollback first renews the fence as the commit does: one another request holds now rolls
+\* nothing back.
 CRollbackDrop(p) ==
-  LET n == NameOf(op[p]) IN
+  LET n == NameOf(op[p]) l == lloc[p] IN
   /\ pc[p] = "c_rb_drop" /\ NoFault
-  /\ IF Named(n) = {}
-       THEN Goto(p, "c_rb_release") /\ UNCHANGED <<rows, lx>>
-       ELSE /\ rows' = rows \ Named(n)
-            /\ lx' = [lx EXCEPT ![p] = LocOf(n)]
-            /\ Goto(p, "c_rb_delete")
-  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, lloc, lver, lpath, mpc, mloc, hist>>
+  /\ IF Renews /\ claim[l].fence # p
+       THEN Goto(p, "done") /\ UNCHANGED <<rows, lx, claim>>
+       ELSE /\ claim' = IF Renews THEN [claim EXCEPT ![l] = Bump(@)] ELSE claim
+            /\ IF Named(n) = {}
+                 THEN Goto(p, "c_rb_release") /\ UNCHANGED <<rows, lx>>
+                 ELSE /\ rows' = rows \ Named(n)
+                      /\ lx' = [lx EXCEPT ![p] = LocOf(n)]
+                      /\ Goto(p, "c_rb_delete")
+  /\ UNCHANGED <<bytes, trash, prot, grants, op, lloc, lver, lpath, mpc, mloc, hist>>
 
 CRollbackDelete(p) ==
   /\ pc[p] = "c_rb_delete" /\ NoFault
@@ -389,7 +457,7 @@ DFence(p) ==
   /\ IF Fences /\ (claim[l].ver # lver[p] \/ FencedAgainst(l, p) \/ (claim[l].st = "held" /\ claim[l].name # n))
        THEN Goto(p, "done") /\ UNCHANGED claim
        ELSE /\ claim' = [claim EXCEPT ![l] = [st |-> "held", name |-> n, fence |-> p, ver |-> @.ver + 1]]
-            /\ Goto(p, CASE On("DropRereadsProtection") -> "d_reprot" [] Door(op[p]) = "drop" -> "d_judge" [] OTHER -> "s_put")
+            /\ Goto(p, CASE Reprotects(p) -> "d_reprot" [] Door(op[p]) = "drop" -> "d_judge" [] OTHER -> "s_put")
   /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, locals, mpc, mloc, hist>>
 
 \* _drop's require_table_unprotected again, once the fence stands: a protection the door's first read missed was
@@ -464,7 +532,7 @@ DRevoke(p) ==
 DLift(p) ==
   /\ pc[p] \in {"d_lift", "s_lift"} /\ NoFault
   /\ claim' = [claim EXCEPT ![lloc[p]] = IF @.fence = p THEN [Bump(@) EXCEPT !.fence = None] ELSE @]
-  /\ Goto(p, IF pc[p] = "s_lift" THEN "s_unprot" ELSE "done")
+  /\ Goto(p, IF pc[p] = "s_lift" /\ ~Cascaded(op[p]) THEN "s_unprot" ELSE "done")
   /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, locals, mpc, mloc, hist>>
 
 \* Recoverable (_drop, `if trashed`): RECORD FIRST, DETACH SECOND, then lift the fence and clear protection.
@@ -506,7 +574,9 @@ UFind(p) ==
        THEN Goto(p, "done") /\ UNCHANGED lloc
        ELSE \E l \in kept :
               /\ lloc' = [lloc EXCEPT ![p] = l]
-              /\ Goto(p, IF Cardinality(kept) = 1 /\ trash[l].st = "kept" /\ ~trash[l].residue THEN "u_stand" ELSE "done")
+              /\ Goto(p, CASE Cardinality(kept) # 1 \/ trash[l].st # "kept" \/ trash[l].residue -> "done"
+                            [] op[p] = "nsundrop_n1" -> "u_take"
+                            [] OTHER -> "u_stand")
   /\ UNCHANGED <<store, op, lver, lx, lpath, mpc, mloc, hist>>
 
 \* `standing = await resolver.table(segments)`: another table holding the name answers 409.
@@ -657,6 +727,69 @@ RLift(p) ==
   /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, locals, mpc, mloc, hist>>
 
 ---------------------------------------------------------------------------
+\* CASCADE: a namespace drop's table step. The cascade lists the table with its uuid, and _require_descendants_unprotected
+\* reads protection for every listed table before any is fenced; a protected one answers 409 and nothing is touched.
+KList(p) ==
+  LET l == LocOf(NameOf(op[p])) IN
+  /\ pc[p] = "k_list" /\ NoFault
+  /\ IF l = None \/ l \in prot THEN Goto(p, "done") /\ UNCHANGED lx ELSE Goto(p, "k_resolve") /\ lx' = [lx EXCEPT ![p] = l]
+  /\ UNCHANGED <<store, op, lloc, lver, lpath, mpc, mloc, hist>>
+
+\* table_claims.resolve, then fence_listed's judgement of it: a table that left since the listing is skipped, another
+\* table under the name answers 409; else the drop's fence (d_fence), then, with CascadeRereadsProtection, protection
+\* read again under it (d_reprot).
+KResolve(p) ==
+  LET l == LocOf(NameOf(op[p])) IN
+  /\ pc[p] = "k_resolve" /\ NoFault
+  /\ IF l # lx[p] THEN Goto(p, "done") /\ UNCHANGED <<lloc, lver>>
+     ELSE Goto(p, "d_fence") /\ lloc' = [lloc EXCEPT ![p] = l] /\ lver' = [lver EXCEPT ![p] = claim[l].ver]
+  /\ UNCHANGED <<store, op, lx, lpath, mpc, mloc, hist>>
+
+---------------------------------------------------------------------------
+\* STOCK: a stock client creates n1 itself. DeclareTable claims a fresh location UNFENCED (dataplane.declare_table with
+\* no fence_for) and registers the name; the client writes its rows with its own Lance on vended credentials (Lance's
+\* check for a dataset first); its first commit reaches version/create, which finalizes version 1 put-if-not-exists.
+XProbe(p) ==
+  /\ pc[p] = "x_probe" /\ NoFault
+  /\ IF Named(NameOf(op[p])) # {} THEN Goto(p, "done") /\ UNCHANGED lloc ELSE Goto(p, "x_claim") /\ lloc' = [lloc EXCEPT ![p] = Mint[p]]
+  /\ UNCHANGED <<store, op, lver, lx, lpath, mpc, mloc, hist>>
+
+\* The claim (unfenced), the grants and the reservation marker.
+XClaim(p) ==
+  /\ pc[p] = "x_claim" /\ NoFault
+  /\ claim' = [claim EXCEPT ![lloc[p]] = [st |-> "held", name |-> NameOf(op[p]), fence |-> None, ver |-> @.ver + 1]]
+  /\ grants' = grants \cup {lloc[p]}
+  /\ bytes' = [bytes EXCEPT ![lloc[p]] = "marker"]
+  /\ Goto(p, "x_register")
+  /\ UNCHANGED <<rows, trash, prot, op, locals, mpc, mloc, hist>>
+
+\* RegisterTable: a name taken since refuses it (A1), and the declare undoes what it made.
+XRegister(p) ==
+  LET n == NameOf(op[p]) IN
+  /\ pc[p] = "x_register" /\ NoFault
+  /\ IF NameCAS /\ Named(n) # {}
+       THEN /\ Goto(p, "done") /\ UNCHANGED rows
+            /\ bytes' = [bytes EXCEPT ![lloc[p]] = Deleted(@)] /\ Released(lloc[p], n) /\ grants' = grants \ {lloc[p]}
+       ELSE Goto(p, "x_write") /\ rows' = rows \cup {<<n, lloc[p]>>} /\ UNCHANGED <<bytes, claim, grants>>
+  /\ UNCHANGED <<trash, prot, op, locals, mpc, mloc, hist>>
+
+\* The client's Lance refuses a location that already holds a dataset, then writes and stages its manifest.
+XWrite(p) ==
+  /\ pc[p] = "x_write" /\ NoFault
+  /\ Goto(p, IF bytes[lloc[p]] = "data" THEN "done" ELSE "x_commit")
+  /\ UNCHANGED <<store, op, locals, mpc, mloc, hist>>
+
+\* version/create: the staged version 1 finalized put-if-not-exists; one finalized since refuses it (409), and the
+\* client is told nothing landed.
+XCommit(p) ==
+  LET l == lloc[p] IN
+  /\ pc[p] = "x_commit" /\ NoFault
+  /\ IF bytes[l] = "data"
+       THEN Goto(p, "done") /\ UNCHANGED <<bytes, acked>>
+       ELSE Goto(p, "done") /\ bytes' = [bytes EXCEPT ![l] = "data"] /\ acked' = acked \cup {l}
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk>>
+
+---------------------------------------------------------------------------
 \* PROTECT (set_table_protection): resolve the name and its claim, write the record, then judge the claim
 \* (ProtectChecksFence). The record is written FIRST and the claim read AFTER, as a drop writes its fence first and
 \* reads protection after (DropRereadsProtection): of the two, one reads what the other wrote.
@@ -715,9 +848,11 @@ Release(l) ==
        ELSE trash' = [trash EXCEPT ![l].st = "released"] /\ grants' = grants \ {l}
   /\ UNCHANGED <<rows, bytes, claim, prot, op, pc, locals, mpc, mloc, hist>>
 
-\* A fence whose request has ended lapses after LEASE.
+\* A fence lapses LEASE after its last write: once its request has ended, or, with LiveLapse, while its request runs a
+\* step that can outlast LEASE (A5).
 Lapse(l) ==
-  /\ claim[l].fence # None /\ pc[claim[l].fence] \in {"done", "dead"} /\ NoFault
+  /\ claim[l].fence # None /\ NoFault
+  /\ pc[claim[l].fence] \in {"done", "dead"} \/ (LiveLapse /\ pc[claim[l].fence] \in LongSteps)
   /\ claim' = [claim EXCEPT ![l] = [Bump(@) EXCEPT !.fence = None]]
   /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, pc, locals, mpc, mloc, hist>>
 
@@ -775,7 +910,8 @@ Step(p) ==
   \/ Start(p)
   \/ CProbe(p) \/ CTake(p) \/ CClaim(p) \/ CGrant(p) \/ CReserve(p) \/ CRegister(p) \/ CUnreserve(p) \/ CTakeBack(p)
   \/ CWrite(p) \/ CCommit(p) \/ CRollbackDrop(p) \/ CRollbackDelete(p) \/ CRollbackRelease(p) \/ CAnswer(p)
-  \/ CRecheck(p) \/ CLift(p)
+  \/ CRecheck(p) \/ CLift(p) \/ CPut(p) \/ KList(p) \/ KResolve(p)
+  \/ XProbe(p) \/ XClaim(p) \/ XRegister(p) \/ XWrite(p) \/ XCommit(p)
   \/ DResolve(p) \/ DProtect(p) \/ DFence(p) \/ DReprotect(p) \/ DJudge(p) \/ DDereg(p) \/ DDelete(p) \/ DClear(p) \/ DRelease(p)
   \/ DRecords(p) \/ DRevoke(p) \/ DLift(p) \/ SPut(p) \/ SDereg(p) \/ SUnprot(p)
   \/ UFind(p) \/ UStand(p) \/ UTake(p) \/ URecheck(p) \/ URegister(p) \/ UClear(p) \/ UUnfence(p)

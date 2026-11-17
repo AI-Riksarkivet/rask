@@ -28,9 +28,11 @@ from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import replace
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Any, Final, NamedTuple, cast
 
 import lance
+import lance.fragment
 import pyarrow as pa
 import pyarrow.fs as pafs
 from botocore.exceptions import BotoCoreError, ClientError
@@ -415,8 +417,15 @@ def _write_blob(
     data_bases: list[DataBase] | None = None,
     properties: dict[str, str] | None = None,
     transaction_properties: dict[str, str] | None = None,
+    before_create_commit: Callable[[], None] | None = None,
 ) -> lance.LanceDataset:
     """Write a table at file format 2.2 with stable row ids.
+
+    A create writes its rows first and commits them after (``lance.fragment.write_fragments``, then
+    ``LanceDataset.commit`` of the transaction it returns, `lance_docs/lance/guide/distributed_write.md`), so
+    ``before_create_commit`` runs between the two: the create renews its fence there, right before the one write it
+    cannot take back (ADR 0227 §8). The two calls make the dataset ``write_dataset`` makes (measured on pylance 13.0.0:
+    the same file version, schema metadata, config, manifest naming and transaction properties).
 
     ``allow_external`` opts into ``Blob.from_uri`` columns ANYWHERE outside the dataset root (blanket bypass);
     ``external_blob_bases`` registers approved base URIs so external pointers UNDER a registered base are
@@ -445,6 +454,28 @@ def _write_blob(
     # Configuration: "every base inherits the unscoped options"): a data base on the estate's store is the table's own
     # storage, reached under the catalog's identity as the root is ([[LH-286]]).
     try:
+        if is_create:
+            transaction = lance.fragment.write_fragments(  # noqa: TID251
+                table,
+                uri,
+                return_transaction=True,
+                mode=mode,
+                storage_options=so.in_clear(),
+                data_storage_version=CREATE_FILE_VERSION,
+                enable_stable_row_ids=CREATE_FORMAT.stable_row_ids,
+                initial_bases=initial_bases,
+                target_bases=target_bases,
+                allow_external_blob_outside_bases=allow_external,
+            )
+            if not isinstance(transaction, Transaction):
+                raise InternalError("Lance answered a create's write with no transaction to commit")
+            if transaction_properties:
+                transaction = replace(transaction, transaction_properties=transaction_properties)
+            if before_create_commit is not None:
+                before_create_commit()
+            return lance.LanceDataset.commit(
+                uri, transaction, storage_options=so.in_clear(), enable_v2_manifest_paths=True, enable_stable_row_ids=CREATE_FORMAT.stable_row_ids
+            )
         return lance.write_dataset(  # noqa: TID251
             table,
             uri,
@@ -840,7 +871,9 @@ def create_table(
     # fenced, one an earlier request made is fenced before it is written into, and the fence is lifted once the write
     # ends. So a second create of the name answers 409 rather than writing at this one's location as though the
     # declaration were its own, where Lance's create would land over these rows or its rollback, a DropTable by name,
-    # would drop them; and no drop, rename or undrop acts on a table still being written.
+    # would drop them; and no drop, rename or undrop acts on a table still being written. A fence lapses LEASE after it
+    # was written, and a Lance write can run longer, so the create renews it right before its commit and its rollback, and
+    # one another request holds by then answers 409 with nothing committed or rolled back (ADR 0227 §8).
     fence = uuid.uuid4().hex if registry is not None else None
     fenced_at: str | None = None
     try:
@@ -878,6 +911,7 @@ def create_table(
             transaction_properties=transaction_properties,
             recorded_author=recorded_author,
             before_commit=before_commit,
+            fence=None if fence is None else table_claims.DoorFence(location=location, token=fence),
         )
     finally:
         if registry is not None and fence is not None and fenced_at is not None:
@@ -995,9 +1029,16 @@ def _write_blob_into(
     transaction_properties: dict[str, str] | None = None,
     recorded_author: str | None = None,
     before_commit: Callable[[str], None] | None = None,
+    fence: table_claims.DoorFence | None = None,
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
     back with ``drop_table`` on failure so the name stays retryable rather than stuck declared-but-unreadable.
+
+    ``fence`` is the create's fence on the table's claim (:func:`create_table`), renewed right before the commit and
+    before the rollback (ADR 0227 §8, CreateRenewsFence): one another request holds by then means the fence lapsed while
+    the rows were written and a door acted on the table since, so nothing is committed and nothing rolled back, the
+    rollback's DropTable by name above all, and the create answers 409 (:class:`table_claims.FenceLostError`). The rows it
+    wrote are files no version names, which the table's reclaim deletes.
 
     THE BASE RECORD IS CLAIMED FIRST ([[LH-279]]): every base this write registers through
     ``initial_bases`` — the external blob base the create asked for and the approved data bases — is in the
@@ -1044,8 +1085,16 @@ def _write_blob_into(
             data_bases=own_bases,
             properties=properties,
             transaction_properties=transaction_properties,
+            before_create_commit=None if registry is None or fence is None else partial(table_claims.renew_fence, _claim_store(registry), fence),
         )
     except BaseException as exc:
+        if isinstance(exc, table_claims.FenceLostError) or not _still_fenced(registry, fence):
+            # THE TABLE IS ANOTHER REQUEST'S NOW (ADR 0227 §8): nothing is rolled back, since a DropTable by name would drop
+            # what that request writes there, and a release would free its claim.
+            log.warning("create_rollback_skipped_fence_lost", extra={"table": "$".join(segments), "location": location})
+            if isinstance(exc, Exception | KeyboardInterrupt | SystemExit | GeneratorExit):
+                raise
+            raise InternalError("the table's first write panicked in Lance; another request acts on the table now") from exc
         # A Rust PANIC is a pyo3 `PanicException`, which derives from BaseException, so `except Exception` would skip
         # the rollback and leave the name declared with no dataset behind it ([[LH-302]]).
         # A failed drop leaves the name declared with no dataset behind it: logged as the release below is, while the write
@@ -1071,6 +1120,20 @@ def _write_blob_into(
         raise InternalError("the table's first write panicked in Lance; the create was rolled back and may be retried") from exc
     _record_written(registry, location, so, dataset, author=recorded_author)
     return CreateTableResponse(location=location, version=dataset.version)
+
+
+def _still_fenced(registry: base_registry.BaseRegistry | None, fence: table_claims.DoorFence | None) -> bool:
+    """Whether a create whose write failed still holds its fence, renewed for its rollback; ``True`` for a create that
+    holds none (a caller outside governance). A renewal the store did not answer counts as lost: the rollback is skipped,
+    and the declaration it leaves is written into once the fence lapses."""
+    if registry is None or fence is None:
+        return True
+    try:
+        table_claims.renew_fence(_claim_store(registry), fence)
+    except Exception as exc:  # noqa: BLE001 — the write's own error is what the caller is told
+        log.warning("create_rollback_fence_unconfirmed", extra={"location": fence.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        return False
+    return True
 
 
 #: Lance's refusal of an Arrow type it does not store, as a bare `OSError`: "LanceError(Schema): Unsupported data type:

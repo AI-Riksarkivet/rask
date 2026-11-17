@@ -460,6 +460,37 @@ class _NotHeld(Exception):
     """The claim a lift read carries no fence of its request's."""
 
 
+def renew_fence(store: ClaimStore, location: str, token: str) -> bool:
+    """Stamp request ``token``'s fence on ``location`` afresh, on the store's clock, under the ETag it reads; ``False`` when
+    the claim carries no fence of that request's, or was released.
+
+    For a door about to make an effect it cannot take back under a fence it has held for a while (a create's commit, its
+    rollback): one conditional write, so of this renewal and another request's fence of the claim, the one that writes
+    second reads the first. A fence past its lease is renewed too while the claim still carries it: every request that
+    acts on a claim writes it (a fence, a take, a hand-over, a release), so a claim unchanged since this request's fence
+    was acted on by no one. The renewal holds the fence for one more :data:`LEASE`, which the effect that follows is
+    assumed to finish within (ADR 0227 §8, A5).
+
+    Raises:
+        records.RecordChangedError: The claim kept changing under the renewal.
+    """
+    key = claim_key(location)
+    for _ in range(_TAKE_ATTEMPTS):
+        found = records.read_json_at(store.control_root, store.storage_options, key)
+        if found.stored is None:
+            return False
+        current = LocationClaim.model_validate(found.stored.record)
+        if current.released_at is not None or current.fence is None or current.fence.token != token:
+            return False
+        renewed = current.model_copy(update={"fence": ClaimFence(token=token, at=found.at)}).model_dump(mode="json")
+        try:
+            records.replace_json(store.control_root, store.storage_options, key, renewed, etag=found.stored.etag)
+        except records.RecordChangedError:
+            continue
+        return True
+    raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
+
+
 def release(store: ClaimStore, location: str, table: str, *, uuid: str | None = None) -> bool:
     """Release ``table``'s claim on ``location``; ``False`` when it held none.
 

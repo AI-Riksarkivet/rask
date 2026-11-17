@@ -60,6 +60,10 @@ class _Tracker:
             self.live -= 1
 
 
+async def _none_protected(_table: object) -> None:
+    """No table under the cascade is protected: what is protected is not the claim of this test."""
+
+
 def _settings(tmp_path: Path) -> Settings:
     return Settings.model_validate(
         {
@@ -127,7 +131,9 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
     monkeypatch.setattr(n_ep.trash, "put", lambda *_a, **_kw: None)
     own = ControlUuids(object_uuid=str(uuid4()))
 
-    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), settings, None, ["bronze"], descendants, own=own, grace_days=7))
+    asyncio.run(
+        n_ep._trash_subtree(cast("LanceNamespace", object()), settings, None, ["bronze"], descendants, own=own, grace_days=7, unprotected=_none_protected)
+    )
 
     assert tracker.total == 8, f"only {tracker.total} describes for 8 descendant tables"
     assert tracker.peak > 1, "the recoverable cascade describes its descendants one at a time"

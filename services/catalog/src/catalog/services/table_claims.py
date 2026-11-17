@@ -594,6 +594,23 @@ def lift_fence(store: ClaimStore, fenced: DoorFence) -> None:
         log.error("location_claim_fence_not_lifted", extra={"location": fenced.location, "error": str(exc)[:300]})
 
 
+class FenceLostError(ConcurrentModificationError):
+    """The fence a door held on its table's claim is another request's now: its own lapsed during a step that outlasted
+    :data:`lakehouse.location_claims.LEASE`, and a door acted on the table since (the spec's code 14). The door makes no
+    further effect on the table, its rollback included: the table is that request's now."""
+
+
+def renew_fence(store: ClaimStore, fenced: DoorFence) -> None:
+    """Renew a door's fence right before an effect it cannot take back (ADR 0227 §8, CreateRenewsFence).
+
+    Raises:
+        FenceLostError: The claim carries the fence no longer.
+    """
+    if not location_claims.renew_fence(store, fenced.location, fenced.token):
+        log.warning("location_claim_fence_lost", extra={"location": fenced.location})
+        raise FenceLostError(f"the table at {fenced.location} was acted on by another request while this one ran; describe it and retry")
+
+
 def hand_over(ns: LanceNamespace, store: ClaimStore, source: ResolvedTable, *, table: str, segments: list[str], previous: str) -> DoorFence:
     """Hand the claim ``source`` resolved to from ``previous`` to ``table``, fenced for this request, judging a stale
     holder against this namespace; the fence the rename then holds.

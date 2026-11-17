@@ -82,7 +82,7 @@ from catalog.core.lineage_emit import (
     RESTORE_TABLE,
 )
 from catalog.core.modes import RegisterMode
-from catalog.core.namespace import open_resolved_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
+from catalog.core.namespace import open_resolved_dataset_unchecked, registered_dataset_facts
 from catalog.core.vending import (
     CredentialVendor,
     ModeBVendor,
@@ -99,7 +99,6 @@ from catalog.services import clone_endings, commit_reconcile, dataplane, native,
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import base_registry, location_claims, object_records, protection, trash
-from lakehouse.base_refs import decoded_path
 from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent, ControlAction
@@ -1536,7 +1535,6 @@ async def undrop_table(
     """
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
-    so = settings.storage_options()
     trashed = await resolver.admitted_trash("table", segments)
     if not trashed:
         raise TableNotFoundError(
@@ -1552,91 +1550,28 @@ async def undrop_table(
     if standing.location is not None and standing.uuid != record_uuid:
         raise TableAlreadyExistsError(f"cannot undrop {canonical}: another table holds the name now; rename or drop it first")
     trash_doors.require_its_own_parent(record, standing=await resolver.namespace_uuid(segments[:-1]), name=canonical)
-    # `register_table` REFUSES an absolute URI ("Location must be a relative path within the root directory"), and keeps
-    # a relative one as the literal key it is given. The record keeps the URL `describe_table` answered, which
-    # percent-encodes a registered table's name, so the table re-attaches at the key that URL decodes to, under the
-    # connection's root, where its bytes are ([[LH-517]]). The absolute URL stays on the record for an operator.
+    # The absolute URL the record kept, for an operator and for the announcement; the step re-attaches the table at the
+    # relative key it decodes to ([[LH-517]]).
     location = str(record["location"])
-    body = RegisterTableRequest(id=segments, location=dataplane.relative_location(location, root=root))
     named = NameResolves(segments=segments, uuid=record_uuid, held=True)
     restored = _marker(
         announcer, token, named, segments, operation=REGISTER_TABLE, uuids=await uuids.table(segments, location=location, uuid=record_uuid), source_uri=location
     )
     restored_event = _table_event(token, named, action="table_undropped", table_uuid=record_uuid, name=canonical, extra={})
     async with announcer.announcing(door="undrop_table", target=fga.table_object(record_uuid), announcements=[restored, restored_event]) as filing:
-        # THE UNDROP HOLDS THE CLAIM FENCED FROM BEFORE ITS REGISTER UNTIL ITS RECORD IS CLEARED (ADR 0227). The drop kept
-        # the location's claim for this uuid ([[LH-204]]); fencing it under the ETag read refuses a released claim or
-        # another holder (re-attaching this id would put two live ids on one dataset), and while the fence stands no
-        # destroying drop deletes the bytes this register attaches and no recoverable drop files the record the clear
-        # below deletes.
-        claims = table_claims.claim_store(settings)
-        fenced = await run_in_threadpool(partial(table_claims.fence_kept, ns, claims, location, holder=canonical, segments=segments, uuid=record_uuid))
-        try:
-            response = await run_in_threadpool(partial(_register_kept, ns, claims, settings, body, record, segments=segments, location=location))
-            await run_in_threadpool(warn_if_mixed_file_versions, location, so, table=canonical)
-
-            # NO SEED — undrop is a PURE RESTORE (owner ruling, diff2 F10 item 4b). The recoverable drop keeps the
-            # table's tuples (#75 — the owner is the one person who needs to undrop it), so the original owner's grants
-            # are live when the undrop runs; seeding the caller would only ADD whoever pressed the button as a second
-            # owner with no grant ever having been made.
-            #
-            # The deliberate trade: a table that was ALREADY ownerless before the drop stays ownerless after the
-            # undrop, rather than being papered over by granting the rescuer, a privilege escalation hiding the
-            # stranding. Surfacing stranded objects is the reconciler's job (diff2 F3.3), not this door's.
-            #
-            # Nothing between the register and the clear needs compensating: the register converges on its own
-            # registration, and a failed clear converges on retry.
-            # THE TABLE EXISTS AGAIN, and lineage has to hear it: the drop stamped the dataset DROP, and without a
-            # CREATE fact the reconcile would skip a live governed table for good ([[LH-144]]). The same
-            # versionless marker the register door sends, at the absolute location the record kept. Before the
-            # clear, so a failed clear that is retried announces again under the ids its filing already holds.
-            await filing.send(restored)
-            # Under the fence, so the record cleared is the one this undrop admitted: no drop files another while it stands.
-            await run_in_threadpool(trash.clear, settings.registry_root, so, record_uuid)
-        finally:
-            await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        # NO SEED — undrop is a PURE RESTORE (owner ruling, diff2 F10 item 4b). The recoverable drop keeps the table's
+        # tuples (#75 — the owner is the one person who needs to undrop it), so the original owner's grants are live when
+        # the undrop runs; seeding the caller would only ADD whoever pressed the button as a second owner with no grant
+        # ever having been made. A table that was ALREADY ownerless before the drop stays ownerless after the undrop,
+        # rather than being papered over by granting the rescuer; surfacing stranded objects is the reconciler's job.
+        #
+        # THE TABLE EXISTS AGAIN, and lineage has to hear it: the drop stamped the dataset DROP, and without a CREATE fact
+        # the reconcile would skip a live governed table for good ([[LH-144]]). The same versionless marker the register
+        # door sends, at the absolute location the record kept, sent before the record is cleared, under the claim's
+        # fence the step holds (ADR 0227).
+        response = await trash_doors.restore_kept_table(ns, settings, record, segments=segments, root=root, before_clear=partial(filing.send, restored))
         await filing.send(restored_event)
     return response
-
-
-def _register_kept(
-    ns: LanceNamespace,
-    claims: location_claims.ClaimStore,
-    settings: Settings,
-    body: RegisterTableRequest,
-    admitted: dict[str, Any],
-    *,
-    segments: list[str],
-    location: str,
-) -> RegisterTableResponse:
-    """Register the trashed table ``admitted`` keeps under ``segments`` at ``location``, under the undrop's fence (ADR 0227).
-
-    The record is read again first: the one the undrop admitted, still there and kept for an undrop. A destroying drop
-    that fenced the claim before the undrop did and ended without lifting it filed its residue record over it, and may
-    have deleted the bytes. A RegisterTable answering TableAlreadyExists is this undrop's own registration only while
-    the name describes this table, its uuid at its location: a recoverable drop whose deregister failed after its record
-    left the table registered, and the undrop converges on it (`undrop_table_already_registered`). Any other table under
-    the name is the conflict, and the record stays for an undrop once the name is free.
-
-    Raises:
-        ConcurrentModificationError: The record is no longer the one admitted.
-        TableAlreadyExistsError: Another table holds the name.
-    """
-    canonical = fga.canonical_object_id(segments)
-    record_uuid = str(admitted["uuid"])
-    now = trash.get(settings.registry_root, settings.storage_options(), record_uuid)
-    if now is None or trash.is_residue(now) or now.get("dropped_at") != admitted.get("dropped_at"):
-        raise ConcurrentModificationError(f"cannot undrop {canonical}: its trash record changed while this request was being served; describe it and retry")
-    try:
-        registered: RegisterTableResponse = native.call(ns, "register_table", body)
-    except TableAlreadyExistsError:
-        standing = table_claims.resolve(ns, claims, segments)
-        if standing.uuid != record_uuid or standing.location is None or decoded_path(standing.location) != decoded_path(location):
-            log.warning("undrop_refused_name_taken", extra={"table": canonical, "location": location, "standing": standing.location})
-            raise TableAlreadyExistsError(f"cannot undrop {canonical}: another table took the name while this request was being served") from None
-        log.info("undrop_table_already_registered", extra={"table": canonical})
-        return RegisterTableResponse(location=location)
-    return registered
 
 
 @management_router.post("/{id}/protection", response_model_exclude_none=True)

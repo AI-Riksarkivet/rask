@@ -1052,9 +1052,11 @@ export interface paths {
          *     table door (``undrop`` maps to the delete rung). It holds the namespace's fence for an add while it
          *     runs, so it never runs beside the namespace's own drop (409).
          *
-         *     Resumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is
-         *     treated as recovered, so a rerun after a mid-recovery failure finishes the job instead of
-         *     409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired
+         *     Resumable, not atomic: namespace creates run ``exist_ok`` and a table the name already holds at its
+         *     recorded location under its uuid is taken as recovered, so a rerun after a mid-recovery failure
+         *     finishes the job instead of 409-ing on what the first attempt already rebuilt. Each table is
+         *     restored by the table undrop's own step (``trash_doors.restore_kept_table``, ADR 0227): a table
+         *     another request acts on, or whose name another table took, answers 409 and keeps its record. 404 when there is no trash record: an expired
          *     or never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers
          *     nothing. A declared-only table (empty recorded location) is skipped with a warning — there were
          *     no bytes to lose.

@@ -54,7 +54,7 @@ def _write_raising(message: str) -> Any:
 def test_a_collision_answers_conflict_and_names_the_location(monkeypatch: pytest.MonkeyPatch) -> None:
     """The measured message, verbatim from the live 500."""
     uri = "s3://bind86-wh/medallion/silver"
-    monkeypatch.setattr(dataplane.lance, "write_dataset", _write_raising(f"Dataset already exists: {uri}"))
+    monkeypatch.setattr(dataplane.lance.fragment, "write_fragments", _write_raising(f"Dataset already exists: {uri}"))
 
     with pytest.raises(TableAlreadyExistsError) as caught:
         dataplane._write_blob(_arrow_table(), uri, StorageOptions(), mode="create", allow_external=False, external_blob_bases=[])
@@ -66,7 +66,7 @@ def test_a_collision_answers_conflict_and_names_the_location(monkeypatch: pytest
 def test_an_unrelated_os_error_is_still_a_500(monkeypatch: pytest.MonkeyPatch) -> None:
     """A translation that swallows every OSError turns real infra failures into client errors — the
     reason the sibling leg in this handler matches a phrase rather than a word."""
-    monkeypatch.setattr(dataplane.lance, "write_dataset", _write_raising("Connection reset by peer"))
+    monkeypatch.setattr(dataplane.lance.fragment, "write_fragments", _write_raising("Connection reset by peer"))
 
     with pytest.raises(OSError) as caught:
         dataplane._write_blob(_arrow_table(), "s3://b/t", StorageOptions(), mode="create", allow_external=False, external_blob_bases=[])

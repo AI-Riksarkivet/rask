@@ -108,16 +108,25 @@ Two contracts stack here, and confusing them is how bugs happen:
   changed since answers it 409 at that table's turn. Measured 2026-11-11 without the fence: the rename answered 200,
   the cascade 200 (the recoverable one 404, the warehouse's 503), and the moved table stood with every tuple revoked
   or a trash record against it.
-  Create, declare, register and the namespace undrop take a claim, a recoverable drop
-  keeps it for the trashed table's uuid, and destructive drops, deregister and the purge release it. **The table lifecycle's
+  Create, declare and register take a claim, the undrops fence the one a recoverable drop
+  keeps for the trashed table's uuid, and destructive drops, deregister and the purge release it. **The table lifecycle's
   own fences** (ADR 0227, `specs/catalog/TableLifecycle.tla`): a create holds its table's claim fenced until its data is
   committed (`claim_new_table(fence_for=…)`; into a table an earlier request declared, `table_claims.fence_declared`, then
   the probe again under the fence), so a second create of the name, and every drop, rename or undrop of a table still
-  being written, answers 409 code 14; the table undrop fences the claim the drop kept (`table_claims.fence_kept`) before
-  its register and lifts it once its trash record is cleared, reads the record again under the fence, and takes a
-  TableAlreadyExists as its own only while the name describes that uuid at that location; a drop reads protection again
-  once it holds its fence, and the protection door writes its record first and then refuses 409 while a request fences
-  the claim or the claim changed since its resolution (`table_claims.require_unfenced`). A release replaces
+  being written, answers 409 code 14. The create writes its rows (`lance.fragment.write_fragments`) and renews its fence
+  (`table_claims.renew_fence`, conditional on its own token) right before its commit (`LanceDataset.commit`) and before
+  its rollback: a fence that lapsed during the write and that another request took since answers 409 code 14
+  (`FenceLostError`) with nothing committed and nothing rolled back (ADR 0227 §8). Every undrop restores a table through
+  ONE step, `trash_doors.restore_kept_table`, the table door's and the namespace undrop's for each table its cascade
+  filed: it fences the claim the drop kept (`table_claims.fence_kept`) before the register and lifts it once the trash
+  record is cleared, reads the record again under the fence, and takes a TableAlreadyExists as its own only while the
+  name describes that uuid at that location. A drop reads protection again once it holds its fence, and so does each
+  table step of a namespace cascade (`_destroy_listed_table`, `_trash_listed_table`, through the door's `unprotected`):
+  a table protected after the cascade's listing stops it 409 code 19. The protection door writes its record first and
+  then refuses 409 while a request fences the claim or the claim changed since its resolution
+  (`table_claims.require_unfenced`). Open (ADR 0227 §9): a stock client's `DeclareTable` takes no fence, so a catalog
+  create of the declared name can land over the client's version 1. These races run on a real store's conditional writes
+  in `make lifecycle-rustfs-check` (`race_ns_client`'s `s3` parameter). A release replaces
   the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
   record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and
   `take` read a released claim as a free location. A holder that no

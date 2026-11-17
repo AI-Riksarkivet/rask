@@ -1,7 +1,7 @@
 # 0233. Erasure and the namespace and warehouse cascade are modelled in TLA+; eight defects found (2026-11-17)
 
 **Status:** accepted; the catalog's third and fourth models (ADR 0221, ADR 0227, ADR 0229). Both describe the Python
-catalog as it runs, before it is ported (ADR 0217 §5). Seven of the eight findings are fixed, model first (§6).
+catalog as it runs, before it is ported (ADR 0217 §5). The eight findings are fixed, model first (§6); the eighth by ADR 0227 §8, and a ninth, found by review in the cascade's table step, with it.
 
 ## Context
 
@@ -114,7 +114,7 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
      `CascadeFaults`, 5); an undrop that clears a namespace's record without rebuilding it (`NothingIsLost`, 12).
    These plants were run against the models before the fixes; they were not run again.
 
-6. **Eight findings; the seven confirmed against the running catalog on 2026-11-17 are FIXED.** Each fix is a guard in
+6. **Eight findings, and a ninth found by review; all FIXED.** The seven confirmed against the running catalog on 2026-11-17 first. Each fix is a guard in
    the model first; the config that found the finding now removes that guard and must fail, and the property it
    violated holds in a gate. Each fix's test drives the real app on real pylance, makes the step the trace names fail
    once (or lands the other door at it), reads the harm through the doors, and passes, its `xfail` marker gone. In the
@@ -179,10 +179,19 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
       own last, so a re-issue finds the namespace's record and finishes. Proved needed by
       `CascadeUndropNotResumable.cfg` (`TheUndropFinishes`); tested by
       `test_a_cascade_keeps_what_it_answered.py::test_an_undrop_cut_short_is_finished_by_its_reissue`.
-   8. **`CascadeUndropClearsRedrop.cfg`** (`NothingIsLost`): ADR 0227's confirmed `UndropClearsRedrop`, reached
-      through a cascade's re-issue: the table door's undrop of T lands between two attempts of the cascade, and its
-      unconditional `trash.clear` deletes the record the re-issue filed. Still a finding here; its fix is ADR 0227's,
-      in the table door's undrop. Not tested again here.
+   8. **ADR 0227's `UndropClearsRedrop` through a cascade. FIXED, guard G5 of the cascade model.** The table door's
+      undrop of T landing between two attempts of the cascade cleared, unconditionally, the record the re-issue filed
+      (`NothingIsLost`). The table undrop now holds T's claim fenced from before its register until its record is
+      cleared (ADR 0227 §5 `UndropFence`, `UndropHoldsFence`), so the re-issue's `fence_listed` of T answers 409 while
+      it runs and files T's record only once the undrop's clear is done. The namespace undrop's table step is the same
+      step (`trash_doors.restore_kept_table`, ADR 0227 §8), which a table undrop holding T's fence answers 409 too
+      (`UTable`). `CascadeUndropClearsRedrop.cfg` removes the fence and must fail; `Cascade.cfg` runs the table undrop
+      between the cascade's attempts and holds. Tested by ADR 0227's
+      `test_a_recoverable_drop_answered_200_can_be_undropped`, whose `[namespace]` case drives the namespace undrop.
+   9. **A cascade destroyed a table protected after its listing. FIXED in the table step (ADR 0227 §8,
+      `CascadeRereadsProtection`).** `_require_descendants_unprotected` read protection before any table was fenced,
+      and neither `_destroy_listed_table` nor `_trash_listed_table` read it again; each now does under the table's fence.
+      Modelled in `TableLifecycle.tla`, which models the cascade's table step; this model still leaves protection out.
 
    `ErasureRestore.cfg` (liveness) is a limit, not a finding: a restore of a residual version made once the obligation
    is released, before the release runs, commits its bytes as main's head, which no cleanup reaches.
@@ -215,8 +224,8 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
 
 The predicate and its digest; index segments (one more residual kind a head must clear); external bases and MemWAL
 shards; the retention window (the model reclaims at retention 0); a registered clone's tag; late derived tables (a
-ruling: listed and paged); grants and their revoke; protection and `force`; claims and fences beyond `fence_listed`'s
-skip (TableLifecycle.tla); the announcements of a cascade; projects; `?purge_bucket`; a fence a dead holder keeps until
+ruling: listed and paged); grants and their revoke; protection and `force` (the cascade's table step, protection included, is `TableLifecycle.tla`'s); claims and fences beyond `fence_listed`'s
+skip and the table undrop's fence (G5) (TableLifecycle.tla); the announcements of a cascade; projects; `?purge_bucket`; a fence a dead holder keeps until
 its hold lapses (the model lapses it at once); the release's own ref announcements.
 
 ## Consequences

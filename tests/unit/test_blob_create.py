@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import lance
+import lance.fragment
 import pyarrow as pa
 import pytest
 from lance import blob_array, blob_field
@@ -98,13 +99,13 @@ def test_create_table_writes_plain_schema_at_2_2_with_stable_row_ids(tmp_path: P
     # asserted on what the door PASSES, because pylance 12's own default is 2.2 and the table alone cannot
     # tell a pinned create from a defaulted one.
     passed: list[Any] = []
-    write = lance.write_dataset
+    write = lance.fragment.write_fragments
 
     def _spy(*args: Any, **kwargs: Any) -> Any:
         passed.append(kwargs.get("data_storage_version"))
         return write(*args, **kwargs)
 
-    monkeypatch.setattr(lance, "write_dataset", _spy)
+    monkeypatch.setattr(lance.fragment, "write_fragments", _spy)
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
     create_table(ns, StorageOptions(), ["db", "plain"], pa.table({"id": [1, 2, 3]}), root=str(tmp_path), mode="create", registry=None)
@@ -179,10 +180,10 @@ def test_a_create_whose_write_and_rollback_both_fail_answers_the_write_and_logs_
     """The write's error is what the caller is told; a rollback that fails too leaves the name declared with no dataset
     behind it, which is logged with its cause rather than swallowed ([[LH-572]])."""
 
-    def _refused_write(*_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401 — `lance.write_dataset`'s own signature
+    def _refused_write(*_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401 — `write_fragments`'s own signature
         raise RuntimeError("the store refused the write")
 
-    monkeypatch.setattr(lance, "write_dataset", _refused_write)
+    monkeypatch.setattr(lance.fragment, "write_fragments", _refused_write)
     real = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(real, "db")
 

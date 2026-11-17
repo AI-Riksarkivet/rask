@@ -40,19 +40,19 @@ def _rows(client: TestClient, name: str = T) -> int | None:
 
 
 @pytest.fixture
-def subtree(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def subtree(race_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """``p``, ``p$c`` and ``p$c$t`` with three rows, under a grace period, so a cascade without ``purge`` is recoverable."""
     from catalog.core.config import get_settings
 
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "7")
     get_settings.cache_clear()
     for namespace in (P, C):
-        assert real_ns_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+        assert race_ns_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
     rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64())}))
-    created = real_ns_client.post(f"/v1/table/{T}/create?mode=create", content=rows, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    created = race_ns_client.post(f"/v1/table/{T}/create?mode=create", content=rows, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert created.status_code == 200, created.text
-    assert _rows(real_ns_client) == 3
-    return real_ns_client
+    assert _rows(race_ns_client) == 3
+    return race_ns_client
 
 
 def test_a_cascade_finished_by_its_reissue_leaves_every_table_it_detached_restorable(subtree: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

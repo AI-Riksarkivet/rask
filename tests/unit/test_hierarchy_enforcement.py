@@ -81,6 +81,10 @@ async def _drain(destroying: AsyncIterator[list[str]]) -> list[list[str]]:
     return [item async for item in destroying]
 
 
+async def _none_protected(_table: object) -> None:
+    """No table under the cascade is protected: what is protected is not the claim of these tests."""
+
+
 def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to(tmp_path: Path) -> None:
     """The dir backend refuses `behavior=Cascade` for every casing, so this door must do the work:
     tables first, then namespaces deepest-first, then the root — each drop hitting an EMPTY object."""
@@ -103,6 +107,7 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to(tmp_path: 
                 claims=_claimed(tmp_path, descendants),
                 storage_options=StorageOptions(),
                 estate_roots=(),
+                unprotected=_none_protected,
             )
         )
     )
@@ -151,6 +156,7 @@ def test_an_already_absent_child_is_DRIFT_not_an_error(tmp_path: Path) -> None:
                 claims=claims,
                 storage_options=StorageOptions(),
                 estate_roots=(),
+                unprotected=_none_protected,
             )
         )
     )

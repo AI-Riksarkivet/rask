@@ -18,11 +18,13 @@
 (*            drop_namespace, an absent one tolerated)                     *)
 (*   create   a create (or a rename in) of N in P: one __manifest add      *)
 (*   undrop   namespaces.py undrop_namespace (each namespace shallowest    *)
-(*            first: create_or_keep_namespace; each table:                 *)
-(*            table_claims.take, register_table, trash.clear; then each    *)
-(*            namespace's trash.clear, deepest first, its own last), and   *)
-(*            the table door's undrop of T (endpoints/tables.py            *)
-(*            undrop_table)                                                *)
+(*            first: create_or_keep_namespace; each table through the     *)
+(*            table undrop's own step, tables.restore_kept_table:          *)
+(*            fence_kept, the record read again, register_table,           *)
+(*            trash.clear, the fence lifted; then each namespace's         *)
+(*            trash.clear, deepest first, its own last), and the table     *)
+(*            door's undrop of T (endpoints/tables.py undrop_table, the    *)
+(*            same step)                                                   *)
 (*   purge    maintenance's purge of an expired trashed table, which       *)
 (*            refuses one still registered (purge.check STILL_REGISTERED)  *)
 (*            and one outside the maintained estate                        *)
@@ -77,11 +79,13 @@
 (*       warehouse delete holds it for a drop from before it reads the     *)
 (*       trash until its record is gone. CascadeWarehouseLateTrash removes *)
 (*       it (NoTrashOutlivesItsWarehouse).                                 *)
+(*   G5. The table undrop's step holds the table's claim fenced from       *)
+(*       before its register until its record is cleared (ADR 0227's       *)
+(*       UndropFence and UndropHoldsFence), so a cascade's fence_listed    *)
+(*       of the table answers 409 while it runs, and the cascade's         *)
+(*       re-issue files its record only once the undrop's clear is done.   *)
+(*       CascadeUndropClearsRedrop removes it (NothingIsLost).             *)
 (* The undrop's own adds take the fence too; each is one step here.        *)
-(*                                                                         *)
-(* NOT FIXED HERE: CascadeUndropClearsRedrop, ADR 0227's UndropClearsRedrop *)
-(* reached through a cascade's re-issue: the table door's unconditional    *)
-(* trash.clear, which ADR 0227's fix owns.                                 *)
 (*                                                                         *)
 (* NOT MODELLED: grants and their revoke (the recoverable cascade keeps    *)
 (* them, the destroying one ends them after its drops); protection and     *)
@@ -109,7 +113,8 @@ CONSTANTS Recoverable,   \* the cascade drop keeps its subtree in the trash (a g
           NsFence,       \* G1
           RecordFirst,   \* G2
           ClearsLast,    \* G3
-          WhFence        \* G4
+          WhFence,       \* G4
+          UndropFenced   \* G5
 
 Tables == {"T", "N"}
 Nss    == {"P", "C"}
@@ -162,6 +167,9 @@ WhEmpty == ~nsRow["P"]
 
 \* A trash record filed under W is refused while the warehouse delete holds W's fence (G4): trash.put answers 409.
 PutRefused == WhFence /\ whHeld
+\* G5: the table door's undrop of T holds T's claim fenced from before its register until its record is cleared
+\* (table_claims.fence_kept), so the cascade's fence_listed of T, and the namespace undrop's own fence of it, answer 409.
+TFenced(t) == UndropFenced /\ t = "T" /\ tpc = "clear"
 \* G1: the drop door holds P's fence for a drop from its identify to its answer, and the namespace undrop holds it for
 \* an add while it runs: each refuses the other's take (409), as an add under P refuses a drop of P.
 DropHeld   == NsFence /\ dpc \in {"table", "detach", "nsdrop", "nsfile"}
@@ -187,6 +195,7 @@ DStart ==
 DFile(t) ==
   /\ dpc = "table" /\ t \in dtabs /\ NoFault
   /\ IF ~tRow[t] THEN UNCHANGED <<tRow, bytes, trashT>> /\ dpc' = "table" /\ dtabs' = dtabs \ {t}
+     ELSE IF TFenced(t) THEN UNCHANGED <<tRow, bytes, trashT, dtabs>> /\ dpc' = "refused"
      ELSE IF Recoverable
             THEN IF PutRefused
                    THEN UNCHANGED <<tRow, bytes, trashT, dtabs>> /\ dpc' = "refused"
@@ -305,11 +314,15 @@ UNs(n, here, next) ==
        ELSE upc' = next /\ UNCHANGED <<nsRow, trashNs>>
   /\ UNCHANGED <<tRow, trashT, uStarted>> /\ UOthers
 
-\* Each table the cascade filed: register_table (an already-registered one is taken as recovered), then trash.clear.
+\* Each table the cascade filed, through the table undrop's own step (tables.restore_kept_table): the kept claim fenced,
+\* the record read again, register_table (an already-registered one is its own only while the name holds it there),
+\* trash.clear, the fence lifted; one step here, since no door acts on the table while the fence stands. A claim the
+\* table door's undrop fences answers 409, and the namespace undrop is issued again.
 UTable(t, here, next) ==
   /\ upc = here /\ NoFault
   /\ IF trashT[t] = "cascade"
-       THEN IF nsRow[Parent[t]]
+       THEN IF TFenced(t) THEN upc' = "dead" /\ UNCHANGED <<tRow, trashT>>
+            ELSE IF nsRow[Parent[t]]
               THEN tRow' = [tRow EXCEPT ![t] = TRUE] /\ trashT' = [trashT EXCEPT ![t] = "none"] /\ upc' = next
               ELSE upc' = "dead" /\ UNCHANGED <<tRow, trashT>>
        ELSE upc' = next /\ UNCHANGED <<tRow, trashT>>

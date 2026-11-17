@@ -1,19 +1,22 @@
 """#3-B — Lance multi-base DATA distribution (unit).
 
 The write path (`dataplane._write_blob`) is the only place multi-base touches Lance, so patch
-`lance.write_dataset` and assert the base wiring (initial_bases + target_bases) — and,
+its write (`lance.fragment.write_fragments` for a create, `lance.write_dataset` for an overwrite) and assert the base wiring (initial_bases + target_bases) — and,
 critically, that the #5a invariant (2.2 + stable-row-ids) SURVIVES multi-base. Config allowlist parsing
 mirrors the external-blob-bases property.
 """
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import lance
+import lance.fragment
 import pyarrow as pa
 import pytest
+from lance.dataset import Transaction
 from lance_namespace import InvalidInputError
 
 from catalog.services import dataplane
@@ -37,9 +40,22 @@ def _capture_write() -> tuple[dict[str, Any], Any]:
     return captured, fake_write
 
 
+def _created(fake_write: Any) -> AbstractContextManager[Any]:
+    """A create's write is ``write_fragments`` and then the commit of its transaction: the write captured, the commit a stand-in."""
+
+    def fake_fragments(table_obj: Any, uri: str, **kw: Any) -> Any:
+        fake_write(table_obj, uri, **kw)
+        return MagicMock(spec=Transaction)
+
+    stack = ExitStack()
+    stack.enter_context(patch.object(lance.fragment, "write_fragments", fake_fragments))
+    stack.enter_context(patch.object(lance.LanceDataset, "commit", MagicMock(return_value=MagicMock(version=1))))
+    return stack
+
+
 def test_write_threads_data_bases_into_write_dataset() -> None:
     captured, fake_write = _capture_write()
-    with patch.object(lance, "write_dataset", fake_write):
+    with _created(fake_write):
         dataplane._write_blob(
             _table(),
             "s3://root/tbl",
@@ -59,7 +75,7 @@ def test_write_threads_data_bases_into_write_dataset() -> None:
 
 def test_external_and_data_bases_compose() -> None:
     captured, fake_write = _capture_write()
-    with patch.object(lance, "write_dataset", fake_write):
+    with _created(fake_write):
         dataplane._write_blob(
             _table(),
             "s3://root/tbl",

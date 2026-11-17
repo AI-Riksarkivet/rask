@@ -8,6 +8,7 @@ mapping — never lance's actual operations. ``real_ns_client`` runs the real ``
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -67,6 +68,49 @@ def real_ns_client(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> Iterato
 
     app.dependency_overrides[get_namespace] = lambda: ns
     app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+    get_settings.cache_clear()
+
+
+#: The S3 store the race tests also run on, named by the lane that stands it up (`scripts/lifecycle_on_rustfs_check.sh`):
+#: the offline suite names none, and collects only the local root.
+_RACE_STORE = os.environ.get("RASK_LIFECYCLE_STORE_ENDPOINT", "")
+
+
+@pytest.fixture(params=["dir", "s3"] if _RACE_STORE else ["dir"])
+def race_ns_client(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """``real_ns_client`` for a test of a race between doors, whose every exclusion is a conditional write on the store:
+    on the local root, and, where a lane names an S3 store, with the catalog's root and control root in a bucket of the
+    test's own there, so the store's put-if-not-exists and If-Match arbitrate each fence, claim and record."""
+    if request.param == "dir":
+        yield request.getfixturevalue("real_ns_client")
+        return
+    import boto3
+
+    bucket = f"race-{uuid4().hex[:12]}"
+    access, secret = os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"]
+    store = boto3.client("s3", endpoint_url=_RACE_STORE, region_name="us-east-1", aws_access_key_id=access, aws_secret_access_key=secret)
+    store.create_bucket(Bucket=bucket)
+    for key, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": f"s3://{bucket}",
+        "LANCE_CONTROL_ROOT": f"s3://{bucket}",
+        "LANCE_S3_ENDPOINT": _RACE_STORE,
+        "LANCE_S3_ACCESS_KEY_ID": access,
+        "LANCE_S3_SECRET_ACCESS_KEY": secret,
+        "LANCE_S3_REGION": "us-east-1",
+    }.items():
+        monkeypatch.setenv(key, value)
+    from catalog.api.dependencies import get_namespace
+    from catalog.core.config import get_settings
+    from catalog.core.namespace import build_namespace
+    from catalog.main import app
+
+    get_settings.cache_clear()
+    ns = build_namespace(get_settings())
+    app.dependency_overrides[get_namespace] = lambda: ns
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
