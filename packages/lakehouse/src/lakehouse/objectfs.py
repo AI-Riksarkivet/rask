@@ -189,9 +189,9 @@ def is_lance_dataset_root(uri: str, storage_options: StorageOptions) -> bool:
     ``get_file_info`` per call, no listing.
 
     It exists because a MANIFEST cannot be trusted to say this about somebody else's directory:
-    ``BasePath.is_dataset_root`` is set by ``shallow_clone`` and by nothing else, so an ``add_bases``
-    pointed straight at a live Lance root reports ``False`` (measured, pylance 10.0.0). The listing
-    does not lie, and the compaction gate reads it.
+    ``BasePath.is_dataset_root`` is what the base's writer declared, so an ``add_bases`` pointed straight at a
+    live Lance root may report ``False`` (measured on pylance 13.0.0, 2026-11-17: the bit lands as its caller
+    passes it). The listing does not lie, and the compaction gate reads it.
 
     RAISES rather than returning False when the store cannot answer. "Unreadable" and "not a dataset"
     are opposite answers for a gate that must fail closed, and collapsing them here would hand the

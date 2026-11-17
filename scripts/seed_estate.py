@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Seed the demo estate through the catalog's REAL APIs, in hierarchy order.
 
-WHY THIS EXISTS — the ghost projects. ``scripts/fga_seed_demo.py`` writes FGA TUPLES ONLY, and a tuple
-write does not require its object to exist: OpenFGA happily stores ``user:alice admin project:acme``
-whether or not any catalog registry record calls ``acme`` a tenant. That is how the live estate ended up
-holding three projects the catalog had never heard of — authorization said they were there, the registry
-said nothing, and the projects gallery broke on the difference. A seed that writes authz without writing
+WHY IT GOES THROUGH THE DOORS — the ghost projects. A tuple write does not require its object to exist: OpenFGA
+stores ``user:alice admin project:acme`` whether or not any catalog registry record calls ``acme`` a tenant, so a
+seed that writes tuples straight to the store leaves projects the catalog has never heard of — authorization says
+they are there, the registry says nothing, and the projects gallery breaks on the difference (measured on the live
+estate: three such projects). A seed that writes authz without writing
 EXISTENCE can manufacture a state no user could ever reach through the UI, and then every surface built
 on the catalog reads that state as corruption.
 
@@ -26,7 +26,7 @@ reason the grants go last: a grant whose object is a create that FAILED is skipp
 writing it is precisely how a ghost is made.
 
 THE ESTATE MIRRORS THE FGA FIXTURES (``lakehouse/governed/auth/model.fga.yaml``), the same set
-``fga_seed_demo.py`` loads and CI asserts against, so this is a replacement rather than a toy: three
+``fga model test`` asserts against, so this is the tested estate rather than a toy: three
 projects, three warehouses, the bronze, silver and gold namespaces under acme, each project's admins as a role of
 that project, a stewards persona,
 and the users that exercise the interesting cases (a writer who is NO classifier, a classifier who
@@ -51,7 +51,7 @@ One fixture tuple is deliberately NOT seeded, for the ghost reason this script e
 ``user:root_admin owner warehouse:lance_catalog`` (the estate root is the bootstrap job's to grant, not a
 demo seed's).
 
-THE SUBJECT MAPPING follows ``fga_seed_demo.py``: the fixtures say ``user:alice``, and a grant names a principal,
+THE SUBJECT MAPPING: the fixtures say ``user:alice``, and a grant names a principal,
 ``<idp-id>~<user id>`` ([[LH-063]]), so the catalog refuses the literal. The development Dex's identities are rewritten
 to their principals; every other name is a persona with no IdP account, named under the ``demo`` idp id no connector
 maps, so it still makes the graph worth reading and still names an identity provider.
@@ -85,11 +85,10 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
 from types import MappingProxyType
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse.naming import CATALOG_DELIMITER
 
@@ -102,8 +101,8 @@ CATALOG_URL = os.environ.get("SEED_CATALOG_URL", "http://127.0.0.1:2333")
 CATALOG_TOKEN = os.environ.get("SEED_CATALOG_TOKEN", "")
 
 #: The development Dex's two static demo identities as the principals they are: `dex~` and the userID the Dex fixture
-#: declares (deploy/fixtures/dex/chart/values.yaml, `scripts/dex_principal.py`). Kept in step with
-#: ``fga_seed_demo._DEX_PRINCIPALS`` — a seed that drifted from them would grant a principal nobody can sign in as.
+#: declares (deploy/fixtures/dex/chart/values.yaml, `scripts/dex_principal.py`): a seed that drifted from them would
+#: grant a principal nobody can sign in as.
 DEX_PRINCIPALS: Mapping[str, str] = MappingProxyType(
     {
         "alice": "dex~08a8684b-db88-4b73-90a9-3cd1661f5466",
@@ -134,18 +133,20 @@ ROLE_CREATE: Mapping[int, tuple[str, str]] = MappingProxyType({**CONVERGED, **FG
 # --------------------------------------------------------------------------- #
 
 
-@dataclass(frozen=True, slots=True)
-class Namespace:
+class Namespace(BaseModel):
     """One namespace of a warehouse, by its name inside the warehouse, and the tables declared inside it."""
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     tables: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class Warehouse:
+class Warehouse(BaseModel):
     """One warehouse = one S3 bucket, and the first segment of every name inside it. ``bucket`` defaults to the id
     server-side."""
+
+    model_config = ConfigDict(frozen=True)
 
     id: str
     namespaces: tuple[Namespace, ...] = ()
@@ -161,17 +162,17 @@ class Role(BaseModel):
     assignees: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class Project:
+class Project(BaseModel):
     """A tenant — the TOP of the hierarchy. One project may hold many warehouses, and its roles."""
+
+    model_config = ConfigDict(frozen=True)
 
     id: str
     warehouses: tuple[Warehouse, ...] = ()
     roles: tuple[Role, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class Grant:
+class Grant(BaseModel):
     """One raw tuple written through ``POST /management/v1/access/tuples`` after the objects exist.
 
     A grant on a TABLE names it by its id, its PATH (``<warehouse>$<namespace>$<name>``), and is written on the uuid DescribeTable
@@ -179,14 +180,17 @@ class Grant:
     exist is the ghost this whole script is built to stop making.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     user: str
     relation: str
     object: str
 
 
-@dataclass(frozen=True, slots=True)
-class Estate:
+class Estate(BaseModel):
     """Everything to seed: the hierarchy, then the grants that decorate it."""
+
+    model_config = ConfigDict(frozen=True)
 
     projects: tuple[Project, ...]
     grants: tuple[Grant, ...] = ()
@@ -235,36 +239,36 @@ DEMO_ESTATE = Estate(
     ),
     grants=(
         # Each project's admins role administers it, which is what makes alice and bob admins of acme AND research.
-        Grant("role:acme/admins#assignee", "admin", "project:acme"),
-        Grant("role:research/admins#assignee", "admin", "project:research"),
-        Grant("role:beta/admins#assignee", "admin", "project:beta"),
+        Grant(user="role:acme/admins#assignee", relation="admin", object="project:acme"),
+        Grant(user="role:research/admins#assignee", relation="admin", object="project:research"),
+        Grant(user="role:beta/admins#assignee", relation="admin", object="project:beta"),
         # dave: a plain WRITER on the bucket — writes any namespace, and holds no other rung.
-        Grant("user:dave", "writer", "warehouse:acme"),
+        Grant(user="user:dave", relation="writer", object="warehouse:acme"),
         # NO READ GRANT FOR A CLIENT'S OWN SERVICE ACCOUNT, and its absence is the control (Q17-8 / §F2-2 F2-4).
         # A client that sends its own identity when there is no session makes it the ANONYMOUS principal —
         # granting it reader on a tenant's tiers is granting the public those tiers. A human reads a tenant's
         # lineage with their OWN bearer; if a surface needs to be public, grant this subject that surface
         # explicitly and it becomes visible in the model.
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
-        Grant("role:acme/stewards#assignee", "classifier", "namespace:acme$gold"),
-        Grant("user:carol", "reader", "warehouse:acme"),
+        Grant(user="role:acme/stewards#assignee", relation="classifier", object="namespace:acme$gold"),
+        Grant(user="user:carol", relation="reader", object="warehouse:acme"),
         # gina: a plain tenant member (not via acme's admins role): listed in the tenant and granted no data rung.
-        Grant("user:gina", "member", "project:acme"),
+        Grant(user="user:gina", relation="member", object="project:acme"),
         # ---- UPWARD VISIBILITY (C1) --------------------------------------------------------------
         # ivan holds ONE grant, on ONE table. The containers above it become VISIBLE — the breadcrumb
         # to his own data resolves instead of 403ing — while a SIBLING namespace stays invisible. This is
         # the only persona whose object is a table.
-        Grant("user:ivan", "reader", "table:acme$gold$catalog"),
+        Grant(user="user:ivan", relation="reader", object="table:acme$gold$catalog"),
         # ---- THE GRANT AXIS (C2) — administering access is not the same as holding it -------------
         # judy: grant authority on the bucket and NO data rung — the access-review persona that was
         # unexpressible while granting was welded to `owner`.
-        Grant("user:judy", "manage_grants", "warehouse:acme"),
+        Grant(user="user:judy", relation="manage_grants", object="warehouse:acme"),
         # kevin: a DELEGATE on the silver namespace — a writer who may hand on exactly what he holds, and
         # no more.
-        Grant("user:kevin", "writer", "namespace:acme$silver"),
-        Grant("user:kevin", "pass_grants", "namespace:acme$silver"),
+        Grant(user="user:kevin", relation="writer", object="namespace:acme$silver"),
+        Grant(user="user:kevin", relation="pass_grants", object="namespace:acme$silver"),
         # leo: holds the grant OPTION and no rung — the option is worthless alone, by construction.
-        Grant("user:leo", "pass_grants", "namespace:acme$silver"),
+        Grant(user="user:leo", relation="pass_grants", object="namespace:acme$silver"),
         # ---- MANAGED ACCESS (C4) -----------------------------------------------------------------
         # The flag, written as the ONE canonical tuple the catalog stores it as (`_MANAGED_ACCESS_SUBJECT`
         # in the catalog's access endpoints). `user:*` is a TYPE RESTRICTION used as a switch, not a
@@ -273,12 +277,12 @@ DEMO_ESTATE = Estate(
         # door is gated on `can_set_managed_access` HELD ON THE WAREHOUSE, which is a tenant's relation and
         # not a seed's; the raw tuple editor is where every other grant here goes and it accepts the
         # flag as the directly-assignable relation it is.
-        Grant("user:*", "managed_access", "warehouse:beta"),
+        Grant(user="user:*", relation="managed_access", object="warehouse:beta"),
         # mona OWNS the namespace inside the managed scope — which would normally carry the right to grant,
         # and under the flag does not. She keeps every data power.
-        Grant("user:mona", "owner", "namespace:beta$locked"),
+        Grant(user="user:mona", relation="owner", object="namespace:beta$locked"),
         # nora is the records manager: grant authority at the warehouse, which the flag centralizes on her.
-        Grant("user:nora", "manage_grants", "warehouse:beta"),
+        Grant(user="user:nora", relation="manage_grants", object="warehouse:beta"),
     ),
 )
 
@@ -288,8 +292,7 @@ DEMO_ESTATE = Estate(
 # --------------------------------------------------------------------------- #
 
 
-@dataclass(frozen=True, slots=True)
-class Step:
+class Step(BaseModel):
     """One HTTP call, plus what it means for the ones that come after it.
 
     ``key`` is the object this step brings into existence (also its FGA object id), ``parents`` the objects
@@ -298,6 +301,8 @@ class Step:
     does not exist, which is the ghost this script exists to stop making.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     layer: str
     label: str
     method: str
@@ -305,7 +310,7 @@ class Step:
     body: dict[str, object] | None = None
     key: str | None = None
     parents: tuple[str, ...] = ()
-    tolerate: Mapping[int, tuple[str, str]] = MappingProxyType({})
+    tolerate: Mapping[int, tuple[str, str]] = Field(default_factory=dict)
 
 
 def remap_subject(subject: str, principals: Mapping[str, str]) -> str:
@@ -472,9 +477,10 @@ def plan(estate: Estate, principals: Mapping[str, str]) -> list[Step]:
 # --------------------------------------------------------------------------- #
 
 
-@dataclass(frozen=True, slots=True)
-class Outcome:
+class Outcome(BaseModel):
     """What one step actually did: ``created`` / ``converged`` / ``skipped`` / ``failed``."""
+
+    model_config = ConfigDict(frozen=True)
 
     step: Step
     state: str
@@ -518,7 +524,7 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
         if missing := [parent for parent in step.parents if parent in blocked]:
             note = f"its parent {', '.join(missing)} did not land"
             print(f"  -  {step.label}: skipped, {note}")
-            outcomes.append(Outcome(step, "skipped", note))
+            outcomes.append(Outcome(step=step, state="skipped", note=note))
             if step.key is not None:
                 blocked.add(step.key)
             continue
@@ -526,33 +532,33 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
         body, unresolved = (None, unresolved) if unresolved else _governed_body(http, step)
         if unresolved:
             print(f"  !! {step.label}: {unresolved}", file=sys.stderr)
-            outcomes.append(Outcome(step, "failed", unresolved))
+            outcomes.append(Outcome(step=step, state="failed", note=unresolved))
             continue
         try:
             response = http.request(step.method, step.path, json=body)
         except httpx.HTTPError as exc:
             note = f"{type(exc).__name__}: {exc}"
             print(f"  !! {step.label}: {note}", file=sys.stderr)
-            outcomes.append(Outcome(step, "failed", note))
+            outcomes.append(Outcome(step=step, state="failed", note=note))
             if step.key is not None:
                 blocked.add(step.key)
             continue
         if response.is_success:
             print(f"  +  {step.label}")
-            outcomes.append(Outcome(step, "created"))
+            outcomes.append(Outcome(step=step, state="created"))
             continue
         note = problem(response)
         tolerated = step.tolerate.get(response.status_code)
         if tolerated is not None:
             state, word = tolerated
             print(f"  =  {step.label}: {word} ({note})")
-            outcomes.append(Outcome(step, state, note))
+            outcomes.append(Outcome(step=step, state=state, note=note))
             if state == "skipped" and step.key is not None:
                 blocked.add(step.key)
             continue
         note = f"HTTP {response.status_code} {note}"
         print(f"  !! {step.label}: {note}", file=sys.stderr)
-        outcomes.append(Outcome(step, "failed", note))
+        outcomes.append(Outcome(step=step, state="failed", note=note))
         if step.key is not None:
             blocked.add(step.key)
     return outcomes
@@ -593,7 +599,7 @@ def _with_roles_resolved(http: httpx.Client, step: Step, role_ids: dict[str, str
                 value = f"role:{role_id}{value[matched.end() :]}"
             resolved[field] = value
         body = resolved
-    return replace(step, path=path, body=body), ""
+    return step.model_copy(update={"path": path, "body": body}), ""
 
 
 #: The object types whose grants OpenFGA holds by the uuid the catalog minted, never by name (ADR 0173 §8, [[LH-524]]).

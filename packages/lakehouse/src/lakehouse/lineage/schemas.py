@@ -14,8 +14,9 @@ reddens CI the moment a published facet version moves.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 from openlineage.client import event_v2
 from openlineage.client.facet_v2 import (
@@ -77,6 +78,16 @@ class WireModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
 
+def _facet[F](facet: type[F], **fields: object) -> F:
+    """An openlineage facet built with its ``producer``.
+
+    The client's facets are attrs classes whose ``_producer`` attribute is initialised as ``producer``, an alias the
+    type checker does not read off them, so the constructor is called through a cast: each call stays typed by the
+    facet it names and its fields are checked by attrs at runtime.
+    """
+    return cast("Callable[..., F]", facet)(**fields)
+
+
 class Facet(WireModel):
     """Base facet — every facet, standard or custom, carries ``_producer`` + ``_schemaURL``."""
 
@@ -126,11 +137,12 @@ class ParentRunFacet(Facet):
             if self.root
             else None
         )
-        return parent_run.ParentRunFacet(
+        return _facet(
+            parent_run.ParentRunFacet,
             run=parent_run.Run(runId=self.run.run_id),
             job=parent_run.Job(namespace=self.job.namespace, name=self.job.name),
             root=root,
-            producer=self.producer,  # ty: ignore[unknown-argument] — attrs init-alias for `_producer`, real at runtime
+            producer=self.producer,
         )
 
 
@@ -143,11 +155,12 @@ class ErrorMessageRunFacet(Facet):
     stack_trace: str | None = Field(default=None, alias="stackTrace")
 
     def to_openlineage(self) -> error_message_run.ErrorMessageRunFacet:
-        return error_message_run.ErrorMessageRunFacet(
+        return _facet(
+            error_message_run.ErrorMessageRunFacet,
             message=self.message,
             programmingLanguage=self.programming_language,
             stackTrace=self.stack_trace,
-            producer=self.producer,  # ty: ignore[unknown-argument] — attrs init-alias for `_producer`, real at runtime
+            producer=self.producer,
         )
 
 
@@ -165,9 +178,10 @@ class SchemaDatasetFacet(Facet):
     fields: list[SchemaField] = Field(default_factory=list)
 
     def to_openlineage(self) -> schema_dataset.SchemaDatasetFacet:
-        return schema_dataset.SchemaDatasetFacet(
+        return _facet(
+            schema_dataset.SchemaDatasetFacet,
             fields=[schema_dataset.SchemaDatasetFacetFields(name=f.name, type=f.type_) for f in self.fields],
-            producer=self.producer,  # ty: ignore[unknown-argument] — attrs init-alias for `_producer`, real at runtime
+            producer=self.producer,
         )
 
 
@@ -179,10 +193,11 @@ class OutputStatisticsFacet(Facet):
     size: int | None = None
 
     def to_openlineage(self) -> output_statistics_output_dataset.OutputStatisticsOutputDatasetFacet:
-        return output_statistics_output_dataset.OutputStatisticsOutputDatasetFacet(
+        return _facet(
+            output_statistics_output_dataset.OutputStatisticsOutputDatasetFacet,
             rowCount=self.row_count,
             size=self.size,
-            producer=self.producer,  # ty: ignore[unknown-argument] — attrs init-alias for `_producer`, real at runtime
+            producer=self.producer,
         )
 
 
@@ -194,7 +209,7 @@ class DatasourceFacet(Facet):
     uri: str
 
     def to_openlineage(self) -> datasource_dataset.DatasourceDatasetFacet:
-        return datasource_dataset.DatasourceDatasetFacet(name=self.name, uri=self.uri, producer=self.producer)  # ty: ignore[unknown-argument]
+        return _facet(datasource_dataset.DatasourceDatasetFacet, name=self.name, uri=self.uri, producer=self.producer)
 
 
 class DatasetVersionFacet(Facet):
@@ -204,7 +219,7 @@ class DatasetVersionFacet(Facet):
     dataset_version: str = Field(alias="datasetVersion")
 
     def to_openlineage(self) -> dataset_version_dataset.DatasetVersionDatasetFacet:
-        return dataset_version_dataset.DatasetVersionDatasetFacet(datasetVersion=self.dataset_version, producer=self.producer)  # ty: ignore[unknown-argument]
+        return _facet(dataset_version_dataset.DatasetVersionDatasetFacet, datasetVersion=self.dataset_version, producer=self.producer)
 
 
 class JobTypeJobFacet(Facet):
@@ -221,11 +236,12 @@ class JobTypeJobFacet(Facet):
     job_type: str = Field(default="JOB", alias="jobType")
 
     def to_openlineage(self) -> job_type_job.JobTypeJobFacet:
-        return job_type_job.JobTypeJobFacet(
+        return _facet(
+            job_type_job.JobTypeJobFacet,
             processingType=self.processing_type,
             integration=self.integration,
             jobType=self.job_type,
-            producer=self.producer,  # ty: ignore[unknown-argument] — keyword-only on the attrs base; ty does not see it
+            producer=self.producer,
         )
 
 

@@ -95,7 +95,7 @@ _FGA_TYPE: dict[str, str] = {
 # ``credentials`` (vending) is a DATA read at its default tier, where the router guard requires can_read_data; a vend
 # at a writing tier is a write, decided by the write judge alone on that tier's own rung: can_write_data for a write-tier
 # vend and can_vend_maintain for a maintain-tier one ([[LH-560]]).
-# ``blobs`` (GET /v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
+# ``blobs`` (GET /management/v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
 # bytes, so it is a DATA read exactly like ``query``.
 # ``changes`` (§ J4) is the MOST disclosing read a table has — every row it ever received, in order —
 # so it is a data read and nothing weaker. Unmapped it fell to WRITER, and the live audit trail is what

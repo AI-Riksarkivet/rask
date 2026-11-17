@@ -242,7 +242,13 @@ def _require_https(url: str, *, label: str, allow_insecure: bool) -> None:
     """Reject non-HTTPS ``url`` unless ``allow_insecure`` is set (dev-only escape hatch)."""
     if allow_insecure:
         return
-    if urlsplit(url).scheme != "https":
+    try:
+        scheme = urlsplit(url).scheme
+    except ValueError as exc:
+        # A value no URL parser reads (an unclosed IPv6 bracket) is the same configuration fault as a wrong scheme.
+        log.warning("oidc_url_unparseable", extra={"label": label, "error": str(exc)})
+        raise ProviderUnavailableError(f"OIDC {label} is not a URL") from exc
+    if scheme != "https":
         # A configuration fault, never the caller's: the URL is this deployment's setting or the provider's
         # discovery document, and no token is read. The log line names which one, because a Lance door's 503
         # redacts the message.
@@ -250,7 +256,7 @@ def _require_https(url: str, *, label: str, allow_insecure: bool) -> None:
         # The ISSUER case is caught earlier, at settings construction (`GovernedAuthSettings`), where a
         # misconfiguration belongs. This stays for the discovery override, and for `jwks_uri`, which
         # comes from discovery and so cannot be seen until verify time.
-        log.warning("oidc_insecure_url", extra={"label": label, "scheme": urlsplit(url).scheme})
+        log.warning("oidc_insecure_url", extra={"label": label, "scheme": scheme})
         raise ProviderUnavailableError(f"OIDC {label} must use HTTPS (set RASK_OIDC_ALLOW_INSECURE=true for dev IdPs)")
 
 

@@ -1755,7 +1755,7 @@ export interface paths {
          * @description Serve one blob payload over plain HTTP — the credential-less consumer path (§9 P1).
          *
          *     A browser/notebook/service with NO storage credentials fetches blob bytes straight from the
-         *     catalog: ``GET /v1/table/{id}/blobs?column=payload&row=3[&version=N]``. ``Range: bytes=…`` is
+         *     catalog: ``GET /management/v1/table/{id}/blobs?column=payload&row=3[&version=N]``. ``Range: bytes=…`` is
          *     honoured (206 + ``Content-Range``), an unsatisfiable range gets the RFC 416 + ``bytes *\/size``,
          *     and every response carries ``Accept-Ranges: bytes`` plus a strong ``ETag``
          *     (``"<version>-<column>-<row>"``) so clients can resume safely: an ``If-Range`` that no longer

@@ -1303,8 +1303,8 @@ governing their data. The project-scoped surface is the console's project page, 
   second read never reads as "never raised".
   The cost of #8944: a vended-credential writer that stages fragments and commits more than 7 days later
   loses them to the `cleanup_old_versions` a table's pass runs.
-- The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
-  "ghost projects". The replacement SHIPPED: `scripts/seed_estate.py` drives the real doors in
+- A seed that writes tuples straight to OpenFGA makes projects no registry knows ("ghost projects"), so the
+  repository ships none. `scripts/seed_estate.py` drives the real doors in
   hierarchy order — `POST /management/v1/projects` → `POST /management/v1/warehouses` → `POST /v1/namespace/{warehouse}${ns}/create`
   → `POST /v1/table/{warehouse}${ns}${table}/declare` → a project's roles and their assignees →
   `POST /management/v1/access/tuples` LAST — so every guard runs and a state that cannot be
@@ -1520,8 +1520,8 @@ governing their data. The project-scoped surface is the console's project page, 
   takes THREE readings and `describe_compaction_unsupported_flags` weighs them; it permits only when
   all three say no, and **every unknown refuses**:
   1. `BasePath.is_dataset_root` — the manifest's self-report. A true positive and a useless negative:
-     measured, `shallow_clone` is the ONLY writer that sets it, so `add_bases` pointed at a live Lance
-     root reports False. A gate reading this bit alone (the earlier, never-wired attempt) waves the
+     it is what the base's writer declared (`shallow_clone` sets it; `add_bases` writes its caller's value,
+     measured on pylance 13.0.0), so `add_bases` pointed at a live Lance root may report False. A gate reading this bit alone (the earlier, never-wired attempt) waves the
      clone shape through.
   2. **The object store's own answer** — `objectfs.is_lance_dataset_root`, i.e. does `<base>/_versions/`
      exist. Ground truth, and the load-bearing signal.

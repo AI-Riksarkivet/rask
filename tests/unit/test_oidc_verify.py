@@ -349,3 +349,12 @@ def test_split_horizon_http_override_requires_allow_insecure(rsa_keypair: tuple[
     result = _make(allow_insecure=True).verify(token)
     assert result.iss == public_issuer
     assert discovery_urls == [f"{internal_dex}{_WELL_KNOWN}"]
+
+
+def test_a_discovery_override_that_is_no_url_is_the_deployments_fault(private_pem: bytes) -> None:
+    """The override is this deployment's setting, and the presented token is never read in reaching it: a value no
+    client can dial is answered as a provider that cannot be used, never as the caller's bad token."""
+    verifier = OIDCVerifier(PUBLIC_ISSUER, AUDIENCE, cache_ttl=3600, discovery_overrides={PUBLIC_ISSUER: "https://[not-a-host"})
+
+    with pytest.raises(ProviderUnavailableError):
+        verifier.verify(_sign(private_pem, _claims(iss=PUBLIC_ISSUER)))

@@ -496,11 +496,10 @@ groups:
 
       - alert: LineageIngestDiscardingUnrepairable
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="unrepairable"}[5m])) > 0
-        # 10m for the same reason `LineageIngestRefusingProvenance` uses it, and more so: the consumer
-        # is ephemeral with `deliverPolicy: all`, so every roll re-presents the retained stream and
-        # re-discards whatever still cannot be repaired. Measured 2026-09-18, one roll produced 70 of
-        # these in a single burst and then silence. A 5m `for` cannot tell that bounded burst from a
-        # producer emitting unparseable or unauthored events continuously.
+        # 10m for the same reason `LineageIngestRefusingProvenance` uses it: a bounded burst keeps a 5m rate
+        # positive for a full window after its last increment (measured 2026-09-18: 70 of these in one burst, then
+        # silence), and a 5m `for` cannot tell that from a producer emitting unparseable or unauthored events
+        # continuously. Lineage pulls the durable consumer `lineage-ingest`, so a roll re-presents nothing.
         for: 10m
         labels:
           severity: warning
@@ -521,13 +520,11 @@ groups:
 
       - alert: LineageIngestRefusingProvenance
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="refused"}[5m])) > 0
-        # 10m, not 5m, and the extra five minutes are the restart replay. The bus consumer is ephemeral
-        # with `deliverPolicy: all`, so every lineage roll re-presents the whole retained stream;
-        # byte-identical replays are exempt, but genuinely unauthorized history in that stream is
-        # refused again each time. Measured 2026-09-09 on a real roll: 772 deliveries, 107 exempted,
-        # 7 refused inside 90 seconds and then silent. A 5m `for` cannot tell that bounded burst from a
-        # producer being refused continuously — the rate stays positive for a full 5m window after the
-        # last increment — and an alert that pages on every deploy is one an operator learns to ignore.
+        # 10m, not 5m: a bounded burst of refusals (measured 2026-09-09: 7 refused inside 90 seconds, then
+        # silence) keeps the rate positive for a full 5m window after its last increment, so a 5m `for` cannot
+        # tell it from a producer being refused continuously, and an alert that pages on a burst is one an
+        # operator learns to ignore. Lineage pulls the durable consumer `lineage-ingest`, so a roll re-presents
+        # nothing.
         for: 10m
         labels:
           severity: warning

@@ -249,9 +249,9 @@ class BasePathRef(BaseModel):
     under its own root). Those two need opposite answers from the compaction gate, so this model
     carries ``is_dataset_root`` alongside the path.
 
-    IT IS A SELF-REPORT, NOT AN OBSERVATION, and on its own it is not enough to gate on. Measured on
-    pylance 10.0.0: ``shallow_clone`` is the only writer that ever sets the bit, so an ``add_bases``
-    pointed straight at a live Lance root reads False here. :func:`gather_compaction_bases` therefore
+    IT IS A SELF-REPORT, NOT AN OBSERVATION, and on its own it is not enough to gate on. ``shallow_clone`` sets
+    the bit, and ``add_bases`` writes whatever its caller passes (measured on pylance 13.0.0, 2026-11-17: ``True`` and
+    ``False`` both land as given), so an ``add_bases`` pointed straight at a live Lance root may read False here. :func:`gather_compaction_bases` therefore
     pairs it with the object store's own answer and with ``DataFile.base_id`` — see
     :class:`CompactionBases`.
     """
@@ -538,9 +538,9 @@ class CompactionBases(BaseModel):
     a fixture built by hand, and each catches a shape the others miss:
 
     ``bases[].declares_dataset_root``
-        The manifest's own ``BasePath.is_dataset_root``. Set by ``shallow_clone`` and by nothing else,
-        so it is a true positive and a useless negative: an ``add_bases`` pointed straight at a live
-        Lance root reports False.
+        The manifest's own ``BasePath.is_dataset_root``, which is whatever the base's writer declared
+        (``shallow_clone`` sets it; ``add_bases`` writes its caller's value), so it is a true positive and a
+        useless negative: an ``add_bases`` pointed straight at a live Lance root may report False.
     ``bases[].probed_dataset_root``
         The OBJECT STORE's answer — does ``<base>/_versions/`` exist. Ground truth about the base,
         independent of what the referring manifest chose to say. ``None`` means the store could not
