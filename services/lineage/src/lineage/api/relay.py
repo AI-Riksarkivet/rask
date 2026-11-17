@@ -202,11 +202,11 @@ async def _drain_outbox(
     cap = settings.outbox_drain_limit or None  # 0 => unbounded
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.outbox_uri, opts, limit=cap)))
     drained = stranded = refused = recorded = 0
-    for key, event_json in staged:
+    for key, record in staged:
         try:
             # THE DOORS' DISCRIMINATOR, never `RunEvent` alone: every catalog create, drop and alter is a
             # `DatasetEvent`, so a run-only parse destroys the staged copy of each one as poison ([[LH-199]]).
-            staged_copy = read_staged(event_json)
+            staged_copy = read_staged(record)
             event: RunEvent | DatasetEvent = parse_staged(staged_copy)
         except UnparseableEventError as exc:
             # ONLY a genuinely-unparseable event is poison. The author rides the RAW json: this branch fires
@@ -215,7 +215,7 @@ async def _drain_outbox(
             poison_author: str | None = None
             poison_run: str | None = None
             with suppress(Exception):
-                payload = json.loads(event_json).get("data") or {}
+                payload = json.loads(record).get("data") or {}
                 poison_author = author_sub_from_payload(payload)
                 poison_run = str((payload.get("run") or {}).get("runId") or "") or None
             log.warning("lineage_outbox_poison_dropped", extra={"outbox_key": key, "run_id": poison_run, "error": str(exc), "author": poison_author})

@@ -148,7 +148,7 @@ def _store_serving_the_catalogs_keys(secret_store: SecretStoreDouble, status: in
     return secret_store.hold(f"signing-public-{CATALOG}", secret_store.held({"keys": pair.public}) if pair is not None else httpx.Response(status)).call_count
 
 
-async def _stage(uri: str, event: CatalogControlEvent, *, signing: SigningKeyHolder[SigningKey] | None = None) -> str:
+async def _stage(uri: str, event: CatalogControlEvent, *, signing: SigningKeyHolder[SigningKey] | None = None) -> bytes:
     """Stage one control event through the real emitter as a NATS blip leaves it, and answer the staged bytes: its
     envelope, the event as ``data``.
 

@@ -153,16 +153,16 @@ def bounded(text: str) -> str:
     return text if len(text) <= _MAX_LOGGED_CHARS else f"{text[:_MAX_LOGGED_CHARS]}..."
 
 
-def _action_of(event_json: str) -> str | None:
+def _action_of(record: bytes) -> str | None:
     """The action a staged object's event names, for its log line, or None when it names none that can be read.
 
-    Read off the RAW text, because the object is poison exactly when the model may not parse it. Total over whatever
+    Read off the RAW bytes, because the object is poison exactly when the model may not parse it. Total over whatever
     was staged: a document nested past the interpreter's recursion limit, or one that is not an object, must not raise
     here, since this runs where the object is retired and a raise would leave it to wedge every tick.
     """
     try:
-        parsed = json.loads(event_json)
-    except (ValueError, RecursionError):
+        parsed = json.loads(record)
+    except (ValueError, RecursionError):  # a `UnicodeDecodeError` too: bytes that are no UTF-8 are a `ValueError`
         return None
     event = parsed.get("data") if isinstance(parsed, dict) else None
     action = event.get("action") if isinstance(event, dict) else None
@@ -232,7 +232,7 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
             report.poison_dropped += 1
 
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.control_outbox_uri, options, limit=DRAIN_LIMIT)))
-    for key, event_json in staged:
+    for key, record in staged:
         try:
             # ENVELOPED, THEN VERIFIED. The envelope is derived from the staged event, which must therefore be a
             # control event one can carry: that asks "could a subscriber read this?". Verification asks "did this
@@ -240,7 +240,7 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
             # it is, never a re-serialization of a parsed model, and never signed here; it goes out in the trace it
             # was staged under (ADR 0209). The staged object's refusal is a `ValidationError`, the poison verdict,
             # whatever is wrong with the text: not JSON, no envelope, or nested past the parser's limit.
-            staged = outbox.staged_envelope(event_json)
+            staged = outbox.staged_envelope(record)
             envelope = control_envelope(staged.data).with_trace_of(staged)
             if verify is not None:
                 await run_in_threadpool(verify, envelope.data)
@@ -255,7 +255,7 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
             # poison. A broad `except` here would retire a staged event on any transient failure, i.e. destroy
             # the one durable copy this module exists to deliver.
             reason = exc.reason if isinstance(exc, SignatureError) else "invalid"
-            log.warning("control_outbox_unverifiable", extra={"key": bounded(key), "action": _action_of(event_json), "reason": reason})
+            log.warning("control_outbox_unverifiable", extra={"key": bounded(key), "action": _action_of(record), "reason": reason})
             await retire(key)
             continue
         try:
@@ -263,7 +263,7 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
         except ValueError as exc:
             # THE BUS CAN NEVER CARRY IT: the publish seam's own refusal, made before any I/O, so no later tick
             # changes it. Left staged, it would stop every pass at itself and hold every event behind it.
-            log.warning("control_outbox_undeliverable", extra={"key": bounded(key), "action": _action_of(event_json), "error": bounded(str(exc))})
+            log.warning("control_outbox_undeliverable", extra={"key": bounded(key), "action": _action_of(record), "error": bounded(str(exc))})
             await retire(key)
             continue
         except Exception as exc:

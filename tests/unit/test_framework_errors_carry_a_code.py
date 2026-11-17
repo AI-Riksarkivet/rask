@@ -17,23 +17,30 @@ WHY `Unsupported` (code 0) FOR BOTH. The spec's codes are domain answers, and ne
 nor "wrong method here" is a domain condition — but both are precisely "this backend does not do that
 operation", which is what code 0 means. A `TableNotFound` 404 is unaffected: it is raised as a
 `LanceNamespaceError` and answered with code 4 by the handler above this one.
+
+A path with a trailing slash that names no route is the same unknown path, answered the same 404 by every lakehouse app
+(`lakehouse.lance_app`), never a redirect a Host header could steer.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 import pytest
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from lance_namespace import ErrorCode
 
-from lakehouse.ns_errors import PROBLEM_JSON, install_problem_handlers
+from lakehouse.lance_app import build_lance_service_app
+from lakehouse.ns_errors import PROBLEM_JSON
+from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
 @pytest.fixture
 def app() -> FastAPI:
-    import logging
-
-    application = FastAPI()
+    """A lakehouse app as the one factory builds catalog, lineage and maintenance, serving two doors."""
     router = APIRouter()
 
     @router.post("/v1/thing/{id}/describe")
@@ -44,15 +51,39 @@ def app() -> FastAPI:
     def boom() -> None:
         raise HTTPException(status_code=409, detail="already there")
 
-    application.include_router(router)
-    install_problem_handlers(application, logging.getLogger("test"))
-    return application
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+        yield
+
+    async def ready(_request: Request) -> Readiness:
+        return Readiness(status=ReadinessStatus.ready)
+
+    return build_lance_service_app(
+        title="t",
+        docs_enabled=False,
+        audit_enabled=False,
+        lifespan=lifespan,
+        log=logging.getLogger("test"),
+        ready_check=ready,
+        max_body_bytes=1024,
+        request_deadline_seconds=30,
+        routers=[router],
+    )
 
 
-def test_a_routing_404_carries_a_code(app: FastAPI) -> None:
-    with TestClient(app) as client:
-        resp = client.post("/v1/thing/x/no-such-op")
-    assert resp.status_code == 404
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("/v1/thing/x/no-such-op", id="no-such-route"),
+        # A trailing slash names no route either. Redirected, it would send the caller to a URL built from its own Host
+        # header and the scheme the pod sees: plain http behind a TLS Gateway, and a host the caller chose.
+        pytest.param("/v1/thing/x/describe/", id="a-route-with-a-trailing-slash"),
+    ],
+)
+def test_a_routing_404_carries_a_code(app: FastAPI, path: str) -> None:
+    with TestClient(app, base_url="https://lakehouse.example") as client:
+        resp = client.post(path, headers={"Host": "elsewhere.example"}, follow_redirects=False)
+    assert (resp.status_code, resp.headers.get("location")) == (404, None), resp.headers
     body = resp.json()
     assert body.get("code") == ErrorCode.UNSUPPORTED, f"no parseable code on a routing 404: {body}"
     assert resp.headers["content-type"].startswith(PROBLEM_JSON)

@@ -11,17 +11,23 @@ name there and answers the uuids of a table the caller may see ([[LH-531]]), and
 would refuse the caller too. One question rather than a describe per name, so a producer that may see none of the
 tables it names costs the catalog that question, however many it names. Elsewhere (authorization off, or decided from
 the store, which holds no names) a name is resolved by the catalog's DescribeTable and DescribeNamespace under the
-caller's own bearer. A name the catalog does not hold, or will not resolve for this caller, resolves to no uuid. Any
-other failure raises: an event recorded under a name it should have been keyed by a uuid would split the table's
-lineage, so the producer's retry is the better answer.
+caller's own bearer. A name the catalog does not hold, or will not resolve for this caller, resolves to no uuid. A
+name the catalog refuses as no identifier (400) is the caller's own input refused, so it is refused as the caller's
+`InvalidInputError`: deterministic, so not an outage a retry would cure, and answered in lineage's words, since the
+catalog's problem body carries the catalog's own trace and text. Any other failure raises: an event recorded under a
+name it should have been keyed by a uuid would split the table's lineage, so the producer's retry is the better answer.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Final
 
-from lakehouse.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
+from lance_namespace import InvalidInputError
+
+from lakehouse.exceptions import ForbiddenError, NotFoundError, UnauthorizedError, ValidationError
 from lakehouse.governed.decider import AccessDecider
 from lakehouse.lancekit.catalog_client import catalog_read_client, request_headers
 from lakehouse.lancekit.reader import translate_catalog_errors
@@ -39,6 +45,24 @@ _UNSEEN: Final = (NotFoundError, ForbiddenError, UnauthorizedError)
 #: The rung the catalog's DescribeTable asks, which a name is resolved on at the decision door: a caller resolves there
 #: exactly the tables it could describe.
 _DESCRIBE_RELATION: Final = "can_get_metadata"
+
+#: The most of a caller's name a refusal quotes back.
+_QUOTED_NAME_CHARS: Final = 256
+
+
+@contextmanager
+def _described_as_the_callers(name: str) -> Generator[None]:
+    """Translate the catalog's describe errors, its refusal of ``name`` as no identifier answered as the caller's own.
+
+    Raises:
+        InvalidInputError: The catalog refused ``name`` 400 or 422; the detail quotes the caller's name and nothing of
+            the catalog's answer.
+    """
+    try:
+        with translate_catalog_errors():
+            yield
+    except ValidationError as exc:
+        raise InvalidInputError(f"{name[:_QUOTED_NAME_CHARS]!r} is no governed name the catalog can resolve") from exc
 
 
 class CatalogNames:
@@ -65,7 +89,7 @@ class CatalogNames:
         from lance_namespace_urllib3_client.models import DescribeTableRequest
 
         try:
-            with translate_catalog_errors():
+            with _described_as_the_callers(name):
                 described = TableApi(catalog_read_client(self._url)).describe_table(
                     # The uuid is all this reads, so no credential is minted for the caller's location.
                     name,
@@ -85,7 +109,7 @@ class CatalogNames:
         from lance_namespace_urllib3_client.models import DescribeNamespaceRequest
 
         try:
-            with translate_catalog_errors():
+            with _described_as_the_callers(name):
                 described = NamespaceApi(catalog_read_client(self._url)).describe_namespace(
                     name, DescribeNamespaceRequest(), delimiter=CATALOG_DELIMITER, _request_timeout=self._timeout, _headers=request_headers(bearer)
                 )

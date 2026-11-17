@@ -2,7 +2,8 @@
 
 Driven against a REAL local outbox (a tmp dir): stage events with ``lakehouse.outbox``, then exercise the
 handlers directly. Covers the happy path (list summaries oldest-first, replay re-ingests + drops), the
-poison object (surfaced in the view, un-replayable), the fail-closed auth ladder (FGA on + no token → 401),
+poison object (un-replayable; how the view lists it is driven over HTTP on an S3 outbox in
+`tests/integration/test_the_relay_tick_drains_forwards_and_announces.py`), the fail-closed auth ladder (FGA on + no token → 401),
 per-dataset governance of the list, and the replay writer gate (a non-writer of the event's outputs is 403).
 """
 
@@ -135,14 +136,6 @@ def test_list_returns_backlog_and_summaries_oldest_first(tmp_path: Path) -> None
     assert [e.run_id for e in out.events] == ["r1", "r2"]  # oldest first
     assert out.events[0].outputs == ["bronze$a"]
     assert out.events[0].event_type == "COMPLETE" and out.events[0].parseable
-
-
-def test_list_surfaces_a_poison_object(tmp_path: Path) -> None:
-    s = _settings(tmp_path)
-    _stage(s, "bad", "{not valid json")
-    out = asyncio.run(list_dlq_off(s))
-    assert out.depth == 1
-    assert out.events[0].run_id == "bad" and out.events[0].parseable is False
 
 
 def test_list_empty_when_no_outbox_configured() -> None:

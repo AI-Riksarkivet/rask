@@ -15,7 +15,9 @@ what it owns is the part that is identical in all of them:
    gated on the service's own ``docs_enabled``; a service that sets none of the three serves all
    three, which is how the schemas shipped openly once. Each page names its schema by a URL relative to itself, and
    the schema its server the same way (``_SERVED_BESIDE_THE_SCHEMA``): a service is published under a prefix its route
-   rewrites or the service strips, which it is never told, so only a relative URL is right behind every route.
+   rewrites or the service strips, which it is never told, so only a relative URL is right behind every route. A path
+   with a trailing slash that names no route answers 404 like any other unknown path, never a redirect
+   (``_NO_SLASH_REDIRECT``).
 3. ``register_handlers`` THEN ``install_problem_handlers``. ``lakehouse.exceptions.DomainError``
    subclasses ``HTTPException``, so without the first, starlette's built-in handler renders it —
    status and headers intact, ``{"detail": ...}`` body — which is how the draining 503 came to declare
@@ -95,6 +97,14 @@ _SERVED_BESIDE_THE_SCHEMA: Final = "."
 
 #: The schema as each docs page names it: beside the page, whatever prefix the page was reached under.
 _SCHEMA_BESIDE_THE_PAGE: Final = "openapi.json"
+
+
+#: Starlette's router answers a path that names no route, but would without (or with) a trailing slash, with a 307 to a
+#: URL it builds from the request's Host header and the scheme the pod sees. Behind the platform's TLS Gateway that
+#: scheme is plain http, and the Host header is the caller's to choose, so the redirect would steer a client off TLS
+#: to a host it named. No door is declared with a trailing slash (``docs/*-openapi.json``, the Lance Namespace spec's
+#: routes in ``lance_docs/ns_catalog/spec.yaml``), so such a path is answered as the unknown path it is.
+_NO_SLASH_REDIRECT: Final = False
 
 
 class _UncachedApp(FastAPI):
@@ -207,6 +217,7 @@ def build_lance_service_app(
         redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,
         servers=[{"url": _SERVED_BESIDE_THE_SCHEMA}],
+        redirect_slashes=_NO_SLASH_REDIRECT,
     )
     if docs_enabled:
         _mount_docs(app)

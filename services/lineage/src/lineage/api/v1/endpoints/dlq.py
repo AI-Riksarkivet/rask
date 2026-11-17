@@ -57,12 +57,12 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/dlq", tags=["admin"])
 
 
-def _summary(run_id: str, event_json: str) -> DlqEvent:
+def _summary(run_id: str, record: bytes) -> DlqEvent:
     """Parse a staged event into its ops summary; a poison (unparseable) object surfaces by run_id alone so
     the operator can SEE the stuck event the relay would silently drop. A static change has no run, type or
     job, so it lists under its staged key with those left empty."""
     try:
-        event = parse_staged(read_staged(event_json))
+        event = parse_staged(read_staged(record))
     except UnparseableEventError:
         return DlqEvent(run_id=run_id, parseable=False)
     outputs = [d.name for d in event.outputs if d.name]
@@ -109,20 +109,18 @@ async def list_dlq(
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.outbox_uri, opts, limit=limit)))
     # Drop events referencing datasets the caller may not see (fail-closed). A poison event has no parseable
     # datasets, so under FGA it is filtered out (dataset-less → dropped); in dev/tests (FGA off) it shows.
-    parsed = [_parsed(event_json) for _, event_json in staged]
+    parsed = [_parsed(record) for _, record in staged]
     scopes = iter(await datasets.scope_unrecorded([event for event in parsed if event is not None]))
     # A poison object names nothing, so nothing is asked about it.
-    events = [
-        (_summary(run_id, event_json), next(scopes) if event is not None else Governed()) for (run_id, event_json), event in zip(staged, parsed, strict=True)
-    ]
+    events = [(_summary(run_id, record), next(scopes) if event is not None else Governed()) for (run_id, record), event in zip(staged, parsed, strict=True)]
     visible = await governed(datasets, settings.fga_enabled, events, lambda pair: pair[1])
     return DlqBacklog(depth=depth, oldest_age_seconds=oldest_age, events=[summary for summary, _ in visible], limit=limit)
 
 
-def _parsed(event_json: str) -> RunEvent | DatasetEvent | None:
+def _parsed(record: bytes) -> RunEvent | DatasetEvent | None:
     """The event a staged object holds, or ``None`` for a poison object."""
     try:
-        return parse_staged(read_staged(event_json))
+        return parse_staged(read_staged(record))
     except UnparseableEventError:
         return None
 
@@ -161,9 +159,9 @@ async def replay_dlq(
     resolved = await run_in_threadpool(outbox.resolve_event, settings.outbox_uri, opts, run_id)
     if resolved is None:
         raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
-    staged_key, event_json = resolved
+    staged_key, record = resolved
     try:
-        staged = read_staged(event_json)
+        staged = read_staged(record)
         event = parse_staged(staged)
     except UnparseableEventError as exc:
         # A poison object is dataset-less, so the governed list_dlq already hides it under FGA — replay must

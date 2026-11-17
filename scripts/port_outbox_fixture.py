@@ -171,7 +171,7 @@ def cross(endpoint: str, bucket: str, issuer_url: str) -> None:
         python_listed = list(outbox.list_events(uri, relay))
         rust_listed = _rust("list", env=rust_env(RELAY))
         check(
-            [[key, text] for key, text in python_listed] == rust_listed,
+            [[key, body.decode()] for key, body in python_listed] == rust_listed,
             "the Rust lists what the Python staged, as the Python lists it",
             [key for key, _ in rust_listed],
         )
@@ -183,9 +183,13 @@ def cross(endpoint: str, bucket: str, issuer_url: str) -> None:
         for key, text in staged.items():
             _rust("stage", key, text, env=rust_env(PRODUCER))
         python_listed = list(outbox.list_events(uri, relay))
-        check(sorted(python_listed) == sorted(staged.items()), "the Python lists what the Rust staged", [key for key, _ in python_listed])
+        check(
+            sorted((key, body.decode()) for key, body in python_listed) == sorted(staged.items()),
+            "the Python lists what the Rust staged",
+            [key for key, _ in python_listed],
+        )
         for key in staged:
-            check(outbox.read_event(uri, relay, key) == staged[key], f"the Python reads {key} as the Rust staged it", "read")
+            check(outbox.read_event(uri, relay, key) == staged[key].encode(), f"the Python reads {key} as the Rust staged it", "read")
             outbox.drop_event(uri, relay, key)
         check(_rust("list", env=rust_env(RELAY)) == [], "what the Python dropped is gone for the Rust", "dropped")
 

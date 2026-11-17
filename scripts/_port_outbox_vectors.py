@@ -135,7 +135,7 @@ def _listings() -> list[dict[str, Any]]:
                 "objects": [{"key": f"_lineage_outbox/{entry}", "modified_ns": mtime, "directory": is_dir} for entry, mtime, is_dir in entries],
                 "limit": limit,
                 "now_ns": now,
-                "listed": [[key, text] for key, text in listed],
+                "listed": [[key, body.decode()] for key, body in listed],
                 "depth": depth,
                 "oldest_age_seconds": age,
             }

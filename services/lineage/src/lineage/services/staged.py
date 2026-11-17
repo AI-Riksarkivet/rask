@@ -19,11 +19,11 @@ class UnparseableEventError(ValueError):
     """Staged bytes that are no OpenLineage event: deterministic, so no retry can repair them."""
 
 
-def read_staged(record: str) -> CloudEvent:
+def read_staged(record: bytes) -> CloudEvent:
     """The envelope a staged object holds: the event as ``data``, and the trace it was staged under (ADR 0209).
 
     Raises:
-        UnparseableEventError: for ANY bytes that hold no envelope, and for nothing else. Hostile input is refused with
+        UnparseableEventError: for ANY bytes that hold no envelope, bytes that are no UTF-8 among them, and for nothing else. Hostile input is refused with
             more than one error type (an integer past 4300 digits is a plain `ValueError`, deep nesting a
             `RecursionError`), and one such object, read oldest-first, would otherwise abort every drain tick and 500
             both DLQ routes. The read does no I/O, so no transient failure can be mistaken for poison here.

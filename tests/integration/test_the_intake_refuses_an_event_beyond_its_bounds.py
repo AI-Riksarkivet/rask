@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from lance_namespace import ErrorCode
 
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event
 
@@ -49,3 +50,24 @@ def test_an_event_beyond_the_intakes_bounds_is_refused_and_records_nothing(
         recorded = [row for row in lineage.get("/events", params={"since": 0}).json()["events"] if row["event"]["run"]["runId"] == run]
 
     assert (answer.status_code, len(recorded)) == (status, 1 if status == 201 else 0), answer.text
+
+
+def test_an_input_that_is_no_governed_name_is_refused_as_the_callers_own_and_records_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An input named by a governed name that is no name (a segment holding `/`) is the caller's error: lineage answers
+    its own 400, the spec's InvalidInput, naming the caller's input and nothing of the catalog's refusal to describe it,
+    whose body carries the catalog's own problem and trace."""
+    run = str(uuid.uuid4())
+    name = "lance_catalog$port$data$x/y"
+    event = run_event(run, "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=["lance_catalog$acme-gold$t0"])
+    event["inputs"] = [{"namespace": "lance-namespace://localhost/api/catalog", "name": name}]
+    with (
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        live_lineage(catalog_url, monkeypatch) as lineage_url,
+        httpx.Client(base_url=lineage_url, timeout=60) as lineage,
+    ):
+        answer = lineage.post("/api/v1/lineage", json=event)
+        recorded = [row for row in lineage.get("/events", params={"since": 0}).json()["events"] if row["event"]["run"]["runId"] == run]
+
+    body = answer.json()
+    assert (answer.status_code, body["code"], len(recorded)) == (400, ErrorCode.INVALID_INPUT, 0), answer.text
+    assert name in body["detail"] and "{" not in body["detail"], body

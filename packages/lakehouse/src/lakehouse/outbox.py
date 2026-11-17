@@ -121,10 +121,14 @@ def stage_envelope(outbox_uri: str, storage_options: StorageOptions, envelope: C
     stage_event(outbox_uri, storage_options, envelope.id, json.dumps(envelope.as_wire()))
 
 
-def staged_envelope(record: str) -> CloudEvent:
+def staged_envelope(record: bytes) -> CloudEvent:
     """The envelope a staged object holds: the event as its producer signed it, as ``data``, and the trace it was
-    staged under. ``ValueError`` (a ``pydantic.ValidationError``) for bytes that hold none, ``RecursionError`` for a
-    document nested past the interpreter's limit."""
+    staged under. ``ValueError`` (a ``pydantic.ValidationError``) for bytes that hold none, bytes that are no UTF-8
+    among them, and ``RecursionError`` for a document nested past the interpreter's limit.
+
+    The object's BYTES are judged, never a decoded text: a decode is a step that can fail outside this verdict, and
+    one that failed for a single object in a listing would answer the whole listing an error rather than that object
+    as poison."""
     return CloudEvent.model_validate_json(record)
 
 
@@ -170,8 +174,8 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
         fs.delete_file(f"{base}/{key}.json")
 
 
-def resolve_event(outbox_uri: str, storage_options: StorageOptions, run_id: str) -> tuple[str, str] | None:
-    """Find the staged object for one RUN ID, as ``(key, event_json)``.
+def resolve_event(outbox_uri: str, storage_options: StorageOptions, run_id: str) -> tuple[str, bytes] | None:
+    """Find the staged object for one RUN ID, as ``(key, its bytes)``.
 
     The object key is per EVENT (its envelope's id) while the DLQ replay route addresses a RUN: its path
     parameter is a run id, not a key, and an exact-key read alone would answer 404 to every replay by run.
@@ -196,14 +200,14 @@ def resolve_event(outbox_uri: str, storage_options: StorageOptions, run_id: str)
     return None if payload is None else (key, payload)
 
 
-def read_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> str | None:
-    """The staged event JSON for one ``run_id``, or ``None`` if it isn't staged (already drained / never
-    staged). The targeted read behind an admin DLQ replay (#83) — cheaper + race-safer than scanning the
-    whole prefix. Blocking IO; callers threadpool it."""
+def read_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> bytes | None:
+    """The staged object's bytes under ``key``, or ``None`` if it isn't staged (already drained / never staged), for
+    :func:`staged_envelope` to judge. The targeted read behind an admin DLQ replay (#83) — cheaper + race-safer than
+    scanning the whole prefix. Blocking IO; callers threadpool it."""
     fs, base = fs_and_base(outbox_uri, storage_options)
     try:
         with fs.open_input_stream(f"{base}/{key}.json") as stream:
-            return stream.readall().decode("utf-8")
+            return stream.readall()
     except FileNotFoundError:
         return None
 
@@ -259,9 +263,10 @@ def measured_backlog(lane: OutboxLane, outbox_uri: str, storage_options: Storage
     return depth, oldest_age
 
 
-def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int | None = None) -> Iterator[tuple[str, str]]:
-    """Yield ``(key, event_json)`` for staged events under the outbox prefix (the relay's input), OLDEST
-    FIRST, at most ``limit`` of them.
+def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int | None = None) -> Iterator[tuple[str, bytes]]:
+    """Yield ``(key, its bytes)`` for staged objects under the outbox prefix (the relay's input), OLDEST
+    FIRST, at most ``limit`` of them. The bytes are as staged, for :func:`staged_envelope` to judge one by one, so an
+    object that holds no envelope is that object's poison and never the listing's failure.
 
     THE FIRST ELEMENT IS THE DROP KEY, NOT A RUN ID, and the distinction is the whole reason
     :func:`resolve_event` exists. One run stages ``<run_id>@COMPLETE`` and ``<run_id>@FAIL`` as separate
@@ -291,7 +296,7 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
         except FileNotFoundError:
             continue
         with stream:
-            yield key, stream.readall().decode("utf-8")
+            yield key, stream.readall()
 
 
 async def publish_with_outbox(

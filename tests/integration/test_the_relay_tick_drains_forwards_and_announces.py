@@ -218,3 +218,60 @@ def test_through_a_read_only_window_the_relays_timer_is_held(tmp_path: Path, mon
         turn = lineage.portal.call(timer.turn)
 
     assert turn.outcome == Outcome.HELD
+
+
+@pytest.fixture
+def s3_outbox(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, Callable[[str, bytes], None]]]:
+    """An outbox on an S3 stand-in served over HTTP, as lineage's pod reaches its own (pyarrow lists and reads it, boto3
+    deletes from it), with lineage's environment pointed at the store; yields its URI and a put of raw bytes under a key."""
+    import boto3
+    from moto.server import ThreadedMotoServer
+
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    host, port = server.get_host_and_port()
+    endpoint = f"http://{host}:{port}"
+    s3 = boto3.client("s3", endpoint_url=endpoint, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    s3.create_bucket(Bucket="outbox")
+    for name, value in {"LINEAGE_S3_ENDPOINT": endpoint, "LINEAGE_S3_ACCESS_KEY_ID": "test", "LINEAGE_S3_SECRET_ACCESS_KEY": "test"}.items():
+        monkeypatch.setenv(name, value)
+
+    def put(key: str, body: bytes) -> None:
+        s3.put_object(Bucket="outbox", Key=f"_lineage_outbox/{key}.json", Body=body)
+
+    try:
+        yield "s3://outbox/_lineage_outbox", put
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize(
+    "staged",
+    [
+        pytest.param(b"{not valid json", id="no-json"),
+        # A valid envelope's text but for one byte that is no UTF-8, inside a string: read leniently it would parse.
+        pytest.param(
+            json.dumps(lineage_envelope(run_event(_RUN, "COMPLETE", "2026-11-14T10:00:00+00:00", outputs=[_TABLE])).as_wire())
+            .encode()
+            .replace(b"daily", b"dai\xffly"),
+            id="no-utf-8",
+        ),
+    ],
+)
+def test_a_poison_object_is_listed_as_poison_and_the_relay_drains_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, s3_outbox: tuple[str, Callable[[str, bytes], None]], staged: bytes
+) -> None:
+    """An object that holds no envelope, whatever its bytes, is poison: the DLQ lists it beside the events behind it,
+    marked unparseable, and the relay drops it and records nothing of it ([[LIN-6]], `specs/lineage/EventPath.tla`)."""
+    outbox_uri, put = s3_outbox
+    put("bad", staged)
+    with (
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        _lineage_as_its_pod_starts_it(catalog_url, outbox_uri, BusDouble(), monkeypatch) as lineage,
+    ):
+        listed = lineage.get("/admin/dlq")
+        tick = relay_tick(lineage)
+        after = lineage.get("/admin/dlq")
+
+    assert (listed.status_code, [(e["run_id"], e["parseable"]) for e in listed.json()["events"]]) == (200, [("bad", False)]), listed.text
+    assert (tick.outbox_drained, tick.outbox_stranded, after.json()["depth"]) == (0, 0, 0), tick
