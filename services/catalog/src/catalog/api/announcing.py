@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Literal
 
+import lance
 from fastapi import Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from openfga_sdk import OpenFgaClient
@@ -38,6 +39,7 @@ from catalog.services.announcement_intents import (
     RecordHeld,
     RoleEnded,
     Standing,
+    TagGone,
     TupleGone,
     TupleHeld,
 )
@@ -185,6 +187,41 @@ class Announcer:
             done.finished += 1
         return done
 
+    async def finish_on(self, target: str) -> int:
+        """Send what every filing standing on ``target`` names wherever the store shows its change landed, whatever its age,
+        and remove each filing all of whose changes landed; how many it sent.
+
+        For a door whose own earlier requests filed on ``target`` and whose next request resumes them (an erasure's
+        verification, ADR 0233): an announcement goes out only once its change shows, under the id it was filed with, so
+        one the earlier request is still sending arrives twice as one event, and a filing whose door may still change
+        something stays for that door, or for :meth:`finish`.
+
+        Raises:
+            ServiceUnavailableError: The store did not answer a read; nothing more was sent.
+        """
+        root, so = self._settings.registry_root, self._settings.storage_options()
+        try:
+            filings, _listed = await run_in_threadpool(partial(announcement_intents.standing, root, so, target=target))
+        except OSError as exc:
+            raise store_refusal(exc, reading=f"what was filed on {target}", so="nothing was sent") from exc
+        sent = 0
+        for filing in filings:
+            landed = [a for a in filing.intent.announcements if await self.landed(a.evidence)]
+            for announcement in landed:
+                await self._send(announcement.message, authorization=None)
+                sent += 1
+            if len(landed) == len(filing.intent.announcements):
+                await self._settle(filing.key)
+        return sent
+
+    async def send_filed(self, key: str, announcements: Sequence[Announcement]) -> None:
+        """Send ``announcements``, which this request filed under ``key`` itself before its change, with its bearer, then
+        remove the filing. For a door that learns what it will announce only while it changes (an erasure's verification
+        drops the tags it judges), so it files from inside the change rather than through :meth:`announcing`."""
+        for announcement in announcements:
+            await self._send(announcement.message, authorization=self._authorization)
+        await self._settle(key)
+
     async def landed(self, evidence: Evidence) -> bool:
         """Whether the store shows the change ``evidence`` names landed.
 
@@ -210,6 +247,11 @@ class Announcer:
                 return not await self._absent(lambda root, so: records.read_json(root, so, key))
             case RoleEnded(project=project, role=role):
                 return await self._absent(lambda root, so: roles.find_role(root, so, project, role))
+            case TagGone(location=location, tag=tag):
+                try:
+                    return not await run_in_threadpool(_tag_stands, location, self._settings.storage_options(plane="data"), tag)
+                except OSError as exc:
+                    raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
 
     async def _absent(self, read: Callable[[str, StorageOptions], object]) -> bool:
         try:
@@ -270,6 +312,20 @@ class Filing:
         for t in changed:
             if fga.names_someone(t.user):
                 await self.send(filed.get((t.object, t.relation, t.user)) or _grant_change(t, action=action, actor=actor, reason=reason))
+
+
+def _tag_stands(location: str, so: StorageOptions, tag: str) -> bool:
+    """Whether the table at ``location`` holds a tag named ``tag``: none does once its dataset is gone from there.
+
+    Raises:
+        OSError: The store did not answer.
+    """
+    try:
+        dataset = lance.dataset(location, storage_options=so.in_clear())
+    except ValueError:
+        # pylance answers a location holding no dataset with a ValueError naming it (measured on 13.0.0).
+        return False
+    return tag in (dataset.tags.list() or {})
 
 
 def _as_filed(announcement: Announcement, reused: Mapping[str, Announcement]) -> Announcement:

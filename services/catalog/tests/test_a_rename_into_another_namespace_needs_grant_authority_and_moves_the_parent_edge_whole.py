@@ -50,6 +50,7 @@ from openfga_sdk import OpenFgaClient
 
 from lakehouse import location_claims
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.namespace_fences import NamespaceFence, NamespaceWork
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
@@ -218,7 +219,17 @@ def _land_before(scene: _Scene, method: str, rival: Callable[[], object]) -> Non
 
 
 def _the_destination_is_dropped_as_the_name_is_registered(scene: _Scene) -> None:
-    _land_before(scene, "register_table", lambda: _ok(scene.estate, "/v1/namespace/lance_catalog$managed/drop", json={}))
+    # As the rename is about to register the name: before the register holds the destination's namespace fence, since a
+    # drop sent once it holds it is refused (ADR 0233), and the register then finds no namespace to add the name into.
+    real, pending = NamespaceFence.take, [True]
+
+    def _take(fence: NamespaceFence, work: str) -> str:
+        if pending and fence.name == "lance_catalog$managed" and work == NamespaceWork.ADD:
+            pending.clear()
+            _ok(scene.estate, "/v1/namespace/lance_catalog$managed/drop", json={})
+        return real(fence, work)
+
+    scene.monkeypatch.setattr(NamespaceFence, "take", _take)
 
 
 def _the_backend_does_not_detach_the_source(scene: _Scene) -> None:
@@ -618,9 +629,10 @@ _REFUSED = (409, ErrorCode.CONCURRENT_MODIFICATION.value)
 #: its tables. As its first row is about to go, the table being removed is held by the cascade and refuses, and the
 #: other, whose turn has not come, does not. Renamed into ``managed``, it has left: a destroying cascade resolves each
 #: name as its turn comes, so it finds the name gone and finishes, and a recoverable one resolved every name before its
-#: first write, so it answers the change at that table's turn. Dropped and made again, its name holds a table the
-#: cascade never listed, and so held to no protection check, and the cascade refuses. Renamed out before a recoverable
-#: cascade resolves its names, both tables have left and it detaches neither.
+#: first write, so it answers the change at that table's turn. Dropped and made again, its drop lands and its making
+#: again is refused, since the cascade holds its namespace's fence for a drop and no table is made in it meanwhile (ADR
+#: 0233), so the cascade finds the name gone and finishes. Renamed out before a recoverable cascade resolves its names,
+#: both tables have left and it detaches neither.
 @pytest.mark.parametrize(
     ("trash_grace_days", "lands", "rival", "answers", "cascade_answer"),
     [
@@ -629,7 +641,7 @@ _REFUSED = (409, ErrorCode.CONCURRENT_MODIFICATION.value)
         pytest.param(
             "7", _once_it_has_listed_its_tables, _RENAMED_OUT, [_DONE, _DONE], _DONE, id="a-recoverable-cascade-whose-tables-left-before-it-resolved-them"
         ),
-        pytest.param("0", _as_its_first_row_goes, _MADE_AGAIN, [_DONE, _REFUSED], _REFUSED, id="a-destroying-cascade-one-of-whose-names-another-table-took"),
+        pytest.param("0", _as_its_first_row_goes, _MADE_AGAIN, [_REFUSED, _REFUSED], _DONE, id="a-destroying-cascade-beside-which-no-table-is-made-again"),
     ],
 )
 def test_a_cascade_removes_each_listed_table_under_its_fence_and_none_that_left_or_was_made_since(
@@ -672,7 +684,8 @@ def test_a_cascade_removes_each_listed_table_under_its_fence_and_none_that_left_
     # first stands where that request left it, linked to that namespace and to no other and owned by alice, with no trash
     # record against it and no deletion tracked for it: the table the cascade listed when it was renamed out, and
     # another, which the cascade removes nothing of, when it was made again.
-    entered = _object(estate, "namespace", rival.leaves_it_in)
+    # Read only when a table was left there: a cascade that took both may have taken the namespace with them.
+    entered = _object(estate, "namespace", rival.leaves_it_in) if left else ""
     now = {name: str(standing.get(f"{rival.leaves_it_in}${name}")) for name in left}
     cascade_finished_destroying = cascade_answer == _DONE and not recoverable
     assert (

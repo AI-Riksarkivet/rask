@@ -41,6 +41,7 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import erasure_release, table_claims
+from catalog.services.announcement_intents import ControlMessage
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
 from lakehouse.base_registry import BaseRegistry
@@ -203,6 +204,13 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
     assert "trained" not in open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()
 
 
+def _notice_id(record: erasure_release.ReleaseRecord, subject: str) -> str:
+    """The id every telling of ``record`` to ``subject`` is sent under."""
+    message = erasure_release.notice(record, subject, object_id="").message
+    assert isinstance(message, ControlMessage)
+    return message.event.event_id
+
+
 @pytest.mark.parametrize(
     ("scheduled", "settles"),
     [pytest.param("tag:trained", True, id="it-names-every-pin"), pytest.param("tag:other", False, id="it-misses-a-pin")],
@@ -214,8 +222,9 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
     settles: bool,
 ) -> None:
     """A verification that scheduled the release under the obligation's id and did not get to settle it leaves the
-    record for the next one, whose people were told then. A pin the record does not name would stay pinned with the
-    obligation released, so that verification leaves it open and names the pin."""
+    record for the next one, which tells its people again under the ids the first telling used, so whoever it did not
+    reach is told and a reader keeps one notice each (ADR 0233). A pin the record does not name would stay pinned with
+    the obligation released, so that verification leaves it open, names the pin and tells nobody."""
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
     emitter, clock = _Recorder(), _Clock()
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as (client, _run_release):
@@ -230,12 +239,16 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
             requested_by="user:dex~alice",
             notified=["user:dex~alice", "user:dex~olivia"],
             due_at=clock.now + timedelta(days=7),
+            residual=["main@2"],
+            retain_days=0,
         )
         erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), earlier)
         verified = _verify(client, obligation)
 
     release = [s["detail"] for s in verified["report"]["surfaces"] if s["surface"] == "release"]
-    assert (verified["obligation"]["state"], [event.action for event in emitter.events]) == ("released" if settles else "open", [])
+    told = [(event.action, event.extra["subject"], event.event_id) for event in emitter.events]
+    again = [("erasure_release_scheduled", subject, _notice_id(earlier, subject)) for subject in earlier.notified]
+    assert (verified["obligation"]["state"], told) == (("released", again) if settles else ("open", []))
     assert (verified["report"]["release"] is not None, bool(release and "tag:trained" in release[0])) == (settles, not settles), release
 
 
@@ -269,6 +282,8 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
         requested_by="user:dex~alice",
         notified=["user:dex~alice"],
         due_at=clock.now,
+        residual=[],
+        retain_days=0,
     )
     erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), release)
 
@@ -309,6 +324,8 @@ def test_a_release_waits_while_a_reclaim_holds_the_tables_history(tmp_path: Path
         requested_by="user:dex~alice",
         notified=["user:dex~alice"],
         due_at=clock.now,
+        residual=[],
+        retain_days=0,
     )
     erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), release)
     branches, tags = _branches(ns), open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()

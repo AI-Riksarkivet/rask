@@ -1047,8 +1047,10 @@ export interface paths {
          *
          *     The unit of a cascade is the subtree, so the unit of its recovery is too: every trashed
          *     namespace under (and including) ``id`` is re-created shallowest-first, then every trashed table
-         *     is re-registered at its old id from its still-present bytes, and each record is cleared as its
-         *     object recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).
+         *     is re-registered at its old id from its still-present bytes, each table's record cleared as it
+         *     recovers, and last the namespaces' records, deepest first and its own last. Owner-gated like the
+         *     table door (``undrop`` maps to the delete rung). It holds the namespace's fence for an add while it
+         *     runs, so it never runs beside the namespace's own drop (409).
          *
          *     Resumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is
          *     treated as recovered, so a rerun after a mid-recovery failure finishes the job instead of
@@ -1983,7 +1985,9 @@ export interface paths {
          *     `obligation.open_surfaces` names every surface the job still owes or the catalog could not settle.
          *
          *     Each tag it drops is announced as the tag door announces a deletion, a `table_tag_deleted` control event naming the
-         *     tag, the ref it pinned and this obligation, and `report.untagged` lists them.
+         *     tag, the ref it pinned and this obligation, and `report.untagged` lists them. Those announcements, and the release's
+         *     notices, are filed before their change (ADR 0233), so what a verification that ended part-way did not send is sent by
+         *     the next verification of the obligation, or by the catalog's finish, under the id it was filed with.
          *
          *     Every table lineage's edge list records as derived from this one is a `derived:<uuid>` surface, open until an
          *     obligation recorded on it follows this one ([[LH-332]]): this predicate cannot judge another table's columns. A derived

@@ -38,17 +38,19 @@ from fastapi.concurrency import run_in_threadpool
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
+from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings, fresh_lance_session
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref
 from catalog.schemas import ErasureRequest, ErasureVerifyRequest
-from catalog.services import dataplane, erasure, erasure_derived, erasure_obligations, erasure_release, table_claims
+from catalog.services import announcement_intents, dataplane, erasure, erasure_derived, erasure_obligations, erasure_release, table_claims
+from catalog.services.announcement_intents import Announcement, ControlMessage, TagGone
 from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
 from lakehouse import derived_tables
-from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.history_fences import TableHistory
@@ -177,6 +179,7 @@ async def verify_erasure(
     provenance: ProvenanceNamespaceDep,
     client: FgaClientDep,
     clock: ClockDep,
+    announcer: AnnouncerDep,
     token: CurrentToken = None,
 ) -> ErasureVerification:
     """Verify what the bring-your-own job left, and release the obligation when nothing but a scheduled release remains.
@@ -195,7 +198,9 @@ async def verify_erasure(
     `obligation.open_surfaces` names every surface the job still owes or the catalog could not settle.
 
     Each tag it drops is announced as the tag door announces a deletion, a `table_tag_deleted` control event naming the
-    tag, the ref it pinned and this obligation, and `report.untagged` lists them.
+    tag, the ref it pinned and this obligation, and `report.untagged` lists them. Those announcements, and the release's
+    notices, are filed before their change (ADR 0233), so what a verification that ended part-way did not send is sent by
+    the next verification of the obligation, or by the catalog's finish, under the id it was filed with.
 
     Every table lineage's edge list records as derived from this one is a `derived:<uuid>` surface, open until an
     obligation recorded on it follows this one ([[LH-332]]): this predicate cannot judge another table's columns. A derived
@@ -214,6 +219,33 @@ async def verify_erasure(
     table_uuid = table.resolved.require_uuid()
     dataset = await run_in_threadpool(table.open, so)
     erasure_obligations.require_verifiable(obligation, table_uuid=table_uuid, location=str(dataset.uri), predicate=body.predicate)
+    # What an earlier verification of this obligation filed and did not send (it ended between a tag's delete and its
+    # announcement): sent now, wherever the tag is gone.
+    await announcer.finish_on(_untag_target(obligation_id))
+    actor = f"user:{token.subject}" if token is not None else None
+    filed: list[tuple[str, list[Announcement]]] = []
+
+    def _file_untags(doomed: Sequence[erasure.DroppedTag]) -> None:
+        # Each tag's announcement as the tag door builds it, filed before the tag is deleted, landed once it is gone.
+        told = [
+            Announcement(
+                evidence=TagGone(location=str(dataset.uri), tag=tag.tag),
+                message=ControlMessage(
+                    event=CatalogControlEvent(
+                        action="table_tag_deleted",
+                        object_type="table",
+                        object_id=fga.table_object(table_uuid),
+                        object_name=canonical,
+                        actor=actor,
+                        extra={"tag": tag.tag, **dataplane.tag_event_ref(table.location, so, segments, tag.branch), "obligation_id": obligation_id},
+                    )
+                ),
+            )
+            for tag in doomed
+        ]
+        key = announcement_intents.file(control_root, control_options, door="erasure_untag", target=_untag_target(obligation_id), announcements=told)
+        filed.append((key, told))
+
     report = await run_in_threadpool(
         erasure.verify,
         dataset,
@@ -225,26 +257,19 @@ async def verify_erasure(
         trusted=obligation.refs,
         history=TableHistory(control_root=control_root, storage_options=control_options, table_uuid=table_uuid),
         derived=partial(erasure_derived.judge, settings, provenance, so, obligation=obligation, table=canonical),
+        before_untag=_file_untags,
     )
     # Each tag the verification dropped is announced as the tag door announces a deletion ([[LH-332]]): untargeted, naming
     # the tag and the ref it pinned, beside the obligation whose verification dropped it. AFTER the drops, so a tag still
-    # standing is never announced gone.
-    for dropped in report.untagged:
-        pinned = await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, dropped.branch)
-        await emit_control(
-            control,
-            action="table_tag_deleted",
-            object_type="table",
-            object_id=fga.table_object(table_uuid),
-            object_name=canonical,
-            actor=f"user:{token.subject}" if token is not None else None,
-            extra={"tag": dropped.tag, **pinned, "obligation_id": obligation_id},
-        )
+    # standing is never announced gone, and as filed before them.
+    dropped = {tag.tag for tag in report.untagged}
+    for key, told in filed:
+        await announcer.send_filed(key, [a for a in told if isinstance(a.evidence, TagGone) and a.evidence.tag in dropped])
     if report.settled and report.pinned_by:
         # The events name the table as it is named now, which a rename since the request changed; its owners are found on
         # its uuid, which no rename changes.
         current = obligation.model_copy(update={"table": canonical})
-        await _schedule_release(report, current, settings=settings, control=control, owners=owners, now=clock())
+        await _schedule_release(report, current, settings=settings, announcer=announcer, owners=owners, now=clock())
     standing = await run_in_threadpool(erasure_obligations.settle, control_root, control_options, obligation_id, report=report, now=clock())
     audit(
         AuditAction.ERASURE_OBLIGATION_VERIFIED,
@@ -319,18 +344,21 @@ async def _schedule_release(
     obligation: ErasureObligation,
     *,
     settings: Settings,
-    control: ControlEmitter,
+    announcer: Announcer,
     owners: TableOwners,
     now: datetime,
 ) -> None:
     """ADR 0138: record the release of what ``pinned_by`` names under the obligation's id, then tell its requester and
     the table's owners.
 
-    The record is written FIRST, so a person is never told of a release nothing will perform; a record the store
-    refuses is a failed `release` surface, nobody is told, and the obligation stays open. A release already recorded
-    under that id was scheduled by an earlier verification that did not get to settle the obligation, and its people
-    were told then, so it is taken as it stands. Owners that cannot be read are a failed `notice` surface, and the
-    requester is still told.
+    The notices are FILED first, then the record written, then the notices sent (ADR 0233): each lands only while the
+    record stands, so a person is never told of a release nothing will perform, and one a verification that ended
+    part-way did not send is sent by the finish, while the release tick waits for it. A record the store refuses is a
+    failed `release` surface, nobody is told, and the obligation stays open. A release already recorded under that id was
+    scheduled by an earlier verification that did not get to settle the obligation; it is taken as it stands, and its
+    people are told again under the ids the first telling used (``erasure_release.notice``), so whoever the earlier
+    verification did not reach is told and nobody hears it twice. Owners that cannot be read are a failed `notice`
+    surface, and the requester is still told.
     """
     try:
         holders = [subject for subject in await owners(obligation.object_id) if subject.startswith("user:")]
@@ -354,35 +382,35 @@ async def _schedule_release(
         requested_by=requester,
         notified=notified,
         due_at=now + timedelta(days=settings.erasure_release_grace_days),
+        residual=report.residual_versions,
+        retain_days=obligation.retain_days,
     )
     control_root, control_options = settings.registry_root, settings.storage_options()
-    try:
-        await run_in_threadpool(erasure_release.schedule, control_root, control_options, record)
-    except RecordExistsError:
-        _take_the_earlier_release(report, await run_in_threadpool(erasure_release.scheduled, control_root, control_options, record.release_id), settings)
-        return
-    except Exception as exc:  # noqa: BLE001 — the report still answers with what the verification found
-        log.error("erasure_release_unscheduled", extra={"table": report.table, "error": str(exc)})
-        report.surfaces.append(
-            SurfaceResult(surface="release", outcome="failed", detail=f"the release of {record.refs} could not be recorded, so nobody was told: {exc}")
-        )
-        report.settled = False
-        return
-    report.release = _pin_release(record, settings)
-    for subject in notified:
-        await emit_control(
-            control,
-            action="erasure_release_scheduled",
-            object_type="table",
-            object_id=obligation.object_id,
-            object_name=obligation.table,
-            actor=requester,
-            extra={"subject": subject, "release_id": record.release_id, "refs": record.refs, "due_at": record.due_at.isoformat()},
-        )
+    told = [erasure_release.notice(record, subject, object_id=obligation.object_id) for subject in notified]
+    async with announcer.announcing(door="erasure_release", target=erasure_release.notice_target(record.release_id), announcements=told) as filing:
+        try:
+            await run_in_threadpool(erasure_release.schedule, control_root, control_options, record)
+        except RecordExistsError:
+            earlier = await run_in_threadpool(erasure_release.scheduled, control_root, control_options, record.release_id)
+            if _take_the_earlier_release(report, earlier, settings) and earlier is not None:
+                for subject in earlier.notified:
+                    await filing.send(erasure_release.notice(earlier, subject, object_id=obligation.object_id))
+            return
+        except Exception as exc:  # noqa: BLE001 — the report still answers with what the verification found
+            log.error("erasure_release_unscheduled", extra={"table": report.table, "error": str(exc)})
+            report.surfaces.append(
+                SurfaceResult(surface="release", outcome="failed", detail=f"the release of {record.refs} could not be recorded, so nobody was told: {exc}")
+            )
+            report.settled = False
+            return
+        report.release = _pin_release(record, settings)
+        for notice in told:
+            await filing.send(notice)
 
 
-def _take_the_earlier_release(report: ErasureReport, earlier: erasure_release.ReleaseRecord | None, settings: Settings) -> None:
-    """Settle on the release an earlier verification scheduled under the obligation's id, only while it names every pin.
+def _take_the_earlier_release(report: ErasureReport, earlier: erasure_release.ReleaseRecord | None, settings: Settings) -> bool:
+    """Settle on the release an earlier verification scheduled under the obligation's id, only while it names every pin;
+    whether it did.
 
     A pin that release does not name would stay pinned with the obligation released, so the obligation stays open and
     the `release` surface names it; once the earlier release has run, the next verification schedules its own.
@@ -390,13 +418,19 @@ def _take_the_earlier_release(report: ErasureReport, earlier: erasure_release.Re
     missing = sorted({pin.ref for pin in report.pinned_by} - set(earlier.refs)) if earlier is not None else []
     if earlier is not None and not missing:
         report.release = _pin_release(earlier, settings)
-        return
+        return True
     if earlier is None:
         detail = "a release under this obligation's id ran meanwhile: verify again"
     else:
         detail = f"the release an earlier verification scheduled for {earlier.refs} does not name {missing}: verify again once it has run at {earlier.due_at.isoformat()}"
     report.surfaces.append(SurfaceResult(surface="release", outcome="failed", detail=detail))
     report.settled = False
+    return False
+
+
+def _untag_target(obligation_id: str) -> str:
+    """The object a verification files the announcements of the tags it drops on: its obligation."""
+    return f"erasure:{obligation_id}"
 
 
 def _pin_release(record: erasure_release.ReleaseRecord, settings: Settings) -> PinRelease:

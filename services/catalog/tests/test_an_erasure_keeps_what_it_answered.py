@@ -1,14 +1,10 @@
 """What an erasure answers stays true beside another caller's ref and through a verification cut short (ADR 0233).
 
-Each test drives one candidate finding of the erasure model (`specs/catalog/Erasure.tla`) through the erasure doors, the
-tag door and the release's tick on one app, against real pylance on ``tmp_path``: a step the model's trace ends at
-fails once (the read that names a dropped tag's ref, the release's bound), or another caller acts in the grace period,
-and the claim is judged by what the doors then answer. A verification that dies at that step leaves the same state as
-one whose step fails.
-
-Every test is marked xfail, strictly: each reproduces a defect of the catalog, confirmed 2026-11-17, whose fix is the
-owner's to schedule. The day a fix lands the test passes and the strict marker turns the run red, so the marker goes
-with the fix. ``raises=AssertionError`` keeps a scenario that no longer sets up (``pytest.fail``) a failure of its own.
+Each test drives one finding of the erasure model (`specs/catalog/Erasure.tla`) through the erasure doors, the tag door
+and the release's tick on one app, against real pylance on ``tmp_path``: a step the model's trace ends at fails once (the
+sending of a dropped tag's announcement, the release's bound), or another caller acts in the grace period, and the
+claim is judged by what the doors then answer. A verification that dies at that step leaves the same state as one whose
+step fails. Each finding was confirmed against the catalog on 2026-11-17 and is fixed (ADR 0233).
 """
 
 from __future__ import annotations
@@ -29,6 +25,7 @@ from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
 
 from catalog.api import erasure_release as release_tick
+from catalog.api.announcing import Announcer
 from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options
 from catalog.api.security import authenticate
 from catalog.api.ticks import Tick
@@ -36,7 +33,7 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.api.v1.endpoints import tags
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
-from catalog.services import dataplane, erasure_release
+from catalog.services import erasure_release
 from catalog.services.dataplane import create_table, read_arrow_body
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.control_events import CatalogControlEvent
@@ -50,10 +47,6 @@ from lakehouse.storage_options import StorageOptions
 _PREDICATE = "pii = 'alice'"
 _TABLE_ID = ["db", "subjects"]
 _TABLE = "db$subjects"
-
-
-def _confirmed(finding: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"{finding}: ADR 0233, confirmed 2026-11-17; the fix is the owner's to schedule")
 
 
 def _rows(*names: str) -> pa.Table:
@@ -163,10 +156,10 @@ def _fails_once(monkeypatch: pytest.MonkeyPatch, owner: object, name: str) -> No
     monkeypatch.setattr(owner, name, _flaky)
 
 
-@_confirmed("ErasureCopyTag")
 def test_a_released_erasure_whose_release_ran_leaves_the_subject_on_no_ref(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
-    # The release deletes the refs the verification named; a tag another caller puts on the residual version in the
-    # grace period is not among them (erasure_release._plan reads again only the subtree of the branches it names).
+    # The release deletes the refs the verification named and every ref standing on a residual version, read again when
+    # it runs (G1), so a tag another caller puts on the residual version in the grace period goes with them, and the
+    # release reclaims the version before it ends.
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
     emitter, clock = _Recorder(), _Clock()
     with _catalog(ns, tmp_path, emitter=emitter, clock=clock) as catalog:
@@ -186,17 +179,16 @@ def test_a_released_erasure_whose_release_ran_leaves_the_subject_on_no_ref(tmp_p
     )
 
 
-@_confirmed("ErasureTagEventLost")
 def test_every_tag_an_erasure_drops_is_announced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
-    # The verification drops `pinned`, whose version answers the subject, and the door fails reading the ref it pinned for
-    # the announcement: the next verification finds the tag gone, so nothing drops or announces it again.
+    # The verification drops `pinned`, whose version answers the subject, and the door fails sending its announcement:
+    # the verification filed it before the drop (G3), so the next verification of the obligation sends it.
     ns = _created(tmp_path / "data")
     open_by_name(ns, StorageOptions(), _TABLE_ID).tags.create("pinned", 1)
     emitter, clock = _Recorder(), _Clock()
     with _catalog(ns, tmp_path, emitter=emitter, clock=clock) as catalog:
         obligation = catalog.record()
         erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
-        _fails_once(monkeypatch, dataplane, "tag_event_ref")
+        _fails_once(monkeypatch, Announcer, "send_filed")
         if (cut := catalog.verify(obligation)).status_code == 200:
             pytest.fail(f"the verification did not fail at the tag's announcement: {cut.text}")
         if "pinned" in open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list():
@@ -208,10 +200,9 @@ def test_every_tag_an_erasure_drops_is_announced(tmp_path: Path, monkeypatch: py
     )
 
 
-@_confirmed("ErasureNoticeLost")
 def test_everyone_a_release_costs_is_told_before_it_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
-    # _schedule_release writes the release's record, then fails before its notices; the next verification meets the record,
-    # takes it as one whose people were told, and releases the obligation with nobody told.
+    # _schedule_release writes the release's record, then fails before its notices; it filed them first (G2), so the next
+    # verification, meeting the record, tells them under the same ids before it releases the obligation.
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
     emitter, clock = _Recorder(), _Clock()
     with _catalog(ns, tmp_path, emitter=emitter, clock=clock) as catalog:

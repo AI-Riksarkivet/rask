@@ -38,6 +38,8 @@ import pyarrow.fs as pafs
 
 from lakehouse import control_prefixes, location_claims, object_records
 from lakehouse.base_registry import BaseRegistry, forget_base_record
+from lakehouse.namespace_fences import NamespaceFence, NamespaceWork
+from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
 from lakehouse.records import RecordChangedError, RecordMissingError, mutate_json
@@ -185,7 +187,22 @@ def mark_released(control_root: str, storage_options: StorageOptions, uuid: str,
 
 
 def put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
-    put_record(control_root, storage_options, key(str(record["uuid"]), kind=kind_of(record)), record)
+    """File ``record``, holding its warehouse's namespace fence for an add while it does (ADR 0233).
+
+    The warehouse delete holds that fence for a drop from before it reads the warehouse's trash until the warehouse's
+    record is gone, so a record is filed either before that read, which finds it, or not at all: none outlives its
+    warehouse.
+
+    Raises:
+        NamespaceFencedError: The warehouse is being deleted; nothing was filed.
+        botocore.exceptions.ClientError: The store refused a read or a write.
+    """
+    target = key(str(record["uuid"]), kind=kind_of(record))
+    if not (warehouse := name_of(record).split(CATALOG_DELIMITER, 1)[0]):
+        put_record(control_root, storage_options, target, record)
+        return
+    with NamespaceFence(control_root=control_root, storage_options=storage_options, name=warehouse).held(NamespaceWork.ADD, renewed=False):
+        put_record(control_root, storage_options, target, record)
 
 
 def keeps(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> bool:

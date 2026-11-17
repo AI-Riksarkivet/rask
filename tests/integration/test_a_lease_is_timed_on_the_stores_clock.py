@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, tzinfo
 import boto3
 import pytest
 
-from lakehouse import history_fences, location_claims, records
+from lakehouse import fences, location_claims, records
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.location_claims import ClaimStore, LocationClaim, LocationHeldError
 from lakehouse.storage_options import StorageOptions
@@ -80,7 +80,7 @@ def test_a_pod_an_hour_ahead_still_finds_a_fresh_lease_live(
 ) -> None:
     second_pod = arrange(store)
     # Every clock the second pod has, the records layer's included: only the store's `Date` is left to agree with the first.
-    for module in (location_claims, history_fences, records):
+    for module in (location_claims, fences, records):
         monkeypatch.setattr(module, "datetime", _AnHourAhead)
 
     with pytest.raises(refusal):

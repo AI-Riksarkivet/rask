@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.core import run_context
 from catalog.core.config import Settings, StorePlane, get_settings
+from catalog.core.fenced_namespace import fenced, unfenced
 from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier, transaction_table
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBoundEmitter, is_person_subject
 from catalog.core.namespace import NO_WAREHOUSE, NamespaceConnections
@@ -227,7 +228,14 @@ async def namespace_for_table(request: Request, settings: Settings, segments: li
     return await estate_namespace(request, settings)
 
 
-NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
+async def get_fenced_namespace(ns: Annotated[LanceNamespace, Depends(get_namespace)], settings: SettingsDep) -> LanceNamespace:
+    """The request's namespace connection with every add beneath a namespace, and every drop of one, under that namespace's
+    fence (ADR 0233, :mod:`catalog.core.fenced_namespace`). A dependency of its own above :func:`get_namespace`, so a
+    connection a test supplies for that one is fenced as the catalog's own are."""
+    return fenced(ns, control_root=settings.registry_root, storage_options=settings.storage_options())
+
+
+NamespaceDep = Annotated[LanceNamespace, Depends(get_fenced_namespace)]
 
 
 async def get_provenance_namespace(request: Request, settings: SettingsDep) -> LanceNamespace | None:
@@ -433,7 +441,7 @@ async def get_data_namespace(request: Request, settings: SettingsDep, ns: Namesp
     the catalog did not build (a test's override) is handed back unchanged.
     """
     connections: NamespaceConnections | None = getattr(request.app.state, "connections", None)
-    twin = await run_in_threadpool(connections.data_twin, settings, ns) if connections is not None else None
+    twin = await run_in_threadpool(connections.data_twin, settings, unfenced(ns)) if connections is not None else None
     return twin or ns
 
 

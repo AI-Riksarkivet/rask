@@ -622,16 +622,11 @@ def test_a_cascade_releases_only_the_claim_of_the_table_it_identified(tenant: _T
     assert (len(taken), held.uuid if held is not None else None) == (1, taken[0] if taken else None)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="CascadeWarehouseLateTrash: ADR 0233, confirmed 2026-11-17; the fix is the owner's to schedule",
-)
 def test_a_warehouse_deleted_beside_a_recoverable_drop_leaves_none_of_its_trash(tenant: _Tenant) -> None:
-    """The delete reads the warehouse's trash once, before its cascade (`specs/catalog/Cascade.tla`, finding
-    WarehouseLateTrash). A recoverable cascade of one of its namespaces lands right after that read: it files a record
-    for the namespace and its table, the warehouse's cascade finds both gone and tolerates it, and the warehouse's record
-    goes with the two records standing, which no undrop can route to and no step of the delete ends."""
+    """The delete reads the warehouse's trash once, before its cascade (`specs/catalog/Cascade.tla`, guard G4). A
+    recoverable cascade of one of its namespaces sent right after that read files no record under the warehouse while the
+    delete holds its fence: it is refused 409, or, had it filed before, the read found it. No record is left for a
+    warehouse no door routes to."""
     tenant.create_namespace("acme-wh$bronze")
     tenant.create_table("acme-wh$bronze$a")
     real_read = warehouses.trash_owned_by
@@ -646,7 +641,7 @@ def test_a_warehouse_deleted_beside_a_recoverable_drop_leaves_none_of_its_trash(
 
     ended = tenant.client.delete(f"/management/v1/warehouses/{tenant.warehouse}", params={"cascade": "true"})
 
-    if dropped != [200]:
-        pytest.fail(f"the recoverable drop did not land beside the delete: {dropped}")
+    if len(dropped) != 1:
+        pytest.fail(f"no recoverable drop was sent beside the delete: {dropped}")
     left = tenant.trashed([("table", "acme-wh$bronze$a"), ("namespace", "acme-wh$bronze")])
     assert (ended.status_code, left) == (200, []), f"the delete answered {ended.status_code} and left {left}: {ended.text}"

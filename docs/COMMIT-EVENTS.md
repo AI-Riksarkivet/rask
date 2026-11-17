@@ -174,6 +174,15 @@ named the table by its id.
   would have sent, so a copy that did go out lands one row; the namespace and warehouse cascades file theirs the same
   way. A follower that must not miss a table coming or going still reads `ListTables` and `DescribeTable` as the truth,
   and the marker as its cue.
+- An erasure's verification files its `table_tag_deleted` events before it deletes the tags, and the release's
+  `erasure_release_scheduled` notices before it records the release ([ADR 0233](adr/0233-erasure-and-the-namespace-cascade-are-modelled-in-tla.md)).
+  What a verification that ended part-way did not send is sent by the next verification of the same obligation, or by
+  the catalog's finish within the hour, under the `event_id` it was filed with; the release does not run while its
+  notices are filed. A verification that settles on a release an earlier one recorded tells its people again: each
+  notice's `event_id` is fixed by the release and the person, so a reader that keeps the first copy of an id is told
+  once. The release itself announces each tag and branch it deletes or recreates (`table_tag_deleted`,
+  `table_branch_deleted`, `table_branch_created`, `extra.release_id`): the refs the verification named and every ref
+  standing on a version that held the subject, made by anyone, during the grace period.
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
   commits. Order the writes of one table by `rask_lance.version`, not by `seq`.
 - The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), and longer for a row the
@@ -221,7 +230,7 @@ percent-encoded, which `fga.subject_of` decodes, or a userset):
 | `action` | `extra.subject` |
 | --- | --- |
 | `grant_added`, `grant_revoked` | the principal or userset the grant names; `extra.relation` is the rung and `object_id` the object |
-| `erasure_release_scheduled` | one event per person the release costs (the erasure's requester and each table owner), with the deadline in `extra.due_at` |
+| `erasure_release_scheduled` | one event per person the release costs (the erasure's requester and each table owner), with the deadline in `extra.due_at`; its `event_id` is the same however often it is sent |
 | `principal_deleted` | the principal the estate admin offboarded: nobody is left to tell, so a notifier erases what it keeps for them |
 
 ### What a notifier asks

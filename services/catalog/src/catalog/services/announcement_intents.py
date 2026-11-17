@@ -117,6 +117,16 @@ class RecordHeld(BaseModel):
     key: str
 
 
+class TagGone(BaseModel):
+    """A tag's delete landed: the table at ``location`` holds no tag named ``tag``, or no longer stands there."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["tag_gone"] = "tag_gone"
+    location: str
+    tag: str
+
+
 class RoleEnded(BaseModel):
     """A role's end landed: ``project`` no longer holds the role standing."""
 
@@ -127,7 +137,7 @@ class RoleEnded(BaseModel):
     role: str
 
 
-type Evidence = Annotated[TupleGone | TupleHeld | NameResolves | NamespaceResolves | RecordGone | RecordHeld | RoleEnded, Field(discriminator="kind")]
+type Evidence = Annotated[TupleGone | TupleHeld | NameResolves | NamespaceResolves | RecordGone | RecordHeld | RoleEnded | TagGone, Field(discriminator="kind")]
 
 
 class ControlMessage(BaseModel):
@@ -173,10 +183,14 @@ class Announcement(BaseModel):
 
 def identity(announcement: Announcement) -> str:
     """What makes two filed announcements one event: the same change (its evidence), told on the same lane as the same
-    action, and on the lineage lane by the same author, since lineage binds a run to the first author it records for it.
-    A control event's reader keeps the first copy of an id, whoever it names as the actor."""
+    action, about the same person (a control event's ``extra.subject``, which several events of one change each name
+    differently), and on the lineage lane by the same author, since lineage binds a run to the first author it records
+    for it. A control event's reader keeps the first copy of an id, whoever it names as the actor."""
     message = announcement.message
-    told = (message.event.action,) if isinstance(message, ControlMessage) else (message.operation, message.author)
+    if isinstance(message, ControlMessage):
+        told: tuple[object, ...] = (message.event.action, message.event.extra.get("subject"))
+    else:
+        told = (message.operation, message.author)
     return json.dumps([announcement.evidence.model_dump(mode="json"), message.lane, *told], sort_keys=True)
 
 

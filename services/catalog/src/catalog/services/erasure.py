@@ -282,6 +282,18 @@ class ErasureReport(BaseModel):
     )
 
 
+class Reclaimable(Protocol):
+    """What a reclaim needs of a pylance handle (:func:`reclaim_refs`)."""
+
+    @property
+    def uri(self) -> str: ...
+    @property
+    def _ds(self) -> Any: ...
+    def checkout_version(self, version: Any, /) -> Any: ...
+    def checkout_latest(self) -> None: ...
+    def cleanup_old_versions(self, older_than: timedelta | None = None, *, error_if_tagged_old_versions: bool = True) -> Any: ...
+
+
 class _Dataset(Protocol):
     """The pylance surface this uses, kept structural so the ordering is testable without a store."""
 
@@ -375,6 +387,7 @@ def verify(
     trusted: Mapping[str, int],
     history: TableHistory | None,
     derived: Callable[[], Sequence[SurfaceResult]],
+    before_untag: Callable[[Sequence[DroppedTag]], None],
 ) -> ErasureReport:
     """Judge every ref's head on bytes, drop the tags pinning the subject, reclaim each clean ref, verify every retained
     version of every ref, and name every table derived from this one.
@@ -392,7 +405,8 @@ def verify(
     is where the table's history fence is kept, which the reclaim holds ([[LH-308]]); ``None`` holds none, and it has no
     default for the same reason. ``derived`` judges the tables derived from this one, a surface each
     (:func:`catalog.services.erasure_derived.judge`); one that raises is a failed ``derived`` surface, and it has no
-    default for the same reason.
+    default for the same reason. ``before_untag`` is handed the tags step 2 is about to delete, before it deletes any, so
+    what announces their deletion is filed first (ADR 0233); one that raises keeps every tag, a failed ``tags`` surface.
 
     EVERY SURFACE IS ATTEMPTED even when one fails, short of what would destroy history for nothing (the module's
     `skipped`). Stopping at the first error would leave the remaining surfaces both unjudged and unreported, so nobody
@@ -418,7 +432,7 @@ def verify(
     clean, proved = _judge_heads(report, dataset, branches, predicate=predicate, trusted=trusted)
     deepest_first: list[str | None] = [*sorted(branches, key=lambda name: (-_depth(name, branches), name)), None]
     # 2. TAGS THAT PIN THE SUBJECT, and only once every head is clean (:func:`_drop_subject_tags`).
-    _drop_subject_tags(report, dataset, every_head_clean=listed is not None and clean == {*branches, None}, predicate=predicate)
+    _drop_subject_tags(report, dataset, every_head_clean=listed is not None and clean == {*branches, None}, predicate=predicate, before_untag=before_untag)
 
     # 3. RECLAIM EVERY CLEAN REF, DEEPEST FIRST: cleanup through a branch handle removes only that branch's own versions
     #    and files (`test_the_gc_run_reclaims_the_ref_the_request_names`), and the parent's cleanup then sees what the
@@ -475,7 +489,9 @@ def _judge_heads(
     return clean, proved
 
 
-def _drop_subject_tags(report: ErasureReport, dataset: _Dataset, *, every_head_clean: bool, predicate: str) -> None:
+def _drop_subject_tags(
+    report: ErasureReport, dataset: _Dataset, *, every_head_clean: bool, predicate: str, before_untag: Callable[[Sequence[DroppedTag]], None]
+) -> None:
     """Step 2: delete every tag whose version answers ``predicate`` or cannot be read, once every head is clean.
 
     A tag holds a VERSION, so there is nothing to delete from it; the row becomes unreachable once the tag stops pinning
@@ -491,12 +507,17 @@ def _drop_subject_tags(report: ErasureReport, dataset: _Dataset, *, every_head_c
     The probe reads the tag's OWN ref. A tag names a version of the branch it records, and branch histories are numbered
     independently, so judging a `work` tag by main's same-numbered version would keep a tag pinning the subject and drop
     a clean one.
+
+    EVERY TAG IS JUDGED BEFORE ANY IS DELETED, and the ones to delete are handed to ``before_untag`` first, which files
+    their announcements (ADR 0233): a verification that ends between a delete and its announcement leaves the filing,
+    which the next verification or maintenance's finish sends.
     """
     tags = _tags(dataset)
     if tags is None:
         detail = "the tag list could not be read, so no tag was judged or dropped, and one may still pin the subject"
         report.surfaces.append(SurfaceResult(surface="tags", outcome="failed", detail=detail))
         return
+    doomed: list[DroppedTag] = []
     for name, reference in tags.items():
         if name.startswith(clone_sources.TAG_PREFIX):
             # A registered clone reads this version through the table's files (ADR 0198 §1): dropping the tag would let a
@@ -510,13 +531,24 @@ def _drop_subject_tags(report: ErasureReport, dataset: _Dataset, *, every_head_c
         if reference is not None and _answers(dataset, reference, predicate) is False:
             report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="retained", detail=f"{_name(reference)} does not hold the subject"))
             continue
+        doomed.append(DroppedTag(tag=name, branch=reference[0] if reference is not None else None))
+    if not doomed:
+        return
+    try:
+        before_untag(doomed)
+    except Exception as exc:  # noqa: BLE001 — a tag whose announcement is not filed is kept, and says so
+        log.warning("erasure_untag_unfiled", extra={"table": report.table, "error": str(exc)})
+        detail = f"kept: what announces their deletion could not be filed, so none was deleted: {exc}"
+        report.surfaces += [SurfaceResult(surface=f"tag:{tag.tag}", outcome="failed", detail=detail) for tag in doomed]
+        return
+    for tag in doomed:
         try:
-            dataset.tags.delete(name)
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="untagged"))
-            report.untagged.append(DroppedTag(tag=name, branch=reference[0] if reference is not None else None))
+            dataset.tags.delete(tag.tag)
+            report.surfaces.append(SurfaceResult(surface=f"tag:{tag.tag}", outcome="untagged"))
+            report.untagged.append(tag)
         except Exception as exc:  # noqa: BLE001
-            log.warning("erasure_tag_failed", extra={"table": report.table, "tag": name, "error": str(exc)})
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="failed", detail=str(exc)))
+            log.warning("erasure_tag_failed", extra={"table": report.table, "tag": tag.tag, "error": str(exc)})
+            report.surfaces.append(SurfaceResult(surface=f"tag:{tag.tag}", outcome="failed", detail=str(exc)))
 
 
 def _judge_head(report: ErasureReport, history: _History, listing: _StorageListing, *, ref: str | None, predicate: str) -> frozenset[str] | None:
@@ -579,19 +611,19 @@ def _reclaim(
     reclaimed and each says so, so the obligation stays open for the next verification.
     """
     if history is None:
-        return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
+        return reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
     try:
         with history.held(HistoryWork.RECLAIM):
-            return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
+            return reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
     except HistoryFencedError as exc:
         log.info("erasure_history_fenced", extra={"table": report.table, "reason": str(exc)})
         report.surfaces += [SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail=f"{exc} Not reclaimed.") for ref in deepest_first]
         return {}
 
 
-def _reclaim_refs(
+def reclaim_refs(
     report: ErasureReport,
-    dataset: _Dataset,
+    dataset: Reclaimable,
     deepest_first: Sequence[str | None],
     *,
     clean: Collection[str | None],
@@ -1402,7 +1434,7 @@ def _visible(source: Any, predicate: str) -> int:
     return source.scanner(filter=predicate, **_READ_THE_DATA).count_rows()
 
 
-def _head(dataset: _Dataset, ref: str | None) -> _Dataset:
+def _head[D: Reclaimable](dataset: D, ref: str | None) -> D:
     """A handle on ``ref``'s latest version: ``dataset`` itself for main, refreshed in place, because the
     erasure is opened on it and its own writes and other writers' may have moved main on."""
     if ref is None:

@@ -1,18 +1,16 @@
 """What a namespace cascade and its undrop answer stays true when a step of theirs fails part-way (ADR 0233).
 
-Each test drives one candidate finding of the cascade model (`specs/catalog/Cascade.tla`) through the real catalog app on
-a real pylance `dir` namespace: the step the model's trace ends at fails once (a trash record's write, a table's
-register), the caller issues the request again as the door documents, and the claim is judged by what a client then
-reads over HTTP. A request that dies at that step leaves the same state as one whose step fails.
-
-Every test is marked xfail, strictly: each reproduces a defect of the catalog, confirmed 2026-11-17, whose fix is the
-owner's to schedule. The day a fix lands the test passes and the strict marker turns the run red, so the marker goes
-with the fix. ``raises=AssertionError`` keeps a scenario that no longer sets up (``pytest.fail``) a failure of its own.
+Each test drives one finding of the cascade model (`specs/catalog/Cascade.tla`) through the real catalog app on a real
+pylance `dir` namespace: the step the model's trace ends at fails once (a trash record's write, a table's register), or
+two requests reach the step that orders them together, the caller issues the request again as the door documents, and
+the claim is judged by what a client then reads over HTTP. A request that dies at that step leaves the same state as one
+whose step fails. Each finding was confirmed against the catalog on 2026-11-17 and is fixed (ADR 0233).
 """
 
 from __future__ import annotations
 
 import threading
+from contextlib import suppress
 from typing import Any, cast
 
 import pyarrow as pa
@@ -30,10 +28,9 @@ C = f"{P}$c"
 T = f"{C}$t"
 #: How long one request waits for the one it is sent with: far above what either takes, so it only bounds a hang.
 WAIT = 30
-
-
-def _confirmed(finding: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"{finding}: ADR 0233, confirmed 2026-11-17; the fix is the owner's to schedule")
+#: How long a request at the backend waits for the one it is sent with, which a fence may have answered already: far above
+#: what reaching the backend takes, so two requests that both reach it meet.
+MEET = 5
 
 
 def _rows(client: TestClient, name: str = T) -> int | None:
@@ -58,10 +55,9 @@ def subtree(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Test
     return real_ns_client
 
 
-@_confirmed("CascadeNamespaceRecordAfterDrop")
 def test_a_cascade_finished_by_its_reissue_leaves_every_table_it_detached_restorable(subtree: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    # _trash_subtree drops each namespace before it files that namespace's record: the record of `p$c` fails after the
-    # drop landed, the re-issue lists only `p`, and no record rebuilds `p$c` for the table filed beneath it.
+    # _trash_subtree files each namespace's record before its drop (G2): the record of `p$c` fails, nothing of `p$c` has
+    # gone, and the re-issue files it and drops it, so the undrop of `p` rebuilds `p$c` for the table filed beneath it.
     real, pending = trash.put, [True]
 
     def _put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
@@ -105,11 +101,12 @@ class _FailsOnce:
 
 class _AtOnce:
     """The real namespace, sending its first ``create_namespace`` of ``child`` and its first ``drop_namespace`` of ``parent``
-    to the backend together: each waits at a barrier until the other has reached it."""
+    to the backend together: each waits at a barrier until the other has reached it, or for :data:`MEET` when the other was
+    answered before it reached the backend."""
 
     def __init__(self, ns: LanceNamespace, *, child: list[str], parent: list[str]) -> None:
         self._ns, self._calls = ns, {("create_namespace", tuple(child)), ("drop_namespace", tuple(parent))}
-        self._barrier = threading.Barrier(2, timeout=WAIT)
+        self._barrier = threading.Barrier(2, timeout=MEET)
 
     def __getattr__(self, name: str) -> Any:  # noqa: ANN401 — forwards the backend's own methods
         real = getattr(self._ns, name)
@@ -117,17 +114,18 @@ class _AtOnce:
         def _call(request: Any, *args: object, **kwargs: object) -> object:  # noqa: ANN401 — the backend's own request types
             if (name, tuple(request.id or [])) in self._calls:
                 self._calls.discard((name, tuple(request.id or [])))
-                self._barrier.wait()
+                with suppress(threading.BrokenBarrierError):
+                    self._barrier.wait()
             return real(request, *args, **kwargs)
 
         return _call
 
 
-@_confirmed("CascadeParentNotChecked")
 def test_a_namespace_created_beside_its_parents_drop_never_stands_without_it(subtree: TestClient) -> None:
     # The `dir` backend checks a new row's parent, and a Restrict drop the parent's rows, each against the __manifest it
     # read: two such commits sent together both land (measured on the installed pylance, 50 of 50), and the child stands
-    # under no parent. `n` stands alone in `p2`, so the drop is a plain Restrict one.
+    # under no parent. Each holds `p2`'s namespace fence first (G1), so the one that takes it second is answered 409
+    # before it reaches the backend, and the other goes on alone. `n` stands alone in `p2`, so the drop is a plain Restrict one.
     from catalog.api.dependencies import get_namespace
     from catalog.main import app
 
@@ -155,17 +153,18 @@ def test_a_namespace_created_beside_its_parents_drop_never_stands_without_it(sub
     assert not (parent == 404 and child == 200), f"the create answered {answers.get('create')}, the drop {answers.get('drop')}, and p2$n stands under no p2"
 
 
-@_confirmed("CascadeUndropNotResumable")
 def test_an_undrop_cut_short_is_finished_by_its_reissue(subtree: TestClient) -> None:
-    # undrop_namespace clears each namespace's record right after rebuilding it, so once a table's register fails the
-    # re-issue finds no record of `p` and answers 404, where the door's docstring says a rerun finishes the job.
+    # undrop_namespace clears the namespaces' records only once every table is registered (G3), so a register that
+    # fails leaves the record of `p` for the re-issue, which finishes the job.
     from catalog.api.dependencies import get_namespace
     from catalog.main import app
 
     if (dropped := subtree.post(f"/v1/namespace/{P}/drop", json={"behavior": "Cascade"})).status_code != 200:
         pytest.fail(f"the cascade answered {dropped.status_code}: {dropped.text}")
     ns = cast(LanceNamespace, app.dependency_overrides[get_namespace]())
-    app.dependency_overrides[get_namespace] = lambda: _FailsOnce(ns, "register_table", "t")
+    # One connection for every request, so its register fails once in all, not once per request.
+    failing = _FailsOnce(ns, "register_table", "t")
+    app.dependency_overrides[get_namespace] = lambda: failing
     if (failed := subtree.post(f"/management/v1/namespace/{P}/undrop")).status_code == 200:
         pytest.fail(f"the undrop did not fail at the register of {T}: {failed.text}")
     reissued = subtree.post(f"/management/v1/namespace/{P}/undrop")

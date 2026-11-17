@@ -619,6 +619,19 @@ governing their data. The project-scoped surface is the console's project page, 
 - Deletes are bottom-up: a container refuses **409, naming its contents**; `cascade` is explicit;
   warehouse delete gates on the PROJECT's `can_administer`; bucket purge is a **separate opt-in**;
   project delete has **no cascade at all**.
+- **An add beneath a namespace and that namespace's drop never run together** (ADR 0233, `lakehouse.namespace_fences`).
+  The `dir` backend checks a new row's parent, and a Restrict drop's emptiness, each against the `__manifest` it read,
+  and both land when sent together (measured on pylance 13.0.0: 50 of 50 races of a namespace, 30 of 30 of a declared
+  table). So every request's backend connection is fenced (`catalog.core.fenced_namespace`, `NamespaceDep` through
+  `get_fenced_namespace`): each add (create, declare, register, rename in, undrop) holds the fence of the namespace it
+  adds into for an add, each `drop_namespace` its namespace's for a drop; adds share, drops share, an add and a drop
+  refuse each other 409 code 14 (`NamespaceFencedError`, a `ConcurrentModificationError`). One record per namespace NAME
+  under `_namespace_fences/`, a hold of 2 minutes renewed while its work runs. The namespace drop door holds its
+  namespace's fence for a drop over its whole run, the namespace undrop for an add, so the two never run together; the
+  warehouse delete holds the warehouse's for a drop from before it reads its trash until its record goes, and
+  `trash.put` files a record only while it holds its warehouse's for an add, so no trash outlives its warehouse.
+  Pinned by `tests/integration/test_a_cascade_keeps_what_it_answered.py` and
+  `test_a_warehouse_deleted_beside_a_recoverable_drop_leaves_none_of_its_trash`.
 - **A cascade revokes a grant only once its object is gone** ([[LH-495]]). The warehouse door's `?cascade=true` first
   enumerates every namespace directly under the warehouse's name, with its subtree, and holds it to its protection
   (`force` turns those locks as it turns the warehouse's), and selects its own trash (`warehouses.trash_owned_by`: every
@@ -697,11 +710,13 @@ governing their data. The project-scoped surface is the console's project page, 
   **The CASCADE is recoverable too (#96)**: with a grace period, `drop_namespace(cascade)` never
   issues the destructive native call — a trash record pointing at bytes that call deleted would be
   a lie — and instead DETACHES the subtree (every table deregistered, namespaces emptied
-  deepest-first then dropped, one `kind`-tagged record each, shared drop-time `expires_at`; tuples
+  deepest-first then dropped, one `kind`-tagged record each, each record filed BEFORE its object goes, a namespace's
+  as a table's, so a re-issue finishes a cascade cut short; shared drop-time `expires_at`; tuples
   KEPT, the same #75 rule). `POST /management/v1/namespace/{id}/undrop` is the PLURAL undrop: it restores the
   records one cascade filed (`cascade` equal to the chosen namespace's uuid), rebuilding every namespace
-  shallowest-first and re-registering every table (relative-location form), resumable (`exist_ok` creates;
-  already-registered = recovered);
+  shallowest-first and re-registering every table (relative-location form), and clears the namespaces' records only
+  once every table is back, deepest first and its own last, so it is resumable (`exist_ok` creates;
+  already-registered = recovered; ADR 0233);
   `GET /management/v1/namespace/{id}/tasks` shows the subtree's deadline; `purge=true` is the same explicit
   opt-out. A RESTRICT drop stays unrecorded on purpose — it only ever removes an empty manifest
   row. Declared-only tables (no recorded location) are skipped by undrop with a warning: no bytes
@@ -1194,13 +1209,13 @@ governing their data. The project-scoped surface is the console's project page, 
   (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
   20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
-  `tags/update`, `branches/create`, the erasure release's branch re-creation) holds the fence,
+  `tags/update`, `branches/create`) holds the fence,
   one record per table uuid under `_history_fences/`; holders of one kind share it, the other kind is refused 409 code
   14 (`DoorTable.history_held`), and a fenced expiry is `skipped="history_fenced"`, its table's pass tried again after
-  `retrySeconds` (`table_pass._dataset_due_at`). A branch create (the create door,
-  the erasure release's re-creation) holds the kind `branch`, which also excludes another branch create, so two creates
-  of nesting names on one table take turns and each judges a listing no other create changes (ADR 0179, [[LH-413]]). A
-  hold lapses after 15 minutes on the store's clock.
+  `retrySeconds` (`table_pass._dataset_due_at`). A branch create holds the kind `branch`, which also excludes another
+  branch create, so two creates of nesting names on one table take turns and each judges a listing no other create
+  changes (ADR 0179, [[LH-413]]). An erasure's release holds the kind `release`, which excludes every kind, its own
+  included, from its plan to its reclaim (ADR 0233). A hold lapses after 15 minutes on the store's clock.
   Pinned by `services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py` and
   `tests/integration/test_no_reclaim_deletes_a_version_while_a_ref_is_written.py`.
 - **An erasure is an obligation a bring-your-own job fulfils and the catalog verifies** ([[LH-493]], ADR 0163).
@@ -1250,10 +1265,14 @@ governing their data. The project-scoped surface is the console's project page, 
   settles an obligation and `ErasureReport.pinned_by` is non-empty, the verification door writes a release record
   under the obligation's id (`catalog.services.erasure_release`, `_erasure_releases/<id>.json` on the control root)
   BEFORE it tells anyone, then emits one targeted `erasure_release_scheduled` per person (the obligation's requester,
-  table owners). The `catalog-erasure-release` timer's tick claims a due record by an ETag-guarded lease, RECORDS each
-  branch's recreate reference before deleting any, deletes the tags and the branch subtree leaf-first (re-read live,
-  so a branch cut during the grace period goes too) and recreates it top-down from main's head. No door cancels or
-  extends one, and protection does not block it (ADR 0150). With every head clean, what a settled release names is
+  table owners). The notices are filed before the record (`announcement_intents`, on `erasure_release.notice_target`)
+  under an `event_id` fixed by the release and the person, a verification that meets an earlier record tells them
+  again under those ids, and the tick leaves a release whose notices are filed alone (ADR 0233). The tick claims a due
+  record by an ETag-guarded lease, RECORDS each branch's recreate reference before deleting any, deletes the tags and
+  the branch subtree leaf-first (re-read live, so a branch cut during the grace period goes too), and every tag on and
+  branch cut from a version the record's `residual` names, whoever made it, recreates the branches top-down from main's
+  head, and reclaims main at the obligation's `retain_days`, all under one `release` hold of the table's history. No
+  door cancels or extends one, and protection does not block it (ADR 0150). With every head clean, what a settled release names is
   tags: a branch head standing on a residual's files would hold the subject itself. Pinned by
   `services/catalog/tests/test_erasure_releases_a_pinning_branch_after_its_notice.py`.
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance

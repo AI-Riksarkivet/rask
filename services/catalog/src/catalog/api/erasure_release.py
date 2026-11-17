@@ -50,6 +50,7 @@ async def tick(ctx: Tick) -> ErasureReleaseTick:
         settings.storage_options(),
         now=ctx.clock(),
         open_location=partial(_open, storage_options=ctx.storage_options),
+        table_options=ctx.storage_options,
     )
     claims = table_claims.claim_store(settings)
     for change in changes:

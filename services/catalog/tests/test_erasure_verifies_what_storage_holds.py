@@ -101,6 +101,7 @@ def _verify(
         trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
         history=None,
         derived=list,
+        before_untag=lambda _tags: None,
     )
 
 

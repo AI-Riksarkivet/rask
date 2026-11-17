@@ -67,6 +67,7 @@ from catalog.api.pagination import ListLimit
 from catalog.api.security import Caller, CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core.config import Settings
+from catalog.core.fenced_namespace import fenced, holding
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import DEREGISTER_TABLE
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
@@ -89,6 +90,7 @@ from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.namespace_fences import NamespaceWork
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.ns_errors import PartiallyApplied, status_for
 from lakehouse.records import RecordExistsError, RecordMissingError
@@ -1045,7 +1047,15 @@ async def delete_warehouse(
 
     # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
     in_estate_store = names_the_estate_store(record.get("endpoint"), estate=settings.s3_endpoint)
-    ns_conn = await namespace_for_root(request, settings, record["root_uri"], endpoint=record.get("endpoint") or None) if in_estate_store else None
+    ns_conn = (
+        fenced(
+            await namespace_for_root(request, settings, record["root_uri"], endpoint=record.get("endpoint") or None),
+            control_root=settings.registry_root,
+            storage_options=so,
+        )
+        if in_estate_store
+        else None
+    )
     held = await _namespaces_in(ns_conn, warehouse_id) if ns_conn is not None else []
     if held and not cascade:
         raise NamespaceNotEmptyError(
@@ -1070,122 +1080,167 @@ async def delete_warehouse(
     if cascade or purge_bucket:
         require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
-    # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
-    # this warehouse's namespaces and report a clean delete having removed nothing.
-    subtrees = await _cascade_subtrees(ns_conn, settings, held, force=force) if ns_conn is not None else []
-    # The warehouse's own trash: the records whose names begin with its id.
-    trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
-    if purge_bucket:
-        await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
-    # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
-    # What the delete announces is filed before it changes anything, so a delete that fails part-way still announces what
-    # it did once the store shows it ([[LH-576]]): a deregister marker per table it means to detach, landed once the
-    # table's name names it no longer, and `warehouse_deleted`, landed once the warehouse's record is gone.
-    detached: dict[tuple[str, ...], Announcement] = {}
-    for subtree in subtrees:
-        for item in subtree.descendants:
-            if item.kind == "table":
-                detached[tuple(item.segments)] = Announcement(
-                    evidence=NameResolves(segments=item.segments, uuid=item.uuid, held=False),
-                    message=announcer.marker(
-                        item.segments,
-                        author=token.subject if token is not None else None,
-                        operation=DEREGISTER_TABLE,
-                        uuids=await uuids.table(item.segments, uuid=item.uuid),
-                    ),
-                )
-    planned = CatalogControlEvent(
-        action="warehouse_deleted",
-        object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.subject}" if token else None,
-        extra={
-            "project": project,
-            "bucket": bucket,
-            "namespaces_dropped": [fga.canonical_object_id(namespace) for subtree in subtrees for namespace in subtree.namespaces],
-            "bucket_purged": purge_bucket,
-            "objects_purged": 0,
-        },
-    )
-    deleted = Announcement(evidence=RecordGone(key=warehouses.record_key(warehouse_id)), message=ControlMessage(event=planned))
-    async with announcer.announcing(door="delete_warehouse", target=f"warehouse:{warehouse_id}", announcements=[*detached.values(), deleted]) as filing:
-        namespaces_dropped: list[str] = []
-        tables_removed: list[str] = []
-        trash_ended: list[str] = []
-        revoked = 0
-        bucket_purged = False
-        try:
-            for entry in trashed:
-                kind, canonical = str(entry.get("kind") or "table"), str(entry.get("id") or "")
-                # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
-                # so a failure in the records after it still reports these tuples.
-                trashed_uuid = trash.object_uuid(entry)
-                if trashed_uuid is not None:
-                    obj = fga.object_of(kind, trashed_uuid)
-                    revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)
-                else:
-                    log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
-                await _forget_trashed(settings, entry, purge=purge_bucket)
-                trash_ended.append(f"{kind}:{canonical}")
-            if ns_conn is not None:
-                for subtree in subtrees:
-                    # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
-                    # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
-                    removed = [item for item in subtree.descendants if item.kind == "namespace"]
-                    for item in subtree.descendants:
-                        if item.kind != "table":
-                            continue
-                        # What the announcement names the table by, read while it still stands (ADR 0173 §10).
-                        if await _detach_table(ns_conn, settings, item.segments, purge=purge_bucket, table_uuid=item.uuid):
-                            removed.append(item)
-                            tables_removed.append(fga.canonical_object_id(item.segments))
-                            await filing.send(detached[tuple(item.segments)])
-                    for namespace in subtree.namespaces:
-                        try:
-                            await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=namespace))
-                        except NamespaceNotFoundError:
-                            # Drift, or an earlier attempt's work: the namespace went before its turn, and refusing
-                            # here would leave records and grants nobody can end, so the catalog's own records still go.
-                            log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
-                        namespaces_dropped.append(fga.canonical_object_id(namespace))
-                    async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
+    # G4 (ADR 0233): the warehouse's namespace fence held for a drop from before its trash is read until its record is gone.
+    # A trash record is filed under the warehouse only while that fence is held for an add (`trash.put`), so a recoverable
+    # drop landing beside this delete files before the read below, which finds it, or is refused 409: none outlives the
+    # warehouse. Its adds directly beneath the warehouse are held off the same way.
+    async with holding(settings.registry_root, so, [warehouse_id], NamespaceWork.DROP):
+        # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
+        # this warehouse's namespaces and report a clean delete having removed nothing.
+        subtrees = await _cascade_subtrees(ns_conn, settings, held, force=force) if ns_conn is not None else []
+        # The warehouse's own trash: the records whose names begin with its id.
+        trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
+        if purge_bucket:
+            await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
+        # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
+        # What the delete announces is filed before it changes anything, so a delete that fails part-way still announces what
+        # it did once the store shows it ([[LH-576]]): a deregister marker per table it means to detach, landed once the
+        # table's name names it no longer, and `warehouse_deleted`, landed once the warehouse's record is gone.
+        detached: dict[tuple[str, ...], Announcement] = {}
+        for subtree in subtrees:
+            for item in subtree.descendants:
+                if item.kind == "table":
+                    detached[tuple(item.segments)] = Announcement(
+                        evidence=NameResolves(segments=item.segments, uuid=item.uuid, held=False),
+                        message=announcer.marker(
+                            item.segments,
+                            author=token.subject if token is not None else None,
+                            operation=DEREGISTER_TABLE,
+                            uuids=await uuids.table(item.segments, uuid=item.uuid),
+                        ),
+                    )
+        planned = CatalogControlEvent(
+            action="warehouse_deleted",
+            object_type="warehouse",
+            object_id=f"warehouse:{warehouse_id}",
+            actor=f"user:{token.subject}" if token else None,
+            extra={
+                "project": project,
+                "bucket": bucket,
+                "namespaces_dropped": [fga.canonical_object_id(namespace) for subtree in subtrees for namespace in subtree.namespaces],
+                "bucket_purged": purge_bucket,
+                "objects_purged": 0,
+            },
+        )
+        deleted = Announcement(evidence=RecordGone(key=warehouses.record_key(warehouse_id)), message=ControlMessage(event=planned))
+        async with announcer.announcing(door="delete_warehouse", target=f"warehouse:{warehouse_id}", announcements=[*detached.values(), deleted]) as filing:
+            namespaces_dropped: list[str] = []
+            tables_removed: list[str] = []
+            trash_ended: list[str] = []
+            revoked = 0
+            bucket_purged = False
+            try:
+                for entry in trashed:
+                    kind, canonical = str(entry.get("kind") or "table"), str(entry.get("id") or "")
+                    # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
+                    # so a failure in the records after it still reports these tuples.
+                    trashed_uuid = trash.object_uuid(entry)
+                    if trashed_uuid is not None:
+                        obj = fga.object_of(kind, trashed_uuid)
+                        revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)
+                    else:
+                        log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
+                    await _forget_trashed(settings, entry, purge=purge_bucket)
+                    trash_ended.append(f"{kind}:{canonical}")
+                if ns_conn is not None:
+                    for subtree in subtrees:
+                        # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
+                        # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
+                        removed = [item for item in subtree.descendants if item.kind == "namespace"]
+                        for item in subtree.descendants:
+                            if item.kind != "table":
+                                continue
+                            # What the announcement names the table by, read while it still stands (ADR 0173 §10).
+                            if await _detach_table(ns_conn, settings, item.segments, purge=purge_bucket, table_uuid=item.uuid):
+                                removed.append(item)
+                                tables_removed.append(fga.canonical_object_id(item.segments))
+                                await filing.send(detached[tuple(item.segments)])
+                        for namespace in subtree.namespaces:
+                            try:
+                                await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=namespace))
+                            except NamespaceNotFoundError:
+                                # Drift, or an earlier attempt's work: the namespace went before its turn, and refusing
+                                # here would leave records and grants nobody can end, so the catalog's own records still go.
+                                log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
+                            namespaces_dropped.append(fga.canonical_object_id(namespace))
+                        async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
+                            revoked += count
+                    # The warehouse's own row last, once every namespace beneath it is gone.
+                    with suppress(NamespaceNotFoundError):
+                        await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=[warehouse_id]))
+                # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
+                # is ended from there before the warehouse's own grants go.
+                ended = {fga.namespace_object(subtree.uuid) for subtree in subtrees if subtree.uuid is not None}
+                for orphan in await fga_deps.orphaned_children(client, settings, f"warehouse:{warehouse_id}", ended=ended):
+                    async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
                         revoked += count
-                # The warehouse's own row last, once every namespace beneath it is gone.
-                with suppress(NamespaceNotFoundError):
-                    await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=[warehouse_id]))
-            # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
-            # is ended from there before the warehouse's own grants go.
-            ended = {fga.namespace_object(subtree.uuid) for subtree in subtrees if subtree.uuid is not None}
-            for orphan in await fga_deps.orphaned_children(client, settings, f"warehouse:{warehouse_id}", ended=ended):
-                async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
-                    revoked += count
 
-            revoked += await fga_deps.revoke_removed_object(client, settings, f"warehouse:{warehouse_id}", token=token)
-            # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
-            # fail, it keeps the warehouse for the re-issue that finishes them.
-            purged = 0
-            if purge_bucket:
-                purged = await run_in_threadpool(warehouses.purge_bucket, bucket, so)
-                bucket_purged = True
-                await run_in_threadpool(partial(warehouses.release_bucket_claim, settings.registry_root, so, bucket=bucket, warehouse_id=warehouse_id))
-            await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, so, warehouse_id)
-        except Exception as exc:
-            # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first
-            # table is detached, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
-            # blip) — and the caller then gets a problem body that says nothing about what is already
-            # gone. The error is deliberately NOT swallowed (fail-closed; every primitive is idempotent, so the
-            # recovery path is to re-issue the same call), but what DID land is recorded here or it is lost.
-            if isinstance(exc, fga.RevokeInterrupted):
-                # The object whose revoke the outage stopped lost these before it.
-                revoked += len(exc.removed)
-            if _a_refusal(exc) and not (namespaces_dropped or tables_removed or trash_ended or revoked):
-                # A GUARD'S REFUSAL BEFORE ANY STEP LANDED is the answer, under its own code ([[LH-572]]): a guard refuses before
-                # its step writes, so nothing is partial. A failure of the store or of OpenFGA is reported as partial even with
-                # nothing counted, since the step it stopped may have landed (a clone's row detached, then its tag's delete
-                # failed), and a re-issue is what finishes it.
-                raise
-            log.error(
-                "warehouse_delete_partial",
+                revoked += await fga_deps.revoke_removed_object(client, settings, f"warehouse:{warehouse_id}", token=token)
+                # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
+                # fail, it keeps the warehouse for the re-issue that finishes them.
+                purged = 0
+                if purge_bucket:
+                    purged = await run_in_threadpool(warehouses.purge_bucket, bucket, so)
+                    bucket_purged = True
+                    await run_in_threadpool(partial(warehouses.release_bucket_claim, settings.registry_root, so, bucket=bucket, warehouse_id=warehouse_id))
+                await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, so, warehouse_id)
+            except Exception as exc:
+                # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first
+                # table is detached, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
+                # blip) — and the caller then gets a problem body that says nothing about what is already
+                # gone. The error is deliberately NOT swallowed (fail-closed; every primitive is idempotent, so the
+                # recovery path is to re-issue the same call), but what DID land is recorded here or it is lost.
+                if isinstance(exc, fga.RevokeInterrupted):
+                    # The object whose revoke the outage stopped lost these before it.
+                    revoked += len(exc.removed)
+                if _a_refusal(exc) and not (namespaces_dropped or tables_removed or trash_ended or revoked):
+                    # A GUARD'S REFUSAL BEFORE ANY STEP LANDED is the answer, under its own code ([[LH-572]]): a guard refuses before
+                    # its step writes, so nothing is partial. A failure of the store or of OpenFGA is reported as partial even with
+                    # nothing counted, since the step it stopped may have landed (a clone's row detached, then its tag's delete
+                    # failed), and a re-issue is what finishes it.
+                    raise
+                log.error(
+                    "warehouse_delete_partial",
+                    extra={
+                        "warehouse": warehouse_id,
+                        "project": project,
+                        "bucket": bucket,
+                        "namespaces_dropped": namespaces_dropped,
+                        "tables_removed": tables_removed,
+                        "trash_ended": trash_ended,
+                        "tuples_revoked": revoked,
+                        "bucket_purged": bucket_purged,
+                    },
+                    exc_info=True,
+                )
+                # AND TELL THE CALLER, not only the log. The log records what landed for an operator; the
+                # caller got a problem body that said nothing, so it could not tell a delete that did nothing
+                # from one that destroyed three namespaces and then failed — and those need different next
+                # actions. The outcome rides as RFC 9457 extension members, which is what lets a 5xx say
+                # something true about the caller's own objects while `detail` stays redacted.
+                #
+                # ServiceUnavailable rather than the original error, and that is the honest code: every
+                # primitive here is idempotent, so the recovery is to re-issue the SAME call — which is
+                # precisely what a 503 asks a client to do. The cause is chained, so the real failure is still
+                # in the traceback and the log.
+                raise PartiallyApplied(
+                    f"warehouse {warehouse_id!r} was PARTIALLY deleted: {len(namespaces_dropped)} namespace(s) dropped, "
+                    f"{len(tables_removed)} table(s) removed, {len(trash_ended)} trashed object(s) ended and {revoked} tuple(s) "
+                    "revoked before the failure. Every step is "
+                    "idempotent — re-issue this call to finish it.",
+                    problem_extra={
+                        "warehouse": warehouse_id,
+                        "namespaces_dropped": namespaces_dropped,
+                        "tables_removed": tables_removed,
+                        "trash_ended": trash_ended,
+                        "tuples_revoked": revoked,
+                        "bucket_purged": bucket_purged,
+                        "partial": True,
+                    },
+                ) from exc
+
+            log.info(
+                "warehouse_deleted",
                 extra={
                     "warehouse": warehouse_id,
                     "project": project,
@@ -1194,54 +1249,14 @@ async def delete_warehouse(
                     "tables_removed": tables_removed,
                     "trash_ended": trash_ended,
                     "tuples_revoked": revoked,
-                    "bucket_purged": bucket_purged,
+                    "bucket_purged": purge_bucket,
+                    "objects_purged": purged,
+                    "forced": force,
                 },
-                exc_info=True,
             )
-            # AND TELL THE CALLER, not only the log. The log records what landed for an operator; the
-            # caller got a problem body that said nothing, so it could not tell a delete that did nothing
-            # from one that destroyed three namespaces and then failed — and those need different next
-            # actions. The outcome rides as RFC 9457 extension members, which is what lets a 5xx say
-            # something true about the caller's own objects while `detail` stays redacted.
-            #
-            # ServiceUnavailable rather than the original error, and that is the honest code: every
-            # primitive here is idempotent, so the recovery is to re-issue the SAME call — which is
-            # precisely what a 503 asks a client to do. The cause is chained, so the real failure is still
-            # in the traceback and the log.
-            raise PartiallyApplied(
-                f"warehouse {warehouse_id!r} was PARTIALLY deleted: {len(namespaces_dropped)} namespace(s) dropped, "
-                f"{len(tables_removed)} table(s) removed, {len(trash_ended)} trashed object(s) ended and {revoked} tuple(s) "
-                "revoked before the failure. Every step is "
-                "idempotent — re-issue this call to finish it.",
-                problem_extra={
-                    "warehouse": warehouse_id,
-                    "namespaces_dropped": namespaces_dropped,
-                    "tables_removed": tables_removed,
-                    "trash_ended": trash_ended,
-                    "tuples_revoked": revoked,
-                    "bucket_purged": bucket_purged,
-                    "partial": True,
-                },
-            ) from exc
-
-        log.info(
-            "warehouse_deleted",
-            extra={
-                "warehouse": warehouse_id,
-                "project": project,
-                "bucket": bucket,
-                "namespaces_dropped": namespaces_dropped,
-                "tables_removed": tables_removed,
-                "trash_ended": trash_ended,
-                "tuples_revoked": revoked,
-                "bucket_purged": purge_bucket,
-                "objects_purged": purged,
-                "forced": force,
-            },
-        )
-        # Sent with what the delete dropped and purged, under the id the planned event was filed with.
-        actual = planned.model_copy(update={"extra": {**planned.extra, "namespaces_dropped": namespaces_dropped, "objects_purged": purged}})
-        await filing.send(deleted.model_copy(update={"message": ControlMessage(event=actual)}))
+            # Sent with what the delete dropped and purged, under the id the planned event was filed with.
+            actual = planned.model_copy(update={"extra": {**planned.extra, "namespaces_dropped": namespaces_dropped, "objects_purged": purged}})
+            await filing.send(deleted.model_copy(update={"message": ControlMessage(event=actual)}))
     return DeleteWarehouseResponse(
         id=warehouse_id,
         bucket=bucket,
