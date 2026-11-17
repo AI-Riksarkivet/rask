@@ -2,6 +2,7 @@
 
 pub mod claims;
 pub mod identity;
+pub mod issuer;
 pub mod principal;
 pub mod settings;
 pub mod verifier;
