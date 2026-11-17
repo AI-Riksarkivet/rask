@@ -51,10 +51,20 @@ live chart); the catalog's registry and FGA are the real project store, as in La
 - **A declaration is its declarer's** (ADR 0227 §9, owner 2026-11-17). `DeclareTable` takes the table's location claim
   fenced for the authenticated subject that sent it, so until the declarer's first `version/create` lands, or the fence
   lapses after the claim's `LEASE` (15 minutes), a catalog create of the name or a version 1 by any other principal
-  answers 409 ConcurrentModification (14). The first `version/create` fences the claim under the ETag its resolution read
-  right before the finalize (taking over its own declarer's fence) and lifts it after. A declarer sending `DeclareTable`
-  again is answered its declaration as it stands; a drop of the declared, unwritten table takes the fence over. The
-  stock client's path is the spec's unchanged: no field and no call is added.
+  answers 409 ConcurrentModification (14). The first `version/create` fences the claim under the ETag of the claim it
+  reads right before the finalize (taking over its own declarer's fence) and lifts it after. A declarer asking again
+  (`DeclareTable` sent again, its client's credential refresh through `DescribeTable`, or the management credential
+  door at the write tier) renews its declaration's fence under the ETag it read before anything is vended, and a
+  credential vended for a declaration lasts no longer than that fence, `min(LANCE_VENDING_TTL_SECONDS, LEASE)`; a
+  declaration another request acted on refuses the renewal. A drop of the declared, unwritten table takes the fence
+  over. The stock client's path is the spec's unchanged: no field and no call is added.
+  So the open overwrite above does not reach across a declaration's lapse: measured on RustFS 1.0.3 (2026-11-17,
+  `make lifecycle-rustfs-check`, a session the store's STS issued under the catalog's session policy), a declarer's
+  write credential whose declaration lapsed while it stayed live put over a data file of the version another
+  principal's create committed at the location (200), and that table no longer read ("Invalid range 0..403 for
+  object of size 7 bytes"); with the bound, the credential expires within the second of the fence's lapse, before any
+  other principal's create can fence the claim (ADR 0227 §9). Every write credential on a written table still reaches
+  every committed data file of its table.
 - **Provenance:** at version/create the catalog reads the staged manifest's transaction properties and refuses a
   silver/gold commit without `rask.run_id` and `rask.inputs` (and checks `can_read_data` on each input); on its own
   doors it stamps them from the Context headers. No manifest is rewritten.

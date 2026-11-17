@@ -236,15 +236,26 @@ def _vendable_bases(location: str, settings: Settings, so: StorageOptions) -> Ve
     return bases
 
 
-def _mint(location: str, *, tier: Tier, bases: VendableBases, vendor: CredentialVendor, session_name: str) -> dict[str, str] | None:
-    """The ``storage_options`` the vendor mints for ``location`` at ``tier``, with the expiry the spec reads.
+def _mint(
+    location: str, *, tier: Tier, bases: VendableBases, vendor: CredentialVendor, session_name: str, at_most_seconds: int | None
+) -> dict[str, str] | None:
+    """The ``storage_options`` the vendor mints for ``location`` at ``tier``, with the expiry the spec reads, lasting at
+    most ``at_most_seconds`` where that is set.
 
     THE EXPIRY GOES INSIDE ``storage_options``, where the spec puts it and the only place a stock client looks
     (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableResponse: "If the vended credentials are temporary, the
     ``expires_at_millis`` key ..."). Without it a temporary credential looks permanent, and the client discovers
     the TTL by failing at the 900-second mark instead of refreshing.
     """
-    vended = vend_or_refuse(vendor, table_location=location, tier=tier, session_name=session_name, bases=bases.bases, data_directories=bases.data_directories)
+    vended = vend_or_refuse(
+        vendor,
+        table_location=location,
+        tier=tier,
+        session_name=session_name,
+        bases=bases.bases,
+        data_directories=bases.data_directories,
+        at_most_seconds=at_most_seconds,
+    )
     if vended is None:
         return None
     # The secret and the session token leave the catalog in the door's answer and nowhere else ([[LH-072]]).
@@ -264,6 +275,7 @@ async def _vend_on_spec_door(
     token: Caller | None,
     client: OpenFgaClient | None,
     asked: bool,
+    at_most_seconds: int | None = None,
 ) -> dict[str, str] | None:
     """Vend the highest tier FGA grants the caller on ``segments`` (ADR 0156 C3), and record the issuance (#41).
 
@@ -283,6 +295,9 @@ async def _vend_on_spec_door(
     failed exchange leaves the answer without one and is logged, because a metadata read, the catalog's most
     called door, must not fail on the object store's STS. Asked for, the refusal is the answer.
 
+    ``at_most_seconds`` caps the credential's life: a declaration's is no longer than its fence
+    (:func:`table_claims.declaration_credential_seconds`).
+
     Raises:
         PermissionDeniedError: The caller asked and FGA grants it no rung that opens a tier.
         LanceNamespaceError: The caller asked and the vend was refused or failed (409, 401, 503).
@@ -297,7 +312,9 @@ async def _vend_on_spec_door(
                 raise PermissionDeniedError(f"can_read_data required on table:{fga.canonical_object_id(segments)} to vend credentials")
             return None
         subject = token.subject if token is not None else ANONYMOUS_SUBJECT
-        options = await run_in_threadpool(partial(_mint, location, tier=tier, bases=bases, vendor=vendor, session_name=role_session_name(subject)))
+        options = await run_in_threadpool(
+            partial(_mint, location, tier=tier, bases=bases, vendor=vendor, session_name=role_session_name(subject), at_most_seconds=at_most_seconds)
+        )
     except LanceNamespaceError:
         if asked:
             raise
@@ -355,7 +372,9 @@ async def declare_table(
     claims = table_claims.claim_store(settings)
     declarer = current_subject(token)
     # A DECLARATION IS ITS DECLARER'S (ADR 0227 §9): sent again by the subject that made it, nothing having acted on it
-    # since, the declaration is answered as it stands, its fence kept, with a fresh credential the vend judges anew.
+    # since, the declaration is renewed under the ETag its resolution read and answered with a credential vended after
+    # the renewal, lasting no longer than the fence (RedeclareRenews). One another request acted on since is answered as a
+    # first declare of the name is now.
     own = await run_in_threadpool(partial(dataplane.own_declaration, ns, so, segments, claims=claims, declarer=declarer))
     if own is not None and own.location is not None:
         return await _vended_declaration(
@@ -365,6 +384,8 @@ async def declare_table(
     # and its grants are written once the claim records it, before the backend records the table ([[LH-588]]). The claim
     # is fenced for the declarer until its first version or the fence's lease (ADR 0227 §9).
     table_uuid = str(uuid4())
+    # The fence the declare takes its claim under: the declaration's, until a request of the declarer renews it.
+    declared_under = table_claims.DoorFence(location=f"{root.rstrip('/')}/{table_uuid}", token=uuid4().hex)
     grants = fga_deps.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
     try:
         location = await run_in_threadpool(
@@ -378,6 +399,7 @@ async def declare_table(
                 holder=canonical,
                 table_uuid=table_uuid,
                 before_register=grants,
+                fence_for=declared_under.token,
                 declarer=declarer,
             )
         )
@@ -386,6 +408,10 @@ async def declare_table(
         raise
 
     async def _undo_declare() -> None:
+        # The rollback renews this declare's own fence first, a plain fence of its own (ADR 0227 §8's rule for an effect
+        # it cannot take back): a fence another request wrote since, the declarer's DeclareTable sent again and answered
+        # this declaration included, raises FenceLostError, and the declaration is left standing as that request's.
+        await run_in_threadpool(table_claims.renew_fence, claims, declared_under)
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
         await run_in_threadpool(location_claims.release, claims, location, canonical)
 
@@ -430,7 +456,10 @@ async def _vended_declaration(
     """The declaration of ``segments`` at ``location`` as its declarer is answered, owned by them since before it was
     recorded ([[LH-588]]), with the credential they write it with, ``undo`` taking the declaration and its grants back
     when the vend fails (:func:`fga_deps.undo_then_take_back`: the table first, its grants once it is gone). ``None``
-    for a declaration answered again to its declarer, which a failed vend leaves as it stands."""
+    for a declaration answered again to its declarer, which a failed vend leaves as it stands.
+
+    The credential lasts no longer than the declaration's fence, which the door wrote or renewed right before
+    (:func:`table_claims.declaration_credential_seconds`)."""
     response = DeclareTableResponse(location=location)
     # The credential is part of the answer, so a vend that fails takes the declaration back with it, before
     # anything announces the table: a declared, owned table whose declarer was told it failed is one a retry
@@ -449,6 +478,7 @@ async def _vended_declaration(
                 token=token,
                 client=client,
                 asked=req.vend_credentials is True,
+                at_most_seconds=table_claims.declaration_credential_seconds(),
             )
         except Exception:
             if undo is not None:
@@ -642,6 +672,17 @@ async def describe_table(
         table_uuid = uuid_of(response.properties)
         if table_uuid is None:
             raise InternalError(f"table {segments} answers no uuid, so no credential can be vended for it")
+        # A stock client refreshes the credential its declare answered through this door: a declaration's declarer is
+        # vended one only after renewing the declaration, and for no longer than its fence (ADR 0227 §9, RedeclareRenews).
+        try:
+            at_most_seconds = await run_in_threadpool(
+                partial(table_claims.renewed_for_its_declarer, table_claims.claim_store(settings), table.resolved, declarer=current_subject(token))
+            )
+        except ConcurrentModificationError:
+            if vend_credentials is True:
+                raise
+            log.warning("spec_vend_skipped", extra={"door": "describe", "table": "/".join(segments), "reason": "declaration_changed"})
+            return response
         response.storage_options = await _vend_on_spec_door(
             table.namespace,
             door="describe",
@@ -654,6 +695,7 @@ async def describe_table(
             token=token,
             client=client,
             asked=vend_credentials is True,
+            at_most_seconds=at_most_seconds,
         )
     return response
 

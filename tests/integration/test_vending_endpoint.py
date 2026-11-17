@@ -49,6 +49,7 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
             data_directories: Sequence[str] = (),
             branch: str = "",
             records: TableRecords | None = None,
+            at_most_seconds: int | None = None,
         ) -> VendedSession:
             captured.update(table_location=table_location, tier=tier)
             key_pair = S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST"))
@@ -81,6 +82,7 @@ def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, c
             data_directories: Sequence[str] = (),
             branch: str = "",
             records: TableRecords | None = None,
+            at_most_seconds: int | None = None,
         ) -> VendedSession:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "token verification failed"}}, "AssumeRoleWithWebIdentity")
 
@@ -118,6 +120,7 @@ def test_a_vend_whose_store_does_not_answer_the_open_is_refused_unavailable(
             data_directories: Sequence[str] = (),
             branch: str = "",
             records: TableRecords | None = None,
+            at_most_seconds: int | None = None,
         ) -> VendedSession:
             asked.append(table_location)
             return VendedSession(

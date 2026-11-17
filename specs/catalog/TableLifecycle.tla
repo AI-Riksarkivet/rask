@@ -144,18 +144,28 @@
 (*       version 1: its version/create, or its own catalog create.        *)
 (*       TableLifecycleStockIntruder.                                     *)
 (*   StockFencesFirstVersion  version/create of a version 1 fences the   *)
-(*       claim (one write under the ETag its resolution read, refused     *)
+(*       claim (one write under the ETag of the claim it reads, refused   *)
 (*       while another request fences it) before the put-if-not-exists,  *)
 (*       and lifts the fence after: a declarer whose own fence lapsed in  *)
 (*       its write renews it so only while nobody acted on the claim.    *)
 (*       TableLifecycleStockLapse.                                        *)
+(* and the one review of §9 found (ADR 0227 §9, 2026-11-17):             *)
+(*   RedeclareRenews  the declarer asking for its declaration again (its  *)
+(*       DeclareTable sent again, its client's credential refresh)        *)
+(*       renews the declaration's fence under the ETag it reads before a  *)
+(*       credential is vended, which lasts no longer than the fence; a    *)
+(*       claim another request acted on refuses the renewal and nothing  *)
+(*       is vended. TableLifecycleStockRedeclare.                         *)
 (*                                                                         *)
 (* NOT MODELLED: namespaces' own rows (Cascade.tla); deregister and       *)
 (* register as doors of their own; Overwrite and ExistOk creates;         *)
 (* idempotency keys; the announcements; base records, data directories    *)
 (* and clone endings; `force`, which turns protection off on purpose; a   *)
 (* lease's clock beyond the lapse (A5); a purge refusal retried on a      *)
-(* later tick (a noted refusal stays noted).                               *)
+(* later tick (a noted refusal stays noted); a stock declare that fails  *)
+(* after its claim and rolls back (its rollback renews its own fence     *)
+(* first, as a create's does, so a declaration answered again since is    *)
+(* left standing: pinned by a test, ADR 0227 §9).                         *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -171,7 +181,7 @@ CONSTANTS Ops1, Ops2, Ops3,   \* the operations each of the three callers may ru
 
 Guards == {"CreateFence", "CreateFenceHoldsDoors", "UndropFence", "UndropHoldsFence", "UndropOwnConflict",
            "DropRereadsProtection", "ProtectChecksFence", "CascadeRereadsProtection", "CreateRenewsFence",
-           "DeclarationFence", "DeclarerLifts", "StockFencesFirstVersion"}
+           "DeclarationFence", "DeclarerLifts", "StockFencesFirstVersion", "RedeclareRenews"}
 ASSUME Off \subseteq Guards
 On(g) == g \notin Off
 
@@ -224,11 +234,15 @@ VARIABLES rows,      \* __manifest: the <<name, location>> rows
           overwritten, \* locations where a create's commit landed over rows another create committed
           protOk,      \* locations whose protection answered 200 (an initial record counts as one)
           owed,        \* locations declared, whose declaration has neither lapsed nor been ended or written by its declarer
-          intruded     \* locations another principal took to write version 1 into while their declaration was owed
+          intruded,    \* locations another principal took to write version 1 into while their declaration was owed
+          cred         \* the write credential a declaration's declarer holds for each location: none; bounded, vended
+                       \* right after its declaration's fence was written or renewed, so it expires within the
+                       \* request's latency of that fence's lapse; unbounded, vended under a fence written earlier,
+                       \* so it can outlive the fence; stale, an unbounded one still live after its fence lapsed
 
 store  == <<rows, bytes, claim, trash, prot, grants>>
 locals == <<lloc, lver, lx, lpath>>
-hist   == <<acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+hist   == <<acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 vars   == <<store, op, pc, locals, mpc, mloc, faults, hist>>
 
 NoClaim  == [st |-> "none", name |-> None, fence |-> None, decl |-> FALSE, ver |-> 0]
@@ -250,6 +264,7 @@ Init ==
   /\ doorEnded = {} /\ softDropped = {} /\ undropOk = {} /\ purged = {} /\ protHit = FALSE /\ purgeHitLive = FALSE /\ overwritten = {}
   /\ protOk = prot
   /\ owed = {} /\ intruded = {}
+  /\ cred = [l \in Locs |-> "none"]
 
 ---------------------------------------------------------------------------
 \* Helpers.
@@ -288,6 +303,7 @@ Against(l, p) == IF FencedAgainst(l, p) THEN ~TakesOver(l, p) ELSE FALSE
 Owes(l, p) ==
   /\ owed' = owed \ {l}
   /\ intruded' = IF l \in owed /\ Door(op[p]) \notin {"drop", "softdrop"} /\ Principal(p) # "A" THEN intruded \cup {l} ELSE intruded
+  /\ UNCHANGED cred
 
 \* location_claims.lift_fence: request p's own fence goes; a claim it no longer fences is left.
 Unfenced(l, p) == claim' = [claim EXCEPT ![l] = IF @.fence = p THEN [Bump(@) EXCEPT !.fence = None, !.decl = FALSE] ELSE @]
@@ -338,12 +354,12 @@ CTake(p) ==
   /\ pc[p] = "c_take" /\ NoFault
   /\ IF On("CreateFence")
        THEN IF Against(l, p) \/ claim[l].st # "held" \/ claim[l].name # n
-              THEN Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded>>
+              THEN Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded, cred>>
               ELSE Goto(p, "c_recheck") /\ claim' = [claim EXCEPT ![l] = [Bump(@) EXCEPT !.fence = p, !.decl = FALSE]] /\ Owes(l, p)
-       ELSE CASE Against(l, p) -> Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded>>
+       ELSE CASE Against(l, p) -> Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded, cred>>
               [] claim[l].st = "held" /\ claim[l].name = n -> Goto(p, "c_write") /\ UNCHANGED claim /\ Owes(l, p)
-              [] claim[l].st # "held" -> Goto(p, "c_rb_drop") /\ claim' = [claim EXCEPT ![l] = [st |-> "held", name |-> n, fence |-> None, decl |-> FALSE, ver |-> @.ver + 1]] /\ UNCHANGED <<owed, intruded>>
-              [] OTHER -> Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded>>
+              [] claim[l].st # "held" -> Goto(p, "c_rb_drop") /\ claim' = [claim EXCEPT ![l] = [st |-> "held", name |-> n, fence |-> None, decl |-> FALSE, ver |-> @.ver + 1]] /\ UNCHANGED <<owed, intruded, cred>>
+              [] OTHER -> Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded, cred>>
   /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk>>
 
 \* The probe again, under the fence: the name still describes this location (a rollback that ran since removed the
@@ -438,7 +454,7 @@ CPut(p) ==
   /\ bytes' = [bytes EXCEPT ![lloc[p]] = "data"]
   /\ overwritten' = IF bytes[lloc[p]] = "data" THEN overwritten \cup {lloc[p]} ELSE overwritten
   /\ Goto(p, "c_unfence")
-  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, protOk, owed, intruded>>
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, protOk, owed, intruded, cred>>
 
 CWriteFails(p) ==
   /\ pc[p] \in {"c_write", "c_commit", "c_put"} /\ Fault
@@ -467,7 +483,7 @@ CRollbackDelete(p) ==
   /\ pc[p] = "c_rb_delete" /\ NoFault
   /\ DeleteBytes(lx[p])
   /\ Goto(p, "c_rb_release")
-  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 \* The rollback releases the claim under the name and the uuid the claim recorded, then (fresh path) the grants.
 CRollbackRelease(p) ==
@@ -480,7 +496,7 @@ CAnswer(p) ==
   /\ pc[p] = "c_answer" /\ NoFault
   /\ acked' = acked \cup {lloc[p]}
   /\ Goto(p, "done")
-  /\ UNCHANGED <<store, op, locals, mpc, mloc, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<store, op, locals, mpc, mloc, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 ---------------------------------------------------------------------------
 \* DROP: the resolution, the protection guard and the fence are common to both branches of _drop.
@@ -505,7 +521,7 @@ DFence(p) ==
   LET n == NameOf(op[p]) l == lloc[p] IN
   /\ pc[p] = "d_fence" /\ NoFault
   /\ IF Fences /\ (claim[l].ver # lver[p] \/ Against(l, p) \/ (claim[l].st = "held" /\ claim[l].name # n))
-       THEN Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded>>
+       THEN Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded, cred>>
        ELSE /\ claim' = [claim EXCEPT ![l] = [st |-> "held", name |-> n, fence |-> p, decl |-> FALSE, ver |-> @.ver + 1]]
             /\ Owes(l, p)
             /\ Goto(p, CASE Reprotects(p) -> "d_reprot" [] Door(op[p]) = "drop" -> "d_judge" [] OTHER -> "s_put")
@@ -540,14 +556,14 @@ DDereg(p) ==
             /\ Retired(LocOf(n))
             /\ Goto(p, IF LocOf(n) = l THEN "d_delete" ELSE "done")
             /\ UNCHANGED trash
-  /\ UNCHANGED <<bytes, claim, prot, grants, op, locals, mpc, mloc, acked, softDropped, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<bytes, claim, prot, grants, op, locals, mpc, mloc, acked, softDropped, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 \* _delete_everything_under; a delete that fails is TableBytesLeftError: the residue record and the claim stay.
 DDelete(p) ==
   /\ pc[p] = "d_delete" /\ NoFault
   /\ DeleteBytes(lloc[p])
   /\ Goto(p, "d_clear")
-  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 DDeleteFails(p) ==
   /\ pc[p] = "d_delete" /\ Fault
@@ -604,7 +620,7 @@ SDereg(p) ==
             /\ softDropped' = softDropped \cup {LocOf(n)}
             /\ Retired(LocOf(n))
             /\ Goto(p, "s_lift")
-  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 SUnprot(p) ==
   /\ pc[p] = "s_unprot" /\ NoFault
@@ -676,11 +692,11 @@ URegister(p) ==
        THEN /\ UNCHANGED <<rows, softDropped>>
             /\ Goto(p, IF ~On("UndropOwnConflict") \/ LocOf(n) = l THEN URegistered ELSE "u_lift")
        ELSE rows' = rows \cup {<<n, l>>} /\ softDropped' = softDropped \ {l} /\ Goto(p, URegistered)
-  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 \* What an undrop answers 200 for is fixed at its last effect: a door acting on the table after it acts on it again.
 Answered(p) == undropOk' = undropOk \cup {<<NameOf(op[p]), lloc[p]>>}
-UNotAnswered == <<acked, doorEnded, softDropped, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+UNotAnswered == <<acked, doorEnded, softDropped, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 \* trash.clear(uuid): the record goes once the table is registered. No other door writes it while the fence stands.
 UClear(p) ==
@@ -736,7 +752,7 @@ RDereg(p) ==
   /\ IF Named(n) = {}
        THEN Goto(p, "r_handback") /\ UNCHANGED <<rows, doorEnded, undropOk>>
        ELSE rows' = rows \ Named(n) /\ doorEnded' = doorEnded \cup {lloc[p]} /\ Retired(LocOf(n)) /\ Goto(p, "r_register")
-  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, softDropped, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<bytes, claim, trash, prot, grants, op, locals, mpc, mloc, acked, softDropped, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 \* ns.register_table(destination, location): put-if-not-exists (A1); a failure compensates.
 RRegister(p) ==
@@ -822,18 +838,39 @@ XClaim(p) ==
   /\ bytes' = [bytes EXCEPT ![lloc[p]] = "marker"]
   /\ owed' = owed \cup {lloc[p]}
   /\ Goto(p, "x_register")
-  /\ UNCHANGED <<rows, trash, prot, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, intruded>>
+  /\ UNCHANGED <<rows, trash, prot, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, intruded, cred>>
 
-\* RegisterTable: a name taken since refuses it (A1), and the declare undoes what it made.
+\* RegisterTable: a name taken since refuses it (A1), and the declare undoes what it made. Registered, the declare
+\* answers with the write credential it vends (_vended_declaration), right after the fence its claim was written with, for
+\* at most the fence's LEASE: bounded.
 XRegister(p) ==
   LET n == NameOf(op[p]) IN
   /\ pc[p] = "x_register" /\ NoFault
   /\ IF NameCAS /\ Named(n) # {}
-       THEN /\ Goto(p, "done") /\ UNCHANGED rows
+       THEN /\ Goto(p, "done") /\ UNCHANGED <<rows, cred>>
             /\ bytes' = [bytes EXCEPT ![lloc[p]] = Deleted(@)] /\ Released(lloc[p], n) /\ grants' = grants \ {lloc[p]}
             /\ owed' = owed \ {lloc[p]}
-       ELSE Goto(p, "x_write") /\ rows' = rows \cup {<<n, lloc[p]>>} /\ UNCHANGED <<bytes, claim, grants, owed>>
+       ELSE /\ Goto(p, "x_write") /\ rows' = rows \cup {<<n, lloc[p]>>} /\ UNCHANGED <<bytes, claim, grants, owed>>
+            /\ cred' = [cred EXCEPT ![lloc[p]] = "bounded"]
   /\ UNCHANGED <<trash, prot, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, intruded>>
+
+\* The declarer asks for its declaration again while it writes, once per behaviour: its DeclareTable sent again (its
+\* answer lost), or its client's credential refresh (DescribeTable). With RedeclareRenews the door renews its own
+\* declaration's fence, one write under the ETag it read (table_claims.renew_declaration), and vends after it for at most
+\* the fence's LEASE: bounded. A claim that no longer carries the declarer's live declaration refuses the renewal, and
+\* nothing is vended (the declare answers as a first declare of the name would now, the describe without a credential).
+\* Without the guard the door answers the declaration as it stands, with a credential of the full TTL vended under a fence
+\* written earlier: unbounded, so it can outlive the fence.
+XAsk(p) ==
+  LET l == lloc[p] IN
+  /\ pc[p] = "x_write" /\ op[p] = "stock_n1" /\ lpath[p] # "asked" /\ NoFault
+  /\ lpath' = [lpath EXCEPT ![p] = "asked"]
+  /\ IF claim[l].st = "held" /\ claim[l].decl /\ claim[l].fence = p
+       THEN IF On("RedeclareRenews")
+              THEN claim' = [claim EXCEPT ![l] = Bump(@)] /\ cred' = [cred EXCEPT ![l] = "bounded"]
+              ELSE cred' = [cred EXCEPT ![l] = "unbounded"] /\ UNCHANGED claim
+       ELSE UNCHANGED <<claim, cred>>
+  /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, pc, lloc, lver, lx, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
 
 \* The client's Lance refuses a location that already holds a dataset, then writes and stages its manifest. Its own
 \* process, outside the catalog: it can take longer than LEASE (LongSteps).
@@ -842,37 +879,39 @@ XWrite(p) ==
   /\ Goto(p, IF bytes[lloc[p]] = "data" THEN "done" ELSE "x_resolve")
   /\ UNCHANGED <<store, op, locals, mpc, mloc, hist>>
 
-\* version/create's door resolves the name (DoorTable: the claim and its ETag) and stages the manifest: a name that left
-\* the location answers 409 (TableChanged) or 404, a version already there 409 (VersionTaken).
+\* version/create's door resolves the name and stages the manifest: a name that left the location answers 409
+\* (TableChanged) or 404, a version already there 409 (VersionTaken).
 XResolve(p) ==
   LET l == lloc[p] IN
   /\ pc[p] = "x_resolve" /\ NoFault
-  /\ IF LocOf(NameOf(op[p])) # l \/ bytes[l] = "data"
-       THEN Goto(p, "done") /\ UNCHANGED lver
-       ELSE Goto(p, "x_fence") /\ lver' = [lver EXCEPT ![p] = claim[l].ver]
-  /\ UNCHANGED <<store, op, lloc, lx, lpath, mpc, mloc, hist>>
+  /\ Goto(p, IF LocOf(NameOf(op[p])) # l \/ bytes[l] = "data" THEN "done" ELSE "x_fence")
+  /\ UNCHANGED <<store, op, locals, mpc, mloc, hist>>
 
-\* DoorTable.fence_first_version (StockFencesFirstVersion): one write under the ETag the resolution read, refused while
-\* another request fences the claim, a declaration's fence of another principal included (DeclarerLifts); the declarer's
-\* own is taken over. Refused: 409 ConcurrentModification, nothing finalized. Without the guard, the door's ETag check
-\* reads the claim and writes nothing (DoorTable.require_named before the finalize).
+\* DoorTable.first_version_fenced (StockFencesFirstVersion): one write under the ETag of the claim it reads, refused
+\* while another request fences the claim, a declaration's fence of another principal included (DeclarerLifts); the
+\* declarer's own is taken over. Refused: 409 ConcurrentModification, nothing finalized. Without the guard the door writes
+\* nothing before the finalize. The claim is judged as the fence reads it, not against the one the door's resolution
+\* read: a check that it is still that one was measured redundant here (ADR 0227 §9), every request that acts on the
+\* claim meanwhile leaving its fence, a version (XPut's put-if-not-exists) or a name that no longer describes the
+\* location (XPut's DoorTable.require_named).
 XFence(p) ==
   LET l == lloc[p] IN
   /\ pc[p] = "x_fence" /\ NoFault
-  /\ IF claim[l].ver # lver[p] \/ claim[l].st # "held"
-       THEN Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded>>
+  /\ IF claim[l].st # "held"
+       THEN Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded, cred>>
        ELSE IF On("StockFencesFirstVersion")
               THEN IF Against(l, p)
-                     THEN Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded>>
+                     THEN Goto(p, "done") /\ UNCHANGED <<claim, owed, intruded, cred>>
                      ELSE Goto(p, "x_put") /\ claim' = [claim EXCEPT ![l] = [Bump(@) EXCEPT !.fence = p, !.decl = FALSE]] /\ Owes(l, p)
               ELSE Goto(p, "x_put") /\ UNCHANGED claim /\ Owes(l, p)
   /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk>>
 
-\* The finalize: version 1 put-if-not-exists; one finalized since refuses it (409) and the client is told nothing landed.
+\* The finalize: the name still describes the location (DoorTable.require_named), then version 1 put-if-not-exists; a
+\* name that left the location, or a version finalized since, refuses it (409) and the client is told nothing landed.
 XPut(p) ==
   LET l == lloc[p] IN
   /\ pc[p] = "x_put" /\ NoFault
-  /\ IF bytes[l] = "data"
+  /\ IF bytes[l] = "data" \/ LocOf(NameOf(op[p])) # l
        THEN Goto(p, "x_lift") /\ UNCHANGED bytes
        ELSE Goto(p, "x_unfence") /\ bytes' = [bytes EXCEPT ![l] = "data"]
   /\ UNCHANGED <<rows, claim, trash, prot, grants, op, locals, mpc, mloc, hist>>
@@ -883,7 +922,7 @@ XLift(p) ==
   /\ Unfenced(lloc[p], p)
   /\ acked' = IF pc[p] = "x_unfence" THEN acked \cup {lloc[p]} ELSE acked
   /\ Goto(p, "done")
-  /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, locals, mpc, mloc, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, locals, mpc, mloc, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 ---------------------------------------------------------------------------
 \* PROTECT (set_table_protection): resolve the name and its claim, write the record, then judge the claim
@@ -901,7 +940,7 @@ PSet(p) ==
   /\ pc[p] = "p_set" /\ NoFault
   /\ prot' = prot \cup {lloc[p]}
   /\ IF On("ProtectChecksFence") THEN Goto(p, "p_check") /\ UNCHANGED protOk ELSE Goto(p, "done") /\ protOk' = protOk \cup {lloc[p]}
-  /\ UNCHANGED <<rows, bytes, claim, trash, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, owed, intruded>>
+  /\ UNCHANGED <<rows, bytes, claim, trash, grants, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, owed, intruded, cred>>
 
 \* DoorTable.require_named and the claim's fence: the name still describes the location under the claim the door
 \* resolved (its ETag), and no other request fences that claim; else 409 ConcurrentModification, the record left (it
@@ -913,7 +952,7 @@ ProtCheck(p) ==
        THEN UNCHANGED protOk
        ELSE protOk' = protOk \cup {l}
   /\ Goto(p, "done")
-  /\ UNCHANGED <<store, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, owed, intruded>>
+  /\ UNCHANGED <<store, op, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, owed, intruded, cred>>
 
 ---------------------------------------------------------------------------
 \* A caller's process dies between two effects. What it wrote stays; its fence lapses (A5).
@@ -952,6 +991,9 @@ Lapse(l) ==
   /\ pc[claim[l].fence] \in {"done", "dead"} \/ (LiveLapse /\ (pc[claim[l].fence] \in LongSteps \/ claim[l].decl))
   /\ claim' = [claim EXCEPT ![l] = [Bump(@) EXCEPT !.fence = None, !.decl = FALSE]]
   /\ owed' = IF claim[l].decl THEN owed \ {l} ELSE owed
+  \* A credential vended right after the declaration's fence was written expires with it; one vended under a fence
+  \* written earlier is still live.
+  /\ cred' = IF claim[l].decl THEN [cred EXCEPT ![l] = CASE @ = "bounded" -> "none" [] @ = "unbounded" -> "stale" [] OTHER -> @] ELSE cred
   /\ UNCHANGED <<rows, bytes, trash, prot, grants, op, pc, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, intruded>>
 
 \* Without DeclarationFence there is no fence to lapse, and the declaration's LEASE runs out all the same: history only.
@@ -959,7 +1001,13 @@ Expire(l) ==
   /\ ~On("DeclarationFence") /\ l \in owed /\ NoFault
   /\ \E q \in Procs : op[q] = "stock_n1" /\ lloc[q] = l /\ (pc[q] \in {"done", "dead"} \/ LiveLapse)
   /\ owed' = owed \ {l}
-  /\ UNCHANGED <<store, op, pc, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, intruded>>
+  /\ UNCHANGED <<store, op, pc, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, intruded, cred>>
+
+\* A credential the store issued for longer than its fence expires at its own time, before or after the fence lapses.
+CredExpires(l) ==
+  /\ cred[l] \in {"unbounded", "stale"} /\ NoFault
+  /\ cred' = [cred EXCEPT ![l] = "none"]
+  /\ UNCHANGED <<store, op, pc, locals, mpc, mloc, acked, doorEnded, softDropped, undropOk, purged, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
 
 \* The purge (purge._purge_one), one released record at a time. A refusal is noted and the purge goes back to idle.
 Refuse(l) == trash' = [trash EXCEPT ![l].refused = TRUE] /\ mpc' = "idle" /\ mloc' = None
@@ -989,7 +1037,7 @@ PDelete ==
   /\ DeleteBytes(mloc)
   /\ purgeHitLive' = (purgeHitLive \/ (Live(mloc) /\ bytes[mloc] = "data"))
   /\ mpc' = "end"
-  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, pc, locals, mloc, acked, doorEnded, softDropped, undropOk, purged, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<rows, claim, trash, prot, grants, op, pc, locals, mloc, acked, doorEnded, softDropped, undropOk, purged, overwritten, protOk, owed, intruded, cred>>
 
 PDeleteFails ==
   /\ mpc = "delete" /\ Fault
@@ -1008,7 +1056,7 @@ PEnd ==
             /\ trash' = [trash EXCEPT ![l] = NoRecord]
             /\ purged' = purged \cup {l}
             /\ mpc' = "idle" /\ mloc' = None
-  /\ UNCHANGED <<rows, bytes, op, pc, locals, acked, doorEnded, softDropped, undropOk, protHit, purgeHitLive, overwritten, protOk, owed, intruded>>
+  /\ UNCHANGED <<rows, bytes, op, pc, locals, acked, doorEnded, softDropped, undropOk, protHit, purgeHitLive, overwritten, protOk, owed, intruded, cred>>
 
 ---------------------------------------------------------------------------
 Step(p) ==
@@ -1016,7 +1064,7 @@ Step(p) ==
   \/ CProbe(p) \/ CTake(p) \/ CClaim(p) \/ CGrant(p) \/ CReserve(p) \/ CRegister(p) \/ CUnreserve(p) \/ CTakeBack(p)
   \/ CWrite(p) \/ CCommit(p) \/ CRollbackDrop(p) \/ CRollbackDelete(p) \/ CRollbackRelease(p) \/ CAnswer(p)
   \/ CRecheck(p) \/ CLift(p) \/ CPut(p) \/ KList(p) \/ KResolve(p)
-  \/ XProbe(p) \/ XClaim(p) \/ XRegister(p) \/ XWrite(p) \/ XResolve(p) \/ XFence(p) \/ XPut(p) \/ XLift(p)
+  \/ XProbe(p) \/ XClaim(p) \/ XRegister(p) \/ XAsk(p) \/ XWrite(p) \/ XResolve(p) \/ XFence(p) \/ XPut(p) \/ XLift(p)
   \/ DResolve(p) \/ DProtect(p) \/ DFence(p) \/ DReprotect(p) \/ DJudge(p) \/ DDereg(p) \/ DDelete(p) \/ DClear(p) \/ DRelease(p)
   \/ DRecords(p) \/ DRevoke(p) \/ DLift(p) \/ SPut(p) \/ SDereg(p) \/ SUnprot(p)
   \/ UFind(p) \/ UStand(p) \/ UTake(p) \/ URecheck(p) \/ URegister(p) \/ UClear(p) \/ UUnfence(p)
@@ -1031,7 +1079,7 @@ Fails ==
   \E p \in Procs : CRegisterFails(p) \/ CWriteFails(p) \/ DDeleteFails(p) \/ RRegisterFails(p) \/ Dies(p)
   \/ PDeleteFails
 
-Next == (\E p \in Procs : Step(p)) \/ Maintain \/ Fails \/ (\E l \in Locs : Expire(l))
+Next == (\E p \in Procs : Step(p)) \/ Maintain \/ Fails \/ (\E l \in Locs : Expire(l) \/ CredExpires(l))
 
 Spec == Init /\ [][Next]_vars /\ \A p \in Procs : WF_vars(Step(p)) /\ WF_vars(Maintain)
 
@@ -1065,6 +1113,11 @@ OneCreateCommitsPerTable == overwritten = {}
 \* A declaration is its declarer's (owner, 2026-11-17): until its LEASE runs out, or a door removing the table ends it,
 \* no request of another principal takes it to write version 1, by version/create or by the catalog's create.
 DeclarationIsItsDeclarers == intruded = {}
+
+\* No credential vended for a declaration is live after the declaration's fence lapsed while another principal's request
+\* holds the claim: a write credential lasts no longer than the declaration it was vended for (zero trust), so a create of
+\* the name by another principal after the lapse writes where no credential of the lapsed declarer still reaches.
+DeclaredCredentialDiesWithItsFence == \A l \in Locs : cred[l] = "stale" => claim[l].fence = None \/ Principal(claim[l].fence) = "A"
 
 \* A dropped table can be undropped until it is purged: a recoverable drop leaves its record, and the record
 \* goes only with an undrop that registered the table again or with the purge.

@@ -429,6 +429,7 @@ def fence(
     token: str,
     is_gone: Callable[[LocationClaim], bool],
     takes_over: Callable[[ClaimFence], bool] = lambda _fence: False,
+    declarer: str | None = None,
 ) -> None:
     """Fence ``table``'s claim on ``location`` for request ``token``, judged on the claim ``read_as`` found.
 
@@ -439,7 +440,8 @@ def fence(
 
     Another request's fence refuses, unless ``takes_over`` admits it: a declaration's fence (:attr:`ClaimFence.declarer`)
     is taken over by its declarer's own write and by a door removing the table, and the fence written in its place is
-    this request's, no declaration's. The write is conditional on ``read_as`` as every other is, so of two requests
+    this request's, no declaration's; with ``declarer`` it is that subject's declaration again, which is how the
+    declarer renews its own (ADR 0227 §9). The write is conditional on ``read_as`` as every other is, so of two requests
     taking one fence over, the second answers that the claim changed.
 
     Raises:
@@ -447,7 +449,7 @@ def fence(
         ClaimChangedError: The claim changed since ``read_as``, or another request is acting on ``table``.
     """
     now = store_now(store, location)
-    mark = ClaimFence(token=token, at=now)
+    mark = ClaimFence(token=token, at=now, declarer=declarer)
     current = read_as.claim if read_as is not None else None
     if current is not None and current.fenced_against(token, now) and not (current.fence is not None and takes_over(current.fence)):
         raise ClaimChangedError(f"another request is acting on table {current.table!r}")

@@ -295,11 +295,14 @@ class CredentialVendor(Protocol):
         data_directories: Sequence[str] = (),
         branch: str = "",
         records: TableRecords | None = None,
+        at_most_seconds: int | None = None,
     ) -> VendedSession | None:
         """Return creds for ``table_location`` at ``tier``, named ``session_name`` at the store (:func:`role_session_name`).
 
         ``data_directories`` are those of ``bases`` the table's record holds as its own data directories
         (:class:`VendableBases`), and ``records`` are where its records are kept, ``None`` for a prefix that is no table.
+        ``at_most_seconds`` caps the session's length below the configured TTL: a credential vended for a declaration
+        lasts no longer than the declaration's fence (ADR 0227 §9).
         ``None`` means "no direct credential" — the caller falls back to the server-mediated (Mode B) data path.
         """
         ...
@@ -1077,6 +1080,7 @@ def vend_or_refuse(
     data_directories: Sequence[str] = (),
     branch: str = "",
     records: TableRecords | None = None,
+    at_most_seconds: int | None = None,
 ) -> VendedSession | None:
     """``vendor.vend``, with a failed exchange answered as the spec's typed error rather than a bare 500.
 
@@ -1090,7 +1094,14 @@ def vend_or_refuse(
     """
     with _exchange_failures_as_unavailable(table_location):
         return vendor.vend(
-            table_location=table_location, tier=tier, session_name=session_name, bases=bases, data_directories=data_directories, branch=branch, records=records
+            table_location=table_location,
+            tier=tier,
+            session_name=session_name,
+            bases=bases,
+            data_directories=data_directories,
+            branch=branch,
+            records=records,
+            at_most_seconds=at_most_seconds,
         )
 
 
@@ -1141,6 +1152,7 @@ class ModeBVendor:
         data_directories: Sequence[str] = (),
         branch: str = "",
         records: TableRecords | None = None,
+        at_most_seconds: int | None = None,
     ) -> VendedSession | None:
         return None
 
@@ -1190,6 +1202,7 @@ class WebIdentityVendor:
         data_directories: Sequence[str] = (),
         branch: str = "",
         records: TableRecords | None = None,
+        at_most_seconds: int | None = None,
     ) -> VendedSession | None:
         bucket, prefix = split_s3_location(table_location)
         policy = build_session_policy(
@@ -1203,7 +1216,8 @@ class WebIdentityVendor:
             kms_key=self._encryption.kms_key_id,
             records=records,
         )
-        return self._session(policy, session_name=session_name, policy_of=f"the {tier} session policy for {table_location}")
+        ttl = self._ttl if at_most_seconds is None else min(self._ttl, at_most_seconds)
+        return self._session(policy, session_name=session_name, policy_of=f"the {tier} session policy for {table_location}", ttl_seconds=ttl)
 
     def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
         """The session the catalog's token is exchanged for under the policy ``scope`` writes: one trashed table's bytes.
@@ -1213,10 +1227,10 @@ class WebIdentityVendor:
             IdentityTokenUnavailableError: The catalog's projected token cannot be read.
             botocore.exceptions.ClientError: The store refused the exchange.
         """
-        return self._session(scope.policy(), session_name=session_name, policy_of=f"the reclaim session policy for {scope.location}")
+        return self._session(scope.policy(), session_name=session_name, policy_of=f"the reclaim session policy for {scope.location}", ttl_seconds=self._ttl)
 
-    def _session(self, policy: dict[str, object], *, session_name: str, policy_of: str) -> VendedSession:
-        """The session the catalog's token is exchanged for under ``policy``.
+    def _session(self, policy: dict[str, object], *, session_name: str, policy_of: str, ttl_seconds: int) -> VendedSession:
+        """The session the catalog's token is exchanged for under ``policy``, lasting ``ttl_seconds``.
 
         Raises:
             SessionPolicyTooLong: ``policy`` is past what STS takes.
@@ -1230,7 +1244,7 @@ class WebIdentityVendor:
                 "the locations, bases or KMS key it names are too long for a direct credential",
                 characters=len(text),
             )
-        issued = self._exchange(self._identity, session_name=session_name, duration_seconds=self._ttl, policy=text)
+        issued = self._exchange(self._identity, session_name=session_name, duration_seconds=ttl_seconds, policy=text)
         return VendedSession(
             key_pair=issued.key_pair,
             endpoint=self._store_endpoint or None,

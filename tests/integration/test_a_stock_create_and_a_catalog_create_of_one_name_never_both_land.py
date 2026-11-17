@@ -19,13 +19,30 @@ by uvicorn, with stock pylance as the client and two principals, alice the decla
   Without the fence version/create writes, her version 1 lands and his commit lands over it.
 - ``declared-then-dropped``: alice drops her declared, unwritten table within the lease and it goes at once; her late
   version/create is refused.
+- ``own-catalog-create`` (DeclarerLifts, the model's ``owncreate``): bob's catalog create of alice's declared name answers
+  409, and alice's own catalog create takes her declaration over and lands.
+- ``declared-then-protected``: alice protects her declared, unwritten table within the lease, and the protection door
+  answers 200: a declaration's fence is no drop's.
+- ``declared-then-deregistered-and-cascaded``: alice deregisters her declared, unwritten table within the lease, declares
+  it again and drops its namespace in cascade; each door takes the declaration's fence over and answers 200.
+- ``redeclared-before-the-lapse`` (RedeclareRenews): alice sends her DeclareTable again before her declaration lapses
+  (``LEASE`` driven to ten seconds), which renews it; bob's catalog create after the first fence's lease, within the
+  renewed one, answers 409, and alice's version 1 lands. Without the renewal bob's create writes into her declaration
+  while the credential her second declare was vended still reaches it.
+- ``redeclared-while-the-first-rolls-back``: alice's first declare fails after its claim (its vend, held and then
+  refused) while her stock client's create, declaring again, is answered the declaration, writes and commits; the first
+  declare's rollback then finds its fence another request's and leaves the table standing. Without that check the
+  rollback drops the table alice's client was told it created.
 
-Each runs on the local root, and on a real S3 store where `make lifecycle-rustfs-check` names one (``race_catalog``).
+Each runs on the local root, and on a real S3 store where `make lifecycle-rustfs-check` names one (``race_catalog``),
+where the stock client writes with the credential the catalog vends it, a session the store's STS issued under the
+session policy the catalog writes, and no other key.
 """
 
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Generator, Iterator
 from datetime import timedelta
 from typing import Any
@@ -37,6 +54,8 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi import Header
+from fastapi.concurrency import run_in_threadpool
+from lance_namespace import ServiceUnavailableError
 
 from lakehouse import location_claims
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -164,13 +183,25 @@ def _rows(catalog: RaceCatalog) -> int | None:
     return int(counted.text) if counted.status_code == 200 else None
 
 
-CASES = ["declared-then-catalog-create", "catalog-create-then-declared", "another-principals-version-1", "declaration-lapsed", "declared-then-dropped"]
+CASES = [
+    "declared-then-catalog-create",
+    "catalog-create-then-declared",
+    "another-principals-version-1",
+    "declaration-lapsed",
+    "declared-then-dropped",
+    "own-catalog-create",
+    "declared-then-protected",
+    "declared-then-deregistered-and-cascaded",
+    "redeclared-before-the-lapse",
+    "redeclared-while-the-first-rolls-back",
+]
 
 
 @pytest.mark.parametrize("case", CASES)
 def test_of_a_stock_create_and_another_door_on_its_name_only_what_the_declaration_is_owed_lands(
     catalog: RaceCatalog, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
+    from catalog.api.v1.endpoints import tables
     from catalog.services import dataplane, table_claims
 
     declares, commits = _Gate(), _Gate()
@@ -217,7 +248,7 @@ def test_of_a_stock_create_and_another_door_on_its_name_only_what_the_declaratio
         commits.release.set()
         bob.ended()
         expected, landed = {"alice": False, "bob": True}, 2
-    else:
+    elif case == "declared-then-dropped":
         monkeypatch.setattr(dataplane, "declare_table", _held_once(declares, dataplane.declare_table, after=True))
         alice = _Run(lambda: _stock(catalog, ALICE, [1, 2, 3]))
         alice.reaches(declares)
@@ -226,6 +257,63 @@ def test_of_a_stock_create_and_another_door_on_its_name_only_what_the_declaratio
         alice.ended()
         assert dropped.status_code == 200, f"alice's drop of her declared, unwritten table answered {dropped.status_code}: {dropped.text}"
         expected, landed = {"alice": False}, None
+        bob = None
+    elif case == "own-catalog-create":
+        assert _post(catalog, ALICE, "declare", json={}).status_code == 200
+        bob = _Run(lambda: _catalog_create(catalog, BOB, [7, 8]))
+        bob.ended()
+        alice = _Run(lambda: _catalog_create(catalog, ALICE, [1, 2, 3]))
+        alice.ended()
+        expected, landed = {"alice": True, "bob": False}, 3
+    elif case == "declared-then-protected":
+        assert _post(catalog, ALICE, "declare", json={}).status_code == 200
+        protected = httpx.post(f"{catalog.url}/management/v1/table/{TABLE}/protection", json={"protected": True}, headers={SUBJECT_HEADER: ALICE}, timeout=WAIT)
+        alice = _Run(lambda: protected.status_code == 200)
+        alice.ended()
+        expected, landed = {"alice": True}, None
+        bob = None
+    elif case == "declared-then-deregistered-and-cascaded":
+        assert _post(catalog, ALICE, "declare", json={}).status_code == 200
+        deregistered = _post(catalog, ALICE, "deregister", json={})
+        assert _post(catalog, ALICE, "declare", json={}).status_code == 200
+        cascaded = httpx.post(f"{catalog.url}/v1/namespace/{NAMESPACE}/drop", json={"behavior": "Cascade"}, headers={SUBJECT_HEADER: ALICE}, timeout=WAIT)
+        alice = _Run(lambda: (deregistered.status_code, cascaded.status_code) == (200, 200))
+        alice.ended()
+        expected, landed = {"alice": True}, None
+        bob = None
+    elif case == "redeclared-before-the-lapse":
+        # Ten seconds of lease: the second declare comes six seconds into the first fence's, bob's create six seconds
+        # after it, past the first fence's lease and inside the renewed one.
+        monkeypatch.setattr(location_claims, "LEASE", timedelta(seconds=10))
+        assert _post(catalog, ALICE, "declare", json={}).status_code == 200
+        time.sleep(6)
+        assert _post(catalog, ALICE, "declare", json={}).status_code == 200
+        time.sleep(6)
+        bob = _Run(lambda: _catalog_create(catalog, BOB, [7, 8]))
+        bob.ended()
+        monkeypatch.setattr(location_claims, "LEASE", timedelta(minutes=15))
+        alice = _Run(lambda: _stock(catalog, ALICE, [1, 2, 3]))
+        alice.ended()
+        expected, landed = {"alice": True, "bob": False}, 3
+    else:
+        rollback = _Gate()
+        vend, pending = tables._vend_on_spec_door, [True]
+
+        async def _first_vend_refused(*args: Any, **kwargs: Any) -> dict[str, str] | None:  # noqa: ANN401 — the vend's own arguments
+            if pending:
+                pending.clear()
+                await run_in_threadpool(rollback.hold)
+                raise ServiceUnavailableError("the store refused the first declare's credential exchange")
+            return await vend(*args, **kwargs)
+
+        monkeypatch.setattr(tables, "_vend_on_spec_door", _first_vend_refused)
+        first = _Run(lambda: _post(catalog, ALICE, "declare", json={}).status_code == 200)
+        first.reaches(rollback)
+        alice = _Run(lambda: _stock(catalog, ALICE, [1, 2, 3]))
+        alice.ended()
+        rollback.release.set()
+        first.ended()
+        expected, landed = {"alice": True}, 3
         bob = None
 
     answered = {"alice": alice.succeeded, **({"bob": bob.succeeded} if bob is not None else {})}

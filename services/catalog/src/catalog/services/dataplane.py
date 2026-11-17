@@ -640,24 +640,28 @@ def declare_table(
     A failure after the claim removes the marker and releases the claim; what ``before_register`` wrote is its caller's to
     take back. ``claims`` is ``None`` for a caller outside governance (a test building a fixture), which takes no claim.
     ``fence_for`` is a create's token: the claim is taken fenced for it, and the create lifts the fence once its data is
-    committed (:func:`create_table`). ``declarer`` is the subject a bare DeclareTable authenticated: the claim is taken
-    fenced for that principal's declaration under a token nobody is answered (ADR 0227 §9), which their first version
-    takes over (``table_claims.DoorTable.first_version_fenced``) or which lapses after ``location_claims.LEASE``.
+    committed (:func:`create_table`). With ``declarer``, the subject a bare DeclareTable authenticated, ``fence_for`` is
+    the declare's token and the fence is that principal's declaration (ADR 0227 §9): their first version takes it over
+    (``table_claims.DoorTable.first_version_fenced``), they renew it by asking again
+    (:func:`table_claims.renew_declaration`), or it lapses after ``location_claims.LEASE``. The declare's own rollback
+    renews it under that token first, so a declaration its declarer was answered again since is left standing.
 
     Raises:
         InvalidInputError: ``segments`` names a table outside every namespace: the `dir` backend resolves a root-level
             table by its ``<name>.lance`` directory, never by its row (measured on pylance 13.0.0).
         ConcurrentModificationError: Another table holds the location.
         TableAlreadyExistsError: A table already holds the name.
+        ValueError: ``declarer`` names no ``fence_for`` to fence the declaration under.
     """
+    if declarer is not None and fence_for is None:
+        raise ValueError("a declaration is fenced under the declare's own token")
     if len(segments) < 2:
         raise InvalidInputError(f"table {segments!r} names no namespace; a table the catalog makes lives in one")
     minted = table_uuid or str(uuid.uuid4())
     location = f"{root.rstrip('/')}/{minted}"
     if claims is not None:
-        fenced_for = fence_for if fence_for is not None or declarer is None else uuid.uuid4().hex
         try:
-            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=minted, fence_for=fenced_for, declarer=declarer)
+            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=minted, fence_for=fence_for, declarer=declarer)
         except location_claims.LocationHeldError:
             raise ConcurrentModificationError(f"the location minted for table {holder} is held by another table; retry to be given another") from None
     try:
@@ -680,18 +684,21 @@ def declare_table(
 def own_declaration(
     ns: LanceNamespace, so: StorageOptions, segments: list[str], *, claims: location_claims.ClaimStore, declarer: str
 ) -> table_claims.ResolvedTable | None:
-    """The table ``segments`` names when it is a declaration ``declarer`` made that nothing has acted on since: its claim
-    still carries the declaration's fence that subject took (ADR 0227 §9), lapsed or not, and its location holds no
-    version. ``None`` for any other table, or none.
+    """The table ``segments`` names when it is a declaration ``declarer`` made that nothing has acted on since, its
+    declaration renewed: its claim carried the declaration's fence that subject took (ADR 0227 §9), lapsed or not, its
+    location holds no version, and the fence is written afresh for that subject under the ETag the resolution read
+    (:func:`table_claims.renew_declaration`). ``None`` for any other table, or none, and for a declaration another
+    request acted on since the resolution read it: the door then answers what a first declare of the name answers now.
 
     A DeclareTable its declarer sends again, its answer lost, is that declaration's: the door answers it as it answered
-    the first, the declaration and its fence as they are, rather than 409 against its own declarer.
+    the first, with a credential vended after the renewal, rather than 409 against its own declarer.
     """
     resolved = table_claims.resolve(ns, claims, segments)
-    held = resolved.claim.claim if resolved.claim is not None else None
-    if resolved.location is None or held is None or held.released_at is not None or held.fence is None:
+    if resolved.location is None or not table_claims.holds_own_declaration(resolved, declarer) or holds_a_version(resolved.location, so):
         return None
-    if not table_claims.declared_by(declarer)(held.fence) or holds_a_version(resolved.location, so):
+    try:
+        table_claims.renew_declaration(claims, resolved, declarer=declarer)
+    except ConcurrentModificationError:
         return None
     return resolved
 

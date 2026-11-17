@@ -39,6 +39,7 @@ from catalog.core.vending import (
     vend_or_refuse,
 )
 from catalog.schemas import CredentialResponse, VendedCredentials
+from catalog.services import table_claims
 from lakehouse import maintenance_policies
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -205,6 +206,13 @@ async def vend_credentials(
     # A vend is a grant on the table its uuid identifies, so a table no uuid identifies is refused before anything is
     # minted ([[LH-534]]); the uuid also keys the records a maintain-tier vend reaches on the control root.
     table_uuid = table.resolved.require_uuid()
+    # A write credential for the caller's own declaration is vended only after renewing it, and lasts no longer than its
+    # fence (ADR 0227 §9, RedeclareRenews); a declaration another request acted on since answers 409 (14).
+    at_most_seconds = None
+    if tier == "write":
+        at_most_seconds = await run_in_threadpool(
+            partial(table_claims.renewed_for_its_declarer, table_claims.claim_store(settings), table.resolved, declarer=subject)
+        )
     # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
     # (`vend_or_refuse`), never a bare 500.
     vended = await run_in_threadpool(
@@ -218,6 +226,7 @@ async def vend_credentials(
             data_directories=bases.data_directories,
             branch=branch,
             records=TableRecords(control_root=settings.registry_root, table_uuid=table_uuid),
+            at_most_seconds=at_most_seconds,
         )
     )
     # The secret and the session token leave the catalog in this body and nowhere else ([[LH-072]]), built before the

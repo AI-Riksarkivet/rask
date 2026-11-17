@@ -2238,12 +2238,17 @@ async def undo_then_take_back(
     """Undo the table ``uuid`` its door brought into being and is about to fail for, then take its grants back.
 
     The table first, its grants once it is gone ([[LH-588]]): an undo that fails leaves the table standing, and it keeps
-    its grants, so it never stands without them; the failure is logged for the operator. Never raised: the caller is
+    its grants, so it never stands without them; the failure is logged for the operator. An undo that finds its fence
+    another request's (:class:`table_claims.FenceLostError`) leaves the table standing with its grants too: that request
+    acts on it now, as the declarer's DeclareTable answered again does (ADR 0227 §9). Never raised: the caller is
     answering the failure that brought it here.
     """
     name = fga.canonical_object_id(segments)
     try:
         await undo()
+    except table_claims.FenceLostError:
+        log.warning("create_compensation_left_to_another_request", extra={"object": name, "resource": "table", "reason": reason})
+        return
     except Exception as undo_exc:  # noqa: BLE001 — the door's own failure is what the caller is told
         log.error("create_compensation_failed", extra={"object": name, "resource": "table", "reason": reason, "error": str(undo_exc)[:300]})
         return

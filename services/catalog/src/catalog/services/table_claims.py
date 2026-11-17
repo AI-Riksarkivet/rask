@@ -278,26 +278,29 @@ class DoorTable:
         """The table's claim fenced for this request while the block finalizes the table's first version, a version
         ``declarer`` authenticated as commits (ADR 0227 §9, StockFencesFirstVersion and DeclarerLifts); lifted when it ends.
 
-        One conditional write under the ETag the door's resolution read, so of this commit and any other request acting
-        on the claim (a catalog create of the name fencing the declaration, a drop, a second first version) the one that
-        writes second answers 409: no create commits its version 1 over this one's (A4), and none lands this one over
-        its own. Another request's fence refuses, a declaration of another principal's included: a declaration is its
-        declarer's until its fence lapses. The declarer's own declaration fence is taken over, lapsed or not: a claim
-        whose ETag is still the one the resolution read was acted on by no one since, so a declarer whose write
-        outlasted the declaration's lease still commits, and one whose declaration another request took meanwhile is
-        refused. The block's finalize, one write after this, is assumed to end within the fence's lease (ADR 0227 A5).
+        One conditional write under the ETag of the claim it reads right before, so of this commit and any other request
+        acting on the claim (a catalog create of the name fencing the declaration, a drop, a second first version) the
+        one that writes second answers 409: no create commits its version 1 over this one's (A4), and none lands this
+        one over its own. Another request's fence refuses, a declaration of another principal's included: a declaration
+        is its declarer's until its fence lapses. The declarer's own declaration fence is taken over, lapsed or not, so a
+        declarer whose write outlasted the declaration's lease still commits where nobody acted on the table since; one
+        another request acted on meanwhile is refused by what that request left: its live fence here, a version it
+        finalized at the put-if-not-exists, a name it removed or moved at the finalize's own check that the name still
+        resolves to the location (:meth:`require_named`). The claim is not compared with the one the door's resolution
+        read: no interleaving of `specs/catalog/TableLifecycle.tla` needs it (ADR 0227 §9). The block's finalize, one
+        write after this, is assumed to end within the fence's lease (ADR 0227 A5).
 
         The resolution moves to the claim as fenced, so the finalize's own check (:meth:`require_named`) reads it.
 
         Raises:
             TableNotFoundError: The name named no table.
-            TableChangedError: The claim changed since the resolution read it, or was released.
+            TableChangedError: The claim is gone or was released.
             ConcurrentModificationError: Another request fences the claim, a declaration of another principal's
-                included.
+                included, or the claim changed between this read and the fence's write.
         """
         location = self.location
         now = location_claims.read(self._claims, location)
-        if now is None or now.claim.released_at is not None or _etag(now) != _etag(self._resolved.claim):
+        if now is None or now.claim.released_at is not None:
             self._refuse(location)
         token = uuid4().hex
         try:
@@ -593,6 +596,73 @@ def declared_by(declarer: str) -> Callable[[location_claims.ClaimFence], bool]:
     """Whether a fence is a declaration ``declarer`` made: the one fence a request of that principal takes over to write
     the table's first version (ADR 0227 §9, DeclarerLifts)."""
     return lambda fenced: fenced.declarer is not None and fenced.declarer == declarer
+
+
+def holds_own_declaration(table: ResolvedTable, declarer: str) -> bool:
+    """Whether the claim ``table`` resolved carries a declaration ``declarer`` made, lapsed or not: the table is that
+    subject's declared, unwritten table (a declaration's fence never stands over a version, :func:`is_a_declaration`)."""
+    held = table.claim.claim if table.claim is not None else None
+    return held is not None and held.released_at is None and held.fence is not None and declared_by(declarer)(held.fence)
+
+
+def declaration_credential_seconds() -> int:
+    """How long a credential vended for a declaration may last: the fence's :data:`lakehouse.location_claims.LEASE`, which
+    the door wrote or renewed right before it vends, so the credential outlives the fence by no more than the request's
+    latency and a create of the name by another principal once it lapsed writes where it no longer reaches (ADR 0227
+    §9). An operator's longer ``LANCE_VENDING_TTL_SECONDS`` does not lengthen it."""
+    return int(location_claims.LEASE.total_seconds())
+
+
+def renewed_for_its_declarer(store: ClaimStore, table: ResolvedTable, *, declarer: str) -> int | None:
+    """Before a write credential is vended on ``table`` to ``declarer``: when its claim carries that subject's own
+    declaration, renew it (:func:`renew_declaration`) and answer how long the credential may last
+    (:func:`declaration_credential_seconds`); ``None``, nothing renewed, for any other table.
+
+    Raises:
+        ConcurrentModificationError: The declaration was the caller's and another request acted on it since the door's
+            resolution read it.
+    """
+    if not holds_own_declaration(table, declarer):
+        return None
+    renew_declaration(store, table, declarer=declarer)
+    return declaration_credential_seconds()
+
+
+def renew_declaration(store: ClaimStore, table: ResolvedTable, *, declarer: str) -> None:
+    """Renew ``declarer``'s own declaration of ``table`` before a credential is vended for it (ADR 0227 §9,
+    RedeclareRenews): one write under the ETag the resolution read, the fence written afresh for that subject's
+    declaration under a token of its own, on the store's clock.
+
+    A credential vended right after lasts no longer than the fence (:func:`declaration_credential_seconds`), so no
+    credential vended for a declaration outlives it by more than the request's latency: a create of the name by another
+    principal once it lapsed writes where no credential of the declarer still reaches. A declarer holds its own name for
+    as long as it keeps asking, as dropping and declaring it again already lets it.
+
+    Raises:
+        ConcurrentModificationError: The claim carries no declaration of ``declarer``'s, or changed since the resolution
+            read it: another request acted on the table (the declarer's own first version included), and nothing was
+            renewed.
+    """
+    if table.location is None or table.claim is None or not holds_own_declaration(table, declarer):
+        raise ConcurrentModificationError(f"table {fga.canonical_object_id(table.segments)} is no declaration of the caller's; describe it and retry")
+    held = table.claim.claim
+    try:
+        location_claims.fence(
+            store,
+            table.location,
+            table.claim,
+            table=held.table,
+            segments=held.segments,
+            token=uuid4().hex,
+            is_gone=lambda _claim: False,
+            takes_over=declared_by(declarer),
+            declarer=declarer,
+        )
+    except (location_claims.ClaimChangedError, location_claims.LocationHeldError):
+        log.warning("declaration_renewal_refused", extra={"table": table.segments, "location": table.location})
+        raise ConcurrentModificationError(
+            f"table {fga.canonical_object_id(table.segments)} changed while this request was being served; describe it and retry"
+        ) from None
 
 
 def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder: str, verb: str) -> DoorFence:

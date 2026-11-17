@@ -8,7 +8,10 @@ mapping — never lance's actual operations. ``real_ns_client`` runs the real ``
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import os
+import secrets
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -24,6 +27,7 @@ from pydantic import BaseModel
 
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
+from lakehouse.store_session import IssuedSession
 
 
 @pytest.fixture(scope="module")
@@ -103,23 +107,104 @@ class RaceCatalog(BaseModel):
     """The live catalog a race between a stock client and the catalog's doors runs against."""
 
     url: str
-    #: What a stock client's own Lance writes the root with: nothing on the local root; on the lane's store its key pair,
-    #: since the catalog vends no credential where it runs without a web identity (``LANCE_VENDING_MODE=mode_b``).
+    #: What a stock client's own Lance writes the root with beside what the catalog vends it: nothing. On the local root
+    #: the catalog vends nothing and none is needed; on the lane's store the client writes with the credential the
+    #: catalog vends it (:func:`_vending_session`) and no other key.
     stock_options: dict[str, str]
+
+
+#: The canned policy the chart grants the catalog's own identity on the store (`lance.objectStorePolicy.catalog`,
+#: chart/templates/_helpers.tpl): every vend is a session of it, narrowed by the session policy the catalog writes.
+_CATALOG_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "TheWholeDataPlaneItGoverns",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation",
+                "s3:ListAllMyBuckets",
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:AbortMultipartUpload",
+                "s3:CreateBucket",
+                "s3:DeleteBucket",
+            ],
+            "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"],
+        }
+    ],
+}
+
+
+def _vending_session() -> Callable[..., IssuedSession]:
+    """The store's STS exchange as the catalog's vend makes it, for a lane with no token issuer: an identity that holds the
+    catalog's canned policy (a user of the lane's own, made now) assumes a session narrowed by the vend's session policy,
+    for the length the vend asks. The store, not the catalog, then decides what each request on the vended session may
+    do (`.claude/skills/rask-rustfs`: AssumeRole by a non-root user, the session policy intersected with the parent's)."""
+    import boto3
+    from botocore.config import Config
+    from pydantic import SecretStr
+
+    from lakehouse.governed.store_credential import S3KeyPair
+
+    spec = importlib.util.spec_from_file_location("rustfs_admin", Path(__file__).resolve().parents[2] / "scripts" / "rustfs_admin.py")
+    assert spec is not None and spec.loader is not None
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    admin = script.AdminClient(_RACE_STORE, os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"])
+    user, secret = f"rask-vend-{uuid4().hex[:8]}", secrets.token_urlsafe(24)
+    admin.put("add-canned-policy", {"name": "rask-lifecycle-catalog"}, json.dumps(_CATALOG_POLICY).encode())
+    admin.put("add-user", {"accessKey": user}, json.dumps({"secretKey": secret, "status": "enabled"}).encode())
+    admin.put("set-user-or-group-policy", {"policyName": "rask-lifecycle-catalog", "userOrGroup": user, "isGroup": "false"}, b"")
+    sts = boto3.client(
+        "sts",
+        endpoint_url=_RACE_STORE,
+        region_name="us-east-1",
+        aws_access_key_id=user,
+        aws_secret_access_key=secret,
+        config=Config(retries={"max_attempts": 1}),
+    )
+
+    def exchange(_identity: object, *, session_name: str, duration_seconds: int, policy: str | None = None) -> IssuedSession:
+        asked: dict[str, object] = {"RoleArn": "arn:aws:iam::000000000000:role/vend", "RoleSessionName": session_name, "DurationSeconds": duration_seconds}
+        if policy is not None:
+            asked["Policy"] = policy
+        issued = sts.assume_role(**asked)["Credentials"]
+        key_pair = S3KeyPair(
+            access_key_id=issued["AccessKeyId"], secret_access_key=SecretStr(issued["SecretAccessKey"]), session_token=SecretStr(issued["SessionToken"])
+        )
+        return IssuedSession(key_pair=key_pair, expiration=issued["Expiration"])
+
+    return exchange
 
 
 @pytest.fixture(params=["dir", "s3"] if _RACE_STORE else ["dir"])
 def race_catalog(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[RaceCatalog]:
     """The catalog app under a live uvicorn (`lineage_app.live_catalog`), for a race a stock Lance client takes part in, on
-    the local root and, where a lane names an S3 store, in a bucket of the test's own there, as ``race_ns_client``."""
+    the local root and, where a lane names an S3 store, in a bucket of the test's own there, as ``race_ns_client``, the
+    catalog vending each stock client a session the store's STS issues (:func:`_vending_session`)."""
     from tests.integration.lineage_app import live_catalog
 
     env = _race_bucket() if request.param == "s3" else {}
     with live_catalog(tmp_path / "catalog", monkeypatch, **env) as url:
-        from catalog.core.config import get_settings
+        from catalog.api.dependencies import get_vendor
+        from catalog.core.vending import WebIdentityVendor
+        from catalog.main import app
+        from lakehouse.store_session import WebIdentity
 
-        options = get_settings().storage_options().in_clear() if env else {}
-        yield RaceCatalog(url=url, stock_options=options)
+        if env:
+            # The stock client signs with what the catalog vends it and nothing ambient.
+            for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+                monkeypatch.delenv(key, raising=False)
+            identity = WebIdentity(token_file=tmp_path / "no-token", endpoint=_RACE_STORE, region="us-east-1", role_arn="arn:aws:iam::000000000000:role/vend")
+            vendor = WebIdentityVendor(identity=identity, store_endpoint=_RACE_STORE, exchange=_vending_session())
+            app.dependency_overrides[get_vendor] = lambda: vendor
+        try:
+            yield RaceCatalog(url=url, stock_options={})
+        finally:
+            app.dependency_overrides.pop(get_vendor, None)
 
 
 @pytest.fixture(params=["dir", "s3"] if _RACE_STORE else ["dir"])

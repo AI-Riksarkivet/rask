@@ -130,10 +130,19 @@ Two contracts stack here, and confusing them is how bugs happen:
   `version/create`, answers 409 code 14 until the fence lapses (`LEASE`, 15 min); the declarer's own catalog create takes
   the fence over (`table_claims.fence_declared(declarer=…)`), and so does a drop, deregister or cascade
   (`table_claims.is_a_declaration`), so a declared, unwritten table is dropped at once. `version/create` of a version 1
-  fences the claim under the ETag its resolution read right before the finalize and lifts it after
-  (`DoorTable.first_version_fenced`), taking the declarer's own declaration fence over, lapsed or not, so a declarer whose
-  declaration another request took meanwhile is refused 409. The declarer's DeclareTable sent again is answered its
-  declaration as it stands (`dataplane.own_declaration`). These races run on a real store's conditional writes in
+  fences the claim under the ETag of the claim it reads right before the finalize and lifts it after
+  (`DoorTable.first_version_fenced`), taking the declarer's own declaration fence over, lapsed or not; a declarer whose
+  declaration another request acted on meanwhile is refused by that request's fence, its version 1 (409 code 14) or the
+  finalize's own check that the name still resolves to the location. **A credential vended for a declaration never
+  outlives its fence**: the declarer asking again (DeclareTable sent again, `dataplane.own_declaration`; DescribeTable
+  or the management credential door at the write tier, `table_claims.renewed_for_its_declarer`) renews the declaration
+  under the ETag its resolution read (`table_claims.renew_declaration`) before anything is vended, and every vend for a
+  declaration lasts `min(LANCE_VENDING_TTL_SECONDS, LEASE)` (`table_claims.declaration_credential_seconds`, the vendor's
+  `at_most_seconds`); a refused renewal answers a repeated declare as a first declare of the name answers now (409 code
+  5 or a new declaration), a describe without a credential (409 code 14 when it asked for one). The first declare's
+  rollback renews its own fence first (`table_claims.renew_fence`), so a declaration its declarer was answered again
+  since is left standing with its grants (`fga_deps.undo_then_take_back` on `FenceLostError`). These races run on a
+  real store's conditional writes, the stock client on the credential the catalog vends it, in
   `make lifecycle-rustfs-check` (`race_ns_client`'s and `race_catalog`'s `s3` parameter). A release replaces
   the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
   record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and

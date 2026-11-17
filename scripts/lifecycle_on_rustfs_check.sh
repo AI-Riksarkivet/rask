@@ -7,7 +7,9 @@
 # Starts the pinned RustFS (scripts/rustfs_server.sh) as a process, with a root pair made for this run and read from
 # files, and runs the tests' `s3` parametrization (tests/integration/conftest.py::race_ns_client and race_catalog), each test in a bucket
 # of its own. The catalog writes under that root pair: what is checked is how the store arbitrates the writes, not whose
-# identity makes them (the governance-chain lane checks that). Stops the store at the end; KEEP_UP=1 leaves it running
+# identity makes them (the governance-chain lane checks that). The stock client's cases write with the credential the
+# catalog vends them and no other key: a session the store's STS issues, under the catalog's session policy, to a user of
+# the run's own holding the catalog's canned policy (race_catalog). Stops the store at the end; KEEP_UP=1 leaves it running
 # and prints the environment a test run needs.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"

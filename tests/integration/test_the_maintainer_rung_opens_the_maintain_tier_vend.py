@@ -56,6 +56,7 @@ class _Vendor:
         data_directories: Sequence[str] = (),
         branch: str = "",
         records: TableRecords | None = None,
+        at_most_seconds: int | None = None,
     ) -> VendedSession:
         key_pair = S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST"))
         return VendedSession(key_pair=key_pair, endpoint=None, region="us-east-1", expires_at_millis=1)

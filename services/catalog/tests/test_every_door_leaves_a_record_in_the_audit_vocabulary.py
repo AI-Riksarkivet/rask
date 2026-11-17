@@ -197,6 +197,7 @@ class _StsVendor:
         data_directories: Sequence[str] = (),
         branch: str = "",
         records: TableRecords | None = None,
+        at_most_seconds: int | None = None,
     ) -> VendedSession | None:
         return VendedSession(
             key_pair=S3KeyPair(access_key_id=f"AK-{tier}", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1

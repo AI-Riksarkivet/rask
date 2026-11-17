@@ -50,6 +50,7 @@ class _Vendor:
         data_directories: Sequence[str] = (),
         branch: str = "",
         records: TableRecords | None = None,
+        at_most_seconds: int | None = None,
     ) -> VendedSession | None:
         self.asked.append((table_location, tier))
         if self._error is not None:
