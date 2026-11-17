@@ -9,12 +9,18 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["catch-panic"] }
+tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order`: an event is stored as the JSON it arrived as, members in the order sent.
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 thiserror = "2"
-uuid = { version = "1", features = ["v5"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -225,3 +225,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0216](0216-the-events-poll-reads-the-control-stream.md) | LH-601 | The events poll reads the control stream by sequence, and any catalog replica answers it (2026-11-16) | accepted |
 | [0217](0217-the-lakehouse-is-ported-to-rust-one-service-at-a-time.md) |  | The lakehouse is ported to Rust one service at a time, behind the doors it already serves (2026-11-17) | accepted |
 | [0218](0218-lineages-decisions-about-an-event-are-pure-functions-in-rust.md) |  | Lineage's decisions about an event are pure functions in Rust, checked against the Python by vectors (2026-11-17) | accepted |
+| [0219](0219-the-service-shell-in-rust-answers-as-the-python-app-factory-does.md) |  | The service shell in Rust answers as the Python app factory does (2026-11-17) | accepted |

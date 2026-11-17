@@ -19,6 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from fastapi import APIRouter, FastAPI, Request
+
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "services"))  # `uv run` doesn't apply the pytest pythonpath
@@ -303,9 +305,169 @@ def _function_vectors() -> dict[str, Any]:
     }
 
 
+#: The trace a recorded request names, so its error body's `instance` is known.
+_TRACE = "0af7651916cd43dd8448eb211c80319c"
+#: The shell's limits while it is recorded: small, so a case reaches each of them quickly.
+_MAX_BODY_BYTES = 1024
+_DEADLINE_SECONDS = 0.2
+
+
+def _shell_requests() -> list[dict[str, Any]]:
+    """The requests put to the shell: a name, where the service is in its life, which dependencies answer, and what is sent."""
+    up = {"catalog": True, "bus": True}
+
+    def case(name: str, method: str, path: str, *, life: str = "started", answering: dict[str, bool] = up, **sent: Any) -> dict[str, Any]:  # noqa: ANN401
+        return {"name": name, "life": life, "answering": answering, "method": method, "path": path, "headers": {}, "body": 0, "declared": True} | sent
+
+    raised = [case(f"a door refuses with {name}", "GET", f"/raise/{name}") for name in _error_names()]
+    return [
+        case("alive", "GET", "/livez"),
+        case("alive while starting", "GET", "/livez", life="starting"),
+        case("ready", "GET", "/readyz"),
+        case("starting", "GET", "/readyz", life="starting"),
+        case("draining", "GET", "/readyz", life="draining"),
+        case("degraded without an optional dependency", "GET", "/readyz", answering={"catalog": True, "bus": False}),
+        case("unhealthy without a required dependency", "GET", "/readyz", answering={"catalog": False, "bus": True}),
+        case("no door at the path", "GET", "/nope"),
+        case("no door for the method", "POST", "/livez"),
+        case("an error names the trace sent", "GET", "/nope", headers={"traceparent": f"00-{_TRACE}-b7ad6b7169203331-01"}),
+        case("a malformed traceparent is not the trace", "GET", "/nope", headers={"traceparent": f"00-{_TRACE}-0000000000000000-01"}),
+        case("a body at the cap", "POST", "/echo", body=_MAX_BODY_BYTES),
+        case("a body declared over the cap", "POST", "/echo", body=_MAX_BODY_BYTES + 1),
+        case("a body declared over the cap, to no door", "POST", "/nope", body=_MAX_BODY_BYTES + 1),
+        case("a body that runs over the cap undeclared", "POST", "/echo", body=_MAX_BODY_BYTES + 1, declared=False),
+        case("a request past its deadline", "GET", "/slow"),
+        case("a door that panics", "GET", "/panic"),
+        case("a refusal under a name of its own", "GET", "/raise-named"),
+        *raised,
+    ]
+
+
+def _error_names() -> list[str]:
+    import lance_namespace
+    from lance_namespace import ErrorCode
+
+    by_code = {
+        int(error.code): name
+        for name, error in vars(lance_namespace).items()
+        if isinstance(error, type) and issubclass(error, lance_namespace.LanceNamespaceError) and name != "LanceNamespaceError"
+    }
+    return [by_code[int(code)] for code in ErrorCode]
+
+
+async def _shell_vectors() -> list[dict[str, Any]]:
+    import asyncio
+    import logging
+    from collections.abc import AsyncGenerator
+    from contextlib import asynccontextmanager
+
+    import httpx
+    import lance_namespace
+
+    from lakehouse.health import Dependency, HealthWatch
+    from lakehouse.lance_app import build_lance_service_app
+    from lakehouse.lifecycle import mark_draining, mark_started
+    from lakehouse.schemas.health import Readiness
+    from lineage.models import UnauthoredRunError
+
+    class Panic(BaseException):
+        """What a native library's panic reaches Python as: a BaseException that is no Exception."""
+
+    doors = APIRouter()
+
+    @doors.get("/raise/{name}")
+    async def refuse(name: str) -> None:
+        raise getattr(lance_namespace, name)("boom")
+
+    @doors.get("/raise-named")
+    async def refuse_named() -> None:
+        raise UnauthoredRunError("boom")
+
+    @doors.get("/slow")
+    async def slow() -> dict[str, str]:
+        await asyncio.sleep(5 * _DEADLINE_SECONDS)
+        return {}
+
+    @doors.get("/panic")
+    async def panic() -> None:
+        raise Panic
+
+    @doors.post("/echo")
+    async def echo(request: Request) -> dict[str, int]:
+        return {"bytes": len(await request.body())}
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
+        yield
+
+    async def ready(request: Request) -> Readiness:
+        return request.app.state.health.readiness()
+
+    app = build_lance_service_app(
+        title="shell",
+        docs_enabled=False,
+        audit_enabled=False,
+        lifespan=lifespan,
+        log=logging.getLogger("shell"),
+        ready_check=ready,
+        max_body_bytes=_MAX_BODY_BYTES,
+        request_deadline_seconds=_DEADLINE_SECONDS,
+        routers=[doors],
+    )
+    answering: dict[str, bool] = {}
+
+    async def read(name: str) -> None:
+        if not answering[name]:
+            raise ConnectionError(f"{name} is down")
+
+    async def unsent(size: int) -> AsyncGenerator[bytes]:
+        yield b"x" * size
+
+    vectors: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://shell") as client:
+        for case in _shell_requests():
+            app.state.startup_complete = app.state.shutting_down = False
+            if case["life"] == "started":
+                mark_started(app)
+            elif case["life"] == "draining":
+                mark_draining(app)
+            answering.clear()
+            answering.update(case["answering"])
+            dependencies = [
+                Dependency(name="catalog", read=lambda: read("catalog"), required=True),
+                Dependency(name="bus", read=lambda: read("bus"), required=False),
+            ]
+            app.state.health = HealthWatch(dependencies)
+            for dependency in dependencies:
+                await app.state.health.check(dependency)
+            content = (b"x" * case["body"] if case["declared"] else unsent(case["body"])) if case["body"] else None
+            answer = await client.request(case["method"], case["path"], headers=case["headers"], content=content)
+            body = answer.json() if answer.content else None
+            named = body.get("instance") if isinstance(body, dict) else None
+            vectors.append(
+                case
+                | {
+                    "status": answer.status_code,
+                    "answered": {name: answer.headers[name] for name in ("content-type", "cache-control", "vary", "allow") if name in answer.headers},
+                    # The trace an error names: the one sent where one was, else only whether it names one (a new trace is random).
+                    "instance": named if named == _TRACE else named is not None,
+                    "answer": {key: value for key, value in body.items() if key != "instance"} if isinstance(body, dict) else body,
+                }
+            )
+        await asyncio.sleep(5 * _DEADLINE_SECONDS)
+    return vectors
+
+
 def main() -> None:
+    import asyncio
+
+    shell = {"limits": [{"max_body_bytes": _MAX_BODY_BYTES, "deadline_seconds": _DEADLINE_SECONDS}], "exchanges": asyncio.run(_shell_vectors())}
     _OUT.mkdir(parents=True, exist_ok=True)
-    for name, vectors in (("lineage_events", {"catalog": [_CATALOG], "cases": _event_vectors()}), ("lineage_functions", _function_vectors())):
+    for name, vectors in (
+        ("lineage_events", {"catalog": [_CATALOG], "cases": _event_vectors()}),
+        ("lineage_functions", _function_vectors()),
+        ("shell_http", shell),
+    ):
         (_OUT / f"{name}.json").write_text(_one_entry_a_line(vectors))
         print(f"wrote rust/vectors/{name}.json")
 

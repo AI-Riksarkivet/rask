@@ -8,9 +8,18 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+axum = { workspace = true }
+http-body-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "test-util"] }
+tower = { workspace = true }
 
 [lints]
 workspace = true

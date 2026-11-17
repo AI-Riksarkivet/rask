@@ -3,3 +3,4 @@
 pub mod events;
 pub mod naming;
 pub mod pyjson;
+pub mod service;
