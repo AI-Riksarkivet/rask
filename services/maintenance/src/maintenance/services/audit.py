@@ -340,8 +340,8 @@ def _finding_identity(finding: BaseModel) -> str:
 
 
 async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQueue, sources: ReconcileSources | None) -> dict[str, int]:
-    """Queue a pass for every table, and a task for every trash record, that neither a schedule nor the queue holds, and
-    schedule an orphan check for every table holding neither a check's schedule nor a queued check.
+    """Queue a pass for every table, and a task for every trash record, that neither a schedule (held, or fired and waiting
+    for the task holding its table) nor the queue holds, and schedule an orphan check for every table holding neither a check's schedule nor a queued check.
 
     A table's first task comes with the catalog's announcement of it, its birth or its first commit, and each pass
     schedules the next (:mod:`maintenance.services.table_pass`); a table's drop announcement queues its trash task. So what

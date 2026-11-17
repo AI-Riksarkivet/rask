@@ -71,7 +71,15 @@ $(OPENFGA_BIN): .dagger/governed.go
 .PHONY: openfga
 openfga: $(OPENFGA_BIN) ## Export the pinned OpenFGA server binary to .localbin, for the suite's authorization tests
 
-test: $(OPENFGA_BIN)
+# The pinned nats-server the tests that drive maintenance's queue on a real broker run, as the Rust plane's bus tests do
+# (`tests/integration/test_a_live_table_stays_held_on_the_bus.py`): `scripts/nats_server.sh` fetches it into .localbin
+# once, checked against `scripts/toolchain.sha256`, and does nothing while it is there. Without it and without the
+# network the target fails here, naming the download, before any test runs.
+.PHONY: nats-server
+nats-server: ## Fetch the pinned nats-server to .localbin, for the suite's tests on a real broker
+	@bash scripts/nats_server.sh >/dev/null
+
+test: $(OPENFGA_BIN) nats-server
 	uv run pytest -m "not e2e" $(PYTEST_PARALLEL)
 
 lint:
@@ -254,7 +262,7 @@ knip:
 # NO `fail_under` HERE ON PURPOSE. Picking the number is an owner's decision, and a threshold invented
 # by whoever fixed the plumbing is how a gate ends up ratcheted to whatever happened to be true that
 # afternoon. The report is honest now; the policy is a separate call.
-coverage: $(OPENFGA_BIN) ## The coverage report, computed on request against a correct denominator
+coverage: $(OPENFGA_BIN) nats-server ## The coverage report, computed on request against a correct denominator
 	uv run pytest -m "not e2e" --cov --cov-report=term-missing:skip-covered
 
 # `go-fmt` IS IN HERE because a gate that runs nowhere is not a gate. It gated the Go plane from no
@@ -825,7 +833,7 @@ e2e-compaction:     ## Maintenance proof: a deployed commit's pass (needs LANCE_
 #
 # `-n 16` rather than `auto`: `auto` takes all 64 cores and the run is IO-bound long before that —
 # measured, 16 workers already reach the wall-clock floor while leaving the machine usable.
-check-fast: $(OPENFGA_BIN) ## The pre-push suite in parallel — 1m17s against 9m57s serial
+check-fast: $(OPENFGA_BIN) nats-server ## The pre-push suite in parallel — 1m17s against 9m57s serial
 	uv run pytest tests/unit tests/integration -q -n 16 --dist loadfile
 
 # REQUIRES its targets, rather than skipping into a green: every test in this suite skips without

@@ -357,7 +357,8 @@ _store_events_settled = _meter.create_counter(
 )
 #: How the worker settled one commit announcement it pulled (:meth:`maintenance.services.queue.Worker.run_arrivals`), the
 #: closed `outcome` set of `maintenance.arrivals.settled`: acknowledged with the task it asks for held or queued
-#: (``held``), acknowledged because a task already held covers it (``covered``), acknowledged untouched (``ignored``: an
+#: (``held``; a registration's always, since its pass replaces the one held), acknowledged because a task already held
+#: covers it (``covered``: a write, a create, or a drop whose release is queued), acknowledged untouched (``ignored``: an
 #: event the lane asks nothing for, or a write no table's claim holds), acknowledged and acted on by nothing because no
 #: listed signer's key verifies it (``refused``), handed back for another delivery (``retried``), ended at once as no
 #: event envelope (``unreadable``), and ended on its last delivery, or on the one past it after its worker died every

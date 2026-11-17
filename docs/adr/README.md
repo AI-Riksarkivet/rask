@@ -238,7 +238,7 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0229](0229-a-committed-write-and-its-announcement-are-modelled-in-tla.md) |  | A committed write and its announcement are modelled in TLA+ (2026-11-17) | accepted |
 | [0230](0230-a-service-reads-its-secrets-in-rust-as-in-python.md) |  | A service reads its secrets in Rust as in Python, and a verifier the keys its signers publish (2026-11-17) | accepted |
 | [0231](0231-the-relay-drains-a-staged-event-in-rust-by-the-models-steps.md) |  | The relay drains a staged event in Rust by the model's steps (2026-11-17) | accepted |
-| [0232](0232-maintenances-work-queue-is-modelled-in-tla-before-it-is-ported.md) |  | Maintenance's work queue and a table's pass are modelled in TLA+ before they are ported; two findings (2026-11-17) | accepted |
+| [0232](0232-maintenances-work-queue-is-modelled-in-tla-before-it-is-ported.md) |  | Maintenance's work queue and a table's pass are modelled in TLA+ before they are ported; its two findings fixed in the worker (2026-11-17) | accepted |
 | [0233](0233-erasure-and-the-namespace-cascade-are-modelled-in-tla.md) |  | Erasure and the namespace and warehouse cascade are modelled in TLA+; eight defects found (2026-11-17) | accepted |
 | [0234](0234-the-outbox-and-its-store-session-are-spoken-in-rust-as-in-python.md) |  | The outbox and its store session are spoken in Rust as in Python (2026-11-17) | accepted |
 | [0235](0235-what-lineage-runs-without-a-request-is-ported-to-rust-by-the-models-steps.md) |  | What lineage runs without a request is ported to Rust by the model's steps: its settings, the ingest lane, the relay tick and the forwarder (2026-11-17) | accepted |

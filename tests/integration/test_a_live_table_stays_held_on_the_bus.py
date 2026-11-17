@@ -1,15 +1,14 @@
 """Something on the bus holds every live table between its passes (ADR 0232, invariant `HeldUnlessBackstopped`).
 
-Each test is one finding of the model of maintenance's work queue (`specs/maintenance/WorkQueue.tla`), its shortest trace
-played on the running code: the worker (`maintenance.services.queue.Worker` over `TaskQueue`), its task runner
-(`maintenance.services.tasks.run_task`) and its commit lane (`maintenance.services.arrival.Arrivals.hold_task`), on the
-pinned nats-server (`scripts/nats_server.sh`, the release the estate's bus runs) with JetStream, its streams, durable
-consumers and claims bucket declared as the chart's stream Job declares them (`chart/templates/nats-stream-job.yaml`
-151-169, `lance.busConsumers` in `chart/templates/_helpers.tpl` 408-418), at one replica. One step is held at the moment
-the trace names, while every other runs as it would; the harm is read as the hourly audit reads it
-(`audit._queue_what_holds_nothing`: `TaskQueue.held` over the table's schedule and its task), once the bus is quiet.
-
-Each is marked `xfail(strict=True)`: the suite stays green while the defect stands and turns red the day a fix lands.
+Each test is one assumption of the model of maintenance's work queue (`specs/maintenance/WorkQueue.tla`, A5 and A6), the
+shortest trace of the config that removes it played on the running code: the worker (`maintenance.services.queue.Worker`
+over `TaskQueue`), its task runner (`maintenance.services.tasks.run_task`) and its commit lane
+(`maintenance.services.arrival.Arrivals.hold_task`), on the pinned nats-server (`scripts/nats_server.sh`, the release the
+estate's bus runs) with JetStream, its streams, durable consumers and claims bucket declared as the chart's stream Job
+declares them (`chart/templates/nats-stream-job.yaml` 151-169, `lance.busConsumers` in `chart/templates/_helpers.tpl`
+408-418), at one replica. One step is held at the moment the trace names, while every other runs as it would; the harm is
+read as the hourly audit reads it (`audit._queue_what_holds_nothing`: `TaskQueue.held` over the table's schedules, held
+or fired, and its task), once the step has settled.
 """
 
 from __future__ import annotations
@@ -156,8 +155,13 @@ def _free_port() -> int:
 
 @pytest.fixture
 def bus(tmp_path: Path) -> Iterator[str]:
-    """The pinned nats-server with JetStream, on a free port and a store of the test's own."""
-    server = subprocess.run(["bash", str(ROOT / "scripts" / "nats_server.sh")], capture_output=True, text=True, check=True).stdout.strip()  # noqa: S603, S607
+    """The pinned nats-server with JetStream, on a free port and a store of the test's own. `scripts/nats_server.sh` fetches
+    it into `.localbin/` when it is not there (`make test` does so first), and a lane that can neither find nor fetch it
+    fails here, naming why: a broker these tests need is no reason to skip them."""
+    fetched = subprocess.run(["bash", str(ROOT / "scripts" / "nats_server.sh")], capture_output=True, text=True, check=False)  # noqa: S603, S607
+    if fetched.returncode != 0:
+        pytest.fail(f"scripts/nats_server.sh could not fetch the pinned nats-server (scripts/toolchain.sha256): {fetched.stderr.strip()}")
+    server = fetched.stdout.strip()
     port = _free_port()
     process = subprocess.Popen(
         [server, "-js", "-a", "127.0.0.1", "-p", str(port), "-sd", str(tmp_path / "jetstream")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -246,7 +250,8 @@ async def _quiet(queue: TaskQueue) -> bool:
 
 
 async def _holds(queue: TaskQueue, uuid: str) -> bool:
-    """Whether the bus holds the table as the hourly audit reads it: a schedule of its own, or a task on the queue."""
+    """Whether the bus holds the table as the hourly audit reads it: a schedule of its own, held or fired, or a task on the
+    queue."""
     return uuid in await queue.held("schedule", "table") | await queue.held("task", "table")
 
 
@@ -256,24 +261,16 @@ def _settings(tmp_path: Path) -> MaintenanceSettings:
     return MaintenanceSettings(MAINTENANCE_CONTROL_ROOT=str(control), MAINTENANCE_POLICY_ROOT=str(control))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "WorkQueueLateSchedule: ADR 0232, confirmed 2026-11-17; a pass that holds its next time already past has the "
-        "fired schedule acked as covered by its own task, and nothing holds the table until the hourly audit"
-    ),
-)
 @pytest.mark.asyncio
 async def test_a_pass_that_holds_a_time_already_past_leaves_its_table_held(bus: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A table's pass counts its next time from its start (`table_pass.run_table_pass` 837, `next_due` 968), so a pass
-    longer than that time holds one already past (`tasks.run_task` 63), which fires at once.
+    """A table's pass counts its next time from its start (`table_pass.run_table_pass`, `next_due`), so a pass longer than
+    that time holds one already past (`tasks.run_task`), which fires at once, while the pass still runs.
 
     The pass is the real `next_due` over a pass that began `retry_seconds` and half a minute ago and could not decide one
     dataset, which holds the next try `retry_seconds` from the start: a pass of 15.5 min, inside the half-hour bound,
-    whose store did not answer for one dataset. The held step is the pass's ack (`Worker._handle` 959): it is sent once
-    the fired schedule has met the pass's own task in flight (`Worker._move` 1255, `TaskQueue.enqueue` refused) and the
-    move has settled the fired schedule. What the bus holds then is what the hourly audit reads."""
+    whose store did not answer for one dataset. The held step is the pass's ack (`Worker._handle`): it is sent once the
+    fired schedule has met the pass's own task in flight (`Worker._move`, `TaskQueue.enqueue` refused) and the move has
+    settled the fired schedule. What the bus holds once the pass has acked is what the hourly audit reads."""
     settings = _settings(tmp_path)
     started = datetime.now(UTC) - timedelta(seconds=settings.retry_seconds + 30)
 
@@ -285,8 +282,8 @@ async def test_a_pass_that_holds_a_time_already_past_leaves_its_table_held(bus: 
     monkeypatch.setattr(tasks, "run_table_pass", long_pass)
     table = Task(kind="table", uuid=str(uuid4()), location=str(tmp_path / "table"))
     async with _queue_on(bus) as queue:
-        covered = asyncio.Event()
-        enqueue, told = queue.enqueue, queue.told
+        covered, settled = asyncio.Event(), asyncio.Event()
+        enqueue, told, move = queue.enqueue, queue.told, Worker._move
 
         async def moved(task: Task, *, carried: Mapping[str, str] | None = None) -> bool:
             queued = await enqueue(task, carried=carried)
@@ -294,30 +291,32 @@ async def test_a_pass_that_holds_a_time_already_past_leaves_its_table_held(bus: 
                 covered.set()
             return queued
 
+        async def settles(worker: Worker, msg: Msg) -> None:
+            await move(worker, msg)
+            if msg.subject == table.subject("due") and covered.is_set():
+                settled.set()
+
         async def acked_after_the_move(msg: Msg, said: bytes, *, within: float) -> bool:
             if said == Msg.Ack.Ack and msg.subject == table.subject("task"):
                 await asyncio.wait_for(covered.wait(), _STEP_SECONDS)
-                assert await _until(lambda: _due_settled(queue)), "the move never settled the fired schedule"
+                await asyncio.wait_for(settled.wait(), _STEP_SECONDS)
             return await told(msg, said, within=within)
 
         monkeypatch.setattr(queue, "enqueue", moved)
         monkeypatch.setattr(queue, "told", acked_after_the_move)
+        monkeypatch.setattr(Worker, "_move", settles)
         async with _worker(queue, settings, partial(run_task, settings=settings, queue=queue, emitter=NoopEmitter(), control=NoopControlEmitter())):
             assert await queue.enqueue(table), "the table's first task was not queued"
-            await _until(lambda: _passed_and_quiet(queue, covered))
+            assert await _until(lambda: _acked(queue, settled)), "the pass never acked"
         assert await _holds(queue, table.uuid), (
             "the pass held its table's next time already past; it fired, the move found the pass's own task in flight and "
             "acked it as covered, the pass acked, and nothing on the bus holds the live table until the hourly audit"
         )
 
 
-async def _due_settled(queue: TaskQueue) -> bool:
-    due = await queue.consumer_state(SCHEDULES_STREAM, DUE_CONSUMER)
-    return due.num_pending == 0 and due.num_ack_pending == 0
-
-
-async def _passed_and_quiet(queue: TaskQueue, covered: asyncio.Event) -> bool:
-    return covered.is_set() and await _quiet(queue)
+async def _acked(queue: TaskQueue, settled: asyncio.Event) -> bool:
+    """Whether the move has settled the fired schedule and the pass's task has left the queue, acknowledged."""
+    return settled.is_set() and (await queue.stream_state(TASKS_STREAM)).messages == 0
 
 
 def _announcement(operation: str, *, uuid: str, location: str) -> bytes:
@@ -332,27 +331,28 @@ def _announcement(operation: str, *, uuid: str, location: str) -> bytes:
     return json.dumps(lineage_envelope(event).as_wire()).encode()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "WorkQueueUndropFollowUp: ADR 0232, confirmed 2026-11-17; an undrop's announcement is covered by an older "
-        "follow-up that fires before the trash record is cleared, and nothing holds the table until the hourly audit"
-    ),
-)
+#: The commit delay the second test holds follow-ups at, where the chart's is five minutes: it only brings their fires
+#: within the test. The undrop announces the table `_UNDROP_AFTER` later than the write, so the write's follow-up comes
+#: due between the announcement and the clear while the announcement's own does not: `@at` holds to the second
+#: (`queue.at_schedule`), and a follow-up's pass starts 3 to 13 ms after its time (ADR 0232, measured on the pinned
+#: server), so the two fires stand at least `_UNDROP_AFTER` less a second apart.
+_DELAY_SECONDS = 6
+_UNDROP_AFTER = 3.0
+
+
 @pytest.mark.asyncio
 async def test_an_undropped_table_is_held_when_an_older_follow_up_fires_before_the_clear(bus: str, tmp_path: Path) -> None:
-    """A table is written (its follow-up held `commitPassDelaySeconds` out, `Arrivals._held` 188-191), dropped (its trash
-    record filed) and undropped: the undrop announces the table (`undrop_table`'s `filing.send(restored)`, catalog
-    `tables.py` 1598) and then clears the record (1599). The announcement's follow-up is refused, since the write's is
-    still held (`TaskQueue.follow_up` 616-623), and the lane answers `covered`. The write's follow-up fires, and its pass
-    reads the table in the trash and holds no next time (`table_pass.run_table_pass` 849-852, `tasks.run_task` 60-61).
+    """A table is written (its follow-up held `commitPassDelaySeconds` out, `Arrivals._held`), dropped (its trash record
+    filed) and undropped: the undrop announces the table (`undrop_table`'s `filing.send(restored)` in the catalog's
+    `tables.py`) and then clears the record. The write's follow-up comes due between the two; covered by it, the
+    announcement would leave the table to a pass that reads it in the trash and holds no next time
+    (`table_pass.run_table_pass`, `tasks.run_task`).
 
-    The held step is the clear: it lands once that pass has run and acked. The door's two writes are made here in the
-    door's order, the announcement through the lane's own handling of its delivery and the clear through `trash.clear`,
-    on the claim and the trash record the catalog keeps. The write's follow-up is held two seconds out where the chart's
-    is five minutes, which only brings its fire within the test."""
-    settings = _settings(tmp_path).model_copy(update={"commit_pass_delay_seconds": 2})
+    The held step is the clear: it lands once the write's follow-up's time has passed and the bus is quiet, when a pass
+    of that follow-up would have read the table in the trash. The door's two writes are made here in the door's order,
+    the announcement through the lane's own handling of its delivery and the clear through `trash.clear`, on the claim and
+    the trash record the catalog keeps. What the bus holds once the next pass has run is what the hourly audit reads."""
+    settings = _settings(tmp_path).model_copy(update={"commit_pass_delay_seconds": _DELAY_SECONDS})
     control, options = settings.resolved_control_root, StorageOptions()
     uuid, location = str(uuid4()), str(tmp_path / "table")
     claims = location_claims.ClaimStore(control_root=control, storage_options={})
@@ -367,12 +367,15 @@ async def test_an_undropped_table_is_held_when_an_older_follow_up_fires_before_t
 
         lane = Arrivals(settings, queue)
         async with _worker(queue, settings, run):
+            written = time.monotonic()
             assert await lane.hold_task(_announcement("insert", uuid=uuid, location=location)) == "held", "the write held no follow-up"
             trash.put(control, options, trash.make_record("lance_catalog$db$t", uuid=uuid, location=location, dropped_by="user:karin", grace_days=7))
-            assert await lane.hold_task(_announcement("register_table", uuid=uuid, location=location)) == "covered", "the undrop's announcement was not covered"
-            await asyncio.wait_for(passed.wait(), _STEP_SECONDS)
-            assert await _until(lambda: _quiet(queue)), "the follow-up's pass did not settle"
+            await asyncio.sleep(_UNDROP_AFTER)
+            await lane.hold_task(_announcement("register_table", uuid=uuid, location=location))
+            await asyncio.sleep(max(written + _DELAY_SECONDS + 1.5 - time.monotonic(), 0.0))
+            assert await _until(lambda: _quiet(queue)), "the bus did not settle before the clear"
             trash.clear(control, options, uuid)
+            await asyncio.wait_for(passed.wait(), _STEP_SECONDS)
             await _until(lambda: _quiet(queue))
         assert not trash.keeps(control, options, uuid), "the undrop's clear did not land"
         assert await _holds(queue, uuid), (

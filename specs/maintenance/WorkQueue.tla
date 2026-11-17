@@ -20,10 +20,12 @@
 (*   - a settle the network held past its sender's end is applied late,    *)
 (*     by sequence, to whatever delivery of that message is out then.      *)
 (* Around it: a commit's announcement holds the table's follow-up unless   *)
-(* one is held (Arrivals.hold_task, TaskQueue.follow_up); a fired schedule *)
-(* is moved onto the queue and dropped while a task holds the table, a     *)
-(* fired follow-up waits for the table to be free (Worker._move); the      *)
-(* hourly audit queues a table that neither a schedule nor the queue holds *)
+(* one is held, and a registration (an undrop's announcement among them)   *)
+(* holds its own, replacing any held (Arrivals.hold_task,                  *)
+(* TaskQueue.follow_up); a fired schedule or follow-up is moved onto the   *)
+(* queue once no task holds the table, and naked meanwhile                 *)
+(* (Worker._move); the hourly audit queues a table that neither a          *)
+(* schedule, held or fired, nor the queue holds                            *)
 (* (audit._queue_what_holds_nothing); a drop, and an undrop that announces *)
 (* the table before it clears its trash record (arrival.py's docstring).   *)
 (*                                                                         *)
@@ -41,28 +43,23 @@
 (*   A2. Claims: the claim exists. Without it a late settle starts a       *)
 (*       second pass beside the first: WorkQueueNoClaim.cfg.               *)
 (*   A3. DueUnlimited: the consumer of fired schedules redelivers for      *)
-(*       ever (maintenance-due, max_deliver -1), so a follow-up waits out  *)
-(*       any pass: WorkQueueDueLimit.cfg.                                  *)
+(*       ever (maintenance-due, max_deliver -1), so a fired follow-up or   *)
+(*       schedule waits out any pass: WorkQueueDueLimit.cfg.               *)
 (*   A4. Audits: the hourly audit runs. It is what finds a table whose     *)
 (*       schedule a failure lost: WorkQueueNoAudit.cfg.                    *)
-(*   A5. ScheduleAfterSettle: the time a pass holds comes after it acks    *)
-(*       (table_pass._SOONEST is 60 s). It counts from the pass's start,   *)
-(*       so a pass longer than that holds a time already past:             *)
-(*       WorkQueueLateSchedule.cfg, a FINDING.                             *)
-(*   A6. UndropDelay: no follow-up fires between an undrop's announcement  *)
-(*       and its clear of the trash record ("all"). The delay              *)
-(*       (commitPassDelaySeconds) holds this only for a follow-up the      *)
-(*       announcement itself held ("own"): WorkQueueUndropFollowUp.cfg,    *)
-(*       a FINDING.                                                        *)
-(*                                                                         *)
-(* THE FIXES EACH FINDING IS CHECKED WITH (ADR 0232 §4), none in the code: *)
-(*   NextTimeFix "fromEnd": the next time counts from the pass's end, so   *)
-(*       it fires after the ack while the ack is answered inside           *)
-(*       _SOONEST (an ack wait of at most 60 s); "nak": a fired schedule   *)
-(*       waits while a task holds the table, as a fired follow-up does.    *)
-(*   UndropFix "afterClear": the undrop's announcement is sent after its   *)
-(*       clear, filed before it; "own": an undrop's announcement holds its *)
-(*       follow-up whatever is held, replacing an older one.               *)
+(*   A5. FiredWaits: a fired schedule that finds a task holding its        *)
+(*       table is naked to come again, never acked as covered by it        *)
+(*       (Worker._move). A pass counts its next time from its start, so    *)
+(*       one longer than that time holds one already past, which fires     *)
+(*       while the pass runs; acked as covered, it leaves the table held   *)
+(*       by nothing once the pass acks: WorkQueueLateSchedule.cfg.         *)
+(*   A6. UndropHoldsOwn: an undrop's announcement (a registration) holds   *)
+(*       a follow-up of its own, replacing an older one, and that one      *)
+(*       fires only after the undrop's clear of the trash record, its      *)
+(*       delay (commitPassDelaySeconds) outlasting the door's two writes.  *)
+(*       An older follow-up the announcement found held may fire between   *)
+(*       the two; covered by it, the announcement leaves the table to a    *)
+(*       pass that read it in the trash: WorkQueueUndropFollowUp.cfg.      *)
 (*                                                                         *)
 (* NOT MODELLED: the pass's own effects on the store (they are one Read    *)
 (* step here), the orphan check and the trash task (other subjects; the    *)
@@ -83,10 +80,8 @@ CONSTANTS Workers,
           Claims,               \* A2
           DueUnlimited,         \* A3
           Audits,               \* A4
-          ScheduleAfterSettle,  \* A5
-          UndropDelay,          \* A6: "all" or "own"
-          NextTimeFix,          \* a fix of A5's finding: "none", "fromEnd" or "nak"
-          UndropFix             \* a fix of A6's finding: "none", "afterClear" or "own"
+          FiredWaits,           \* A5
+          UndropHoldsOwn        \* A6
 
 VARIABLES table,      \* "live", "dropped", or "undropping" (announced, its trash record not yet cleared)
           owed,       \* a commit landed that no pass has read the table after
@@ -337,29 +332,27 @@ AgesOff ==
 ---------------------------------------------------------------------------
 \* Schedules (TaskQueue.schedule_at, follow_up; Worker.run_due, _move).
 
-\* A held time fires. Under A5 one a pass held fires only once that pass has acked.
+\* A held time fires, the one a pass held included while that pass still runs: it counts from the pass's start.
 FireSchedule ==
   /\ sched /\ NoFault
-  /\ IF ScheduleAfterSettle \/ NextTimeFix = "fromEnd" THEN \A w \in Workers : ws[w] # "scheduled" ELSE TRUE
   /\ sched' = FALSE /\ soon' = FALSE
   /\ dueSched' = TRUE /\ dueSoon' = soon
   /\ UNCHANGED <<env, followup, dueFollow, mst, mholder, mn, net, workers, claim, backstop>>
 
-\* A fired schedule is moved onto the queue; a table that has a task queued or in flight is taken as covered by it, and
-\* the fired schedule is acked either way. With NextTimeFix "nak" it waits, naked, while a task holds the table.
+\* A fired schedule is moved onto the queue once no task holds the table, and naked meanwhile (A5). Without A5 a table
+\* that has a task queued or in flight is taken as covered by it, and the fired schedule is acked.
 MoveSchedule ==
   /\ dueSched /\ NoFault
-  /\ IF NextTimeFix = "nak" THEN mst = "none" ELSE TRUE
+  /\ IF FiredWaits THEN mst = "none" ELSE TRUE
   /\ IF mst = "none" THEN Enqueued ELSE UNCHANGED <<mst, mholder, mn, wcur, net>>
   /\ dueSched' = FALSE /\ dueSoon' = FALSE
   /\ UNCHANGED <<env, followup, dueFollow, sched, soon, wn, ws, lapsed, claim, backstop>>
 
-\* The commit lane holds the table's follow-up unless one is held, which covers this commit. With UndropFix "own" an
-\* undrop's announcement holds its own, replacing an older one; with "afterClear" it is sent once the record is cleared.
+\* The commit lane holds the table's follow-up unless one is held, which covers this commit. An undrop's announcement, a
+\* registration, holds its own, replacing an older one (A6); without A6 an older one covers it too.
 Lane ==
   /\ hint /\ NoFault
-  /\ IF UndropFix = "afterClear" THEN table # "undropping" ELSE TRUE
-  /\ followup' = IF table = "undropping" /\ (followup = "none" \/ UndropFix = "own") THEN "late"
+  /\ followup' = IF table = "undropping" THEN (IF UndropHoldsOwn \/ followup = "none" THEN "late" ELSE followup)
                  ELSE IF followup = "none" THEN "early" ELSE followup
   /\ hint' = FALSE
   /\ UNCHANGED <<table, owed, commits, drops, dueFollow, sched, soon, dueSched, dueSoon, mst, mholder, mn, net, workers, claim, backstop>>
@@ -370,11 +363,11 @@ LaneLoses ==
   /\ hint' = FALSE /\ backstop' = TRUE
   /\ UNCHANGED <<table, owed, commits, drops, bus, workers, claim>>
 
-\* A follow-up fires a delay after it was held. Between an undrop's announcement and its clear, none fires under A6
-\* ("all"); with only what the delay holds ("own"), one held before the announcement may.
+\* A follow-up fires a delay after it was held. Between an undrop's announcement and its clear only one held before the
+\* announcement may: the one the announcement held waits out its delay, which outlasts the door's two writes (A6).
 FireFollowUp ==
   /\ followup # "none" /\ NoFault
-  /\ table = "undropping" => (UndropDelay = "own" /\ followup = "early")
+  /\ table = "undropping" => followup = "early"
   /\ followup' = "none" /\ dueFollow' = TRUE
   /\ UNCHANGED <<env, sched, soon, dueSched, dueSoon, mst, mholder, mn, net, workers, claim, backstop>>
 
@@ -385,15 +378,20 @@ MoveFollowUp ==
   /\ dueFollow' = FALSE
   /\ UNCHANGED <<env, followup, sched, soon, dueSched, dueSoon, workers, claim, backstop>>
 
-\* Without A3: the consumer gives a waiting follow-up up.
+\* Without A3: the consumer gives a waiting follow-up, or a waiting schedule, up.
 FollowUpGivenUp ==
   /\ ~DueUnlimited /\ dueFollow /\ mst # "none" /\ NoFault
   /\ dueFollow' = FALSE
   /\ UNCHANGED <<env, followup, sched, soon, dueSched, dueSoon, mst, mholder, mn, net, workers, claim, backstop>>
 
-\* The hourly audit queues a live table that neither a schedule nor the queue holds.
+ScheduleGivenUp ==
+  /\ ~DueUnlimited /\ FiredWaits /\ dueSched /\ mst # "none" /\ NoFault
+  /\ dueSched' = FALSE /\ dueSoon' = FALSE
+  /\ UNCHANGED <<env, followup, dueFollow, sched, soon, mst, mholder, mn, net, workers, claim, backstop>>
+
+\* The hourly audit queues a live table that neither a schedule, held or fired, nor the queue holds (TaskQueue.held).
 Audit ==
-  /\ Audits /\ table = "live" /\ ~sched /\ mst = "none" /\ NoFault
+  /\ Audits /\ table = "live" /\ ~sched /\ ~dueSched /\ mst = "none" /\ NoFault
   /\ Enqueued
   /\ UNCHANGED <<env, followup, dueFollow, sched, soon, dueSched, dueSoon, ws, wn, lapsed, claim, backstop>>
 
@@ -427,7 +425,8 @@ Step(w) == Claim(w) \/ GiveBack(w) \/ Read(w) \/ Retry(w) \/ EndUnrun(w) \/ Ack(
 Next ==
   \/ \E w \in Workers : Pull(w) \/ Step(w) \/ ScheduleRefused(w) \/ PassFails(w) \/ Die(w) \/ SettleHeld(w) \/ Lapse(w)
   \/ AckWaitRunsOut \/ ClaimAgesOut \/ LateSettle \/ AgesOff
-  \/ FireSchedule \/ MoveSchedule \/ Lane \/ LaneLoses \/ FireFollowUp \/ MoveFollowUp \/ FollowUpGivenUp \/ Audit
+  \/ FireSchedule \/ MoveSchedule \/ Lane \/ LaneLoses \/ FireFollowUp \/ MoveFollowUp \/ FollowUpGivenUp \/ ScheduleGivenUp
+  \/ Audit
   \/ Commit \/ Drop \/ UndropAnnounces \/ UndropClears
 
 Fairness ==

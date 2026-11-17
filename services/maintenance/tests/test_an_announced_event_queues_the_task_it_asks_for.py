@@ -61,7 +61,8 @@ def _body(event: dict[str, Any]) -> bytes:
 
 class _RecordingQueue:
     """The lane's publishes, with `TaskQueue`'s signatures, recorded; ``down`` refuses each as an unreachable bus does.
-    A follow-up asked for a task that already has one is answered as the bus answers it, not held. That the bus keeps
+    A follow-up asked for a task that already has one is answered as the bus answers it, not held, and one asked for
+    ``replacing`` is held whatever is. That the bus keeps
     the first and refuses the others is its own guard, proven on a real broker by the `nats-auth` lane
     (`tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py`, its burst)."""
 
@@ -76,12 +77,12 @@ class _RecordingQueue:
         self.queued.append(task)
         return True
 
-    async def follow_up(self, task: Task, at: datetime) -> bool:
+    async def follow_up(self, task: Task, at: datetime, *, replacing: bool = False) -> bool:
         if self.down:
             raise QueueUnavailableError("the bus did not take it")
         held_already = any(held == task for held, _ in self.followed)
         self.followed.append((task, at))
-        return not held_already
+        return replacing or not held_already
 
 
 def _queue(recording: _RecordingQueue) -> TaskQueue:
@@ -96,7 +97,7 @@ def _queue(recording: _RecordingQueue) -> TaskQueue:
     [
         pytest.param("insert", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-write-asks-for-its-tables-pass"),
         pytest.param("create_table", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-create-is-a-write"),
-        pytest.param("register_table", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-registration-is-passed-too"),
+        pytest.param("register_table", LaneTask(kind="table", uuid=TABLE_UUID, location=URI, replacing=True), id="a-registration-replaces-the-held-pass"),
         pytest.param("drop_table", LaneTask(kind="trash", uuid=TABLE_UUID), id="a-drop-asks-for-its-release"),
     ],
 )
@@ -134,9 +135,10 @@ def test_an_event_the_lane_cannot_act_on_is_acknowledged_untouched(event: object
 @pytest.mark.asyncio
 async def test_each_commit_holds_its_tables_pass_a_delay_out() -> None:
     """Two writes and a registration each ask for the table's pass, ``MAINTENANCE_COMMIT_PASS_DELAY_SECONDS`` out, and
-    queue nothing: the bus keeps the first follow-up and refuses the others, which that pass covers, so one pass reads
-    the table after them all. A registration waits as a write does, which an undrop needs, since it announces its table
-    before it clears the trash record."""
+    queue nothing: the bus keeps the first follow-up and refuses the second, which that pass covers, so one pass reads
+    the table after them all. A registration waits as a write does and replaces the held follow-up rather than being
+    covered by it, which an undrop needs: it announces its table before it clears the trash record, and the older
+    follow-up could fire in between (ADR 0232, A6)."""
     queue = _RecordingQueue()
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
     arrivals = Arrivals(settings, _queue(queue))
@@ -146,7 +148,7 @@ async def test_each_commit_holds_its_tables_pass_a_delay_out() -> None:
     answers = [await arrivals.hold_task(_body(_event(operation))) for operation in ("insert", "insert", "register_table")]
 
     after = datetime.now(UTC)
-    assert (answers, queue.queued) == (["held", "covered", "covered"], [])
+    assert (answers, queue.queued) == (["held", "covered", "held"], [])
     assert [task for task, _ in queue.followed] == [Task(kind="table", uuid=TABLE_UUID, location=URI)] * 3
     assert all(before + delay <= at <= after + delay for _, at in queue.followed), "a pass was not held the commit delay"
 

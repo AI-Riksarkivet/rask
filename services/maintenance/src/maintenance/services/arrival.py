@@ -8,9 +8,12 @@ also carries the catalog's lifecycle markers, and maps each event to at most one
 * A **write** or a **registration** holds its table's pass a delay out (``MAINTENANCE_COMMIT_PASS_DELAY_SECONDS``), unless
   one is held already, which covers it (:meth:`maintenance.services.queue.TaskQueue.follow_up`): a burst of commits makes
   one pass, at most one per delay, and that pass reads the table after every commit it covers. A create is announced as a
-  write. A registration (``register_table``, which both undrop doors send too) waits
-  the same delay, which an undrop needs: it announces the table before it clears the trash record, and a pass that read
-  the record in between would end the table's schedule.
+  write. A registration (``register_table``, which both undrop doors send too) waits the same delay, which an undrop
+  needs: it announces the table before it clears the trash record, and a pass that read the record in between would end
+  the table's schedule. So a registration holds a follow-up of its own, replacing any held, never covered by it: a
+  follow-up a write held before the drop fires on its own older time, which may fall between the undrop's announcement
+  and its clear (ADR 0232, assumption A6). Replaced, that older pass comes up to a delay later, and reads every commit
+  it covered.
 * A **drop** (``drop_table``) queues the trash task of the table's uuid (:mod:`maintenance.services.trash_task`), which
   holds itself until the record's release, or ends at once when the drop filed no record.
 * A declaration, a deregistration and a rename move no bytes and keep the table's uuid and location, so they are
@@ -76,6 +79,8 @@ _MAX_LOGGED_CHARS: Final = 300
 #: maintenance's own run, announced on the topic this lane reads.
 _UNTOUCHED: Final = frozenset({"declare_table", "deregister_table", "rename_table", "expire_versions"})
 _DROP: Final = "drop_table"
+#: The registration, which both undrop doors announce too: its pass replaces the one held.
+_REGISTER: Final = "register_table"
 
 
 class LaneTask(BaseModel):
@@ -87,6 +92,8 @@ class LaneTask(BaseModel):
     uuid: str | None = None
     #: The table's physical location from the event's ``dataSource`` facet; empty for a drop, which names none.
     location: str = ""
+    #: Whether the pass replaces the one held for the table rather than being covered by it: a registration's does.
+    replacing: bool = False
 
 
 def lane_task(event: object) -> LaneTask | None:
@@ -113,7 +120,7 @@ def lane_task(event: object) -> LaneTask | None:
         return LaneTask(kind="trash", uuid=uuid) if uuid else None
     if (location := _location_of(output)) is None:
         return None
-    return LaneTask(kind="table", uuid=uuid, location=location)
+    return LaneTask(kind="table", uuid=uuid, location=location, replacing=operation == _REGISTER)
 
 
 def _first_output(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -153,8 +160,8 @@ class Arrivals:
         """Put the task the announcement ``body`` asks for on the work queue (:func:`lane_task`), now or held, and
         answer how the delivery is acknowledged.
 
-        A table's pass is held a delay out, unless one is held already, which covers this event; a drop's release is
-        queued now, unless one is queued already. An event the lane leaves untouched, a write no table's claim holds and
+        A table's pass is held a delay out, unless one is held already, which covers this event; a registration's
+        replaces the one held, and is never covered. A drop's release is queued now, unless one is queued already. An event the lane leaves untouched, a write no table's claim holds and
         an event no listed signer's key verifies are acknowledged and hold nothing: none of those is repaired by a
         redelivery. Handled as a span of the trace the announcement was published under, so the task it holds is linked
         to the commit that asked for it.
@@ -185,7 +192,8 @@ class Arrivals:
             return "ignored"
         task = Task(kind=lane.kind, uuid=uuid, location=lane.location)
         if task.kind == "table":
-            held = await self._queue.follow_up(task, datetime.now(UTC) + timedelta(seconds=self._settings.commit_pass_delay_seconds))
+            at = datetime.now(UTC) + timedelta(seconds=self._settings.commit_pass_delay_seconds)
+            held = await self._queue.follow_up(task, at, replacing=lane.replacing)
         else:
             held = await self._queue.enqueue(task)
         return "held" if held else "covered"

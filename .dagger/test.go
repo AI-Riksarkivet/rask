@@ -11,6 +11,10 @@ import (
 // runs.
 const natsImage = "nats:2.15.2-alpine"
 
+// natsServerPath is where `scripts/nats_server.sh` finds the pinned nats-server before it fetches one, under the
+// version it pins; the pytest lane puts natsImage's binary there, so a test needing the broker fetches nothing.
+const natsServerPath = "/src/.localbin/nats-server-v2.15.2"
+
 // withRenderableChart gives a python-gate container what `tests/unit/chart_render.py` needs to render the
 // chart: the pinned helm and the vendored subcharts. Shared by the pytest lane (Test) and the NATS auth lane
 // (NatsAuth), so the two cannot render the same chart under different Helm minors or subchart sets.
@@ -63,6 +67,10 @@ func (m *Rask) Test(
 		// the static binary of the image the governed lanes run, so every lane evaluates the model with one
 		// server. `make openfga` exports the same file to `.localbin` for a developer box.
 		WithFile("/usr/local/bin/openfga", dag.Container().From(openfgaImage).File("/openfga")).
+		// ── the pinned nats-server, for the tests that drive maintenance's queue on a real broker ────────────────
+		// (`tests/integration/test_a_live_table_stays_held_on_the_bus.py`): the image the NATS lanes run, at the path
+		// `scripts/nats_server.sh` reads, so the lane neither fetches it nor depends on the network.
+		WithFile(natsServerPath, dag.Container().From(natsImage).File("/usr/local/bin/nats-server")).
 		// ── a per-test ceiling, because a hang in HERE is undiagnosable without one ─────────────────
 		// This suite has hung in Dagger while passing on a developer box, and the container is what
 		// makes it undebuggable: Dagger buffers a WithExec's stdout until the exec COMPLETES, so a run

@@ -154,9 +154,15 @@ call (measured on fastapi 0.140.13).
 
 ## NATS, locally, through Dagger
 
-No offline suite needs a broker: the bus contract is proved by the `nats-auth` lane
+The bus contract under its permission table is proved by the `nats-auth` lane
 (`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`), which brings its own
-nats-server. For an ad-hoc broker, bring one up as a Dagger service, never a docker container.
+nats-server. One offline file runs a broker of its own: `tests/integration/test_a_live_table_stays_held_on_the_bus.py`
+(maintenance's worker on its queue, ADR 0232) starts the pinned nats-server `scripts/nats_server.sh` prints, a process
+on a free port with a store under `tmp_path`, as the Rust plane's bus tests do. The script fetches the release into
+`.localbin/` against `scripts/toolchain.sha256` when it is not there; `make test`, `check-fast` and `coverage` fetch it
+first (`make nats-server`), `dagger call test` copies the binary of `natsImage` to that path, and a lane that can do
+neither fails the fixture naming the download, never skips. For an ad-hoc broker, bring one up as a Dagger service,
+never a docker container.
 `up` holds the foreground, so run it in the background or in a second shell:
 
 ```bash

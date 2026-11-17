@@ -840,15 +840,22 @@ governing their data. The project-scoped surface is the console's project page, 
   begun at the events published after it (`Worker.run_arrivals`, `maintenance.services.arrival.Arrivals.hold_task`), and
   checks a write's signature before it acts. An announcement (`maintenance.services.arrival.lane_task`) holds one
   follow-up pass `commitPassDelaySeconds` (300) out unless one is held already, so a burst of commits makes one pass; a
-  table's drop (`drop_table`) queues its trash task instead. One the worker cannot settle is handed back after a growing
-  delay and ended on its `maxDeliver`-th delivery, each outcome counted on `maintenance.arrivals.settled` (`held`,
-  `covered`, `ignored`, `refused`, `unreadable`, `retried`, `ended`). A table's pass
+  registration (`register_table`, which both undrop doors announce) replaces the follow-up held instead of being covered
+  by it, since an older one could fire between the undrop's announcement and its clear of the trash record and pass the
+  table as trashed (ADR 0232, A6); a table's drop (`drop_table`) queues its trash task instead. One the worker cannot
+  settle is handed back after a growing delay and ended on its `maxDeliver`-th delivery, each outcome counted on
+  `maintenance.arrivals.settled` (`held`, `covered`, `ignored`, `refused`, `unreadable`, `retried`, `ended`). A fired
+  schedule or follow-up that meets a task holding its table (a table's, a trash record's, an orphan check's) waits for
+  it, naked a minute out, and is never acked as covered by it (`Worker._move`, ADR 0232, A5): a pass counts its next time
+  from its start, so a long one holds a time already past, which fires while it runs. Only a cadence's firing (the
+  audit's, the scan's) is covered by the task it meets. A table's pass
   (`maintenance.services.table_pass.run_table_pass`) expires the table and each branch once it has
   `minVersionsToExpire` (20) reclaimable versions, refreshes its due record, reads its committed files (below), and
   schedules its next pass (`next_due`: the earliest a version or a staged manifest comes due, held to the policy's
   cadence, never later than `recheckHours` (24) and never sooner than 60 s; a pass that could not decide, or found the
   table's history fenced, is tried again after `retrySeconds`). The hourly audit opens no table and queues each table
-  and trash record that holds neither a schedule nor a queued task, which bounds a lost announcement or schedule to one
+  and trash record that holds neither a schedule (held, or fired and waiting on its `due` subject) nor a queued task,
+  which bounds a lost announcement or schedule to one
   firing (`maintenance.services.audit.run_audit`); a trash record already released, or carrying no deadline, gets no task,
   which would end holding nothing. The chart's stream Job reads MAINTENANCE_SCHEDULES back and fails unless it allows
   message schedules, which nats-server older than 2.12 drops without a word. A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).

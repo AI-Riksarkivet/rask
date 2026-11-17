@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # nats_server.sh: print the path of the pinned nats-server, fetching it into .localbin/ first when it is not there.
-# The bus's integration tests (rust/crates/lakehouse-bus/tests) run this release, the one the estate's bus runs.
+# The bus's integration tests (rust/crates/lakehouse-bus/tests) and maintenance's queue on a real broker
+# (tests/integration/test_a_live_table_stays_held_on_the_bus.py) run this release, the one the estate's bus runs.
 set -euo pipefail
 version=v2.15.2
 root="$(cd "$(dirname "$0")/.." && pwd)"
