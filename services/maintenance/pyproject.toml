@@ -12,9 +12,9 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
     "uvicorn[standard]>=0.30",
-    "pylance[otel]>=13.0.0",
+    "pylance[otel]>=14.0.3",
     # Imported directly (the plan door's spec error codes), so declared rather than inherited.
-    "lance-namespace>=0.11.0,<0.12",
+    "lance-namespace>=0.13.0,<0.14",
     "pyarrow",
     "opentelemetry-api>=1.44.0",
     "nats-py[nkeys]>=2.16",

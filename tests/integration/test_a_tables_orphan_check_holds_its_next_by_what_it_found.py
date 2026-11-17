@@ -527,7 +527,7 @@ def test_a_file_written_while_the_check_reads_is_no_finding(
     *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A commit landing during the check writes its transaction file after the referenced set was read, so the file looks
-    stranded; age is the only evidence an unverified file has (`lance_docs/lance/guide/read_and_write.md:957-964`), and a
+    stranded; age is the only evidence an unverified file has (`lance_docs/lance/guide/read_and_write.md:996-1003`), and a
     file the check cannot place before it began reading is not a finding."""
     task = _table(bucket=bucket, options=store)
     read = orphans.referenced_paths_of

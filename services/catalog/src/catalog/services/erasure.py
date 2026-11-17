@@ -126,6 +126,7 @@ from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_f
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
+from lakehouse.transactions import read_transaction
 
 
 log = logging.getLogger(__name__)
@@ -982,7 +983,7 @@ class _History:
                 head = _head(self.cold, ref)
                 horizon = self._trusted.get(_label(ref), -1)
                 for version in (version for version in self.versions(ref) if version <= horizon):
-                    transaction = head.read_transaction(version)
+                    transaction = read_transaction(head, version)
                     built = getattr(getattr(transaction, "operation", None), "new_indices", None) or []
                     for index in built:
                         fresh = transaction is not None and int(index.dataset_version) == int(transaction.read_version)

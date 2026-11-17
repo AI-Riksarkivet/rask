@@ -148,6 +148,7 @@ from lakehouse.provenance_stamp import declare_dataset_id
 from lakehouse.schema import SchemaFields, facet_fields
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
+from lakehouse.transactions import read_transaction
 from lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 
 
@@ -267,7 +268,7 @@ def committed_version(table: table_claims.DoorTable, so: StorageOptions, transac
         parent = listed.get("parent_version")
         floor = max(head - _TRANSACTION_SEARCH_DEPTH, int(parent) if isinstance(parent, int) else 0)
         for version in range(head, floor, -1):
-            transaction = dataset.read_transaction(version)
+            transaction = read_transaction(dataset, version)
             if transaction is not None and transaction.uuid == transaction_id:
                 return version
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
@@ -685,16 +686,16 @@ def stands_at(ns: LanceNamespace, segments: list[str], location: str) -> bool:
 
 
 def _namespace_holds(ns: LanceNamespace, segments: list[str]) -> bool:
-    """Whether a namespace, and no table, is at ``segments``; an unreadable answer is not one.
+    """Whether a namespace is at ``segments``; an unreadable answer is not one.
 
-    The `dir` backend's ``namespace_exists`` answers present for a table's id as well (measured on pylance 13.0.0), so
-    a table answering at the id means the holder is a table: a second declaration, or two creates racing.
+    The `dir` backend tells a namespace from a table of the same id: ``namespace_exists`` on a table's id raises
+    ``NamespaceNotFoundError`` (measured on pylance 14.0.3, 2026-11-17).
     """
     try:
         ns.namespace_exists(NamespaceExistsRequest(id=segments))
     except Exception:  # noqa: BLE001 — only a namespace that answers present changes the conflict's wording
         return False
-    return _existing_location(ns, segments) is None
+    return True
 
 
 def _reserve(location: str, so: StorageOptions) -> None:
@@ -1613,7 +1614,7 @@ def _discard_unlanded_attempt(
     Called only once the attempt cannot land, its finalize lost to another commit's manifest or the attempt refused before
     its finalize, so no version names these files, and the next attempt plans afresh and writes its own. Lance would keep
     them 7 days, since a store cannot tell a dead commit's file from one still being written
-    (``lance_docs/lance/guide/read_and_write.md:957-964``); the catalog knows them for its own. It raises nothing, since it
+    (``lance_docs/lance/guide/read_and_write.md:996-1003``); the catalog knows them for its own. It raises nothing, since it
     runs while another error is on its way: a delete the store refuses is logged and leaves its file to Lance's rule.
     """
     own = committed_files.written_by(transaction, wrote, branch=branch)
@@ -1952,7 +1953,7 @@ def _staged_transaction(location: str, so: StorageOptions, manifest_path: str) -
             body = manifest_bytes.with_manifest_version(source.read(), detached)
         with fs.open_output_stream(f"{versions}/d{detached}.manifest") as sink:
             sink.write(body)
-        transaction = lance.dataset(location, version=detached, storage_options=so.in_clear() or None).read_transaction(detached)
+        transaction = read_transaction(lance.dataset(location, version=detached, storage_options=so.in_clear() or None), detached)
     finally:
         discard_detached_manifest(location, so, detached)
         delete_table_object(location, so, f"_versions/{name}")
@@ -2737,7 +2738,7 @@ def committed_under_key(table: table_claims.DoorTable, so: StorageOptions, *, br
         if committed_at(entry) < earliest:
             return None
         version = int(entry["version"])
-        transaction = dataset.read_transaction(version)
+        transaction = read_transaction(dataset, version)
         if transaction is None or (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) != mark:
             continue
         added = getattr(transaction.operation, "fragments", None) or []
@@ -2756,14 +2757,15 @@ def insert_into_table(
 ) -> InsertIntoTableResponse:
     """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES, and report the commit it made.
 
-    ONE PATH FOR EVERY REF, through a handle opened on that ref. A branch needs it: measured live
-    2026-08-31, the upstream op answered `?branch=work` by appending to main. Main needs it too, for the
-    version: the `dir` backend's `insert_into_table` answers `{}` (measured on pylance 12.0.0), while the
-    spec's `InsertIntoTableResponse.version` is "the commit version associated with the operation". A
-    reopen cannot recover that number: under concurrent appends it reports whichever commit landed last.
-    `LanceDataset.insert` advances its own handle to the version IT committed, after any conflict
-    rebase (measured on 12.0.0: two handles appending in turn report v3 and v4, each holding its own
-    rows), so the response and the lineage event name the write that happened.
+    ONE PATH FOR EVERY REF, through a handle opened on that ref. A branch needs it: the `dir` backend's
+    `insert_into_table` answers `branch=work` by appending to main (measured on pylance 14.0.3, 2026-11-17: main went
+    from 3 rows to 4, the branch kept 3, and the answer named main's version). Main takes the same path because the
+    door's stamp and a keyed append ride the commit, which the backend's op carries neither of. The spec's
+    `InsertIntoTableResponse.version` is "the commit version associated with the operation", and a reopen cannot
+    recover that number: under concurrent appends it reports whichever commit landed last. `LanceDataset.insert`
+    advances its own handle to the version IT committed, after any conflict rebase (measured on 12.0.0: two handles
+    appending in turn report v3 and v4, each holding its own rows), so the response and the lineage event name the
+    write that happened.
 
     The handle is opened through the checked open ([[LH-279]]), so the manifest the write builds on is
     the one judged. `mode` is read through `InsertMode`, whose two values are pylance's own spellings of
@@ -2830,14 +2832,13 @@ def merge_insert_into_table(
     req: MergeInsertIntoTableRequest,
     data: bytes,
     *,
-    on: Sequence[str],
     max_bytes: int,
     transaction_properties: dict[str, str],
 ) -> MergeInsertIntoTableResponse:
     """Run the spec's merge-insert against the ref the request NAMES, on the handle opened at the door's location.
 
-    ``on`` is the merge key, every field path the request names, and a row matches only when every field is equal
-    ([[LH-537]]). It is not read off ``req``, whose ``on`` the installed lance-namespace 0.11.1 model types as one string.
+    ``req.on`` is the merge key, every field path the request names, and a row matches only when every field is equal
+    ([[LH-537]]).
 
     In-process on every ref, main included: the native merge names the table and would resolve it again ([[LH-530]]),
     and it runs the same ``MergeInsertBuilder`` on the dataset it loads (lance-namespace-impls 13.0.0, ``dir.rs``),
@@ -2871,7 +2872,7 @@ def merge_insert_into_table(
     # for naming it wrongly — while the branchless path answered 13.
     with _write_schema_errors(), caller_sql("invalid merge_insert key or filter"):
         version, stats = commit_stamped(
-            table, so, transaction_properties, lambda latest: _merge_builder(latest, req, on).execute_uncommitted(rows), branch=req.branch
+            table, so, transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows), branch=req.branch
         )
     counts = stats if isinstance(stats, dict) else {}
     return MergeInsertIntoTableResponse(
@@ -2882,15 +2883,17 @@ def merge_insert_into_table(
     )
 
 
-def _merge_builder(dataset: lance.LanceDataset, req: MergeInsertIntoTableRequest, on: Sequence[str]) -> lance.MergeInsertBuilder:
-    """The merge ``req`` asks for on the key ``on``, on ``dataset``; every spec parameter has a builder method of the same name.
+def _merge_builder(dataset: lance.LanceDataset, req: MergeInsertIntoTableRequest) -> lance.MergeInsertBuilder:
+    """The merge ``req`` asks for on its key ``on``, on ``dataset``; every spec parameter has a builder method of the same name.
 
     Read as ``spec.yaml`` states them: each ``*_filt`` is its clause's own condition, so a filter applies whether or not
     its flag is set, and ``when_not_matched_insert_all`` defaults to false. The ``dir`` backend's native merge reads an
     absent ``when_not_matched_insert_all`` as an insert (lance-namespace-impls 13.0.0, ``dir.rs``), which the spec's
     default is not.
     """
-    builder = dataset.merge_insert(on)
+    if not req.on:
+        raise InvalidInputError("merge_insert needs its key: name at least one field path in on")
+    builder = dataset.merge_insert(req.on)
     if req.when_matched_update_all or req.when_matched_update_all_filt is not None:
         builder.when_matched_update_all(req.when_matched_update_all_filt)
     if req.when_not_matched_insert_all:
@@ -2984,7 +2987,7 @@ def drop_index(table: table_claims.DoorTable, so: StorageOptions, name: str, *, 
     if name in SYSTEM_INDICES:
         raise UnsupportedOperationError(f"System index '{name}' cannot be dropped via this API")
     version, _ = commit_stamped(table, so, transaction_properties, captured(table, so, lambda handle: handle.drop_index(name), branch=None))
-    made = table.open_unchecked(so, version=version).read_transaction(version)
+    made = read_transaction(table.open_unchecked(so, version=version), version)
     return DropTableIndexResponse(transaction_id=made.uuid if made is not None else None)
 
 
@@ -3400,7 +3403,7 @@ def _require_followable_window(spans: list[_WindowSpan], *, table: str) -> None:
     for span in spans:
         for version in range(span.high, span.low, -1):
             try:
-                transaction = span.handle.read_transaction(version)
+                transaction = read_transaction(span.handle, version)
             except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
                 if isinstance(exc, KeyboardInterrupt | SystemExit):
                     raise
@@ -3756,7 +3759,7 @@ def table_history(table: table_claims.DoorTable, so: StorageOptions, limit: int 
             "operation": None,
         }
         try:
-            txn = dataset.read_transaction(version)
+            txn = read_transaction(dataset, version)
         except Exception as exc:
             # Versions written before transaction files, or a GC'd txn, still belong in the log. Reporting
             # the version with a null operation is honest; dropping it would make the history lie by omission.

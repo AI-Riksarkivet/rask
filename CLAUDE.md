@@ -373,12 +373,12 @@ Key facts that aren't obvious from any single file:
 
 - **A Lance APPEND never names a file version.** A create names `data_storage_version="2.2"` and
   `enable_stable_row_ids=True` (both create-time-only through pylance); an append inherits the table's
-  version. On pylance 12 and 13 an append or fragment commit whose files are at another version is
+  version. On pylance 12, 13 and 14.0.3 an append or fragment commit whose files are at another version is
   COMMITTED and stamps reader flag 256 (mixed data file versions), which no operation removes:
-  maintenance refuses the table, and pylance 11 and lancedb 0.34 cannot open it, while lancedb 0.40 (the
+  maintenance refuses the table, and pylance 11 and lancedb 0.34 cannot open it, while lancedb 0.41 (the
   pinned one) can (`lance_docs/PROVENANCE.md`). The catalog's `version/create` (a stock client's commit, ADR 0157) and the register door refuse
   such a set (`lakehouse.features.describe_foreign_data_file_versions`), and the maintenance
-  counter `maintenance.datasets.mixed_file_versions` pages on one. pylance 13's `update()`,
+  counter `maintenance.datasets.mixed_file_versions` pages on one. From pylance 13, `update()`,
   `merge_insert().data_storage_version()` and `compact_files()` also take a `data_storage_version` that
   can stamp the flag: a stock client's such commit is refused at `version/create`, and rask code never passes it.
 - **A workload is the user's, and the platform knows nothing about it.** Whatever a workload's stage graph, model or output format is, it reaches the platform as a client of the catalog's doors: bytes in, a governed table out, lineage emitted.

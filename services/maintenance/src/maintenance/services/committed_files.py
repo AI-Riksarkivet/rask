@@ -32,6 +32,7 @@ from lakehouse import file_identities, stored_objects
 from lakehouse.base_refs import decoded_path
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.storage_options import StorageOptions
+from lakehouse.transactions import read_transaction
 from maintenance.services import base_reclaim
 
 
@@ -135,7 +136,7 @@ def _named_by(version: lance.LanceDataset, ref: str, root: str) -> set[str]:
     for index in version.list_indices():
         if (where := at(index.get("base_id"))) is not None:
             named.add(f"{where}_indices/{index['uuid']}/")
-    transaction = version.read_transaction(version.version)
+    transaction = read_transaction(version, version.version)
     if transaction is not None:
         named.add(f"{ref}_transactions/{transaction.read_version}-{transaction.uuid}.txn")
     return named

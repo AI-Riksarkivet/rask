@@ -43,8 +43,10 @@ COMPACTION_CONFIG_PREFIX = "lance.compaction."
 #: Keys that turn on a Lance feature this catalog does not serve, which no later commit turns off: schema metadata
 #: ``lance.blob.managed = "true"`` activates Managed Blobs (flag 2^14, ``lance_docs/lance/format/table/versioning.md`` §
 #: Current Feature Flags), and config ``lance.row_lineage.spill`` lets a writer spill row lineage, stamping flag 2^11
-#: (``lance_docs/lance/format/table/row_id_lineage.md``). pylance 13.0.0 acts on neither, so a table holding one is locked
-#: by the first newer writer's commit, whose flag every flag gate refuses (``lakehouse.features``).
+#: (``lance_docs/lance/format/table/row_id_lineage.md``). pylance 14.0.3 acts on the first: a table created with it carries
+#: flag 2^14 in both fields and a ``_blobs/`` directory, and an append under the second alone stamps nothing (measured
+#: 2026-11-17). Either way a table holding one is locked by the first writer that acts on it, whose flag every flag gate
+#: refuses (``lakehouse.features``).
 FLAG_LOCKING_KEYS = frozenset({"lance.blob.managed", "lance.row_lineage.spill"})
 
 

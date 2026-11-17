@@ -3345,15 +3345,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Count Table Rows
-         * @description Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
-         *
-         *     Routed through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It
-         *     was not: the parameter reached the upstream implementation, which answered from main regardless,
-         *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
-         */
-        get: operations["count_table_rows_compat_get"];
+        get?: never;
         put?: never;
         /**
          * Count Table Rows
@@ -3363,7 +3355,7 @@ export interface paths {
          *     was not: the parameter reached the upstream implementation, which answered from main regardless,
          *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
          */
-        post: operations["count_table_rows"];
+        post: operations["count_table_rows_v1_table__id__count_rows_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4063,17 +4055,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Table Tags
-         * @description List the table's tags, a page at a time — wraps lance_namespace ListTableTags.
-         */
-        get: operations["list_table_tags_compat_get"];
+        get?: never;
         put?: never;
         /**
          * List Table Tags
          * @description List the table's tags, a page at a time — wraps lance_namespace ListTableTags.
          */
-        post: operations["list_table_tags"];
+        post: operations["list_table_tags_v1_table__id__tags_list_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5310,8 +5298,18 @@ export interface components {
              */
             lower_bound?: number | null;
             /**
+             * Maximum Nprobes
+             * @description Maximum number of IVF partitions to search. When omitted, all partitions may be searched if needed.
+             */
+            maximum_nprobes?: number | null;
+            /**
+             * Minimum Nprobes
+             * @description Minimum number of IVF partitions to search before adaptive expansion.
+             */
+            minimum_nprobes?: number | null;
+            /**
              * Nprobes
-             * @description Number of probes for IVF index
+             * @description Legacy exact number of IVF partitions to search. Ignored when minimum_nprobes or maximum_nprobes is provided.
              */
             nprobes?: number | null;
             /**
@@ -8890,8 +8888,18 @@ export interface components {
              */
             lower_bound?: number | null;
             /**
+             * Maximum Nprobes
+             * @description Maximum number of IVF partitions to search. When omitted, all partitions may be searched if needed.
+             */
+            maximum_nprobes?: number | null;
+            /**
+             * Minimum Nprobes
+             * @description Minimum number of IVF partitions to search before adaptive expansion.
+             */
+            minimum_nprobes?: number | null;
+            /**
              * Nprobes
-             * @description Number of probes for IVF index
+             * @description Legacy exact number of IVF partitions to search. Ignored when minimum_nprobes or maximum_nprobes is provided.
              */
             nprobes?: number | null;
             /**
@@ -16027,45 +16035,7 @@ export interface operations {
             };
         };
     };
-    count_table_rows_compat_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["CountTableRowsRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    count_table_rows: {
+    count_table_rows_v1_table__id__count_rows_post: {
         parameters: {
             query?: {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
@@ -18474,44 +18444,7 @@ export interface operations {
             };
         };
     };
-    list_table_tags_compat_get: {
-        parameters: {
-            query?: {
-                page_token?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
-            };
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ListTableTagsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_table_tags: {
+    list_table_tags_v1_table__id__tags_list_post: {
         parameters: {
             query?: {
                 page_token?: string | null;

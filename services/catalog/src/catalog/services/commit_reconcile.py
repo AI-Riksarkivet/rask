@@ -50,6 +50,7 @@ from lakehouse.lineage.signing import SIGNATURE_FACET
 from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.openlineage import BRANCH_IDENTIFIER
 from lakehouse.storage_options import StorageOptions, on_s3
+from lakehouse.transactions import read_transaction
 from lakehouse.version_retention import manifest_version
 
 
@@ -394,7 +395,7 @@ def _commit_at(handle: lance.LanceDataset, version: int, *, branch: str | None, 
     Raises:
         UnidentifiedCommitError: The version names no transaction, or one whose operation no door commits.
     """
-    transaction = handle.read_transaction(version)
+    transaction = read_transaction(handle, version)
     if transaction is None:
         raise UnidentifiedCommitError(f"version {version} names no transaction")
     properties = dict(transaction.transaction_properties or {})

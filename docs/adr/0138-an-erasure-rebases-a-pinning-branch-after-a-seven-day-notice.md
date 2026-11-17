@@ -59,8 +59,15 @@ Idea taken from: Lakekeeper's two-step expiry (mark first, reclaim later).
     also rewrites managed blob-v2 sidecars (inline, packed and dedicated), so their old `.blob` files go at the next
     cleanup (`prototypes/lance-erasure-and-commit-door/a4_blob_v2.py`, `a4b_blob_dedicated.py`);
   - every index over an erased column is rebuilt (`create_*_index(..., replace=True)`) or dropped, because compaction
-    does not rewrite index files on a stable-row-id table: after compaction and cleanup the BTree and FTS files keep the
-    subject, and `optimize_indices()` commits nothing (`prototypes/lance-erasure-and-commit-door/a2_index_files.py`). Index files are immutable
+    does not rewrite every index on a stable-row-id table. On pylance 13.0.0 it rewrote none: after compaction and
+    cleanup the BTree and FTS files kept the subject, and `optimize_indices()` committed nothing
+    (`prototypes/lance-erasure-and-commit-door/a2_index_files.py`). On pylance 14.0.3 (measured 2026-11-17) a
+    materialising compaction rewrites a BTREE index without the deleted row, and leaves a BITMAP segment as it was,
+    holding the subject's key after cleanup; an INVERTED index is not rewritten, and no object was found holding the key
+    in one, which is not proof it holds none. So the rule stands for every index, and the job drops an index before it
+    compacts: on a branch that inherited a BTREE index, pylance 14.0.3's compaction commits the rewritten index naming
+    the parent's base path while its files lie under the branch, a version no reader can open and `version/create`
+    refuses. Index files are immutable
     (`lance_docs/lance/format/index/index.md:42-44`) and only an index built after the delete leaves the row out (`:54-57`,
     `:264-265`). A rebuild works without compaction, and cleanup alone removes a dropped index's files. A fragment reuse
     index never arises here: `compact_files(defer_index_remap=True)` is refused under stable row ids;

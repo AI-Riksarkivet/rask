@@ -72,24 +72,6 @@ def test_every_spec_operation_publishes_the_error_statuses_the_spec_lists(client
 #: The spec owns the whole of ``/v1``. rask's own surface is ``/management/v1``, and the probes sit at the root.
 _SPEC_PREFIX = "/v1/"
 
-#: PERMANENT, JUSTIFIED DEVIATIONS: spec operations reached by the method the shipped client sends.
-#:
-#: The Lance namespace spec defines `count_rows` and `tags/list` as POST at every tag from v0.9.0 to
-#: v0.12.0. But the REST client pylance BUNDLES (`rust/lance-namespace-impls/src/rest.rs`) calls
-#: `get_json` for exactly those two, and the reference SERVER it bundles mounts them as GET — the lance
-#: repo disagrees with its own document on both sides of the wire, and `lance_namespace.connect("rest",
-#: …)` resolves to that class. rask dual-mounts so the stock client works; mounting POST only gave it
-#: FastAPI's 405, which carries no `code` and surfaced as `InternalError 18`. Moving them to
-#: `/management/v1` would break the stock client, and deleting them would too.
-#: `tests/integration/test_spec_method_and_status_conformance.py` (A3) holds the behaviour; the real
-#: fix is upstream, a one-line change in lance, and this set shrinks when that lands.
-_METHOD_ALIASES_THE_STOCK_CLIENT_SENDS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("GET", "/v1/table/{}/count_rows"),  # spec: POST
-        ("GET", "/v1/table/{}/tags/list"),  # spec: POST
-    }
-)
-
 
 def _on_the_spec_surface(routes: set[tuple[str, str]]) -> set[tuple[str, str]]:
     return {(method, path) for method, path in routes if path.startswith(_SPEC_PREFIX)}
@@ -102,7 +84,7 @@ def test_the_v1_surface_holds_only_spec_operations(client: TestClient) -> None:
     actually builds rather than silencing the checker.
     """
     served = _ops(cast(FastAPI, client.app).openapi().get("paths", {}))
-    intruders = _on_the_spec_surface(served) - SPEC_ROUTES - _METHOD_ALIASES_THE_STOCK_CLIENT_SENDS
+    intruders = _on_the_spec_surface(served) - SPEC_ROUTES
 
     assert not intruders, (
         f"{len(intruders)} rask-only operation(s) are served on the SPEC surface, where a spec client "

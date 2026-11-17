@@ -929,7 +929,7 @@ SPEC_DOORS: tuple[Door, ...] = (
         operation="MergeInsertIntoTable",
         rung=Rung.WRITER,
         send=lambda s, role, t: s.clients[role].merge_insert_into_table(
-            ln.MergeInsertIntoTableRequest(id=t.table, on="id", when_matched_update_all=True, when_not_matched_insert_all=True),
+            ln.MergeInsertIntoTableRequest(id=t.table, on=["id"], when_matched_update_all=True, when_not_matched_insert_all=True),
             scenario.arrow_ipc(pa.table({"id": pa.array([0, 2000 + list(Role).index(role)], pa.int64()), "payload": pa.array([f"merged by {role}"] * 2)})),
         ),
         watch=_version_and_rows,

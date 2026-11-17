@@ -31,6 +31,7 @@ from lakehouse import base_refs, file_identities
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
+from lakehouse.transactions import read_transaction
 
 
 log = logging.getLogger(__name__)
@@ -124,7 +125,7 @@ def record_landed(
     it. So is a version that names no transaction, which no record can be keyed by.
     """
     try:
-        transaction = after.read_transaction(after.version)
+        transaction = read_transaction(after, after.version)
     except OSError as exc:
         _count_unrecorded(table_location, after.version, f"{type(exc).__name__}: {exc}")
         return None

@@ -8,7 +8,7 @@ import re
 from functools import partial
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Body, Depends, Header, Query, Request
+from fastapi import APIRouter, Body, Header, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from lance_namespace import (
@@ -361,10 +361,9 @@ async def merge_insert_into_table(
         # The catalog plans and commits the merge itself, under the table's commit turn and its own attempt budget
         # (`dataplane.commit_stamped`), so a timeout the caller names would bound nothing the merge waits on.
         raise UnsupportedOperationError("timeout cannot be served: the catalog commits a merge under its own commit turn and attempt budget; omit it")
-    # `on` travels beside the request ([[LH-537]]): the installed lance-namespace 0.11.1 model types it as one string,
-    # where `spec.yaml` makes it the composite key.
     req = MergeInsertIntoTableRequest(
         id=segments,
+        on=list(on),
         when_matched_update_all=when_matched_update_all,
         when_matched_update_all_filt=when_matched_update_all_filt,
         when_not_matched_insert_all=when_not_matched_insert_all,
@@ -381,7 +380,6 @@ async def merge_insert_into_table(
             so,
             req,
             data,
-            on=on,
             max_bytes=settings.max_body_bytes,
             transaction_properties=lineage_deps.door_stamp(token, MERGE_INSERT, run),
         )
@@ -636,61 +634,10 @@ def _reader(token: Caller | None) -> str:
     return token.subject if token is not None else "system:catalog"
 
 
-#: Query fields the vendored spec declares (``lance_docs/ns_catalog/spec.yaml`` QueryTableRequest and
-#: AnalyzeTableQueryPlanRequest) and the installed lance-namespace request models do not carry: pydantic drops a key its
-#: model lacks, so the query would run without the field and answer 200 (``lance_docs/PROVENANCE.md`` § ``spec.yaml``).
-_UNCARRIED_QUERY_FIELDS: Final = ("minimum_nprobes", "maximum_nprobes")
-
-
-async def _refuse_query_fields_the_model_drops(request: Request) -> None:
-    """Refuse a ``query`` or ``analyze_plan`` body naming a query field the installed request model would drop.
-
-    Raises:
-        UnsupportedOperationError: The body names ``minimum_nprobes`` or ``maximum_nprobes``.
-    """
-    _refuse_uncarried_fields(await _json_body(request))
-
-
-async def _refuse_explained_query_fields_the_model_drops(request: Request) -> None:
-    """Refuse an ``explain_plan`` body whose nested ``query`` names a query field the installed request model would drop.
-
-    Raises:
-        UnsupportedOperationError: The nested query names ``minimum_nprobes`` or ``maximum_nprobes``.
-    """
-    body = await _json_body(request)
-    _refuse_uncarried_fields(body.get("query") if isinstance(body, dict) else None)
-
-
-def _refuse_uncarried_fields(query: object) -> None:
-    """Refuse ``query`` when it names a field the installed request model would drop, with the spec's Unsupported.
-
-    406 code 0, as these doors refuse a branch they cannot honour: the request is the spec's, and this backend cannot
-    serve the field yet ([[LH-573]]).
-
-    Raises:
-        UnsupportedOperationError: ``query`` names ``minimum_nprobes`` or ``maximum_nprobes``.
-    """
-    named = [field for field in _UNCARRIED_QUERY_FIELDS if isinstance(query, dict) and field in query]
-    if named:
-        raise UnsupportedOperationError(
-            f"{' and '.join(named)} cannot be served yet: this catalog's lance-namespace request model does not carry it, "
-            "so the query would run without it; ask with nprobes"
-        )
-
-
-async def _json_body(request: Request) -> object:
-    """The request's JSON body, or ``None`` for a body that is not JSON, which the door's own body validation answers."""
-    try:
-        return await request.json()
-    except ValueError:
-        return None
-
-
 @router.post(
     "/{id}/query",
     responses=_serves(ARROW_FILE),
     response_class=ArrowFileResponse,
-    dependencies=[Depends(_refuse_query_fields_the_model_drops)],
 )
 def query_table(
     id: str, body: QueryTableRequest, table: DoorTableDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
@@ -721,19 +668,6 @@ def query_table(
     return Response(content=response.data, media_type=ARROW_FILE)
 
 
-# DUAL-MOUNTED, and the reason is upstream disagreeing with itself. The spec says POST at every
-# tag from v0.9.0 to v0.12.0, and lance-namespace's own generated reqwest client sends POST — but
-# the REST client pylance BUNDLES from the lance repo (`rust/lance-namespace-impls/src/rest.rs`)
-# calls `get_json` for this op, and the reference server it bundles mounts it as GET. Since
-# `lance_namespace.connect("rest", …)` resolves to that class, a POST-only route answered every
-# Python user of the "rest" alias with FastAPI's default 405, which carries no `code` and so
-# surfaces as `InternalError 18`. Serving both is the local fix; the upstream fix is one line in
-# lance and is worth filing.
-# TWO DECORATORS, NOT `api_route(methods=[...])`, and the difference is not style. One `api_route`
-# with both methods emits ONE operationId for both, and FastAPI derives its suffix from whichever
-# method it happened to register last — so the generated OpenAPI flipped between `_get` and
-# `_post` between runs, which is invalid (operationIds must be unique) and made the contract gate
-# flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
 @management_router.post("/{id}/changes", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
 def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
@@ -778,8 +712,7 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
     return StreamingResponse(data, media_type=ARROW_FILE)
 
 
-@router.post("/{id}/count_rows", operation_id="count_table_rows")
-@router.get("/{id}/count_rows", operation_id="count_table_rows_compat_get")
+@router.post("/{id}/count_rows")
 def count_table_rows(
     id: str,
     table: DoorTableDep,
@@ -807,7 +740,7 @@ def count_table_rows(
     return JSONResponse(content=counted.count)
 
 
-@router.post("/{id}/explain_plan", dependencies=[Depends(_refuse_explained_query_fields_the_model_drops)])
+@router.post("/{id}/explain_plan")
 def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
@@ -836,7 +769,7 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     return JSONResponse(content=plan)
 
 
-@router.post("/{id}/analyze_plan", dependencies=[Depends(_refuse_query_fields_the_model_drops)])
+@router.post("/{id}/analyze_plan")
 def analyze_table_query_plan(
     id: str,
     body: AnalyzeTableQueryPlanRequest,

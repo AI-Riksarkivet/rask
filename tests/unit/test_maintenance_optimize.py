@@ -154,7 +154,7 @@ def test_an_UNKNOWN_flag_still_refuses_everything(tmp_path: Path) -> None:
     is a per-operation exception, not a general relaxation."""
     from lakehouse import features
 
-    assert features.describe_gc_unsupported_flags(features.FLAG_DATA_OVERLAYS, 0) is not None
+    assert features.describe_gc_unsupported_flags(features.FLAG_UNSTABLE_DATA_OVERLAY_FILES, 0) is not None
     assert features.describe_gc_unsupported_flags(1 << 20, 0) is not None
     # base_paths is the ONLY difference between the two masks.
     assert features.SUPPORTED_FOR_GC == features.SUPPORTED | features.FLAG_BASE_PATHS

@@ -44,8 +44,8 @@ dev = [
     "requests>=2.32",
     "ruff",
     "ty",
-    "pylance>=13.0.0",
-    "lancedb>=0.40.0",
+    "pylance>=14.0.3",
+    "lancedb>=0.41.0",
     # The third stock client criterion 2 reads a governed table through (tests/e2e-py/test_the_catalog_is_correct.py):
     # a distributed read resolves the table through the catalog's namespace, as lancedb's open does.
     "lance-ray>=0.5.0",

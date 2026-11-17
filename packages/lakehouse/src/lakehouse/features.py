@@ -113,13 +113,13 @@ FLAG_STABLE_ROW_IDS = 2
 FLAG_USE_V2_FORMAT_DEPRECATED = 4
 FLAG_TABLE_CONFIG = 8
 FLAG_BASE_PATHS = 16
-#: THE BITS ABOVE 16. Upstream's `rust/lance-table/src/feature_flags.rs` at v13.0.0 allocates FOURTEEN
-#: flags and puts its `FLAG_UNKNOWN` sentinel at `1 << 14`. The vendored `lance_docs/lance/format/table/versioning.md`
-#: § Current Feature Flags names eighteen (2^0 to 2^17, bits 16 and 17 reserved), of which pylance 13.0.0 allocates
-#: the fourteen named here before :data:`FLAG_MANAGED_BLOBS`; see `lance_docs/PROVENANCE.md` § "These docs run ahead
-#: of the installed pylance". Named here so a refusal says WHICH feature it declined instead of "32 (unknown)": an
-#: operator can act on "disable_transaction_file", not on a bare bit. **Naming is not supporting** — none of them enters
-#: :data:`SUPPORTED`, so all of them still refuse.
+#: THE BITS ABOVE 16. Upstream's `rust/lance-table/src/feature_flags.rs` at v14.0.3 allocates EIGHTEEN
+#: flags and puts its `FLAG_UNKNOWN` sentinel at `1 << 18`. The vendored `lance_docs/lance/format/table/versioning.md`
+#: § Current Feature Flags names twenty (2^0 to 2^19, bits 16 and 17 reserved); the two above pylance 14.0.3's are
+#: newer than the installed release (`lance_docs/PROVENANCE.md` § "These docs run ahead of the installed pylance").
+#: Named here so a refusal says WHICH feature it declined instead of "32 (unknown)": an operator can act on
+#: "disable_transaction_file", not on a bare bit. **Naming is not supporting** — none of them enters :data:`SUPPORTED`,
+#: so all of them still refuse.
 #:
 #: 32 is WRITER-REQUIRED ONLY, which is why it is the concrete case for the reader/writer split: a
 #: dataset that sets it writer-side is one a read-only pass may safely scan.
@@ -129,32 +129,43 @@ FLAG_DISABLE_TRANSACTION_FILE = 32
 #: than ``data_files()``. Release builds of Lance reject it unless
 #: ``LANCE_ENABLE_UNSTABLE_DATA_OVERLAY_FILES`` is set — which rask never sets in a deployed image
 #: (verified: zero occurrences in the repo and zero in the live Deployments).
-FLAG_DATA_OVERLAYS = 64
+FLAG_UNSTABLE_DATA_OVERLAY_FILES = 64
 #: Reader- and writer-required, and STICKY once set.
 FLAG_COVERED_INDEX_METADATA = 128
 #: A dataset setting it references recognised V2 data files at DIFFERENT exact versions, which is a
 #: layout no rewrite here has been checked against. Named for the refusal message only.
 FLAG_MIXED_DATA_FILE_VERSIONS = 256
 #: THE FRAGMENT REUSE INDEX PAIR and the three bits above them, read from
-#: `rust/lance-table/src/feature_flags.rs` at v13.0.0. None is set by anything this estate does —
-#: measured on pylance 13.0.0, a `compact_files` with `defer_index_remap=True` (the sweep's own call,
-#: and the one that USES the FRI) writes a legacy FRI and leaves the manifest at `(0, 0)`; a release
-#: build sets 512 only in debug builds, 2048 only behind an environment opt-in, and masks 4096 and 8192
-#: as reserved — so naming them changes no verdict now. They are here because `SUPPORTED` fails closed:
-#: the day a pylance bump starts stamping one, the sweep refuses that dataset, and the only difference
-#: between a diagnosable refusal and a dead end is whether the bit has a name.
+#: `rust/lance-table/src/feature_flags.rs` at v14.0.3. None is set by anything this estate does —
+#: measured on pylance 14.0.3, `compact_files(defer_index_remap=True)`, the call that writes a fragment reuse index,
+#: is refused on a stable-row-id table ("recording their row-address moves in a fragment reuse index is not supported
+#: by this build"), and every table the catalog makes has stable row ids; a release build sets 512 only in debug
+#: builds, 2048 only behind an environment opt-in, and masks 4096 and 8192 as reserved — so naming them changes no
+#: verdict now. They are here because `SUPPORTED` fails closed: the day a pylance bump starts stamping one, the sweep
+#: refuses that dataset, and the only difference between a diagnosable refusal and a dead end is whether the bit has a
+#: name.
 FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS = 512
 FLAG_FRAGMENT_REUSE_INDEX = 1024
 FLAG_SPILLED_ROW_LINEAGE = 2048
 FLAG_FRAGMENT_TREE = 4096
 FLAG_INDEPENDENT_COVERING_FIELDS = 8192
-#: MANAGED BLOBS, the first bit pylance 13.0.0 does not allocate (its `FLAG_UNKNOWN`), so its open refuses a table that
-#: carries it. Committing schema metadata ``lance.blob.managed = "true"`` sets it in both fields, for good
+#: MANAGED BLOBS. Committing schema metadata ``lance.blob.managed = "true"`` sets it in both fields, for good
 #: (`lance_docs/lance/format/table/blob.md` § Capability and Compatibility). A blob descriptor then addresses its object
 #: directly, under ``_blobs/`` or at a sidecar path whose data file is gone, and stays live while any protected snapshot's
 #: rows reference it (§ Garbage Collection), so a file no fragment names is no longer unreferenced:
 #: :func:`manages_blobs` is judged on its own wherever rask deletes a table's files by what its fragments name.
 FLAG_MANAGED_BLOBS = 16384
+#: Writer-required only: the manifest carries ``max_allocated_field_id`` and a writer allocates new field ids above it
+#: (`lance_docs/lance/format/table/schema.md` § Field IDs). pylance 14.0.3 sets it only when a commit asks to activate
+#: it (`migrate_to_non_reusable_field_ids`); measured on pylance 14.0.3, no create, append, delete, update, merge,
+#: schema change, index build, compaction, tag, branch or config write sets it.
+FLAG_NON_REUSABLE_FIELD_IDS = 32768
+#: Reserved by the format and refused by pylance 14.0.3 itself.
+FLAG_ZONE_WRITE_SEEDS = 65536
+FLAG_OBJECT_METADATA = 131072
+#: Named by the vendored docs and newer than pylance 14.0.3, whose open refuses either as an unknown flag.
+FLAG_ROW_ADDR_INDICES = 262144
+FLAG_INLINE_DELETIONS = 524288
 
 #: Flags this pass can compact / GC / scan without being wrong.
 #:
@@ -199,7 +210,7 @@ _FLAG_NAMES = {
     FLAG_TABLE_CONFIG: "table config",
     FLAG_BASE_PATHS: "base_paths (shallow clone / multi-base)",
     FLAG_DISABLE_TRANSACTION_FILE: "disable_transaction_file (writer-required only)",
-    FLAG_DATA_OVERLAYS: "data overlays",
+    FLAG_UNSTABLE_DATA_OVERLAY_FILES: "data overlays",
     FLAG_COVERED_INDEX_METADATA: "covered index metadata (sticky)",
     FLAG_MIXED_DATA_FILE_VERSIONS: "mixed data file versions",
     FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS: "fragment reuse with stable row ids",
@@ -208,6 +219,11 @@ _FLAG_NAMES = {
     FLAG_FRAGMENT_TREE: "fragment tree (reserved)",
     FLAG_INDEPENDENT_COVERING_FIELDS: "independent covering fields (reserved)",
     FLAG_MANAGED_BLOBS: "managed blobs",
+    FLAG_NON_REUSABLE_FIELD_IDS: "non-reusable field ids (writer-required only)",
+    FLAG_ZONE_WRITE_SEEDS: "zone write seeds (reserved)",
+    FLAG_OBJECT_METADATA: "object metadata (reserved, writer-required only)",
+    FLAG_ROW_ADDR_INDICES: "row address indices (writer-required only)",
+    FLAG_INLINE_DELETIONS: "inline deletions",
 }
 
 #: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented
@@ -439,8 +455,9 @@ def unsupported_read_flags(*, reader: int, writer: int) -> str | None:
 def describe_foreign_data_file_versions(table_version: str, data_files: Iterable[VersionedDataFile]) -> str | None:
     """Why committing ``data_files`` to a table at ``table_version`` would mix file versions, or ``None``.
 
-    pylance 12 and 13 commit such a set and stamp reader and writer flag 256, which no operation removes:
-    maintenance refuses the table, and pylance 11 and lancedb 0.34 (lance core 8) cannot open it (lancedb 0.40 can).
+    pylance 12, 13 and 14.0.3 commit such a set and stamp reader and writer flag 256, which no operation removes:
+    maintenance refuses the table, and pylance 11 and lancedb 0.34 (lance core 8) cannot open it (lancedb 0.40 and
+    0.41 can).
     pylance 11 refused the commit itself. Measured on 12.0.0 over 2.0/2.1/2.2 tables, with and without
     stable row ids, and appends at every version: this refuses exactly when Lance's commit sets the flag.
 

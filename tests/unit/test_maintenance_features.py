@@ -73,11 +73,9 @@ def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Pat
     a refusal nobody can act on — the module's stated purpose, failing exactly one bit past where it was
     last checked.
 
-    Measured against the source 2026-09-14 (`lance-format/lance`, `rust/lance-table/src/feature_flags.rs`):
-    upstream reserves `FLAG_MIXED_DATA_FILE_VERSIONS = 1 << 8` and puts `FLAG_UNKNOWN` at the same bit,
-    so the unknown boundary is 256. The vendored `lance_docs/lance/format/table/versioning.md` says "Bits at
-    positions 18 and above are unknown", ahead of pylance 13.0.0 (`lance_docs/PROVENANCE.md` § "These docs run ahead
-    of the installed pylance").
+    The vendored `lance_docs/lance/format/table/versioning.md` allocates `2^0` through `2^19` and says "Bits at
+    positions 20 and above are unknown", two flags ahead of pylance 14.0.3 (`lance_docs/PROVENANCE.md` § "These docs
+    run ahead of the installed pylance").
 
     NAMING IS NOT SUPPORTING, which is why this asserts both halves: 256 must be named AND must still
     refuse. A dataset mixing exact V2 file versions is one whose layout a rewrite has not been checked
@@ -174,7 +172,7 @@ def test_a_data_overlay_makes_pylance_refuse_the_open_and_we_classify_it(tmp_pat
         lance.dataset(uri)
     # A bit test, not a string match: pylance 12 commits an overlay as 64 | 256 (mixed data file versions).
     flags = re.search(r"Flags: (\d+)", str(caught.value))
-    assert flags is not None and int(flags.group(1)) & features.FLAG_DATA_OVERLAYS, "fixture must really commit a flag-64 overlay"
+    assert flags is not None and int(flags.group(1)) & features.FLAG_UNSTABLE_DATA_OVERLAY_FILES, "fixture must really commit a flag-64 overlay"
 
     reason = features.unsupported_features_from_open_error(caught.value)
     assert reason is not None, "pylance's own feature refusal must not read as an ordinary open failure"

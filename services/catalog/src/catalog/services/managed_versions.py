@@ -48,6 +48,7 @@ from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.storage_options import StorageOptions
+from lakehouse.transactions import read_transaction
 
 
 log = logging.getLogger(__name__)
@@ -245,7 +246,7 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     _write(location, so, f"d{detached_id}.manifest", manifest_bytes.with_manifest_version(manifest, detached_id))
     _write(location, so, f"d{finalize_id}.manifest", manifest)
     try:
-        transaction = lance.dataset(location, version=detached_id, storage_options=so.in_clear() or None).read_transaction(detached_id)
+        transaction = read_transaction(lance.dataset(location, version=detached_id, storage_options=so.in_clear() or None), detached_id)
     except (OSError, ValueError) as exc:
         _discard(location, so, detached_id, finalize_id)
         if reads_as_store_outage(exc):
@@ -791,7 +792,7 @@ def _added_indices(version: _Judged) -> list[_AddedIndex]:
 
 def _declared_index_files(version: _Judged) -> dict[str, dict[str, int]]:
     """The files each index the staged transaction adds says it has, by name and size."""
-    transaction = version.proposed.read_transaction(version.staged.detached_id)
+    transaction = read_transaction(version.proposed, version.staged.detached_id)
     new_indices = getattr(transaction.operation, "new_indices", None) if transaction is not None else None
     return {index.uuid: {file.path: file.size_bytes for file in index.files or []} for index in new_indices or []}
 

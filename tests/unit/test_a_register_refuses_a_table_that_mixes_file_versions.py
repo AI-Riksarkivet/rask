@@ -112,7 +112,7 @@ def _mixed(uri: Path) -> None:
 
 
 def _opted_into_managed_blobs(uri: Path) -> None:
-    """Schema metadata that activates Managed Blobs once a newer Lance commits the table, a flag no commit clears."""
+    """Schema metadata that activates Managed Blobs, a flag no commit clears."""
     schema = pa.schema([pa.field("id", pa.int64())], metadata={"lance.blob.managed": "true"})
     lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}, schema=schema), str(uri), data_storage_version="2.2", enable_stable_row_ids=True)
 

@@ -7,7 +7,7 @@ consumer**, not an embedded query engine for the platform (the in-process query/
 parked, `#20`); it is the "an analyst can point DuckDB at our tables" path.
 
 The read path below was proven live against pylance 8.0.0 datasets over RustFS; it
-has not been re-proven against pylance 13 datasets (file version 2.2). No test guards it: it exercises
+has not been re-proven against pylance 14 datasets (file version 2.2). No test guards it: it exercises
 pylance and DuckDB's extension, and no rask code sits between them.
 
 ## Install
@@ -81,6 +81,6 @@ without leaving DuckDB.
 - The `lance` extension is versioned per **DuckDB release** (built by DuckDB's CI); it has historically lagged
   new DuckDB versions. If `INSTALL lance` 404s for a very new DuckDB, use the DuckDB version the extension is
   published for, or build from source (`duckdb -unsigned -c "LOAD 'build/release/extension/lance/lance.duckdb_extension'"`).
-- Format compat with the **pylance version the platform writes** (pylance 13, file version 2.2) is the thing that can break
+- Format compat with the **pylance version the platform writes** (pylance 14, file version 2.2) is the thing that can break
   on a lance-core bump, and CI does not check it: after a pylance bump, read a governed table back through
   the extension and compare count, values and schema.

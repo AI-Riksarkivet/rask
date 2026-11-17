@@ -5,8 +5,9 @@ writes ([[LH-202]], [[LH-229]], [[LH-490]], [[XC-084]]).
 ``_versions/``, transaction files under ``_transactions/``, deletion files under ``_deletions/``, indices
 under ``_indices/``, branch and tag pointers under ``_refs/``, each branch's own files under
 ``tree/<branch>/`` and the MemWAL under ``_mem_wal/``. Its ``_blobs/`` (Managed blob payloads) and ``_bt/`` (fragment-tree
-objects) are written only under ``FLAG_MANAGED_BLOBS`` and ``FLAG_FRAGMENT_TREE``, which pylance 13.0.0 does not write
-and ``version/create`` refuses a commit turning on, so no tier grants a put there; every tier reads them under
+objects) are written only under ``FLAG_MANAGED_BLOBS`` and ``FLAG_FRAGMENT_TREE``. pylance 14.0.3 writes the first for a
+table whose schema metadata asks for it (measured 2026-11-17), every door refuses that key, and ``version/create``
+refuses a commit turning either flag on, so no tier grants a put there; every tier reads them under
 ``<prefix>/*``.
 
 A writer-tier client is a managed-versioning writer (ADR 0157): it writes everything a commit needs except

@@ -2221,6 +2221,32 @@
             "description": "Lower bound for search",
             "title": "Lower Bound"
           },
+          "maximum_nprobes": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Maximum number of IVF partitions to search. When omitted, all partitions may be searched if needed.",
+            "title": "Maximum Nprobes"
+          },
+          "minimum_nprobes": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Minimum number of IVF partitions to search before adaptive expansion.",
+            "title": "Minimum Nprobes"
+          },
           "nprobes": {
             "anyOf": [
               {
@@ -2231,7 +2257,7 @@
                 "type": "null"
               }
             ],
-            "description": "Number of probes for IVF index",
+            "description": "Legacy exact number of IVF partitions to search. Ignored when minimum_nprobes or maximum_nprobes is provided.",
             "title": "Nprobes"
           },
           "offset": {
@@ -10420,6 +10446,32 @@
             "description": "Lower bound for search",
             "title": "Lower Bound"
           },
+          "maximum_nprobes": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Maximum number of IVF partitions to search. When omitted, all partitions may be searched if needed.",
+            "title": "Maximum Nprobes"
+          },
+          "minimum_nprobes": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Minimum number of IVF partitions to search before adaptive expansion.",
+            "title": "Minimum Nprobes"
+          },
           "nprobes": {
             "anyOf": [
               {
@@ -10430,7 +10482,7 @@
                 "type": "null"
               }
             ],
-            "description": "Number of probes for IVF index",
+            "description": "Legacy exact number of IVF partitions to search. Ignored when minimum_nprobes or maximum_nprobes is provided.",
             "title": "Nprobes"
           },
           "offset": {
@@ -24448,88 +24500,9 @@
       }
     },
     "/v1/table/{id}/count_rows": {
-      "get": {
-        "description": "Count the table's rows on the ref the request names \u2014 ``count_table_rows``; returns plain text.\n\nRouted through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It\nwas not: the parameter reached the upstream implementation, which answered from main regardless,\nso a branch-scoped count returned a plausible number for the wrong dataset with a 200.",
-        "operationId": "count_table_rows_compat_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/CountTableRowsRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Count Table Rows",
-        "tags": [
-          "data"
-        ]
-      },
       "post": {
         "description": "Count the table's rows on the ref the request names \u2014 ``count_table_rows``; returns plain text.\n\nRouted through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It\nwas not: the parameter reached the upstream implementation, which answered from main regardless,\nso a branch-scoped count returned a plausible number for the wrong dataset with a 200.",
-        "operationId": "count_table_rows",
+        "operationId": "count_table_rows_v1_table__id__count_rows_post",
         "parameters": [
           {
             "in": "path",
@@ -28760,108 +28733,9 @@
       }
     },
     "/v1/table/{id}/tags/list": {
-      "get": {
-        "description": "List the table's tags, a page at a time \u2014 wraps lance_namespace ListTableTags.",
-        "operationId": "list_table_tags_compat_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Page Token"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ListTableTagsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Table Tags",
-        "tags": [
-          "tag"
-        ]
-      },
       "post": {
         "description": "List the table's tags, a page at a time \u2014 wraps lance_namespace ListTableTags.",
-        "operationId": "list_table_tags",
+        "operationId": "list_table_tags_v1_table__id__tags_list_post",
         "parameters": [
           {
             "in": "path",

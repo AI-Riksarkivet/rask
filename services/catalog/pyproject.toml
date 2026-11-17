@@ -15,8 +15,8 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
     "pyarrow",
-    "pylance[otel]>=13.0.0",
-    "lance-namespace>=0.11.0,<0.12",
+    "pylance[otel]>=14.0.3",
+    "lance-namespace>=0.13.0,<0.14",
     # >=0.10.4 with `lakehouse`: the shared FGA write path rides `on_duplicate_writes=IGNORE`.
     "openfga-sdk>=0.10.4",
     # Declared for the `botocore.exceptions` imports (`ClientError` handling in the credentials door

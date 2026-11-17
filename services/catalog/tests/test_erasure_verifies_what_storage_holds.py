@@ -775,9 +775,10 @@ def _through_a_mem_wal_shard(root: Path) -> LanceNamespace:
 
 
 def _tagged_over_a_stale_index_segment(root: Path) -> LanceNamespace:
-    """The delete door and a materialising compaction removed the subject's row and kept the BTREE segment
-    holding its key, cleanup reclaimed every earlier version, and a run's tag names the result."""
-    ns = _indexed("BTREE")(root)
+    """The delete door and a materialising compaction removed the subject's row and kept the BITMAP segment
+    holding its key, cleanup reclaimed every earlier version, and a run's tag names the result. A BITMAP index, because
+    a compaction rewrites a BTREE one without the row (measured on pylance 14.0.3, 2026-11-17)."""
+    ns = _indexed("BITMAP")(root)
     dataset = open_by_name(ns, StorageOptions(), _TABLE_ID)
     dataset.delete(f"pii = '{_IDENTIFIER}'")
     dataset.optimize.compact_files(materialize_deletions_threshold=0.0)

@@ -31,6 +31,7 @@ from lakehouse import location_claims, objectfs, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.history_fences import HistoryWork, TableHistory
+from lakehouse.transactions import read_transaction
 
 
 if TYPE_CHECKING:
@@ -118,7 +119,7 @@ def clone_reference(clone: lance.LanceDataset) -> CloneReference | None:
     import lance
 
     first = min(int(entry["version"]) for entry in clone.version_refs())
-    transaction = clone.read_transaction(first)
+    transaction = read_transaction(clone, first)
     operation = transaction.operation if transaction is not None else None
     if not isinstance(operation, lance.LanceOperation.Clone) or not operation.is_shallow:
         return None

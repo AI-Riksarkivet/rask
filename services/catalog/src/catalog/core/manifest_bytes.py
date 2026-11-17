@@ -55,14 +55,14 @@ NEXT_ROW_ID_FIELD: Final = 14
 #: ``optional uint64 transaction_section = 23`` of ``message Manifest`` (Lance ``protos/table.proto`` at the commit
 #: ``lance_docs/PROVENANCE.md`` pins): the file offset of the version's transaction, stored inline as
 #: ``<u32 length><Transaction>`` (``lance_docs/lance/format/table/transaction.md`` § Inline Transaction Sections). Its
-#: presence is tracked, so a section at offset 0 is written as 0, never left absent. pylance 13.0.0 does not write it; a
-#: newer writer writes it and leaves :data:`DEPRECATED_TRANSACTION_SECTION_FIELD` absent.
+#: presence is tracked, so a section at offset 0 is written as 0, never left absent. Measured on pylance 14.0.3, it is
+#: written on every manifest (beside the ``_transactions/`` file field 12 names): 0 on an Append's, 151 on a
+#: CreateIndex's (its index section comes first), with :data:`DEPRECATED_TRANSACTION_SECTION_FIELD` absent.
 TRANSACTION_SECTION_FIELD: Final = 23
 
 #: ``transaction_section_deprecated = 21``, the legacy inline position, read only where field 23 is absent (the same
-#: section). Measured on pylance 13.0.0, which writes it on every manifest (beside the ``_transactions/`` file it names in
-#: field 12): 0 on an Append's, 56 on a CreateIndex's (its index section comes first); ``read_transaction`` reads this
-#: copy, and reads the file when the manifest carries no field it knows.
+#: section): pylance 13.0.0 wrote it in field 23's place, so a manifest a 13 writer committed, or a stock client of that
+#: release stages, carries it.
 DEPRECATED_TRANSACTION_SECTION_FIELD: Final = 21
 
 #: The ``Transaction.operation`` oneof's field numbers pylance models no class for, by operation name. Measured on

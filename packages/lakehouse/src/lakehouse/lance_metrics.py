@@ -5,7 +5,7 @@ registers Lance's Rust-side object-store/IO metrics as observable instruments on
 ``MeterProvider`` — the one ``opentelemetry-instrument`` already installs in every deployed service,
 so the metrics flow through the existing OTLP export to the platform's OTLP gateway with zero new config.
 
-The lock pins pylance 13.0.0, so the bridge is live in the catalog and maintenance, its two callers; the
+The lock pins pylance 14.0.3, so the bridge is live in the catalog and maintenance, its two callers; the
 import guard stays because a consumer resolving pylance < 9 must degrade to a logged no-op, not fail
 startup. Call it once per process, from the lifespan, after the auto-instrumentation wrapper has set
 the provider.

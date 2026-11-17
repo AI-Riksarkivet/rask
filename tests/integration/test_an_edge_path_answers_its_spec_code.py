@@ -9,10 +9,9 @@ row count is the one a client reads to confirm the replace. A query refusal's de
 An add_columns entry is added as it declares or the request is refused ([[LH-537]]): an entry declaring `computed` or
 `virtual_column` beside an `expression` asks for a column the backend cannot make (406), and an entry declaring nothing
 or a column named twice is malformed (400), since filling the first from its expression or dropping the others answers
-success for a request the door did not serve. An empty merge key is the caller's mistake (400). A query field the
-vendored spec declares and the installed lance-namespace request model cannot carry (`minimum_nprobes`,
-`maximum_nprobes`) is refused 406 at the three query doors rather than dropped from a 200, and a query body that is not
-JSON keeps the door's own 400 ([[LH-573]]).
+success for a request the door did not serve. An empty merge key is the caller's mistake (400). A query's
+`minimum_nprobes` and `maximum_nprobes` reach the plan as asked ([[LH-595]]), and a query body that is not JSON keeps
+the door's own 400 ([[LH-573]]).
 
 The races and the panic are driven where they happen: a competing ExistOk create lands between the door's probe and its
 declaration, and Lance panics inside the first write.
@@ -25,6 +24,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
@@ -139,16 +139,6 @@ _ADD_COLUMNS_VIRTUAL = {
         pytest.param(
             lambda c: c.post(f"{T}/update", json={"updates": [["id", "id + 1"]], "properties": {"owner": "alice"}}), 406, 0, id="update-properties-kept-nowhere"
         ),
-        pytest.param(lambda c: c.post(f"{T}/query", json={"k": 1, "vector": _VECTOR, "minimum_nprobes": 2}), 406, 0, id="query-a-field-the-model-drops"),
-        pytest.param(
-            lambda c: c.post(f"{T}/explain_plan", json={"query": {"k": 1, "vector": _VECTOR, "minimum_nprobes": 2}}),
-            406,
-            0,
-            id="explain-a-nested-field-the-model-drops",
-        ),
-        pytest.param(
-            lambda c: c.post(f"{T}/analyze_plan", json={"k": 1, "vector": _VECTOR, "maximum_nprobes": 4}), 406, 0, id="analyze-a-field-the-model-drops"
-        ),
         pytest.param(lambda c: c.post(f"{T}/query", content=b"k=1", headers={"content-type": "text/plain"}), 400, 13, id="query-a-body-that-is-not-json"),
     ],
 )
@@ -176,6 +166,22 @@ def test_a_create_at_a_held_id_names_its_holder(client: TestClient, send: Callab
 
     assert (response.status_code, response.json()["code"]) == (409, 5), response.text
     assert ("a namespace already holds the id" in response.json()["detail"]) is names_a_namespace, response.text
+
+
+def test_a_querys_probe_range_reaches_the_plan(client: TestClient) -> None:
+    """`minimum_nprobes` and `maximum_nprobes` are the spec's (`lance_docs/ns_catalog/spec.yaml` QueryTableRequest), and
+    the plan of a query over an IVF index names the range the caller asked for."""
+    values = pa.array([float(i % 97) for i in range(512 * 4)], pa.float32())
+    rows = _ipc(pa.table({"id": pa.array(range(512), pa.int64()), "vec": pa.FixedSizeListArray.from_arrays(values, 4)}))
+    assert client.post("/v1/table/lance_catalog$g$v/create", content=rows, headers=ARROW).status_code == 200
+    location = client.post("/v1/table/lance_catalog$g$v/describe", json={}).json()["location"]
+    lance.dataset(location).create_index("vec", "IVF_FLAT", num_partitions=4)
+    query = {"k": 2, "vector": {"single_vector": [1.0, 2.0, 3.0, 4.0]}, "vector_column": "vec", "minimum_nprobes": 2, "maximum_nprobes": 3}
+
+    explained = client.post("/v1/table/lance_catalog$g$v/explain_plan", json={"query": query})
+
+    assert explained.status_code == 200, explained.text
+    assert "minimum_nprobes=2, maximum_nprobes=Some(3)" in explained.json(), explained.text
 
 
 def test_a_detailed_describe_answers_the_tables_stats(client: TestClient) -> None:

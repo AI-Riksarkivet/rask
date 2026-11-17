@@ -27,7 +27,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   ([[LH-221]]): describe asks `can_get_metadata` and alter `can_write_data` on the table the id names, an id of one
   segment is refused 400 first (`identifiers.transaction_table`), and describe reads through the door's resolution
   (`TransactionTableDep`, `DoorTable.read_natively`). The model has no `transaction` type. `refresh_materialized_view` refuses every caller 403: it needs
-  `can_refresh` on a view, and no view exists to hold it. **pylance's `RestNamespace` implements 51 of the 54**:
+  `can_refresh` on a view, and no view exists to hold it. **pylance's `RestNamespace` implements 51 of the 54** (measured on 14.0.3):
   `update_field_metadata` (served here), `batch_create_table_versions` and `batch_commit_tables` fall to the
   `LanceNamespace` base class, which answers code 0 itself and sends nothing, so a client reaches them through
   the spec's generated `lance_namespace_urllib3_client`. `CreateTableVersion` is served under
@@ -361,8 +361,8 @@ Guards run BEFORE `native.call` — rejecting after leaves a real Lance object w
 FGA are the only project store (there is no controlplane service, ADR 0157). Keep their errors in the
 same problem-body format so one client error path serves the whole API. **`/v1` holds only spec
 operations** (ADR 0156, LH-476): every rask-only route is served under `/management/v1`, projects on
-`/management/v1/projects`, and a rask route on `/v1` answers 404. The two GET twins of `count_rows` and
-`tags/list` stay on `/v1` because they are spec operations the stock pylance REST client sends as GET.
+`/management/v1/projects`, and a rask route on `/v1` answers 404. Every spec operation is served at the spec's own
+method only: pylance 14.0.3's REST client sends POST for `count_rows` and `tags/list` (measured 2026-11-17).
 `tests/integration/test_spec_conformance.py` walks the served route table for both directions, and the
 read-only maintenance gate (`catalog/api/maintenance_mode.py`) refuses writes on both mounts. It classifies a request by
 the ROUTE it matches, never by its path text, since a name can spell a read action (`DELETE /management/v1/projects/list`):
@@ -458,7 +458,7 @@ the rule:
   read from the store (`TableTurns.keeps` for a handed turn's release, a take's own read). Without the turn a writer
   committing in a tight loop won every version: measured, a `cast(NULL)` add lost all ten plans and a stock writer landed 0 appends beside 639. The
   capturing namespace answers no version after the one planned on, so Lance stages the next one rather than spending its
-  own retries on a version committed since. Most pylance operations take no transaction properties (13.0.0: `update`,
+  own retries on a version committed since. Most pylance operations take no transaction properties (14.0.3: `update`,
   `delete`, `add_columns`, `alter_columns`, `drop_columns`, both metadata updates, `drop_index`,
   `MergeInsertBuilder.execute`), so for those the plan is Lance's own call made on a handle opened through an in-process
   namespace under managed versioning (`dataplane.captured`), which keeps the staged manifest instead of finalizing it;
@@ -1219,9 +1219,11 @@ governing their data. The project-scoped surface is the console's project page, 
   refuses it), disarms every ref and records the obligation (`catalog.services.erasure_obligations`,
   `_erasure_obligations/<id>.json`: the predicate's SHA-256, never the predicate, `retain_days`, each ref with its head
   version then, the requester and a deadline, chart `catalog.erasure.deadlineDays`), answering 202; it commits no data.
-  A job holding `writer` and `maintainer` deletes the subject by row id, compacts with deletions materialised and drops
-  every user index (a stock `drop_index` is a `CreateIndex` removing it), each commit judged at `version/create`, and
-  rebuilds its indexes after the release. `POST .../erasure/{obligation_id}/verify` (`can_maintain`) refuses a
+  A job holding `writer` and `maintainer` deletes the subject by row id, drops every user index (a stock `drop_index`
+  is a `CreateIndex` removing it) and compacts with deletions materialised, each commit judged at `version/create`, and
+  rebuilds its indexes after the release. The drop comes before the compaction: a compaction rewrites a BTREE index it
+  finds, and on a branch that inherited one pylance 14.0.3 commits the rewritten index naming the parent's base path
+  while its files lie under the branch, which no reader can open and `version/create` refuses (measured 2026-11-17). `POST .../erasure/{obligation_id}/verify` (`can_maintain`) refuses a
   predicate whose digest differs (400) and another table's or a released obligation (409), then `erasure.verify`
   judges every head on bytes (`main`/`branch:<b>`, `compact:<ref>`, `index:<ref>` are what the job owes). It reads
   `CreateIndex` provenance only up to each ref's recorded head: a segment committed since is the job's own claim (a
@@ -1331,14 +1333,14 @@ governing their data. The project-scoped surface is the console's project page, 
   itself** ([[LH-286]], `maintenance.services.base_reclaim`). `cleanup_old_versions` is ROOT-SCOPED: measured
   on pylance 13.0.0, after an overwrite of a table whose fragments sit on a data base, `cleanup_old_versions(older_than=0,
   delete_unverified=True)` removed every superseded version and none of the base's files (against
-  `lance_docs/lance/guide/read_and_write.md:832`). The same root-scoping is what makes cleanup SAFE on a shallow clone (see
+  `lance_docs/lance/guide/read_and_write.md:871`). The same root-scoping is what makes cleanup SAFE on a shallow clone (see
   `SUPPORTED_FOR_GC`). A data base is its tables' storage on the estate's store, reached under the catalog's own
   identity like a root (owner, 2026-10-24: Lance's default, "every base inherits the unscoped options",
   `lance_docs/lance/guide/object_store.md` § Per-Base Configuration); no base holds a credential of its own, so the native doors read it and the
   vend is direct. The expiry pass, after `cleanup_old_versions`, lists each directory the table's base record names
   as a `data` entry (a plain base, never a dataset root), subtracts every file any retained version of main or any
   branch references (a branch inherits the base under the same id and appends into the same directory, measured), and
-  deletes what is left once it is older than Lance's unverified-file age, 7 days (`lance_docs/lance/guide/read_and_write.md:957-964`). It signs with the
+  deletes what is left once it is older than Lance's unverified-file age, 7 days (`lance_docs/lance/guide/read_and_write.md:996-1003`). It signs with the
   maintain-tier vend, which gets delete on the table's own data directories (`vending.VendableBases`), and the probe
   asks for that vend when a stranded file is past the age, so a table overwritten once still reclaims. A deleted row's
   bytes stay in its base fragment behind a deletion vector; the pass reports such fragments

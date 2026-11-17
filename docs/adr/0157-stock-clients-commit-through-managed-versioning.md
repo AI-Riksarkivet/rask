@@ -52,6 +52,7 @@ live chart); the catalog's registry and FGA are the real project store, as in La
   silver/gold commit without `rask.run_id` and `rask.inputs` (and checks `can_read_data` on each input); on its own
   doors it stamps them from the Context headers. No manifest is rewritten.
 - **Versions:** pylance 13 and lancedb 0.40 everywhere now; lance-namespace stays 0.11.1 and lance-ray 0.5.0 (the
-  newest); lance-namespace 0.13 (array-valued `on`) moves with the first pylance release that allows it. `index_specs`
+  newest); lance-namespace 0.13 (array-valued `on`) moves with the first pylance release that allows it. That move
+  was made on 2026-11-17 (LH-595): pylance 14.0.3, lance-namespace 0.13.0 and lancedb 0.41.0. `index_specs`
   records the requested build parameters, because Lance 13 builds fewer partitions than asked on small tables.
 - **The controlplane is deleted**: projects are the catalog's, served on `/management/v1/projects`.

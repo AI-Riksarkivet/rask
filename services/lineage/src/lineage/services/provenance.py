@@ -666,13 +666,13 @@ class ProvenanceStore:
             landing = [recording for recording in batch if id(recording) not in refused]
             if founders:
                 bindings = [{"run_id": run, "author": founder.author, "received_at": founder.received_at} for run, founder in founders.items()]
-                self._writer(RUNS).merge_insert_only(pa.Table.from_pylist(bindings, schema=RUN_SCHEMA), on="run_id")
+                self._writer(RUNS).merge_insert_only(pa.Table.from_pylist(bindings, schema=RUN_SCHEMA), on=["run_id"])
             if landing:
                 edges = _first_of_each(pa.concat_tables([recording.edges for recording in landing]), "edge_key")
                 if edges.num_rows:
-                    self._writer(EDGES).merge_insert_only(edges, on="edge_key")
+                    self._writer(EDGES).merge_insert_only(edges, on=["edge_key"])
                 rows = _first_of_each(pa.concat_tables([recording.row for recording in landing]), "event_key")
-                self._writer(FEED).merge_insert_only(rows, on="event_key")
+                self._writer(FEED).merge_insert_only(rows, on=["event_key"])
         return foreign
 
     def _authors_of(self, runs: set[str]) -> dict[str, str | None]:
@@ -691,7 +691,7 @@ class ProvenanceStore:
         the object's delete leaves the object to be refused again into the same row.
         """
         row = {"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event": event_json, "refused_at": datetime.now(UTC)}
-        await self._run(lambda: self._writer(REFUSALS).merge_upsert(pa.Table.from_pylist([row], schema=REFUSAL_SCHEMA), on="outbox_key"))
+        await self._run(lambda: self._writer(REFUSALS).merge_upsert(pa.Table.from_pylist([row], schema=REFUSAL_SCHEMA), on=["outbox_key"]))
 
     async def parked(self, run_id: str | None = None) -> list[ParkedDelivery]:
         """Each delivery the ingest lane's park kept ([[LH-148]]), of ``run_id`` or of every run."""
@@ -809,11 +809,11 @@ class ProvenanceStore:
 
     async def advance_cursor(self, follower: str, seq: int) -> None:
         """Move ``follower``'s cursor to ``seq``, never backward: a replica's slower tick cannot undo a faster one's progress."""
-        await self._run(lambda: self._writer(CURSORS).merge_upsert(_cursor_row(follower, seq), on="follower", matched_when="source.seq > target.seq"))
+        await self._run(lambda: self._writer(CURSORS).merge_upsert(_cursor_row(follower, seq), on=["follower"], matched_when="source.seq > target.seq"))
 
     async def reset_cursor(self, follower: str, seq: int) -> None:
         """Set ``follower``'s cursor to ``seq`` whichever way it moves: for a feed whose bytes were put back from before it."""
-        await self._run(lambda: self._writer(CURSORS).merge_upsert(_cursor_row(follower, seq), on="follower"))
+        await self._run(lambda: self._writer(CURSORS).merge_upsert(_cursor_row(follower, seq), on=["follower"]))
 
     async def feed_incarnation(self) -> str:
         """Which feed table this is: the uuid the catalog minted when it was created, which a feed created again does not share.

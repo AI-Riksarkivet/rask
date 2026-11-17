@@ -253,7 +253,7 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         REQUIRES `code`. The three handlers above cover domain errors, validation and crashes; routing
         failures went out as FastAPI's default `{"detail": "..."}`, which the reference client cannot
         parse, so it reported `InternalError 18` — the server is told to be broken when in truth it
-        does not serve that route. A3's GET form of `count_rows` is exactly how that surfaced.
+        does not serve that route.
 
         `Unsupported` is the honest default: neither "no such route" nor "wrong method" is a domain
         condition, and code 0 means precisely "this backend does not do that operation". A status the

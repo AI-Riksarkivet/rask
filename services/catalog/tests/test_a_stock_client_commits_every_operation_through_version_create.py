@@ -440,8 +440,9 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
     """[[LH-493]], [[LH-490]], ADR 0163: the erasure door records an obligation, and every rewrite is a bring-your-own job's.
 
     The job holds ``writer`` and ``maintainer`` and no owner rung. With stock pylance it deletes the subject by row id,
-    compacts with Lance's own protocol and drops the index, on main and on the branch that inherited the subject, each
-    a commit judged here; the catalog's verification then releases the obligation, no version lands that a stock
+    drops the index and compacts with Lance's own protocol, on main and on the branch that inherited the subject, each
+    a commit judged here. It drops the index first: a compaction rewrites a BTREE index it finds, and on a branch that
+    inherited one pylance 14.0.3 commits a rewrite no reader can open, which the catalog refuses (the test below); the catalog's verification then releases the obligation, no version lands that a stock
     commit did not make, and the job rebuilds its index."""
     stock = _created(served_on_s3)
     options = served_on_s3.storage_options
@@ -460,9 +461,9 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
             job = head()
             ids = job.to_table(columns=[], filter="id = 2", with_row_id=True).column("_rowid").to_pylist()
             job.delete(f"_rowid IN ({', '.join(str(row_id) for row_id in ids)})")
+            head().drop_index("v_idx")
             job = head()
             Compaction.commit(job, [task.execute(job) for task in Compaction.plan(job, {"materialize_deletions_threshold": 0.0}).tasks])
-            head().drop_index("v_idx")
         verified = httpx.post(
             f"{served_on_s3.url}/management/v1/table/lance_catalog$db$t/erasure/{recorded.json()['obligation_id']}/verify",
             json={"predicate": "id = 2"},
@@ -472,7 +473,7 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
 
     assert verified.status_code == 200, verified.text
     assert (verified.json()["obligation"]["state"], verified.json()["report"]["complete"]) == ("released", True), verified.json()["report"]["surfaces"]
-    rewrite = ["Delete", "ReserveFragments", "Rewrite", "CreateIndex"]
+    rewrite = ["Delete", "CreateIndex", "ReserveFragments", "Rewrite"]
     assert [(branch, operation) for branch, _, operation in _commits(caplog)] == [
         *((None, operation) for operation in rewrite),
         *(("work", operation) for operation in rewrite),
@@ -480,6 +481,31 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
     ]
     assert _opened(stock, options).version == before + len(rewrite) + 1, "a version no stock commit made has landed"
     assert _rows(_opened(stock, options)) == _rows(_branch(stock, options)) == [(1, "a"), (3, "c"), (4, "d"), (5, "e")]
+
+
+def test_a_compaction_that_would_leave_a_branchs_inherited_index_unreadable_is_refused(served_on_s3: Served) -> None:
+    """A branch reads the index it inherited through its parent's base path. Compacting such a branch, pylance 14.0.3
+    rewrites a BTREE index into the branch's own ``_indices/`` and still names the parent's base on it, so every query
+    the index serves then fails ``Not found`` (measured 2026-11-17 on a local table). The catalog refuses that commit,
+    and the branch keeps its fragments and answers through its index."""
+    stock = _created(served_on_s3)
+    options = served_on_s3.storage_options
+    _opened(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
+    stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
+    _branch(stock, options).delete("id = 2")
+    before = _branch(stock, options)
+
+    job = _branch(stock, options)
+    tasks = Compaction.plan(job, {"materialize_deletions_threshold": 0.0}).tasks
+    assert tasks, "the branch's one fragment holds a deleted row, so a materialising compaction has work"
+    with pytest.raises(OSError, match="Commit result for version"):
+        Compaction.commit(job, [task.execute(job) for task in tasks])
+
+    after = _branch(stock, options)
+    # The compaction's fragment-id reservation is a commit of its own and landed; the rewrite did not.
+    assert after.version == before.version + 1
+    assert [fragment.fragment_id for fragment in after.get_fragments()] == [fragment.fragment_id for fragment in before.get_fragments()]
+    assert after.to_table(filter="v = 'c'")["id"].to_pylist() == [3]
 
 
 def _branch(stock: lance_namespace.LanceNamespace, storage_options: dict[str, str] | None = None) -> lance.LanceDataset:
@@ -787,9 +813,9 @@ def _detached(root: Path, operation: lance.LanceOperation.BaseOperation, read_ve
 
 
 def _carrying(manifest: bytes, transaction: bytes) -> bytes:
-    """``manifest`` with ``transaction`` as its inline transaction, which Lance 13 keeps at offset 0 ahead of the message."""
+    """``manifest`` with ``transaction`` as its inline transaction, which an Append's manifest keeps at offset 0 ahead of the message."""
     message = manifest_bytes.manifest_message(manifest)
-    assert manifest_bytes.varint_field(message, manifest_bytes.DEPRECATED_TRANSACTION_SECTION_FIELD) == 0
+    assert manifest_bytes.varint_field(message, manifest_bytes.TRANSACTION_SECTION_FIELD) == 0
     section = struct.pack("<I", len(transaction)) + transaction
     major, minor = struct.unpack_from("<HH", manifest, len(manifest) - 8)
     return section + struct.pack("<I", len(message)) + message + struct.pack("<QHH4s", len(section), major, minor, b"LANC")
@@ -1578,7 +1604,7 @@ def _insert(stock: lance_namespace.LanceNamespace) -> None:
 
 
 def _merge_insert(stock: lance_namespace.LanceNamespace) -> None:
-    request = lance_namespace.MergeInsertIntoTableRequest(id=_TABLE, on="id", when_matched_update_all=True, when_not_matched_insert_all=True)
+    request = lance_namespace.MergeInsertIntoTableRequest(id=_TABLE, on=["id"], when_matched_update_all=True, when_not_matched_insert_all=True)
     stock.merge_insert_into_table(request, _ipc(_keyed([3, 4], ["C", "d"])))
 
 
