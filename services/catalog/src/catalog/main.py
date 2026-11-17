@@ -14,7 +14,6 @@ from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from functools import partial
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
@@ -51,7 +50,6 @@ from lakehouse.governed.signing_key import attach_signing, make_signing_holder, 
 from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
 from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lance_metrics import instrument_lance_if_available
-from lakehouse.lifecycle import closed_quietly
 from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.obs import configure_app_logging
 from lakehouse.schemas.health import Readiness
@@ -244,11 +242,6 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # catalog serves, and stages what it announces, while the bus is away. Entered before everything that publishes, so
     # it is drained after them. None for a stack the chart names no bus.
     bus = await stack.enter_async_context(bus_session(loops, settings.bus))
-    # Lineage emission (opt-in, best-effort) over the chosen transport: the bus, or a direct-HTTP client.
-    lineage_http = None
-    if settings.lineage_emit_enabled and settings.lineage_transport == "http" and settings.lineage_url:
-        lineage_http = httpx.AsyncClient(timeout=settings.lineage_emit_timeout_seconds)
-        stack.push_async_callback(closed_quietly, lineage_http.aclose)
 
     # WHICH TENANT a write belongs to, for the emitted `rask_lance.project` facet — WATCH targeting's only
     # key. Without it a notifier skips the watcher loop entirely and every catalog write in the
@@ -269,9 +262,6 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     setattr(app.state, COMMIT_IDS_STATE, commit_ids)
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
-        transport=settings.lineage_transport,
-        url=settings.lineage_url,
-        client=lineage_http,
         bus=bus,
         topic=settings.lineage_topic,
         job_namespace=settings.lineage_job_namespace,

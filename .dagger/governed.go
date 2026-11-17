@@ -165,30 +165,75 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 	return &governedStack{Store: store, OpenFGA: openfga, Dex: dex, StoreToken: identity.CatalogToken}, nil
 }
 
-// provenanceWiring is what a catalog needs to announce its writes to lineage and keep lineage's tables: the
-// hostname lineage answers on, and the subjects that may write the provenance namespace.
+// provenanceWiring is what a catalog needs to announce its writes to lineage and keep lineage's tables: the bus it
+// publishes each announcement on, and the subjects that may write the provenance namespace.
 type provenanceWiring struct {
-	LineageHost string
-	Writers     []string
+	Bus     *dagger.Service
+	Writers []string
+}
+
+// The lane's bus keeps lineage's events on the stream and hands them to the durable consumer the chart's stream Job
+// declares on the estate (`chart/templates/nats-stream-job.yaml`, `lance.busConsumers`): lineage binds to its consumer
+// and creates none, so the lane declares both before either service starts.
+const (
+	laneBusURL          = "nats://bus:4222"
+	laneBusTokenPath    = "/var/run/rask/bus-token"
+	laneLineageStream   = `{"name":"LINEAGE","subjects":["lineage.events.>"],"retention":"limits","max_consumers":-1,"max_msgs":-1,"max_bytes":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"max_age":86400000000000,"storage":"file","discard":"old","num_replicas":1,"duplicate_window":120000000000,"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"allow_direct":true}`
+	laneLineageConsumer = `{"durable_name":"lineage-ingest","ack_policy":"explicit","ack_wait":300000000000,"max_deliver":-1,"filter_subject":"lineage.events.v1","deliver_policy":"all","replay_policy":"instant","max_ack_pending":64,"max_waiting":512}`
+)
+
+// laneBus is a NATS JetStream server holding lineage's stream and its durable consumer, started.
+//
+// IT ADMITS EVERY CONNECTION. Which user may publish or pull what, the token a pod presents and the session the signer
+// grants it are the nats-auth lane's claim, on the permission table the chart renders; this lane's claim is that an
+// announcement the catalog publishes is what lineage records.
+func (m *Rask) laneBus(ctx context.Context) (*dagger.Service, error) {
+	bus, err := dag.Container().
+		From(natsImage).
+		WithExposedPort(4222).
+		WithDefaultArgs([]string{"nats-server", "-js"}).
+		AsService().
+		Start(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_, err = dag.Container().
+		From(natsBoxImage).
+		WithServiceBinding("bus", bus).
+		WithNewFile("/tmp/stream.json", laneLineageStream).
+		WithNewFile("/tmp/consumer.json", laneLineageConsumer).
+		WithExec([]string{"nats", "--server", laneBusURL, "stream", "add", "--config", "/tmp/stream.json"}).
+		WithExec([]string{"nats", "--server", laneBusURL, "consumer", "add", "LINEAGE", "lineage-ingest", "--config", "/tmp/consumer.json"}).
+		Sync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return bus, nil
+}
+
+// onLaneBus names `ctr` the lane's bus as the chart names a pod its own: the address, the user it connects as, and a
+// file holding the token it presents, which this bus does not read.
+func onLaneBus(ctr *dagger.Container, bus *dagger.Service, user string) *dagger.Container {
+	return ctr.
+		WithServiceBinding("bus", bus).
+		WithNewFile(laneBusTokenPath, "lane").
+		WithEnvVariable("RASK_BUS_URL", laneBusURL).
+		WithEnvVariable("RASK_BUS_USER", user).
+		WithEnvVariable("RASK_BUS_TOKEN_FILE", laneBusTokenPath)
 }
 
 // catalogService builds the REST catalog from its own dockerfile and points it at a governed stack: OIDC against the
-// stack's Dex, OpenFGA enforced, and every committed write announced to the lineage service `prov` names.
+// stack's Dex, OpenFGA enforced, and every committed write announced on the bus `prov` names.
 //
 // THE EMISSION IS ON, as the chart renders it (`LANCE_LINEAGE_EMIT_ENABLED`). Without it the catalog runs perfectly and
 // simply records nothing, so the provenance assertions fail against a healthy service: the emit is the thing under
 // test, not a side effect of it.
-//
-// LINEAGE IS REACHED BY ITS SESSION HOSTNAME, not a binding: lineage keeps its tables in this catalog and binds it, and
-// a binding cannot run both ways. The hostname must resolve when the first write emits, and the emit is BEST-EFFORT, so
-// a target that does not resolve is swallowed exactly as designed: the only symptom is a provenance assertion finding
-// no author.
 func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, prov provenanceWiring) (*dagger.Service, error) {
 	writers, err := json.Marshal(prov.Writers)
 	if err != nil {
 		return nil, err
 	}
-	return withLaneStoreSession(m.Image(src, "rest-catalog", "", "", "", nil, "").
+	return withLaneStoreSession(onLaneBus(m.Image(src, "rest-catalog", "", "", "", nil, ""), prov.Bus, "catalog").
 		WithServiceBinding("store", stack.Store), stack.StoreToken, "store").
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
@@ -208,7 +253,6 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, prov 
 		WithEnvVariable("RASK_FGA_ENABLED", "true").
 		WithEnvVariable("RASK_FGA_API_URL", "http://openfga:8080").
 		WithEnvVariable("LANCE_LINEAGE_EMIT_ENABLED", "true").
-		WithEnvVariable("LANCE_LINEAGE_URL", "http://"+prov.LineageHost+":8000/api/v1/lineage").
 		WithEnvVariable("LANCE_PROVENANCE_NAMESPACE", provenanceNamespace).
 		WithEnvVariable("LANCE_PROVENANCE_WRITERS", string(writers)).
 		WithExposedPort(2333).
@@ -253,10 +297,10 @@ out.mkdir(exist_ok=True)
 }
 
 // lineageService is the lineage service, keeping its feed and edge list as tables of `catalog`'s provenance
-// namespace (ADR 0158) and presenting `token` to it. It answers on the session hostname `host`, so the catalog
-// it binds can reach it back without a binding cycle; the caller starts it.
-func (m *Rask) lineageService(src *dagger.Directory, catalog *dagger.Service, token *dagger.File, host string) *dagger.Service {
-	return m.Image(src, "rest-catalog", "", "", "", nil, "").
+// namespace (ADR 0158) and presenting `token` to it, and takes the catalog's announcements from its consumer on `bus`.
+// It answers on the session hostname `host`, where the test reaches it; the caller starts it.
+func (m *Rask) lineageService(src *dagger.Directory, catalog *dagger.Service, bus *dagger.Service, token *dagger.File, host string) *dagger.Service {
+	return onLaneBus(m.Image(src, "rest-catalog", "", "", "", nil, ""), bus, "lineage").
 		WithServiceBinding("catalog", catalog).
 		// Lineage calls `assert_authentication_configured` exactly as the catalog does, and refuses to
 		// boot unless a posture is named. The authorization under test in these lanes is the CATALOG's;
@@ -314,12 +358,16 @@ func (m *Rask) GovernanceChain(
 	if err != nil {
 		return "", err
 	}
-	catalog, err := m.catalogService(src, stack, provenanceWiring{LineageHost: "lineage-api", Writers: []string{lineageSub}})
+	bus, err := m.laneBus(ctx)
 	if err != nil {
 		return "", err
 	}
-	// Started rather than bound: the catalog reaches it by hostname, and the test below does too.
-	if _, err := m.lineageService(src, catalog, token, "lineage-api").Start(ctx); err != nil {
+	catalog, err := m.catalogService(src, stack, provenanceWiring{Bus: bus, Writers: []string{lineageSub}})
+	if err != nil {
+		return "", err
+	}
+	// Started rather than bound: the test below reaches it by hostname.
+	if _, err := m.lineageService(src, catalog, bus, token, "lineage-api").Start(ctx); err != nil {
 		return "", err
 	}
 

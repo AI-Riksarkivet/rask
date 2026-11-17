@@ -413,9 +413,8 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
 
 
 def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    # The DEREGISTER_TABLE marker must publish BEFORE revoke_ownership: on the http transport the caller's
-    # bearer authorizes ingest against their write grant — revoke-first would 403 the marker (silently
-    # dropped by the best-effort emitter) and the graph would keep showing the table as live.
+    # The DEREGISTER_TABLE marker must publish BEFORE revoke_ownership: a revoke that fails ends the request, and a
+    # marker that waited for it would leave the feed showing the table as live.
     from lance_namespace import DeregisterTableResponse
 
     fake_ns.deregister_table.return_value = DeregisterTableResponse()

@@ -13,7 +13,7 @@ import logging
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateTableIndexRequest,
@@ -147,7 +147,6 @@ async def drop_table_index(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
     body: DropTableIndexRequest | None = None,
     branch: Annotated[
         str | None,
@@ -184,7 +183,6 @@ async def drop_table_index(
         so=so,
         token=token,
         operation=DROP_INDEX,
-        authorization=authorization,
         uuids=uuids,
         pin_version=await run_in_threadpool(partial(dataplane.committed_version, table, so, response.transaction_id, branch=None)),
         # Main only: this door refuses a branch before the build.

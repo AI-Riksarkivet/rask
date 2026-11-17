@@ -1,6 +1,6 @@
 """OpenLineage HTTP ingest endpoint (``POST /api/v1/lineage``) for external producers.
 
-The OpenLineage HTTP-transport default path: any producer (our emitter, Airflow, Spark, dbt, …)
+The OpenLineage HTTP-transport default path: any producer (the OpenLineage client, Airflow, Spark, dbt, …)
 configured with ``OPENLINEAGE_URL`` pointed here ingests with no glue — the lightweight-Marquez
 contract. Durable catalog→lineage delivery rides the bus instead, on lineage's ingest lane (``lineage.api.ingest_lane``).
 
@@ -114,17 +114,15 @@ async def ingest_event(
     """Ingest one OpenLineage event — a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.
 
     PARSED HERE RATHER THAN BY THE SIGNATURE, so this door and the bus door share ONE discriminator
-    (`models.parse_event`). Declaring the body as `RunEvent` is what made a static event 422 before
-    any handler ran: [[LIN-004]] moved catalog DDL onto `DatasetEvent` and taught only the bus. The
-    catalog's HTTP emitter is best-effort, so every create it sent lost its provenance in silence —
-    measured 2026-09-24, three creates, `{"events":[]}` in the durable feed, and a governance
-    assertion reading `expected lineage creator=..., got None`.
+    (`models.parse_event`). A body declared as `RunEvent` would refuse a static event with a 422 before
+    any handler ran, and a catalog DDL change is a `DatasetEvent` ([[LIN-004]]), which a producer replaying
+    or re-posting a recorded event sends here.
 
     A body that is neither shape raises `RequestValidationError`, which `install_problem_handlers`
     renders exactly as FastAPI's own 422 — the wire answer for a malformed payload is unchanged.
 
     This is the OpenLineage HTTP-transport default path, so any OpenLineage producer
-    (our emitter, Airflow, Spark, dbt, …) configured with ``OPENLINEAGE_URL`` pointed
+    (the OpenLineage client, Airflow, Spark, dbt, …) configured with ``OPENLINEAGE_URL`` pointed
     here ingests with no glue — the lightweight-Marquez contract.
 
     When OIDC is enabled the ``CurrentToken`` dependency requires a verified bearer token

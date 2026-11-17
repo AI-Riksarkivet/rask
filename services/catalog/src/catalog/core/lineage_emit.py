@@ -3,24 +3,20 @@
 The catalog is the only component that knows the *verified* principal on every write, so it is
 the authoritative source of "who created/changed a table". On a table create it emits an
 OpenLineage ``RunEvent`` (output = the table, ``author`` = the token sub, plus a ``lance`` run
-facet naming the operation + version) to the lineage service's ingest endpoint.
+facet naming the operation + version) on the bus, where the lineage service takes it.
 
 Emission is **inline-awaited + best-effort**: the write endpoints ``await`` it (NOT a FastAPI
 BackgroundTasks fire-and-forget — that dies with the worker + can't reach the durable transport before
 the response) but it swallows every error, so the lineage service being down/slow can never block or
-fail a catalog write. Two transports sit behind the same :class:`LineageEmitter` interface:
-
-* :class:`HttpLineageEmitter` — direct HTTP POST (the OpenLineage default transport; simple, but the
-  event is lost if the lineage service is down when we POST). Good for dev / external producers.
-* :class:`BusEmitter` — publish on the bus, NATS JetStream (the production transport,
-  ``LANCE_LINEAGE_TRANSPORT=bus``), over this process's own connection (``lakehouse.bus``): one bounded
-  attempt whose acknowledgement means the stream holds the event. The lineage service pulls it from its own durable
-  consumer on its own connection, and a delivery it cannot record within its lane's attempts is parked: kept in the
-  provenance namespace's ``refusals`` table, ERROR-logged and counted, for the estate admin to replay
-  (``lineage.api.ingest_lane``, docs/RESILIENCE.md). With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
-  object-store outbox (``lakehouse.outbox``) before the publish, which narrows the loss window
-  to commit→stage; the catalog's commit reconcile announces a version whose event a crash in that window lost,
-  from the version log (``catalog.api.commit_reconcile``, [[LH-497]]).
+fail a catalog write. There is one transport, :class:`BusEmitter`: it publishes on the bus, NATS JetStream, over this
+process's own connection (``lakehouse.bus``), so the catalog hands no caller's credential to another service. One bounded
+attempt whose acknowledgement means the stream holds the event. The lineage service pulls it from its own durable
+consumer on its own connection, and a delivery it cannot record within its lane's attempts is parked: kept in the
+provenance namespace's ``refusals`` table, ERROR-logged and counted, for the estate admin to replay
+(``lineage.api.ingest_lane``, docs/RESILIENCE.md). With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
+object-store outbox (``lakehouse.outbox``) before the publish, which narrows the loss window
+to commit→stage; the catalog's commit reconcile announces a version whose event a crash in that window lost,
+from the version log (``catalog.api.commit_reconcile``, [[LH-497]]).
 
 A versioned announcement's run id is derived from its commit (:mod:`catalog.core.commit_ids`), and its ``eventTime`` is
 the commit's own time, so the original and a re-announcement of one commit are one event.
@@ -35,7 +31,6 @@ from dataclasses import dataclass  # noqa: TID251
 from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, TypedDict, Unpack, runtime_checkable
 
-import httpx
 import lance
 from opentelemetry import metrics
 from pydantic import BaseModel
@@ -46,7 +41,6 @@ from catalog.core.run_context import RunContext
 from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus
 from lakehouse.cloud_events import lineage_envelope
-from lakehouse.context import current_trace_context
 from lakehouse.governed import fga
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.governed.subjects import is_person_subject
@@ -81,17 +75,17 @@ _meter = metrics.get_meter("lance.catalog")
 _emit_failed = _meter.create_counter(
     "catalog.lineage_emit.failed",
     unit="{event}",
-    description="Best-effort catalog lineage emits that failed terminally, by transport. On `http` the "
-    "event is simply gone; on `bus` the publish goes through the staged "
-    "outbox, so a failure AFTER staging leaves a durable copy the relay can still drain and a failure "
-    "at staging does not. The counter cannot tell those apart, which is why any increase is worth a look.",
+    description="Best-effort catalog lineage emits that failed terminally, by transport. On `bus` the publish goes "
+    "through the staged outbox, so a failure AFTER staging leaves a durable copy the relay can still drain and a "
+    "failure at staging does not; `derive` is an event whose run id could not be derived, the catalog's key being away. The counter cannot tell a staged "
+    "failure from an unstaged one, which is why any increase is worth a look.",
 )
 
 
 def _create_emit_failed_series() -> None:
     """Create every transport's series of the failed-emit counter at 0 when an emitter is built: one born at its first
     failure has no 0 before it, so the alert reading the counter's rate would miss that failure."""
-    for transport in ("derive", "http", "bus"):
+    for transport in ("derive", "bus"):
         _emit_failed.add(0, {"lance.catalog.transport": transport})
 
 
@@ -498,8 +492,6 @@ class EmitFields(TypedDict, total=False):
 
     #: When the commit was made (``dataplane.CommitReadback.committed_at``), the event's ``eventTime``; now when unknown.
     event_time: str | None
-    #: The caller's bearer, forwarded so lineage ingest accepts it when the lineage service has OIDC on.
-    authorization: str | None
     #: The physical Lance URI → the standard ``dataSource`` facet.
     source_uri: str | None
     #: The per-version column schema → the standard ``schema`` facet (#24).
@@ -746,7 +738,7 @@ class _BaseLineageEmitter:
             catalog_impl=self._catalog_impl,
             warehouse_uri=self._warehouse_uri,
         )
-        await self._send(event, operation=operation, table_id=table_id, authorization=fields.get("authorization"))
+        await self._send(event, operation=operation, table_id=table_id)
 
     def _run_id(self, version: int | None, operation: str, fields: EmitFields) -> str:
         """The event's run id, for a version of a table the catalog minted a uuid for: derived from the commit, so every
@@ -767,31 +759,8 @@ class _BaseLineageEmitter:
         key = (self._commit_ids or UnkeyedCommitIds()).key()
         return commit_run_id(key, table_uuid=table_uuid, branch=fields.get("branch"), branch_identifier=fields.get("branch_identifier"), version=version)
 
-    async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:  # pragma: no cover — abstract
+    async def _send(self, event: dict[str, Any], *, operation: str, table_id: str) -> None:  # pragma: no cover — abstract
         raise NotImplementedError
-
-
-class HttpLineageEmitter(_BaseLineageEmitter):
-    """POSTs OpenLineage events to the lineage service, swallowing every failure."""
-
-    def __init__(self, client: httpx.AsyncClient, url: str, *, job_namespace: str, dataset_namespace: str) -> None:
-        self._client = client
-        self._url = url
-        self._job_namespace = job_namespace
-        self._dataset_namespace = dataset_namespace
-        _create_emit_failed_series()
-
-    async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:
-        # Forward the caller's bearer so ingest accepts the event when the lineage service has OIDC on
-        # (else the event 401s and is silently dropped). Lineage binds the author to this verified principal. The event
-        # travels in the trace of the request that caused it (ADR 0209), whether or not anything instruments this client.
-        headers = current_trace_context() | ({"Authorization": authorization} if authorization else {})
-        try:
-            response = await self._client.post(self._url, json=event, headers=headers)
-            response.raise_for_status()
-        except Exception as exc:
-            _emit_failed.add(1, {"lance.catalog.transport": "http"})
-            log.warning("lineage_emit_failed", extra={"operation": operation, "table": table_id, "error": str(exc)})
 
 
 class BusEmitter(_BaseLineageEmitter):
@@ -800,7 +769,7 @@ class BusEmitter(_BaseLineageEmitter):
     One bounded publish per event (`lakehouse.bus.publish_event`): the stream's acknowledgement is the delivery, and
     an event it did not acknowledge stays in the outbox for lineage's relay. Each event rides
     the envelope derived from it (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context. The topic
-    is versioned (``lineage.events.v1``). ``authorization`` is unused: the bus says which of its users published
+    is versioned (``lineage.events.v1``). The bus says which of its users published
     an event and not which person the producer wrote it for, so the ``author`` stamped inside is a claim until the
     event is signed. A catalog holding a signing key signs each authored event as itself (:meth:`_signed`), and
     where signing is enforced the subscriber admits an event only when that signature verifies against the keys
@@ -860,7 +829,7 @@ class BusEmitter(_BaseLineageEmitter):
         on_behalf_of = None if author == self._signing.identity else author
         return attach_signature(event, key=key, identity=self._signing.identity, on_behalf_of=on_behalf_of)
 
-    async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:
+    async def _send(self, event: dict[str, Any], *, operation: str, table_id: str) -> None:
         try:
             # SIGNED INSIDE THE TRY, like everything else about an emit: this runs AFTER the Lance write committed, so a
             # signature that cannot be made is a lost announcement, counted and logged, and never a failed request.
@@ -894,9 +863,6 @@ class BusEmitter(_BaseLineageEmitter):
 def make_emitter(
     *,
     enabled: bool,
-    transport: str,
-    url: str | None,
-    client: httpx.AsyncClient | None,
     bus: Bus | None,
     topic: str,
     job_namespace: str,
@@ -911,43 +877,32 @@ def make_emitter(
     unannounced: Callable[[str, str], bool] | None = None,
     commit_ids: CommitIds | None = None,
 ) -> LineageEmitter:
-    """Select the lineage transport: ``bus`` (the durable stream, over this process's own connection) or ``http`` (direct POST);
-    no-op when disabled or unwired (a half-configured transport must never silently become the other).
+    """The catalog's lineage emitter: the bus emitter over this process's own connection, or the no-op when emission is
+    off or the process is named no bus.
 
     ``unannounced`` answers, for a write's parent namespace and operation, whether it goes unannounced (the provenance
     namespace's own rows). ``commit_ids`` holds the key a versioned announcement's run id is derived under.
     ``dataset_namespace`` is the catalog's endpoint, every dataset's namespace ([[LH-553]])."""
-    if not enabled:
+    if not enabled or bus is None:
         return NoopEmitter()
-    if transport == "bus" and bus is not None:
-        emitter: _BaseLineageEmitter = BusEmitter(
-            bus,
-            topic,
-            job_namespace=job_namespace,
-            dataset_namespace=dataset_namespace,
-            timeout_seconds=timeout_seconds,
-            outbox_uri=outbox_uri,
-            storage_options=storage_options,
-            # ONLY THE BUS TRANSPORT SIGNS, and that is the whole surface that needs it: the HTTP
-            # emitter posts to lineage's own door, which runs `enforce_author` against a real bearer —
-            # a principal the bus door does not have and the signature exists to supply.
-            signing=signing,
-        )
-        emitter._project_resolver = project_resolver
-        emitter._catalog_impl = catalog_impl
-        emitter._warehouse_uri = warehouse_uri
-        emitter._unannounced = unannounced
-        emitter._commit_ids = commit_ids
-        return emitter
-    if transport == "http" and url and client is not None:
-        http_emitter = HttpLineageEmitter(client, url, job_namespace=job_namespace, dataset_namespace=dataset_namespace)
-        http_emitter._project_resolver = project_resolver
-        http_emitter._catalog_impl = catalog_impl
-        http_emitter._warehouse_uri = warehouse_uri
-        http_emitter._unannounced = unannounced
-        http_emitter._commit_ids = commit_ids
-        return http_emitter
-    return NoopEmitter()
+    emitter = BusEmitter(
+        bus,
+        topic,
+        job_namespace=job_namespace,
+        dataset_namespace=dataset_namespace,
+        timeout_seconds=timeout_seconds,
+        outbox_uri=outbox_uri,
+        storage_options=storage_options,
+        # The bus says which of its users published an event, never which person it was written for: the signature is
+        # what names that person to lineage.
+        signing=signing,
+    )
+    emitter._project_resolver = project_resolver
+    emitter._catalog_impl = catalog_impl
+    emitter._warehouse_uri = warehouse_uri
+    emitter._unannounced = unannounced
+    emitter._commit_ids = commit_ids
+    return emitter
 
 
 async def emit_write_event(
@@ -957,7 +912,6 @@ async def emit_write_event(
     author: str | None,
     version: int | None,
     operation: str,
-    authorization: str | None,
     uuids: UuidReader,
     known: DatasetUuids | None = None,
     branch: str | None = None,
@@ -1002,7 +956,6 @@ async def emit_write_event(
         author=author,
         version=version,
         operation=operation,
-        authorization=authorization,
         source_uri=source_uri,
         schema_fields=schema_fields,
         inputs=refs,

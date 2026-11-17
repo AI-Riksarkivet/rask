@@ -3,8 +3,8 @@
 Lineage keeps no database: every event it admits is a row of `lance_catalog$provenance$events`, written through the
 catalog's own `merge_insert` door and read back through its `query` door, and `GET /events?since=` pages that
 table oldest first. Driven over real sockets against the real catalog app on a real `dir` namespace, because
-the claim is that lineage's store IS the catalog: a live uvicorn catalog announcing each commit over HTTP to
-lineage's own app, served beside it, which records it back into that catalog. Recording a commit is itself a
+the claim is that lineage's store IS the catalog: a live uvicorn catalog announcing each commit on the bus it shares
+with lineage's own app, served beside it (`lineage_app.joined_bus`), which records it back into that catalog. Recording a commit is itself a
 commit, so a catalog that announced its provenance namespace's writes would feed lineage its own rows for ever.
 
 What stands in is `lineage_app`'s: OpenFGA answering from a granted set, and the verified caller named in a
@@ -40,8 +40,7 @@ from lakehouse.lancekit.writer import RestCatalogWriteTransport
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lineage.models import parse_event
 from lineage.services.provenance import FEED, ProvenanceStore
-from tests.integration.lineage_app import SUBJECT_HEADER, ensure_tables, governed_lineage, live_catalog, live_lineage, run_event
-from tests.loopback import free_port
+from tests.integration.lineage_app import SUBJECT_HEADER, ensure_tables, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
 
 
 if TYPE_CHECKING:
@@ -95,11 +94,10 @@ def _compact_the_feed(catalog_url: str) -> None:
 
 
 def test_each_catalog_commit_is_followed_forward_once_and_in_commit_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    port = free_port()
-    announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
+    joined_bus(monkeypatch)
     with (
-        live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url,
-        live_lineage(catalog_url, monkeypatch, port=port) as lineage_url,
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        live_lineage(catalog_url, monkeypatch) as lineage_url,
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
         httpx.Client(base_url=lineage_url, timeout=60) as lineage,
     ):

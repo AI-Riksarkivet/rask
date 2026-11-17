@@ -12,6 +12,7 @@ claim of none of the tests that use them; what the doors record is.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -27,6 +28,8 @@ from fastapi import Body, FastAPI, Header, Response
 from fastapi.testclient import TestClient
 from openfga_sdk import OpenFgaClient
 
+from lakehouse.bus import BusUnavailableError
+from lakehouse.bus_delivery import Handle, Lane, Park, Settlement
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.fga import user_object
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -34,6 +37,7 @@ from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.ns_errors import install_problem_handlers
+from tests.bus_double import BusDouble, Sent, session_holding
 from tests.integration.openfga_grants import Grants
 
 
@@ -46,6 +50,63 @@ if TYPE_CHECKING:
 SUBJECT_HEADER = "x-test-subject"
 #: The event loop each app :func:`serve` serves runs on, by the base URL it answers at.
 _SERVED_ON: dict[str, asyncio.AbstractEventLoop] = {}
+
+
+#: The topic the catalog announces on and lineage's consumer takes, each service's own default.
+LINEAGE_TOPIC = "lineage.events.v1"
+
+
+class JoinedBus(BusDouble):
+    """The one bus a live catalog and a live lineage share: what the catalog publishes on lineage's topic is handed to
+    lineage's own consumer, on lineage's loop, before the publish is acknowledged, and what the bus was told about each
+    delivery is kept in ``settled``. While ``away`` every publish is refused, as by a bus that does not answer, and
+    kept in ``refused``; :meth:`hand_late` hands lineage one of those. A publish made while lineage consumes nothing is
+    taken and handed to nobody."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.away = False
+        self.refused: list[Sent] = []
+        self.settled: list[Settlement] = []
+        self._consumed_on: asyncio.AbstractEventLoop | None = None
+        self._consumer = ""
+
+    async def send(self, topic: str, body: bytes, *, message_id: str, timeout: float) -> None:
+        if self.away:
+            self.refused.append(Sent(topic=topic, message_id=message_id, envelope=json.loads(body)))
+            raise BusUnavailableError("this process is not connected to the bus")
+        await super().send(topic, body, message_id=message_id, timeout=timeout)
+        if self._consumed_on is None or topic != LINEAGE_TOPIC:
+            return
+        handing = asyncio.run_coroutine_threadsafe(self.deliver(self._consumer, self.sent[-1].envelope, subject=topic), self._consumed_on)
+        self.settled.append(await asyncio.wrap_future(handing))
+
+    def hand_late(self, refused: Sent) -> Settlement:
+        """Hand lineage a message this bus refused, as the outbox relay's publish of the event it staged delivers it;
+        answers what the bus is told about the delivery."""
+        assert self._consumed_on is not None, "lineage consumes nothing yet"
+        return asyncio.run_coroutine_threadsafe(self.deliver(self._consumer, refused.envelope, subject=refused.topic), self._consumed_on).result(timeout=60)
+
+    async def consume(self, lane: Lane, handle: Handle, *, park: Park) -> None:
+        self._consumed_on, self._consumer = asyncio.get_running_loop(), lane.consumer
+        try:
+            await super().consume(lane, handle, park=park)
+        finally:
+            self._consumed_on = None
+
+
+def joined_bus(monkeypatch: pytest.MonkeyPatch) -> JoinedBus:
+    """Name the catalog and lineage of this test one :class:`JoinedBus`, the catalog announcing every write on it: call
+    before :func:`live_catalog` and :func:`live_lineage`, whose lifespans then hold it in place of a connection."""
+    import catalog.main
+    import lineage.main
+
+    bus = JoinedBus()
+    for name, value in {"LANCE_LINEAGE_EMIT_ENABLED": "true", "RASK_BUS_URL": "nats://bus.test:4222", "RASK_BUS_USER": "catalog"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(catalog.main, "bus_session", session_holding(bus))
+    monkeypatch.setattr(lineage.main, "bus_session", session_holding(bus))
+    return bus
 
 
 @contextmanager
@@ -75,11 +136,8 @@ def live_catalog(root: Path, monkeypatch: pytest.MonkeyPatch, **env: str) -> Gen
 
 
 @contextmanager
-def live_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, *, port: int = 0) -> Generator[str]:
-    """Lineage's own app and lifespan under a live uvicorn, its store the catalog at ``catalog_url``; yields its base URL.
-
-    ``port`` is for a catalog that must be told where lineage listens before lineage starts (`tests.loopback.free_port`).
-    """
+def live_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch) -> Generator[str]:
+    """Lineage's own app and lifespan under a live uvicorn, its store the catalog at ``catalog_url``; yields its base URL."""
     monkeypatch.setenv("LINEAGE_CATALOG_URL", catalog_url)
     from lineage.core.config import get_settings
 
@@ -87,16 +145,16 @@ def live_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, *, port: int
     from lineage.main import app
 
     try:
-        with serve(app, port) as url:
+        with serve(app) as url:
             yield url
     finally:
         get_settings.cache_clear()
 
 
 @contextmanager
-def serve(app: FastAPI, port: int = 0) -> Generator[str]:
+def serve(app: FastAPI) -> Generator[str]:
     """``app`` under uvicorn on a thread, its lifespan run; yields its base URL once it accepts connections."""
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="on"))
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     deadline = time.monotonic() + 150

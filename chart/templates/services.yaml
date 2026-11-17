@@ -91,7 +91,6 @@ spec:
             {{- end }}
             {{- end }}
             - { name: LANCE_LINEAGE_EMIT_ENABLED, value: "true" }
-            - { name: LANCE_LINEAGE_TRANSPORT, value: "bus" }
             - { name: LANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
             - { name: LANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}

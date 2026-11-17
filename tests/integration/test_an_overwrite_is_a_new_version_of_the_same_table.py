@@ -13,25 +13,22 @@ No table came into being, so neither door announces one on the control lane: the
 the overwrite's announcement, as Lance records it as one more version of the same dataset ([[LH-415]], ADR 0099).
 
 Driven through the real catalog app on a real `dir` namespace, with the lineage event captured on the
-wire: the real `HttpLineageEmitter` builds and posts it to an `httpx.MockTransport`.
+wire: the real `BusEmitter` builds it and publishes it on the bus double.
 """
 
 from __future__ import annotations
 
 import io
-import json
-import threading
-from typing import Any
 
-import httpx
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
-from catalog.core.lineage_emit import HttpLineageEmitter
+from catalog.core.lineage_emit import BusEmitter
 from lakehouse.control_events import CatalogControlEvent
+from tests.bus_double import BusDouble
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -52,24 +49,18 @@ def _rows(*ids: int) -> pa.Table:
 
 
 @pytest.fixture
-def events(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Every lineage event the catalog posts, as the lineage service would receive it."""
-    posted: list[dict[str, Any]] = []
-    lock = threading.Lock()
-
-    def _receive(request: httpx.Request) -> httpx.Response:
-        with lock:
-            posted.append(json.loads(request.content))
-        return httpx.Response(200)
-
-    emitter = HttpLineageEmitter(
-        httpx.AsyncClient(transport=httpx.MockTransport(_receive)),
-        "http://lineage/api/v1/lineage",
+def bus(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> BusDouble:
+    """The bus the catalog publishes on, which keeps every lineage event as the lineage service would receive it."""
+    bus = BusDouble()
+    emitter = BusEmitter(
+        bus,
+        "lineage.events.v1",
         job_namespace="lance-catalog",
         dataset_namespace="lance-namespace://localhost/api/catalog",
+        timeout_seconds=5.0,
     )
     monkeypatch.setattr(real_ns_client.app.state, "lineage_emitter", emitter, raising=False)
-    return posted
+    return bus
 
 
 class _Control:
@@ -118,7 +109,7 @@ def _uuid(client: TestClient) -> str:
 
 @pytest.mark.parametrize("door", list(DOORS))
 def test_a_forced_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
-    real_ns_client: TestClient, protected: str, events: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, door: str
+    real_ns_client: TestClient, protected: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch, door: str
 ) -> None:
     minted = _uuid(real_ns_client)
     control = _Control()
@@ -130,8 +121,8 @@ def test_a_forced_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
     assert _uuid(real_ns_client) == minted, f"{door}: the overwritten table answers another uuid"
     version = int(answer.json()["version"])
     assert sorted(lance.dataset(protected, version=1).to_table()["id"].to_pylist()) == [1, 2, 3], "the table's history did not survive"
-    assert len(events) == 1, f"{door}: expected one lineage event, got {[e.get('job') or e.get('dataset') for e in events]}"
-    event = events[0]
+    assert len(bus.events) == 1, f"{door}: expected one lineage event, got {[e.get('job') or e.get('dataset') for e in bus.events]}"
+    event = bus.events[0]
     assert "run" in event, f"{door}: recorded as a static DatasetEvent, which carries no WROTE edge: {event}"
     assert event["run"]["facets"]["rask_lance"]["operation"] == "overwrite_table", event["run"]["facets"]["rask_lance"]
     facets = event["outputs"][0]["facets"]

@@ -17,8 +17,3 @@ def free_ports(count: int) -> list[int]:
         for probe in probes:
             probe.bind(("127.0.0.1", 0))
         return [int(probe.getsockname()[1]) for probe in probes]
-
-
-def free_port() -> int:
-    """A loopback port nothing listens on now, for a server another must be told to reach before it starts."""
-    return free_ports(1)[0]

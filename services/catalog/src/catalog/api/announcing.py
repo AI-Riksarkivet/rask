@@ -71,7 +71,6 @@ class Announcer:
         lineage: LineageEmitter,
         uuids: UuidReader,
         originator: str | None,
-        authorization: str | None,
     ) -> None:
         self._settings = settings
         self._client = client
@@ -80,7 +79,6 @@ class Announcer:
         self._lineage = lineage
         self._uuids = uuids
         self._originator = originator
-        self._authorization = authorization
 
     def marker(
         self,
@@ -120,7 +118,7 @@ class Announcer:
             InternalError: The store refused the filing; nothing was changed.
         """
         if not announcements:
-            yield Filing(partial(self._send, authorization=self._authorization), {})
+            yield Filing(self._send, {})
             return
         root, so = self._settings.registry_root, self._settings.storage_options()
         try:
@@ -135,9 +133,9 @@ class Announcer:
             raise store_refusal(exc, reading=f"filing what {door} will announce", so="nothing was changed") from exc
         for filing, landed in left:
             for announcement in landed:
-                await self._send(announcement.message, authorization=None)
+                await self._send(announcement.message)
             await self._settle(filing.key)
-        yield Filing(partial(self._send, authorization=self._authorization), reused)
+        yield Filing(self._send, reused)
         # The change and its announcements went out; a filing left standing is sent again by the finish, as the same events.
         await self._settle(key)
 
@@ -176,7 +174,7 @@ class Announcer:
                 if not await self.landed(announcement.evidence):
                     done.unlanded += 1
                     continue
-                await self._send(announcement.message, authorization=None)
+                await self._send(announcement.message)
                 done.sent += 1
             try:
                 await run_in_threadpool(announcement_intents.settle, root, so, filing.key)
@@ -217,9 +215,8 @@ class Announcer:
         except OSError as exc:
             raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
 
-    async def _send(self, message: Message, *, authorization: str | None) -> None:
-        """Emit ``message`` on its lane. ``authorization`` is the bearer of the caller the message is about, which only the
-        http lineage transport reads; one sent for another request's filing goes without."""
+    async def _send(self, message: Message) -> None:
+        """Emit ``message`` on its lane."""
         if isinstance(message, ControlMessage):
             await self._control.emit(message.event)
             return
@@ -229,7 +226,6 @@ class Announcer:
             author=message.author,
             version=None,
             operation=message.operation,
-            authorization=authorization,
             uuids=self._uuids,
             known=message.uuids,
             source_uri=message.source_uri,
@@ -377,7 +373,6 @@ def get_announcer(
         lineage=emitter if emitter is not None else NoopEmitter(),
         uuids=uuids,
         originator=originator_hint(request.headers.get("x-lance-originator")),
-        authorization=request.headers.get("authorization"),
     )
 
 

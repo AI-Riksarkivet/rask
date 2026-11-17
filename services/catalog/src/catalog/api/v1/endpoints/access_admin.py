@@ -457,8 +457,8 @@ async def delete_access_tuple(
 
 
 @router.get("/model")
-async def get_access_model(client: EstateFgaClient, settings: SettingsDep) -> AccessModelResponse:
-    """The authorization model — the checked-in ``model.fga`` DSL text plus the pinned model id.
+async def get_access_model(client: EstateFgaClient) -> AccessModelResponse:
+    """The authorization model: the checked-in ``model.fga`` DSL text plus the id of the model this catalog checks against.
 
     Read-only and estate-admin gated: the model reveals the whole privilege topology (which rungs derive
     which actions), the same platform-tier disclosure as the tuple listing.

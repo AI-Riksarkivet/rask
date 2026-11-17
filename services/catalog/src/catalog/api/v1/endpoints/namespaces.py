@@ -7,9 +7,8 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from functools import partial
-from typing import Annotated
 
-from fastapi import APIRouter, Header, Response
+from fastapi import APIRouter, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -1009,7 +1008,6 @@ async def undrop_namespace(
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     resolver: ResolverDep,
-    authorization: Annotated[str | None, Header()] = None,
     uuid: TrashedUuidQuery = None,
 ) -> CreateNamespaceResponse:
     """Recover a cascade-dropped SUBTREE from the trash (#96) — the plural undrop.
@@ -1112,7 +1110,6 @@ async def undrop_namespace(
                     author=token.subject if token is not None else None,
                     version=None,
                     operation=REGISTER_TABLE,
-                    authorization=authorization,
                     uuids=uuids,
                     source_uri=location,
                 )

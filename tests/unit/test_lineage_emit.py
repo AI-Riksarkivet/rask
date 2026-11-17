@@ -13,7 +13,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-import httpx
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
@@ -27,7 +26,6 @@ from catalog.core.lineage_emit import (
     INSERT,
     MERGE_INSERT,
     BusEmitter,
-    HttpLineageEmitter,
     InputPin,
     InputRef,
     LineageEmitter,
@@ -178,50 +176,21 @@ def test_emitted_event_round_trips_into_lineage_model() -> None:
     assert set(event["run"]["facets"]) == {"rask_author", "rask_lance", "processing_engine"}
 
 
-class _Resp:
-    def raise_for_status(self) -> None:
-        return None
+def _emitting(bus: BusDouble) -> BusEmitter:
+    """The catalog's emitter on ``bus``, which keeps what it publishes."""
+    return BusEmitter(bus, "lineage.events.v1", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE, timeout_seconds=5.0)
 
 
-class _CapturingClient:
-    """Fake httpx client capturing the posted JSON + headers."""
-
-    def __init__(self) -> None:
-        self.posted: Any = None
-        self.headers: Any = None
-
-    async def post(self, *_args: object, **kwargs: object) -> _Resp:
-        self.posted = kwargs["json"]
-        self.headers = kwargs.get("headers")
-        return _Resp()
-
-
-class _BoomClient:
-    async def post(self, *_args: object, **_kwargs: object) -> _Resp:
-        raise httpx.ConnectError("lineage down")
-
-
-def test_http_emitter_posts_the_event() -> None:
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(
-        cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE
-    )
-    asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=3))
-    assert client.posted is not None
-    output = _written(client.posted)
+def test_the_emitter_names_the_table_under_the_catalogs_endpoint_with_its_version_and_author() -> None:
+    bus = BusDouble()
+    asyncio.run(_emitting(bus).emit_create(table_id="a$b", namespace="a", author="alice", version=3))
+    [event] = bus.events
+    output = _written(event)
     # Every dataset is named under the catalog's endpoint, not the table's parent namespace ([[LH-553]]).
     assert output["namespace"] == DEFAULT_DATASET_NAMESPACE
     assert output["name"] == "a$b"
     assert output["facets"]["version"]["datasetVersion"] == "3"  # #20
-    assert _facets(client.posted)["rask_author"]["sub"] == "alice"
-
-
-def test_http_emitter_forwards_authorization() -> None:
-    # So ingest accepts the event when the lineage service has OIDC on (else 401 + silent drop).
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
-    asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1, authorization="Bearer xyz"))
-    assert client.headers == {"Authorization": "Bearer xyz"}
+    assert _facets(event)["rask_author"]["sub"] == "alice"
 
 
 # --------------------------------------------------------------------------- #
@@ -248,7 +217,6 @@ def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> 
             author="alice",
             version=3,
             operation="update",
-            authorization="Bearer x",
             uuids=NO_OBJECT_UUIDS,
         )
     )
@@ -260,7 +228,6 @@ def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> 
     assert w["operation"] == "update"
     assert w["version"] == 3
     assert w["author"] == "alice"
-    assert w["authorization"] == "Bearer x"
 
 
 def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_the_writers_run() -> None:
@@ -311,7 +278,6 @@ def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
             author="alice",
             version=9,
             operation=MERGE_INSERT,
-            authorization=None,
             inputs=[InputPin(segments=["db1", "src"], version=5)],
             uuids=NO_OBJECT_UUIDS,
         )
@@ -322,7 +288,7 @@ def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
 def test_emit_write_event_root_table_has_empty_namespace() -> None:
     # Boundary: a top-level (single-segment) table has no parent namespace → "".
     em = _RecordingEmitter()
-    asyncio.run(emit_write_event(cast(LineageEmitter, em), ["t"], author=None, version=None, operation=INSERT, authorization=None, uuids=NO_OBJECT_UUIDS))
+    asyncio.run(emit_write_event(cast(LineageEmitter, em), ["t"], author=None, version=None, operation=INSERT, uuids=NO_OBJECT_UUIDS))
     assert em.writes[0]["namespace"] == ""
     assert em.writes[0]["version"] is None
 
@@ -346,42 +312,21 @@ def test_build_write_event_drop_is_versionless_and_named_drop_table() -> None:
     assert "job" not in event, "a drop still mints a Job node for an operation nobody performed"
 
 
-def test_http_emitter_swallows_failures() -> None:
-    # Best-effort: a down/erroring lineage service must NOT propagate out of a catalog write.
-    emitter = HttpLineageEmitter(
-        cast(httpx.AsyncClient, _BoomClient()), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE
-    )
-    asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1))  # no raise
-
-
-@pytest.mark.parametrize(
-    ("transport", "missing"),
-    [
-        pytest.param("http", "LANCE_LINEAGE_URL", id="http-with-no-door-to-post-to"),
-        pytest.param("bus", "RASK_BUS_URL", id="the-bus-with-no-bus-named"),
-    ],
-)
-def test_an_emission_the_catalog_is_given_no_way_to_make_is_refused_at_boot(monkeypatch: pytest.MonkeyPatch, transport: str, missing: str) -> None:
-    """Emission switched on over a transport with nowhere to send would run as the no-op, every write unannounced and
-    nothing counted, so the settings are refused when they are read."""
+def test_an_emission_the_catalog_is_named_no_bus_for_is_refused_at_boot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Emission switched on with no bus to publish on would run as the no-op, every write unannounced and nothing
+    counted, so the settings are refused when they are read."""
     monkeypatch.setenv("LANCE_LINEAGE_EMIT_ENABLED", "true")
-    monkeypatch.setenv("LANCE_LINEAGE_TRANSPORT", transport)
-    monkeypatch.delenv(missing, raising=False)
+    monkeypatch.delenv("RASK_BUS_URL", raising=False)
 
-    with pytest.raises(ValueError, match=missing):
+    with pytest.raises(ValueError, match="RASK_BUS_URL"):
         Settings()
 
 
-def test_make_emitter_selects_implementation() -> None:
-    client = cast(httpx.AsyncClient, object())
-
+def test_the_catalog_emits_on_the_bus_or_not_at_all() -> None:
     def _make(**over: object) -> object:
         kw: dict[str, Any] = {
             "enabled": True,
-            "transport": "http",
-            "url": "http://lineage",
-            "client": client,
-            "bus": None,
+            "bus": BusDouble(),
             "topic": "lineage.events.v1",
             "job_namespace": "lance-catalog",
             "dataset_namespace": DEFAULT_DATASET_NAMESPACE,
@@ -389,11 +334,9 @@ def test_make_emitter_selects_implementation() -> None:
         kw.update(over)
         return make_emitter(**kw)
 
-    assert isinstance(_make(), HttpLineageEmitter)
-    assert isinstance(_make(enabled=False), NoopEmitter)  # disabled → no-op
-    assert isinstance(_make(url=None), NoopEmitter)  # http transport unwired → no-op
-    assert isinstance(_make(transport="bus", bus=BusDouble()), BusEmitter)  # the durable transport
-    assert isinstance(_make(transport="bus", bus=None), NoopEmitter)  # no connection to the bus → no-op
+    assert isinstance(_make(), BusEmitter)
+    assert isinstance(_make(enabled=False), NoopEmitter)  # disabled: no-op
+    assert isinstance(_make(bus=None), NoopEmitter)  # no connection to the bus: no-op
 
 
 def test_the_bus_emitter_publishes_the_event_on_its_topic() -> None:
@@ -443,7 +386,7 @@ def test_the_bus_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_h
 ) -> None:
     """A bus outage at publish never breaks the catalog write, and the line it logs says whether the relay
     can still deliver the event ([[LH-573]]). The failure is counted on a series the emitter created at 0 when it was
-    built, every transport's, so the first one is an increase the alert reads."""
+    built, so the first one is an increase the alert reads."""
     reader = InMemoryMetricReader()
     monkeypatch.setattr(
         lineage_emit, "_emit_failed", MeterProvider(metric_readers=[reader]).get_meter("lance.catalog").create_counter("catalog.lineage_emit.failed")
@@ -464,7 +407,7 @@ def test_the_bus_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_h
     asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author=None, version=2, operation=INSERT))
 
     assert [getattr(record, "staged", None) for record in caplog.records if record.getMessage() == "lineage_publish_failed"] == [staged]
-    assert (at_start, _emit_failures(reader)) == ({"derive": 0, "http": 0, "bus": 0}, {"derive": 0, "http": 0, "bus": 1})
+    assert (at_start, _emit_failures(reader)) == ({"derive": 0, "bus": 0}, {"derive": 0, "bus": 1})
 
 
 # --- #19: lineage on every write (not just create) ---
@@ -507,22 +450,19 @@ def test_build_write_event_merge_carries_version() -> None:
     assert "rask_author" not in _facets(event)
 
 
-def test_http_emitter_emit_write_posts_operation_and_version_under_the_commits_run_id() -> None:
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(
-        cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE
-    )
+def test_a_write_is_announced_with_its_operation_and_version_under_the_commits_run_id() -> None:
+    bus = BusDouble()
+    emitter = _emitting(bus)
 
     def announce() -> str:
         uuids = DatasetUuids(table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
         asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=4, operation=MERGE_INSERT, uuids=uuids))
-        assert client.posted is not None
-        return str(client.posted["run"]["runId"])
+        return str(bus.events[-1]["run"]["runId"])
 
     first, second = announce(), announce()
-    assert client.posted is not None
-    assert client.posted["job"]["name"] == "merge_insert.a$b"
-    assert client.posted["outputs"][0]["facets"]["version"]["datasetVersion"] == "4"
+    posted = bus.events[-1]
+    assert posted["job"]["name"] == "merge_insert.a$b"
+    assert posted["outputs"][0]["facets"]["version"]["datasetVersion"] == "4"
     # Two announcements of one commit are one run ([[LH-497]]), under the empty key of a stack with no store.
     assert first == second == commit_run_id(b"", table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01", branch=None, branch_identifier=None, version=4)
 
@@ -538,16 +478,16 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
     It is a TARGETING hint and authorizes nothing: a notifier re-derives every recipient's visibility at
     delivery, so a forged one can at worst tell a person about a run whose outputs they can already see.
     """
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
+    bus = BusDouble()
 
-    await emitter.emit_create(
+    await _emitting(bus).emit_create(
         table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, originator="dex~08a8684b-db88"
     )
 
-    lance = _facets(client.posted)["rask_lance"]
+    [event] = bus.events
+    lance = _facets(event)["rask_lance"]
     assert lance["originator"] == "dex~08a8684b-db88"
-    assert _facets(client.posted)["rask_author"]["sub"] == "service-publisher", "the service remains the author; originator is additive"
+    assert _facets(event)["rask_author"]["sub"] == "service-publisher", "the service remains the author; originator is additive"
 
 
 @pytest.mark.asyncio
@@ -555,9 +495,9 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
 async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
     """An originator is an address, so it must identify a person; a role, a wildcard or a userset is not one, and
     carrying it would address whatever it names (`lakehouse.governed.subjects.is_person_subject`)."""
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
+    bus = BusDouble()
 
-    await emitter.emit_create(table_id="db$t", namespace="db", author="svc", version=1, originator=junk)
+    await _emitting(bus).emit_create(table_id="db$t", namespace="db", author="svc", version=1, originator=junk)
 
-    assert "originator" not in _facets(client.posted)["rask_lance"]
+    [event] = bus.events
+    assert "originator" not in _facets(event)["rask_lance"]

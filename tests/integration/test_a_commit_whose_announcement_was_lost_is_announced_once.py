@@ -1,9 +1,9 @@
 """A committed version whose announcement was lost reaches the feed within one reconcile tick, exactly once ([[LH-497]]).
 
 The catalog announces a write after its commit, and a crash between the commit and the staging of its event loses the
-announcement while the version stays committed. Here the loss is real rather than simulated: the catalog announces over
-HTTP through a gate that refuses every event while it is down, so each write's own announcement fails and nothing is
-staged. One tick of the catalog's reconcile then finds each version from the table's version log and announces it,
+announcement while the version stays committed. Here the loss is real rather than simulated: the catalog announces on
+a bus that refuses every publish while it is away, and keeps no outbox, so each write's own announcement fails and
+nothing is staged. One tick of the catalog's reconcile then finds each version from the table's version log and announces it,
 under the run id derived from the commit, so the write's own announcement, delivered late, lands no second row.
 
 A re-announcement is signed only for the author the catalog recorded authorizing the commit ([[LH-550]]), the caller its
@@ -23,9 +23,10 @@ and an append on a branch, each of which would be counted unauthored or announce
 Driven over real sockets against the real catalog and lineage apps on a real ``dir`` namespace, as
 `test_the_commit_feed_is_a_lance_table_followed_forward.py` drives them: the claim is about what a pipeline following
 ``/events?since=`` reads. The catalog authenticates every caller, alice through the loopback Dex and lineage's catalog
-calls through the loopback service-account issuer, as a deployment's does; lineage itself authenticates nobody, since the
-gate forwards bare events. What stands in is the gate, a recording hop in front of lineage, the paging counters, recorded
-by doubles of their instruments, and two faults, each injected for one step: the store refusing one author record, and
+calls through the loopback service-account issuer, as a deployment's does; lineage takes each event from its own consumer and
+verifies no signature, since this estate names no signer. What stands in is the bus the two share
+(`lineage_app.joined_bus`), which keeps every publish it took or refused, the paging counters, recorded by doubles of
+their instruments, and two faults, each injected for one step: the store refusing one author record, and
 one version's transaction reading as none.
 """
 
@@ -45,16 +46,15 @@ import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from fastapi import Body, FastAPI, Request, Response
 from lance.fragment import write_fragments
 from lance.namespace import DirectoryNamespace
 from lance_namespace import DescribeTableRequest, DescribeTableResponse, InternalError, PermissionDeniedError
 
 from lakehouse import manifest_wire
+from lakehouse.bus_delivery import Outcome
 from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.version_retention import manifest_version
-from tests.integration.lineage_app import catalog_tick, live_catalog, live_lineage, serve
-from tests.loopback import free_port
+from tests.integration.lineage_app import catalog_tick, joined_bus, live_catalog, live_lineage
 from tests.traces import trace_id_of
 
 
@@ -98,32 +98,6 @@ def _commits(rows: list[dict[str, Any]], table: str) -> list[tuple[str, str, str
 #: The caller's own trace, as W3C Trace Context's example writes one.
 _TRACE: Final = "4bf92f3577b34da6a3ce929d0e0e4736"
 _TRACED: Final = {"traceparent": f"00-{_TRACE}-00f067aa0ba902b7-01"}
-
-
-class _Gate:
-    """The hop the catalog announces through: it records every event, refuses it while down, and forwards it once up.
-
-    It forwards under ``bearer``, a caller who may describe every table here: lineage's HTTP door resolves each table an
-    event names under the poster's bearer, where the bus a deployment announces on carries the catalog's signed uuids.
-    """
-
-    def __init__(self, bearer: str) -> None:
-        self.refused: list[dict[str, Any]] = []
-        #: Every event the gate forwarded, with the trace it arrived in (its ``traceparent`` header).
-        self.forwarded: list[tuple[dict[str, Any], str | None]] = []
-        self.lineage: str | None = None
-        self.bearer = bearer
-        self.app = FastAPI()
-        self.app.add_api_route("/api/v1/lineage", self._take, methods=["POST"])
-
-    async def _take(self, request: Request, event: dict[str, Any] = Body()) -> Response:  # noqa: B008 — FastAPI's own body declaration
-        if self.lineage is None:
-            self.refused.append(event)
-            return Response(status_code=503)
-        self.forwarded.append((event, request.headers.get("traceparent")))
-        async with httpx.AsyncClient(base_url=self.lineage, timeout=60) as client:
-            forwarded = await client.post("/api/v1/lineage", json=event, headers={"Authorization": self.bearer})
-        return Response(status_code=forwarded.status_code, content=forwarded.content)
 
 
 def _stamped_behind(location: str, version: int, behind: timedelta) -> None:
@@ -172,248 +146,244 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
     monkeypatch.setattr(commit_reconcile, "_reannounced", counted)
     monkeypatch.setattr(commit_authors, "_unrecorded", unrecorded)
     alice = {"Authorization": f"Bearer {dex_issuer.mint('alice', connector='local', audience='lance-catalog')}"}
-    gate = _Gate(alice["Authorization"])
-    with serve(gate.app) as gate_url:
-        env = {
-            "LANCE_LINEAGE_EMIT_ENABLED": "true",
-            "LANCE_LINEAGE_TRANSPORT": "http",
-            "LANCE_LINEAGE_URL": f"{gate_url}/api/v1/lineage",
-            "LANCE_COMMIT_RECONCILE_GRACE_SECONDS": "0",
-            "RASK_OIDC_ENABLED": "true",
-            "RASK_OIDC_ISSUER": dex_issuer.issuer,
-            "RASK_OIDC_AUDIENCE": "lance-catalog",
-            "RASK_OIDC_ALLOW_INSECURE": "true",
-            "RASK_OIDC_IDP_ID": "dex",
-            "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
-            "RASK_SA_ISSUER": sa_issuer.issuer,
-            "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
-            "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
-            "RASK_SA_AUDIENCE": "rask-catalog",
-        }
-        with (
-            live_catalog(tmp_path / "catalog", monkeypatch, **env) as catalog_url,
-            httpx.Client(base_url=catalog_url, headers=alice, timeout=60) as catalog,
-        ):
+    bus = joined_bus(monkeypatch)
+    bus.away = True
+    env = {
+        "LANCE_COMMIT_RECONCILE_GRACE_SECONDS": "0",
+        "RASK_OIDC_ENABLED": "true",
+        "RASK_OIDC_ISSUER": dex_issuer.issuer,
+        "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_IDP_ID": "dex",
+        "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
+        "RASK_SA_ISSUER": sa_issuer.issuer,
+        "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
+        "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
+        "RASK_SA_AUDIENCE": "rask-catalog",
+    }
+    with (
+        live_catalog(tmp_path / "catalog", monkeypatch, **env) as catalog_url,
+        httpx.Client(base_url=catalog_url, headers=alice, timeout=60) as catalog,
+    ):
 
-            def reconcile() -> commit_reconcile.CommitReconcileTick:
-                return catalog_tick(catalog_url, commit_reconcile.tick)
+        def reconcile() -> commit_reconcile.CommitReconcileTick:
+            return catalog_tick(catalog_url, commit_reconcile.tick)
 
-            assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-            # The gate is down, so each write's own announcement is lost after its commit. Each write is made in the
-            # caller's own trace, which its commit records as `rask.traceparent` (ADR 0209).
-            assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW | _TRACED).status_code == 200
-            assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(3, 5), headers=_ARROW | _TRACED).status_code == 200
-            # A delete commits detached and is finalized by the catalog, where the create and the insert commit through Lance.
-            assert catalog.post("/v1/table/lance_catalog$db$t/delete", json={"predicate": "id = 0"}, headers=_TRACED).status_code == 200
-            # A table only declared holds no version: nothing to announce, and nothing the tick cannot read.
-            assert catalog.post("/v1/table/lance_catalog$db$declared/declare", json={}).status_code == 200
-            originals = [event for event in gate.refused if "run" in event and event["outputs"][0]["name"] == "lance_catalog$db$t"]
-            assert len(originals) == 3, gate.refused
-            # The caller the catalog authenticated, as each write's own announcement names it.
-            author = originals[0]["run"]["facets"]["rask_author"]["sub"]
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        # The bus is away, so each write's own announcement is lost after its commit. Each write is made in the
+        # caller's own trace, which its commit records as `rask.traceparent` (ADR 0209).
+        assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW | _TRACED).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(3, 5), headers=_ARROW | _TRACED).status_code == 200
+        # A delete commits detached and is finalized by the catalog, where the create and the insert commit through Lance.
+        assert catalog.post("/v1/table/lance_catalog$db$t/delete", json={"predicate": "id = 0"}, headers=_TRACED).status_code == 200
+        # A table only declared holds no version: nothing to announce, and nothing the tick cannot read.
+        assert catalog.post("/v1/table/lance_catalog$db$declared/declare", json={}).status_code == 200
+        originals = [refused for refused in bus.refused if "run" in refused.event and refused.event["outputs"][0]["name"] == "lance_catalog$db$t"]
+        assert len(originals) == 3, bus.refused
+        # The caller the catalog authenticated, as each write's own announcement names it.
+        author = originals[0].event["run"]["facets"]["rask_author"]["sub"]
 
-            # Lineage reaches the catalog under its own service account, and itself authenticates nobody.
-            lineage_token = tmp_path / "lineage-catalog-token"
-            lineage_token.write_text(sa_issuer.mint("rask-sa-lineage", audience="rask-catalog"))
-            monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(lineage_token))
-            monkeypatch.setenv("RASK_OIDC_ENABLED", "false")
-            with live_lineage(catalog_url, monkeypatch, port=free_port()) as lineage_url, httpx.Client(base_url=lineage_url, timeout=60) as lineage:
-                gate.lineage = lineage_url
-                assert _commits(_follow(lineage), "lance_catalog$db$t") == [], "the writes' own announcements reached the feed, so none was lost"
+        # Lineage reaches the catalog under its own service account, and itself authenticates nobody.
+        lineage_token = tmp_path / "lineage-catalog-token"
+        lineage_token.write_text(sa_issuer.mint("rask-sa-lineage", audience="rask-catalog"))
+        monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(lineage_token))
+        monkeypatch.setenv("RASK_OIDC_ENABLED", "false")
+        with live_lineage(catalog_url, monkeypatch) as lineage_url, httpx.Client(base_url=lineage_url, timeout=60) as lineage:
+            bus.away = False
+            assert _commits(_follow(lineage), "lance_catalog$db$t") == [], "the writes' own announcements reached the feed, so none was lost"
 
-                # The feed, then the table, described while the store does not answer: the tick announces nothing, counts the
-                # failure and logs its cause, and never reads an unanswered describe as a feed or a table that is not there.
-                # A table its warehouse's deactivation quarantines (the resolver's PermissionDenied) is no live table: the
-                # tick neither announces it nor counts it as a read it could not make.
-                real_describe = DirectoryNamespace.describe_table
+            # The feed, then the table, described while the store does not answer: the tick announces nothing, counts the
+            # failure and logs its cause, and never reads an unanswered describe as a feed or a table that is not there.
+            # A table its warehouse's deactivation quarantines (the resolver's PermissionDenied) is no live table: the
+            # tick neither announces it nor counts it as a read it could not make.
+            real_describe = DirectoryNamespace.describe_table
 
-                def failing(described: list[str], error: Exception) -> Callable[[DirectoryNamespace, DescribeTableRequest], DescribeTableResponse]:
-                    def describe(ns: DirectoryNamespace, request: DescribeTableRequest) -> DescribeTableResponse:
-                        if list(request.id or []) == described:
-                            raise error
-                        return real_describe(ns, request)
+            def failing(described: list[str], error: Exception) -> Callable[[DirectoryNamespace, DescribeTableRequest], DescribeTableResponse]:
+                def describe(ns: DirectoryNamespace, request: DescribeTableRequest) -> DescribeTableResponse:
+                    if list(request.id or []) == described:
+                        raise error
+                    return real_describe(ns, request)
 
-                    return describe
+                return describe
 
-                outage = InternalError('IO { source: Generic { store: "S3", source: RetryError { inner: Status { status: 503 } } } }')
-                unannounced: list[commit_reconcile.CommitReconcileTick] = []
-                for described, error, events in (
-                    (["lance_catalog", "provenance", "events"], outage, ["commit_reconcile_feed_unreadable"]),
-                    (["lance_catalog", "db", "t"], outage, ["commit_reconcile_table_unreadable"]),
-                    (["lance_catalog", "db", "t"], PermissionDeniedError("warehouse 'wh' is deactivated"), []),
-                ):
-                    monkeypatch.setattr(DirectoryNamespace, "describe_table", failing(described, error))
-                    with caplog.at_level(logging.ERROR, logger="catalog.api.commit_reconcile"):
-                        unannounced.append(reconcile())
-                    monkeypatch.setattr(DirectoryNamespace, "describe_table", real_describe)
-                    logged = [
-                        (record.getMessage(), "503" in str(getattr(record, "error", "")))
-                        for record in caplog.records
-                        if record.name == "catalog.api.commit_reconcile"
-                    ]
-                    assert logged == [(event, True) for event in events], logged
-                    caplog.clear()
-                assert [(tick.skipped, tick.reannounced, tick.unreadable) for tick in unannounced] == [(True, 0, 1), (False, 0, 1), (False, 0, 0)], unannounced
-
-                # A retained version the store fails to open once: the tick keeps the ref's mark, and skips nothing for it.
-                real_checkout = lance.LanceDataset.checkout_version
-
-                def unreadable_once(dataset: lance.LanceDataset, version: int | str | tuple[str | None, int | None]) -> lance.LanceDataset:
-                    if version == 1 and str(dataset.uri).endswith(location_of_t):
-                        monkeypatch.setattr(lance.LanceDataset, "checkout_version", real_checkout)
-                        raise OSError("the store did not answer")
-                    return real_checkout(dataset, version)
-
-                location_of_t = str(catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]).rstrip("/").rsplit("/", 1)[-1]
-                monkeypatch.setattr(lance.LanceDataset, "checkout_version", unreadable_once)
-                blocked = reconcile()
-                assert (blocked.reannounced, blocked.unreadable) == (0, 1), blocked
-
-                tick = reconcile()
-                assert tick.reannounced == 3, tick
-                # Each re-announcement is made in the trace of the request whose commit it announces, not the tick's own.
-                reannounced = [traceparent for event, traceparent in gate.forwarded if "run" in event and event["outputs"][0]["name"] == "lance_catalog$db$t"]
-                assert [trace_id_of(traceparent) if traceparent else None for traceparent in reannounced] == [_TRACE] * 3
-                assert _commits(_follow(lineage), "lance_catalog$db$t") == [
-                    ("lance_catalog$db$t", "create_table", "1", author),
-                    ("lance_catalog$db$t", "insert", "2", author),
-                    ("lance_catalog$db$t", "delete", "3", author),
+            outage = InternalError('IO { source: Generic { store: "S3", source: RetryError { inner: Status { status: 503 } } } }')
+            unannounced: list[commit_reconcile.CommitReconcileTick] = []
+            for described, error, events in (
+                (["lance_catalog", "provenance", "events"], outage, ["commit_reconcile_feed_unreadable"]),
+                (["lance_catalog", "db", "t"], outage, ["commit_reconcile_table_unreadable"]),
+                (["lance_catalog", "db", "t"], PermissionDeniedError("warehouse 'wh' is deactivated"), []),
+            ):
+                monkeypatch.setattr(DirectoryNamespace, "describe_table", failing(described, error))
+                with caplog.at_level(logging.ERROR, logger="catalog.api.commit_reconcile"):
+                    unannounced.append(reconcile())
+                monkeypatch.setattr(DirectoryNamespace, "describe_table", real_describe)
+                logged = [
+                    (record.getMessage(), "503" in str(getattr(record, "error", "")))
+                    for record in caplog.records
+                    if record.name == "catalog.api.commit_reconcile"
                 ]
+                assert logged == [(event, True) for event in events], logged
+                caplog.clear()
+            assert [(tick.skipped, tick.reannounced, tick.unreadable) for tick in unannounced] == [(True, 0, 1), (False, 0, 1), (False, 0, 0)], unannounced
 
-                # Each write's own announcement arriving late, as the outbox relay delivers one it had staged; the tick that
-                # then finds them on the feed is refused one delete of a version's author record.
-                for original in originals:
-                    late = lineage.post("/api/v1/lineage", json=original, headers=alice)
-                    assert late.status_code == 201, late.text
-                real_forget = commit_records.forget_author
+            # A retained version the store fails to open once: the tick keeps the ref's mark, and skips nothing for it.
+            real_checkout = lance.LanceDataset.checkout_version
 
-                def refused_for_version_2(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the delete's own arguments
-                    if kwargs["version"] == 2:
-                        raise OSError("the store refused the delete")
-                    real_forget(*args, **kwargs)
+            def unreadable_once(dataset: lance.LanceDataset, version: int | str | tuple[str | None, int | None]) -> lance.LanceDataset:
+                if version == 1 and str(dataset.uri).endswith(location_of_t):
+                    monkeypatch.setattr(lance.LanceDataset, "checkout_version", real_checkout)
+                    raise OSError("the store did not answer")
+                return real_checkout(dataset, version)
 
-                monkeypatch.setattr(commit_records, "forget_author", refused_for_version_2)
-                again = reconcile()
-                monkeypatch.setattr(commit_records, "forget_author", real_forget)
-                assert (again.reannounced, again.unreadable) == (0, 0), again
-                # The record the store kept holds main's mark below its version, so the next tick reads it and forgets it.
-                settings = get_settings()
-                control, control_so = settings.registry_root, settings.storage_options()
-                uuid_of_t = catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"]["rask.uuid"]
-                second = lance.dataset(
-                    catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]
-                ).read_transaction(2)
-                assert second is not None
+            location_of_t = str(catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]).rstrip("/").rsplit("/", 1)[-1]
+            monkeypatch.setattr(lance.LanceDataset, "checkout_version", unreadable_once)
+            blocked = reconcile()
+            assert (blocked.reannounced, blocked.unreadable) == (0, 1), blocked
 
-                def recorded_second() -> str | None:
-                    record = commit_records.recorded(control, control_so, uuid_of_t, transaction_uuid=second.uuid, version=2, ref="")
-                    return record.author if record is not None else None
+            tick = reconcile()
+            assert tick.reannounced == 3, tick
+            # Each re-announcement is made in the trace of the request whose commit it announces, not the tick's own.
+            reannounced = [
+                sent.envelope.get("traceparent") for sent in bus.sent if "run" in sent.event and sent.event["outputs"][0]["name"] == "lance_catalog$db$t"
+            ]
+            assert [trace_id_of(traceparent) if traceparent else None for traceparent in reannounced] == [_TRACE] * 3
+            assert _commits(_follow(lineage), "lance_catalog$db$t") == [
+                ("lance_catalog$db$t", "create_table", "1", author),
+                ("lance_catalog$db$t", "insert", "2", author),
+                ("lance_catalog$db$t", "delete", "3", author),
+            ]
 
-                assert (commit_records.read_marks(control, control_so, uuid_of_t).refs, recorded_second()) == ({"": 1}, author)
-                assert _commits(_follow(lineage), "lance_catalog$db$t") == [
-                    ("lance_catalog$db$t", "create_table", "1", author),
-                    ("lance_catalog$db$t", "insert", "2", author),
-                    ("lance_catalog$db$t", "delete", "3", author),
-                ]
+            # Each write's own announcement arriving late, as the outbox relay delivers one it had staged; the tick that
+            # then finds them on the feed is refused one delete of a version's author record.
+            for original in originals:
+                assert bus.hand_late(original).outcome is Outcome.TAKEN
+            real_forget = commit_records.forget_author
 
-                # A write through a door whose author record the store refuses, its announcement lost too: the write lands,
-                # and the miss is logged at ERROR and counted.
-                real_record = commit_records.record_author
+            def refused_for_version_2(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the delete's own arguments
+                if kwargs["version"] == 2:
+                    raise OSError("the store refused the delete")
+                real_forget(*args, **kwargs)
 
-                def refused(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the record's own arguments
-                    raise OSError("the store refused the write")
+            monkeypatch.setattr(commit_records, "forget_author", refused_for_version_2)
+            again = reconcile()
+            monkeypatch.setattr(commit_records, "forget_author", real_forget)
+            assert (again.reannounced, again.unreadable) == (0, 0), again
+            # The record the store kept holds main's mark below its version, so the next tick reads it and forgets it.
+            settings = get_settings()
+            control, control_so = settings.registry_root, settings.storage_options()
+            uuid_of_t = catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"]["rask.uuid"]
+            second = lance.dataset(catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]).read_transaction(
+                2
+            )
+            assert second is not None
 
-                gate.lineage = None
-                monkeypatch.setattr(commit_records, "record_author", refused)
-                with caplog.at_level(logging.ERROR, logger="catalog.services.commit_authors"):
-                    assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(5, 6), headers=_ARROW).status_code == 200
-                monkeypatch.setattr(commit_records, "record_author", real_record)
-                gate.lineage = lineage_url
-                missed = [(record.levelno, record.getMessage()) for record in caplog.records if record.name == "catalog.services.commit_authors"]
-                assert missed == [(logging.ERROR, "commit_author_unrecorded")]
+            def recorded_second() -> str | None:
+                record = commit_records.recorded(control, control_so, uuid_of_t, transaction_uuid=second.uuid, version=2, ref="")
+                return record.author if record is not None else None
 
-                # A write through a door, announced, then two versions committed straight to the store, past every door: one
-                # carries the write's transaction uuid and stamps another estate's person, and the write's record names the
-                # version it landed at; the other's transaction cannot be read, which no catalog commit leaves.
-                assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(6, 7), headers=_ARROW).status_code == 200
-                location = catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]
-                written = lance.dataset(location)
-                reused = written.read_transaction(written.version)
-                assert reused is not None
-                planned = write_fragments(pa.table({"id": pa.array([7], pa.int64())}), location, return_transaction=True, data_storage_version="2.2")
-                stamped = replace(planned, read_version=written.version, uuid=reused.uuid, transaction_properties={"rask.author": "dex~mallory"})
-                forged = lance.LanceDataset.commit(location, stamped)
-                carried = forged.read_transaction(forged.version)
-                assert carried is not None and carried.uuid == reused.uuid
-                unreadable = lance.write_dataset(pa.table({"id": pa.array([8], pa.int64())}), location, mode="append").version
-                real_read = lance.LanceDataset.read_transaction
+            assert (commit_records.read_marks(control, control_so, uuid_of_t).refs, recorded_second()) == ({"": 1}, author)
+            assert _commits(_follow(lineage), "lance_catalog$db$t") == [
+                ("lance_catalog$db$t", "create_table", "1", author),
+                ("lance_catalog$db$t", "insert", "2", author),
+                ("lance_catalog$db$t", "delete", "3", author),
+            ]
 
-                def unreadable_transaction(dataset: lance.LanceDataset, version: int) -> Any:  # noqa: ANN401 — a lance Transaction
-                    if version == unreadable and str(dataset.uri).rstrip("/").endswith(location_of_t):
-                        return None
-                    return real_read(dataset, version)
+            # A write through a door whose author record the store refuses, its announcement lost too: the write lands,
+            # and the miss is logged at ERROR and counted.
+            real_record = commit_records.record_author
 
-                monkeypatch.setattr(lance.LanceDataset, "read_transaction", unreadable_transaction)
-                past_every_door = reconcile()
-                monkeypatch.setattr(lance.LanceDataset, "read_transaction", real_read)
-                assert (past_every_door.reannounced, past_every_door.unauthored) == (0, 3), past_every_door
-                assert recorded_second() is None
-                assert _commits(_follow(lineage), "lance_catalog$db$t") == [
-                    ("lance_catalog$db$t", "create_table", "1", author),
-                    ("lance_catalog$db$t", "insert", "2", author),
-                    ("lance_catalog$db$t", "delete", "3", author),
-                    ("lance_catalog$db$t", "insert", "5", author),
-                ]
+            def refused(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the record's own arguments
+                raise OSError("the store refused the write")
 
-                # Config commits ([[LH-575]]): a floor raise through its door, its author recorded and announced on no feed;
-                # a floor stamp set straight at the store, past every door, counted; and a disarm, the commit every door
-                # makes before its own, neither.
-                raised = catalog.post("/management/v1/table/lance_catalog$db$t/maintenance/floor", json={})
-                assert (raised.status_code, raised.json()["version"] is not None) == (200, True), raised.text
-                lance.dataset(location).update_config({FLOOR_KEY: "1"})
-                lance.dataset(location).delete_config_keys(["lance.auto_cleanup.interval"])
-                configs = reconcile()
-                assert (configs.reannounced, configs.unauthored) == (0, 1), configs
-                assert len(_commits(_follow(lineage), "lance_catalog$db$t")) == 4
+            bus.away = True
+            monkeypatch.setattr(commit_records, "record_author", refused)
+            with caplog.at_level(logging.ERROR, logger="catalog.services.commit_authors"):
+                assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(5, 6), headers=_ARROW).status_code == 200
+            monkeypatch.setattr(commit_records, "record_author", real_record)
+            bus.away = False
+            missed = [(record.levelno, record.getMessage()) for record in caplog.records if record.name == "catalog.services.commit_authors"]
+            assert missed == [(logging.ERROR, "commit_author_unrecorded")]
 
-                # A dataset written outside the catalog, registered, then written through the catalog while the gate is
-                # down again: only that last write's announcement is the catalog's, and lost.
-                gate.lineage = None
-                outside = str(tmp_path / "catalog" / "outside" / "registered")
-                stock = lance.write_dataset(pa.table({"id": pa.array([0, 1], pa.int64())}), outside, data_storage_version="2.2", enable_stable_row_ids=True)
-                stock = lance.write_dataset(
-                    pa.table({"id": pa.array([2], pa.int64())}), stock, mode="append", transaction_properties={"rask.author": "dex~mallory"}
-                )
-                stock.create_branch("work")
-                lance.dataset(outside).checkout_version(("work", None)).insert(pa.table({"id": pa.array([3], pa.int64())}))
-                registered = catalog.post("/v1/table/lance_catalog$db$registered/register", json={"location": "outside/registered"})
-                assert registered.status_code == 200, registered.text
-                assert catalog.post("/v1/table/lance_catalog$db$registered/insert", content=_rows(4, 5), headers=_ARROW).status_code == 200
-                gate.lineage = lineage_url
+            # A write through a door, announced, then two versions committed straight to the store, past every door: one
+            # carries the write's transaction uuid and stamps another estate's person, and the write's record names the
+            # version it landed at; the other's transaction cannot be read, which no catalog commit leaves.
+            assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(6, 7), headers=_ARROW).status_code == 200
+            location = catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]
+            written = lance.dataset(location)
+            reused = written.read_transaction(written.version)
+            assert reused is not None
+            planned = write_fragments(pa.table({"id": pa.array([7], pa.int64())}), location, return_transaction=True, data_storage_version="2.2")
+            stamped = replace(planned, read_version=written.version, uuid=reused.uuid, transaction_properties={"rask.author": "dex~mallory"})
+            forged = lance.LanceDataset.commit(location, stamped)
+            carried = forged.read_transaction(forged.version)
+            assert carried is not None and carried.uuid == reused.uuid
+            unreadable = lance.write_dataset(pa.table({"id": pa.array([8], pa.int64())}), location, mode="append").version
+            real_read = lance.LanceDataset.read_transaction
 
-                after_register = reconcile()
-                assert (after_register.reannounced, after_register.unauthored, after_register.unreadable) == (1, 0, 0), after_register
-                assert _commits(_follow(lineage), "lance_catalog$db$registered") == [("lance_catalog$db$registered", "insert", "3", author)]
-                # Lineage recorded every event above in the provenance namespace through the catalog's doors, and none of
-                # those writes is announced, so none keeps an author record.
-                uuid_of_registered = catalog.post("/v1/table/lance_catalog$db$registered/describe", json={}).json()["properties"]["rask.uuid"]
-                assert {path.name for path in (Path(control) / commit_records.AUTHORS_PREFIX).iterdir()} == {uuid_of_t, uuid_of_registered}
+            def unreadable_transaction(dataset: lance.LanceDataset, version: int) -> Any:  # noqa: ANN401 — a lance Transaction
+                if version == unreadable and str(dataset.uri).rstrip("/").endswith(location_of_t):
+                    return None
+                return real_read(dataset, version)
 
-                # A write whose writer's clock runs two days behind, past the horizon, its announcement lost: a version's age
-                # is the store's stamp on its manifest, never the time its writer wrote into it, so it is looked for and
-                # announced rather than taken as one the feed has long since dropped.
-                assert catalog.post("/v1/table/lance_catalog$db$late/create", content=_rows(0, 1), headers=_ARROW).status_code == 200
-                gate.lineage = None
-                assert catalog.post("/v1/table/lance_catalog$db$late/insert", content=_rows(1, 2), headers=_ARROW).status_code == 200
-                gate.lineage = lineage_url
-                _stamped_behind(
-                    catalog.post("/v1/table/lance_catalog$db$late/describe", json={"vend_credentials": False}).json()["location"], 2, timedelta(days=2)
-                )
-                assert reconcile().reannounced == 1
-                assert _commits(_follow(lineage), "lance_catalog$db$late") == [
-                    ("lance_catalog$db$late", "create_table", "1", author),
-                    ("lance_catalog$db$late", "insert", "2", author),
-                ]
+            monkeypatch.setattr(lance.LanceDataset, "read_transaction", unreadable_transaction)
+            past_every_door = reconcile()
+            monkeypatch.setattr(lance.LanceDataset, "read_transaction", real_read)
+            assert (past_every_door.reannounced, past_every_door.unauthored) == (0, 3), past_every_door
+            assert recorded_second() is None
+            assert _commits(_follow(lineage), "lance_catalog$db$t") == [
+                ("lance_catalog$db$t", "create_table", "1", author),
+                ("lance_catalog$db$t", "insert", "2", author),
+                ("lance_catalog$db$t", "delete", "3", author),
+                ("lance_catalog$db$t", "insert", "5", author),
+            ]
+
+            # Config commits ([[LH-575]]): a floor raise through its door, its author recorded and announced on no feed;
+            # a floor stamp set straight at the store, past every door, counted; and a disarm, the commit every door
+            # makes before its own, neither.
+            raised = catalog.post("/management/v1/table/lance_catalog$db$t/maintenance/floor", json={})
+            assert (raised.status_code, raised.json()["version"] is not None) == (200, True), raised.text
+            lance.dataset(location).update_config({FLOOR_KEY: "1"})
+            lance.dataset(location).delete_config_keys(["lance.auto_cleanup.interval"])
+            configs = reconcile()
+            assert (configs.reannounced, configs.unauthored) == (0, 1), configs
+            assert len(_commits(_follow(lineage), "lance_catalog$db$t")) == 4
+
+            # A dataset written outside the catalog, registered, then written through the catalog while the bus is
+            # away again: only that last write's announcement is the catalog's, and lost.
+            bus.away = True
+            outside = str(tmp_path / "catalog" / "outside" / "registered")
+            stock = lance.write_dataset(pa.table({"id": pa.array([0, 1], pa.int64())}), outside, data_storage_version="2.2", enable_stable_row_ids=True)
+            stock = lance.write_dataset(
+                pa.table({"id": pa.array([2], pa.int64())}), stock, mode="append", transaction_properties={"rask.author": "dex~mallory"}
+            )
+            stock.create_branch("work")
+            lance.dataset(outside).checkout_version(("work", None)).insert(pa.table({"id": pa.array([3], pa.int64())}))
+            registered = catalog.post("/v1/table/lance_catalog$db$registered/register", json={"location": "outside/registered"})
+            assert registered.status_code == 200, registered.text
+            assert catalog.post("/v1/table/lance_catalog$db$registered/insert", content=_rows(4, 5), headers=_ARROW).status_code == 200
+            bus.away = False
+
+            after_register = reconcile()
+            assert (after_register.reannounced, after_register.unauthored, after_register.unreadable) == (1, 0, 0), after_register
+            assert _commits(_follow(lineage), "lance_catalog$db$registered") == [("lance_catalog$db$registered", "insert", "3", author)]
+            # Lineage recorded every event above in the provenance namespace through the catalog's doors, and none of
+            # those writes is announced, so none keeps an author record.
+            uuid_of_registered = catalog.post("/v1/table/lance_catalog$db$registered/describe", json={}).json()["properties"]["rask.uuid"]
+            assert {path.name for path in (Path(control) / commit_records.AUTHORS_PREFIX).iterdir()} == {uuid_of_t, uuid_of_registered}
+
+            # A write whose writer's clock runs two days behind, past the horizon, its announcement lost: a version's age
+            # is the store's stamp on its manifest, never the time its writer wrote into it, so it is looked for and
+            # announced rather than taken as one the feed has long since dropped.
+            assert catalog.post("/v1/table/lance_catalog$db$late/create", content=_rows(0, 1), headers=_ARROW).status_code == 200
+            bus.away = True
+            assert catalog.post("/v1/table/lance_catalog$db$late/insert", content=_rows(1, 2), headers=_ARROW).status_code == 200
+            bus.away = False
+            _stamped_behind(catalog.post("/v1/table/lance_catalog$db$late/describe", json={"vend_credentials": False}).json()["location"], 2, timedelta(days=2))
+            assert reconcile().reannounced == 1
+            assert _commits(_follow(lineage), "lance_catalog$db$late") == [
+                ("lance_catalog$db$late", "create_table", "1", author),
+                ("lance_catalog$db$late", "insert", "2", author),
+            ]
 
     assert [amount for amount, _ in counted.added] == [1, 1, 1, 1, 1]
     # The create, both inserts the catalog recorded, the refused one, the registered table's insert, and the late table's

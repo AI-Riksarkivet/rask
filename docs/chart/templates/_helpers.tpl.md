@@ -926,12 +926,10 @@ converger has anything of it to grant or keep.
 
 ## `{{- define "lance.governedFgaPins" -}}`
 
-The operator-pinned FGA store/model ids — optional, and emitted at DIFFERENT positions by
-different callers relative to their own service-specific vars, which is why they are not folded
-into the block above: doing so would reorder a caller's env list, a change this refactor has no
-business making. The store id is the SAME auth.fgaStoreId the model hook publishes into,
+The operator-pinned FGA store id, optional. It is the SAME auth.fgaStoreId the model hook publishes into,
 so a pinned store can never diverge from the store the services check against. Unset =
-provision-by-name at boot (`lance-catalog`).
+provision-by-name at boot (`lance-catalog`). No model id is pinned: each service checks against the model its
+image carries (ADR 0082).
 
 ## `{{- define "lance.bootstrapJobDeadline" -}}`
 

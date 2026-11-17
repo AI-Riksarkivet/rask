@@ -17,7 +17,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from lance_namespace import (
@@ -137,7 +137,6 @@ async def add_columns(
     client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableAddColumnsResponse:
     """Add SQL-expression-computed columns to the table — wraps ``alter_table_add_columns``; emits an
     ADD_COLUMNS event carrying the NEW per-version schema, so the feed records the add at its version."""
@@ -153,7 +152,6 @@ async def add_columns(
         so=so,
         token=token,
         operation=ADD_COLUMNS,
-        authorization=authorization,
         uuids=uuids,
         pin_version=response.version,
         branch=body.branch,
@@ -171,7 +169,6 @@ async def alter_columns(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableAlterColumnsResponse:
     """Rename, re-type, or change nullability of existing columns — wraps ``alter_table_alter_columns``;
     emits an ALTER_COLUMNS event with the post-evolution schema, so renames and re-types reach the feed."""
@@ -185,7 +182,6 @@ async def alter_columns(
         so=so,
         token=token,
         operation=ALTER_COLUMNS,
-        authorization=authorization,
         uuids=uuids,
         pin_version=response.version,
         branch=body.branch,
@@ -203,7 +199,6 @@ async def drop_columns(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableDropColumnsResponse:
     """Drop the named columns from the table — wraps ``alter_table_drop_columns``; emits a DROP_COLUMNS
     event with the reduced schema, so the feed records the version without the dropped columns."""
@@ -217,7 +212,6 @@ async def drop_columns(
         so=so,
         token=token,
         operation=DROP_COLUMNS,
-        authorization=authorization,
         uuids=uuids,
         pin_version=response.version,
         branch=body.branch,
@@ -255,7 +249,6 @@ async def update_field_metadata(
     client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> UpdateFieldMetadataResponse:
     """Merge or replace per-field metadata for the given field paths — wraps ``update_field_metadata``;
     emits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still
@@ -274,7 +267,6 @@ async def update_field_metadata(
         so=so,
         token=token,
         operation=UPDATE_FIELD_METADATA,
-        authorization=authorization,
         uuids=uuids,
         pin_version=response.version,
         branch=body.branch,
@@ -292,7 +284,6 @@ async def update_table_schema_metadata(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
     branch_named: Annotated[str | None, Query(alias="branch", description="The ref to write when the body is the bare metadata map. Omit for main.")] = None,
 ) -> JSONResponse:
     """Upsert the table's schema-level metadata map — a ``null`` value DELETES that key; emits an
@@ -362,7 +353,6 @@ async def update_table_schema_metadata(
         so=so,
         token=token,
         operation=UPDATE_SCHEMA_METADATA,
-        authorization=authorization,
         uuids=uuids,
         pin_version=committed,
         branch=branch,

@@ -16,17 +16,17 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import boto3
-import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings as catalog_settings
-from catalog.core.lineage_emit import HttpLineageEmitter
+from catalog.core.lineage_emit import BusEmitter
 from lakehouse.storage import S3Client
 from lakehouse.supervision import Supervisor
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.runtime import standing
+from tests.bus_double import BusDouble
 from tests.integration.openfga_grants import TupleStore, act_as
 
 
@@ -89,11 +89,8 @@ def catalog_and_maintenance(
 
     maintenance_app = FastAPI(lifespan=_standing)
     store = TupleStore()
-    lineage = HttpLineageEmitter(
-        httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200))),
-        "http://lineage/api/v1/lineage",
-        job_namespace="lance-catalog",
-        dataset_namespace="lance-namespace://localhost/api/catalog",
+    lineage = BusEmitter(
+        BusDouble(), "lineage.events.v1", job_namespace="lance-catalog", dataset_namespace="lance-namespace://localhost/api/catalog", timeout_seconds=5.0
     )
     try:
         with TestClient(catalog_app, headers={"Authorization": "Bearer t"}) as catalog, TestClient(maintenance_app) as maintenance:

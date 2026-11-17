@@ -153,7 +153,6 @@ def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
         "LANCE_S3_ASSUME_ROLE_ARN": two_stores.role_on(two_stores.estate_bucket),
         "RASK_SIGNING_IDENTITY": CATALOG,
         "LANCE_LINEAGE_EMIT_ENABLED": "true",
-        "LANCE_LINEAGE_TRANSPORT": "bus",
         "LANCE_CONTROL_EMIT_ENABLED": "true",
         "RASK_BUS_URL": "nats://bus.test:4222",
         "RASK_BUS_USER": "catalog",

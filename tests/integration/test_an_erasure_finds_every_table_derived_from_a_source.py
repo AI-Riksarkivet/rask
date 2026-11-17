@@ -2,8 +2,8 @@
 
 Lineage keeps no graph: what derives from a table is answered by walking the edge list its recorded runs left,
 a Lance table the catalog keeps. Driven end to end: a pipeline's bronze, silver and gold writes name their runs and
-inputs on the catalog's own doors (`x-rask-run-id`, `x-rask-inputs`), the catalog announces each commit over HTTP to
-lineage's app served beside it, and lineage records the edges back into that catalog.
+inputs on the catalog's own doors (`x-rask-run-id`, `x-rask-inputs`), the catalog announces each commit on the bus it shares with
+lineage's app served beside it (`lineage_app.joined_bus`), and lineage records the edges back into that catalog.
 
 An external input never resolves onto a governed table's edges ([[LIN-3]]): a producer naming a source outside the
 estate by a governed table's name records an edge from that source, under its namespace-qualified identity, so a
@@ -40,8 +40,7 @@ import pyarrow.ipc as ipc
 import pytest
 
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
-from tests.integration.lineage_app import SUBJECT_HEADER, catalog_tick, governed_lineage, live_catalog, live_lineage, run_event
-from tests.loopback import free_port
+from tests.integration.lineage_app import SUBJECT_HEADER, catalog_tick, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -86,11 +85,10 @@ def _stamped(event: dict[str, object], uuid_of: dict[str, str]) -> dict[str, obj
 
 
 def test_a_walk_from_a_source_reaches_every_table_built_from_it_and_nothing_an_outside_input_fed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    port = free_port()
-    announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
+    joined_bus(monkeypatch)
     with (
-        live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url,
-        live_lineage(catalog_url, monkeypatch, port=port) as lineage_url,
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        live_lineage(catalog_url, monkeypatch) as lineage_url,
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
         httpx.Client(base_url=lineage_url, timeout=60) as lineage,
     ):
@@ -169,11 +167,10 @@ def _gold_is_deregistered(catalog: httpx.Client, obligations: dict[str, str]) ->
 def test_an_erasure_is_held_until_every_table_derived_from_its_source_has_an_obligation_following_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arrange: _Gold, gold: str, state: str
 ) -> None:
-    port = free_port()
-    announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
+    joined_bus(monkeypatch)
     with (
-        live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url,
-        live_lineage(catalog_url, monkeypatch, port=port),
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        live_lineage(catalog_url, monkeypatch),
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
     ):
         for namespace in ("lance_catalog$acme-bronze", "lance_catalog$acme-silver", "lance_catalog$acme-gold"):
@@ -256,10 +253,10 @@ def _silver_appended_by_a_stock_client(catalog: httpx.Client, url: str) -> None:
 def test_a_table_written_from_the_source_while_lineage_is_down_holds_the_erasure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write: Callable[[httpx.Client, str], None]
 ) -> None:
-    """Every announcement goes to a port nothing listens on, so lineage records no edge: the verification names silver from
-    what the catalog recorded when silver's write declared bronze, and the obligation stays open."""
-    down = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{free_port()}/api/v1/lineage"}
-    with live_catalog(tmp_path / "catalog", monkeypatch, **down) as catalog_url, httpx.Client(base_url=catalog_url, timeout=60) as catalog:
+    """Every announcement is published on a bus no lineage consumes, so lineage records no edge: the verification names
+    silver from what the catalog recorded when silver's write declared bronze, and the obligation stays open."""
+    joined_bus(monkeypatch)
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, httpx.Client(base_url=catalog_url, timeout=60) as catalog:
         for namespace in ("lance_catalog$acme-bronze", "lance_catalog$acme-silver"):
             assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$acme-bronze$events/create", content=_rows(), headers=_ARROW).status_code == 200
@@ -295,11 +292,10 @@ def test_a_table_lineage_records_after_the_release_from_a_run_before_it_is_liste
 
     counted = _Counter()
     monkeypatch.setattr(commit_reconcile, "_late_derived", counted)
-    port = free_port()
-    announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
+    joined_bus(monkeypatch)
     with (
-        live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url,
-        live_lineage(catalog_url, monkeypatch, port=port) as lineage_url,
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        live_lineage(catalog_url, monkeypatch) as lineage_url,
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
         httpx.Client(base_url=lineage_url, timeout=60) as lineage,
     ):
@@ -369,10 +365,9 @@ def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Pa
 def test_a_renamed_source_answers_what_it_fed_under_both_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Read through lineage's FGA gate by a caller granted on the tables' uuids, which a rename keeps and so moves no
     grant: the write recorded under the old name is answered as the table's."""
-    port = free_port()
-    announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
-    with live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url, httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-        with live_lineage(catalog_url, monkeypatch, port=port):
+    joined_bus(monkeypatch)
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, httpx.Client(base_url=catalog_url, timeout=60) as catalog:
+        with live_lineage(catalog_url, monkeypatch):
             for namespace in ("lance_catalog$acme-bronze", "lance_catalog$acme-silver"):
                 assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
             assert catalog.post("/v1/table/lance_catalog$acme-bronze$t/create", content=_rows(), headers=_ARROW).status_code == 200

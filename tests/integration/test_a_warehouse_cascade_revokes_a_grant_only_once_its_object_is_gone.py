@@ -17,9 +17,7 @@ not the claim: the tuples each call leaves behind are. A table's tuples are what
 
 from __future__ import annotations
 
-import json
 import logging
-import threading
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import timedelta
@@ -38,7 +36,7 @@ from lance_namespace import ConcurrentModificationError, LanceNamespace, TableNo
 from openfga_sdk.client.models import ClientWriteRequest
 
 from catalog.core.config import get_settings
-from catalog.core.lineage_emit import HttpLineageEmitter
+from catalog.core.lineage_emit import BusEmitter
 from catalog.services import native
 from lakehouse import base_registry, clone_endings, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -46,6 +44,7 @@ from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
+from tests.bus_double import BusDouble
 from tests.integration.openfga_grants import Options, TupleStore, act_as
 
 
@@ -78,10 +77,10 @@ class _Outage(TupleStore):
 class _Tenant:
     """Project ``acme`` and its warehouse on a bucket of its own, driven by the project's admin."""
 
-    def __init__(self, client: TestClient, store: _Outage, posted: list[dict[str, Any]], s3: S3Client, bucket: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(self, client: TestClient, store: _Outage, bus: BusDouble, s3: S3Client, bucket: str, monkeypatch: pytest.MonkeyPatch) -> None:
         self.client = client
         self.store = store
-        self.posted = posted
+        self.bus = bus
         self.s3 = s3
         self.warehouse = WAREHOUSE
         self.bucket = bucket
@@ -173,7 +172,7 @@ class _Tenant:
 
     def announced_drops(self) -> list[str]:
         """The tables lineage was told stopped existing, in the order it was told."""
-        return [str(event["dataset"]["name"]) for event in self.posted if _lifecycle(event) == "DROP"]
+        return [str(event["dataset"]["name"]) for event in self.bus.events if _lifecycle(event) == "DROP"]
 
     def bucket_exists(self) -> bool:
         try:
@@ -210,13 +209,7 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
     from catalog.main import app
 
     store = _Outage()
-    posted: list[dict[str, Any]] = []
-    lock = threading.Lock()
-
-    def _receive(request: httpx.Request) -> httpx.Response:
-        with lock:
-            posted.append(json.loads(request.content))
-        return httpx.Response(200)
+    bus = BusDouble()
 
     with TestClient(app, headers={"Authorization": "Bearer t"}) as client:
         governed = get_settings().model_copy(
@@ -233,11 +226,12 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
         monkeypatch.setattr(app.state, "oidc", MagicMock())
         act_as(client, "alice")
         monkeypatch.setattr(app.state, "fga", store)
-        emitter = HttpLineageEmitter(
-            httpx.AsyncClient(transport=httpx.MockTransport(_receive)),
-            "http://lineage/api/v1/lineage",
+        emitter = BusEmitter(
+            bus,
+            "lineage.events.v1",
             job_namespace="lance-catalog",
             dataset_namespace="lance-namespace://localhost/api/catalog",
+            timeout_seconds=5.0,
         )
         monkeypatch.setattr(app.state, "lineage_emitter", emitter, raising=False)
         for path, body in (
@@ -246,7 +240,7 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
         ):
             answer = client.post(path, json=body)
             assert answer.status_code == 200, f"{path}: {answer.text}"
-        yield _Tenant(client, store, posted, s3, bucket, monkeypatch)
+        yield _Tenant(client, store, bus, s3, bucket, monkeypatch)
     app.dependency_overrides.clear()
     get_settings.cache_clear()
 
@@ -290,7 +284,7 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
         for table in ("acme-wh$bronze$a", "acme-wh$bronze$b", "acme-wh$bronze$inner$c")
     }
     held = len(tenant.store.tuples)
-    tenant.posted.clear()
+    tenant.bus.sent.clear()
 
     answer = tenant.delete_warehouse()
 

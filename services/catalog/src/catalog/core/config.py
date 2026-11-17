@@ -238,14 +238,10 @@ class CatalogLineageSettings(BaseSettings):
     # service on a table write — fire-and-forget + best-effort, so the lineage service being down can
     # never block or fail a catalog write. The catalog is the only component that knows the verified
     # principal, so it is the authoritative source of "who created/changed a table" (author = token.subject).
-    # Transport: ``http`` (direct POST — dev / external producers) or ``bus`` (publish on NATS JetStream over
-    # this process's own connection, `lakehouse.bus` — durable, decoupled, the production path).
+    # It is published on NATS JetStream over this process's own connection (`lakehouse.bus`), the one transport.
     lineage_emit_enabled: bool = Field(default=False, alias="LANCE_LINEAGE_EMIT_ENABLED")
-    # Literal (like vending_mode) so pydantic validates the allowed set — one enum-setting idiom in this file.
-    lineage_transport: Literal["http", "bus"] = Field(default="http", alias="LANCE_LINEAGE_TRANSPORT")
-    #: The topic the ``bus`` transport publishes on. Versioned: a breaking schema change is a new ``.vN``.
+    #: The topic the emitter publishes on. Versioned: a breaking schema change is a new ``.vN``.
     lineage_topic: str = Field(default="lineage.events.v1", alias="LANCE_LINEAGE_TOPIC")
-    lineage_url: str | None = Field(default=None, alias="LANCE_LINEAGE_URL")
     lineage_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_LINEAGE_EMIT_TIMEOUT_SECONDS")
     lineage_job_namespace: str = Field(default="lance-catalog", alias="LANCE_LINEAGE_JOB_NAMESPACE")
     #: The namespace every table's OpenLineage dataset is named under: this catalog's endpoint,
@@ -586,12 +582,10 @@ class Settings(
     def _validate_lineage(self) -> Self:
         """Fail fast on emission switched on with nowhere to send: it would run as the no-op, every change unannounced
         and nothing counted. The auth invariants are the shared mixin's."""
-        if self.lineage_emit_enabled and self.lineage_transport == "http" and not self.lineage_url:
-            raise ValueError("LANCE_LINEAGE_URL is required for the http lineage transport")
         on_the_bus = [
             switch
             for switch, on in (
-                ("LANCE_LINEAGE_EMIT_ENABLED", self.lineage_emit_enabled and self.lineage_transport == "bus"),
+                ("LANCE_LINEAGE_EMIT_ENABLED", self.lineage_emit_enabled),
                 ("LANCE_CONTROL_EMIT_ENABLED", self.control_emit_enabled),
             )
             if on

@@ -12999,7 +12999,7 @@
     },
     "/management/v1/access/model": {
       "get": {
-        "description": "The authorization model \u2014 the checked-in ``model.fga`` DSL text plus the pinned model id.\n\nRead-only and estate-admin gated: the model reveals the whole privilege topology (which rungs derive\nwhich actions), the same platform-tier disclosure as the tuple listing.",
+        "description": "The authorization model: the checked-in ``model.fga`` DSL text plus the id of the model this catalog checks against.\n\nRead-only and estate-admin gated: the model reveals the whole privilege topology (which rungs derive\nwhich actions), the same platform-tier disclosure as the tuple listing.",
         "operationId": "get_access_model_management_v1_access_model_get",
         "parameters": [
           {
@@ -16036,22 +16036,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           },
           {
@@ -23480,22 +23464,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-lance-originator",
             "required": false,
             "schema": {
@@ -23644,22 +23612,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           },
           {
@@ -24799,22 +24751,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "Idempotency-Key",
             "required": false,
             "schema": {
@@ -25417,22 +25353,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           },
           {
@@ -26149,22 +26069,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-lance-originator",
             "required": false,
             "schema": {
@@ -26810,22 +26714,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-lance-originator",
             "required": false,
             "schema": {
@@ -27189,22 +27077,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "Idempotency-Key",
             "required": false,
             "schema": {
@@ -27518,22 +27390,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           },
           {
@@ -28155,22 +28011,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "Idempotency-Key",
             "required": false,
             "schema": {
@@ -28354,22 +28194,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           },
           {
@@ -29501,22 +29325,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-lance-originator",
             "required": false,
             "schema": {
@@ -29669,22 +29477,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-lance-originator",
             "required": false,
             "schema": {
@@ -29833,22 +29625,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           },
           {

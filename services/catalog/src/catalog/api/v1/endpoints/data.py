@@ -125,7 +125,6 @@ async def create_table(
     storage_options: Annotated[str | None, Query(description="REFUSED: storage access is the catalog's to vend.")] = None,
     data_base: RaskDataBase = [],  # noqa: B006 — FastAPI Query default, not mutated
     external_blob_base: RaskExternalBlobBase = None,
-    authorization: Annotated[str | None, Header()] = None,
     force: RaskFlag = False,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream — ``create_table``; seeds ownership + lineage.
@@ -203,7 +202,6 @@ async def create_table(
         mode=create_mode,
         shape=shape,
         data_base=data_base,
-        authorization=authorization,
         run=run,
         force=force,
     )
@@ -230,7 +228,6 @@ async def insert_into_table(
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     branch: Annotated[str | None, Query(description="The ref to insert into. Omit for main.")] = None,
-    authorization: Annotated[str | None, Header()] = None,
     force: RaskFlag = False,
 ) -> InsertIntoTableResponse:
     """Append Arrow-IPC rows — ``insert_into_table``; emits an INSERT lineage event.
@@ -306,7 +303,6 @@ async def insert_into_table(
         so=so,
         token=token,
         operation=OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT,
-        authorization=authorization,
         uuids=uuids,
         pin_version=response.version,
         # A branch has its own version sequence; reading this write back off main pins the edge to a
@@ -351,7 +347,6 @@ async def merge_insert_into_table(
     timeout: str | None = None,
     use_index: bool | None = None,
     branch: Annotated[str | None, Query(description="The ref to merge into. Omit for main.")] = None,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> MergeInsertIntoTableResponse:
     """Upsert Arrow-IPC rows — ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.
     The ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.
@@ -400,7 +395,6 @@ async def merge_insert_into_table(
         so=so,
         token=token,
         operation=MERGE_INSERT,
-        authorization=authorization,
         uuids=uuids,
         pin_version=response.version,
         # Pinned AND branched, together: the dataplane call above already takes `branch=branch`, so a
@@ -422,7 +416,6 @@ async def update_table(
     client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> UpdateTableResponse:
     """Update rows matching a predicate — ``update_table``; emits an UPDATE lineage event."""
     # LANCE-ONLY (2026-08-15 ruling). An update door is the create door's back way in: a table
@@ -444,7 +437,6 @@ async def update_table(
         so=so,
         token=token,
         operation=UPDATE,
-        authorization=authorization,
         uuids=uuids,
         pin_version=response.version,
         # The ref the dataplane committed to: the version above is that ref's number, and on main the
@@ -464,7 +456,6 @@ async def delete_from_table(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> DeleteFromTableResponse:
     """Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event."""
     segments = parse_identifier(id)
@@ -481,7 +472,6 @@ async def delete_from_table(
         so=so,
         token=token,
         operation=DELETE,
-        authorization=authorization,
         uuids=uuids,
         pin_version=response.version,
         # The ref the dataplane committed to: the version above is that ref's number, and on main the

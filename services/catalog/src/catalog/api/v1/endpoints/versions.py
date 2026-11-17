@@ -10,7 +10,7 @@ import logging
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     BatchCommitTablesRequest,
@@ -197,7 +197,6 @@ async def create_table_version(
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     resolver: ResolverDep,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> CreateTableVersionResponse:
     """Finalize a client-staged manifest as the next version of the table or of one of its branches, after judging it
     ([[LH-471]], [[LH-490]], ADR 0157).
@@ -305,7 +304,6 @@ async def create_table_version(
         so=so,
         token=token,
         operation=managed_versions.lineage_operation(staged),
-        authorization=authorization,
         uuids=uuids,
         pin_version=staged.version,
         branch=staged.branch,

@@ -110,7 +110,6 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
             data=encode_arrow_stream(pa.table({"id": [1]})),
             mode=None,
             properties=None,
-            authorization="Bearer tok",
             run=None,
             uuids=NO_OBJECT_UUIDS,
             resolver=NamedResolver(),

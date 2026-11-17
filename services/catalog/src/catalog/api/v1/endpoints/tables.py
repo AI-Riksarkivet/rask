@@ -11,7 +11,7 @@ from typing import Annotated, Any
 from uuid import uuid4
 
 import lance
-from fastapi import APIRouter, Header, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
@@ -827,8 +827,8 @@ async def drop_table(
     async with announcer.announcing(door="drop_table", target=fga.table_object(table_uuid), announcements=[dropped, dropped_event]) as filing:
         response = await _drop(ns, settings, table, segments=segments, table_uuid=table_uuid, known=known, grace=grace, token=token, so=so)
         # Record the drop as lineage — provenance of the deletion (the dataset node persists in the graph, named a
-        # `drop_table` run). Sent BEFORE the revoke: on the http transport the caller's bearer authorizes ingest against
-        # their (still-live) write grant — revoking first would 403 the very event that records who dropped the table.
+        # `drop_table` run). Sent BEFORE the revoke, so a revoke that fails ends the request with the marker already
+        # published. Lineage admits a drop this catalog signed on that signature, never on the grants the revoke takes.
         await filing.send(dropped)
         # Revoke the table's FGA tuples so a later table reusing this id can't inherit stale grants — but
         # ONLY on a destructive drop. A RECOVERABLE drop (#75) leaves an object that still exists and whose
@@ -1017,8 +1017,8 @@ async def deregister_table(
         await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
         # Record the detach as lineage — asymmetric with drop (which deletes data), deregister only detaches, so without
         # this marker the feed reads it as a still-live, never-touched table. Versionless (no data was written), sent
-        # BEFORE the revoke: on the http transport the caller's bearer authorizes ingest against their (still-live) write
-        # grant — revoking first would 403 the very marker this endpoint exists to record.
+        # BEFORE the revoke, so a revoke that fails ends the request with the marker already published. Lineage admits a
+        # detach this catalog signed on that signature, never on the grants the revoke takes.
         await filing.send(detached)
         await fga_deps.revoke_ownership(client, settings, obj=fga.table_object(table_uuid), token=token, origin="lifecycle_delete")
         await filing.send(detached_event)
@@ -1798,7 +1798,6 @@ async def restore_table(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> RestoreTableResponse:
     """Restore the table at ``id`` to a prior version via ``restore_table``; emits a RESTORE_TABLE event at
     the NEW current version (restore mints a fresh version pointing at the restored data)."""
@@ -1826,7 +1825,6 @@ async def restore_table(
         so=so,
         token=token,
         operation=RESTORE_TABLE,
-        authorization=authorization,
         uuids=uuids,
         pin_version=committed,
         branch=body.branch,

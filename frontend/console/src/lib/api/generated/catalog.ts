@@ -145,7 +145,7 @@ export interface paths {
         };
         /**
          * Get Access Model
-         * @description The authorization model — the checked-in ``model.fga`` DSL text plus the pinned model id.
+         * @description The authorization model: the checked-in ``model.fga`` DSL text plus the id of the model this catalog checks against.
          *
          *     Read-only and estate-admin gated: the model reveals the whole privilege topology (which rungs derive
          *     which actions), the same platform-tier disclosure as the tuple listing.
@@ -11577,7 +11577,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -15379,7 +15378,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -15474,7 +15472,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -16171,7 +16168,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -16561,7 +16557,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -16940,7 +16935,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -17316,7 +17310,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -17510,7 +17503,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -17617,7 +17609,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -18010,7 +18001,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -18108,7 +18098,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -18804,7 +18793,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -18899,7 +18887,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -18994,7 +18981,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {

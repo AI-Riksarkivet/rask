@@ -64,7 +64,6 @@ async def emit_measured_write(
     so: StorageOptions,
     token: Caller | None,
     operation: str,
-    authorization: str | None,
     pin_version: int | None,
     branch: str | None,
     uuids: UuidReader,
@@ -105,7 +104,6 @@ async def emit_measured_write(
         author=token.subject if token is not None else None,
         version=readback.version,
         operation=operation,
-        authorization=authorization,
         uuids=uuids,
         schema_fields=readback.schema_fields,
         # The standard `dataSource` facet. Every write door reaches lineage through this trailer, so

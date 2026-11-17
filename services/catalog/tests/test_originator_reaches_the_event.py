@@ -61,7 +61,6 @@ def _emit(bound: Any) -> None:
             author="service-labelling",
             version=3,
             operation="create_table",
-            authorization=None,
             uuids=_NoUuids(),
         )
     )
@@ -107,7 +106,7 @@ class _RecordingEmitter(_BaseLineageEmitter):
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
 
-    async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:
+    async def _send(self, event: dict[str, Any], *, operation: str, table_id: str) -> None:
         self.events.append(event)
 
 
@@ -115,7 +114,6 @@ def _optional() -> EmitFields:
     """Every OPTIONAL field, so a dropped one is visible in the emitted event."""
     return EmitFields(
         event_time="2026-10-25T12:00:00+00:00",
-        authorization="Bearer x",
         source_uri="s3://bkt/t.lance",
         schema_fields=[],
         inputs=[InputRef("acme$src", 2)],

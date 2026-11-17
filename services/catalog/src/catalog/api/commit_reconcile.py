@@ -199,7 +199,6 @@ async def _announce(
             author=commit.author,
             version=commit.version,
             operation=commit.operation,
-            authorization=None,
             uuids=ObjectUuids(request, settings),
             known=table.uuids,
             branch=commit.branch,

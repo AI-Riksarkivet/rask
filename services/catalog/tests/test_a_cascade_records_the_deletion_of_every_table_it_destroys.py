@@ -12,9 +12,8 @@ ungoverned, 8 of them tables this repo's own suites had cascade-dropped hours ea
 It is also condition 1 read backwards. A write's provenance is supposed to survive it; a DELETE is a
 write, and a cascade's deletions were leaving none.
 
-EMITTED BEFORE THE REVOKE, the same ordering the table door states and for the same reason: on the
-http transport the caller's bearer authorizes ingest against their still-live write grant, so
-revoking first would 403 the very event that records who dropped the table.
+EMITTED BEFORE THE REVOKE, the same ordering the table door states and for the same reason: a revoke
+that fails ends the request with the event that records who dropped the table already published.
 """
 
 from __future__ import annotations

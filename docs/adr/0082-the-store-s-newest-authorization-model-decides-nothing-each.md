@@ -19,7 +19,8 @@ store's history and use its id; the hook and the catalog write a body only when 
 it, before the new pods start (the hook is `post-install,pre-upgrade`). A downgrade therefore changes the
 rules of the downgraded image's own pods and nobody else's. The two verifiers (`scripts/fga-store-check.sh`
 and the e2e model check) ask whether the store holds the checkout's body, not whether it is the newest.
-A model pin (`RASK_FGA_MODEL_ID`) contradicts this and is unused; its removal is parked as LH-309.
+A model pin (`RASK_FGA_MODEL_ID`) contradicted this and was unused; LH-309 removed it on 2026-11-17 (XC-217), with the
+chart value `auth.fgaModelId` and the pinned-model audit.
 
 The same rule retires the boot-time narrowing guard (2026-09-11). It refused a body that removed a relation the
 store's newest defines and answered with the newest's id instead, so the catalog checked against rules its image

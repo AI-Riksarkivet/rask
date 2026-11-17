@@ -16,7 +16,7 @@ The event also names the tenant whose watchers it reaches, ``rask_lance.project`
 table's name begins with, however deep the table lies ([[LH-573]]).
 
 Driven through the real catalog app on real pylance, and the event is captured on the WIRE: the real
-``HttpLineageEmitter`` builds and posts it, and an ``httpx.MockTransport`` stands in for the lineage service.
+``BusEmitter`` builds and publishes it, and the bus double stands in for the bus.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from lakehouse.control_emit import CatalogControlEvent
 from lakehouse.storage_options import StorageOptions
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
+from tests.bus_double import BusDouble
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -66,32 +67,23 @@ def _rows(*ids: int) -> pa.Table:
 
 
 @pytest.fixture
-def events(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Every lineage event the catalog posts, as the lineage service would receive it."""
-    posted: list[dict[str, Any]] = []
-    lock = threading.Lock()
-
-    def _receive(request: httpx.Request) -> httpx.Response:
-        with lock:
-            posted.append(json.loads(request.content))
-        return httpx.Response(200)
+def bus(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> BusDouble:
+    """The bus the catalog publishes on, which keeps every lineage event as the lineage service would receive it."""
+    bus = BusDouble()
 
     async def _tenant_of(warehouse_id: str) -> str | None:
         return TENANTS.get(warehouse_id)
 
     emitter = make_emitter(
         enabled=True,
-        transport="http",
-        url="http://lineage/api/v1/lineage",
-        client=httpx.AsyncClient(transport=httpx.MockTransport(_receive)),
-        bus=None,
-        topic="",
+        bus=bus,
+        topic="lineage.events.v1",
         job_namespace="lance-catalog",
         dataset_namespace="lance-namespace://localhost/api/catalog",
         project_resolver=_tenant_of,
     )
     monkeypatch.setattr(real_ns_client.app.state, "lineage_emitter", emitter, raising=False)
-    return posted
+    return bus
 
 
 @pytest.fixture
@@ -143,7 +135,7 @@ def _identifier(location: str) -> str:
     return str(chain[-1][1])
 
 
-def test_concurrent_appends_each_emit_the_version_that_carries_their_own_rows(real_ns_client: TestClient, location: str, events: list[dict[str, Any]]) -> None:
+def test_concurrent_appends_each_emit_the_version_that_carries_their_own_rows(real_ns_client: TestClient, location: str, bus: BusDouble) -> None:
     """Each append's event names the version whose commit added THAT append's rows, and no other's."""
     markers = list(range(100, 108))
     start = threading.Barrier(len(markers))
@@ -161,14 +153,14 @@ def test_concurrent_appends_each_emit_the_version_that_carries_their_own_rows(re
     for thread in threads:
         thread.join(timeout=60)
 
-    inserts = [event for event in events if _lance(event)["operation"] == "insert"]
+    inserts = [event for event in bus.events if _lance(event)["operation"] == "insert"]
     emitted = sorted(_version(event) or -1 for event in inserts)
     assert emitted == sorted(answered.values()), f"the events do not name the versions the appends committed: {emitted} vs {answered}"
     for marker, version in answered.items():
         assert _ids(location, version) - _ids(location, version - 1) == {marker}, f"v{version} is not the commit that added row {marker}"
 
 
-def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_client: TestClient, location: str, events: list[dict[str, Any]]) -> None:
+def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_client: TestClient, location: str, bus: BusDouble) -> None:
     """Every door keyed on a ``branch`` request field emits that ref, the branch's head version and schema, and commits
     that version naming its verified caller and the door's own operation ([[LH-497]]).
 
@@ -232,10 +224,10 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
     wrong: list[str] = []
     for operation, prepare, call in doors:
         prepare()
-        before = len(events)
+        before = len(bus.events)
         response = call()
         assert response.status_code == 200, f"{operation}: {response.text}"
-        emitted = events[before:]
+        emitted = bus.events[before:]
         assert [_lance(event)["operation"] for event in emitted] == [operation], f"{operation}: {[_lance(event) for event in emitted]}"
         event, head = emitted[0], _head(location)
         named = {key: _lance(event).get(key) for key in expected_ref}
@@ -250,7 +242,7 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
 
 
 def test_a_recreated_branch_emits_a_different_identifier_for_the_same_version(
-    real_ns_client: TestClient, location: str, events: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    real_ns_client: TestClient, location: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``dev@2`` before a delete-and-recreate and ``dev@2`` after it are two commits, and the events say so.
 
@@ -263,9 +255,9 @@ def test_a_recreated_branch_emits_a_different_identifier_for_the_same_version(
 
     def _write_once() -> dict[str, Any]:
         assert client.post(f"/v1/table/{TABLE}/branches/create", json={"name": BRANCH}).status_code == 200
-        before = len(events)
+        before = len(bus.events)
         assert client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(9)), headers=ARROW).status_code == 200
-        return _lance(events[before]) | {"version": _version(events[before])}
+        return _lance(bus.events[before]) | {"version": _version(bus.events[before])}
 
     first = _write_once()
     assert client.post(f"/v1/table/{TABLE}/branches/delete", json={"name": BRANCH}).status_code == 200
@@ -301,9 +293,7 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     assert dataplane.committed_version(table, StorageOptions(), "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
 
 
-def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
-    real_ns_client: TestClient, events: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_every_event_names_the_table_and_its_namespace_by_their_uuids(real_ns_client: TestClient, bus: BusDouble, monkeypatch: pytest.MonkeyPatch) -> None:
     """A write, a rename, a write and a definition change under the new name, and a drop each announce the table and its
     namespace by their uuids beside their names, on the lineage event and the control event; lineage's projection keeps
     them, and the file's ``lineage.dataset_id`` is the table's uuid ([[LH-522]], ADR 0173 §10).
@@ -335,18 +325,18 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
     def _named(dataset: dict[str, Any]) -> dict[str, Any]:
         return {key: dataset.get("facets", {}).get("rask_lance", {}).get(key) for key in uuids}
 
-    announced = [(_lance(event)["operation"], _named(_dataset(event))) for event in events]
+    announced = [(_lance(event)["operation"], _named(_dataset(event))) for event in bus.events]
     assert announced == [(operation, uuids) for operation in ("create_table", "insert", "rename_table", "insert", "add_columns", "drop_table")], announced
     # One table renamed in place: a DatasetEvent on its new name, naming the old one as the spec's previousIdentifier.
-    renamed = events[2]
+    renamed = bus.events[2]
     lifecycle = {key: value for key, value in renamed["dataset"]["facets"]["lifecycleStateChange"].items() if not key.startswith("_")}
     assert ("run" in renamed, renamed["dataset"]["name"], lifecycle) == (
         False,
         "lance_catalog$lh522$u",
         {"lifecycleStateChange": "RENAME", "previousIdentifier": {"namespace": renamed["dataset"]["namespace"], "name": "lance_catalog$lh522$t"}},
     ), renamed
-    projected = [_named(_dataset(targeting_view(event))) for event in events]
-    assert projected == [uuids] * len(events), projected
+    projected = [_named(_dataset(targeting_view(event))) for event in bus.events]
+    assert projected == [uuids] * len(bus.events), projected
     assert [named for named in control.named if named[0].startswith("table_")] == [
         ("table_created", table_uuid, namespace_uuid),
         ("table_renamed", table_uuid, namespace_uuid),
@@ -357,7 +347,7 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
     assert stamped == table_uuid.encode(), stamped
 
 
-def test_a_tables_create_names_the_tenant_of_its_warehouse_at_any_depth(real_ns_client: TestClient, events: list[dict[str, Any]]) -> None:
+def test_a_tables_create_names_the_tenant_of_its_warehouse_at_any_depth(real_ns_client: TestClient, bus: BusDouble) -> None:
     """A project's watchers are reached through the event's ``rask_lance.project`` alone, and a tenant is its warehouse's
     project, so a table two namespaces deep is announced under the tenant of the warehouse its name begins with
     ([[LH-573]], [[LH-593]])."""
@@ -367,7 +357,7 @@ def test_a_tables_create_names_the_tenant_of_its_warehouse_at_any_depth(real_ns_
     created = real_ns_client.post("/v1/table/lance_catalog$lh214$raw$t/create", content=_ipc(_rows(1)), headers=ARROW)
 
     assert created.status_code == 200, created.text
-    assert [(_lance(event)["operation"], _lance(event).get("project")) for event in events] == [("create_table", "acme")]
+    assert [(_lance(event)["operation"], _lance(event).get("project")) for event in bus.events] == [("create_table", "acme")]
 
 
 def _incarnations(location: str) -> dict[str, str]:
@@ -414,7 +404,7 @@ def test_a_branch_delete_announces_every_branch_it_removes_as_the_incarnation_it
     ], control.events
 
 
-def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: TestClient, location: str, events: list[dict[str, Any]]) -> None:
+def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: TestClient, location: str, bus: BusDouble) -> None:
     """[[LH-413]] An edge reads ``src@feed`` into ``t@dev``; each ref is named with its incarnation, since a branch deleted
     and created again under the name restarts its numbering. The event the catalog emits is the one lineage records."""
     client = real_ns_client
@@ -428,12 +418,12 @@ def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: T
         "x-rask-job": "nightly",
         "x-rask-inputs": json.dumps([{"table": ["lance_catalog", "lh214", "src"], "version": 1, "branch": "feed"}]),
     }
-    before = len(events)
+    before = len(bus.events)
 
     answer = client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(9)), headers={**ARROW, **run})
 
     assert answer.status_code == 200, answer.text
-    (written,) = events[before:]
+    (written,) = bus.events[before:]
     edges = edges_of(parse_event(written), received_at=datetime.now(UTC))
     identifiers = [(edge["in_branch"], edge["in_branch_identifier"], edge["out_branch"], edge["out_branch_identifier"]) for edge in edges]
     source, target = _incarnations(str(created.json()["location"])), _incarnations(location)

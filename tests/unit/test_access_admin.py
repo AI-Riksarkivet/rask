@@ -258,9 +258,9 @@ def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], r
 # ── the model + check surfaces ────────────────────────────────────────────────────────────────────────
 
 
-def test_model_returns_the_checked_in_dsl_and_pinned_id(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_model_returns_the_checked_in_dsl_and_the_id_the_catalog_checks_against(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     client = SimpleNamespace(get_authorization_model_id=lambda: "01MODEL")
-    response = asyncio.run(ep.get_access_model(client=_fga_client(client), settings=_settings()))
+    response = asyncio.run(ep.get_access_model(client=_fga_client(client)))
     assert response.authorization_model_id == "01MODEL"
     assert response.dsl == fga.load_model_dsl() and "type table" in response.dsl
 

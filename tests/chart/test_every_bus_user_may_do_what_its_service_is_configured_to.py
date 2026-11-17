@@ -86,7 +86,7 @@ def _configured_to_publish(env: dict[str, str]) -> set[str]:
     """The topics a pod's environment has its service publish on a connection of its own: each service's own switch,
     and the topic variable or the control lane's one topic beside it."""
     topics: set[str] = set()
-    if env.get("LANCE_LINEAGE_EMIT_ENABLED") == "true" and env.get("LANCE_LINEAGE_TRANSPORT") == "bus":
+    if env.get("LANCE_LINEAGE_EMIT_ENABLED") == "true":
         topics.add(env["LANCE_LINEAGE_TOPIC"])
     if env.get("LINEAGE_OUTBOX_URI"):
         topics.add(env["LINEAGE_EVENTS_TOPIC"])

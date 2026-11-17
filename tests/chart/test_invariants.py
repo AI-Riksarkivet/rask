@@ -495,9 +495,9 @@ def test_the_catalog_is_switched_to_publish_on_the_bus_it_is_named() -> None:
     told = {}
     for label, extra in (("default", ()), ("control off", ("catalog.controlEmit=false",))):
         docs = tuple(_rendered_docs(*extra))
-        [env] = [env for _, _, container in chart_render.containers(docs) if "LANCE_LINEAGE_TRANSPORT" in (env := chart_render.env_of(container))]
-        told[label] = (env["LANCE_LINEAGE_EMIT_ENABLED"], env["LANCE_LINEAGE_TRANSPORT"], env["LANCE_CONTROL_EMIT_ENABLED"], env.get("RASK_BUS_URL"))
-    assert told == {"default": ("true", "bus", "true", chart_render.NATS_URL), "control off": ("true", "bus", "false", chart_render.NATS_URL)}
+        [env] = [env for _, _, container in chart_render.containers(docs) if "LANCE_LINEAGE_EMIT_ENABLED" in (env := chart_render.env_of(container))]
+        told[label] = (env["LANCE_LINEAGE_EMIT_ENABLED"], env["LANCE_CONTROL_EMIT_ENABLED"], env.get("RASK_BUS_URL"))
+    assert told == {"default": ("true", "true", chart_render.NATS_URL), "control off": ("true", "false", chart_render.NATS_URL)}
 
 
 @pytest.mark.parametrize("stand_in", ["dex", "rustfs", "openbao"])

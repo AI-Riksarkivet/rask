@@ -89,7 +89,6 @@ def _call(updates: list[dict[str, Any]]) -> Any:
             client=cast("Any", object()),
             emitter=cast("Any", object()),
             uuids=cast("Any", object()),
-            authorization=None,
         )
     )
 

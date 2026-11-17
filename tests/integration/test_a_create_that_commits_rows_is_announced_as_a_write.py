@@ -28,8 +28,7 @@ import pytest
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from tests.integration.lineage_app import live_catalog, live_lineage
-from tests.loopback import free_port
+from tests.integration.lineage_app import joined_bus, live_catalog, live_lineage
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -95,11 +94,10 @@ def _facets(event: dict[str, Any]) -> dict[str, Any]:
 @pytest.mark.parametrize("door", list(DOORS))
 @pytest.mark.parametrize("count", [2, 0], ids=["rows", "no-rows"])
 def test_a_create_that_commits_rows_is_announced_as_a_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, door: str, count: int) -> None:
-    port = free_port()
-    announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
+    joined_bus(monkeypatch)
     with (
-        live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url,
-        live_lineage(catalog_url, monkeypatch, port=port) as lineage_url,
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        live_lineage(catalog_url, monkeypatch) as lineage_url,
         _signed_in("dex~alice"),
     ):
         assert httpx.post(f"{catalog_url}/v1/namespace/{_NAMESPACE}/create", json={}, timeout=60).status_code == 200

@@ -1,26 +1,10 @@
-"""Whatever the catalog emits, BOTH lineage doors must accept — the bus and the HTTP endpoint.
+"""Both lineage doors take every shape the catalog's builder makes: the bus lane and the HTTP endpoint.
 
-[[LIN-004]] (2026-09-21) moved a catalog DDL change off the run shape: a create is no run that ran, so
-`build_write_event` returns an OpenLineage **DatasetEvent** for it. The bus door was taught the new shape
-first, and the HTTP door, declaring its body as `RunEvent` (which requires `eventType`, `run` and `job`),
-refused a static event in FastAPI's validation before any handler ran. Both doors now parse through
-`models.parse_event`, and the store records whichever shape arrives.
-
-MEASURED 2026-09-24 against the hermetic governance stack — the catalog on the HTTP transport, which
-is its default:
-
-    POST http://lineage-api:8000/api/v1/lineage "HTTP/1.1 422 Unprocessable Content"
-    lineage_emit_failed operation='create_table' table='gov32$bronze'
-
-and lineage's durable feed answered `{"events":[],"next_cursor":null,"oldest_seq":null}` — not one
-event, for three creates. The emit is BEST-EFFORT by design, so every catalog create over HTTP lost
-its provenance silently and the only symptom was a governance assertion reading
-`expected lineage creator=..., got None`.
-
-THE DEPLOYED ESTATE IS ON THE BUS (`chart/templates/services.yaml` sets
-`LANCE_LINEAGE_TRANSPORT=bus`), so this is not a production outage — but the HTTP door is a
-DECLARED contract, not a dev convenience. Its own source calls it "the ONLY door for a producer with
-no bus user — a user's pipeline job on its own compute, and any external OpenLineage producer".
+A catalog DDL change is no run that ran, so `build_write_event` returns an OpenLineage **DatasetEvent** for it and a
+RunEvent for a write ([[LIN-004]]). The catalog publishes on the bus; the HTTP door is the declared contract for a
+producer with no bus user (a pipeline on its own compute, any external OpenLineage producer), and a recorded event
+replayed or re-posted reaches it in the shape the catalog built. A door that declared its body as `RunEvent` would
+refuse a static event in FastAPI's validation before any handler ran, so both parse through `models.parse_event`.
 
 DRIVEN THROUGH THE REGISTERED ROUTES with the real builder on one side and the real router on the
 other. A test that hand-writes the payload proves only that someone can write a valid one; the

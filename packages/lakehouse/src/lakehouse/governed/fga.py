@@ -513,21 +513,6 @@ async def _guarded[T](
 # --------------------------------------------------------------------------- #
 
 
-def _relation_index(type_definitions: Iterable[Any] | None) -> dict[str, frozenset[str]]:
-    """`{type: {relation, …}}` from either shape a model arrives in.
-
-    `load_model()` yields plain dicts off `model.json`; a model read back from the store yields SDK
-    `TypeDefinition` objects. One index over both is what lets the comparison be written once.
-    """
-    index: dict[str, frozenset[str]] = {}
-    for definition in type_definitions or ():
-        is_mapping = isinstance(definition, dict)
-        type_name = definition["type"] if is_mapping else definition.type
-        relations = (definition.get("relations") if is_mapping else definition.relations) or {}
-        index[str(type_name)] = frozenset(relations)
-    return index
-
-
 def _plain(value: Any) -> Any:
     """An SDK model (or any nesting of them) as plain JSON-able data.
 
@@ -629,7 +614,7 @@ def canonical_model(model: Any) -> str:
 def _relation_bodies(type_definitions: Iterable[Any] | None) -> dict[str, str]:
     """``{type#relation: canonical definition}`` from either shape a model arrives in.
 
-    The companion to :func:`_relation_index`, which keeps only the names. A definition is the userset
+    A definition is the userset
     body AND its ``metadata.relations`` entry, because the entry holds the type restrictions: ``[user]``
     against ``[user:*]``, or a dropped ``with non_expired_grant``, changes who a tuple may name under an
     identical body. Both go through the canonicaliser the unchanged-model check uses, so the two agree
@@ -654,34 +639,6 @@ def _body_changes(incoming: dict[str, str], current: dict[str, str]) -> list[str
     that did not.
     """
     return sorted(key for key, body in current.items() if key in incoming and incoming[key] != body)
-
-
-def _narrowings(incoming: dict[str, frozenset[str]], current: dict[str, frozenset[str]]) -> list[str]:
-    """What ``incoming`` would take away, as ``type`` or ``type#relation``.
-
-    EMPTY MEANS "REMOVES NO TYPE AND NO RELATION NAME" — not "only adds". The indexes compared here come
-    from :func:`_relation_index`, which keeps the relation dict's KEYS and discards every userset body,
-    so a model that narrows a relation in place is invisible to this guard: measured, an incoming
-    ``can_read_data: reader`` against a stored ``can_read_data: reader or pass_grants`` returns ``[]``
-    and the narrower model is written. The live failure this was built for — an older image whose
-    `model.json` lacked ``warehouse#event_stager`` entirely — is a removed NAME, which is caught.
-
-    Telling a narrowed body from a widened one is a semantic question about usersets, not a structural
-    one, so it is not attempted here. :func:`_body_changes` reports WHICH relations changed instead, and
-    `provision` logs them with the write, so a rollback that narrows a body is visible even though it is
-    not refused.
-
-    Additions are invisible ON PURPOSE: `provision` exists so a `model.json` edit takes effect on boot,
-    and a guard that also refused new types would freeze the estate at whatever the first pod shipped.
-    Only the removing direction makes image order decide who may do what.
-    """
-    lost: list[str] = []
-    for type_name, relations in current.items():
-        if type_name not in incoming:
-            lost.append(type_name)
-            continue
-        lost.extend(f"{type_name}#{relation}" for relation in relations - incoming[type_name])
-    return sorted(lost)
 
 
 #: 50 is OpenFGA's default page of models; v1.18.3 serves up to 100 (measured 2026-09-28), so the live
@@ -924,8 +881,8 @@ async def provision(
     # A MODEL WRITE WAS SILENT, which is half of why 1,316 versions accumulated with nobody noticing.
     # Now that an unchanged model is skipped, reaching this line means the model REALLY changed, so
     # naming what changed is signal rather than noise. `changed` lists relations redefined in place —
-    # widened and narrowed alike, since telling those apart is a semantic question `_narrowings` does
-    # not answer — which is what makes a body-level rollback visible even though it is not refused.
+    # widened and narrowed alike, since telling those apart is a semantic question about usersets, not
+    # a structural one — which is what makes a body-level rollback visible even though it is not refused.
     log.info(
         "openfga_model_written",
         extra={"store_id": store_id, "model_id": written.authorization_model_id, "changed": changed[:20], "changed_count": len(changed)},
