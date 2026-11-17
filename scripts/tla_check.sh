@@ -4,6 +4,7 @@
 # A model is specs/<area>/<Module>.tla, checked once per <Module>*.cfg beside it. A config's first line says how:
 #   "EXPECT VIOLATION <Invariant>"  the model must FAIL that invariant: the config removes an assumption the design
 #                                   rests on, and the failure is the evidence that it rests on it;
+#   "EXPECT VIOLATION temporal"     the same for a property over a whole behaviour, which TLC reports without a name;
 #   "ON DEMAND"                     too large for every run: checked only with --full;
 #   anything else                   the model must hold.
 set -euo pipefail
@@ -33,7 +34,9 @@ for model in "$root"/specs/*/*.tla; do
     states="$(grep -oE '[0-9,]+ distinct states found' <<<"$out" | tail -1 || true)"
     if [[ "$first" =~ EXPECT\ VIOLATION\ ([A-Za-z]+) ]]; then
       expected="${BASH_REMATCH[1]}"
-      if grep -q "Invariant $expected is violated" <<<"$out"; then
+      reported="Invariant $expected is violated"
+      [ "$expected" = "temporal" ] && reported="Temporal properties were violated"
+      if grep -q "$reported" <<<"$out"; then
         echo "fails as expected  $name ($expected)"
       else
         echo "!! $name was expected to violate $expected and did not" >&2

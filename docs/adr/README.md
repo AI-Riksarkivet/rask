@@ -231,3 +231,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0222](0222-a-table-the-catalog-holds-is-reached-from-rust-only-through-its-doors.md) |  | A table the catalog holds is reached from Rust only through its doors (2026-11-17) | accepted |
 | [0223](0223-an-event-signature-is-verified-in-rust-as-in-python.md) |  | An event signature is verified in Rust as in Python (2026-11-17) | accepted |
 | [0224](0224-a-delivery-is-settled-and-an-event-judged-in-rust-by-the-models-steps.md) |  | A delivery is settled and an event judged in Rust by the model's steps (2026-11-17) | accepted |
+| [0229](0229-a-committed-write-and-its-announcement-are-modelled-in-tla.md) |  | A committed write and its announcement are modelled in TLA+ (2026-11-17) | accepted |
