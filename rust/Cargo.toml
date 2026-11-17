@@ -17,7 +17,7 @@ arrow-select = "58"
 # The bus client over rustls with the aws-lc provider reqwest also uses. No JetStream helpers: every JetStream call the
 # lakehouse makes is a request on a subject its bus user is granted, written out where it is made.
 async-nats = { version = "0.52", default-features = false, features = ["aws-lc-rs", "nuid"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "matched-path", "tokio"] }
 base64 = "0.22"
 # Calendar time for a SigV4 stamp and a listing's `LastModified`; already in the lock through the Arrow crates.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -27,6 +27,17 @@ hmac = "0.12"
 http-body-util = "0.1"
 jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto"] }
 percent-encoding = "2"
+# OpenTelemetry's SDK and its OTLP/HTTP protobuf exporter, without its HTTP clients or gRPC: the one client that sends an
+# export is lakehouse-core's own, so the projected token is read for each export (ADR 0237).
+async-trait = "0.1"
+bytes = "1"
+http = "1"
+opentelemetry = { version = "0.33", default-features = false, features = ["trace", "metrics", "logs"] }
+opentelemetry-http = { version = "0.33", default-features = false }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "trace", "metrics", "logs"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "trace", "metrics", "logs"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "metrics", "logs"] }
+prost = { version = "0.14", default-features = false, features = ["std"] }
 # The XML an S3 store and its STS answer in, read into typed structs.
 quick-xml = { version = "0.38", features = ["serialize"] }
 # rustls over the platform's trust store; a private issuer's CA replaces that store for its own fetches.

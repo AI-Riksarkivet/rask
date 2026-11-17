@@ -36,3 +36,4 @@ cbd2219d01502c38733485ac684269da585ee479fa3b1377264beecdefdf9e9d  https://github
 29a083f156fe1a246f0336afe16ff77fffe587628e97339448d8f4fba38dba54  https://github.com/rustfs/rustfs/releases/download/1.0.3/rustfs-linux-x86_64-musl-v1.0.3.zip
 28e973c6e630dfa1c7a6d7af86b360e598a34c476d34a0dcbcfbeb70b1f06747  https://github.com/rustfs/rustfs/releases/download/1.0.3/rustfs-linux-aarch64-musl-v1.0.3.zip
 9ec6f2ad89df88db9b8889f59e37bb27f6b67c61ee8a97968dd90aaa2ac4dd30  https://github.com/rustfs/rustfs/releases/download/1.0.3/rustfs-macos-aarch64-v1.0.3.zip
+d33177515a244a2393f03ffd66ab3e68a8fc11a56bc145ec4d0ca2644ee95504  https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.157.0/otelcol-contrib_0.157.0_linux_amd64.tar.gz

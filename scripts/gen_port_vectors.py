@@ -473,6 +473,7 @@ def main() -> None:
     from _port_signing_vectors import signing_vectors
     from _port_store_vectors import store_vectors
     from _port_tables_vectors import tables_vectors
+    from _port_telemetry_vectors import telemetry_vectors
 
     shell = {"limits": [{"max_body_bytes": _MAX_BODY_BYTES, "deadline_seconds": _DEADLINE_SECONDS}], "exchanges": asyncio.run(_shell_vectors())}
     _OUT.mkdir(parents=True, exist_ok=True)
@@ -492,6 +493,7 @@ def main() -> None:
         ("outbox", outbox_vectors()),
         ("lanes", lanes_vectors()),
         ("doors", doors_vectors()),
+        ("telemetry", telemetry_vectors()),
     ):
         (_OUT / f"{name}.json").write_text(_one_entry_a_line(vectors))
         print(f"wrote rust/vectors/{name}.json")

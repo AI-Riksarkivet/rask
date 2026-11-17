@@ -9,8 +9,8 @@ tokio::task_local! {
     static TRACE_ID: String;
 }
 
-/// The trace id a W3C `traceparent` header carries, where the header is a well-formed version 00 one.
-fn trace_id_of(traceparent: &str) -> Option<&str> {
+/// The trace id, parent span id and flags a W3C `traceparent` header carries, where it is a well-formed version 00 one.
+pub(crate) fn parent_of(traceparent: &str) -> Option<(&str, &str, &str)> {
     let lower_hex = |text: &str, length: usize| text.len() == length && text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
     let nonzero = |text: &str| text.bytes().any(|byte| byte != b'0');
     let mut parts = traceparent.split('-');
@@ -22,7 +22,7 @@ fn trace_id_of(traceparent: &str) -> Option<&str> {
         && lower_hex(span_id, 16)
         && nonzero(span_id)
         && lower_hex(flags, 2);
-    well_formed.then_some(trace_id)
+    well_formed.then_some((trace_id, span_id, flags))
 }
 
 /// The trace id of the request being served, where one is.
@@ -37,7 +37,12 @@ pub async fn within<T>(trace_id: String, work: impl Future<Output = T>) -> T {
 
 /// Serve the request under the trace its `traceparent` names, or under a new one.
 pub async fn traced(request: Request, next: Next) -> Response {
-    let sent = request.headers().get("traceparent").and_then(|value| value.to_str().ok()).and_then(trace_id_of);
+    let sent = request
+        .headers()
+        .get("traceparent")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parent_of)
+        .map(|(trace_id, _, _)| trace_id);
     let trace_id = sent.map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_owned);
     within(trace_id, next.run(request)).await
 }

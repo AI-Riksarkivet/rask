@@ -43,6 +43,22 @@ pub enum RefusalReason {
 }
 
 impl RefusalReason {
+    /// Every reason, in the order the Python `RefusalReason` lists them: each is a series created at 0.
+    pub const ALL: [RefusalReason; 12] = [
+        RefusalReason::Unsigned,
+        RefusalReason::Malformed,
+        RefusalReason::Alg,
+        RefusalReason::Canon,
+        RefusalReason::Signer,
+        RefusalReason::Delegation,
+        RefusalReason::Author,
+        RefusalReason::Encoding,
+        RefusalReason::Kid,
+        RefusalReason::Uncanonical,
+        RefusalReason::Signature,
+        RefusalReason::Error,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             RefusalReason::Unsigned => "unsigned",

@@ -7,6 +7,7 @@ use crate::service::health::{HealthWatch, Readiness, ReadinessStatus};
 use crate::service::lifecycle::Lifecycle;
 use crate::service::problem::{ErrorCode, PROBLEM_JSON, Problem};
 use crate::service::trace;
+use crate::telemetry::http::HttpTelemetry;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
@@ -158,15 +159,30 @@ async fn no_store(request: Request, next: Next) -> Response {
 impl Shell {
     /// `doors` with the probes beside them, behind every limit the shell holds a request to.
     pub fn router(&self, doors: Router) -> Router {
+        self.layered(doors, None)
+    }
+
+    /// [`Shell::router`], with each request a span of its trace and in the HTTP server metrics.
+    pub fn instrumented_router(&self, doors: Router, http: &HttpTelemetry) -> Router {
+        self.layered(doors, Some(http))
+    }
+
+    fn layered(&self, doors: Router, http: Option<&HttpTelemetry>) -> Router {
         let probes = Router::new().route("/livez", get(livez)).route("/readyz", get(readyz)).with_state(self.clone());
-        doors
-            .merge(probes)
+        let mut doors = doors.merge(probes);
+        if http.is_some() {
+            doors = doors.route_layer(from_fn(HttpTelemetry::matched));
+        }
+        let mut layered = doors
             .layer(from_fn(unserved_as_problems))
             .layer(from_fn_with_state(self.clone(), body_cap))
             .layer(from_fn_with_state(self.clone(), deadline))
             .layer(CatchPanicLayer::custom(panicked))
-            .layer(from_fn(no_store))
-            .layer(from_fn(trace::traced))
+            .layer(from_fn(no_store));
+        if let Some(http) = http.cloned() {
+            layered = layered.layer(from_fn_with_state(http, HttpTelemetry::served));
+        }
+        layered.layer(from_fn(trace::traced))
     }
 
     /// Serve `router` on `listener` until SIGTERM, which turns `/readyz` to shutting down and lets open requests end.
