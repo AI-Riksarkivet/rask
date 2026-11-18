@@ -31,7 +31,7 @@ from lakehouse import control_prefixes
 from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
 from lakehouse.protection import is_protected
-from lakehouse.records import RecordChangedError, RecordMissingError, Stored, mutate_json, read_json_at, replace_json
+from lakehouse.records import RecordChangedError, RecordMissingError, Stored, mutate_json, read_json_at, remove_json, replace_json
 from lakehouse.storage_options import StorageOptions
 
 
@@ -275,11 +275,11 @@ def ended_key(kind: tenancy.Kind, uuid: str) -> str:
     return f"{control_prefixes.ENDED}/{kind}/{uuid}.json"
 
 
-def end_creation(root_uri: str, storage_options: StorageOptions, kind: tenancy.Kind, record: dict[str, str], *, now: datetime) -> None:
-    """Keep the creation ``record`` names as ended, before its registry record is removed, so the converge tick sweeps
-    its object whatever wrote on it after the delete read it. Unconditional: a uuid is ended once, by its own delete.
-    Blocking."""
-    ended = EndedCreation(kind=kind, id=str(record["id"]), uuid=str(record[UUID]), ended_at=now.isoformat())
+def end_creation(root_uri: str, storage_options: StorageOptions, kind: tenancy.Kind, object_id: str, uuid: str, *, now: datetime) -> None:
+    """Keep creation ``uuid`` of ``object_id`` as ended, before its registry record is removed, so the converge tick
+    sweeps its object whatever wrote on it after the delete read it. Unconditional: the key is the uuid's, which no other
+    creation names. Blocking."""
+    ended = EndedCreation(kind=kind, id=object_id, uuid=uuid, ended_at=now.isoformat())
     write_json(root_uri, storage_options, ended_key(kind, ended.uuid), ended.model_dump(mode="json", exclude_none=True))
 
 
@@ -316,27 +316,41 @@ def forget_ended(root_uri: str, storage_options: StorageOptions, ended: EndedCre
 
 
 # --------------------------------------------------------------------------- #
-# THE ONE CONDITIONAL WAY a project's or a warehouse's record is changed or removed (ADR 0245, review T2).
+# THE ONE CONDITIONAL WAY a project's or a warehouse's record is changed or removed (ADR 0245, reviews T2 and S3).
 #
 # A record is keyed by its id, and a delete frees the id for another tenant's creation. A change decided on one creation
 # must therefore never land on the next: every change is a write under the ETag of a read that found the creation's
-# uuid, and a removal is the stamp `ended` written that way, then the file removed by the one writer whose stamp landed
-# (the store has no conditional delete; a create is iff-absent, so nothing replaces a stamped record before it goes).
+# uuid, and its removal is ONE DeleteObject under the ETag of a read that found it (`lakehouse.records.remove_json`), so a
+# writer paused between its read and its removal removes nothing another creation wrote at the key since.
 # --------------------------------------------------------------------------- #
 
-#: The fields a delete writes on its record: the principal who started it (``deleting_by``), the token of the request
-#: whose mark stands (``delete_run``: each later step acts only while it is its own), and its point of no return
-#: (``no_return``: stamped before its first irreversible step; a refusal before it puts the record back live).
+#: The fields a delete writes on its record: the principal who started it (``deleting_by``); the token of the request
+#: whose mark stands (``delete_run``) and when that mark was written (``marked_at``: the converge tick settles a mark
+#: whose run is older than its bound); its point of no return (``no_return``, the run that stamped it: stamped before its
+#: first irreversible step; a failure before it puts the record back live); and what the delete was asked to do
+#: (``delete_asked``, stamped with ``no_return``), which the tick finishes a stamped delete by and never guesses.
 DELETING_BY: Final = "deleting_by"
 DELETE_RUN: Final = "delete_run"
+MARKED_AT: Final = "marked_at"
 NO_RETURN: Final = "no_return"
-#: When the record was stamped ``ended``.
-ENDED_AT: Final = "ended_at"
+DELETE_ASKED: Final = "delete_asked"
+#: Every field a delete writes, which a record put back live carries none of.
+DELETE_FIELDS: Final = (DELETING_BY, DELETE_RUN, MARKED_AT, NO_RETURN, DELETE_ASKED)
+
+
+class DeleteAsked(BaseModel):
+    """What a warehouse's delete was asked to do past its point of no return, as its stamp keeps it: a delete the converge
+    tick finishes does exactly this, so it purges a bucket only where the delete that passed the stamp was asked to."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cascade: bool = False
+    purge_bucket: bool = False
 
 
 class NotTheCreation(Exception):
-    """The record a change was asked of is not the creation the caller holds: gone, ended, another creation's, or in a
-    state the change does not act on."""
+    """The record a change was asked of is not the creation the caller holds: gone, another creation's, or in a state the
+    change does not act on."""
 
 
 def read_creation(root_uri: str, storage_options: StorageOptions, key: str) -> Stored | None:
@@ -383,48 +397,23 @@ def end_record(
     storage_options: StorageOptions,
     kind: tenancy.Kind,
     key: str,
+    object_id: str,
     uuid: str,
     *,
     now: datetime,
     run: str | None = None,
     states: frozenset[str] = frozenset({tenancy.DELETING}),
 ) -> bool:
-    """End creation ``uuid``'s record at ``key``: stamp it ``ended`` where it is in one of ``states`` (marked ``deleting``,
-    by the delete ``run`` where one is named; ``creating``, for a create that abandons its own record or the converge tick
-    ending one a dead create left), keep the creation under ``_ended/`` for the tick's sweep, and remove the record, which
-    frees its id. Only the writer whose stamp landed removes it; whether this call did. Blocking."""
+    """End creation ``uuid`` of ``object_id``, whose record is at ``key``: kept under ``_ended/`` for the tick's sweep, then
+    its record removed by ONE DeleteObject under the ETag of a read that found it in one of ``states`` (marked
+    ``deleting`` by the delete ``run`` where one is named; ``creating``, for a create abandoning its own record or the
+    converge tick ending one a dead create left), which frees its id. Whether this call removed it. Blocking.
 
-    def stamp(record: dict[str, Any]) -> dict[str, Any]:
-        if run is not None and record.get(DELETE_RUN) != run:
-            raise NotTheCreation(f"{key} is marked by another delete")
-        return {**record, STATE: tenancy.ENDED, ENDED_AT: now.isoformat()}
+    The creation is kept first, so one whose removal fails is still swept once it goes; the sweep leaves a creation whose
+    record still stands (``tenancy_converge``), so keeping one that this call then does not remove is harmless."""
 
-    stamped = change_creation(root_uri, storage_options, key, uuid, stamp, states=states)
-    if stamped is None:
-        return False
-    end_creation(root_uri, storage_options, kind, stamped, now=now)
-    fs, base = fs_and_base(root_uri, storage_options)
-    with suppress(FileNotFoundError):
-        fs.delete_file(f"{base}/{key}")
-    return True
+    def ends(record: dict[str, Any]) -> bool:
+        return record.get(UUID) == uuid and record.get(STATE) in states and (run is None or record.get(DELETE_RUN) == run)
 
-
-def remove_stale_ended(root_uri: str, storage_options: StorageOptions, kind: tenancy.Kind, key: str, uuid: str, *, older_than: datetime, now: datetime) -> bool:
-    """Remove a record stamped ``ended`` whose stamper died before removing it: restamped by this call under the ETag of a
-    read that found it stamped before ``older_than`` (the converge tick's bound, past which its stamper no longer runs),
-    so of two ticks only one removes it. Whether this call removed it. Blocking."""
-
-    def restamp(record: dict[str, Any]) -> dict[str, Any]:
-        stamped = record.get(ENDED_AT)
-        if not isinstance(stamped, str) or datetime.fromisoformat(stamped) >= older_than:
-            raise NotTheCreation(f"{key} was ended at {stamped}, within the bound")
-        return {**record, ENDED_AT: now.isoformat()}
-
-    restamped = change_creation(root_uri, storage_options, key, uuid, restamp, states=frozenset({tenancy.ENDED}))
-    if restamped is None:
-        return False
-    end_creation(root_uri, storage_options, kind, restamped, now=now)
-    fs, base = fs_and_base(root_uri, storage_options)
-    with suppress(FileNotFoundError):
-        fs.delete_file(f"{base}/{key}")
-    return True
+    end_creation(root_uri, storage_options, kind, object_id, uuid, now=now)
+    return remove_json(root_uri, storage_options, key, ends) is not None

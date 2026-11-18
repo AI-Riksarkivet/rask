@@ -14,17 +14,31 @@ project's creation it was made under, and ``lakehouse.governed.tenancy.made_unde
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+import logging
+from collections.abc import AsyncGenerator, Iterable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final
 
-from lance_namespace import ConcurrentModificationError, TableNotFoundError
+from lance_namespace import ConcurrentModificationError, InternalError, ServiceUnavailableError, TableNotFoundError
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
 from catalog.services import projects, warehouses
-from catalog.services.control_records import DELETE_RUN, DELETING_BY, NO_RETURN, NotTheCreation, change_creation, end_record, read_creation
+from catalog.services.control_records import (
+    DELETE_ASKED,
+    DELETE_FIELDS,
+    DELETE_RUN,
+    DELETING_BY,
+    MARKED_AT,
+    NO_RETURN,
+    DeleteAsked,
+    NotTheCreation,
+    change_creation,
+    end_record,
+    read_creation,
+)
 from lakehouse.governed import tenancy
 from lakehouse.governed.tenancy import DELETING, LIVE, PROJECT, STATE, UUID, WAREHOUSE, Kind
 from lakehouse.records import Stored
@@ -34,6 +48,8 @@ if TYPE_CHECKING:
     from catalog.core.config import Settings
     from lakehouse.storage_options import StorageOptions
 
+
+log = logging.getLogger(__name__)
 
 #: The actor the converge tick's writes are recorded as: no person, the catalog converging an invariant of its own.
 ACTOR: Final = "system:catalog"
@@ -145,15 +161,29 @@ class DeleteTakenOver(ConcurrentModificationError):
     """A delete stopped: another delete of the same creation took its mark over, and finishes it (409)."""
 
 
-class DeleteRun(BaseModel):
-    """One delete of one creation, as its request runs it (ADR 0245, review T2 and T3): the token its mark carries.
+class MarkLeft(ServiceUnavailableError):
+    """A delete failed before its point of no return and its record could not be put back live either: the object is left
+    marked ``deleting``, nothing of it deleted. Asking the same delete again judges it afresh, and the converge tick puts
+    it back live once the delete's run is older than its bound (503: asking again is the recovery). The answer says so in
+    its extension members, since a 5xx ``detail`` is redacted (``lakehouse.ns_errors.problem_detail``)."""
 
-    A delete's mark is written under the ETag of the read its checks judged (:func:`mark`), so a change landing between
-    them refuses it, and a delete asked again over another's mark takes the delete over. Every step after the mark acts
-    only while the record still names this creation marked by this run (:func:`require_own`), so a delete held across
-    its creation's end, and the id made again, ends nothing of the creation that holds the id now. Its point of no return
-    is stamped before its first irreversible step (:func:`pass_no_return`); a refusal before it puts the record back live
-    (:func:`put_back`), and its end is the record's one removal (:func:`end`)."""
+    def __init__(self, message: str, *, problem_extra: dict[str, object]) -> None:
+        super().__init__(message)
+        self.problem_extra = problem_extra
+
+
+class DeleteRun(BaseModel):
+    """One delete of one creation, as its request runs it (ADR 0245, reviews T2, T3 and S1): the token its mark carries.
+
+    A delete's mark is written under the ETag of the read its checks judged (:func:`marked`), so a change landing between
+    them refuses it, and a delete asked again over another's mark takes the delete over: as a NEW delete, judged on every
+    check again, unless the mark it takes over is past its point of no return (:func:`judges`). From the mark to the
+    point of no return (:meth:`Marking.pass_no_return`) nothing irreversible is done, so ANY failure there puts the record
+    back live (:func:`marked`). Its point of no return names the run and what it was asked (``delete_asked``), so the
+    converge tick finishes a delete whose run died past it exactly as asked. Every write past the mark is conditional on
+    a read that found this run's mark (:func:`pass_no_return`, :func:`end`), and every step acts on the creation's own
+    objects, so a delete held across its creation's end, and the id made again, ends nothing of the creation that holds
+    the id now."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -176,6 +206,13 @@ class DeleteRun(BaseModel):
         return DeleteGone(f"{self.kind} not found: {self.id}")
 
 
+def judges(record: dict[str, Any]) -> bool:
+    """Whether a delete reading ``record`` judges its checks (authorization's own gate aside: every delete is gated):
+    unless a delete passed its point of no return on it, when what is left is to finish it. A mark with no stamp is only
+    a delete that began, and taking it over is a new delete (``ChecksTakeOver``)."""
+    return NO_RETURN not in record
+
+
 async def judged(settings: Settings, delete: DeleteRun) -> Stored:
     """The record ``delete`` judges its checks on, with the ETag its mark is conditional on.
 
@@ -188,66 +225,112 @@ async def judged(settings: Settings, delete: DeleteRun) -> Stored:
     return stored
 
 
+async def _lost(settings: Settings, delete: DeleteRun) -> DeleteGone | DeleteTakenOver:
+    """Why a write of ``delete`` conditional on its own mark did not land: the creation went, or another delete holds it."""
+    stored = await run_in_threadpool(read_creation, settings.registry_root, settings.storage_options(), delete.key)
+    record = stored.record if stored is not None else None
+    if record is None or record.get(UUID) != delete.uuid or record.get(STATE) != DELETING:
+        return delete.gone()
+    return DeleteTakenOver(f"another delete of {delete.kind} {delete.id!r} took it over; it finishes the delete")
+
+
+class Marking:
+    """A delete's span from its mark to its point of no return (:func:`marked`)."""
+
+    def __init__(self, settings: Settings, delete: DeleteRun) -> None:
+        self._settings, self._delete = settings, delete
+        self.stamped = False
+
+    async def pass_no_return(self, asked: DeleteAsked | None = None) -> None:
+        """Stamp the delete's point of no return, the span's last step (:func:`pass_no_return`)."""
+        await pass_no_return(self._settings, self._delete, asked)
+        self.stamped = True
+
+
+@asynccontextmanager
+async def marked(settings: Settings, delete: DeleteRun, read: Stored, *, by: str) -> AsyncGenerator[Marking]:
+    """Mark the record ``deleting`` by ``delete`` under the ETag of ``read`` (:func:`mark`), and hold the span to the
+    delete's point of no return, which the block ends with (:meth:`Marking.pass_no_return`).
+
+    ONE way for both delete doors, so no path out of the span skips it: whatever the block raises before the stamp
+    landed (a refusal, a store or OpenFGA failing, the stamp's own write failing) puts the record back live, since
+    nothing irreversible has been done; a delete that lost its mark meanwhile (taken over, or its creation gone) leaves
+    it to whoever holds it. Where the put-back fails too, the answer says the object is left marked and how it is cleared
+    (:class:`MarkLeft`).
+
+    Raises:
+        ConcurrentModificationError: The record changed since ``read``; nothing was marked.
+        MarkLeft: The block failed and the record could not be put back.
+        InternalError: The block ended without passing the point of no return.
+    """
+    await mark(settings, delete, read, by=by)
+    marking = Marking(settings, delete)
+    try:
+        yield marking
+    except (DeleteGone, DeleteTakenOver):
+        raise
+    except BaseException as exc:
+        if not marking.stamped:
+            try:
+                await put_back(settings, delete)
+            except Exception as failed:
+                log.error("delete_mark_left", extra={"kind": delete.kind, "id": delete.id, "uuid": delete.uuid, "error": str(failed)[:300]})
+                cleared = (
+                    f"ask the same delete again, or the catalog's converge tick puts it back live within {create_bound(settings.request_deadline_seconds)}"
+                )
+                raise MarkLeft(
+                    f"{delete.kind} {delete.id!r} is left marked for deletion, nothing of it deleted: its delete failed before its point of no "
+                    f"return and putting it back live failed too; {cleared}.",
+                    problem_extra={delete.kind: delete.id, "marked_for_deletion": True, "deleted": False, "cleared_by": cleared},
+                ) from exc
+        raise
+    if not marking.stamped:
+        raise InternalError(f"the delete of {delete.kind} {delete.id!r} left its span without passing its point of no return")
+
+
 async def mark(settings: Settings, delete: DeleteRun, read: Stored, *, by: str) -> dict[str, Any]:
     """Mark the record ``deleting`` by ``delete``, under the ETag of ``read``: from here no door resolves it, and the
-    first caller to start a delete stays named as its starter.
+    first caller to start a delete stays named as its starter. Asked through :func:`marked`.
 
     Raises:
         ConcurrentModificationError: The record changed since ``read`` (another delete's mark, a protection change): judged
             on a record that is no longer there, the delete changes nothing; asked again, it judges the one there now.
     """
     record = read.record
-    marked = {**record, STATE: DELETING, DELETING_BY: record.get(DELETING_BY) or by, DELETE_RUN: delete.run}
+    marked = {**record, STATE: DELETING, DELETING_BY: record.get(DELETING_BY) or by, DELETE_RUN: delete.run, MARKED_AT: datetime.now(UTC).isoformat()}
     write = projects.mark_deleting if delete.kind == PROJECT else warehouses.mark_deleting
     if not await run_in_threadpool(partial(write, settings.registry_root, settings.storage_options(), delete.id, read, marked)):
         raise ConcurrentModificationError(f"{delete.kind} {delete.id!r} changed while its delete was judged; nothing was deleted, ask again")
     return marked
 
 
-async def require_own(settings: Settings, delete: DeleteRun) -> dict[str, Any]:
-    """The record, where it still names ``delete``'s creation marked by ``delete``: asked after each step of a delete that
-    can take long.
-
-    Raises:
-        DeleteGone: The id no longer names the creation (it ended, or another tenant made it again).
-        DeleteTakenOver: Another delete of it took its mark over, and finishes it.
-    """
-    stored = await run_in_threadpool(read_creation, settings.registry_root, settings.storage_options(), delete.key)
-    record = stored.record if stored is not None else None
-    if record is None or record.get(UUID) != delete.uuid or record.get(STATE) != DELETING:
-        raise delete.gone()
-    if record.get(DELETE_RUN) != delete.run:
-        raise DeleteTakenOver(f"another delete of {delete.kind} {delete.id!r} took it over; it finishes the delete")
-    return record
-
-
-def _own(delete: DeleteRun, change: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    def guarded(record: dict[str, Any]) -> dict[str, Any]:
-        if record.get(DELETE_RUN) != delete.run:
-            raise NotTheCreation(f"{delete.key} is marked by another delete")
-        return change(record)
-
-    return guarded
-
-
-async def pass_no_return(settings: Settings, delete: DeleteRun) -> None:
-    """Stamp ``delete``'s point of no return on its record, right before its first irreversible step: past it a failure
-    leaves the record marked, and the same delete asked again finishes it. The stamp names the run, so a guard of this run
-    refusing before any step landed may still put it back (:func:`put_back`).
+async def pass_no_return(settings: Settings, delete: DeleteRun, asked: DeleteAsked | None = None) -> None:
+    """Stamp ``delete``'s point of no return on its record, right before its first irreversible step, under the ETag of a
+    read that found its own mark: past it a failure leaves the record marked, and the same delete asked again, or the
+    converge tick, finishes it as ``asked``. The stamp names the run, so a guard of this run refusing before any step
+    landed may still put it back (:func:`put_back`).
 
     Raises:
         DeleteGone: The id no longer names the creation.
         DeleteTakenOver: Another delete of it took its mark over.
     """
-    stamp = _own(delete, lambda record: {**record, NO_RETURN: delete.run})
+
+    def stamp(record: dict[str, Any]) -> dict[str, Any]:
+        if record.get(DELETE_RUN) != delete.run:
+            raise NotTheCreation(f"{delete.key} is marked by another delete")
+        return {**record, NO_RETURN: delete.run, DELETE_ASKED: (asked or DeleteAsked()).model_dump()}
+
     change = partial(change_creation, settings.registry_root, settings.storage_options(), delete.key, delete.uuid, stamp, states=frozenset({DELETING}))
     if await run_in_threadpool(change) is None:
-        await require_own(settings, delete)
-        raise delete.gone()
+        raise await _lost(settings, delete)
+
+
+def _back_live(record: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in record.items() if k not in DELETE_FIELDS} | {STATE: LIVE}
 
 
 async def put_back(settings: Settings, delete: DeleteRun) -> bool:
-    """Put the record back ``live`` after a refusal of ``delete`` where nothing irreversible was done to the creation: no
+    """Put the record back ``live`` after ``delete`` stopped where nothing irreversible was done to the creation: no
     delete of it passed its point of no return, or only ``delete`` did, which still holds its mark and refused by a guard
     before any step of it landed. Whether it was put back. A record another delete of it has taken past its point of no
     return stays marked, for that delete to finish."""
@@ -255,26 +338,58 @@ async def put_back(settings: Settings, delete: DeleteRun) -> bool:
     def live(record: dict[str, Any]) -> dict[str, Any]:
         if record.get(NO_RETURN) not in (None, delete.run) or (record.get(NO_RETURN) and record.get(DELETE_RUN) != delete.run):
             raise NotTheCreation(f"{delete.key} is past another delete's point of no return")
-        return {k: v for k, v in record.items() if k not in (DELETING_BY, DELETE_RUN, NO_RETURN)} | {STATE: LIVE}
+        return _back_live(record)
 
     change = partial(change_creation, settings.registry_root, settings.storage_options(), delete.key, delete.uuid, live, states=frozenset({DELETING}))
     return await run_in_threadpool(change) is not None
 
 
+def put_back_stale(control_root: str, storage_options: StorageOptions, kind: Kind, record: dict[str, Any], *, older_than: datetime) -> bool:
+    """The converge tick's put-back (``TickSettlesMarks``): ``record``'s mark, carrying no point of no return and written
+    before ``older_than`` (its run no longer runs), put back live, under the ETag of a read that finds that same run's
+    mark so. Whether it was. Blocking."""
+    run = record.get(DELETE_RUN)
+
+    def live(current: dict[str, Any]) -> dict[str, Any]:
+        if current.get(DELETE_RUN) != run or NO_RETURN in current or not marked_before(current, older_than):
+            raise NotTheCreation(f"{record['id']} holds another mark, or one within the bound")
+        return _back_live(current)
+
+    key = key_of(kind, str(record["id"]))
+    return change_creation(control_root, storage_options, key, str(record[UUID]), live, states=frozenset({DELETING})) is not None
+
+
+def marked_before(record: dict[str, Any], older_than: datetime) -> bool:
+    """Whether ``record``'s mark was written before ``older_than``, so its run no longer runs; a mark naming no time it was
+    written was written by no run this catalog is running, and is judged so."""
+    stamped = record.get(MARKED_AT)
+    try:
+        return not isinstance(stamped, str) or datetime.fromisoformat(stamped) < older_than
+    except ValueError:
+        return True
+
+
 async def end(settings: Settings, delete: DeleteRun) -> None:
-    """End ``delete``'s creation: its record stamped ``ended`` while marked by ``delete``, kept under ``_ended/``, and
-    removed (``control_records.end_record``), which frees its id.
+    """End ``delete``'s creation: kept under ``_ended/``, and its record removed under the ETag of a read that found this
+    run's mark (``control_records.end_record``), which frees its id.
 
     Raises:
         DeleteGone: The id no longer names the creation.
         DeleteTakenOver: Another delete of it took its mark over.
     """
     ending = partial(
-        end_record, settings.registry_root, settings.storage_options(), delete.kind, delete.key, delete.uuid, run=delete.run, now=datetime.now(UTC)
+        end_record,
+        settings.registry_root,
+        settings.storage_options(),
+        delete.kind,
+        delete.key,
+        delete.id,
+        delete.uuid,
+        run=delete.run,
+        now=datetime.now(UTC),
     )
     if not await run_in_threadpool(ending):
-        await require_own(settings, delete)
-        raise delete.gone()
+        raise await _lost(settings, delete)
 
 
 def ids_by_object(kind: Kind, records: Iterable[dict[str, Any]], *, states: frozenset[str] = DOORS) -> dict[str, str]:

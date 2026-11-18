@@ -758,7 +758,7 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
     wh_svc.put_warehouse(control, StorageOptions(), {**elsewhere, "id": "wh-elsewhere", "endpoint": "http://another-store:9000"})
     ended = wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {}
     control_records.end_record(
-        control, StorageOptions(), "warehouse", wh_svc.record_key("wh-p"), ended["uuid"], now=datetime.now(UTC), states=frozenset({"live"})
+        control, StorageOptions(), "warehouse", wh_svc.record_key("wh-p"), "wh-p", ended["uuid"], now=datetime.now(UTC), states=frozenset({"live"})
     )
 
     def unanswered_registry(*_args: Any) -> list[dict[str, str]]:

@@ -54,9 +54,9 @@ class _Harness:
         async def fake_still(_s: object, _tenant: object) -> None:
             return None
 
-        async def fake_require(_c: object, _s: object, _t: object, *, relation: str, obj: str) -> None:
+        async def fake_require(_c: object, _s: object, _t: object, *, relation: str, obj: str, label: str | None = None) -> None:
             if not self.allow:
-                raise ForbiddenError(f"{relation} required on {obj}")
+                raise ForbiddenError(f"{relation} required on {label or obj}")
 
         async def fake_read(_c: object, _obj: str, **_kw: object) -> list[SimpleNamespace]:
             return list(self.existing)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
+from typing import Any
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -39,12 +40,12 @@ from catalog.core.vending import CredentialVendor
 from catalog.schemas import CreateWarehouseRequest, DeleteProfile
 from catalog.services import declaration, project_admins, tenancy, tenancy_converge, warehouses
 from catalog.services import projects as project_registry
-from catalog.services.control_records import GIT, MANAGED_BY, UUID, DeleteMode, ProtectionChange
+from catalog.services.control_records import DELETE_ASKED, GIT, MANAGED_BY, UUID, DeleteAsked, DeleteMode, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
 from lakehouse import protection
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.governed import fga
-from lakehouse.governed.tenancy import kind_of
+from lakehouse.governed.tenancy import PROJECT, Kind, kind_of
 
 
 log = logging.getLogger(__name__)
@@ -221,7 +222,7 @@ class _Converger:
             if grant.object in ungranted:
                 continue
             if grant.relation == project_admins.ADMIN and grant.object in released:
-                await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+                await run_in_threadpool(declaration.forget_record, self._root, self._so, recorded[grant])
                 continue
             await self._attempt(f"revoke:{grant.object}#{grant.relation}", partial(self._revoke, self._client, recorded[grant]))
         for obj in self._estate_objects:
@@ -234,7 +235,7 @@ class _Converger:
             await run_in_threadpool(declaration.settle_grant, self._root, self._so, record)
             await fga.delete_tuples(client, [proof], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
         else:
-            await run_in_threadpool(declaration.forget_grant, self._root, self._so, record.grant)
+            await run_in_threadpool(declaration.forget_record, self._root, self._so, record)
 
     @property
     def _estate_objects(self) -> tuple[str, str]:
@@ -290,7 +291,7 @@ class _Converger:
         if await fga.holds(client, on.client_tuple):
             return
         if settled is not None:
-            await run_in_threadpool(partial(declaration.forget_settled, self._root, self._so, settled))
+            await run_in_threadpool(declaration.forget_record, self._root, self._so, settled)
         proof = fga.evidence(on.object)
         if not await run_in_threadpool(partial(declaration.record_intent, self._root, self._so, grant, evidence=str(proof.user), uuid=on.uuid)):
             raise ConcurrentModificationError(
@@ -304,7 +305,7 @@ class _Converger:
             if not await fga.write_evidenced(client, on.client_tuple, proof, actor=DECLARATION.subject, origin="declaration"):
                 # A door made the tuple between the read above and this Write: it is the door's and it is held, and the
                 # intent goes.
-                await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+                await run_in_threadpool(declaration.forget_record, self._root, self._so, record)
                 return
             await self._settle(client, record)
             await filing.send(told)
@@ -317,7 +318,7 @@ class _Converger:
         grant = record.grant
         on = await self._on_creation(grant)
         if on is None or on.uuid != record.uuid:
-            await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+            await run_in_threadpool(declaration.forget_record, self._root, self._so, record)
             return
         told = announcing.grant_announcement(
             on.client_tuple, action="grant_revoked", actor=DECLARATION.actor, object_name=on.name, object_uuid=on.uuid, extra={"reason": "undeclared"}
@@ -329,7 +330,7 @@ class _Converger:
             else:
                 await fga.delete_tuples(client, [on.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
             await filing.send(told)
-        await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+        await run_in_threadpool(declaration.forget_record, self._root, self._so, record)
         self.tick.grants_revoked += 1
 
     async def _on_creation(self, grant: GrantTuple) -> _OnCreation | None:
@@ -387,17 +388,49 @@ def _spec_drifted(record: dict[str, str], declared: DeclaredWarehouse) -> bool:
     return (record.get("bucket"), held_mode, record.get(warehouses.TRASH_GRACE_DAYS)) != (declared.bucket or declared.id, mode, grace)
 
 
+def finisher(ctx: Tick) -> tenancy_converge.Finisher:
+    """What finishes a delete past its point of no return whose run died: the delete door itself, run by the tick as no
+    caller (ADR 0245, second review S1). Its authorization was asked of the delete that passed the stamp, and a delete
+    resumed past one judges no check, so the door takes the mark over and runs the steps left, a warehouse's with the
+    ``cascade`` and ``purge_bucket`` its stamp records (``delete_asked``): bytes are purged only where the delete that
+    passed the stamp was asked to, under the claim the purge takes itself (ADR 0241 §10)."""
+    request, settings = ctx.request, ctx.settings
+    client = get_fga_client(request)
+    announcer = get_announcer(request, settings, client, Resolver(request, settings), ctx.control, ObjectUuids(request, settings))
+
+    async def finish(kind: Kind, record: dict[str, Any]) -> None:
+        if kind == PROJECT:
+            await project_doors.delete_project(str(record["id"]), record, settings, None, client, announcer)
+            return
+        asked = DeleteAsked.model_validate(record.get(DELETE_ASKED) or {})
+        await warehouse_doors.delete_warehouse(
+            str(record["id"]),
+            warehouse_doors.WarehouseToDelete(record=record),
+            request,
+            settings,
+            None,
+            client,
+            announcer,
+            ObjectUuids(request, settings),
+            cascade=asked.cascade,
+            purge_bucket=asked.purge_bucket,
+        )
+
+    return finish
+
+
 async def tick(ctx: Tick) -> ConvergeTick:
-    """Finish or end every creating project and warehouse record and sweep what a dead creation left
-    (``tenancy_converge.converge``, ADR 0245), then the estate's tenants onto the mounted declaration; a deployment that
-    mounts none converges only the tenancy. What the tenancy's convergence could not converge is reported among the
-    tick's failures."""
+    """Finish or end every creating project and warehouse record, settle every mark a dead delete left and sweep what a
+    dead creation left (``tenancy_converge.converge``, ADR 0245), then the estate's tenants onto the mounted declaration;
+    a deployment that mounts none converges only the tenancy. What the tenancy's convergence could not converge is
+    reported among the tick's failures."""
     request, settings = ctx.request, ctx.settings
     tenanted = await tenancy_converge.converge(
         settings,
         fga_deps.wired(settings, get_fga_client(request)),
         bound=tenancy.create_bound(settings.request_deadline_seconds),
         connections=request.app.state.connections,
+        finish=finisher(ctx),
     )
     if not settings.declaration_file:
         return ConvergeTick(skipped=True, failed=tenanted.failed)

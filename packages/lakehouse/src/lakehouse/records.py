@@ -20,10 +20,11 @@ Two branches, one contract:
 A refused create raises :class:`RecordExistsError`; the caller decides what a lost race means
 (idempotent convergence on an identical record, or the spec's AlreadyExists/ConcurrentModification).
 
-The MUTATION half (F4) lives here too, as :func:`mutate_json` — this module used to say a
-read-modify-write "needs a separate seam", and it does need different mechanics, but not a different
-home: splitting them invited exactly the mistake the create branch was written to prevent, a caller
-reaching for the create primitive because it was the only conditional thing on offer.
+The MUTATION half (F4) lives here too, as :func:`mutate_json`: a read-modify-write needs different
+mechanics, but not a different home: splitting them invited exactly the mistake the create branch was
+written to prevent, a caller reaching for the create primitive because it was the only conditional thing
+on offer. So does the REMOVAL half, :func:`delete_json` and :func:`remove_json`: a record keyed by an id
+another writer may take again is removed only under the ETag of the read that judged it.
 
 An RMW cannot be arbitrated by put-if-not-exists — the key exists, that is the point — so it is
 conditioned on the record's ETag instead: read it, apply the mutation to the record you actually
@@ -291,14 +292,18 @@ def replace_json(root_uri: str, storage_options: StorageOptions, key: str, recor
 
 
 def delete_json(root_uri: str, storage_options: StorageOptions, key: str, *, etag: str) -> None:
-    """Delete ``key`` iff the record there is still the one read with ``etag``, once and never retried: a writer that
-    emptied the record it read removes it, and a write landing since refuses the delete rather than being lost.
+    """Remove ``key`` iff the record there is still the one read with ``etag``, once and never retried: a removal decided
+    on a read never removes what another writer put at the key since (a record of a creation made again under its id),
+    and a write landing since refuses the delete rather than being lost.
 
-    Measured 2026-11-18 on moto 5 and RustFS 1.0.3: a DeleteObject naming a stale If-Match answers 412 and keeps the
-    object, a current one deletes it, and one naming a key already gone answers 404 (moto) or 412 (RustFS).
+    On S3 one ``DeleteObject`` naming ``If-Match`` (measured 2026-11-18 on the pinned RustFS 1.0.3: a stale ETag answers
+    412 and keeps the object; 40 rounds of 8 conditional deletes racing 8 conditional puts under one ETag each had exactly
+    one winner; on moto 5.2.2 a stale ETag answers ``PreconditionFailed``; a key already gone answers 404 on moto and 412
+    on RustFS; AWS S3 general purpose buckets since 2025-09); on a local root the same compare and unlink under the
+    replace's exclusive lock.
 
     Raises:
-        RecordChangedError: The record changed or went since that read.
+        RecordChangedError: The record changed, or went, since that read.
     """
     if on_s3(root_uri):
         from botocore.exceptions import ClientError
@@ -325,12 +330,44 @@ def delete_json(root_uri: str, storage_options: StorageOptions, key: str, *, eta
     with handle as fh:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
-            if os.fstat(fh.fileno()).st_nlink == 0 or hashlib.sha256(fh.read()).hexdigest() != etag:
+            if not _still_at(fh.fileno(), target) or hashlib.sha256(fh.read()).hexdigest() != etag:
                 raise RecordChangedError(f"record {key!r} changed under {root_uri!r}")
-            # Unlinked under the lock: a replace waiting on it finds the file unlinked and refuses (:func:`_replace_json`).
+            # Unlinked under the lock: a replace waiting on it finds the file gone from its path and refuses
+            # (:func:`_replace_json`).
             os.unlink(target)
         finally:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def remove_json(
+    root_uri: str, storage_options: StorageOptions, key: str, judge: Callable[[dict[str, Any]], bool], *, attempts: int = _MUTATE_ATTEMPTS
+) -> dict[str, Any] | None:
+    """Remove the record at ``key`` where ``judge`` admits it as read, by :func:`delete_json` under that read's ETag; the
+    record removed, or ``None`` where none stands that ``judge`` admits. A write landing between the read and the removal
+    refuses it, and the record is read and judged again, so nothing is removed that ``judge`` did not see.
+
+    Raises:
+        RecordChangedError: Every attempt lost the race.
+    """
+    for _ in range(attempts):
+        current = read_json(root_uri, storage_options, key)
+        if current is None or not judge(current[0]):
+            return None
+        try:
+            delete_json(root_uri, storage_options, key, etag=current[1])
+        except RecordChangedError:
+            continue
+        return current[0]
+    raise RecordChangedError(f"record {key!r} under {root_uri!r} kept changing across {attempts} attempts")
+
+
+def _still_at(fd: int, target: str) -> bool:
+    """Whether the file open as ``fd`` is still the one at ``target``: a conditional delete unlinks it under the lock, and
+    a writer that opened it before then holds a file no path names, whose write would land nowhere."""
+    try:
+        return os.stat(target).st_ino == os.fstat(fd).st_ino
+    except FileNotFoundError:
+        return False
 
 
 def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any], *, etag: str) -> None:
@@ -378,7 +415,7 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, reco
             fh.seek(0)
             # A record deleted while this waited for the lock (:func:`delete_json`) is unlinked with its bytes intact: a
             # write into it would be lost, so it is a record that changed.
-            if os.fstat(fh.fileno()).st_nlink == 0 or hashlib.sha256(fh.read()).hexdigest() != etag:
+            if not _still_at(fh.fileno(), target) or hashlib.sha256(fh.read()).hexdigest() != etag:
                 raise RecordChangedError(f"record {key!r} changed under {root_uri!r}")
             fh.seek(0)
             fh.truncate()

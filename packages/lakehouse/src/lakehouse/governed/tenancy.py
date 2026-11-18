@@ -49,11 +49,10 @@ STATE: Final = "state"
 CREATING: Final = "creating"
 LIVE: Final = "live"
 DELETING: Final = "deleting"
-#: Stamped by the delete that ended the creation, under the ETag of a read that found its own mark, right before that
-#: delete removes the record: a record is removed only by the one writer whose stamp landed (ADR 0245, review T2).
-ENDED: Final = "ended"
-type State = Literal["creating", "live", "deleting", "ended"]
-STATES: Final = (CREATING, LIVE, DELETING, ENDED)
+#: A creation's end is its record's removal, by one DeleteObject under the ETag of the read that found it
+#: (``catalog.services.control_records.end_record``), so no state names an ended creation.
+type State = Literal["creating", "live", "deleting"]
+STATES: Final = (CREATING, LIVE, DELETING)
 #: The shape of a uuid as :func:`new_uuid` mints it: 32 lowercase hex digits. A create refuses an id of this shape
 #: (:func:`require_an_id`), so no id is ever read as a creation's uuid.
 UUID_PATTERN: Final = r"[0-9a-f]{32}"

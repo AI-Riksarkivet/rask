@@ -86,7 +86,7 @@ from catalog.schemas import (
 from catalog.services import clone_endings, dataplane, native, seal_posture, table_claims, tenancy, trash_doors, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, RecordGone
-from catalog.services.control_records import PROJECT_UUID, STATE, UUID, ProtectionChange, with_protection
+from catalog.services.control_records import PROJECT_UUID, STATE, UUID, DeleteAsked, ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, SEAL_CHECK, ProbeCheck, ProbeReport, Sealed, summarize_probe
 from lakehouse import base_registry, clone_sources, data_directories, location_claims, stored_objects, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
@@ -163,8 +163,8 @@ async def create_warehouse(
     ids = validated_ids(settings, body)
     _warehouse_id, project_id, _bucket = ids
 
-    async def gate(obj: str) -> None:
-        await fga_deps.require_relation(client, settings, token, relation="can_create_warehouse", obj=obj)
+    async def gate(obj: str, label: str) -> None:
+        await fga_deps.require_relation(client, settings, token, relation="can_create_warehouse", obj=obj, label=label)
 
     project = await fga_deps.on_tenant(settings, PROJECT, project_id, gate=gate, absent=fga_deps.project_missing(project_id))
     # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
@@ -730,7 +730,7 @@ async def activate_warehouse(
 async def _require_project_admin(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: tenancy.Tenant) -> None:
     """Refuse a caller without ``can_administer`` on ``project``'s creation: the authority over its warehouses'
     destruction, and so over the lock on it."""
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=project.obj)
+    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=project.obj, label=f"project:{project.id}")
 
 
 async def _project_of(settings: Settings, record: dict[str, str]) -> tenancy.Tenant | None:
@@ -1250,20 +1250,25 @@ async def delete_warehouse(
     ``can_purge_dead_tenant_warehouse`` on the estate reaches it with ``?purge_bucket=true``, the bucket in the
     warehouse's place.
 
-    **The point of no return** (ADR 0245, review T2 and T3). Every check that can refuse with nothing changed runs
+    **The point of no return** (ADR 0245, reviews T2, T3 and S1). Every check that can refuse with nothing changed runs
     before the mark, judged on one read of the record that the mark is then written under (its ETag; a record changed
-    since is refused 409, nothing changed): the protection (step 3), the emptiness (step 4), the purge's guards (step 7),
-    the warehouse's namespace fence taken for the drop (409 while another holds it), the subtree's protection and the
-    clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is written beneath it (a
-    declare or a commit is refused 409). The namespaces are read again after the mark (`ChildrenBeforeMark`): one made in
-    between refuses 409 without ``cascade``, or is held to the subtree's checks with it, and such a refusal PUTS THE
-    RECORD BACK live. Then the POINT OF NO RETURN is stamped on the record, before the first irreversible step (the
+    since is refused 409, nothing changed): the protection (step 3; judged again by a delete taking over a mark short of
+    its point of no return, ``tenancy.judges``), the emptiness (step 4), the purge's guards (step 7), the warehouse's
+    namespace fence taken for the drop (409 while another holds it), the subtree's protection, the trash it cannot
+    account for and the clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is
+    written beneath it (a declare or a commit is refused 409). The namespaces are read again after the mark
+    (`ChildrenBeforeMark`): one made in between refuses 409 without ``cascade``, or is held to the subtree's checks with
+    it. From the mark to the stamp is one span (``tenancy.marked``): ANY failure in it, such a refusal or a store not
+    answering, PUTS THE RECORD BACK live, and one whose put-back fails too answers 503 saying the warehouse is left
+    marked (the converge tick puts it back past its bound). Then the POINT OF NO RETURN is stamped on the record, with
+    the ``cascade`` and ``purge_bucket`` the delete was asked, before the first irreversible step (the
     trash's end, a table's detach, a grant's revoke): past it the delete finishes, or its answer is ``partial`` (503)
-    and the same delete asked again finishes it. Each step past the mark that can take long is followed by a read of the
-    record (``tenancy.require_own``): a delete asked again took the delete over (409), or the creation ended and the id
-    names another (404), and the delete stops there, ending nothing of the warehouse that holds the id now. Its trash is
-    the records filed under its own creation (``warehouses.trash_owned_by``), and its end is the record's one removal
-    (``tenancy.end``).
+    and the same delete asked again, or the converge tick as the stamp records it was asked, finishes it. A step past the
+    mark acts on this creation's own objects: its trash is the records filed under its own creation
+    (``warehouses.trash_owned_by``), its cascade writes only under the warehouse's namespace fence, which a delete made
+    of a warehouse made again under the id takes from it, and its end is the record's one removal, conditional on a read
+    that found this delete's own mark (``tenancy.end``): a delete taken over answers 409, and one whose creation ended and
+    the id names another answers 404, ending nothing of the warehouse that holds the id now.
     """
     so = settings.storage_options()
     if addressed.record is None:
@@ -1277,8 +1282,9 @@ async def delete_warehouse(
     project = record["project"]
     obj = _object_of(record)
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
-    # state, so it runs strictly after the gate above. A delete asked again over a mark judged these when it marked.
-    if record.get(STATE) != DELETING:
+    # state, so it runs strictly after the gate above. Judged again over a mark short of its point of no return: taking it
+    # over is a new delete (``ChecksTakeOver``); a delete past one was judged when it passed it.
+    if tenancy.judges(record):
         fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)
 
     # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
@@ -1337,10 +1343,10 @@ async def delete_warehouse(
         trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, record)
         if purge_bucket:
             await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
-        await tenancy.mark(settings, delete, judged, by=current_subject(token))
-        # Marked `deleting` (`MarksFirst`): a namespace made after the mark is refused by its door, and one made before it
-        # is in this second read. Nothing irreversible is done yet, so a refusal here puts the warehouse back live.
-        try:
+        async with tenancy.marked(settings, delete, judged, by=current_subject(token)) as marking:
+            # Marked `deleting` (`MarksFirst`): a namespace made after the mark is refused by its door, and one made before
+            # it is in this second read. Nothing irreversible is done yet, so a refusal here, or any failure before the
+            # stamp, puts the warehouse back live.
             if ns_conn is not None and (late := sorted(set(await _namespaces_in(ns_conn, warehouse_id)) - set(held))):
                 if not cascade:
                     raise NamespaceNotEmptyError(
@@ -1350,12 +1356,9 @@ async def delete_warehouse(
                 if purge_bucket:
                     await _require_no_outside_clones(ns_conn, settings, subtrees=acquired, trashed=[])
                 subtrees = [*subtrees, *acquired]
-            # The point of no return: past it the delete finishes, or the same delete asked again does.
-            await tenancy.pass_no_return(settings, delete)
-        except Exception as exc:
-            if _a_refusal(exc) and not isinstance(exc, (tenancy.DeleteGone, tenancy.DeleteTakenOver)):
-                await tenancy.put_back(settings, delete)
-            raise
+            # The point of no return: past it the delete finishes, or the same delete asked again, or the converge tick
+            # as the stamp records it was asked, does.
+            await marking.pass_no_return(DeleteAsked(cascade=cascade, purge_bucket=purge_bucket))
         # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
         # What the delete announces is filed before it changes anything, so a delete that fails part-way still announces what
         # it did once the store shows it ([[LH-576]]): a deregister marker per table it means to detach, landed once the
@@ -1417,12 +1420,8 @@ async def delete_warehouse(
                         log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
                     await _forget_trashed(settings, entry, purge=purge.hold is not None)
                     trash_ended.append(f"{kind}:{canonical}")
-                await tenancy.require_own(settings, delete)
                 if ns_conn is not None:
                     for subtree in subtrees:
-                        # The record read again before each subtree: a delete held across its warehouse's end, and the id made
-                        # again, drops no namespace of the warehouse that holds the id now.
-                        await tenancy.require_own(settings, delete)
                         # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
                         # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
                         removed = [item for item in subtree.descendants if item.kind == "namespace"]
@@ -1444,7 +1443,6 @@ async def delete_warehouse(
                             namespaces_dropped.append(fga.canonical_object_id(namespace))
                         async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
                             revoked += count
-                    await tenancy.require_own(settings, delete)
                     # The warehouse's own row last, once every namespace beneath it is gone.
                     with suppress(NamespaceNotFoundError):
                         await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=[warehouse_id]))
@@ -1459,7 +1457,6 @@ async def delete_warehouse(
                 # wrote on it after this read wrote on a dead object nothing resolves to, which the converge tick sweeps once
                 # the creation is ended.
                 revoked += len(await fga_deps.end_object(client, settings, obj, token=token))
-                await tenancy.require_own(settings, delete)
                 # The record goes after the bytes: it is what the door is addressed by, so while the purge can still fail, it
                 # keeps the warehouse for the re-issue that finishes it; the claim goes last, once no record names the bucket.
                 purged = await purge.delete_bytes(request, settings)

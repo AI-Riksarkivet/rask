@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Final
 
 from lakehouse import control_prefixes
-from lakehouse.governed.tenancy import PROJECT_UUID
+from lakehouse.governed.tenancy import LIVE, PROJECT_UUID, STATE
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.record_store import list_records, read_record
 from lakehouse.storage_options import StorageOptions
@@ -61,15 +61,19 @@ def read_warehouse_records(control_root: str, storage_options: StorageOptions) -
 
 
 def maintainable_buckets(records: list[dict[str, Any]]) -> list[str]:
-    """The buckets whose datasets the sweep should maintain, sorted and de-duplicated.
+    """The buckets whose datasets the sweep should maintain, sorted and de-duplicated: those of LIVE warehouses.
 
     DEACTIVATED warehouses are excluded, and that is a decision rather than an oversight. Deactivate
     is offboarding step one — the resolver already 403s every operation on a quarantined tenant's
     namespaces — so compacting and reclaiming its version history would be the one process still
     rewriting data the estate has said nobody may touch. A reactivated warehouse is swept again on
     the next tick, having lost nothing but a cycle of maintenance.
+
+    A warehouse being created or deleted is excluded too (ADR 0245, second review S4): one being created holds nothing
+    yet, and one being deleted is emptied by its own delete, which ends its trash and purges its bytes under the claim it
+    holds; maintenance rewriting or reclaiming beneath it would race that delete.
     """
-    buckets = {str(r["bucket"]) for r in records if r.get("bucket") and str(r.get("status", "active")).lower() != "deactivated"}
+    buckets = {str(r["bucket"]) for r in records if r.get("bucket") and r.get(STATE) == LIVE and not is_deactivated(r)}
     return sorted(buckets)
 
 
@@ -79,7 +83,9 @@ def is_deactivated(record: dict[str, Any]) -> bool:
 
 
 def warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, Any] | None:
-    """The record of warehouse ``warehouse_id``, read by its key, or ``None`` when no record holds that id.
+    """The record of warehouse ``warehouse_id`` while it is live, read by its key, or ``None`` when no record holds that
+    id live: a warehouse being created or deleted is maintained by no one but its own create or delete (ADR 0245, second
+    review S4), and no drop files trash beneath one (``lakehouse.trash.put``).
 
     A warehouse is the first segment of every name beneath it ([[LH-593]]), so a table's warehouse is read here by the
     table's own first segment, one read whatever the registry holds. The estate's own warehouse has no record, so the
@@ -91,7 +97,8 @@ def warehouse_record(control_root: str, storage_options: StorageOptions, warehou
     """
     if not CONTROL_ID_RE.fullmatch(warehouse_id):
         return None
-    return read_record(control_root, storage_options, f"{REGISTRY_PREFIX}/{warehouse_id}.json")
+    record = read_record(control_root, storage_options, f"{REGISTRY_PREFIX}/{warehouse_id}.json")
+    return record if record is not None and record.get(STATE) == LIVE else None
 
 
 def bucket_claimant(control_root: str, storage_options: StorageOptions, bucket: str) -> tuple[str, str] | None:

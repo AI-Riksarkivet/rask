@@ -229,6 +229,15 @@ def test_a_project_policy_governs_only_the_buckets_of_the_creation_that_set_it(e
         _project_uuid(estate),
     ], written
 
+    # The tick ends one an earlier creation left, by a removal conditional on the read that found it naming that creation
+    # (second review S3), and leaves the live creation's.
+    policies.put_policy(settings.registry_root, so, {**written, PROJECT_UUID: dead})
+    ended = _converge(estate, bound=timedelta(0))
+    policies.put_policy(settings.registry_root, so, written)
+    kept = _converge(estate, bound=timedelta(0))
+    assert (f"policy:project:{PROJECT}" in ended.ended, f"policy:project:{PROJECT}" in kept.ended) == (True, False), (ended, kept)
+    assert policies.get_policy(settings.registry_root, so, "project", PROJECT) == written
+
 
 def test_a_bucket_git_declares_is_claimed_once_the_dead_creation_that_claimed_it_is_released(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401
     """alice's create of ``wh-a`` ran across acme's delete and left a claim on ``wh-a-bucket`` naming the dead creation,

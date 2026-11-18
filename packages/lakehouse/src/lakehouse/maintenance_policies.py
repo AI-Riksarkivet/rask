@@ -47,7 +47,7 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse import control_prefixes, records, stored_objects, warehouse_records
-from lakehouse.governed.tenancy import PROJECT_UUID
+from lakehouse.governed.tenancy import PROJECT_UUID, made_under
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, read_record, record_key
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, on_s3
@@ -129,6 +129,15 @@ def get_policy(control_root: str, storage_options: StorageOptions, kind: str, ke
 def delete_policy(control_root: str, storage_options: StorageOptions, kind: str, key: str) -> bool:
     """Remove one policy record; ``False`` when it did not exist (delete is idempotent)."""
     return delete_record(control_root, storage_options, record_key(PREFIX, kind, key))
+
+
+def end_project_policy(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> bool:
+    """Remove project ``project``'s policy where it names the creation ``project_uuid`` that set it, under the ETag of the
+    read that found it so (``records.remove_json``): a removal decided on one creation of the project never removes a
+    policy the tenant holding the id now set (ADR 0245, second review S3). Whether one was removed."""
+    return (
+        records.remove_json(control_root, storage_options, record_key(PREFIX, "project", project), lambda record: made_under(record, project_uuid)) is not None
+    )
 
 
 def list_policies(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:

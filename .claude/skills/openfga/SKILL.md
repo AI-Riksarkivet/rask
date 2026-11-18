@@ -158,7 +158,11 @@ dead object, which the converge tick sweeps (`control_records.read_ended`, `fga.
 naming types read from the model's type restrictions, `fga.types_naming`). EVERY door on a tenant's id gates through
 ONE function, `fga_deps.on_tenant` (`require_on_tenant` for a relation): an absent id is gated as an object nobody
 holds (`tenancy.nowhere`), so a caller refused is answered alike for an id that stands and one that does not, and
-only a caller the gate admits learns that an id is missing; EVERY door writing a tuple on a creation resolves again
+only a caller the gate admits learns that an id is missing. The gate is asked with the object AND its label
+`<kind>:<id>`, and **a refusal names the label, what the caller sent, never a resolved object or a uuid** (second review
+S2: a refusal naming `project:<uuid>` told the ids apart and leaked the creation; `_require`, `_require_any`'s
+`labels`, `_require_rung`'s and `require_grant_authority`'s `label`); a creation's uuid is the audit row's and the
+events'. Both rosters compare the whole problem body. EVERY door writing a tuple on a creation resolves again
 after its Write through ONE helper, `tenancy.require_still` (review T4, T6; both rosters are tests that walk the router).
 The estate admin's tools take `project:<id>` / `warehouse:<id>` and resolve them to the creation (a write: live; a
 question: any standing record), take a standing creation's uuid, answer 400 for anything else shaped like a tenancy

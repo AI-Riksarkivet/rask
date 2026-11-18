@@ -596,13 +596,13 @@ def _refuse_absent(*, user: str, relation: str, label: str) -> PermissionDeniedE
     return PermissionDeniedError(f"{relation} required on {label}")
 
 
-async def _require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str, rung: write_judge.Rung) -> str:
+async def _require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str, rung: write_judge.Rung, label: str | None = None) -> str:
     """Ask ``rung`` on the object its name resolves to, refuse it as :func:`_require` does, and return that object.
 
     A name that holds no object is refused alike: no tuple can name it, and the refusal names the name, as it does for
     an object that is there.
     """
-    label = _label(rung)
+    label = label or _label(rung)
     if not isinstance(rung.on, str) and rung.on.in_trash:
         segments = list(rung.on.segments)
         trashed = await resolver.trashed(rung.on.kind, segments)
@@ -644,7 +644,7 @@ async def _require_trashed(
     return next(iter(admitted))
 
 
-async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[str, str]], label: str | None = None) -> None:
+async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[str, str]], labels: Mapping[str, str] | None = None) -> None:
     """Allow if ANY ``(relation, object)`` door checks out; audit the decision, and raise 403 otherwise.
 
     :func:`_require` expresses a single rung; a two-door gate (the project's own admin OR the estate admin)
@@ -661,7 +661,7 @@ async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[st
             return
     for relation, obj in doors:  # reaching here means every door was probed and every one denied
         audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation=relation, subject=user, resource=obj)
-    wanted = " or ".join(f"{relation} on {label or obj}" for relation, obj in doors)
+    wanted = " or ".join(f"{relation} on {(labels or {}).get(obj, obj)}" for relation, obj in doors)
     log.info("access_denied", extra={"relation": "any_of", "object": wanted})
     raise PermissionDeniedError(f"one of [{wanted}] required")
 
@@ -737,6 +737,7 @@ async def _authorize_grant(
     segments: list[str],
     revoking: bool,
     obj: str | None = None,
+    label: str | None = None,
 ) -> None:
     """Authorize grant/revoke on the RUNG in the body — ``can_grant_<relation>``, not a blanket bar.
 
@@ -793,9 +794,9 @@ async def _authorize_grant(
     if f"can_grant_{relation}" not in _grant_actions(fga_type):
         raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
     rung = write_judge.Rung(relation=action, on=obj) if obj is not None else _rung(action, fga_type, segments)
-    obj = await _require_rung(client, resolver, user=user, rung=rung)
+    obj = await _require_rung(client, resolver, user=user, rung=rung, label=label)
     if not revoking:
-        await refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
+        await refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj, label=label)
 
 
 async def require_grant_authority(
@@ -809,18 +810,20 @@ async def require_grant_authority(
     segments: list[str],
     revoking: bool,
     obj: str | None = None,
+    label: str | None = None,
 ) -> None:
     """Gate a grant or revoke door the router leaves to its handler exactly as :func:`authorize` gates the table and
     namespace ones, through :func:`_authorize_grant`: ``can_grant_<rung>`` from the body, or ``can_revoke_grant``, and no
     grant that raises the caller's own access ([[LH-555]]). ``obj`` is the object a project's or a warehouse's door
-    resolved its id to (its live creation, ADR 0245). A no-op with FGA off; with it on, no client is 503 and no caller
+    resolved its id to (its live creation, ADR 0245), and ``label`` what a refusal names it by, the id its caller sent. A
+    no-op with FGA off; with it on, no client is 503 and no caller
     401 (:func:`authorization`), since nothing before the handler decided."""
     if (authz := authorization(settings, client, token)) is None:
         return
-    await _authorize_grant(request, authz.client, resolver, user=authz.subject, fga_type=fga_type, segments=segments, revoking=revoking, obj=obj)
+    await _authorize_grant(request, authz.client, resolver, user=authz.subject, fga_type=fga_type, segments=segments, revoking=revoking, obj=obj, label=label)
 
 
-async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: object, relation: str, obj: str) -> None:
+async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: object, relation: str, obj: str, label: str | None = None) -> None:
     """Refuse a grant that would hand the CALLER a rung they do not already hold.
 
     Separation of duties, enforced at the only layer that can see both sides. See
@@ -862,7 +865,7 @@ async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: ob
         return
     audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation="can_grant_self", subject=user, resource=obj, grantee=resolved, granted_relation=relation)
     log.info("self_elevation_refused", extra={"relation": relation, "object": obj})
-    raise PermissionDeniedError(f"a grant may not raise your own access: you do not hold {relation} on {obj}")
+    raise PermissionDeniedError(f"a grant may not raise your own access: you do not hold {relation} on {label or obj}")
 
 
 def require_wired(client: OpenFgaClient | None) -> OpenFgaClient:
@@ -2964,7 +2967,9 @@ async def require_relation(
     await authz.require(relation, obj, label=label)
 
 
-async def require_any_relation(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, doors: list[tuple[str, str]]) -> None:
+async def require_any_relation(
+    client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, doors: list[tuple[str, str]], labels: Mapping[str, str] | None = None
+) -> None:
     """Gate on ANY of ``doors``, each a ``(relation, object)`` pair, through the audited :func:`_require_any` core.
 
     For a handler that two rungs open, one on its object and one above it (a tenant's record: a member's, or the estate
@@ -2979,7 +2984,7 @@ async def require_any_relation(client: OpenFgaClient | None, settings: Settings,
     """
     if (authz := authorization(settings, client, token)) is None:
         return
-    await _require_any(authz.client, user=authz.subject, doors=doors)
+    await _require_any(authz.client, user=authz.subject, doors=doors, labels=labels)
 
 
 async def require_relation_on_a_path(
@@ -3225,7 +3230,7 @@ async def on_tenant(
     kind: tenancy.Kind,
     object_id: str,
     *,
-    gate: Callable[[str], Awaitable[None]],
+    gate: Callable[[str, str], Awaitable[None]],
     states: frozenset[str] = tenancy.DOORS,
     absent: TableNotFoundError | None = None,
 ) -> tenancy.Tenant:
@@ -3235,13 +3240,16 @@ async def on_tenant(
 
     An id no such creation holds is gated as an object nobody holds anything on (``tenancy.nowhere``), so a caller the
     gate refuses is refused exactly as for one that stands, and only a caller the gate admits learns that it is missing.
+    ``gate`` is asked with the object and its LABEL, ``<kind>:<id>``, what the caller sent: a refusal names the label and
+    never the object, so it is worded alike for an id that stands and one that does not, and never carries a creation's
+    uuid (ADR 0245, second review S2). The uuid is the audit row's, written by the gate.
 
     Raises:
         PermissionDeniedError: ``gate`` refused the caller (or whatever ``gate`` raises in its place).
         TableNotFoundError: No such creation holds the id, told to a caller the gate admitted.
     """
     tenant = await tenancy.resolved(settings, kind, object_id, states=states)
-    await gate(tenant.obj if tenant is not None else tenancy.nowhere(kind))
+    await gate(tenant.obj if tenant is not None else tenancy.nowhere(kind), f"{kind}:{object_id}")
     if tenant is None:
         raise absent or TableNotFoundError(f"{kind} not found: {object_id}")
     return tenant
@@ -3265,7 +3273,7 @@ async def require_on_tenant(
         TableNotFoundError: No live creation holds the id.
     """
 
-    async def gate(obj: str) -> None:
-        await require_relation(client, settings, token, relation=relation, obj=obj)
+    async def gate(obj: str, label: str) -> None:
+        await require_relation(client, settings, token, relation=relation, obj=obj, label=label)
 
     return await on_tenant(settings, kind, object_id, gate=gate, states=states)

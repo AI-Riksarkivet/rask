@@ -10,9 +10,16 @@ hand-run:
   :func:`tenancy.create_bound`) is finished the same way where its project's creation it names is live and its bucket's
   claim names it, its catalog row ensured first; where its project's creation is not live, it is ended: its object
   revoked, its record ended, and its bucket's claim released on the terms the bucket half sets.
+- A record still ``deleting`` whose delete's run no longer runs (marked before the bound) is settled one way or the
+  other (ADR 0245, second review S1): a mark with no point of no return is put back live, since nothing irreversible was
+  done under it (``tenancy.put_back_stale``); a mark past its point of no return is finished as the stamp records the
+  delete was asked (``finish``: the delete door's own steps, taking the mark over), since those steps were authorized
+  and begun. Nothing stays ``deleting`` with no reconciler ending it.
 - An ended creation is swept: what stands on its object and names it is revoked (``fga.revoke_object_tuples``), and it is
-  forgotten once a sweep past the bound found nothing, since no door's write can land on it after that.
-- A role or a project policy naming a project creation that is not live is reported; a role is ended.
+  forgotten once a sweep past the bound found nothing, since no door's write can land on it after that. A creation whose
+  record still stands is left: its delete kept it before removing the record, and removes it, or puts it back.
+- A role or a project policy naming a project creation that is not live is reported and ended, each under a read that
+  found it naming that creation.
 - A bucket claim of a dead creation that no record names is released where the bucket holds only what a create writes
   (``warehouses.written_by_others``), once the tick, holding the claim, has removed exactly that and found the bucket
   empty; anything else keeps the claim, reported as ``bucket:<name>``, which the estate owner's purge reaches by its
@@ -30,17 +37,18 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final
 
-from lance_namespace import InternalError
+from lance_namespace import ConcurrentModificationError, InternalError
 from opentelemetry import metrics
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps
 from catalog.services import control_records, projects, roles, tenancy, warehouses
+from catalog.services.control_records import NO_RETURN
 from catalog.services.tenancy import ACTOR, object_of_record
 from lakehouse import maintenance_policies
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.tenancy import CREATING, ENDED, LIVE, PROJECT, PROJECT_UUID, STATE, UUID, WAREHOUSE, Kind, made_under
+from lakehouse.governed.tenancy import CREATING, DELETING, LIVE, PROJECT, PROJECT_UUID, STATE, UUID, WAREHOUSE, Kind, made_under
 
 
 if TYPE_CHECKING:
@@ -61,12 +69,20 @@ _orphans = metrics.get_meter("lance.catalog").create_counter(
 #: Why the converge tick released a bucket's claim.
 RELEASED_UNBORN: Final = "claimed_by_a_dead_creation"
 
+#: What finishes a delete past its point of no return whose run died: the delete door's own steps, run by the tick on
+#: the record of ``kind`` it names, as its stamp records the delete was asked.
+type Finisher = Callable[[Kind, dict[str, Any]], Awaitable[None]]
+
 
 class TenancyConverged(BaseModel):
     """What one run did, each object as ``project:<id>``, ``warehouse:<id>``, ``role:<uuid>`` or ``bucket:<name>``."""
 
     #: Creating records finished, flipped live.
     finished: list[str] = Field(default_factory=list)
+    #: Marks of a delete that died before its point of no return, put back live.
+    put_back: list[str] = Field(default_factory=list)
+    #: Deletes that died past their point of no return, finished.
+    deleted: list[str] = Field(default_factory=list)
     #: Creating warehouse records of a dead project creation ended, and orphan roles ended.
     ended: list[str] = Field(default_factory=list)
     #: Tuples revoked from ended creations, by the object they stood on.
@@ -98,8 +114,12 @@ class _Convergence:
     """One run over the registry and OpenFGA: ONE listing of each registry, and OpenFGA requests only for what needs
     work (a creating record, an ended creation, an orphan), never one per record."""
 
-    def __init__(self, settings: Settings, client: OpenFgaClient | None, *, bound: timedelta, now: datetime, connections: NamespaceConnections) -> None:
-        self._settings, self._client, self._connections = settings, client, connections
+    def __init__(
+        self, settings: Settings, client: OpenFgaClient | None, *, bound: timedelta, now: datetime, connections: NamespaceConnections, finish: Finisher | None
+    ) -> None:
+        self._settings, self._client, self._connections, self._finish = settings, client, connections, finish
+        #: The uuid of every creation whose record stands, by kind; ``None`` where its listing failed.
+        self._standing: dict[Kind, set[str] | None] = {PROJECT: None, WAREHOUSE: None}
         self._root, self._so = settings.registry_root, settings.storage_options()
         self._now = now
         self._older_than = now - bound
@@ -108,9 +128,11 @@ class _Convergence:
         self.done = TenancyConverged()
 
     async def run(self) -> TenancyConverged:
-        listed = await self._listing("projects", partial(projects.read_projects, self._root, self._so, ended=True))
+        listed = await self._listing("projects", partial(projects.read_projects, self._root, self._so))
         if listed is not None:
-            records, unreadable = await self._removing_ended(PROJECT, listed)
+            records, unreadable = listed
+            self._standing[PROJECT] = {str(r[UUID]) for r in records}
+            await self._deleting(PROJECT, records)
             # A project record that cannot be read may name the creation a record was made under, so nothing is judged a
             # dead creation's while one cannot: orphans are reported and kept.
             self._may_end = not unreadable
@@ -124,10 +146,11 @@ class _Convergence:
         return self._done()
 
     async def _children(self, live: dict[str, str]) -> None:
-        listed_warehouses = await self._listing("warehouses", partial(warehouses.read_warehouses, self._root, self._so, ended=True))
-        stored, unreadable_warehouses = (
-            await self._removing_ended(WAREHOUSE, listed_warehouses) if listed_warehouses is not None else ([], ["the warehouse registry"])
-        )
+        listed_warehouses = await self._listing("warehouses", partial(warehouses.read_warehouses, self._root, self._so))
+        stored, unreadable_warehouses = listed_warehouses if listed_warehouses is not None else ([], ["the warehouse registry"])
+        if listed_warehouses is not None:
+            self._standing[WAREHOUSE] = {str(r[UUID]) for r in stored}
+            await self._deleting(WAREHOUSE, stored)
         listed_claims = await self._listing("claims", partial(warehouses.read_claims, self._root, self._so))
         claims, unreadable_claims = listed_claims or ([], ["the bucket claims"])
         # A warehouse record or a claim that cannot be read may be what keeps a bucket from another tenant, so while any
@@ -147,21 +170,36 @@ class _Convergence:
                 await self._attempt(f"bucket:{claim['bucket']}", partial(self._claim, claim, live, standing))
         await self._attempt("policies", partial(self._policies, live))
 
-    async def _removing_ended(self, kind: Kind, listed: tuple[list[dict[str, Any]], list[str]]) -> tuple[list[dict[str, Any]], list[str]]:
-        """``listed`` without the records stamped ``ended``, each removed where its stamp is older than the bound: the delete
-        that stamped it died before removing it, and no longer runs (``control_records.remove_stale_ended``)."""
-        records, unreadable = listed
+    async def _deleting(self, kind: Kind, records: list[dict[str, Any]]) -> None:
+        """Settle each record ``deleting`` whose delete's run is older than the bound (``DeletingSettles``)."""
         for record in records:
-            if record.get(STATE) == ENDED:
-                key = tenancy.key_of(kind, str(record["id"]))
-                remove = partial(
-                    control_records.remove_stale_ended, self._root, self._so, kind, key, str(record[UUID]), older_than=self._older_than, now=self._now
-                )
-                await self._attempt(f"{kind}:{record['id']}", partial(run_in_threadpool, remove))
-        return [r for r in records if r.get(STATE) != ENDED], unreadable
+            if record.get(STATE) == DELETING and tenancy.marked_before(record, self._older_than):
+                await self._attempt(f"{kind}:{record['id']}", partial(self._settle_mark, kind, record))
+
+    async def _settle_mark(self, kind: Kind, record: dict[str, Any]) -> None:
+        """Put back a mark with no point of no return; finish one past it, as its stamp records it was asked."""
+        obj = f"{kind}:{record['id']}"
+        if NO_RETURN not in record:
+            put = partial(tenancy.put_back_stale, self._root, self._so, kind, record, older_than=self._older_than)
+            if await run_in_threadpool(put):
+                log.warning("delete_mark_put_back", extra={"object": obj, "uuid": record[UUID], "delete_run": record.get(control_records.DELETE_RUN)})
+                self.done.put_back.append(obj)
+            return
+        if self._finish is None:
+            raise InternalError(f"{obj} is past its delete's point of no return, and this run has no delete to finish it with")
+        try:
+            await self._finish(kind, record)
+        except (tenancy.DeleteGone, ConcurrentModificationError):
+            # Another replica's tick, or a delete asked again, holds the delete now (its mark, or the warehouse's namespace
+            # fence), or finished it: the conditional writes let one of them finish it, and it is no failure of this run.
+            log.info("delete_finished_elsewhere", extra={"object": obj, "uuid": record[UUID]})
+            return
+        log.warning("delete_finished_by_the_tick", extra={"object": obj, "uuid": record[UUID]})
+        self.done.deleted.append(obj)
 
     def _done(self) -> TenancyConverged:
-        if self.done.finished or self.done.ended or self.done.swept or self.done.orphans or self.done.released or self.done.failed:
+        done = self.done
+        if done.finished or done.put_back or done.deleted or done.ended or done.swept or done.orphans or done.released or done.failed:
             log.info("tenancy_converged", extra=self.done.model_dump())
         return self.done
 
@@ -229,6 +267,9 @@ class _Convergence:
         nothing (``DeadObjectsSwept``)."""
         listed = await self._listing("ended", partial(control_records.read_ended, self._root, self._so))
         for ended in listed[0] if listed is not None else []:
+            standing = self._standing[ended.kind]
+            if standing is None or ended.uuid in standing:
+                continue
             obj = object_of_record(ended.kind, {UUID: ended.uuid})
             revoked = await fga_deps.end_object(self._client, self._settings, obj, token=None)
             if revoked:
@@ -315,20 +356,36 @@ class _Convergence:
             self.done.released.append(bucket)
 
     async def _policies(self, live: dict[str, str]) -> None:
-        """Report each project policy a creation that is not live set (a set racing its project's delete). It is not ended:
-        a write under the project's id here could only be unconditional, and would take a policy the tenant holding the id
-        set meanwhile. It governs only a bucket whose claim names the creation that set it
-        (``maintenance_policies.governing_policy``), no door reads or merges onto it, and the next set replaces it."""
+        """Report and end each project policy a creation that is not live set (a set racing its project's delete). Its
+        removal is one DeleteObject under the ETag of a read that found it naming that dead creation
+        (``maintenance_policies.end_project_policy``, ADR 0245, second review S3), so a policy the tenant holding the id set
+        meanwhile stays. Until it goes it governs only a bucket whose claim names the creation that set it
+        (``maintenance_policies.governing_policy``), and no door reads or merges onto it."""
         listed = await self._listing("policies", partial(maintenance_policies.read_policies, self._root, self._so))
         for record in listed[0] if listed is not None else []:
             project = str(record.get("id"))
             if record.get("kind") != PROJECT or made_under(record, live.get(project)):
                 continue
-            report_orphan(f"policy:project:{project}", project=project, project_uuid=str(record.get(PROJECT_UUID)))
-            self.done.orphans.append(f"policy:project:{project}")
+            obj, dead = f"policy:project:{project}", str(record.get(PROJECT_UUID))
+            if not await self._creation_ended(project, dead):
+                continue
+            report_orphan(obj, project=project, project_uuid=dead)
+            self.done.orphans.append(obj)
+            ending = partial(maintenance_policies.end_project_policy, self._root, self._so, project, project_uuid=dead)
+            if self._may_end and await run_in_threadpool(ending):
+                self.done.ended.append(obj)
+
+    async def _creation_ended(self, project: str, project_uuid: str) -> bool:
+        """Whether no record of ``project`` names the creation ``project_uuid`` now: read again, since the run's listing
+        is older than a project made since, and a record made under that creation is no orphan. A creation's uuid is never
+        minted again, so once no record names it none ever does."""
+        record = await run_in_threadpool(projects.get_project_record, self._root, self._so, project)
+        return record is None or record.get(UUID) != project_uuid
 
     async def _orphan_role(self, role: roles.StoredRole) -> None:
         obj = roles.role_object(role.id)
+        if not await self._creation_ended(role.project, role.project_uuid):
+            return
         report_orphan(obj, project=role.project, project_uuid=role.project_uuid)
         self.done.orphans.append(obj)
         if not self._may_end:
@@ -345,6 +402,7 @@ async def converge(
     *,
     bound: timedelta,
     connections: NamespaceConnections,
+    finish: Finisher | None = None,
     now: datetime | None = None,
 ) -> TenancyConverged:
     """Finish or end every creating record, sweep every ended creation, and report, end and release what a dead creation
@@ -353,9 +411,10 @@ async def converge(
     Idempotent and safe beside every door: a finish writes what is absent and flips only a record still creating with its
     uuid, and an end, a release or a forgetting acts only past ``bound``, which a request's run does not reach, judged by
     ``now``, the catalog's clock. ``connections`` are the process's namespace connections: a finished warehouse's catalog
-    row is ensured through them, and one rooted at a bucket whose index the tick removed is dropped.
+    row is ensured through them, and one rooted at a bucket whose index the tick removed is dropped. ``finish`` finishes a
+    delete past its point of no return whose run died; without it, such a record is named among the failures.
     """
-    convergence = _Convergence(settings, client, bound=bound, now=now or datetime.now(UTC), connections=connections)
+    convergence = _Convergence(settings, client, bound=bound, now=now or datetime.now(UTC), connections=connections, finish=finish)
     try:
         return await convergence.run()
     except Exception as exc:  # noqa: BLE001 — the tick's and the boot's later steps run whatever stopped this one (ADR 0241 §10 Q3)

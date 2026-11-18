@@ -560,13 +560,20 @@ OpenFGA Write refuses a tuple naming a project or warehouse by an id (`tenancy.r
 written for a dead creation can never apply to a live one, because no create mints a uuid again.
 
 - **Record states** (`state`): `creating` (written first, naming its uuid, its creator and the admin or owner it seeds,
-  before anything in OpenFGA), `live` (once its seed stands; the only state a door resolves), `deleting` (marked before
-  its delete reads or revokes anything), `ended` (stamped by the delete that ends it, which then removes the record; a
-  stamp whose writer died is removed by the tick past its bound, `remove_stale_ended`), its creation kept under
-  `_ended/<kind>/<uuid>.json` until the converge tick has swept its object (`control_records.EndedCreation`).
+  before anything in OpenFGA), `live` (once its seed stands; the only state a door resolves and maintenance maintains,
+  `lakehouse.warehouse_records`), `deleting` (marked before its delete reads or revokes anything). No state names an
+  ended creation: its end is its record's removal, its creation kept under `_ended/<kind>/<uuid>.json` until the converge
+  tick has swept its object (`control_records.EndedCreation`; the sweep leaves a creation whose record still stands).
+  Who leaves each state and what the tick does is ADR 0245's state table.
 - **ONE conditional way to change a record** (review T2): `control_records.change_creation`, a write under the ETag of a
-  read that found the creation's uuid (protection, status, manager, seal, a re-POST's merge, the flip live, the end);
-  never a write keyed by the id alone. A create is iff-absent and a lost race answers 409, seeding nothing (review T9).
+  read that found the creation's uuid (protection, status, manager, seal, a re-POST's merge, the flip live, the mark,
+  the stamp, the put-back); never a write keyed by the id alone. **And to remove one** (second review S3): ONE
+  DeleteObject under the ETag of the read that judged it (`lakehouse.records.delete_json` / `remove_json`): a record's
+  end (`control_records.end_record`), a project's policy (`maintenance_policies.end_project_policy`), a label definition
+  (`object_labels.end_definitions`, `delete_definition`), a declared grant's ledger record (`declaration.forget_record`).
+  Nothing id-keyed is deleted unconditionally; a stamp-then-delete is never the answer (the stores take `If-Match` on
+  DeleteObject: RustFS 1.0.3 measured, moto, AWS since 2025-09). A create is iff-absent and a lost race answers 409,
+  seeding nothing (review T9).
 - **Create.** Record `creating` → (a warehouse: its project resolved again; one deleted meanwhile ends the record, 404)
   → seed on the uuid (`fga_deps.seed_project_admin` / `seed_warehouse`) → `live` (`set_live`, conditional on the record
   still `creating` with its uuid). A re-POST of a record still `creating` resumes it.
@@ -577,23 +584,31 @@ written for a dead creation can never apply to a live one, because no create min
   each other. A namespace created in a
   warehouse resolves the warehouse again once seeded (`fga_deps.seed_ownership`), and one deleted meanwhile has the
   namespace taken back (`seed_ownership_or_compensate`) and answers 404.
-- **Delete, and its point of no return** (`catalog.services.tenancy.DeleteRun`, review T2, T3). Every check that can
-  refuse with nothing changed (protection, emptiness, the purge's guards, the namespace fence, the subtree's protection,
-  the clones outside) runs on ONE read of the record → the mark (`tenancy.mark`: `deleting`, `deleting_by`, `delete_run`,
-  under that read's ETag; 409 where it changed) → the children read AFTER the mark (a project's warehouses in every
-  state; a warehouse's late namespaces) and a refusal there PUTS THE RECORD BACK live (`tenancy.put_back`) → the point of
-  no return (`tenancy.pass_no_return`, `no_return`) → revoke what stands on the creation and names it
-  (`fga_deps.end_object`, the naming types from the model, THE ONE WAY an object is revoked) and its companions OF THIS
-  CREATION (roles by `project_uuid`, label definitions by `project_uuid`, the trash by `warehouse_uuid`), each step
-  followed by `tenancy.require_own` (another run took the mark over: 409; the id names another creation: 404) → end
-  (`tenancy.end`). Past `no_return` a failure answers `partial` (503) and the same delete asked again finishes it; a
-  later delete takes the mark over. A warehouse marked `deleting` refuses every door changing what lies beneath it (409,
-  `dependencies.require_active_warehouse(changing=)`).
+- **Delete, and its point of no return** (`catalog.services.tenancy.DeleteRun`, reviews T2, T3, S1). Every check that
+  can refuse with nothing changed (protection, emptiness, the purge's guards, the namespace fence, the subtree's
+  protection, the trash it cannot account for, the clones outside) runs on ONE read of the record, unless that record is
+  past a point of no return (`tenancy.judges`: taking over a mark short of one is a NEW delete, judged on every check and
+  on the caller's own authorization) → the span `tenancy.marked` (the mark: `deleting`, `deleting_by`, `delete_run`,
+  `marked_at`, under that read's ETag, 409 where it changed; the children read AFTER it, a project's warehouses in every
+  state, a warehouse's late namespaces; the point of no return, `Marking.pass_no_return`: `no_return` and `delete_asked`).
+  ANY failure inside the span puts the record back live; one whose put-back fails too answers 503 `MarkLeft`
+  (`marked_for_deletion`, `cleared_by`) → revoke what stands on the creation and names it (`fga_deps.end_object`, the
+  naming types from the model, THE ONE WAY an object is revoked) and its companions OF THIS CREATION (roles by
+  `project_uuid`, label definitions by `project_uuid`, the trash by `warehouse_uuid`) → end (`tenancy.end`, one removal
+  under a read finding this run's mark: another run took it over, 409; the id names another creation, 404). There is
+  no re-read between steps (`require_own` is deleted: the model finds no property it holds, ADR 0245 S4). Past
+  `no_return` a failure answers `partial` (503) and the same delete asked again finishes it. A warehouse marked
+  `deleting` refuses every door changing what lies beneath it (409, `dependencies.require_active_warehouse(changing=)`).
 - **The converge tick** (`catalog.services.tenancy_converge.converge`, at boot and on every tick): finishes a project
   record still `creating` from what it names; finishes a warehouse record `creating` whose create no longer runs (past
   `tenancy.create_bound`) under its project's live creation and holding its claim, and ends one whose project creation is
-  not live; sweeps each ended creation's object and forgets it once a sweep past the bound found nothing; ends a role and
-  reports a project policy naming a project creation that is not live.
+  not live; puts back a `deleting` mark with no `no_return` whose run is past the bound (`marked_at`), and FINISHES one
+  past its `no_return` by running the delete door as no caller, as `delete_asked` says (`declaration_converge.finisher`;
+  `put_back`, `deleted` in its result); sweeps each ended creation's object and forgets it once a sweep past the bound
+  found nothing; ends a role and a project policy naming a project creation that is not live. Two replicas' ticks at once
+  settle each mark once: every write is conditional, and a finish another holds is no failure.
+- **A refusal names what the caller sent** (second review S2): `fga_deps.on_tenant` asks its gate with the object AND
+  its label `<kind>:<id>`, and the refusal names the label; a creation's uuid belongs to the audit row and the events.
 - **Records belonging to a project** (a warehouse's, a role's, a bucket's claim, a project's maintenance policy) name the
   creation they were made under (`project_uuid`), a required field of their Pydantic model; ONE comparison judges it,
   `lakehouse.governed.tenancy.made_under`, and ONE function lists a project's warehouses, `tenancy.warehouses_of`.
@@ -665,7 +680,7 @@ tables are never declared.
   grant names an id; the tick writes it on the creation the id names live (ADR 0245), so a project made again under a
   declared id is granted it again, in the same tick: git declared it. A record carries the uuid of the creation it was
   written on and is about that creation alone: a settled record whose grant is not held on the live creation is
-  forgotten (`declaration.forget_settled`) and the grant declared afresh, and a grant the tick neither holds nor writes is
+  forgotten (`declaration.forget_record`, one conditional removal) and the grant declared afresh, and a grant the tick neither holds nor writes is
   named in `failed` as `<object>: <why>` (review T1); a revoke finding another creation forgets it (that creation's
   delete revoked the tuple). A recorded tuple git no longer
   asks for is revoked on its creation, then its record forgotten. A project

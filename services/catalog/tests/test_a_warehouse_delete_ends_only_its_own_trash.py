@@ -68,13 +68,21 @@ def test_the_trash_a_warehouse_ends_is_its_own_and_each_child_comes_before_its_p
     assert [kind for kind, _ in ended] == sorted((kind for kind, _ in ended), key=lambda kind: kind == "namespace"), "a namespace came before a table"
 
 
-def test_a_trash_record_that_cannot_be_read_refuses_the_selection(tmp_path: Path) -> None:
-    """A record that cannot be read may be the warehouse's own ([[LH-572]]): the delete refuses rather than ending the rest
-    and leaving it holding its grants and its claim for a warehouse that no longer exists."""
+@pytest.mark.parametrize(
+    ("written", "refusal"),
+    [
+        pytest.param("{not json", "reading the trash failed", id="unreadable"),
+        pytest.param('{"id": "acme-work$bronze$unstamped", "kind": "table", "uuid": "u1"}', "name no creation of warehouse", id="naming-no-creation"),
+    ],
+)
+def test_a_trash_record_the_selection_cannot_account_for_refuses_it(tmp_path: Path, written: str, refusal: str) -> None:
+    """A record that cannot be read, or one under the warehouse's name naming no creation of it (ADR 0245, second review
+    S4), may be the warehouse's own ([[LH-572]]): the selection refuses rather than skipping it, and the delete with it
+    rather than ending the rest and leaving it holding its grants and its claim for a warehouse that no longer exists."""
     control = str(tmp_path / "control")
     work = _warehouse(control, "acme-work")
     _trash(control, "acme-work$bronze$trashed", "s3://acme-bkt/a_bronze$trashed")
-    (tmp_path / "control" / "_trash" / "unreadable.json").write_text("{not json")
+    (tmp_path / "control" / "_trash" / "written.json").write_text(written)
 
-    with pytest.raises(InternalError, match="reading the trash failed"):
+    with pytest.raises(InternalError, match=refusal):
         warehouses.trash_owned_by(control, StorageOptions(), work)

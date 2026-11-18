@@ -382,22 +382,59 @@ def _for_an_absent_id(door: _Door) -> _Door:
     return door.model_copy(update={"params": params, "body": body})
 
 
-def test_a_tenancy_door_answers_a_caller_it_grants_nothing_alike_for_an_id_no_object_holds(estate: Any) -> None:
-    """ADR 0245 decision 4, review T4: a door on a project's or a warehouse's id is asked its gate on the creation the id
-    names, or on the object nobody holds where none stands, so a caller holding nothing is answered the same for an id that
-    stands and one that does not, and learns nothing about which ids exist. Every such door the router serves is asked."""
-    client = _as_a_caller_sees_it(estate.client)
+def _tenancy_doors() -> list[_Door]:
+    """Every door on a project's or a warehouse's id the router serves, as the corpus sends it."""
     tenancy_doors = {(method, route) for method, route in _left_to_handlers() if _TENANCY_DOOR.match(route)} | {("POST", "/management/v1/warehouses")}
     asked = [door for door in _DOORS if door.key in tenancy_doors]
-
-    def answered(door: _Door) -> tuple[int, int | None]:
-        return _refusal(door.send(client, estate.bearer(door.caller)))
-
-    answers = {door.request_id: (answered(door), answered(_for_an_absent_id(door))) for door in asked}
-
     assert {door.key for door in asked} == tenancy_doors, "a tenancy door the router serves with no entry in the corpus"
+    return asked
+
+
+def _as_sent(answer: httpx.Response, door: _Door) -> tuple[int, object]:
+    """``answer``'s status and whole body, the occurrence's trace id left out and each id ``door`` names read as ``<id>``,
+    so one door's answers about two ids compare."""
+    text = answer.text
+    for named in sorted({*door.params.values(), *_ABSENT.values(), PROJECT, WAREHOUSE}, key=len, reverse=True):
+        text = re.sub(rf"\b{re.escape(named)}\b", "<id>", text)
+    body = httpx.Response(answer.status_code, content=text.encode(), headers=answer.headers).json() if text else None
+    return answer.status_code, {k: v for k, v in body.items() if k != "instance"} if isinstance(body, dict) else body
+
+
+def test_a_tenancy_door_answers_a_caller_it_grants_nothing_alike_for_an_id_no_object_holds(estate: Any) -> None:
+    """ADR 0245 decision 4, reviews T4 and S2: a door on a project's or a warehouse's id is asked its gate on the creation
+    the id names, or on the object nobody holds where none stands, and its refusal is worded on the id its caller sent, so
+    a caller holding nothing is answered the same, status, code and whole body, for an id that stands and one that does
+    not, and learns nothing about which ids exist. Every such door the router serves is asked."""
+    client = _as_a_caller_sees_it(estate.client)
+
+    def answered(door: _Door) -> tuple[int, object]:
+        return _as_sent(door.send(client, estate.bearer(door.caller)), door)
+
+    answers = {door.request_id: (answered(door), answered(_for_an_absent_id(door))) for door in _tenancy_doors()}
+
     assert {request_id: pair for request_id, pair in answers.items() if pair[0] != pair[1] or pair[0][0] < 400} == {}, (
         "doors answering a caller who holds nothing differently for an id that stands and one that does not (standing, absent)"
+    )
+
+
+def test_no_refusal_at_a_tenancy_door_names_a_creation(estate: Any) -> None:
+    """ADR 0245, second review S2: a refusal is worded on what its caller sent, never on the creation its id resolved to,
+    whose uuid belongs to the audit trail and the events of those entitled to them. No answer a caller holding nothing
+    gets at a door on a project's or a warehouse's id, for an id that stands or one that does not, carries any
+    creation's uuid."""
+    from catalog.services import projects as project_registry
+
+    client = _as_a_caller_sees_it(estate.client)
+    settings = get_settings()
+    root, so = settings.registry_root, settings.storage_options()
+    uuids = {str(r["uuid"]) for r in [*project_registry.read_projects(root, so)[0], *warehouses.read_warehouses(root, so)[0]]}
+
+    answers = {door.request_id: door.send(client, estate.bearer(door.caller)).text for door in _tenancy_doors()}
+    answers |= {f"{door.request_id} (absent)": door.send(client, estate.bearer(door.caller)).text for door in map(_for_an_absent_id, _tenancy_doors())}
+
+    assert uuids, "the estate holds no creation to look for"
+    assert {request_id: text for request_id, text in answers.items() if any(uuid in text for uuid in uuids) or "0" * 32 in text} == {}, (
+        "answers naming a creation's uuid, or the object nobody holds"
     )
 
 

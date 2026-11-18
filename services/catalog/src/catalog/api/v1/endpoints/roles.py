@@ -70,9 +70,9 @@ async def _project_gate(
     """The client and the live creation of ``project_id`` (ADR 0245), once the caller holds ``relation`` on it; else the
     missing project's 404."""
 
-    async def gate(obj: str) -> None:
+    async def gate(obj: str, label: str) -> None:
         try:
-            await fga_deps.require_relation(client, settings, token, relation=relation, obj=obj)
+            await fga_deps.require_relation(client, settings, token, relation=relation, obj=obj, label=label)
         except PermissionDeniedError as exc:
             raise TableNotFoundError(f"project not found: {project_id}") from exc
 

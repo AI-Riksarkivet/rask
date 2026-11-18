@@ -92,7 +92,7 @@ from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
-from lakehouse.governed.tenancy import CREATING, LIVE, PROJECT, made_under, new_uuid, require_an_id, warehouses_of
+from lakehouse.governed.tenancy import CREATING, LIVE, PROJECT, new_uuid, require_an_id, warehouses_of
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.records import RecordExistsError
@@ -420,7 +420,9 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
         project_id,
         gate=_as_absent(
             project_id,
-            lambda obj: fga_deps.require_any_relation(client, settings, token, doors=[("can_list_all_projects", settings.fga_root_object), ("member", obj)]),
+            lambda obj, label: fga_deps.require_any_relation(
+                client, settings, token, doors=[("can_list_all_projects", settings.fga_root_object), ("member", obj)], labels={obj: label}
+            ),
         ),
     )
     tenant = (await _registries(settings)).tenants({project_id}).get(project_id)
@@ -429,13 +431,13 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     return tenant.response(await _admins_for(client, settings, tenant.record))
 
 
-def _as_absent(project_id: str, require: Callable[[str], Awaitable[None]]) -> Callable[[str], Awaitable[None]]:
+def _as_absent(project_id: str, require: Callable[[str, str], Awaitable[None]]) -> Callable[[str, str], Awaitable[None]]:
     """``require`` as a gate of the one gate function (``fga_deps.on_tenant``) that answers a refused caller the missing
     project's 404, so a door that discloses a tenant's record tells nobody which project ids exist."""
 
-    async def gate(obj: str) -> None:
+    async def gate(obj: str, label: str) -> None:
         try:
-            await require(obj)
+            await require(obj, label)
         except PermissionDeniedError as exc:
             raise TableNotFoundError(f"project not found: {project_id}") from exc
 
@@ -468,7 +470,7 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    gate = _as_absent(project_id, lambda obj: fga_deps.require_relation(client, settings, token, relation="can_administer", obj=obj))
+    gate = _as_absent(project_id, lambda obj, label: fga_deps.require_relation(client, settings, token, relation="can_administer", obj=obj, label=label))
     return (await fga_deps.on_tenant(settings, PROJECT, project_id, gate=gate)).record
 
 
@@ -499,7 +501,9 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, settings.storage_options(), project_id)
     if record is None or record.get(STATE) == CREATING:
         raise TableNotFoundError(f"project not found: {project_id}")
-    starter = record.get(DELETING_BY)
+    # Only a delete past its point of no return has revoked anyone, so only finishing one is authorized by the record;
+    # taking over a mark short of it is a new delete, asked of the project's admin (ADR 0245, second review S1).
+    starter = None if tenancy.judges(record) else record.get(DELETING_BY)
     if starter is not None and starter == current_subject(token):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=DELETING_BY, subject=starter, resource=f"project:{project_id}")
         return record
@@ -646,17 +650,19 @@ async def delete_project(
     404, :func:`project_to_delete`) → the record read, the checks judged on that read, each refusing with nothing
     changed: deletion protection (409) and emptiness (409) → the MARK, written under that read's ETag (409 where the
     record changed since, nothing changed) → the warehouses read again (a warehouse whose record its create wrote before
-    the mark, `ChildrenBeforeMark`); one found refuses 409 and PUTS THE RECORD BACK live → the POINT OF NO RETURN stamped
-    on the record → revoke its tuples → end its roles → end its maintenance policy → end its label definitions → END its
-    record → audit + event. Every check that can refuse runs before the point of no return, so a refused delete leaves
-    the project live; past it, the delete either finishes or leaves the project marked, and the same delete asked again
-    finishes it (503 ``partial``).
+    the mark, `ChildrenBeforeMark`); one found refuses 409 → the POINT OF NO RETURN stamped on the record → revoke its
+    tuples → end its roles → end its maintenance policy → end its label definitions → END its record → audit + event.
+    From the mark to the stamp nothing irreversible is done, so ANY failure there, a refusal or a store or OpenFGA not
+    answering, puts the record back live (``tenancy.marked``); where that put-back fails too, the answer (503) says the
+    project is left marked, and the converge tick puts it back once the delete's run is older than its bound. Past the
+    stamp the delete either finishes or leaves the project marked, and the same delete asked again, or the converge tick,
+    finishes it (503 ``partial``). A delete asked again over a mark short of its stamp is a new delete, judged on every
+    check and on the caller's own authorization (``tenancy.judges``).
 
-    **A delete acts only on the creation it marked.** Each step after the mark that can take long is followed by a read
-    of the record (``tenancy.require_own``): a delete asked again took the mark over (409, it finishes the delete), or the
-    creation ended and the id names another (404): a delete held across its project's end and the id made again ends
-    nothing of the tenant that holds the id now. Its roles, policy and label definitions are those made under the
-    creation it deletes, never every one the id keys.
+    **A delete acts only on the creation it marked.** Its tuples are its uuid's, its roles, policy and label definitions
+    those naming its uuid, each removed under the ETag of a read that found it so, and its end is conditional on a read
+    that found this delete's own mark: a delete taken over answers 409, and one held across its project's end and the id
+    made again answers 404, ending nothing of the tenant that holds the id now.
 
     **A delete that failed part-way is finished by asking again** ([[LH-576]]): the record names the caller who started
     it, whose own admin grant the revoke takes, and :func:`project_to_delete` lets that caller, an admin the revoke has
@@ -705,18 +711,20 @@ async def delete_project(
     obj = tenancy.object_of_record(PROJECT, record)
     delete = tenancy.DeleteRun.of(PROJECT, record)
     judged = await tenancy.judged(settings, delete)
-    if judged.record.get(STATE) == LIVE:
+    # Judged again over a mark short of its point of no return: taking it over is a new delete (``ChecksTakeOver``).
+    if tenancy.judges(judged.record):
         await _require_deletable(project_id, judged.record, settings, force=force)
-    await tenancy.mark(settings, delete, judged, by=current_subject(token))
-    # Marked `deleting` from here (ADR 0245): no door resolves it, so nothing more is granted or made in it. A warehouse
-    # whose create wrote its record before the mark is found by this read, which comes after it; one whose record came
-    # after the mark finds the project gone when its create resolves it again, and ends itself. Either way none stands
-    # under a project creation that ended (`ChildUnderLiveParent`). Nothing irreversible has been done, so the refusal
-    # puts the project back live.
-    if late := _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), record):
-        await tenancy.put_back(settings, delete)
-        raise NamespaceNotEmptyError(f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete began; delete each, then the project")
-    await tenancy.pass_no_return(settings, delete)
+    async with tenancy.marked(settings, delete, judged, by=current_subject(token)) as marking:
+        # Marked `deleting` from here (ADR 0245): no door resolves it, so nothing more is granted or made in it. A
+        # warehouse whose create wrote its record before the mark is found by this read, which comes after it; one whose
+        # record came after the mark finds the project gone when its create resolves it again, and ends itself. Either
+        # way none stands under a project creation that ended (`ChildUnderLiveParent`). Nothing irreversible has been
+        # done, so this refusal, or any failure before the stamp, puts the project back live.
+        if late := _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), record):
+            raise NamespaceNotEmptyError(
+                f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete began; delete each, then the project"
+            )
+        await marking.pass_no_return()
     actor = f"user:{token.subject}" if token is not None else None
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(
@@ -765,8 +773,9 @@ async def delete_project(
 async def _end_the_creation(
     delete: tenancy.DeleteRun, record: dict[str, str], settings: Settings, token: CurrentToken, authz: OpenFgaClient | None, announcer: Announcer
 ) -> list[fga.ClientTuple]:
-    """A delete's irreversible steps, past its point of no return, each acting on the creation it marked and followed by
-    a read that it still holds that mark (``tenancy.require_own``); the tuples revoked.
+    """A delete's irreversible steps, past its point of no return, each acting on the creation it marked alone (its uuid's
+    tuples, the roles, policy and label definitions naming its uuid, each removed under the ETag of a read that found it
+    so), and its end conditional on a read that found this delete's own mark; the tuples revoked.
 
     Raises:
         tenancy.DeleteGone: The id no longer names the creation.
@@ -781,7 +790,6 @@ async def _end_the_creation(
     # edge, a warehouse's tenancy edge). A door that wrote on it after this read wrote on a dead object nothing resolves
     # to, which the converge tick sweeps once the creation is ended (ADR 0245).
     removed = await fga_deps.end_object(authz, settings, tenancy.object_of_record(PROJECT, record), token=token)
-    await tenancy.require_own(settings, delete)
     # Each role made under this creation is ended as its own delete door ends it, with authorization off too, so no record
     # outlives its project; a role of a creation made again under the id is that tenant's.
     for role in await run_in_threadpool(partial(roles.every_role, settings.registry_root, so, project_id, project_uuid=project_uuid)):
@@ -789,13 +797,10 @@ async def _end_the_creation(
         async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
             ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
             await ending.send(ending_filed, ended, actor=actor, reason="project_deleted")
-        await tenancy.require_own(settings, delete)
     # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant.
     # The record names the creation that set it (ADR 0241 §9 P2, ADR 0245), so one another creation set is not this
     # delete's to end, and governs no bucket the next tenant claims whether or not it stands.
-    policy = await run_in_threadpool(maintenance_policies.get_policy, settings.registry_root, so, "project", project_id)
-    if policy is not None and made_under(policy, project_uuid):
-        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
+    await run_in_threadpool(partial(maintenance_policies.end_project_policy, settings.registry_root, so, project_id, project_uuid=project_uuid))
     # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object lay in a
     # warehouse of it, and each ended its labels as it went.
     await run_in_threadpool(partial(object_labels.end_definitions, settings.registry_root, so, project_id, project_uuid=project_uuid))

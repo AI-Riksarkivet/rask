@@ -250,9 +250,11 @@ async def _readable_project(id: str, settings: Settings, token: Caller | None, c
     admin. Anyone else, and a project no live creation holds, is answered the missing project's 404 ([[LH-587]]),
     decided by the one gate every door on a project's id asks (``fga_deps.on_tenant``)."""
 
-    async def gate(obj: str) -> None:
+    async def gate(obj: str, label: str) -> None:
         try:
-            await fga_deps.require_any_relation(client, settings, token, doors=[("can_list_all_projects", settings.fga_root_object), ("member", obj)])
+            await fga_deps.require_any_relation(
+                client, settings, token, doors=[("can_list_all_projects", settings.fga_root_object), ("member", obj)], labels={obj: label}
+            )
         except PermissionDeniedError as exc:
             raise TableNotFoundError(f"project not found: {id}") from exc
 

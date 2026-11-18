@@ -220,8 +220,10 @@ async def _grant_gate(
     an id no live creation holds is refused alike to a caller who holds nothing."""
     segments = parse_identifier(id)
 
-    async def gate(obj: str) -> None:
-        await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type=kind, segments=segments, revoking=revoking, obj=obj)
+    async def gate(obj: str, label: str) -> None:
+        await fga_deps.require_grant_authority(
+            request, client, settings, token, resolver, fga_type=kind, segments=segments, revoking=revoking, obj=obj, label=label
+        )
 
     return await fga_deps.on_tenant(settings, kind, fga.canonical_object_id(segments), gate=gate)
 

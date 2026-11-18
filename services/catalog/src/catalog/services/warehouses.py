@@ -324,7 +324,7 @@ def upsert_warehouse(
     project = record["project"]
 
     def merge(live: dict[str, str]) -> dict[str, str]:
-        if live.get(UUID) != record[UUID] or live.get(STATE) == tenancy.ENDED:
+        if live.get(UUID) != record[UUID]:
             raise RecordMissingError(f"warehouse {record['id']!r} is no longer the creation {record[UUID]}")
         if live.get("project") != project:
             raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
@@ -390,8 +390,8 @@ def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_
 
 
 def get_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
-    """The warehouse record in whatever state it is, or ``None`` if unregistered or stamped ``ended`` (its delete removes
-    it next): what its delete and the converge tick read.
+    """The warehouse record in whatever state it is, or ``None`` if unregistered: what its delete and the converge tick
+    read.
 
     Raises:
         ServiceUnavailableError: The record is there and cannot be read as one.
@@ -399,13 +399,12 @@ def get_warehouse_record(control_root: str, storage_options: StorageOptions, war
     key = _warehouse_key(warehouse_id)
     record = read_json(control_root, storage_options, key)
     valid = validated_or_refuse(record, WarehouseRecord, event="warehouse_record_malformed", path=key) if record is not None else None
-    return None if valid is None or valid.get(STATE) == tenancy.ENDED else valid
+    return valid
 
 
-def read_warehouses(control_root: str, storage_options: StorageOptions, *, ended: bool = False) -> tuple[list[dict[str, str]], list[str]]:
-    """``(readable warehouse records in every state but ``ended`` (that too with ``ended``: the converge tick, removing one
-    whose stamper died), paths that are there and could NOT be read as one)``, unordered. An absent prefix yields
-    ``([], [])``.
+def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+    """``(readable warehouse records in every state, paths that are there and could NOT be read as one)``, unordered. An
+    absent prefix yields ``([], [])``.
 
     The skipped paths are returned because the callers need opposite things from one tolerance: a listing survives one
     bad object, while a decision that no record names something (the last warehouse of a project, another claim on a
@@ -439,7 +438,7 @@ def read_warehouses(control_root: str, storage_options: StorageOptions, *, ended
             continue
         if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is None:
             skipped.append(info.path)
-        elif ended or valid.get(STATE) != tenancy.ENDED:
+        else:
             out.append(valid)
     return out, skipped
 
@@ -816,8 +815,8 @@ def record_key(warehouse_id: str) -> str:
 
 def end_creating(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> bool:
     """End the creation a record still ``creating`` names (a create abandoning its own record, the converge tick ending
-    one a dead create left): stamped ``ended`` where it is still that creation and creating, kept under ``_ended/`` for
-    the tick's sweep, and removed (``control_records.end_record``). Whether this call ended it.
+    one a dead create left): kept under ``_ended/`` for the tick's sweep, and its record removed under the ETag of a read
+    that found it still that creation and creating (``control_records.end_record``). Whether this call ended it.
 
     Deleting the RECORD is not deleting the BUCKET: the bytes survive unless a delete explicitly asked to purge them
     (Decision 3), and a record-less bucket is reported by the reconciler, not silently forgotten.
@@ -827,6 +826,7 @@ def end_creating(control_root: str, storage_options: StorageOptions, record: dic
         storage_options,
         tenancy.WAREHOUSE,
         _warehouse_key(record["id"]),
+        str(record["id"]),
         str(record[UUID]),
         now=datetime.now(UTC),
         states=frozenset({tenancy.CREATING}),
@@ -849,7 +849,8 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, record: d
 
     Raises:
         ServiceUnavailableError: The store did not answer a read of the trash.
-        InternalError: A trash record is there and cannot be read as one.
+        InternalError: A trash record is there and cannot be read as one, or one under the warehouse's name names no creation
+            of it.
     """
     try:
         records = trash.every_record(control_root, storage_options)
@@ -858,7 +859,13 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, record: d
         # claim for a warehouse that no longer exists ([[LH-572]]).
         raise store_refusal(exc, reading="reading the trash", so="this warehouse's own trash cannot be determined") from exc
     warehouse_id, uuid = str(record["id"]), record.get(UUID)
-    owned = [r for r in records if warehouse_of(str(r.get("id") or "")) == warehouse_id and r.get(trash.WAREHOUSE_UUID) == uuid]
+    named = [r for r in records if warehouse_of(str(r.get("id") or "")) == warehouse_id]
+    if uuid is not None and (unaccounted := sorted(str(r.get("id")) for r in named if not isinstance(r.get(trash.WAREHOUSE_UUID), str))):
+        # `trash.put` stamps every record filed under a warehouse with a record; one under this name naming no creation
+        # may be this warehouse's own, which a delete skipping it would leave holding its grants and claim ([[LH-572]]).
+        log.error("trash_record_unaccountable", extra={"warehouse": warehouse_id, "trash": unaccounted})
+        raise InternalError(f"trash record(s) {', '.join(unaccounted)} name no creation of warehouse {warehouse_id!r}, so whether each is its own is unknown")
+    owned = [r for r in named if r.get(trash.WAREHOUSE_UUID) == uuid]
     return sorted(owned, key=lambda r: (r.get("kind") == "namespace", -len(str(r.get("id") or "").split(CATALOG_DELIMITER))))
 
 

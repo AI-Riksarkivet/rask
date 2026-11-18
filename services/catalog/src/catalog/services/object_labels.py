@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse import control_prefixes
 from lakehouse.record_store import delete_record, get_record, list_records, record_key
-from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
+from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json, remove_json
 from lakehouse.storage_options import StorageOptions
 
 
@@ -276,16 +276,20 @@ def carries(attachment: Attachment, defined: LabelDefinition) -> bool:
 
 
 def delete_definition(control_root: str, storage_options: StorageOptions, defined: LabelDefinition) -> None:
-    """Delete the definition ``defined``. Its caller has found no standing object carrying it (:func:`carriers`)."""
-    delete_record(control_root, storage_options, _definition_key(defined.project, defined.name))
+    """Delete the definition ``defined``, where the record at its key is still that definition (its ``uuid``), under the
+    ETag of the read that found it so: a definition made again under the name since is another's. Its caller has found no
+    standing object carrying it (:func:`carriers`)."""
+    remove_json(control_root, storage_options, _definition_key(defined.project, defined.name), lambda record: record.get("uuid") == defined.uuid)
 
 
 def end_definitions(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> int:
     """Delete every definition the creation ``project_uuid`` of ``project`` holds, once that creation goes; how many
-    went. A definition another creation made under the id is that creation's (ADR 0245, review T2)."""
+    went. Each is removed under the ETag of a read that found it naming that creation, so a definition another creation
+    made under the id, before or after the listing, is that creation's (ADR 0245, reviews T2 and S3)."""
     ended = 0
     for defined in definitions(control_root, storage_options, project, project_uuid=project_uuid):
-        ended += delete_record(control_root, storage_options, _definition_key(project, defined.name))
+        key = _definition_key(project, defined.name)
+        ended += remove_json(control_root, storage_options, key, lambda record: record.get("project_uuid") == project_uuid) is not None
     return ended
 
 

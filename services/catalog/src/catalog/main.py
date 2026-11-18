@@ -98,6 +98,8 @@ async def converge_at_boot(app: FastAPI) -> None:
     (``tenancy_converge.converge``, ADR 0245), then run the warehouse-grant backfill, reporting rather than raising, then
     probe every warehouse's seal where the chart gives the probe a period (``catalog.api.seal_probe``). See its call
     site for why."""
+    from catalog.api.declaration_converge import finisher
+    from catalog.api.ticks import Tick
     from catalog.services import tenancy, tenancy_converge
     from catalog.services.warehouse_grant_backfill import backfill
 
@@ -109,6 +111,7 @@ async def converge_at_boot(app: FastAPI) -> None:
         getattr(app.state, "fga", None) if settings.fga_enabled else None,
         bound=tenancy.create_bound(settings.request_deadline_seconds),
         connections=app.state.connections,
+        finish=finisher(Tick(app, settings)),
     )
     if converged.failed:
         log.warning("tenancy_converge_failed_at_boot", extra={"failed": converged.failed[:20]})

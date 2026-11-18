@@ -171,14 +171,26 @@ async def _describe(
 
 
 async def _delete(
-    settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str, condemned: Callable[[], CondemnedBeneath]
+    settings: Settings,
+    control: ControlEmitter,
+    token: Caller | None,
+    kind: str,
+    *,
+    key: str,
+    canonical: str,
+    condemned: Callable[[], CondemnedBeneath],
+    project_uuid: str | None = None,
 ) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs; the answer names the versions
     already condemned beneath it (``condemned``, read after the delete): removing a record hands what it governed to the
     next level. A hold that governs what it governed keeps every version the answer does not name; a retention the next
     level keeps more under binds the batches that condemn after the delete, and a batch already past its policy read
     finishes under the earlier one."""
-    await run_in_threadpool(partial(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key))
+    if project_uuid is not None:
+        # A project's policy is keyed by its id: only the one its live creation set is removed (ADR 0245).
+        await run_in_threadpool(partial(policies.end_project_policy, settings.registry_root, settings.storage_options(), key, project_uuid=project_uuid))
+    else:
+        await run_in_threadpool(partial(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key))
     named = await run_in_threadpool(condemned)
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
     await emit_control(
@@ -411,7 +423,7 @@ async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentTo
     so = settings.storage_options()
     mine = warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), tenant.uuid)
     condemned = partial(_condemned_under, settings, within=_in_warehouses({str(r["id"]) for r in mine if r.get("id")}))
-    return await _delete(settings, control, token, "project", key=project, canonical=project, condemned=condemned)
+    return await _delete(settings, control, token, "project", key=project, canonical=project, condemned=condemned, project_uuid=tenant.uuid)
 
 
 def _named_now(settings: Settings, records: list[dict[str, Any]]) -> list[dict[str, Any]]:

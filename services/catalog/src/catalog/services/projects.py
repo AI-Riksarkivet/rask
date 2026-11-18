@@ -168,13 +168,12 @@ def get_project(control_root: str, storage_options: StorageOptions, project_id: 
 
 
 def get_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
-    """The project's record as it stands, a delete it names included, or ``None`` when there is none or it is stamped
-    ``ended`` (its delete removes it next): what the delete door reads to start or finish a delete. A malformed record
-    refuses, as :func:`get_project` refuses it."""
+    """The project's record as it stands, a delete it names included, or ``None`` when there is none: what the delete
+    door reads to start or finish a delete. A malformed record refuses, as :func:`get_project` refuses it."""
     key = record_key(project_id)
     record = read_json(control_root, storage_options, key)
     valid = validated_or_refuse(record, ProjectRecord, event="project_record_malformed", path=key) if record is not None else None
-    return None if valid is None or valid.get(STATE) == tenancy.ENDED else valid
+    return valid
 
 
 def mark_deleting(control_root: str, storage_options: StorageOptions, project_id: str, judged: Stored, marked: dict[str, str]) -> bool:
@@ -194,10 +193,9 @@ def set_live(control_root: str, storage_options: StorageOptions, project_id: str
     return change_creation(control_root, storage_options, record_key(project_id), uuid, flip, states=frozenset({tenancy.CREATING, tenancy.LIVE}))
 
 
-def read_projects(control_root: str, storage_options: StorageOptions, *, ended: bool = False) -> tuple[list[dict[str, str]], list[str]]:
-    """Every readable project record (unordered), those being created and deleted included and those stamped ``ended``
-    left out unless ``ended`` (the converge tick, removing one whose stamper died), and the path of each that is there and
-    cannot be read as one. An absent registry prefix yields nothing."""
+def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+    """Every readable project record (unordered), those being created and deleted included, and the path of each that is
+    there and cannot be read as one. An absent registry prefix yields nothing."""
     fs, base = fs_and_base(control_root, storage_options)
     out: list[dict[str, str]] = []
     unreadable: list[str] = []
@@ -213,7 +211,7 @@ def read_projects(control_root: str, storage_options: StorageOptions, *, ended: 
             continue
         if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is None:
             unreadable.append(info.path)
-        elif ended or valid.get(STATE) != tenancy.ENDED:
+        else:
             out.append(valid)
     return out, unreadable
 

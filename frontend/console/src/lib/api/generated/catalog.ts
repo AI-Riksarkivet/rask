@@ -1448,17 +1448,19 @@ export interface paths {
          *     404, :func:`project_to_delete`) → the record read, the checks judged on that read, each refusing with nothing
          *     changed: deletion protection (409) and emptiness (409) → the MARK, written under that read's ETag (409 where the
          *     record changed since, nothing changed) → the warehouses read again (a warehouse whose record its create wrote before
-         *     the mark, `ChildrenBeforeMark`); one found refuses 409 and PUTS THE RECORD BACK live → the POINT OF NO RETURN stamped
-         *     on the record → revoke its tuples → end its roles → end its maintenance policy → end its label definitions → END its
-         *     record → audit + event. Every check that can refuse runs before the point of no return, so a refused delete leaves
-         *     the project live; past it, the delete either finishes or leaves the project marked, and the same delete asked again
-         *     finishes it (503 ``partial``).
+         *     the mark, `ChildrenBeforeMark`); one found refuses 409 → the POINT OF NO RETURN stamped on the record → revoke its
+         *     tuples → end its roles → end its maintenance policy → end its label definitions → END its record → audit + event.
+         *     From the mark to the stamp nothing irreversible is done, so ANY failure there, a refusal or a store or OpenFGA not
+         *     answering, puts the record back live (``tenancy.marked``); where that put-back fails too, the answer (503) says the
+         *     project is left marked, and the converge tick puts it back once the delete's run is older than its bound. Past the
+         *     stamp the delete either finishes or leaves the project marked, and the same delete asked again, or the converge tick,
+         *     finishes it (503 ``partial``). A delete asked again over a mark short of its stamp is a new delete, judged on every
+         *     check and on the caller's own authorization (``tenancy.judges``).
          *
-         *     **A delete acts only on the creation it marked.** Each step after the mark that can take long is followed by a read
-         *     of the record (``tenancy.require_own``): a delete asked again took the mark over (409, it finishes the delete), or the
-         *     creation ended and the id names another (404): a delete held across its project's end and the id made again ends
-         *     nothing of the tenant that holds the id now. Its roles, policy and label definitions are those made under the
-         *     creation it deletes, never every one the id keys.
+         *     **A delete acts only on the creation it marked.** Its tuples are its uuid's, its roles, policy and label definitions
+         *     those naming its uuid, each removed under the ETag of a read that found it so, and its end is conditional on a read
+         *     that found this delete's own mark: a delete taken over answers 409, and one held across its project's end and the id
+         *     made again answers 404, ending nothing of the tenant that holds the id now.
          *
          *     **A delete that failed part-way is finished by asking again** ([[LH-576]]): the record names the caller who started
          *     it, whose own admin grant the revoke takes, and :func:`project_to_delete` lets that caller, an admin the revoke has
@@ -2821,20 +2823,25 @@ export interface paths {
          *     ``can_purge_dead_tenant_warehouse`` on the estate reaches it with ``?purge_bucket=true``, the bucket in the
          *     warehouse's place.
          *
-         *     **The point of no return** (ADR 0245, review T2 and T3). Every check that can refuse with nothing changed runs
+         *     **The point of no return** (ADR 0245, reviews T2, T3 and S1). Every check that can refuse with nothing changed runs
          *     before the mark, judged on one read of the record that the mark is then written under (its ETag; a record changed
-         *     since is refused 409, nothing changed): the protection (step 3), the emptiness (step 4), the purge's guards (step 7),
-         *     the warehouse's namespace fence taken for the drop (409 while another holds it), the subtree's protection and the
-         *     clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is written beneath it (a
-         *     declare or a commit is refused 409). The namespaces are read again after the mark (`ChildrenBeforeMark`): one made in
-         *     between refuses 409 without ``cascade``, or is held to the subtree's checks with it, and such a refusal PUTS THE
-         *     RECORD BACK live. Then the POINT OF NO RETURN is stamped on the record, before the first irreversible step (the
+         *     since is refused 409, nothing changed): the protection (step 3; judged again by a delete taking over a mark short of
+         *     its point of no return, ``tenancy.judges``), the emptiness (step 4), the purge's guards (step 7), the warehouse's
+         *     namespace fence taken for the drop (409 while another holds it), the subtree's protection, the trash it cannot
+         *     account for and the clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is
+         *     written beneath it (a declare or a commit is refused 409). The namespaces are read again after the mark
+         *     (`ChildrenBeforeMark`): one made in between refuses 409 without ``cascade``, or is held to the subtree's checks with
+         *     it. From the mark to the stamp is one span (``tenancy.marked``): ANY failure in it, such a refusal or a store not
+         *     answering, PUTS THE RECORD BACK live, and one whose put-back fails too answers 503 saying the warehouse is left
+         *     marked (the converge tick puts it back past its bound). Then the POINT OF NO RETURN is stamped on the record, with
+         *     the ``cascade`` and ``purge_bucket`` the delete was asked, before the first irreversible step (the
          *     trash's end, a table's detach, a grant's revoke): past it the delete finishes, or its answer is ``partial`` (503)
-         *     and the same delete asked again finishes it. Each step past the mark that can take long is followed by a read of the
-         *     record (``tenancy.require_own``): a delete asked again took the delete over (409), or the creation ended and the id
-         *     names another (404), and the delete stops there, ending nothing of the warehouse that holds the id now. Its trash is
-         *     the records filed under its own creation (``warehouses.trash_owned_by``), and its end is the record's one removal
-         *     (``tenancy.end``).
+         *     and the same delete asked again, or the converge tick as the stamp records it was asked, finishes it. A step past the
+         *     mark acts on this creation's own objects: its trash is the records filed under its own creation
+         *     (``warehouses.trash_owned_by``), its cascade writes only under the warehouse's namespace fence, which a delete made
+         *     of a warehouse made again under the id takes from it, and its end is the record's one removal, conditional on a read
+         *     that found this delete's own mark (``tenancy.end``): a delete taken over answers 409, and one whose creation ended and
+         *     the id names another answers 404, ending nothing of the warehouse that holds the id now.
          */
         delete: operations["delete_warehouse_management_v1_warehouses__warehouse_id__delete"];
         options?: never;
