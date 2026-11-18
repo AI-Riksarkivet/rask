@@ -216,7 +216,7 @@ def test_a_maintainer_REACHES_the_vend_route_at_all(governed: tuple[TestClient, 
 
     MEASURED 2026-09-08: `cd4697ab` deployed, 92 `maintainer` tuples written, `can_maintain` verified
     TRUE on the live store — and the sweep tick was byte-identical (AMBIENT 207, SCOPED 78, 207 x 403).
-    `fga_deps` lists `credentials` in `_DATA_READ_ACTIONS`, so the ROUTER required `can_read_data` and
+    `read_actions` lists `credentials` in `DATA_READ_ACTIONS`, so the ROUTER required `can_read_data` and
     refused before the endpoint ran. Measured on a table that was falling back:
 
         can_read_data=False  can_get_metadata=False  can_write_data=False  can_maintain=True

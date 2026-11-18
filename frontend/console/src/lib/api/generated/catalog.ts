@@ -1809,7 +1809,7 @@ export interface paths {
          *     what any particular person may do, so it is an untargeted control event like the other 31 and
          *     reaches a feed rather than a person.
          *
-         *     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, or the router
+         *     THE GATE IS NOT AUTOMATIC — `read_actions.DATA_READ_ACTIONS` must name `changes`, or the router
          *     refuses the route for every caller. Any rung above the reader's refuses the feed's whole audience
          *     and records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data
          *     ALLOW` beside the `read_data` record for the same call. Pinned by
@@ -2030,7 +2030,7 @@ export interface paths {
          *     metadata about the data, and it leaks real information (predicates name values, field names name
          *     columns), so it is gated exactly like the schema is rather than being treated as public.
          *
-         *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it:
+         *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``read_actions.META_READ_ACTIONS`` to get it:
          *     ``authorize`` is a router-wide dependency, so an unnamed suffix is refused for every caller and no reader
          *     ever arrives. Pinned by
          *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.

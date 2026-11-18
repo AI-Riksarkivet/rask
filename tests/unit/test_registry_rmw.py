@@ -37,7 +37,7 @@ from botocore.exceptions import ClientError
 import lakehouse.storage as storage
 from catalog.services import warehouses
 from lakehouse import records
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import ENDPOINT, StorageOptions
 
 
 def _root(tmp_path: Any) -> str:
@@ -145,7 +145,13 @@ def test_s3_replace_sends_if_match_and_maps_412_to_a_lost_race(monkeypatch: pyte
     monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
 
     with pytest.raises(records.RecordChangedError):
-        records.mutate_json("s3://ctl/root", StorageOptions(), "_warehouses/w.json", lambda r: {**r, "status": "deactivated"}, attempts=1)
+        records.mutate_json(
+            "s3://ctl/root",
+            StorageOptions(options={ENDPOINT: "http://store.test:9000"}),
+            "_warehouses/w.json",
+            lambda r: {**r, "status": "deactivated"},
+            attempts=1,
+        )
 
     assert client.put_object.call_args.kwargs["IfMatch"] == "abc123"
     assert client.put_object.call_args.kwargs["Key"] == "root/_warehouses/w.json"
@@ -158,7 +164,7 @@ def test_s3_read_surfaces_a_non_404_error_instead_of_reporting_absent(monkeypatc
     client.get_object.side_effect = _client_error("AccessDenied", 403)
     monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(Exception, match="AccessDenied"):
-        records.read_json("s3://ctl/root", StorageOptions(), "_warehouses/w.json")
+        records.read_json("s3://ctl/root", StorageOptions(options={ENDPOINT: "http://store.test:9000"}), "_warehouses/w.json")
 
 
 # --------------------------------------------------------------------------- #

@@ -735,7 +735,7 @@ governing their data. The project-scoped surface is the console's project page, 
   than defaulted to a rung — `InternalError` (code 18, 500), audited and logged at ERROR with the path,
   because only a route shipped without its rung reaches it — so a new door ships with its entry in
   `_OWNER_SUFFIX_RELATION` or `_WRITER_SUFFIX_RELATION` (or a trailing word in
-  `_META_READ_ACTIONS`/`_DATA_READ_ACTIONS`/`_MAINTENANCE_ACTIONS`) —
+  `read_actions.META_READ_ACTIONS`/`DATA_READ_ACTIONS`, which the read-only window judges by too, and `_MAINTENANCE_ACTIONS`) —
   `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
   on one that has none. **Every control-root record kept for a table or namespace is keyed by its uuid** ([[LH-523]],
   ADR 0173 §8): protection, maintenance policy, labels and the data contract (`lakehouse.object_records.OBJECT_RECORD_PREFIXES`),

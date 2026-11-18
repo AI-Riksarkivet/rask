@@ -291,10 +291,14 @@ def object_client(storage_options: StorageOptions) -> S3Client:
     would fall back to whatever ambient chain it finds, broader rights than the vend scoped. ``lakehouse.storage`` is imported at
     call time so a test replaces the seam rather than this wrapper, and a local root needs no S3 stack at all.
     """
-    from lakehouse.storage import s3_client
+    from lakehouse.storage import aws_s3_client, s3_client
 
     access_key, secret_key, session_token = storage_options.credential_in_clear()
     region = storage_options.region or DEFAULT_REGION
+    if not storage_options.endpoint:
+        # Options naming no endpoint are AWS proper (:func:`on_s3`), which the read reaches too: never an endpoint the
+        # environment names, which would be handed the pair and the bytes.
+        return aws_s3_client(access_key=access_key, secret_key=secret_key, session_token=session_token, region=region)
     return s3_client(storage_options.endpoint, access_key=access_key, secret_key=secret_key, session_token=session_token, region=region)
 
 

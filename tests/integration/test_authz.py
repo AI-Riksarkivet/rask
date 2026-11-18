@@ -239,7 +239,7 @@ def test_read_op_checks_reader_and_allows(client: TestClient, fake_ns: MagicMock
 
 def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: ``GET /management/v1/table/{id}/blobs`` (the credential-less blob serving path) is a DATA read —
-    the router guard checks ``can_read_data`` (same rung as ``/query``, declared in ``_DATA_READ_ACTIONS``)
+    the router guard checks ``can_read_data`` (same rung as ``/query``, declared in ``read_actions.DATA_READ_ACTIONS``)
     and a caller without it is 403'd BEFORE the endpoint touches any dataset."""
     _wire(client)
     captured: list[dict] = []

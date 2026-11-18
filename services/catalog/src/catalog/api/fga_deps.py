@@ -55,11 +55,12 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
+from catalog.api.read_actions import DATA_READ_ACTIONS, META_READ_ACTIONS
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, vending, write_judge
 from catalog.core.config import CatalogAuthzSettings, CatalogLineageSettings, CatalogStore, Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
-from catalog.services import dataplane, native, object_uuids, table_claims, warehouses
+from catalog.services import dataplane, native, object_uuids, protections, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
 from lakehouse import object_records, protection, trash
 from lakehouse.governed import fga
@@ -93,32 +94,7 @@ _FGA_TYPE: dict[str, str] = {
     "classification": "classification",
 }
 
-# Read-only trailing actions (reader rung). ``query``/``count_rows`` read DATA; the rest
-# read metadata — split so list_objects(can_read_data) is meaningful (both are reader).
-# ``credentials`` (vending) is a DATA read at its default tier, where the router guard requires can_read_data; a vend
-# at a writing tier is a write, decided by the write judge alone on that tier's own rung: can_write_data for a write-tier
-# vend and can_vend_maintain for a maintain-tier one ([[LH-560]]).
-# ``blobs`` (GET /management/v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
-# bytes, so it is a DATA read exactly like ``query``.
-# ``changes`` (§ J4) is the MOST disclosing read a table has — every row it ever received, in order —
-# so it is a data read and nothing weaker. Unmapped it fell to WRITER, and the live audit trail is what
-# said so (2026-09-08: `can_write_data ALLOW` on `table:bronze$pages`, logged one line above the
-# `read_data` record for the same call). That refuses every reader who is not also a writer, which for a
-# change feed is its entire audience, and it writes a fiction into the compliance trail.
-# ``explain_plan`` and ``analyze_plan`` read data too: analyze RUNS the query and reports its output row count, so a
-# filter it is handed answers a yes/no about the values and a binary search over them recovers any value; explain
-# names the columns, filters and plan a reader would run. Both take the rung their query would.
-_DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs", "changes", "explain_plan", "analyze_plan"})
-# `tasks` (#75) reports what is SCHEDULED against this object — a pending undrop deadline today.
-# Reader tier: it discloses no data and no principals, and an owner must be able to see the
-# deadline they are racing.
-# `history` (GET /v1/table/{id}/history) is the commit log — WHAT changed and WHEN, never who. Its own
-# docstring already argued the rung ("the same rung as describe/list-versions") and the endpoint checks
-# `can_get_metadata` itself; what was missing is this line, so the ROUTER demanded `can_write_data`
-# first and that weaker second check was unreachable for anyone who had not already cleared the higher
-# bar. Measured on the estate 2026-09-09: one GET logged `can_write_data ALLOW` then
-# `can_get_metadata ALLOW`, in that order.
-_META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "version", "tasks", "history"})
+# The read actions and why each is one: `catalog.api.read_actions`, which the read-only window judges by too.
 
 #: The rungs that mean "this door only READS". Keyed on the relation `_action_relation` resolved, so a
 #: door is classified by what it DOES rather than by how its path happens to be spelled — `access/list`
@@ -519,18 +495,18 @@ def _action_relation(fga_type: str, suffix: str, *, method: str) -> str:
     if (relation := _declared_relation(_OWNER_SUFFIX_RELATION.get(fga_type, {}), suffix)) is not None:
         return relation
     action = suffix.rsplit("/", 1)[-1]
-    if fga_type == "namespace" and (action in _META_READ_ACTIONS or action in _DATA_READ_ACTIONS):
+    if fga_type == "namespace" and (action in META_READ_ACTIONS or action in DATA_READ_ACTIONS):
         return "can_get_metadata"
     if fga_type == "materialized_view":
-        if action in _DATA_READ_ACTIONS:
+        if action in DATA_READ_ACTIONS:
             return "can_read"
-        if action in _META_READ_ACTIONS:
+        if action in META_READ_ACTIONS:
             return "can_get_metadata"
     # `transaction` and `classification` resolve in `authorize`'s own branches, so neither is served here.
     if fga_type == "table":
-        if action in _DATA_READ_ACTIONS:
+        if action in DATA_READ_ACTIONS:
             return "can_read_data"
-        if action in _META_READ_ACTIONS:
+        if action in META_READ_ACTIONS:
             return "can_get_metadata"
     if (relation := _declared_relation(_WRITER_SUFFIX_RELATION.get(fga_type, {}), suffix)) is not None:
         return relation
@@ -2032,7 +2008,7 @@ async def require_table_unprotected(settings: CatalogStore, table: ResolvedTable
     """
     if force:
         return
-    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table.require_uuid())
+    guard = await run_in_threadpool(protections.read, settings, "table", table.require_uuid())
     require_not_protected(guard or {}, kind="table", obj_id=fga.canonical_object_id(table.segments), force=False)
 
 
@@ -2044,7 +2020,7 @@ async def require_namespace_unprotected(settings: CatalogStore, namespace: Gover
     """
     if force:
         return
-    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", namespace.uuid)
+    guard = await run_in_threadpool(protections.read, settings, "namespace", namespace.uuid)
     require_not_protected(guard or {}, kind="namespace", obj_id=fga.canonical_object_id(namespace.segments), force=False)
 
 
@@ -2909,7 +2885,7 @@ async def require_staged_operation(
         return
     table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
     if replaces:
-        guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table_uuid)
+        guard = await run_in_threadpool(protections.read, settings, "table", table_uuid)
         require_not_protected(guard or {}, kind="table", obj_id=canonical, force=False)
     if authz is None:
         return

@@ -29,7 +29,7 @@ from fastapi import Request
 from lance_namespace import InternalError
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps
+from catalog.api import fga_deps, read_actions
 from catalog.api.dependencies import Resolver
 from catalog.core import write_judge
 from catalog.core.config import Settings
@@ -116,8 +116,8 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     suffixes = (
         {s for m in fga_deps._OWNER_SUFFIX_RELATION.values() for s in m}
         | {s for m in fga_deps._WRITER_SUFFIX_RELATION.values() for s in m}
-        | set(fga_deps._META_READ_ACTIONS)
-        | set(fga_deps._DATA_READ_ACTIONS)
+        | set(read_actions.META_READ_ACTIONS)
+        | set(read_actions.DATA_READ_ACTIONS)
     )
     # `classification` returns from its own branch in `authorize` before `_action_relation` is consulted, so
     # enumerating the generic suffix map against it would assert relations the app can never send: it refuses every
@@ -266,7 +266,9 @@ def test_every_DATA_READ_door_is_gated_as_a_READ() -> None:
     Asserting the SET is not enough — membership can be true while `_action_relation` routes elsewhere —
     so this resolves each one through the real classifier.
     """
-    from catalog.api.fga_deps import _DATA_READ_ACTIONS, _META_READ_ACTIONS, _action_relation
+    from catalog.api.fga_deps import _action_relation
+    from catalog.api.read_actions import DATA_READ_ACTIONS as _DATA_READ_ACTIONS
+    from catalog.api.read_actions import META_READ_ACTIONS as _META_READ_ACTIONS
 
     assert "changes" in _DATA_READ_ACTIONS, "the change feed is the most disclosing read a table has"
     for action in _DATA_READ_ACTIONS:

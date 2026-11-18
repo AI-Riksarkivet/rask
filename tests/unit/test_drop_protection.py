@@ -22,7 +22,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
-from lance_namespace import DeregisterTableResponse, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
+from lance_namespace import DeregisterTableResponse, InternalError, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
 from unfiled_announcer import unfiled
 
 from catalog.api.dependencies import Resolver
@@ -211,6 +211,27 @@ def test_a_protected_table_refuses_drop_and_the_native_call_never_ran(tmp_path: 
     with pytest.raises(InvalidTableStateError, match="protected against deletion"):
         _drop_table(settings, ns)
     assert ns.calls == [], "the guard must run BEFORE the native call — bytes were touched"
+
+
+@pytest.mark.parametrize("body", ['["protected"]', "null", '{"protected": "tr'], ids=["a-list", "null", "cut-short"])
+def test_a_protection_record_that_cannot_be_read_refuses_the_drop_and_is_never_read_as_unprotected(tmp_path: Any, body: str) -> None:
+    """A record is filed for the table and is no protection record. Whether its owner armed it is unknown, so the drop
+    is refused before the native call, by the key the record is filed under."""
+    from pathlib import Path
+
+    from lakehouse.record_store import record_key
+
+    settings = _settings(tmp_path)
+    key = record_key(protection.PREFIX, "table", _uuid("bronze$pages"))
+    filed = Path(settings.registry_root.removeprefix("file://")) / key
+    filed.parent.mkdir(parents=True, exist_ok=True)
+    filed.write_text(body)
+    ns: Any = _RecordingNamespace()
+
+    with pytest.raises(InternalError, match=key):
+        _drop_table(settings, ns)
+
+    assert ns.calls == []
 
 
 def test_force_drops_a_protected_table_and_the_record_dies_with_it(tmp_path: Any) -> None:

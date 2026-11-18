@@ -684,7 +684,7 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
     what any particular person may do, so it is an untargeted control event like the other 31 and
     reaches a feed rather than a person.
 
-    THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, or the router
+    THE GATE IS NOT AUTOMATIC — `read_actions.DATA_READ_ACTIONS` must name `changes`, or the router
     refuses the route for every caller. Any rung above the reader's refuses the feed's whole audience
     and records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data
     ALLOW` beside the `read_data` record for the same call. Pinned by

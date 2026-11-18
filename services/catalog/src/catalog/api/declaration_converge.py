@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
+from pathlib import PurePosixPath
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -202,11 +203,21 @@ class _Converger:
                 continue
             if not await self._attempt(f"grant:{grant.object}#{grant.relation}", partial(self._grant, self._client, grant)):
                 ungranted.add(grant.object)
-        released = {f"project:{record['id']}" for record in await run_in_threadpool(project_registry.list_projects, self._root, self._so)} - {
+        standing, unread = await run_in_threadpool(project_registry.read_projects, self._root, self._so)
+        released = {f"project:{record['id']}" for record in standing if not record.get(project_registry.DELETING_BY)} - {
             f"project:{project.id}" for project in declared.projects
         }
+        # A project whose record cannot be read may be a released one, whose admins are handed over, or one that is
+        # gone, whose admins are revoked: its admins are left as they are and the tick says so. Every other revoke runs.
+        unjudged = {f"project:{PurePosixPath(path).stem}" for path in unread}
         for grant in sorted(recorded - wanted, key=_order):
             if grant.object in ungranted:
+                continue
+            if grant.relation == project_admins.ADMIN and grant.object in unjudged:
+                what = f"unreadable:{grant.object}"
+                log.warning("declaration_converge_failed", extra={"object": what})
+                _failed.add(1, {"lance.catalog.object": what})
+                self.tick.failed.append(what)
                 continue
             if grant.relation == project_admins.ADMIN and grant.object in released:
                 await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)

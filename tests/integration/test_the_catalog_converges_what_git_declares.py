@@ -25,8 +25,10 @@ from moto.server import ThreadedMotoServer
 from catalog.api import declaration_converge
 from catalog.api.ticks import Tick
 from catalog.services import warehouses
+from lakehouse import control_prefixes
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
+from tests import seeding
 
 
 ESTATE_BUCKET = "estate"
@@ -440,6 +442,20 @@ def test_a_project_removed_from_git_is_released_and_keeps_its_data(estate: Estat
     assert (fga.user_object(f"{IDP}~alice"), "admin", "project:acme") in estate.store.tuples()
     assert (project["managed_by"], (estate.record("acme") or {}).get("managed_by")) == ("self", None)
     assert estate.client.get("/v1/namespace/acme$sales/table/list", headers=alice).json()["tables"] == ["t"]
+
+
+def test_a_project_whose_record_cannot_be_read_keeps_the_admins_git_recorded_for_it(estate: Estate) -> None:
+    """Git stopped declaring the project and its record no longer reads as one. Whether it is a released project (whose
+    admins are handed over) or one that is gone (whose admins are revoked) is unknown, so the tick revokes nothing and
+    says the grants could not be converged."""
+    _released_acme(estate)
+    settings = estate.client.app.state.settings
+    seeding.put_record(settings.registry_root, settings.storage_options(), f"{control_prefixes.PROJECTS}/acme.json", {"id": ["not", "text"]})
+
+    answer = estate.tick()
+
+    assert (answer.grants_revoked, answer.failed) == (0, ["unreadable:project:acme"]), "the tick tried a revoke it could not judge"
+    assert (fga.user_object(f"{IDP}~alice"), "admin", "project:acme") in estate.store.tuples()
 
 
 def test_a_released_warehouse_is_changed_at_its_doors_again(estate: Estate) -> None:

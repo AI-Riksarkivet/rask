@@ -23,6 +23,7 @@ from lance_namespace import (
     CreateTableVersionResponse,
     DescribeTableVersionRequest,
     DescribeTableVersionResponse,
+    InternalError,
     InvalidInputError,
     ListTableVersionsRequest,
     ListTableVersionsResponse,
@@ -103,7 +104,7 @@ async def table_history(
     metadata about the data, and it leaks real information (predicates name values, field names name
     columns), so it is gated exactly like the schema is rather than being treated as public.
 
-    THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it:
+    THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``read_actions.META_READ_ACTIONS`` to get it:
     ``authorize`` is a router-wide dependency, so an unnamed suffix is refused for every caller and no reader
     ever arrives. Pinned by
     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
@@ -262,6 +263,8 @@ async def create_table_version(
                 )
             except commit_records.AuthorRecordedError as exc:
                 raise InvalidInputError(f"commit refused: its transaction {staged.transaction_uuid} is another commit's at version {staged.version}") from exc
+            except commit_records.UnreadableAuthorRecordError as exc:
+                raise InternalError(f"commit refused: {exc}") from exc
     except BaseException:
         await run_in_threadpool(managed_versions.refuse, staged, so)
         raise

@@ -917,7 +917,7 @@ def _staged_with(
             id="another-commits-transaction-is-not-reused",
         ),
         pytest.param(
-            _append_under_a_transaction_whose_record_is_unreadable, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-unreadable-record-is-no-retrys"
+            _append_under_a_transaction_whose_record_is_unreadable, set(), False, 500, 18, ("lance_catalog$db$t", 4), id="an-unreadable-record-is-no-retrys"
         ),
     ],
 )
@@ -1184,6 +1184,42 @@ def test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_versio
     record = commit_records.recorded(settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction.uuid, version=2, ref="")
     assert record is not None
     assert (record.author, record.manifest) == ("dex~alice", dataplane.committed_manifest_digest(table.uri, StorageOptions(), 2))
+
+
+def test_a_commit_whose_author_record_cannot_be_read_is_neither_announced_nor_counted_unauthored(served: Served) -> None:
+    """A door recorded the commit's author and the record no longer reads as one. Whether the commit was authorized is
+    unknown: the reconcile's scan raises, so the ref's mark stays before the version and the next tick reads it again,
+    where a version counted unauthored would be passed for good with no announcement."""
+    from catalog.core.config import get_settings
+    from catalog.services import commit_reconcile
+
+    stock = _created(served)
+    lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+    table, settings = _opened(stock), get_settings()
+    transaction = table.read_transaction(2)
+    assert transaction is not None
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    key = f"{commit_records.AUTHORS_PREFIX}/{table_uuid}/{transaction.uuid}/2.json"
+    filed = Path(settings.registry_root.removeprefix("file://")) / key
+    assert filed.is_file(), "the commit's door recorded no author, so there is nothing to corrupt"
+    filed.write_text('{"author": "dex~al')
+
+    with pytest.raises(commit_records.UnreadableAuthorRecordError, match=key):
+        commit_reconcile.scan_ref(
+            table.uri,
+            StorageOptions(),
+            branch=None,
+            branch_identifier=None,
+            mark=1,
+            announced=set(),
+            horizon=timedelta(hours=1),
+            grace=timedelta(0),
+            record_of=lambda transaction_uuid, version, ref: commit_records.recorded(
+                settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction_uuid, version=version, ref=ref
+            ),
+            authenticates=True,
+            unannounced=lambda _operation: False,
+        )
 
 
 def test_a_version_landed_past_every_door_under_an_in_flight_commits_transaction_is_signed_for_no_one(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:

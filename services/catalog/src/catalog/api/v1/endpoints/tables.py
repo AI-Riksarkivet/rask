@@ -96,7 +96,7 @@ from catalog.core.vending import (
     vend_or_refuse,
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import clone_endings, commit_reconcile, dataplane, native, table_bases, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, commit_reconcile, dataplane, native, protections, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import base_registry, location_claims, object_records, protection, trash
@@ -1520,7 +1520,7 @@ async def get_table_protection(id: str, table: ResolvedTableDep, settings: Setti
     409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
     record's `set_by` comes back so a refused drop can name who armed it."""
     canonical = fga.canonical_object_id(table.segments)
-    record = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table.require_uuid())
+    record = await run_in_threadpool(protections.read, settings, "table", table.require_uuid())
     return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
 
 

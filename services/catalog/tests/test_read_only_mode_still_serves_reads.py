@@ -36,6 +36,8 @@ READS = [
     ("POST", "/v1/table/pages/count_rows"),
     ("POST", "/management/v1/table/pages/changes"),
     ("POST", "/management/v1/table/pages/credentials?tier=read"),
+    # A read whose path ends in a word the write doors also use: the tag's version is read, never set, here.
+    ("POST", "/v1/table/pages/tags/version"),
     ("POST", "/management/v1/access/list-objects"),
     ("POST", "/management/v1/access/expand"),
     ("GET", "/management/v1/projects"),
@@ -50,6 +52,8 @@ WRITES = [
     ("POST", "/management/v1/table/pages/erasure"),
     ("POST", "/management/v1/warehouses"),
     ("POST", "/management/v1/table/pages/credentials?tier=write"),
+    # A reclaim session deletes a trashed table's bytes: its door ends in the vend's word and names no tier.
+    ("POST", "/management/v1/trash/table/5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a55/credentials"),
     # Fail-closed: an action nobody has classified, and a path no route matches, are writes.
     ("POST", "/v1/table/pages/some_future_operation"),
     # A DELETE of an object named like a read action, and like the vend door at the read tier.

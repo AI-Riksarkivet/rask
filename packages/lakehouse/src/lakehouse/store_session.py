@@ -37,7 +37,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, read_identity_token
 from lakehouse.governed.secrets import secret_store_configured
 from lakehouse.governed.store_credential import S3KeyPair, StoreCredentialUnavailableError
-from lakehouse.storage_options import DEFAULT_REGION, REGION, StorageOptions, object_client
+from lakehouse.storage import configured_endpoint
+from lakehouse.storage_options import DEFAULT_REGION, ENDPOINT, REGION, StorageOptions, object_client
 
 
 if TYPE_CHECKING:
@@ -448,7 +449,9 @@ class JobStoreIdentity(BaseSettings):
 
 
 def job_client(identity: JobStoreIdentity, *, session_name: str) -> S3Client:
-    """The S3 client a one-shot job signs its whole run with: one session ``identity``'s token is exchanged for. Blocking.
+    """The S3 client a one-shot job signs its whole run with: one session ``identity``'s token is exchanged for, at the
+    deployment's own store (``RASK_S3_ENDPOINT_URL``) or, where the job is given none, AWS in the identity's region.
+    Blocking.
 
     Raises:
         RuntimeError: The token could not be read, or STS issued no session.
@@ -457,4 +460,5 @@ def job_client(identity: JobStoreIdentity, *, session_name: str) -> S3Client:
         issued = exchange(identity.web_identity, session_name=session_name, duration_seconds=identity.session_seconds)
     except EXCHANGE_FAILURES as exc:
         raise RuntimeError(f"the object store exchanged no session for the token at {identity.web_identity_token_file}: {exc}") from exc
-    return object_client(StorageOptions(key_pair=issued.key_pair, options={REGION: identity.region}))
+    own = configured_endpoint()
+    return object_client(StorageOptions(key_pair=issued.key_pair, options={REGION: identity.region, **({ENDPOINT: own} if own else {})}))

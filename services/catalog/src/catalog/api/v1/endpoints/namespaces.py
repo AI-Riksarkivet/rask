@@ -68,7 +68,7 @@ from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_eve
 from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, dataplane, native, protections, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves
 from lakehouse import base_registry, clone_sources, location_claims, protection, trash
 from lakehouse.clone_endings import CloneEnding
@@ -791,8 +791,7 @@ async def _require_descendants_unprotected(settings: CatalogStore, descendants: 
     """
     if force or not descendants:
         return
-    so = settings.storage_options()
-    records = await asyncio.gather(*(run_in_threadpool(protection.get_protection, settings.registry_root, so, item.kind, item.uuid) for item in descendants))
+    records = await asyncio.gather(*(run_in_threadpool(protections.read, settings, item.kind, item.uuid) for item in descendants))
     for item, record in zip(descendants, records, strict=True):
         fga_deps.require_not_protected(record or {}, kind=item.kind, obj_id=fga.canonical_object_id(item.segments), force=False)
 
@@ -1176,7 +1175,7 @@ async def get_namespace_protection(id: str, ns: NamespaceDep, settings: Settings
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
     namespace = await fga_deps.identify(ns, settings, "namespace", segments)
-    record = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", namespace.uuid)
+    record = await run_in_threadpool(protections.read, settings, "namespace", namespace.uuid)
     return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
 
 

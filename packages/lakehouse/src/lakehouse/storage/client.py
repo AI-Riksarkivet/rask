@@ -96,6 +96,32 @@ def s3_client(
     because botocore silently IGNORES a lone token and falls back to the env credential chain — the
     request then signs as a different identity and the store's 403 names the wrong problem.
     """
+    env = S3EnvSettings()
+    return _client(endpoint or env.endpoint, env, access_key=access_key, secret_key=secret_key, session_token=session_token, region=region, insecure=insecure)
+
+
+def aws_s3_client(*, access_key: str | None, secret_key: str | None, session_token: str | None = None, region: str) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+    """A boto3 S3 client for AWS proper in ``region``, signed by the pair it is given (the pod's own chain when given
+    none): the client for a root whose storage options name no endpoint.
+
+    It addresses the endpoint botocore resolves for the region and no other: neither the deployment's own
+    (``RASK_S3_ENDPOINT_URL``) nor one the environment or a shared config file names (``AWS_ENDPOINT_URL``,
+    ``AWS_ENDPOINT_URL_S3``, ``endpoint_url``), any of which would be handed the pair and the bytes ([[LH-572]]).
+    """
+    return _client(None, S3EnvSettings(), access_key=access_key, secret_key=secret_key, session_token=session_token, region=region, insecure=None)
+
+
+def _client(
+    endpoint: str | None,
+    env: S3EnvSettings,
+    *,
+    access_key: str | None,
+    secret_key: str | None,
+    session_token: str | None,
+    region: str | None,
+    insecure: bool | None,
+) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+    """The boto3 client both builders hand out; ``endpoint`` None is the region's own, whatever the environment names."""
     import boto3
     from botocore.config import Config
 
@@ -109,11 +135,15 @@ def s3_client(
         read_timeout=60,
         max_pool_connections=MAX_POOL_CONNECTIONS,
     )
+    if endpoint is None:
+        # botocore then resolves the region's own endpoint whatever `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3` or a shared
+        # config file names. Its type stub does not list the option, so this one key is passed as a map.
+        unlisted: dict[str, Any] = {"ignore_configured_endpoint_urls": True}
+        cfg = cfg.merge(Config(**unlisted))
     if session_token and not (access_key and secret_key):
         raise ValueError("session_token needs access_key and secret_key: botocore drops a lone token and signs with the env credential chain instead")
-    env = S3EnvSettings()
     kwargs: dict = {
-        "endpoint_url": endpoint or env.endpoint,
+        "endpoint_url": endpoint,
         "region_name": region or AwsRegionSettings().aws_region,
         "config": cfg,
     }

@@ -274,6 +274,7 @@ def scan_ref(
         ReconcileReadError: The ref's ``_versions/`` could not be listed, or a retained version could not be read or is
             not in that listing; the mark stops before it.
         OSError: A recorded author, or the manifest it names, could not be read.
+        commit_records.UnreadableAuthorRecordError: An author record is kept for a version and does not read as one.
     """
     key = commit_records.ref_key(branch, branch_identifier)
     ref_location = managed_versions.CommitRef(table_location=location, branch=branch).location
@@ -514,7 +515,7 @@ def reconcile_table(
                     unannounced=lambda operation: provenance_namespace.is_unannounced(parent, operation, settings),
                 )
             )
-        except ReconcileReadError as exc:
+        except (ReconcileReadError, commit_records.UnreadableAuthorRecordError) as exc:
             log.error("commit_reconcile_ref_unreadable", extra={"table": segments, "branch": branch, "error": str(exc)[:300]})
             unreadable.append(commit_records.ref_key(branch, identifier))
     kept: dict[str, int] = {}

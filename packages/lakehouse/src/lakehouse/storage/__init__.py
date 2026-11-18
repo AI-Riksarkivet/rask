@@ -6,6 +6,7 @@ in that workload, outside the lakehouse.
 """
 
 from lakehouse.storage.client import S3Client as S3Client
+from lakehouse.storage.client import aws_s3_client as aws_s3_client
 from lakehouse.storage.client import configured_endpoint as configured_endpoint
 from lakehouse.storage.client import s3_client as s3_client
 from lakehouse.storage.errors import BucketNotFoundError as BucketNotFoundError

@@ -29,7 +29,7 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from lakehouse import control_prefixes
-from lakehouse.record_store import delete_record, get_record, put_record, record_key
+from lakehouse.record_store import delete_record, put_record, read_record, record_key
 from lakehouse.storage_options import StorageOptions
 
 
@@ -38,6 +38,11 @@ PREFIX: Final = control_prefixes.PROTECTION
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "protection_record"
+
+
+class UnreadableProtectionRecordError(ValueError):
+    """A protection record is filed for the object and cannot be read as one, so whether its owner armed it is unknown
+    and nothing the flag guards may go ahead. Names the key the record is filed under."""
 
 
 def is_protected(record: Mapping[str, Any]) -> bool:
@@ -61,11 +66,21 @@ def set_protection(control_root: str, storage_options: StorageOptions, record: d
 
 
 def get_protection(control_root: str, storage_options: StorageOptions, kind: str, uuid: str) -> dict[str, Any] | None:
-    """The protection record for the object ``uuid`` names, or ``None`` — and None means UNPROTECTED, which is the
-    correct fail-open direction for this flag: protection is an opt-in the owner set, not a default
-    the store's availability grants. (A store OUTAGE surfaces as an exception from pyarrow, not as
-    None — the caller lets that propagate rather than treating it as unprotected.)"""
-    return get_record(control_root, storage_options, record_key(PREFIX, kind, uuid), event=_EVENT)
+    """The protection record for the object ``uuid`` names, or ``None`` when none is filed, which means UNPROTECTED:
+    protection is an opt-in the owner set, not a default the store's availability grants.
+
+    A destructive door decides from the answer, so a record that is filed and cannot be read raises: read as absent, a
+    table its owner armed would drop.
+
+    Raises:
+        UnreadableProtectionRecordError: A record is filed there and is not a JSON object.
+        OSError: The store failed the read.
+    """
+    key = record_key(PREFIX, kind, uuid)
+    try:
+        return read_record(control_root, storage_options, key)
+    except ValueError as exc:
+        raise UnreadableProtectionRecordError(f"the protection record at {key} cannot be read: {exc}") from exc
 
 
 def clear_protection(control_root: str, storage_options: StorageOptions, kind: str, uuid: str) -> bool:

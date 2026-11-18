@@ -24,14 +24,13 @@ Every function is BLOCKING IO; callers threadpool it.
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from lakehouse import control_prefixes, records, stored_objects
-from lakehouse.record_store import delete_record, get_record, put_record, record_key
+from lakehouse.record_store import delete_record, get_record, put_record, read_record, record_key
 from lakehouse.storage_options import StorageOptions
 
 
@@ -78,6 +77,11 @@ def _author_key(table_uuid: str, transaction_uuid: str, version: int) -> str:
     return f"{AUTHORS_PREFIX}/{table_uuid}/{transaction_uuid}/{version}.json"
 
 
+class UnreadableAuthorRecordError(ValueError):
+    """An author record is filed for the commit and does not read as one, so whether a door authorized the commit is
+    unknown: it signs nothing, and the version is not passed as one no door made. Names the key it is filed under."""
+
+
 class AuthorRecordedError(Exception):
     """The transaction is recorded at the version already, for another author or on another ref: it names another
     caller's commit."""
@@ -95,6 +99,7 @@ def record_author(
     Raises:
         InvalidTransactionUuidError: ``transaction_uuid`` is not a canonical uuid.
         AuthorRecordedError: The transaction is recorded at ``version`` for another author or on another ref.
+        UnreadableAuthorRecordError: A record is kept for the transaction at ``version`` and does not read as one.
         OSError: The store refused, or could not be reached for, the write or the read.
     """
     record = CommitAuthor(author=author, transaction_uuid=transaction_uuid, ref=ref, version=version, manifest=manifest)
@@ -122,18 +127,17 @@ def _from_the_store(exc: Exception) -> bool:
 
 
 def _read(control_root: str, storage_options: StorageOptions, key: str) -> CommitAuthor | None:
-    """The record at ``key``; ``None`` when none is kept or it does not read as one, which signs nothing and is never taken
-    for a retry's."""
+    """The record at ``key``, or ``None`` when none is kept.
+
+    Raises:
+        UnreadableAuthorRecordError: A record is kept there and does not read as one.
+        OSError: The store refused, or could not be reached for, the read.
+    """
     try:
-        loaded = get_record(control_root, storage_options, key, event="commit_author")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    if loaded is None:
-        return None
-    try:
-        return CommitAuthor.model_validate(loaded)
-    except ValidationError:
-        return None
+        loaded = read_record(control_root, storage_options, key)
+        return CommitAuthor.model_validate(loaded) if loaded is not None else None
+    except ValueError as exc:  # not text, not JSON, not an object, or not an author record (pydantic's error is one)
+        raise UnreadableAuthorRecordError(f"the author record at {key} cannot be read: {str(exc)[:200]}") from exc
 
 
 def recorded(control_root: str, storage_options: StorageOptions, table_uuid: str, *, transaction_uuid: str, version: int, ref: str) -> CommitAuthor | None:
@@ -141,6 +145,7 @@ def recorded(control_root: str, storage_options: StorageOptions, table_uuid: str
     the record names another ref, or when ``transaction_uuid`` is no canonical uuid, which no record is keyed by.
 
     Raises:
+        UnreadableAuthorRecordError: A record is kept for the commit and does not read as one.
         OSError: The store refused, or could not be reached for, the read.
     """
     try:

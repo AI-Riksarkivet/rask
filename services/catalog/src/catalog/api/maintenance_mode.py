@@ -24,6 +24,7 @@ from fastapi.routing import iter_route_contexts
 from lance_namespace import ErrorCode
 from starlette.routing import Match
 
+from catalog.api.read_actions import READ_ACTIONS, TABLE_VEND_ROUTE
 from catalog.core import vending
 from catalog.core.config import Settings
 from lakehouse.ns_errors import problem_body
@@ -41,59 +42,22 @@ log = logging.getLogger(__name__)
 #: through it (LH-446).
 GATED_MOUNTS: tuple[str, ...] = ("/v1/", "/management/v1/")
 
-#: The spec's READ actions, as the last segment of the ROUTE a POST matches.
-#:
-#: THE METHOD IS NOT ENOUGH HERE, and that is a property of the Lance Namespace grammar rather than an
-#: oversight in the middleware. The route shape is ``POST /v1/<object>/{id}/<action>`` — the spec puts
-#: the operation in the PATH, so `describe`, `count_rows`, `query` and every other read arrive as POST.
-#: Classifying by verb alone would refuse the entire read surface, which is the outage a read-only
-#: window exists to avoid rather than cause.
+#: The actions a window serves are :data:`catalog.api.read_actions.READ_ACTIONS`, read as the last segment of the ROUTE
+#: a POST matches.
 #:
 #: THE ROUTE, NEVER THE PATH TEXT: a path's last segment can be a name its caller chose, so a project named `list`
 #: would read as a read action. The route template's last segment is a literal only where the route names an action.
 #:
-#: AN ALLOWLIST, so classification is fail-closed: an action nobody has listed is treated as a
-#: write. A spec operation added tomorrow is refused during a window until someone judges it, which is
-#: the safe direction — the opposite default would make every future write a silent hole discovered
-#: only when it corrupted something mid-maintenance.
-_READ_ACTIONS: frozenset[str] = frozenset(
-    {
-        "describe",
-        "exists",
-        "list",
-        "count_rows",
-        "query",
-        "stats",
-        "explain_plan",
-        "analyze_plan",
-        "my-permissions",
-        "check",
-        "graph",
-        "tasks",
-        "preview",
-        # rask's management reads, served as POST in the same grammar: the change feed and the estate FGA
-        # workbench's derivations.
-        "changes",
-        "list-objects",
-        "list-users",
-        "expand",
-        "simulate",
-    }
-)
-
-#: The vend door's action. A read-tier vend is how a direct pylance reader reads, so it is served
-#: through a window; a write or maintain tier hands out the means to write storage straight past the
-#: catalog, so it is refused like any other write. The tier rides the query (`credentials.py`, default
-#: `read`), which the path alone cannot show.
-_VEND_ACTION = "credentials"
+#: AN ALLOWLIST, so classification is fail-closed: an action nobody has listed is treated as a write. A spec operation
+#: added tomorrow is refused during a window until someone judges it, which is the safe direction.
 
 
 def is_mutating(request: Request) -> bool:
     """Whether ``request`` writes, classified by the route it matches and never by its path text.
 
     GET, HEAD and OPTIONS read. DELETE, PUT and PATCH write whatever they name. A POST reads only when the route it
-    matches names a read action (the spec's grammar puts the action in the path); the vend door reads at the read tier
-    alone, which rides its query. A POST matching no route writes: classification fails closed.
+    matches names a read action (the spec's grammar puts the action in the path); a table's vend door reads at the read
+    tier alone, which rides its query. A POST matching no route writes: classification fails closed.
 
     Args:
         request: The request, its path as routing reads it (``lakehouse.route_path``, [[LH-526]]).
@@ -109,10 +73,9 @@ def is_mutating(request: Request) -> bool:
     template = _matched_route(request)
     if template is None:
         return True
-    action = template.rsplit("/", 1)[-1]
-    if action == _VEND_ACTION:
+    if template == TABLE_VEND_ROUTE:
         return vending.requested_tier(request.query_params) != "read"
-    return action not in _READ_ACTIONS
+    return template.rsplit("/", 1)[-1] not in READ_ACTIONS
 
 
 def _matched_route(request: Request) -> str | None:

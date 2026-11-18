@@ -32,6 +32,7 @@ from catalog.services.control_records import (
 )
 from lakehouse import control_prefixes
 from lakehouse.objectfs import fs_and_base
+from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.records import RecordMissingError, create_json, mutate_json
 from lakehouse.storage_options import StorageOptions
 
@@ -187,25 +188,48 @@ def delete_project_record(control_root: str, storage_options: StorageOptions, pr
         return
 
 
-def list_projects(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every readable project record (unordered) but those being deleted, which are no tenant (:func:`get_project`). An
-    absent registry prefix yields ``[]``.
+def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+    """``(readable project records, paths that are there and could NOT be read as one)``, unordered, a project being
+    deleted among the records. An absent prefix yields ``([], [])``.
 
-    One corrupt or unreadable record is SKIPPED with a warning (mirroring ``list_warehouses``):
-    the listing feeds the tenant gallery and the existence guard, and a single bad object voiding
-    it would turn one tenant's registry corruption into an every-tenant outage.
+    The skipped paths are returned because the callers need opposite things from one tolerance, as a warehouse's do
+    (:func:`catalog.services.warehouses.read_warehouses`): a listing survives one bad object, while a decision that no
+    record names a project is a guess while one cannot be read. A record deleted since the listing named it is no
+    record. A read the store did not answer raises, tolerant caller or strict.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a record's read.
     """
     fs, base = fs_and_base(control_root, storage_options)
     out: list[dict[str, str]] = []
+    skipped: list[str] = []
     for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_PROJECTS_PREFIX}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
             with fs.open_input_stream(info.path) as stream:
                 record = json.loads(stream.readall().decode("utf-8"))
-        except Exception as exc:
-            log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
+        except FileNotFoundError:
             continue
-        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None and not valid.get(DELETING_BY):
+        except Exception as exc:
+            if reads_as_store_outage(exc):
+                raise store_refusal(exc, reading=f"reading {info.path}", so="the project registry cannot be read") from exc
+            log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
+            skipped.append(info.path)
+            continue
+        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None:
             out.append(valid)
-    return out
+        else:
+            skipped.append(info.path)
+    return out, skipped
+
+
+def list_projects(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+    """Every readable project record (unordered) but those being deleted, which are no tenant (:func:`get_project`): the
+    tolerant half of :func:`read_projects`, for a caller that only enumerates. An absent registry prefix yields ``[]``.
+
+    One corrupt record is SKIPPED with a warning: the listing feeds the tenant gallery, and a single bad object voiding
+    it would turn one tenant's registry corruption into an every-tenant outage. A read the store did not answer raises.
+    A caller deciding from the registry that no record names a project reads :func:`read_projects` and its skipped paths.
+    """
+    return [record for record in read_projects(control_root, storage_options)[0] if not record.get(DELETING_BY)]
