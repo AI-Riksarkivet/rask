@@ -199,7 +199,6 @@ impl<C: Claims> Timer<C> {
             tracing::info!(timer = self.name, "timer_held");
             return self.ended(Outcome::Held, None, period);
         }
-        let began = Instant::now();
         let asked = match self.ask().await {
             Ok(asked) => asked,
             Err(error) => {
@@ -208,6 +207,10 @@ impl<C: Claims> Timer<C> {
                 return self.ended(Outcome::Unread, None, period.min(RETRY));
             }
         };
+        // The wait runs from after the store's clock was read: `until_next` is what was left of the window when the
+        // store answered, so the time the read took is no part of it. Counted in, the loop woke before the window
+        // ended, found its own claim and counted the window another replica's.
+        let asked_at = Instant::now();
         let until_next = Duration::try_from_secs_f64(asked.until_next).unwrap_or_default();
         if !asked.mine {
             if let Some(elsewhere) = &self.elsewhere {
@@ -222,7 +225,7 @@ impl<C: Claims> Timer<C> {
                 Outcome::Failed
             }
         };
-        self.ended(outcome, Some(asked.window), until_next.saturating_sub(began.elapsed()))
+        self.ended(outcome, Some(asked.window), until_next.saturating_sub(asked_at.elapsed()))
     }
 
     fn ended(&self, outcome: Outcome, window: Option<i64>, wait: Duration) -> Turn {

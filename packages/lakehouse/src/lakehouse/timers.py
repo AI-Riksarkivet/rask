@@ -179,12 +179,16 @@ class Timer:
         if self._held():
             log.info("timer_held", extra={"timer": self.name})
             return self._ended(Outcome.HELD, None, self._period)
-        began = monotonic()
         try:
             asked = await asyncio.to_thread(self._ask)
         except Exception as exc:
             log.warning("timer_claim_unread", extra={"timer": self.name, "error": str(exc)[:300]})
             return self._ended(Outcome.UNREAD, None, min(self._period, RETRY_SECONDS))
+        # THE WAIT RUNS FROM AFTER THE STORE'S CLOCK WAS READ, never from before it: ``until_next`` is what was left of
+        # the window when the store answered, so time spent before that answer is no part of it. Counted in, the loop
+        # woke before the window ended by however long the read took, found its own claim, and counted the window another
+        # replica's (pinned by `test_the_loop_takes_turn_after_turn_until_it_is_cancelled`).
+        asked_at = monotonic()
         if not asked.mine:
             self._elsewhere()
             return self._ended(Outcome.ELSEWHERE, asked.window, asked.until_next)
@@ -195,7 +199,7 @@ class Timer:
             outcome = Outcome.FAILED
         else:
             outcome = Outcome.RAN
-        return self._ended(outcome, asked.window, asked.until_next - (monotonic() - began))
+        return self._ended(outcome, asked.window, asked.until_next - (monotonic() - asked_at))
 
     def _ended(self, outcome: Outcome, window: datetime | None, wait: float) -> Turn:
         _turns.add(1, {"timer": self.name, "outcome": outcome.value})

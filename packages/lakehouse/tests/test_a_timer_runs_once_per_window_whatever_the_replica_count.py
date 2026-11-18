@@ -12,7 +12,7 @@ import asyncio
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep, time
 from typing import Any, NoReturn
 
 import pytest
@@ -206,11 +206,24 @@ async def test_a_claim_that_cannot_be_read_runs_nothing_and_is_read_again_within
 @pytest.mark.asyncio
 async def test_the_loop_takes_turn_after_turn_until_it_is_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every outcome's series of the turn counter exists from the loop's start, the ones that never happen at 0: an
-    alert reads a counter's increase, and a series born at a timer's first failed turn would show none."""
+    alert reads a counter's increase, and a series born at a timer's first failed turn would show none.
+
+    The loop's own waiting never brings a lone replica back into a window it ran, however long the store took to answer
+    the claim's read (here a third of the window, once, on a loop started at a window's beginning): the wait runs from
+    when the store's clock was read, so no turn finds the replica's own claim and counts it another replica's."""
     reader = InMemoryMetricReader()
     monkeypatch.setattr(timers, "_turns", MeterProvider(metric_readers=[reader]).get_meter("lance.timers").create_counter("timer.turns"))
+    period = 0.3
+    answered, slow = records.read_json_at, iter([period / 3])
+
+    def answered_slowly_once(*args: Any, **kwargs: Any) -> records.StoreRead:
+        sleep(next(slow, 0.0))
+        return answered(*args, **kwargs)
+
+    monkeypatch.setattr(records, "read_json_at", answered_slowly_once)
     ran: list[str] = []
-    loop = asyncio.create_task(_replica(tmp_path, ran, holder="pod-1", period=0.1).run())
+    await asyncio.sleep(period - time() % period)
+    loop = asyncio.create_task(_replica(tmp_path, ran, holder="pod-1", period=period).run())
 
     deadline = monotonic() + 5
     while len(ran) < 3 and monotonic() < deadline:

@@ -185,6 +185,39 @@ async fn a_timer_turns_as_pythons_does() {
     assert!(cases.len() >= 20);
 }
 
+/// A claim's store that takes its time to answer a read.
+struct Slow<'c>(Store<'c>);
+
+impl Claims for &Slow<'_> {
+    async fn read_at(&self, key: &str) -> Result<StoreRead, StorageError> {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        (&self.0).read_at(key).await
+    }
+
+    async fn put(&self, key: &str, body: Vec<u8>, unless: Unless<'_>) -> Result<bool, StorageError> {
+        (&self.0).put(key, body, unless).await
+    }
+}
+
+/// `until_next` is what was left of the window when the store answered, so a read the store was slow to answer shortens
+/// no wait: counted in, the loop woke before its window ended and found its own claim as another replica's.
+#[tokio::test]
+async fn a_slow_read_of_the_claim_shortens_no_wait() {
+    let cases = vectors("turns");
+    let case = cases
+        .iter()
+        .find(|case| case["outcome"] == "ran" && case["wait"].as_f64().unwrap() > 1.0)
+        .unwrap();
+    let store = Slow(Store {
+        case,
+        writes: Mutex::default(),
+    });
+    let timer = Timer::new("lineage-relay", case["period"].as_f64().unwrap(), &store, "replica-a").unwrap();
+    let turn = timer.turn(false, async { Ok(()) }).await;
+    let wait = case["wait"].as_f64().unwrap();
+    assert!((turn.wait.as_secs_f64() - wait).abs() < 0.05, "waits {:?}, Python {wait}", turn.wait);
+}
+
 /// A tick's effects, each noted and answered as the case's staged keys say.
 struct Ticker<'c> {
     case: &'c Value,
