@@ -85,7 +85,7 @@ from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.stored_objects import StoredObject, delete_objects, list_under
 from lakehouse.table_paths import objects_at, spellings
-from maintenance.core.config import MaintenanceSettings, shared_lance_session
+from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, end_trash, note_trash_refusal, reclaim_options_for
 from maintenance.services.naming import manifest_uuid
@@ -281,7 +281,7 @@ def report_is_clean(report: ReconcileReport) -> str | None:
 # --------------------------------------------------------------------------- #
 
 
-def maintained_roots(settings: MaintenanceSettings, storage_options: StorageOptions) -> set[str]:
+def maintained_roots(settings: MaintenanceStore, storage_options: StorageOptions) -> set[str]:
     """Every root URI whose bytes this service is allowed to reclaim.
 
     The configured sweep buckets UNION every bucket the warehouse registry names — the same runtime-read
@@ -654,7 +654,7 @@ def _remove_emptied_directories(location: str, storage_options: StorageOptions, 
 _PURGE_ACTION: dict[str, ControlAction] = {"table": "table_purged", "namespace": "namespace_purged"}
 
 
-async def _refuse(out: TrashPurgeReport, record: dict[str, Any], *, reason: str, settings: MaintenanceSettings) -> None:
+async def _refuse(out: TrashPurgeReport, record: dict[str, Any], *, reason: str, settings: MaintenanceCatalogDoor) -> None:
     """Report a refusal AND have the catalog remember it on the record — the one place both halves happen.
 
     ONE HELPER RATHER THAN FIVE CALL SITES, because reporting the tick and remembering the history are
@@ -701,7 +701,7 @@ class _Reclaim(BaseModel):
 
 
 async def _delete_bytes_or_refuse(
-    out: TrashPurgeReport, record: dict[str, Any], reclaim: _Reclaim, *, settings: MaintenanceSettings, control_root: str
+    out: TrashPurgeReport, record: dict[str, Any], reclaim: _Reclaim, *, settings: MaintenanceCatalogDoor, control_root: str
 ) -> tuple[int, int] | None:
     """Delete the bytes this record names, its root and its data directories, under its reclaim session, or record a
     refusal and answer ``None``.
@@ -729,7 +729,7 @@ async def _delete_bytes_or_refuse(
 
 
 async def _recovered_since_the_snapshot(
-    record: dict[str, Any], out: TrashPurgeReport, *, roots: set[str], recheck_live: Callable[[], Liveness | None], settings: MaintenanceSettings
+    record: dict[str, Any], out: TrashPurgeReport, *, roots: set[str], recheck_live: Callable[[], Liveness | None], settings: MaintenanceCatalogDoor
 ) -> bool:
     """Re-read liveness at the last instant before the first mutation. ``True`` when the record was refused.
 

@@ -19,13 +19,13 @@ from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.governed import fga
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceStore
 
 
 log = logging.getLogger(__name__)
 
 
-def claim_store(settings: MaintenanceSettings) -> location_claims.ClaimStore:
+def claim_store(settings: MaintenanceStore) -> location_claims.ClaimStore:
     """The location claims on the control root, read under maintenance's own session."""
     return location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
 

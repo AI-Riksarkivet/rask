@@ -30,117 +30,9 @@ if TYPE_CHECKING:
     import lance
 
 
-class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSettings):
-    """Config for the maintenance service + its S3 access to the lakehouse buckets."""
-
-    # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
-    # every alias below silently gained an un-namespaced twin (a field named `address` would
-    # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
-    # namespace the aliases already declare; an explicit alias bypasses it, so the
-    # deliberately-bare ones (RASK_SIGNING_IDENTITY) still land.
-    # See tests/unit/test_settings_env_namespace.py.
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MAINTENANCE_", alias_generator=env_alias("MAINTENANCE"), extra="ignore")
-
-    # #102: the shared Lance session's cache caps. Defaults sized for the pod tier (512Mi limit —
-    # Lance's own defaults are 1 GiB metadata + 6 GiB index PER OPEN, which is the defect).
-    lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="MAINTENANCE_LANCE_METADATA_CACHE_MB")
-    lance_index_cache_mb: int = Field(default=256, ge=8, alias="MAINTENANCE_LANCE_INDEX_CACHE_MB")
-
-    #: Whether this service emits the `lance.audit` compliance stream. ON by default — the trail is
-    #: evidence, so a deployment that forgets still has it.
-    #:
-    #: IT DID NOT EXIST UNTIL 2026-09-09, and the sweep is where that cost most: this is the component
-    #: that REWRITES BYTES, and with no field there was nothing for `build_lance_service_app` to arm,
-    #: so the `lance.audit` logger sat at NOTSET and followed `RASK_LOG_LEVEL` (§ Q17-27). Arming it is
-    #: the precondition for § Q17-36 — maintenance's per-object outcome becoming a governed record rather
-    #: than telemetry on a 14-day trace TTL.
-    audit_enabled: bool = Field(default=True, alias="RASK_AUDIT_ENABLED")
-    # Datasets whose newest version is older than this are eligible for version GC (keep recent history).
-    # ge=1 (not 0): timedelta(0) is falsy, so pylance collapses `older_than` to None and silently drops the
-    # threshold — to GC aggressively, use a small positive value, not 0.
-    older_than_days: int = Field(default=7, ge=1, alias="MAINTENANCE_OLDER_THAN_DAYS")
-
-    # --- The commit lane (`maintenance.services.arrival`). A write a signed producer announced on `lineage.events.v1`
-    # holds that table's pass a delay out, so a bring-your-own compaction removes the table from the due list after its
-    # own commit rather than at the table's next recheck, and the pass expires the table's versions once enough are
-    # reclaimable (`min_versions_to_expire`).
-    #: Pull the commit lane. Off by default: an estate opts in by naming the lane in the chart, whose stream Job then
-    #: declares the lane's consumer.
-    arrival_enabled: bool = Field(default=False, alias="MAINTENANCE_ARRIVAL_ENABLED")
-    #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy. Both lanes ask it: an
-    #: expiry pass that reclaims one version a tick costs a vend, a manifest commit read and a listing for almost nothing.
-    #: The count is Lance's own, ``explain_cleanup_old_versions`` with the arguments the pass's ``cleanup_old_versions``
-    #: takes ([[LH-562]]).
-    min_versions_to_expire: int = Field(default=20, ge=1, alias="MAINTENANCE_MIN_VERSIONS_TO_EXPIRE")
-    #: How old a manifest a stock writer staged for a version its table already holds must be before expiry removes it
-    #: ([[LH-529]]): one whose commit lost its version is garbage Lance's own cleanup never lists, and the grace outlasts any
-    #: commit still deciding its outcome. A detached manifest a catalog commit left is removed past this grace too, and
-    #: never sooner than an hour (`expiry.DETACHED_MANIFEST_GRACE`), since a commit at work still reads its own
-    #: ([[LH-401]]).
-    staged_manifest_grace_seconds: int = Field(default=600, ge=0, alias="MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS")
-    # --- The work queue (ADR 0198 §2). Each table's pass, each trash record's release and the hourly audit are tasks on
-    # NATS JetStream, which every replica's worker pulls from; the streams and their durable consumers are the chart's
-    # (`chart/templates/nats-stream-job.yaml`), so the worker binds to them and creates nothing.
-    #: The bus the worker connects to; empty runs no worker, for a stack with no NATS and for the tests. The worker
-    #: presents its pod's token there (`lakehouse.bus.BusSettings`), and the session it is granted carries the chart's
-    #: `nats.auth.users` row: pull and ack on its consumers, publish tasks and schedules.
-    nats_url: str = Field(default="", alias="MAINTENANCE_NATS_URL")
-    #: How often a running task tells JetStream it is still being worked on, well inside the consumer's ack wait (the
-    #: chart's `maintenance.queue.ackWaitSeconds`), so a long pass is never redelivered beneath itself while its worker lives.
-    task_heartbeat_seconds: float = Field(default=20.0, gt=0, alias="MAINTENANCE_TASK_HEARTBEAT_SECONDS")
-    #: The consumer's ack wait (the chart's `maintenance.queue.ackWaitSeconds`): how long JetStream waits for a heartbeat
-    #: before it hands a running task to another replica. A worker whose heartbeats go unanswered until the ack wait the
-    #: last answer restarted runs out ends itself, since its task may then be another replica's.
-    task_ack_wait_seconds: float = Field(default=60.0, gt=0, alias="MAINTENANCE_TASK_ACK_WAIT_SECONDS")
-    #: Deliveries of one task before the worker ends it and counts it (the chart's `maintenance.queue.maxDeliver`); the
-    #: consumer allows one more, on which a task that outlived its worker every time is ended without running.
-    task_max_deliver: int = Field(default=10, ge=1, alias="MAINTENANCE_TASK_MAX_DELIVER")
-    #: A pass running longer than this is logged and counted once. It keeps its task, since a redelivery while the pass
-    #: still runs would put the table in flight twice, until twice this, when its replica ends its own process.
-    max_pass_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_MAX_PASS_SECONDS")
-    #: The longest a table goes without a pass: what bounds what no event announces, a lost commit event and the versions a
-    #: deleted tag or branch releases (an erasure's pins among them), and a table only a commit can make due.
-    recheck_hours: int = Field(default=24, ge=1, alias="MAINTENANCE_RECHECK_HOURS")
-    #: When a pass that could not decide, or found the table's history held, is tried again.
-    retry_seconds: int = Field(default=900, ge=60, alias="MAINTENANCE_RETRY_SECONDS")
-    #: How long the first commit of a burst holds its table's pass, and so the most often commits pass a table: every commit
-    #: until the pass runs is covered by it, and a pass costs a fixed handful of store requests however busy the table is.
-    commit_pass_delay_seconds: int = Field(default=300, ge=1, alias="MAINTENANCE_COMMIT_PASS_DELAY_SECONDS")
-    #: How long a stopping replica lets the task it is running finish before its connection drains, inside the pod's
-    #: `terminationGracePeriodSeconds`; a task cut short goes to another replica once its heartbeat stops. A pass still
-    #: running when the drain ends ends its replica (`Worker.drain`), since its heartbeat ends with the drain.
-    drain_seconds: float = Field(default=50.0, gt=0, alias="MAINTENANCE_DRAIN_SECONDS")
-    #: The port the worker's process serves its probes on (:mod:`maintenance.worker`), for the kubelet.
-    worker_port: int = Field(default=8001, ge=1, le=65535, alias="MAINTENANCE_WORKER_PORT")
-    #: The lakehouse's read-only window, rendered from the chart's one `readOnlyWindow` with the catalog's and lineage's: the
-    #: worker takes no task through it, so every task stays queued on the work queue with its deliveries unspent.
-    read_only: bool = Field(default=False, alias="MAINTENANCE_READ_ONLY")
-    #: The audit's schedule, a NATS message schedule (ADR-51): the drift report without the storage walk, its repairs,
-    #: the release and the lost-task backstop run once per firing on one replica, whatever the replica count.
-    audit_schedule: str = Field(default="@hourly", alias="MAINTENANCE_AUDIT_SCHEDULE")
-    #: The scan's schedule: the audit with the storage walk, which lists every bucket's directories, and then the purge
-    #: its report certifies (owner 2026-11-09: daily). At half past midnight, so it does not fire with the hourly
-    #: audit, whose claim it would wait out (the two never run at once). A six-field cron, seconds first: nats-server
-    #: 2.15.2 refuses a five-field one (10189, measured 2026-11-09).
-    scan_schedule: str = Field(default="0 30 0 * * *", alias="MAINTENANCE_SCAN_SCHEDULE")
-
-    # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
-    # were reclaimed, on the bus, over this process's own connection (`lakehouse.bus`). Publishes on the SAME topic
-    # the catalog publishes to and the lineage service subscribes to, so an expiry run shows up in producers()
-    # next to the writes. Off by default; a publish the bus did not take stays staged and never fails a pass.
-    lineage_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_LINEAGE_EMIT_ENABLED")
-    # Bound each publish so a bus that does not answer can't stall a pass (best-effort → the outage is swallowed).
-    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_PUBLISH_TIMEOUT_SECONDS")
-    lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")
-    # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
-    # AGE. The job NAME, `expire_versions.<table_id>`, names the operation.
-    lineage_job_namespace: str = Field(default="maintenance", alias="MAINTENANCE_LINEAGE_JOB_NAMESPACE")
-    #: The catalog's dataset namespace, every table's OpenLineage dataset namespace ([[LH-553]]): the value the catalog's
-    #: `LANCE_LINEAGE_DATASET_NAMESPACE` holds, which the chart renders into both from one helper, so a pass lands on the
-    #: dataset the catalog's events name.
-    lineage_dataset_namespace: Annotated[str, AfterValidator(require_dataset_namespace)] = Field(
-        default=DEFAULT_DATASET_NAMESPACE, alias="MAINTENANCE_LINEAGE_DATASET_NAMESPACE"
-    )
+class MaintenanceStore(StoreIdentitySettings):
+    """The buckets maintenance covers, the roots it reads the catalog's records at, and how it reaches the store under
+    the credential in force: what a function takes when the store is all it reads."""
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")
@@ -204,6 +96,242 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
         """
         declared = [b.strip().removeprefix("s3://").strip("/") for b in self.s3_platform_buckets.split(",")]
         return list(dict.fromkeys([*self.sweep_buckets, *[b for b in declared if b]]))
+
+    # How deep `discover_datasets` walks a bucket looking for the `_versions/` marker. A subtree the
+    # walk stops inside becomes an `IncompleteScan`, which blocks `purge.report_is_clean` — and the
+    # walk cannot tell "no dataset here" from "did not look deep enough", so a prefix that will never
+    # hold a dataset blocks reclamation exactly as hard as a manifest we failed to read.
+    #
+    # Exhausting the tree is the only way to clear those, and until this field existed nothing could:
+    # both call sites took the function default. It is a POLICY LEVER, not a rescue — measured
+    # 2026-09-08 on the primary bucket, depth 6 finds the same 30 datasets as depth 3 and stops
+    # nothing, so raising it reveals no hidden data. The default stays 3 because that measurement
+    # covers one of 93 buckets.
+    #
+    # BOUNDED at both ends deliberately. 0 walks nothing; an unbounded walk is not a freedom but a
+    # foot-gun, because the walk lists every directory it descends into, in every bucket.
+    discovery_max_depth: int = Field(default=3, ge=1, le=16, alias="MAINTENANCE_DISCOVERY_MAX_DEPTH")
+    # The reconciler reads the catalog's registries (`_projects/`, `_warehouses/`) off the control root.
+    # Defaults to the primary bucket, matching the catalog's own LANCE_CONTROL_ROOT default; override
+    # only when the catalog's control root has been moved.
+    control_root: str = Field(default="", alias="MAINTENANCE_CONTROL_ROOT")
+    #: THE CATALOG'S ``LANCE_EXTERNAL_BLOB_BASES``, under the same name the catalog and ingest read ([[LH-279]]).
+    #: A base inside one of these, declared as a plain base, is sanctioned by configuration as a pointer
+    #: base, which no vend grants. The base-reference pre-pass judges each declared base against these
+    #: and the catalog's base record, so an unset value here turns every table's blob base into a record
+    #: read and, for a table with no record, a finding that protects nothing.
+    #: A JSON object, each approved base with the warehouses it is approved for ([[LH-410]]); maintenance reads the bases.
+    external_blob_bases: dict[str, list[str]] = Field(default_factory=dict, validation_alias="LANCE_EXTERNAL_BLOB_BASES")
+    #: The estate's own warehouse, under the name the catalog reads it by (``RASK_FGA_DEFAULT_WAREHOUSE_OBJECT``,
+    #: ``warehouse:<id>``): its id is the first segment of every name on the estate's own root, which has no registry
+    #: record ([[LH-593]]). A table under it is maintained when its bucket is a configured one.
+    estate_warehouse_object: str = Field(default="warehouse:lance_catalog", validation_alias="RASK_FGA_DEFAULT_WAREHOUSE_OBJECT")
+
+    @property
+    def resolved_policy_root(self) -> str:
+        """The policy-registry root — `MAINTENANCE_POLICY_ROOT` or the primary bucket."""
+        return self.policy_root or f"s3://{self.s3_bucket}"
+
+    @property
+    def external_blob_base_list(self) -> list[str]:
+        """The configured external blob bases, whichever warehouse each is approved for."""
+        return [base.strip() for base in self.external_blob_bases if base.strip()]
+
+    @property
+    def resolved_control_root(self) -> str:
+        """The catalog's control root (project/warehouse registries) — `MAINTENANCE_CONTROL_ROOT` or
+        the primary bucket, which is what the catalog defaults to."""
+        return self.control_root or f"s3://{self.s3_bucket}"
+
+    @model_validator(mode="after")
+    def _one_store_identity(self) -> Self:
+        """Refuse a pair beside the token, and a token sent to the public AWS STS."""
+        require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="MAINTENANCE")
+        return self
+
+    def s3_key_pair(self) -> S3KeyPair:
+        """What maintenance's own reads and records sign with: the session its token was exchanged for, or the environment's pair.
+
+        Raises:
+            StoreCredentialUnavailableError: The service projects a token and holds no unexpired session (503).
+        """
+        return key_pair_in_force(self.web_identity, self.env_pair)
+
+    @property
+    def store_timeouts(self) -> StoreTimeouts:
+        """The bound on each of maintenance's store calls, which every ``storage_options`` it opens with carries."""
+        return StoreTimeouts(
+            connect_s=self.store_connect_timeout_s,
+            request_s=self.store_request_timeout_s,
+            max_retries=self.store_max_retries,
+            retry_window_s=self.store_retry_window_s,
+        )
+
+    def storage_options(self) -> StorageOptions:
+        """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint, under the key pair in force and
+        maintenance's :attr:`store_timeouts`."""
+        # Via the shared builder — which also stamps path-style addressing; the hand-rolled copy here had
+        # silently dropped it (audit 2026-07-15), leaving the sweep one object-store default away from 403s.
+        return lance_storage_options(self.s3_endpoint, self.s3_key_pair(), self.s3_region).with_options(self.store_timeouts.storage_options())
+
+
+class MaintenanceCatalogDoor(BaseSettings):
+    """The catalog's doors maintenance asks, and who it asks them as."""
+
+    #: THE CATALOG'S CREDENTIAL DOOR, the only source of a rewrite's credential ([[LH-219]]): each rewrite is signed by a
+    #: `maintain`-tier credential scoped to its one table and expiring in 900 s ([[LH-473]]). Unset, or a catalog on
+    #: `mode_b`, every rewrite is refused; maintenance's own session signs only its reads and its own records
+    #: (`services/credentials.py`).
+    catalog_url: str = Field(default="", alias="MAINTENANCE_CATALOG_URL")
+    #: The subject this service acts as: the author of the lineage it signs, the actor on the tuples it
+    #: repairs, and the name its refusals report. It is never sent as a claim. The catalog derives the
+    #: caller from the verified service-account token, so this must be this pod's service-account subject
+    #: (`kubernetes~system:serviceaccount:<ns>:<sa>`, the chart's `lance.saSubject`), or the two name different principals.
+    catalog_service_identity: str = Field(default="kubernetes~system:serviceaccount:default:rask-sa-maintenance", alias="MAINTENANCE_CATALOG_SERVICE_IDENTITY")
+    #: This pod's projected service-account token for the catalog's doors (audience `rask-catalog`),
+    #: re-read on every call because the kubelet rotates it at ~515 s of its 600 s life.
+    catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
+
+
+class MaintenanceQueue(BaseSettings):
+    """The work queue: the bus the worker pulls from, how a task is held, bounded and retried, and the schedules."""
+
+    # --- The work queue (ADR 0198 §2). Each table's pass, each trash record's release and the hourly audit are tasks on
+    # NATS JetStream, which every replica's worker pulls from; the streams and their durable consumers are the chart's
+    # (`chart/templates/nats-stream-job.yaml`), so the worker binds to them and creates nothing.
+    #: The bus the worker connects to; empty runs no worker, for a stack with no NATS and for the tests. The worker
+    #: presents its pod's token there (`lakehouse.bus.BusSettings`), and the session it is granted carries the chart's
+    #: `nats.auth.users` row: pull and ack on its consumers, publish tasks and schedules.
+    nats_url: str = Field(default="", alias="MAINTENANCE_NATS_URL")
+    #: How often a running task tells JetStream it is still being worked on, well inside the consumer's ack wait (the
+    #: chart's `maintenance.queue.ackWaitSeconds`), so a long pass is never redelivered beneath itself while its worker lives.
+    task_heartbeat_seconds: float = Field(default=20.0, gt=0, alias="MAINTENANCE_TASK_HEARTBEAT_SECONDS")
+    #: The consumer's ack wait (the chart's `maintenance.queue.ackWaitSeconds`): how long JetStream waits for a heartbeat
+    #: before it hands a running task to another replica. A worker whose heartbeats go unanswered until the ack wait the
+    #: last answer restarted runs out ends itself, since its task may then be another replica's.
+    task_ack_wait_seconds: float = Field(default=60.0, gt=0, alias="MAINTENANCE_TASK_ACK_WAIT_SECONDS")
+    #: Deliveries of one task before the worker ends it and counts it (the chart's `maintenance.queue.maxDeliver`); the
+    #: consumer allows one more, on which a task that outlived its worker every time is ended without running.
+    task_max_deliver: int = Field(default=10, ge=1, alias="MAINTENANCE_TASK_MAX_DELIVER")
+    #: A pass running longer than this is logged and counted once. It keeps its task, since a redelivery while the pass
+    #: still runs would put the table in flight twice, until twice this, when its replica ends its own process.
+    max_pass_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_MAX_PASS_SECONDS")
+    #: The longest a table goes without a pass: what bounds what no event announces, a lost commit event and the versions a
+    #: deleted tag or branch releases (an erasure's pins among them), and a table only a commit can make due.
+    recheck_hours: int = Field(default=24, ge=1, alias="MAINTENANCE_RECHECK_HOURS")
+    #: When a pass that could not decide, or found the table's history held, is tried again.
+    retry_seconds: int = Field(default=900, ge=60, alias="MAINTENANCE_RETRY_SECONDS")
+    #: How long the first commit of a burst holds its table's pass, and so the most often commits pass a table: every commit
+    #: until the pass runs is covered by it, and a pass costs a fixed handful of store requests however busy the table is.
+    commit_pass_delay_seconds: int = Field(default=300, ge=1, alias="MAINTENANCE_COMMIT_PASS_DELAY_SECONDS")
+    #: How long a stopping replica lets the task it is running finish before its connection drains, inside the pod's
+    #: `terminationGracePeriodSeconds`; a task cut short goes to another replica once its heartbeat stops. A pass still
+    #: running when the drain ends ends its replica (`Worker.drain`), since its heartbeat ends with the drain.
+    drain_seconds: float = Field(default=50.0, gt=0, alias="MAINTENANCE_DRAIN_SECONDS")
+    #: The port the worker's process serves its probes on (:mod:`maintenance.worker`), for the kubelet.
+    worker_port: int = Field(default=8001, ge=1, le=65535, alias="MAINTENANCE_WORKER_PORT")
+    #: The lakehouse's read-only window, rendered from the chart's one `readOnlyWindow` with the catalog's and lineage's: the
+    #: worker takes no task through it, so every task stays queued on the work queue with its deliveries unspent.
+    read_only: bool = Field(default=False, alias="MAINTENANCE_READ_ONLY")
+    #: The audit's schedule, a NATS message schedule (ADR-51): the drift report without the storage walk, its repairs,
+    #: the release and the lost-task backstop run once per firing on one replica, whatever the replica count.
+    audit_schedule: str = Field(default="@hourly", alias="MAINTENANCE_AUDIT_SCHEDULE")
+    #: The scan's schedule: the audit with the storage walk, which lists every bucket's directories, and then the purge
+    #: its report certifies (owner 2026-11-09: daily). At half past midnight, so it does not fire with the hourly
+    #: audit, whose claim it would wait out (the two never run at once). A six-field cron, seconds first: nats-server
+    #: 2.15.2 refuses a five-field one (10189, measured 2026-11-09).
+    scan_schedule: str = Field(default="0 30 0 * * *", alias="MAINTENANCE_SCAN_SCHEDULE")
+
+    #: A check's own bound, as `max_pass_seconds` is a pass's: past it the check is logged and counted, and at twice it its
+    #: replica ends itself.
+    orphan_check_max_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_ORPHAN_CHECK_MAX_SECONDS")
+    #: The hourly audit's own bound. It reads one record per table (about 7 ms a table over moto, measured 2026-11-13),
+    #: and an audit still running when the next fires holds the claim the two share, so its bound stays under the hour.
+    audit_max_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_AUDIT_MAX_SECONDS")
+    #: The daily scan's own bound. Its storage walk makes three store requests per table (about 54 ms a table over moto,
+    #: measured 2026-11-13), so under a pass's bound it would be ended at twice 1800 s on an estate of some tens of
+    #: thousands of tables, every delivery, and not tried again until the next day.
+    scan_max_seconds: int = Field(default=7200, ge=60, alias="MAINTENANCE_SCAN_MAX_SECONDS")
+
+    @property
+    def max_seconds_by_kind(self) -> dict[str, float]:
+        """The bound of each task kind that has one of its own; any other kind is bounded by ``max_pass_seconds``."""
+        return {"orphans": self.orphan_check_max_seconds, "audit": self.audit_max_seconds, "scan": self.scan_max_seconds}
+
+    @model_validator(mode="after")
+    def _a_bus_needs_the_pods_token(self) -> Self:
+        """Refuse a bus address without a token to present there: the worker holds no other proof of who it is."""
+        if self.nats_url and not BusSettings().token_file:
+            raise ValueError("MAINTENANCE_NATS_URL needs the pod's token for the bus (RASK_BUS_TOKEN_FILE): the worker presents nothing else there")
+        return self
+
+
+class MaintenanceSettings(SignatureDoorSettings, MaintenanceStore, MaintenanceCatalogDoor, MaintenanceQueue, BaseSettings):
+    """Config for the maintenance service + its S3 access to the lakehouse buckets."""
+
+    # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
+    # every alias below silently gained an un-namespaced twin (a field named `address` would
+    # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
+    # namespace the aliases already declare; an explicit alias bypasses it, so the
+    # deliberately-bare ones (RASK_SIGNING_IDENTITY) still land.
+    # See tests/unit/test_settings_env_namespace.py.
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MAINTENANCE_", alias_generator=env_alias("MAINTENANCE"), extra="ignore")
+
+    # #102: the shared Lance session's cache caps. Defaults sized for the pod tier (512Mi limit —
+    # Lance's own defaults are 1 GiB metadata + 6 GiB index PER OPEN, which is the defect).
+    lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="MAINTENANCE_LANCE_METADATA_CACHE_MB")
+    lance_index_cache_mb: int = Field(default=256, ge=8, alias="MAINTENANCE_LANCE_INDEX_CACHE_MB")
+
+    #: Whether this service emits the `lance.audit` compliance stream. ON by default — the trail is
+    #: evidence, so a deployment that forgets still has it.
+    #:
+    #: IT DID NOT EXIST UNTIL 2026-09-09, and the sweep is where that cost most: this is the component
+    #: that REWRITES BYTES, and with no field there was nothing for `build_lance_service_app` to arm,
+    #: so the `lance.audit` logger sat at NOTSET and followed `RASK_LOG_LEVEL` (§ Q17-27). Arming it is
+    #: the precondition for § Q17-36 — maintenance's per-object outcome becoming a governed record rather
+    #: than telemetry on a 14-day trace TTL.
+    audit_enabled: bool = Field(default=True, alias="RASK_AUDIT_ENABLED")
+    # Datasets whose newest version is older than this are eligible for version GC (keep recent history).
+    # ge=1 (not 0): timedelta(0) is falsy, so pylance collapses `older_than` to None and silently drops the
+    # threshold — to GC aggressively, use a small positive value, not 0.
+    older_than_days: int = Field(default=7, ge=1, alias="MAINTENANCE_OLDER_THAN_DAYS")
+
+    # --- The commit lane (`maintenance.services.arrival`). A write a signed producer announced on `lineage.events.v1`
+    # holds that table's pass a delay out, so a bring-your-own compaction removes the table from the due list after its
+    # own commit rather than at the table's next recheck, and the pass expires the table's versions once enough are
+    # reclaimable (`min_versions_to_expire`).
+    #: Pull the commit lane. Off by default: an estate opts in by naming the lane in the chart, whose stream Job then
+    #: declares the lane's consumer.
+    arrival_enabled: bool = Field(default=False, alias="MAINTENANCE_ARRIVAL_ENABLED")
+    #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy. Both lanes ask it: an
+    #: expiry pass that reclaims one version a tick costs a vend, a manifest commit read and a listing for almost nothing.
+    #: The count is Lance's own, ``explain_cleanup_old_versions`` with the arguments the pass's ``cleanup_old_versions``
+    #: takes ([[LH-562]]).
+    min_versions_to_expire: int = Field(default=20, ge=1, alias="MAINTENANCE_MIN_VERSIONS_TO_EXPIRE")
+    #: How old a manifest a stock writer staged for a version its table already holds must be before expiry removes it
+    #: ([[LH-529]]): one whose commit lost its version is garbage Lance's own cleanup never lists, and the grace outlasts any
+    #: commit still deciding its outcome. A detached manifest a catalog commit left is removed past this grace too, and
+    #: never sooner than an hour (`expiry.DETACHED_MANIFEST_GRACE`), since a commit at work still reads its own
+    #: ([[LH-401]]).
+    staged_manifest_grace_seconds: int = Field(default=600, ge=0, alias="MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS")
+
+    # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
+    # were reclaimed, on the bus, over this process's own connection (`lakehouse.bus`). Publishes on the SAME topic
+    # the catalog publishes to and the lineage service subscribes to, so an expiry run shows up in producers()
+    # next to the writes. Off by default; a publish the bus did not take stays staged and never fails a pass.
+    lineage_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_LINEAGE_EMIT_ENABLED")
+    # Bound each publish so a bus that does not answer can't stall a pass (best-effort → the outage is swallowed).
+    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_PUBLISH_TIMEOUT_SECONDS")
+    lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")
+    # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
+    # AGE. The job NAME, `expire_versions.<table_id>`, names the operation.
+    lineage_job_namespace: str = Field(default="maintenance", alias="MAINTENANCE_LINEAGE_JOB_NAMESPACE")
+    #: The catalog's dataset namespace, every table's OpenLineage dataset namespace ([[LH-553]]): the value the catalog's
+    #: `LANCE_LINEAGE_DATASET_NAMESPACE` holds, which the chart renders into both from one helper, so a pass lands on the
+    #: dataset the catalog's events name.
+    lineage_dataset_namespace: Annotated[str, AfterValidator(require_dataset_namespace)] = Field(
+        default=DEFAULT_DATASET_NAMESPACE, alias="MAINTENANCE_LINEAGE_DATASET_NAMESPACE"
+    )
 
     # --- #79 expired-trash purge (RECLAMATION — the only mutation this service makes outside a dataset).
     #
@@ -283,22 +411,6 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: it, and an excluded table (a branch, MemWAL, an unsupported flag, too many files) waits it (owner, 2026-11-10:
     #: "30 days is fine"). A table whose floor was raised waits its retention and a day, whatever this says.
     orphan_check_ceiling_days: int = Field(default=30, ge=1, alias="MAINTENANCE_ORPHAN_CHECK_CEILING_DAYS")
-    #: A check's own bound, as `max_pass_seconds` is a pass's: past it the check is logged and counted, and at twice it its
-    #: replica ends itself.
-    orphan_check_max_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_ORPHAN_CHECK_MAX_SECONDS")
-    #: The hourly audit's own bound. It reads one record per table (about 7 ms a table over moto, measured 2026-11-13),
-    #: and an audit still running when the next fires holds the claim the two share, so its bound stays under the hour.
-    audit_max_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_AUDIT_MAX_SECONDS")
-    #: The daily scan's own bound. Its storage walk makes three store requests per table (about 54 ms a table over moto,
-    #: measured 2026-11-13), so under a pass's bound it would be ended at twice 1800 s on an estate of some tens of
-    #: thousands of tables, every delivery, and not tried again until the next day.
-    scan_max_seconds: int = Field(default=7200, ge=60, alias="MAINTENANCE_SCAN_MAX_SECONDS")
-
-    @property
-    def max_seconds_by_kind(self) -> dict[str, float]:
-        """The bound of each task kind that has one of its own; any other kind is bounded by ``max_pass_seconds``."""
-        return {"orphans": self.orphan_check_max_seconds, "audit": self.audit_max_seconds, "scan": self.scan_max_seconds}
-
     #: Rebuild authorization tuples the control-plane registries still justify ([[LH-061]], owner
     #: ruling 2026-09-19 overturning the standing deferral on a write-capable reconcile).
     #:
@@ -345,113 +457,15 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # the publish, and "best-effort" means only the emitter's counter and log line would show it.
     control_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_CONTROL_EMIT_ENABLED")
 
-    # How deep `discover_datasets` walks a bucket looking for the `_versions/` marker. A subtree the
-    # walk stops inside becomes an `IncompleteScan`, which blocks `purge.report_is_clean` — and the
-    # walk cannot tell "no dataset here" from "did not look deep enough", so a prefix that will never
-    # hold a dataset blocks reclamation exactly as hard as a manifest we failed to read.
-    #
-    # Exhausting the tree is the only way to clear those, and until this field existed nothing could:
-    # both call sites took the function default. It is a POLICY LEVER, not a rescue — measured
-    # 2026-09-08 on the primary bucket, depth 6 finds the same 30 datasets as depth 3 and stops
-    # nothing, so raising it reveals no hidden data. The default stays 3 because that measurement
-    # covers one of 93 buckets.
-    #
-    # BOUNDED at both ends deliberately. 0 walks nothing; an unbounded walk is not a freedom but a
-    # foot-gun, because the walk lists every directory it descends into, in every bucket.
-    discovery_max_depth: int = Field(default=3, ge=1, le=16, alias="MAINTENANCE_DISCOVERY_MAX_DEPTH")
-    # The reconciler reads the catalog's registries (`_projects/`, `_warehouses/`) off the control root.
-    # Defaults to the primary bucket, matching the catalog's own LANCE_CONTROL_ROOT default; override
-    # only when the catalog's control root has been moved.
-    control_root: str = Field(default="", alias="MAINTENANCE_CONTROL_ROOT")
-    #: THE CATALOG'S ``LANCE_EXTERNAL_BLOB_BASES``, under the same name the catalog and ingest read ([[LH-279]]).
-    #: A base inside one of these, declared as a plain base, is sanctioned by configuration as a pointer
-    #: base, which no vend grants. The base-reference pre-pass judges each declared base against these
-    #: and the catalog's base record, so an unset value here turns every table's blob base into a record
-    #: read and, for a table with no record, a finding that protects nothing.
-    #: A JSON object, each approved base with the warehouses it is approved for ([[LH-410]]); maintenance reads the bases.
-    external_blob_bases: dict[str, list[str]] = Field(default_factory=dict, validation_alias="LANCE_EXTERNAL_BLOB_BASES")
-    #: The estate's own warehouse, under the name the catalog reads it by (``RASK_FGA_DEFAULT_WAREHOUSE_OBJECT``,
-    #: ``warehouse:<id>``): its id is the first segment of every name on the estate's own root, which has no registry
-    #: record ([[LH-593]]). A table under it is maintained when its bucket is a configured one.
-    estate_warehouse_object: str = Field(default="warehouse:lance_catalog", validation_alias="RASK_FGA_DEFAULT_WAREHOUSE_OBJECT")
-
-    #: THE CATALOG'S CREDENTIAL DOOR, the only source of a rewrite's credential ([[LH-219]]): each rewrite is signed by a
-    #: `maintain`-tier credential scoped to its one table and expiring in 900 s ([[LH-473]]). Unset, or a catalog on
-    #: `mode_b`, every rewrite is refused; maintenance's own session signs only its reads and its own records
-    #: (`services/credentials.py`).
-    catalog_url: str = Field(default="", alias="MAINTENANCE_CATALOG_URL")
-    #: The subject this service acts as: the author of the lineage it signs, the actor on the tuples it
-    #: repairs, and the name its refusals report. It is never sent as a claim. The catalog derives the
-    #: caller from the verified service-account token, so this must be this pod's service-account subject
-    #: (`kubernetes~system:serviceaccount:<ns>:<sa>`, the chart's `lance.saSubject`), or the two name different principals.
-    catalog_service_identity: str = Field(default="kubernetes~system:serviceaccount:default:rask-sa-maintenance", alias="MAINTENANCE_CATALOG_SERVICE_IDENTITY")
     #: THE IDENTITY THIS SERVICE SIGNS ITS LINEAGE EVENTS AS ([[LH-064]]), one variable on every signer
     #: (`RASK_SIGNING_IDENTITY`). With a secret store named (`RASK_SECRET_STORE_ADDR`) it decides whether the service signs at all: its private
     #: key is `signing-key-<its key name>` in the store (`signing_key_name`). When it signs, it is also the author the events stamp.
     signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
-    #: This pod's projected service-account token for the catalog's doors (audience `rask-catalog`),
-    #: re-read on every call because the kubelet rotates it at ~515 s of its 600 s life.
-    catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
-
-    @property
-    def resolved_policy_root(self) -> str:
-        """The policy-registry root — `MAINTENANCE_POLICY_ROOT` or the primary bucket."""
-        return self.policy_root or f"s3://{self.s3_bucket}"
-
-    @property
-    def external_blob_base_list(self) -> list[str]:
-        """The configured external blob bases, whichever warehouse each is approved for."""
-        return [base.strip() for base in self.external_blob_bases if base.strip()]
-
-    @property
-    def resolved_control_root(self) -> str:
-        """The catalog's control root (project/warehouse registries) — `MAINTENANCE_CONTROL_ROOT` or
-        the primary bucket, which is what the catalog defaults to."""
-        return self.control_root or f"s3://{self.s3_bucket}"
-
     #: Stage lineage events here before publishing. EMPTY = today's behaviour exactly, because
     #: `publish_with_outbox` degrades to a plain publish when unset — so this is inert until a
     #: deployment opts in. The twin of the catalog's `LANCE_LINEAGE_OUTBOX_URI`: `_PUBLISH_INTENT`
     #: pinned exactly two bare lineage publishers and this is the second.
     lineage_outbox_uri: str = Field(default="", alias="MAINTENANCE_LINEAGE_OUTBOX_URI")
-
-    @model_validator(mode="after")
-    def _one_store_identity(self) -> Self:
-        """Refuse a pair beside the token, and a token sent to the public AWS STS."""
-        require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="MAINTENANCE")
-        return self
-
-    @model_validator(mode="after")
-    def _a_bus_needs_the_pods_token(self) -> Self:
-        """Refuse a bus address without a token to present there: the worker holds no other proof of who it is."""
-        if self.nats_url and not BusSettings().token_file:
-            raise ValueError("MAINTENANCE_NATS_URL needs the pod's token for the bus (RASK_BUS_TOKEN_FILE): the worker presents nothing else there")
-        return self
-
-    def s3_key_pair(self) -> S3KeyPair:
-        """What maintenance's own reads and records sign with: the session its token was exchanged for, or the environment's pair.
-
-        Raises:
-            StoreCredentialUnavailableError: The service projects a token and holds no unexpired session (503).
-        """
-        return key_pair_in_force(self.web_identity, self.env_pair)
-
-    @property
-    def store_timeouts(self) -> StoreTimeouts:
-        """The bound on each of maintenance's store calls, which every ``storage_options`` it opens with carries."""
-        return StoreTimeouts(
-            connect_s=self.store_connect_timeout_s,
-            request_s=self.store_request_timeout_s,
-            max_retries=self.store_max_retries,
-            retry_window_s=self.store_retry_window_s,
-        )
-
-    def storage_options(self) -> StorageOptions:
-        """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint, under the key pair in force and
-        maintenance's :attr:`store_timeouts`."""
-        # Via the shared builder — which also stamps path-style addressing; the hand-rolled copy here had
-        # silently dropped it (audit 2026-07-15), leaving the sweep one object-store default away from 403s.
-        return lance_storage_options(self.s3_endpoint, self.s3_key_pair(), self.s3_region).with_options(self.store_timeouts.storage_options())
 
 
 def shared_lance_session() -> lance.Session:

@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from lakehouse.bus_delivery import Delivery, Lane, Verdict
 from lineage.api.fga_deps import enforce_bus_authz
-from lineage.core.config import LineageSettings
+from lineage.core.config import LineageDelivery, LineageSettings
 from lineage.core.metrics import Door, Outcome, record_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload, run_id_from_payload
 from lineage.services.consumer import handle_cloud_event
@@ -66,7 +66,7 @@ def _plain(value: object) -> str | None:
     return value
 
 
-def lane(settings: LineageSettings) -> Lane:
+def lane(settings: LineageDelivery) -> Lane:
     """The consumer lineage pulls, and the numbers the chart gives its deliveries."""
     return Lane(
         stream=STREAM,

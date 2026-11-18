@@ -51,7 +51,92 @@ class Signing(BaseSettings):
         return bool(self.signers)
 
 
-class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings):
+class LineageForward(BaseSettings):
+    """The graph backend lineage forwards each recorded event to, when one is named."""
+
+    # --- The forwarder (ADR 0158): every recorded event, as standard OpenLineage, to a bring-your-own graph -------
+    #: The graph backend's base URL, the OpenLineage HTTP transport's `url`. Empty forwards nothing.
+    forward_url: str = Field(default="", alias="LINEAGE_FORWARD_URL")
+    #: The path events are POSTed to under `forward_url`, the transport's `endpoint`.
+    forward_endpoint: str = Field(default="api/v1/lineage", alias="LINEAGE_FORWARD_ENDPOINT")
+    #: The secret in lineage's secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty
+    #: sends none. Read on every relay tick, so a rotated key is taken without a restart.
+    forward_api_key_secret: str = Field(default="", alias="LINEAGE_FORWARD_API_KEY_SECRET")
+    #: The field of that secret the key is under.
+    forward_api_key_field: str = Field(default="api-key", alias="LINEAGE_FORWARD_API_KEY_FIELD")
+    #: The most events one relay tick forwards; the rest follow on the next. At the relay's 30 s schedule, 100 a tick
+    #: is 12,000 an hour, against a feed measured at about 450 rows a day.
+    forward_batch: int = Field(default=100, ge=1, alias="LINEAGE_FORWARD_BATCH")
+    #: Bounds each POST to the backend, so a hung backend cannot pin a tick.
+    forward_timeout_seconds: float = Field(default=10.0, gt=0, alias="LINEAGE_FORWARD_TIMEOUT_SECONDS")
+
+
+class LineageDelivery(BaseSettings):
+    """The lane lineage takes its deliveries on, and how one is retried, bounded and published again."""
+
+    # --- Durable ingest off the bus: the catalog publishes to NATS JetStream, which keeps each event, and this service
+    # pulls it from its own consumer on its own connection wherever the chart names it a bus (`lineage.api.ingest_lane`,
+    # `lakehouse.bus`), so a lineage outage never loses provenance. The HTTP /api/v1/lineage endpoint stays for
+    # external producers.
+    #: The topic lineage's events ride: the one its consumer takes, and the one the relay publishes a recovered event on.
+    lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")
+    #: How many deliveries are handled at once, across this service's replicas: the consumer's `max_ack_pending`, which
+    #: the chart declares from the same value, so the bus hands out no more than the replicas handle.
+    deliveries_in_flight: int = Field(default=64, ge=1, alias="LINEAGE_DELIVERIES_IN_FLIGHT")
+    #: How many deliveries an event is handled on before it is parked, and how long one that is asked for again waits.
+    delivery_attempts: int = Field(default=5, ge=1, alias="LINEAGE_DELIVERY_ATTEMPTS")
+    delivery_retry_seconds: float = Field(default=120.0, ge=0, alias="LINEAGE_DELIVERY_RETRY_SECONDS")
+    #: The consumer's ack wait, as the chart declares it: a handling is cut short of it, so the bus never delivers an
+    #: event again beneath a handling still running.
+    delivery_ack_wait_seconds: float = Field(default=300.0, gt=Lane.SETTLE_SECONDS, alias="LINEAGE_DELIVERY_ACK_WAIT_SECONDS")
+    #: Bounds the relay's re-publish of a drained event. An unbounded publish against a bus that does not answer
+    #: would stall the tick — the relay failing hardest exactly when a backlog means it matters most, which is the
+    #: same failure the bounded drain was introduced to avoid.
+    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_PUBLISH_TIMEOUT_SECONDS")
+
+
+class LineageRelay(BaseSettings):
+    """The relay's tick: its period, the root its timer claims windows under, the outbox it drains and the feed it prunes."""
+
+    # Seconds between two ticks of the relay, which drains the outbox, forwards to the configured graph backend and
+    # prunes the feed, on lineage's own timer (`lineage/api/relay.py`). 0 = no relay.
+    relay_period_seconds: float = Field(default=0, ge=0, alias="LINEAGE_RELAY_PERIOD_SECONDS")
+    # The control root the relay's timer claims each window under (`lakehouse.timers`), so one replica runs each tick.
+    # Required with a period: a relay that could not claim would run on every replica.
+    timer_root: str = Field(default="", alias="LINEAGE_TIMER_ROOT")
+
+    # #4: the durable lineage-outbox prefix (shared with the producers that stage there). When set, the relay
+    # tick DRAINS it — re-ingesting any event a producer staged but whose publish never got acked (a crash
+    # between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must point at the
+    # SAME object-store prefix as ``LANCE_LINEAGE_OUTBOX_URI`` and ``MAINTENANCE_LINEAGE_OUTBOX_URI``.
+    outbox_uri: str = Field(default="", alias="LINEAGE_OUTBOX_URI")
+    # Max staged events one relay tick drains, OLDEST FIRST (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md P1.2 (bounded drain)).
+    # The drain used to materialise the ENTIRE prefix in memory, so a backlog — precisely the situation the
+    # outbox exists to survive — could OOM or stall the tick. The remainder drains on the next tick;
+    # oldest-first means nothing starves behind a steady arrival rate. 0 = unbounded (not recommended).
+    outbox_drain_limit: int = Field(default=500, alias="LINEAGE_OUTBOX_DRAIN_LIMIT")
+
+    # --- Feed retention, in DAYS of arrival time (the estate's own `received_at`, never the
+    # producer-supplied eventTime). 0 = unbounded. Pruned once per relay tick, never on the ingest path.
+    #
+    # DAYS BECAUSE A CONSUMER REASONS IN DAYS. A notifier walks this feed from a persisted
+    # cursor as its catch-up path after an outage, so the only question an operator needs a
+    # retention knob to answer is "how long an outage does the feed survive". A count cannot answer it at
+    # any volume.
+    #
+    # 7 DAYS IS THE HORIZON THE DEPLOYED FEED WAS MEASURED HOLDING (2026-08-31 → 2026-09-07, 3 133 rows),
+    # so the default states the working estate's horizon rather than changing it.
+    events_retention_days: int = Field(default=7, ge=0, alias="LINEAGE_EVENTS_RETENTION_DAYS")
+
+    @model_validator(mode="after")
+    def _a_relay_claims_its_windows(self) -> Self:
+        """Refuse a relay period with no root to claim its windows under."""
+        if self.relay_period_seconds and not self.timer_root:
+            raise ValueError("LINEAGE_RELAY_PERIOD_SECONDS is set and LINEAGE_TIMER_ROOT is empty: the relay's timer claims each window under a control root")
+        return self
+
+
+class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, LineageForward, LineageDelivery, LineageRelay, BaseSettings):
     """Config for the lineage service, the catalog that keeps its tables, and its auth gate."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
@@ -82,22 +167,6 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     #: Bounds each catalog call, so a hung catalog cannot pin a delivery for ever.
     catalog_timeout_seconds: float = Field(default=30.0, gt=0, alias="LINEAGE_CATALOG_TIMEOUT_SECONDS")
 
-    # --- The forwarder (ADR 0158): every recorded event, as standard OpenLineage, to a bring-your-own graph -------
-    #: The graph backend's base URL, the OpenLineage HTTP transport's `url`. Empty forwards nothing.
-    forward_url: str = Field(default="", alias="LINEAGE_FORWARD_URL")
-    #: The path events are POSTed to under `forward_url`, the transport's `endpoint`.
-    forward_endpoint: str = Field(default="api/v1/lineage", alias="LINEAGE_FORWARD_ENDPOINT")
-    #: The secret in lineage's secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty
-    #: sends none. Read on every relay tick, so a rotated key is taken without a restart.
-    forward_api_key_secret: str = Field(default="", alias="LINEAGE_FORWARD_API_KEY_SECRET")
-    #: The field of that secret the key is under.
-    forward_api_key_field: str = Field(default="api-key", alias="LINEAGE_FORWARD_API_KEY_FIELD")
-    #: The most events one relay tick forwards; the rest follow on the next. At the relay's 30 s schedule, 100 a tick
-    #: is 12,000 an hour, against a feed measured at about 450 rows a day.
-    forward_batch: int = Field(default=100, ge=1, alias="LINEAGE_FORWARD_BATCH")
-    #: Bounds each POST to the backend, so a hung backend cannot pin a tick.
-    forward_timeout_seconds: float = Field(default=10.0, gt=0, alias="LINEAGE_FORWARD_TIMEOUT_SECONDS")
-
     # --- OpenFGA (authz) — reuses the catalog's store READ-ONLY -------------------------
     # The OIDC/FGA field-set itself is `GovernedAuthSettings`' (`RASK_OIDC_*` / `RASK_FGA_*`). A governed dataset is
     # asked about as the table its uuid names (`table:<uuid>`, [[LH-524]]).
@@ -105,31 +174,6 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     #: (`LINEAGE_SIGNERS`, `LINEAGE_DELEGATORS`), so a settings object made by `model_validate` reads them too.
     signing: Signing = Field(default_factory=Signing)
 
-    # --- Durable ingest off the bus: the catalog publishes to NATS JetStream, which keeps each event, and this service
-    # pulls it from its own consumer on its own connection wherever the chart names it a bus (`lineage.api.ingest_lane`,
-    # `lakehouse.bus`), so a lineage outage never loses provenance. The HTTP /api/v1/lineage endpoint stays for
-    # external producers.
-    #: The topic lineage's events ride: the one its consumer takes, and the one the relay publishes a recovered event on.
-    lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")
-    #: How many deliveries are handled at once, across this service's replicas: the consumer's `max_ack_pending`, which
-    #: the chart declares from the same value, so the bus hands out no more than the replicas handle.
-    deliveries_in_flight: int = Field(default=64, ge=1, alias="LINEAGE_DELIVERIES_IN_FLIGHT")
-    #: How many deliveries an event is handled on before it is parked, and how long one that is asked for again waits.
-    delivery_attempts: int = Field(default=5, ge=1, alias="LINEAGE_DELIVERY_ATTEMPTS")
-    delivery_retry_seconds: float = Field(default=120.0, ge=0, alias="LINEAGE_DELIVERY_RETRY_SECONDS")
-    #: The consumer's ack wait, as the chart declares it: a handling is cut short of it, so the bus never delivers an
-    #: event again beneath a handling still running.
-    delivery_ack_wait_seconds: float = Field(default=300.0, gt=Lane.SETTLE_SECONDS, alias="LINEAGE_DELIVERY_ACK_WAIT_SECONDS")
-    #: Bounds the relay's re-publish of a drained event. An unbounded publish against a bus that does not answer
-    #: would stall the tick — the relay failing hardest exactly when a backlog means it matters most, which is the
-    #: same failure the bounded drain was introduced to avoid.
-    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_PUBLISH_TIMEOUT_SECONDS")
-    # Seconds between two ticks of the relay, which drains the outbox, forwards to the configured graph backend and
-    # prunes the feed, on lineage's own timer (`lineage/api/relay.py`). 0 = no relay.
-    relay_period_seconds: float = Field(default=0, ge=0, alias="LINEAGE_RELAY_PERIOD_SECONDS")
-    # The control root the relay's timer claims each window under (`lakehouse.timers`), so one replica runs each tick.
-    # Required with a period: a relay that could not claim would run on every replica.
-    timer_root: str = Field(default="", alias="LINEAGE_TIMER_ROOT")
     # The lakehouse's read-only window, rendered from the chart's one `readOnlyWindow` with the catalog's and maintenance's:
     # the relay's timer is held through it, so the first window after it drains, forwards and prunes.
     read_only: bool = Field(default=False, alias="LINEAGE_READ_ONLY")
@@ -138,29 +182,6 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     s3_endpoint: str | None = Field(default=None, alias="LINEAGE_S3_ENDPOINT")
     # Lineage's identity at the store is `StoreIdentitySettings`' (LINEAGE_S3_WEB_IDENTITY_TOKEN_FILE and the rest): the
     # sessions its token is exchanged for sign its outbox drain, and it holds no key.
-
-    # #4: the durable lineage-outbox prefix (shared with the producers that stage there). When set, the relay
-    # tick DRAINS it — re-ingesting any event a producer staged but whose publish never got acked (a crash
-    # between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must point at the
-    # SAME object-store prefix as ``LANCE_LINEAGE_OUTBOX_URI`` and ``MAINTENANCE_LINEAGE_OUTBOX_URI``.
-    outbox_uri: str = Field(default="", alias="LINEAGE_OUTBOX_URI")
-    # Max staged events one relay tick drains, OLDEST FIRST (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md P1.2 (bounded drain)).
-    # The drain used to materialise the ENTIRE prefix in memory, so a backlog — precisely the situation the
-    # outbox exists to survive — could OOM or stall the tick. The remainder drains on the next tick;
-    # oldest-first means nothing starves behind a steady arrival rate. 0 = unbounded (not recommended).
-    outbox_drain_limit: int = Field(default=500, alias="LINEAGE_OUTBOX_DRAIN_LIMIT")
-
-    # --- Feed retention, in DAYS of arrival time (the estate's own `received_at`, never the
-    # producer-supplied eventTime). 0 = unbounded. Pruned once per relay tick, never on the ingest path.
-    #
-    # DAYS BECAUSE A CONSUMER REASONS IN DAYS. A notifier walks this feed from a persisted
-    # cursor as its catch-up path after an outage, so the only question an operator needs a
-    # retention knob to answer is "how long an outage does the feed survive". A count cannot answer it at
-    # any volume.
-    #
-    # 7 DAYS IS THE HORIZON THE DEPLOYED FEED WAS MEASURED HOLDING (2026-08-31 → 2026-09-07, 3 133 rows),
-    # so the default states the working estate's horizon rather than changing it.
-    events_retention_days: int = Field(default=7, ge=0, alias="LINEAGE_EVENTS_RETENTION_DAYS")
 
     # Compliance audit trail (#41): gate the dedicated `lance.audit` stream (the DLQ-replay record) exactly
     # like the catalog — the SHARED RASK_AUDIT_ENABLED env (not a LINEAGE_* twin), so one flag governs the
@@ -188,13 +209,6 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     def _one_store_identity(self) -> Self:
         """Refuse a store identity that is doubled or sent to AWS's STS."""
         require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="LINEAGE")
-        return self
-
-    @model_validator(mode="after")
-    def _a_relay_claims_its_windows(self) -> Self:
-        """Refuse a relay period with no root to claim its windows under."""
-        if self.relay_period_seconds and not self.timer_root:
-            raise ValueError("LINEAGE_RELAY_PERIOD_SECONDS is set and LINEAGE_TIMER_ROOT is empty: the relay's timer claims each window under a control root")
         return self
 
     @property

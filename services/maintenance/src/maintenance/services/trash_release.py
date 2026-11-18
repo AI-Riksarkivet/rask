@@ -42,7 +42,7 @@ from pydantic import BaseModel, Field
 from lakehouse import trash, warehouse_records
 from lakehouse.base_refs import location_within
 from lakehouse.storage_options import StorageOptions, on_s3
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, release_trash
 from maintenance.services.purge import Liveness, liveness_across, still_registered
 
@@ -85,7 +85,7 @@ class TrashReleaseReport(BaseModel):
     held: list[HeldRecord] = Field(default_factory=list)
 
 
-def roots_read(settings: MaintenanceSettings, storage_options: StorageOptions, control_root: str) -> set[str]:
+def roots_read(settings: MaintenanceStore, storage_options: StorageOptions, control_root: str) -> set[str]:
     """Every root whose manifest tells whether a trashed object stands again: the swept buckets and every warehouse's.
 
     Raises if the registry, or any one record in it, cannot be read (:func:`lakehouse.warehouse_records
@@ -109,7 +109,7 @@ def _why_held(record: dict[str, Any], *, roots: set[str], live: Liveness | None)
     return None
 
 
-async def _release_or_hold(record: dict[str, Any], *, roots: set[str], live: Liveness | None, settings: MaintenanceSettings) -> ReleasedRecord | HeldRecord:
+async def _release_or_hold(record: dict[str, Any], *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> ReleasedRecord | HeldRecord:
     """Release ONE record, and hold it naming the cause of any failure it raises: the step holds "never raises" by
     construction, each record's failure reported beside the others' releases, so a record whose release fails leaves
     the records after it released ([[LH-572]])."""
@@ -121,7 +121,7 @@ async def _release_or_hold(record: dict[str, Any], *, roots: set[str], live: Liv
         return HeldRecord(kind=trash.kind_of(record), id=trash.name_of(record), uuid=trash.object_uuid(record), reason=reason)
 
 
-async def _release_one(record: dict[str, Any], *, roots: set[str], live: Liveness | None, settings: MaintenanceSettings) -> ReleasedRecord | HeldRecord:
+async def _release_one(record: dict[str, Any], *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> ReleasedRecord | HeldRecord:
     """Ask the catalog to release one record; a record the catalog refuses, or could not decide, is held. A failure it does
     not expect raises, and :func:`_release_or_hold` holds the record."""
     kind, obj_id = trash.kind_of(record), trash.name_of(record)

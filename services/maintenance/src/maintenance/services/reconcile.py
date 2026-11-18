@@ -55,7 +55,7 @@ from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 from lakehouse.trash import TrashKind
 from maintenance.core import metrics
-from maintenance.core.config import MaintenanceSettings, shared_lance_session
+from maintenance.core.config import MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.naming import TableIds
 
@@ -1040,7 +1040,7 @@ _UNWALKED = "this run walks no storage: the hourly audit compares the stores and
 WALK_CATEGORIES: Final = ("unregistered_datasets", "absent_datasets")
 
 
-def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources) -> list[str]:
+def _scannable_buckets(report: ReconcileReport, settings: MaintenanceStore, sources: Sources) -> list[str]:
     """Every bucket the storage walk lists: the configured list PLUS every registered warehouse.
 
     A bucket is created by an API CALL at runtime, so every tenant provisioned since the last config edit is
@@ -1128,7 +1128,7 @@ def _registration_drift(report: ReconcileReport, sources: Sources, datasets: lis
             )
 
 
-def _walk_storage(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources, *, walk: bool) -> None:
+def _walk_storage(report: ReconcileReport, settings: MaintenanceStore, sources: Sources, *, walk: bool) -> None:
     """Walk every bucket for its datasets and attach the two registration categories, or say why they are absent.
 
     The walk lists directories, about two requests per directory, so it grows with the estate: the daily scan runs it

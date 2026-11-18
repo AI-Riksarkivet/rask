@@ -11,7 +11,7 @@ from __future__ import annotations
 from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the relay's republish is a registered publish site
 from lakehouse.cloud_events import CloudEvent, lineage_envelope
 from lakehouse.outbox import staged_envelope
-from lineage.core.config import LineageSettings
+from lineage.core.config import LineageDelivery
 from lineage.models import DatasetEvent, RunEvent, parse_event
 
 
@@ -47,7 +47,7 @@ def parse_staged(staged: CloudEvent) -> RunEvent | DatasetEvent:
         raise UnparseableEventError(str(exc)) from exc
 
 
-async def republish_staged(publisher: Bus | None, settings: LineageSettings, staged: CloudEvent) -> None:
+async def republish_staged(publisher: Bus | None, settings: LineageDelivery, staged: CloudEvent) -> None:
     """Re-announce a recovered event on the lineage topic, so its SUBSCRIBERS act on it as well as the feed.
 
     Recording alone repairs the feed and leaves its subscribers unaware: a recovered RUN never reaches

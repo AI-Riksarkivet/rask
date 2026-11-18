@@ -58,7 +58,7 @@ from lakehouse.trash import TrashKind
 
 
 if TYPE_CHECKING:
-    from maintenance.core.config import MaintenanceSettings
+    from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,7 @@ def unauthenticated_remedy(*, asked_for: str, identity: str) -> str:
     )
 
 
-def service_headers(settings: MaintenanceSettings) -> dict[str, str]:
+def service_headers(settings: MaintenanceCatalogDoor) -> dict[str, str]:
     """The `Authorization` header carrying this pod's `rask-catalog` token, read now.
 
     Raises `MaintenanceUnauthenticated` when the projected file cannot be read or is empty.
@@ -269,7 +269,7 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str)
     return _handed_over(_maintain_vend(table_id, settings), uri=uri, table_id=table_id, settings=settings)
 
 
-def _maintain_vend(table_id: str, settings: MaintenanceSettings) -> Vended:
+def _maintain_vend(table_id: str, settings: MaintenanceCatalogDoor) -> Vended:
     """The catalog's maintain-tier vend for ``table_id``, asked now.
 
     Raises:
@@ -278,7 +278,7 @@ def _maintain_vend(table_id: str, settings: MaintenanceSettings) -> Vended:
     return _vended_from(_answered(settings, _maintain_door(table_id, settings)), asked_for=table_id)
 
 
-def _handed_over(vended: Vended, *, uri: str, table_id: str, settings: MaintenanceSettings) -> StorageOptions:
+def _handed_over(vended: Vended, *, uri: str, table_id: str, settings: MaintenanceStore) -> StorageOptions:
     """``vended``'s options for the dataset at ``uri``, once the vend is shown to cover it.
 
     Raises:
@@ -327,7 +327,7 @@ class PassVends(BaseModel):
         return _handed_over(kept.vended, uri=uri, table_id=table_id, settings=settings)
 
 
-def _at_own_store(options: StorageOptions, settings: MaintenanceSettings) -> StorageOptions:
+def _at_own_store(options: StorageOptions, settings: MaintenanceStore) -> StorageOptions:
     """The vended credential, used at maintenance's own store address ([[LH-489]]) under its own store timeouts.
 
     The catalog vends the address a client off the cluster reaches the store at, which may be the store's
@@ -481,7 +481,7 @@ def reclaim_options_for(kind: TrashKind, uuid: str, settings: MaintenanceSetting
     return _at_own_store(_vended_from(_answered(settings, door), asked_for=door.asked_for).storage_options, settings)
 
 
-def release_trash(kind: TrashKind, uuid: str, settings: MaintenanceSettings) -> TrashReleased:
+def release_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) -> TrashReleased:
     """Have the catalog release the trash record of the ``kind`` object ``uuid`` names: revoke the object's grants, tell
     each person who lost one, and stamp the record released.
 
@@ -496,7 +496,7 @@ def release_trash(kind: TrashKind, uuid: str, settings: MaintenanceSettings) -> 
     return _parsed(_answered(settings, door), TrashReleased, asked_for=door.asked_for)
 
 
-def end_trash(kind: TrashKind, uuid: str, settings: MaintenanceSettings) -> int:
+def end_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) -> int:
     """Have the catalog end the trash record of the ``kind`` object ``uuid`` names, its bytes gone, and return how many
     grants it still held and revoked.
 
@@ -511,7 +511,7 @@ def end_trash(kind: TrashKind, uuid: str, settings: MaintenanceSettings) -> int:
     return _parsed(_answered(settings, door), _TrashEnded, asked_for=door.asked_for).tuples_revoked
 
 
-def note_trash_refusal(kind: TrashKind, uuid: str, settings: MaintenanceSettings, *, reason: str) -> int | None:
+def note_trash_refusal(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor, *, reason: str) -> int | None:
     """Have the catalog note maintenance's own refusal on the trash record, and return the record's new attempt count.
 
     Raises:
@@ -524,7 +524,7 @@ def note_trash_refusal(kind: TrashKind, uuid: str, settings: MaintenanceSettings
     return _parsed(_answered(settings, door), _TrashNoted, asked_for=door.asked_for).attempts
 
 
-def disarm_cleanup(table_id: str, settings: MaintenanceSettings, *, branch: str | None) -> Disarmed:
+def disarm_cleanup(table_id: str, settings: MaintenanceCatalogDoor, *, branch: str | None) -> Disarmed:
     """Have the catalog remove every ``lance.auto_cleanup.*`` key from the ref ``branch`` (``None`` = main) of ``table_id``,
     under its own credential: maintenance's vend puts nothing of a table ([[LH-575]]).
 
@@ -539,7 +539,7 @@ def disarm_cleanup(table_id: str, settings: MaintenanceSettings, *, branch: str 
     return _parsed(_answered(settings, door), Disarmed, asked_for=door.asked_for)
 
 
-def raise_floor(table_id: str, settings: MaintenanceSettings, *, dry_run: bool) -> FloorRaised:
+def raise_floor(table_id: str, settings: MaintenanceCatalogDoor, *, dry_run: bool) -> FloorRaised:
     """Have the catalog commit the listing-floor stamp on ``table_id``'s main, recording this identity as the version's
     author; a ``dry_run`` is judged as the raise is and commits nothing ([[LH-094]], [[LH-575]]).
 
@@ -577,7 +577,7 @@ class CloneEndingFinished(BaseModel):
     kept: bool
 
 
-def list_clone_endings(settings: MaintenanceSettings) -> list[CloneEndingListed]:
+def list_clone_endings(settings: MaintenanceCatalogDoor) -> list[CloneEndingListed]:
     """Every registered clone's ending its door did not remove (ADR 0198 §1), oldest first.
 
     Raises:
@@ -589,7 +589,7 @@ def list_clone_endings(settings: MaintenanceSettings) -> list[CloneEndingListed]
     return _parsed(_answered(settings, door), _CloneEndings, asked_for=door.asked_for).endings
 
 
-def finish_clone_ending(ending: CloneEndingListed, settings: MaintenanceSettings) -> CloneEndingFinished:
+def finish_clone_ending(ending: CloneEndingListed, settings: MaintenanceCatalogDoor) -> CloneEndingFinished:
     """Have the catalog finish ``ending``: release the clone's tag on each source its door named, and its location's
     claim, and remove the ending. Maintenance's store policy writes no source's tags; the catalog does.
 
@@ -614,7 +614,7 @@ class IdempotencyKeysReclaimed(BaseModel):
     unreadable: int
 
 
-def reclaim_idempotency_keys(settings: MaintenanceSettings) -> IdempotencyKeysReclaimed:
+def reclaim_idempotency_keys(settings: MaintenanceCatalogDoor) -> IdempotencyKeysReclaimed:
     """Have the catalog delete the `Idempotency-Key` records nothing has written for their lifetime ([[LH-576]]).
 
     Maintenance's store policy writes nothing of the control root, so the delete is the catalog's, on its own reads.
@@ -644,7 +644,7 @@ class AnnouncementIntentsFinished(BaseModel):
     left: int
 
 
-def finish_announcement_intents(settings: MaintenanceSettings) -> AnnouncementIntentsFinished:
+def finish_announcement_intents(settings: MaintenanceCatalogDoor) -> AnnouncementIntentsFinished:
     """Have the catalog send what each failed door left to announce, where its change landed ([[LH-576]]).
 
     Maintenance holds none of the catalog's emitters and signs for none of its callers; the catalog does.
@@ -663,7 +663,7 @@ def finish_announcement_intents(settings: MaintenanceSettings) -> AnnouncementIn
     return _parsed(_answered(settings, door), AnnouncementIntentsFinished, asked_for=door.asked_for)
 
 
-def grant_census(settings: MaintenanceSettings) -> fga.GrantCensus | None:
+def grant_census(settings: MaintenanceCatalogDoor) -> fga.GrantCensus | None:
     """The store's grants counted by object, as the catalog reads them for the drift report; ``None`` when the catalog
     answers that authorization is off.
 
@@ -677,7 +677,7 @@ def grant_census(settings: MaintenanceSettings) -> fga.GrantCensus | None:
     return fga.GrantCensus(counts_by_type=answer.counts_by_type) if answer.enabled else None
 
 
-def revoke_ghosts(settings: MaintenanceSettings, objects: list[str]) -> GhostsRevoked:
+def revoke_ghosts(settings: MaintenanceCatalogDoor, objects: list[str]) -> GhostsRevoked:
     """Have the catalog revoke every grant on each of ``objects``, which the drift report found no registry naming.
 
     Raises:
@@ -689,7 +689,7 @@ def revoke_ghosts(settings: MaintenanceSettings, objects: list[str]) -> GhostsRe
     return _parsed(_answered(settings, door), GhostsRevoked, asked_for=door.asked_for)
 
 
-def rebuild_tenancy(settings: MaintenanceSettings, warehouses: list[str]) -> TenancyRebuilt:
+def rebuild_tenancy(settings: MaintenanceCatalogDoor, warehouses: list[str]) -> TenancyRebuilt:
     """Have the catalog write the tenancy edge each of ``warehouses``' registry record justifies.
 
     Raises:
@@ -701,7 +701,7 @@ def rebuild_tenancy(settings: MaintenanceSettings, warehouses: list[str]) -> Ten
     return _parsed(_answered(settings, door), TenancyRebuilt, asked_for=door.asked_for)
 
 
-def _maintain_door(table_id: str, settings: MaintenanceSettings) -> Door:
+def _maintain_door(table_id: str, settings: MaintenanceCatalogDoor) -> Door:
     """The ``maintain``-tier vend door for ``table_id``.
 
     ``params``, NOT a body: the door declares ``tier: Annotated[Tier, Query()] = "read"``, and FastAPI ignores an unknown
@@ -720,7 +720,7 @@ def _maintain_door(table_id: str, settings: MaintenanceSettings) -> Door:
 
 
 def _maintainer_door(
-    table_id: str, settings: MaintenanceSettings, *, act: str, answer: str, params: dict[str, str] | None = None, body: dict[str, object] | None = None
+    table_id: str, settings: MaintenanceCatalogDoor, *, act: str, answer: str, params: dict[str, str] | None = None, body: dict[str, object] | None = None
 ) -> Door:
     """The maintainer door ``act`` names on ``table_id`` (``/management/v1/table/{id}/maintenance/<act>``), asked at
     ``can_maintain``."""
@@ -737,7 +737,7 @@ def _maintainer_door(
 def _trash_door(
     kind: TrashKind,
     uuid: str,
-    settings: MaintenanceSettings,
+    settings: MaintenanceCatalogDoor,
     *,
     act: str,
     answer: str,
@@ -755,7 +755,7 @@ def _trash_door(
     )
 
 
-def _clone_endings_door(settings: MaintenanceSettings, *, act: str, answer: str, method: Literal["GET", "POST"] = "POST") -> Door:
+def _clone_endings_door(settings: MaintenanceCatalogDoor, *, act: str, answer: str, method: Literal["GET", "POST"] = "POST") -> Door:
     """The clone-endings door ``act`` names, asked on the reclaim rung the trash doors ask."""
     return Door(
         method=method,
@@ -767,7 +767,7 @@ def _clone_endings_door(settings: MaintenanceSettings, *, act: str, answer: str,
 
 
 def _grants_door(
-    settings: MaintenanceSettings, *, act: str, answer: str, method: Literal["GET", "POST"] = "POST", body: dict[str, object] | None = None
+    settings: MaintenanceCatalogDoor, *, act: str, answer: str, method: Literal["GET", "POST"] = "POST", body: dict[str, object] | None = None
 ) -> Door:
     """The grant door ``act`` names."""
     return Door(
@@ -788,7 +788,7 @@ def _door_client() -> httpx.Client:
     return httpx.Client(timeout=_TIMEOUT_SECONDS)
 
 
-def _answered(settings: MaintenanceSettings, door: Door) -> httpx.Response:
+def _answered(settings: MaintenanceCatalogDoor, door: Door) -> httpx.Response:
     """The door's 2xx answer, presented as this service's own identity.
 
     Raises:

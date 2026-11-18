@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from lakehouse import maintenance_policies
 from lakehouse.governed.store_credential import StoreCredentialUnavailableError
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceStore
 from maintenance.services.due import DueQuestion
 from maintenance.services.expiry import ExpiryPolicy
 from maintenance.services.naming import PolicyOwners
@@ -124,7 +124,7 @@ def resolve_plan(uri: str, *, context: PlanContext, owners: PolicyOwners) -> Dat
     return plan_from_policy(policy, older_than=context.older_than)
 
 
-def last_maintained(policy: dict[str, Any], *, settings: MaintenanceSettings, table_uuid: str, uri: str) -> datetime | None:
+def last_maintained(policy: dict[str, Any], *, settings: MaintenanceStore, table_uuid: str, uri: str) -> datetime | None:
     """When a pass last maintained this dataset under ``policy``, or ``None`` when none did or the store cannot say.
 
     A stamp the store fails to give maintains, never the other way, or a lost stamp would silence maintenance for
@@ -137,7 +137,7 @@ def last_maintained(policy: dict[str, Any], *, settings: MaintenanceSettings, ta
         return None
 
 
-def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, table_uuid: str, uri: str, now: datetime) -> str | None:
+def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceStore, table_uuid: str, uri: str, now: datetime) -> str | None:
     """``policy_interval`` while the policy's ``compact_interval_hours`` has not elapsed since this dataset's stamp.
 
     Raises:

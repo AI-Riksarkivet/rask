@@ -44,7 +44,7 @@ from pydantic import BaseModel
 
 from lakehouse.governed.secrets import fits_a_header, read_required_secret
 from lineage.core import metrics
-from lineage.core.config import LineageSettings
+from lineage.core.config import LineageForward
 from lineage.services.provenance import FeedWindow, ProvenanceStore
 
 
@@ -65,18 +65,18 @@ class ForwardOutcome(BaseModel):
     stalled: str | None = None
 
 
-def endpoint_url(settings: LineageSettings) -> str:
+def endpoint_url(settings: LineageForward) -> str:
     """Where the events are POSTed: the HTTP transport's ``url`` joined to its ``endpoint``."""
     return f"{settings.forward_url.rstrip('/')}/{settings.forward_endpoint.lstrip('/')}"
 
 
-def follower(settings: LineageSettings, feed: str) -> str:
+def follower(settings: LineageForward, feed: str) -> str:
     """The forwarder's name in the cursors table: its endpoint and the feed table ``feed`` names (the store's
     ``feed_incarnation``), so a new backend, and a feed created again, each start from the feed's oldest row."""
     return f"forward:{endpoint_url(settings)}@{feed}"
 
 
-async def _authorization(settings: LineageSettings) -> dict[str, str]:
+async def _authorization(settings: LineageForward) -> dict[str, str]:
     """The bearer the backend asks for, read from the secret store on every tick, so a rotated key needs no restart.
 
     Raises:
@@ -96,7 +96,7 @@ async def _authorization(settings: LineageSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
-async def _send(window: FeedWindow, settings: LineageSettings, client: httpx.AsyncClient, url: str, mark: int) -> tuple[int, ForwardOutcome]:
+async def _send(window: FeedWindow, settings: LineageForward, client: httpx.AsyncClient, url: str, mark: int) -> tuple[int, ForwardOutcome]:
     """POST up to ``forward_batch`` events of ``window``, the feed after ``mark``, a page at a time.
 
     Returns the seq of the last event the backend answered, which the cursor may move to, and what was sent.
@@ -125,7 +125,7 @@ async def _send(window: FeedWindow, settings: LineageSettings, client: httpx.Asy
     return reached, ForwardOutcome(forwarded=forwarded, refused=refused)
 
 
-async def forward(provenance: ProvenanceStore, settings: LineageSettings, client: httpx.AsyncClient) -> ForwardOutcome:
+async def forward(provenance: ProvenanceStore, settings: LineageForward, client: httpx.AsyncClient) -> ForwardOutcome:
     """POST the feed's events after the forwarder's cursor to the backend, in seq order, and move the cursor past them."""
     url = endpoint_url(settings)
     name = follower(settings, await provenance.feed_incarnation())

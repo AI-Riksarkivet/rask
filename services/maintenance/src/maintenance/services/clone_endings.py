@@ -16,7 +16,7 @@ import logging
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceCatalogDoor
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, finish_clone_ending, list_clone_endings
 
 
@@ -33,7 +33,7 @@ class CloneEndingsReport(BaseModel):
     reason: str | None = None
 
 
-async def finish_clone_endings(settings: MaintenanceSettings) -> CloneEndingsReport:
+async def finish_clone_endings(settings: MaintenanceCatalogDoor) -> CloneEndingsReport:
     """Ask the catalog to finish every clone's ending it lists, logged NAMED at WARNING when it did or refused anything."""
     report = CloneEndingsReport()
     try:

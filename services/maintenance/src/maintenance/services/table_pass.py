@@ -46,7 +46,7 @@ from lakehouse.lance_session import affordable_cache_bytes, open_dataset
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.maintenance_due import delete_due
 from lakehouse.storage_options import StorageOptions, on_s3
-from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
+from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
     CatalogRefusal,
@@ -153,7 +153,7 @@ def emit_zero_baselines() -> None:
     record_unrecorded_bases(0)
 
 
-def base_record_reader(settings: MaintenanceSettings, options: StorageOptions) -> Callable[[str], base_registry.BaseRecord | None]:
+def base_record_reader(settings: MaintenanceStore, options: StorageOptions) -> Callable[[str], base_registry.BaseRecord | None]:
     """How this service reads the catalog's base record for a table root ([[LH-279]]).
 
     The reader RAISES on a record it cannot read: answering "no record" would hand a table's data directories to a pass
@@ -278,7 +278,7 @@ def _branch_of(uri: str, table: str, *, readings: PassReadings) -> str | None:
     return path.removeprefix(prefix) if location is not None and path.startswith(prefix) else None
 
 
-def _disarm(uri: str, table: str, *, readings: PassReadings, settings: MaintenanceSettings) -> DisarmOutcome:
+def _disarm(uri: str, table: str, *, readings: PassReadings, settings: MaintenanceCatalogDoor) -> DisarmOutcome:
     """Have the catalog remove every ``lance.auto_cleanup.*`` key from the ref ``uri`` is: the backstop for a table no door
     commits on ([[LH-245]], [[LH-575]]).
 
@@ -306,7 +306,7 @@ def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) ->
 
 
 def _data_directories(
-    uri: str, *, uuid: str, readings: PassReadings, settings: MaintenanceSettings, options: StorageOptions, opened: DatasetOpener
+    uri: str, *, uuid: str, readings: PassReadings, settings: MaintenanceStore, options: StorageOptions, opened: DatasetOpener
 ) -> list[base_registry.RecordedBase]:
     """The data directories the table ``uuid`` at ``uri`` holds, as its base record names them ([[LH-286]]).
 
@@ -401,7 +401,7 @@ def _expire_in_span(
         return result
 
 
-def name_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceSettings) -> NamedDataset | DatasetResult:
+def name_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceCatalogDoor) -> NamedDataset | DatasetResult:
     """The table ``uri`` belongs to with its policy owners, or the refusal of a dataset maintenance cannot identify."""
     table = readings.table_ids.table_of(uri)
     if table is None:
@@ -415,7 +415,7 @@ def name_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceSetti
     return NamedDataset(table=table, owners=readings.owners)
 
 
-def _plan_for(uri: str, named: NamedDataset, *, readings: PassReadings, settings: MaintenanceSettings) -> DatasetPlan:
+def _plan_for(uri: str, named: NamedDataset, *, readings: PassReadings, settings: MaintenanceStore) -> DatasetPlan:
     """The dataset's plan, with the policy cadence applied."""
     plan = resolve_plan(uri, context=readings.context, owners=named.owners)
     if plan.policy is not None and (
@@ -496,7 +496,7 @@ def _check_committed_files(
         _forget_reclaimed(result, table=named.table, table_uuid=named.owners.table_uuid, reclaimed=found.reclaimed, settings=settings, vends=vends)
 
 
-def _report_unrecorded_bases(uri: str, *, settings: MaintenanceSettings, opened: DatasetOpener) -> None:
+def _report_unrecorded_bases(uri: str, *, settings: MaintenanceStore, opened: DatasetOpener) -> None:
     """Count and name each base the table's manifest declares that nothing sanctions ([[LH-279]]).
 
     A planted base protects nothing and every door refuses it (`base_registry.judge_bases`, the predicate the vend, read
@@ -537,7 +537,7 @@ def _forget_reclaimed(
         _record_vend_answer(result, exc, table_id=table)
 
 
-def _unnamed(uri: str, *, settings: MaintenanceSettings) -> DatasetResult:
+def _unnamed(uri: str, *, settings: MaintenanceCatalogDoor) -> DatasetResult:
     """A dataset no ``__manifest`` row names, reported by its location and never expired or vended ([[LH-520]]).
 
     Maintenance acts only on a table the catalog names: a dataset the catalog cannot name has no table a vend could be
@@ -552,7 +552,7 @@ def _unnamed(uri: str, *, settings: MaintenanceSettings) -> DatasetResult:
     return refused
 
 
-def _unidentified(uri: str, table: str, *, settings: MaintenanceSettings) -> DatasetResult:
+def _unidentified(uri: str, table: str, *, settings: MaintenanceCatalogDoor) -> DatasetResult:
     """A table whose uuid, or an ancestor namespace's, cannot be read: refused this pass rather than maintained under the
     defaults, since the policy kept under that uuid may be a legal hold ([[LH-523]])."""
     refused = DatasetResult(uri=uri, due="failed").refuse(
@@ -563,7 +563,7 @@ def _unidentified(uri: str, table: str, *, settings: MaintenanceSettings) -> Dat
     return refused
 
 
-def _policy_unreadable(uri: str, table: str, *, reason: str, settings: MaintenanceSettings) -> DatasetResult:
+def _policy_unreadable(uri: str, table: str, *, reason: str, settings: MaintenanceCatalogDoor) -> DatasetResult:
     """A table whose policy record is there and cannot be read as a policy: PARKED, never maintained under the defaults,
     since the record may be a legal hold. Counted under the table's id, which ``MaintenanceTableParked`` pages on: no
     later pass changes the answer until someone writes the record again."""
@@ -591,7 +591,7 @@ def _finish(result: DatasetResult, *, named: NamedDataset, plan: DatasetPlan, no
     _record_dataset_outcome(result, subject=settings.catalog_service_identity)
 
 
-def _stamp_cadence(result: DatasetResult, *, table_uuid: str, plan: DatasetPlan, settings: MaintenanceSettings, now: datetime) -> None:
+def _stamp_cadence(result: DatasetResult, *, table_uuid: str, plan: DatasetPlan, settings: MaintenanceStore, now: datetime) -> None:
     """Record this dataset's ``last_maintained_at`` — only after a pass that could actually DO something.
 
     A refusal carries ``error=None``, so without ``refused is None`` a dataset no pass can ever maintain would read as a
@@ -725,7 +725,7 @@ async def emit_pass_lineage(emitter: MaintenanceEmitter, results: list[DatasetRe
             log.warning(f"maintenance_{lane}_emit_error", extra={"table": result.table_id, "error": str(exc)})
 
 
-def governs(location: str, *, warehouse: str, settings: MaintenanceSettings, options: StorageOptions) -> bool | None:
+def governs(location: str, *, warehouse: str, settings: MaintenanceStore, options: StorageOptions) -> bool | None:
     """Whether the table at ``location``, in warehouse ``warehouse`` (its name's first segment), is one maintenance
     governs: in a registered warehouse while that warehouse is active, or, in the estate's own warehouse, in a configured
     bucket (#81); ``None`` when the warehouse's record cannot be read, which decides nothing and the pass retries.
@@ -801,7 +801,7 @@ def held_location(location: str) -> str:
     return key_uri(store_of(location), decoded_path(location))
 
 
-def _datasets_of(location: str, settings: MaintenanceSettings) -> list[str] | None:
+def _datasets_of(location: str, settings: MaintenanceStore) -> list[str] | None:
     """The table at ``location``, the key its store holds it under, and each of its branches, read from its refs, never by
     walking ``tree/``; ``None`` when no dataset stands there yet, as at a table declared and not yet written.
 

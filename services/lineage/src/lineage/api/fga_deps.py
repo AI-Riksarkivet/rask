@@ -41,6 +41,7 @@ from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.decider import AccessDecider
 from lakehouse.governed.principal import is_principal
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.lineage.signing import VerifiedSignature
 from lakehouse.lineage_events import AUTHOR_FACET, dataset_uuids
 from lakehouse.naming import identifier_location
@@ -211,7 +212,7 @@ def _denied(event: str, *, subject: str, relation: str, resources: Sequence[str]
     log.info(event, extra={"relation": relation, "objects": list(resources)})
 
 
-async def _require_relation(relation: str, obj: str | None, label: str, request: Request, settings: LineageSettings, token: Caller | None) -> None:
+async def _require_relation(relation: str, obj: str | None, label: str, request: Request, settings: FgaSettings, token: Caller | None) -> None:
     """The one fail-closed authz ladder every per-``{name}`` gate shares (audit 2026-07-16: it had
     grown four near-copies). No-op when FGA is off; unwired client → 503; unauthenticated → 401;
     deny → 403, also for a name that resolved to no object (``obj`` is ``None``), named by ``label`` either way;
@@ -236,7 +237,7 @@ _READ_PARKS_RELATION: Final = "can_read_parked_events"
 _REPLAY_PARKS_RELATION: Final = "can_replay_parked_events"
 
 
-async def require_event_feed_reader(request: Request, settings: LineageSettings, token: Caller | None) -> None:
+async def require_event_feed_reader(request: Request, settings: FgaSettings, token: Caller | None) -> None:
     """Gate the unfiltered run feed on ``can_read_event_feed`` at the configured root object ([[CTL-021]]).
 
     The sibling of :func:`_require_relation` and deliberately not a call into it: that helper asks about one
@@ -271,7 +272,7 @@ async def require_parks_replayer(request: Request, settings: SettingsDep, token:
     await _require_estate_rung(_REPLAY_PARKS_RELATION, request, settings, token)
 
 
-async def _require_estate_rung(relation: str, request: Request, settings: LineageSettings, token: Caller | None) -> None:
+async def _require_estate_rung(relation: str, request: Request, settings: FgaSettings, token: Caller | None) -> None:
     if not settings.fga_enabled:
         return
     decider = getattr(request.app.state, "decider", None)

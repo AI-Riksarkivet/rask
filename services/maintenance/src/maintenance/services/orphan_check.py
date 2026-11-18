@@ -39,7 +39,7 @@ from pydantic import BaseModel
 
 from lakehouse import location_claims, objectfs, trash
 from lakehouse.objectfs import fs_and_base
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.core.metrics import OrphanCheckOutcome, record_orphan_check
 from maintenance.services.floor import FloorRaise, raise_listing_floor
 from maintenance.services.naming import PolicyOwners, claim_store
@@ -158,7 +158,7 @@ def _decide(
     return OrphanCheck(outcome="raised", next_check=max(FLOOR, retention + _AFTER_RETENTION), raised=True), found
 
 
-def _scan(location: str, settings: MaintenanceSettings) -> DatasetOrphanScan:
+def _scan(location: str, settings: MaintenanceStore) -> DatasetOrphanScan:
     options = settings.storage_options()
     try:
         fs, prefix = fs_and_base(location, options)

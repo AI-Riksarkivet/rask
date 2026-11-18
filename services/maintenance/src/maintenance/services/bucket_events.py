@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from lakehouse import warehouse_records
 from lakehouse.governed.store_credential import StoreCredentialUnavailableError
 from lakehouse.storage_options import object_client
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceStore
 from maintenance.core.metrics import record_store_event_bucket_checked
 
 
@@ -58,7 +58,7 @@ def covers_every_write(configuration: dict[str, Any]) -> bool:
     return False
 
 
-def report_bucket_events(settings: MaintenanceSettings) -> BucketEventsReport | None:
+def report_bucket_events(settings: MaintenanceStore) -> BucketEventsReport | None:
     """Ask the store about every governed bucket's event configuration, log each bucket with no rule for every object
     write (``maintenance_bucket_without_store_events``, WARNING) and each it could not ask about
     (``maintenance_bucket_store_events_unknown``, WARNING), and count each bucket on

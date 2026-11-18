@@ -28,7 +28,7 @@ from lakehouse.governed.fga import canonical_object_id
 from lakehouse.lance_session import open_dataset
 from lakehouse.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due
 from lakehouse.storage_options import StorageOptions
-from maintenance.core.config import MaintenanceSettings, shared_lance_session
+from maintenance.core.config import MaintenanceStore, shared_lance_session
 from maintenance.services.expiry import DueVerdict
 from maintenance.services.index_health import due_indices
 from maintenance.services.naming import TableIds, manifest_uuid
@@ -135,7 +135,7 @@ def evaluate_due(
     )
 
 
-def refresh_due(question: DueQuestion, settings: MaintenanceSettings, *, now: datetime, opened: Callable[[], lance.LanceDataset] | None = None) -> DueVerdict:
+def refresh_due(question: DueQuestion, settings: MaintenanceStore, *, now: datetime, opened: Callable[[], lance.LanceDataset] | None = None) -> DueVerdict:
     """Evaluate one table and write or delete its due record. Never raises: a failure leaves the record as it was."""
     options = settings.storage_options()
     try:

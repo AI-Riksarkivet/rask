@@ -25,7 +25,7 @@ from lakehouse.lineage import SigningKey, attach_control_signature, parse_publis
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.core.lineage_emit import MaintenanceEmitter, make_emitter
 
 
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from maintenance.services.queue import TaskQueue
 
 
-def reported_health(settings: MaintenanceSettings, queue: TaskQueue | None) -> HealthWatch:
+def reported_health(settings: MaintenanceStore, queue: TaskQueue | None) -> HealthWatch:
     """What a maintenance process reports in `/readyz` and gates on none of (ADR 0203): the object store under its own
     session (the control root's listing), which a task the store fails is retried against; the bus its queue is on, which
     delivers again what the process could not take; and the secret store it reads keys from, whose keys it already read

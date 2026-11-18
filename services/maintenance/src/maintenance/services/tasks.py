@@ -21,7 +21,7 @@ from fastapi.concurrency import run_in_threadpool
 from lakehouse.bus import BusSettings
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.supervision import EndProcess, Supervisor, end_process
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceQueue, MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import create_orphan_check_series, create_signature_refused_series, create_task_series
 from maintenance.services.arrival import Arrivals
@@ -92,7 +92,7 @@ async def _check_orphans(task: Task, *, settings: MaintenanceSettings, queue: Ta
 
 
 @asynccontextmanager
-async def connected_queue(settings: MaintenanceSettings) -> AsyncGenerator[TaskQueue | None]:
+async def connected_queue(settings: MaintenanceQueue) -> AsyncGenerator[TaskQueue | None]:
     """The work queue, connected as this service's own bus user and drained on the way out; ``None`` for a stack with no
     bus.
 
@@ -197,12 +197,12 @@ async def _worker_on(
 _CADENCE_SECONDS: Final = 900.0
 
 
-async def _assert_cadences(queue: TaskQueue, settings: MaintenanceSettings) -> None:
+async def _assert_cadences(queue: TaskQueue, settings: MaintenanceQueue) -> None:
     await queue.schedule_every(Task(kind="audit"), settings.audit_schedule)
     await queue.schedule_every(Task(kind="scan"), settings.scan_schedule)
 
 
-async def _keep_cadences(worker: Worker, queue: TaskQueue, settings: MaintenanceSettings) -> None:
+async def _keep_cadences(worker: Worker, queue: TaskQueue, settings: MaintenanceQueue) -> None:
     """Assert the two cadences again every ``_CADENCE_SECONDS`` until the worker stops; a bus that does not take them is
     asked again at the next."""
     while not worker.stopping():

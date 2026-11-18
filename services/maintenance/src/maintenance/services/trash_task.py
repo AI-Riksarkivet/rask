@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi.concurrency import run_in_threadpool
 
 from lakehouse import location_claims, trash
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.services.naming import claim_store
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.trash_release import release_record
@@ -60,7 +60,7 @@ async def run_trash_task(task: Task, *, settings: MaintenanceSettings, queue: Ta
         await queue.schedule_at(task, now + timedelta(seconds=settings.retry_seconds))
 
 
-async def _pass_a_restored_table(task: Task, *, settings: MaintenanceSettings, queue: TaskQueue) -> None:
+async def _pass_a_restored_table(task: Task, *, settings: MaintenanceStore, queue: TaskQueue) -> None:
     """Queue a pass for the table ``task`` names when its location's claim is held under its uuid again: an undrop."""
     if task.trashed != "table" or not task.location:
         return

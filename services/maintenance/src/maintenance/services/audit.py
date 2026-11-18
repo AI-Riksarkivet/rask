@@ -29,7 +29,7 @@ from lakehouse import location_claims, trash
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.commit_records import is_canonical_uuid
 from lakehouse.control_emit import ControlEmitter
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.bucket_events import report_bucket_events
 from maintenance.services.clone_endings import finish_clone_endings
 from maintenance.services.credentials import (
@@ -118,7 +118,7 @@ async def run_scan(settings: MaintenanceSettings, *, control: ControlEmitter) ->
 _KEY_RECLAIM_CALLS = 50
 
 
-async def _reclaim_idempotency_keys(settings: MaintenanceSettings) -> dict[str, Any]:
+async def _reclaim_idempotency_keys(settings: MaintenanceCatalogDoor) -> dict[str, Any]:
     """Ask the catalog to reclaim the `Idempotency-Key` records past their lifetime, a batch a call while any are left
     ([[LH-576]]). A refusal or an unanswered door is logged and asked again by the next scan, never fatal to this one:
     the records it would remove answer nothing past their lifetime."""
@@ -253,7 +253,7 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
 _FINISH_CALLS = 20
 
 
-async def _finish_announcement_intents(settings: MaintenanceSettings) -> dict[str, Any]:
+async def _finish_announcement_intents(settings: MaintenanceCatalogDoor) -> dict[str, Any]:
     """Ask the catalog to send what failed doors left to announce, a batch a call while any are left. A refusal or an
     unanswered door is logged and asked again by the next audit, never fatal to this one; each send the catalog makes is
     logged NAMED by the catalog, which knows what it sent."""
@@ -399,7 +399,7 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
     return queued
 
 
-def _held_tables(settings: MaintenanceSettings) -> dict[str, str]:
+def _held_tables(settings: MaintenanceStore) -> dict[str, str]:
     """Each table's location by its uuid, off every held claim, as an announcement names it (:func:`claimed_location`)."""
     claims = claim_store(settings)
     return {claim.uuid: claimed_location(settings.resolved_control_root, claim) for claim in location_claims.held_claims(claims) if claim.uuid is not None}
