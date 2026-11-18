@@ -17,17 +17,31 @@ import lance
 import pyarrow as pa
 from lance.blob import Blob
 
-from lakehouse.history_fences import TableHistory
+from lakehouse import condemned_versions
+from lakehouse.condemned_versions import Verdict
 from lakehouse.maintenance_due import CompactionDue
 from lakehouse.storage_options import StorageOptions
 from maintenance.services.due import DueQuestion, compaction_due
-from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
+from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions, reclaimable
 
 
 def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: int | None = None) -> DatasetResult:
-    history = TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid="t")
-    target = ExpiryTarget(uri=uri, storage_options={}, write_options={}, history=history, table_uuid="t")
-    return expire_versions(target, ExpiryPolicy(older_than=older_than, retain_versions=retain_versions))
+    """A pass of ``uri`` whose batches are the catalog's (ADR 0246), its record on a control root of its own, no hold."""
+    policy = ExpiryPolicy(older_than=older_than, retain_versions=retain_versions)
+
+    def condemn(versions: list[int]) -> Verdict:
+        run = condemned_versions.Batch(f"{uri}-control", StorageOptions(), table_uuid="t", location=uri, dataset=lance.dataset(uri), ref=None)
+        run.condemn(versions)
+        run.read_pins()
+        return run.promote(None)
+
+    try:
+        victims = reclaimable(lance.dataset(uri), policy)
+    except ValueError:
+        victims = []
+    first = condemn(victims[: condemned_versions.BATCH]) if victims else None
+    target = ExpiryTarget(uri=uri, storage_options={}, write_options={}, table_uuid="t", victims=victims, condemn=condemn, first=first)
+    return expire_versions(target, policy)
 
 
 def _compaction_due(uri: str) -> CompactionDue | None:

@@ -24,14 +24,29 @@ import pyarrow.fs as pafs
 import pytest
 
 from catalog.core import manifest_bytes
-from catalog.services.erasure import ErasureReport, no_sessions, reclaim_refs
-from lakehouse.history_fences import HistoryWork, TableHistory
+from catalog.services.erasure import ErasureReport, reclaim_refs
+from lakehouse import condemned_versions
 from lakehouse.storage_options import StorageOptions
 from tests.integration.conftest import RaceCatalog
 from tests.integration.test_the_store_refuses_a_put_over_a_committed_file import _HookedCommits
 
 
 TABLE_ID = ["lance_catalog", "clocks", "t"]
+
+
+def unheld(control_root: str, table_uuid: str, uri: str) -> Callable[[str | None], Callable[[list[int]], condemned_versions.Verdict]]:
+    """Each ref's reclaim batches as the catalog runs them for a table no policy holds (``catalog.services.reclaims``)."""
+
+    def of(ref: str | None) -> Callable[[list[int]], condemned_versions.Verdict]:
+        def batch(versions: list[int]) -> condemned_versions.Verdict:
+            run = condemned_versions.Batch(control_root, StorageOptions(), table_uuid=table_uuid, location=uri, dataset=lance.dataset(uri), ref=ref)
+            run.condemn(versions, forks=True)
+            run.read_pins()
+            return run.promote(None)
+
+        return batch
+
+    return of
 
 
 def _rows(ids: range) -> pa.Table:
@@ -72,19 +87,15 @@ def test_a_version_a_writer_stamps_on_a_wrong_clock_ages_by_the_catalogs(race_ca
 
     if skew == "ahead":
         time.sleep(2)
-        history = TableHistory(control_root=str(tmp_path), storage_options=StorageOptions(), table_uuid="clocks")
-        with history.hold_for(HistoryWork.RELEASE) as hold:
-            reclaim_refs(
-                ErasureReport(table="lance_catalog$clocks$t", predicate=""),
-                lance.dataset(location),
-                [None],
-                clean={None},
-                retention=timedelta(seconds=1),
-                storage_options=StorageOptions(),
-                history=history,
-                hold=hold,
-                sessions=no_sessions,
-            )
+        reclaim_refs(
+            ErasureReport(table="lance_catalog$clocks$t", predicate=""),
+            lance.dataset(location),
+            [None],
+            clean={None},
+            retention=timedelta(seconds=1),
+            storage_options=StorageOptions(),
+            condemn=unheld(str(tmp_path), "clocks", location),
+        )
     else:
         lance.dataset(location).cleanup_old_versions(older_than=timedelta(days=1), error_if_tagged_old_versions=False)
     kept = [int(entry["version"]) for entry in lance.dataset(location).versions()]

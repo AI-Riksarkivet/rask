@@ -15,11 +15,13 @@ answers it 403, code 15: its alternative rung goes through `fga_deps._require_an
 denial to a 404.
 
 The fixture carries seven versions, and a cleanup keeping one leaves one, so an unchanged count of seven proves
-it did not run. The vend door is driven through the real client over respx.
+it did not run. The vend door is driven through the real client over respx, and the reclaim batch the pass asks for
+first (ADR 0246) is answered by the same catalog: the same refusal, or every version asked licensed.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -40,6 +42,7 @@ from maintenance.services.plan import DatasetPlan
 CATALOG = "http://catalog.test"
 TABLE_ID = "acme-bronze$events"
 VEND_URL = f"{CATALOG}/management/v1/table/{TABLE_ID}/credentials"
+CONDEMN_URL = f"{CATALOG}/management/v1/table/{TABLE_ID}/maintenance/condemn"
 #: Where the catalog governs `TABLE_ID` in the crossing case: not the dataset the sweep holds.
 ELSEWHERE = "s3://acme-bucket/medallion/bronze"
 #: Keep only the newest version, so a cleanup that runs is visible as a version count.
@@ -95,7 +98,11 @@ def _refused(status: int, body: dict[str, Any]) -> VendAnswer:
 def _execute(maintain_one: Callable[..., DatasetResult], uri: str, *, vend: VendAnswer) -> DatasetResult:
     settings = MaintenanceSettings.model_validate({"s3_bucket": "lake", "catalog_url": CATALOG, "min_versions_to_expire": 1})
     with respx.mock(assert_all_called=False) as router:
-        router.post(VEND_URL).mock(return_value=vend(uri))
+        vended = vend(uri)
+        router.post(VEND_URL).mock(return_value=vended)
+        router.post(CONDEMN_URL).mock(
+            side_effect=lambda request: vended if vended.status_code != 200 else httpx.Response(200, json=json.loads(request.content))
+        )
         return maintain_one(uri, settings, plan=CLEANUP_EVERYTHING, table_id=TABLE_ID)
 
 

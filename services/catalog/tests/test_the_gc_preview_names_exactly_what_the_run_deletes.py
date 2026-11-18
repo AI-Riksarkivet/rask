@@ -42,6 +42,7 @@ from tables_by_name import open_by_name
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings, get_settings
+from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
 from lakehouse import base_registry, version_retention
 from lakehouse.ns_errors import install_problem_handlers
@@ -68,7 +69,7 @@ def _registry(tmp_path: Path) -> base_registry.BaseRegistry:
 def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at v1..v6 and ``work`` at v2..v6, with one tag and one child branch pinning each ref."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1], properties=with_minted_uuid(None)))
     create_table(ns, StorageOptions(), TABLE_ID, _rows(0), root=str(tmp_path / "data"), mode="create", registry=_registry(tmp_path), holder="db$rows")
     open_by_name(ns, StorageOptions(), TABLE_ID).insert(_rows(1))
     open_by_name(ns, StorageOptions(), TABLE_ID).create_branch(BRANCH, 2)

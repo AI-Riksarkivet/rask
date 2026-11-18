@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 from uuid import uuid4
 
 import lance
@@ -516,7 +516,8 @@ def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, 
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/lance_catalog$db$t/tags/create", json={"tag": "rc", "version": 5, "branch": "dev"})
     assert resp.status_code == 200
-    dataset.tags.create.assert_called_once_with("rc", ("dev", 5))
+    # The door pins the version first (ADR 0246), at the same (branch, version) the tag names.
+    assert [called.args for called in dataset.tags.create.call_args_list] == [(ANY, ("dev", 5)), ("rc", ("dev", 5))]
 
 
 def test_alter_columns_converts_json_arrow_type_to_pyarrow(real_ns_client: TestClient) -> None:

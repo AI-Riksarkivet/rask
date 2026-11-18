@@ -319,10 +319,11 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
     import lance
     import pyarrow as pa
 
-    from lakehouse.history_fences import TableHistory
+    from lakehouse import condemned_versions
+    from lakehouse.condemned_versions import Verdict
     from lakehouse.provenance_stamp import declare_dataset_id
     from lakehouse.storage_options import StorageOptions
-    from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
+    from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions, reclaimable
 
     forged = "victim$payroll"
     named, unnamed = str(tmp_path / "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"), str(tmp_path / "medallion" / "gold")
@@ -331,11 +332,21 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
         lance.write_dataset(pa.table({"v": [2]}), uri, mode="append")  # a second version, so the pass reclaims one
     policy = ExpiryPolicy(older_than=None, retain_versions=1)
 
-    history = TableHistory(control_root=str(tmp_path / "control"), storage_options=StorageOptions(), table_uuid="t")
-    results = [
-        expire_versions(ExpiryTarget(uri=named, storage_options={}, write_options={}, table_id="silver$plain", history=history, table_uuid="t"), policy),
-        expire_versions(ExpiryTarget(uri=unnamed, storage_options={}, write_options={}, history=history, table_uuid="t"), policy),
-    ]
+    def _licensed(uri: str, table_id: str | None) -> ExpiryTarget:
+        """The pass's target with the catalog's batches (ADR 0246), its record on a control root of the test's own."""
+
+        def condemn(versions: list[int]) -> Verdict:
+            run = condemned_versions.Batch(str(tmp_path / "control"), StorageOptions(), table_uuid=uri, location=uri, dataset=lance.dataset(uri), ref=None)
+            run.condemn(versions)
+            run.read_pins()
+            return run.promote(None)
+
+        victims = reclaimable(lance.dataset(uri), policy)
+        return ExpiryTarget(
+            uri=uri, storage_options={}, write_options={}, table_id=table_id, table_uuid="t", victims=victims, condemn=condemn, first=condemn(victims)
+        )
+
+    results = [expire_versions(_licensed(named, "silver$plain"), policy), expire_versions(_licensed(unnamed, None), policy)]
     assert [(r.error, r.old_versions_removed) for r in results] == [(None, 1), (None, 1)], results
 
     emitter = _RecordingEmitter()

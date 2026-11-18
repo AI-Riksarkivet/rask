@@ -37,7 +37,7 @@ from lakehouse.context import DiagnosticFormatter
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, MaintenanceUnauthenticated, TableNotGoverned, VendingNotDirect, VendUndecided
-from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
+from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions, reclaimable
 
 
 pytestmark = pytest.mark.usefixtures("catalog_identity_token")
@@ -226,6 +226,7 @@ def test_a_pass_holding_no_vend_writes_nothing_whatever_it_finds(tmp_path: Path)
     for _ in range(3):
         lance.write_dataset(rows, uri, mode="overwrite")
 
-    result = expire_versions(ExpiryTarget(uri=uri, storage_options={}), ExpiryPolicy(older_than=timedelta(0), retain_versions=1))
+    policy = ExpiryPolicy(older_than=timedelta(0), retain_versions=1)
+    result = expire_versions(ExpiryTarget(uri=uri, storage_options={}, victims=reclaimable(lance.dataset(uri), policy)), policy)
 
     assert (result.reclaimable_versions, result.old_versions_removed, len(lance.dataset(uri).versions())) == (3, 0, 4)

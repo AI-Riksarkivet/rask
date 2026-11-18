@@ -37,6 +37,7 @@ OBJECT_RECORD_PREFIXES: Final = (
     commit_records.MARKS_PREFIX,
     control_prefixes.LABELS,
     control_prefixes.CONTRACTS,
+    control_prefixes.CONDEMNED,
 )
 
 

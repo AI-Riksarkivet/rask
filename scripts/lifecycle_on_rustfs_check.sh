@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lifecycle_on_rustfs_check.sh: run the table lifecycle's, the namespace cascade's, the stock create's, the history
-# fence's, the keyed commit's and a table's maintenance pass's race tests (ADR 0227, ADR 0233, ADR 0240, ADR 0243), and
+# fence's, the keyed commit's and a reclaim's race tests (ADR 0227, ADR 0233, ADR 0240, ADR 0246), and
 # the store's refusal of a vended write credential's put over a committed file, with the commits that name a file the
 # store does not hold, a transaction put over while judged, a long branch's vend and a seal the store refuses (ADR 0242),
 # with the catalog's root and control root on a REAL S3 store, so every fence, claim and record is arbitrated by the
@@ -11,7 +11,7 @@
 # of its own. The catalog writes under that root pair: what is checked is how the store arbitrates the writes, not whose
 # identity makes them (the governance-chain lane checks that). The stock client's cases write with the credential the
 # catalog vends them and no other key: a session the store's STS issues, under the catalog's session policy, to a user of
-# the run's own holding the catalog's canned policy as the chart renders it (race_catalog); the maintain vend's test writes under the credential
+# the run's own holding the catalog's canned policy as the chart renders it (race_catalog); the vend's test writes under the credentials
 # the catalog's own session policy vends. Stops the store at the end; KEEP_UP=1 leaves it running
 # and prints the environment a test run needs.
 set -euo pipefail
@@ -27,7 +27,7 @@ ls "$root"/chart/charts/*.tgz >/dev/null 2>&1 || { echo "!! chart/charts holds n
 
 cd "$root"
 stop() {
-  kill "${vend_pid:-}" "${store_pid:-}" 2>/dev/null || true
+  kill "${store_pid:-}" 2>/dev/null || true
   wait 2>/dev/null || true
   rm -rf "$work"
 }
@@ -58,11 +58,6 @@ if [ "${KEEP_UP:-}" = 1 ]; then
   echo "RASK_LIFECYCLE_STORE_ENDPOINT=$endpoint RASK_LIFECYCLE_STORE_ACCESS_KEY=rask-lifecycle-root RASK_LIFECYCLE_STORE_SECRET_KEY=$RASK_LIFECYCLE_STORE_SECRET_KEY (pid $store_pid, $work)"
   exit 0
 fi
-# The maintain vend's own credential, which only this lane's store can mint (ADR 0233 §9, ADR 0243 §7.2): every case is the store's,
-# and the cap's (ADR 0243 §7.5) waits out one 900 s session, since RustFS 1.0.3 issues none shorter. It runs beside the
-# other groups, each in buckets of its own, so the lane lasts one session and not one session more.
-uv run --no-sync pytest tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py -p no:cacheprovider -rA "$@" >"$work/maintain-vend.log" 2>&1 &
-vend_pid=$!
 uv run --no-sync pytest \
   tests/integration/test_a_lifecycle_door_keeps_what_it_answered_beside_a_concurrent_door.py \
   tests/integration/test_a_cascade_keeps_what_it_answered.py \
@@ -72,9 +67,8 @@ uv run --no-sync pytest \
   packages/lakehouse/tests/test_a_tables_history_is_held_by_one_kind_of_work_at_a_time.py \
   tests/integration/test_a_keyed_write_lands_once_beside_its_resend.py \
   -k s3 -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"
-# A table's pass beside the doors on its history (ADR 0243), its deletes held or refused on the wire in front of the store.
-uv run --no-sync pytest tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py -k rustfs -p no:cacheprovider -rA "$@"
-vend=0
-wait "$vend_pid" || vend=$?
-cat "$work/maintain-vend.log"
-exit "$vend"
+# No vended credential writes a pin or a table's condemned versions (ADR 0246, B2): the store's own refusal of the real
+# maintain and write vends, which only this lane's store can mint.
+uv run --no-sync pytest tests/integration/test_no_vended_credential_writes_a_pin_or_the_condemned_record.py -p no:cacheprovider -rA "$@"
+# A reclaim beside the doors on its history (ADR 0246), its deletes held or refused on the wire in front of the store.
+uv run --no-sync pytest tests/integration/test_a_reclaim_condemns_before_it_deletes.py -k rustfs -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"

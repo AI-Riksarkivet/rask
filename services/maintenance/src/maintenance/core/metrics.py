@@ -6,7 +6,6 @@ samples its streams and durable consumers under ``maintenance.queue.*`` (ADR 019
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from typing import Literal, get_args
 
 from opentelemetry import metrics
@@ -208,17 +207,16 @@ def record_dataset_swept() -> None:
     _datasets_swept.add(1)
 
 
-#: Why a pass kept what it would otherwise reclaim this time and passes the table again (ADR 0243): a write of the table's
-#: refs held its history (``history_fenced``), a write of the policy of a namespace or the project above it held that
-#: level's policy fence (``policy_fenced``), its maintenance policy changed since the pass read it (``policy_changed``),
-#: or a cleanup's victims stay marked, a delete the store refused or a policy that now keeps them (``marked``). A closed
-#: set: it is a metric label, and the alert ``MaintenanceReclaimStarved`` reads it.
-type HeldBack = Literal["history_fenced", "policy_fenced", "policy_changed", "marked", "policy_too_long"]
+#: Why a pass kept what it would otherwise reclaim this time and passes the table again (ADR 0246): versions it condemned
+#: stay condemned, a pin keeping them or the store refusing their deletes (``condemned``), or the table's maintain-tier
+#: vend can never be minted (``policy_too_long``). A closed set: it is a metric label, and the alert
+#: ``MaintenanceReclaimStarved`` reads it.
+type HeldBack = Literal["condemned", "policy_too_long"]
 
 _reclaims_held_back = _meter.create_counter(
     "maintenance.reclaims.held_back",
     unit="{dataset}",
-    description="Datasets whose pass kept what it would reclaim, by reason: a write held the table's history or a policy fence above it, its policy changed since the pass read it, or a cleanup's victims stay marked; each is passed again.",
+    description="Datasets whose pass kept what it would reclaim, by reason: versions it condemned stay condemned, or the table's vend can never be minted; each is passed again.",
 )
 
 
@@ -228,28 +226,28 @@ def record_reclaim_held_back(reason: HeldBack | None = None) -> None:
         _reclaims_held_back.add(1 if each == reason else 0, {"reason": each})
 
 
-#: The age of the oldest cleanup mark standing that this worker has seen, one series with no table label (F5): a mark
-#: names versions no door may pin or bring back, and one that stays is a table whose reclaim is starved (a delete the
-#: store keeps refusing) or whose half-removed versions a policy now keeps. Named without its unit, so the series is
-#: `maintenance_reclaims_mark_oldest_seconds` (deploy/alerting/rules.yml); the table is named in the log line
-#: `maintenance_victims_marked`. Synchronous, so a worker that has passed no table exports nothing.
-_mark_oldest = _meter.create_gauge(
-    "maintenance.reclaims.mark_oldest",
-    unit="s",
-    description="Age of the oldest cleanup mark standing in any table this worker last passed, on the store's clock (0 when none).",
+#: How many versions stand condemned in the tables this worker last passed, one series with no table label (ADR 0246): a
+#: condemned version is one no ref door may name, which the next reclaim finishes; one that stays is a table whose deletes
+#: the store keeps refusing, whose version a dead door's pin keeps for a day, or whose ``version/delete``d versions a hold
+#: keeps. Not a fork point an erasure took, which stays condemned while its branch stands (``Verdict.standing``). The
+#: tables are named in the log line `maintenance_versions_left_condemned`. Synchronous, so a worker that has passed no
+#: table exports nothing.
+_condemned = _meter.create_gauge(
+    "maintenance.reclaims.condemned",
+    unit="{version}",
+    description="Versions standing condemned in the tables this worker last passed: no ref door names them, and the next reclaim finishes them unless a hold keeps them.",
 )
-#: Each table this worker found a mark in at its last pass, and when, on the worker's clock, that table's oldest mark was
-#: written; a table found with none is forgotten.
-_marks_written: dict[str, datetime] = {}
+#: How many versions each ref this worker last passed left condemned; a ref found with none is forgotten.
+_condemned_by_ref: dict[tuple[str, str | None], int] = {}
 
 
-def record_mark_age(table_uuid: str, age: timedelta | None, *, now: datetime) -> None:
-    """Note the age of the oldest mark ``table_uuid``'s pass found (``None`` for none), and export the oldest of all."""
-    if age is None:
-        _marks_written.pop(table_uuid, None)
+def record_condemned(table_uuid: str, ref: str | None, count: int) -> None:
+    """Note how many versions the pass of ``table_uuid``'s ref ``ref`` left condemned, and export the sum of all."""
+    if count:
+        _condemned_by_ref[(table_uuid, ref)] = count
     else:
-        _marks_written[table_uuid] = now - age
-    _mark_oldest.set(max(((now - written).total_seconds() for written in _marks_written.values()), default=0.0))
+        _condemned_by_ref.pop((table_uuid, ref), None)
+    _condemned.set(sum(_condemned_by_ref.values()))
 
 
 def record_trash_purge(

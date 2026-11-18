@@ -67,13 +67,13 @@ def _governed(uri: str, table: str, settings: MaintenanceSettings, monkeypatch: 
 def reached(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Every dataset a pass reached its reclamation decision on: the probe before any vend counts what it could reclaim."""
     seen: list[str] = []
-    real = table_pass.count_reclaimable
+    real = table_pass.reclaimable
 
-    def _spy(ds: lance.LanceDataset, policy: ExpiryPolicy) -> int:
+    def _spy(ds: lance.LanceDataset, policy: ExpiryPolicy) -> list[int]:
         seen.append(ds.uri)
         return real(ds, policy)
 
-    monkeypatch.setattr(table_pass, "count_reclaimable", _spy)
+    monkeypatch.setattr(table_pass, "reclaimable", _spy)
     return seen
 
 

@@ -48,10 +48,17 @@ version until then, and a clone is never broken in silence (owner, 2026-11-17: "
 
 **THEN THE RELEASE RECLAIMS WHAT THE REFS KEPT, under the same hold** (ADR 0233). Once nothing pins a residual, main's
 cleanup at the obligation's retention (``retain_days``, whose window the verification already found the residuals
-outside) deletes it, as the verification's own reclaim does. The table's history is held as a release from the plan to
-the reclaim (:attr:`lakehouse.history_fences.HistoryWork.RELEASE`), which no ref write shares: a tag written after the
-release's last read of the refs and before the reclaim would otherwise keep a residual, and one written after the
-reclaim finds no residual left to name.
+outside) deletes it, through the catalog's batches as every reclaim does (ADR 0246). The table's history is held as a
+release from the plan to the reclaim (:attr:`lakehouse.history_fences.HistoryWork.RELEASE`), which no ref write shares:
+a tag written after the release's last read of the refs and before the reclaim would otherwise keep a residual, and one
+written after the reclaim finds no residual left to name.
+
+**WHERE ITS BRANCHES COME BACK IS PINNED BEFORE ITS FIRST DELETE** (ADR 0246 §3, ReleasePins). A reclaim takes no fence,
+so one running between the release's delete of a branch and its recreate would take the version the branch comes back
+at, should main's head have moved off it: the release writes a pin on each version it records for a branch's return,
+then reads the table's condemned versions and refuses one an entry names, before its first delete, and deletes the pins
+once it finished. A tick that died leaves them, and the next tick, which resumes from the record, writes the same pins
+(:func:`_pin_name`). A dead door's pin on a residual is one of the refs it takes.
 
 **NOBODY IS TOLD TWICE AND NOBODY IS LEFT UNTOLD** (ADR 0233). The verification files the release's notices before it
 writes the record (:mod:`catalog.services.announcement_intents`, on :func:`notice_target`), each notice under an id fixed
@@ -83,22 +90,24 @@ place the identifier is written ([[LH-281]]). The release needs only the refs, w
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Literal, Protocol
+from typing import Any, Final, Literal, Protocol, cast
 from uuid import NAMESPACE_URL, uuid5
 
+import lance
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services import announcement_intents, erasure_obligations
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld, RefOnARelease
 from catalog.services.dataplane import PlacedRef, recorded_branch
-from catalog.services.erasure import ErasureReport, Pin, Sessions, SurfaceResult, held_by_a_clone, reclaim_refs
-from lakehouse import clone_sources, control_prefixes, history_fences, stored_objects
+from catalog.services.erasure import Condemner, ErasureReport, Pin, SurfaceResult, held_by_a_clone, reclaim_refs
+from lakehouse import clone_sources, condemned_versions, control_prefixes, history_fences, stored_objects
 from lakehouse.control_events import CatalogControlEvent
-from lakehouse.fences import Hold, mark_name
+from lakehouse.fences import mark_name
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.record_store import delete_record, list_records, put_record
@@ -419,16 +428,16 @@ def release_due(
     now: datetime,
     open_location: Callable[[str], _Dataset],
     table_options: StorageOptions,
-    sessions_at: Callable[[str], Sessions],
+    condemn_at: Callable[[ReleaseRecord, lance.LanceDataset], Condemner],
 ) -> Released:
     """Release every scheduled release that is due and not held by another tick; the refs it changed, and the notices of
     the releases registered clones hold.
 
-    One release failing records its error, hands its lease back and leaves the others to run. One a reclaim of its table
-    holds off ([[LH-308]]) is left unclaimed for a later tick, as is one whose notices are still filed (ADR 0233): its
-    people are told first; and one a registered clone holds changes nothing, and is told again. ``table_options`` reach
-    the tables' store, where the reclaim records what it removes; ``sessions_at`` names, for a table's location, what each
-    of its refs' reclaim deletes through (:data:`catalog.services.erasure.Sessions`, ADR 0243 R5).
+    One release failing records its error, hands its lease back and leaves the others to run. One a ref write or the
+    scheduling of its table holds off is left unclaimed for a later tick, as is one whose notices are still filed (ADR
+    0233): its people are told first; and one a registered clone holds changes nothing, and is told again.
+    ``table_options`` reach the tables' store, where the reclaim records what it removes; ``condemn_at`` names, for a
+    release and its table's main, how each ref's reclaim asks the catalog for its batches (ADR 0246).
     """
     done = Released()
     for raw in list_records(control_root, storage_options, RELEASE_PREFIX, event="erasure_release"):
@@ -450,14 +459,14 @@ def release_due(
                 now=now,
                 open_location=open_location,
                 table_options=table_options,
-                sessions=sessions_at(record.location),
+                condemn_at=condemn_at,
                 done=done,
             ):
                 done.notices += [held_notice(record, subject, clones) for subject in record.notified]
         except _Lost:
             log.info("erasure_release_claimed_elsewhere", extra={"release": record.release_id})
         except HistoryFencedError as exc:
-            log.info("erasure_release_waits_for_a_reclaim", extra={"release": record.release_id, "table": record.table, "reason": str(exc)})
+            log.info("erasure_release_waits_for_a_ref_write", extra={"release": record.release_id, "table": record.table, "reason": str(exc)})
         except Exception as exc:  # noqa: BLE001 — one release's failure must not hold up the others
             log.warning("erasure_release_failed", extra={"release": record.release_id, "table": record.table, "error": str(exc)})
             _hand_back(control_root, storage_options, record.release_id, now=now, error=str(exc))
@@ -480,24 +489,27 @@ def _release(
     now: datetime,
     open_location: Callable[[str], _Dataset],
     table_options: StorageOptions,
-    sessions: Sessions,
+    condemn_at: Callable[[ReleaseRecord, lance.LanceDataset], Condemner],
     done: Released,
 ) -> list[str]:
     """Run ``record``'s release, adding the refs it changed to ``done``; the registered clones' tags that hold it, which
     leave everything as it was."""
     dataset = open_location(record.location)
+    condemn = condemn_at(record, cast("lance.LanceDataset", dataset))
     # [[LH-308]] Held before the release is claimed, so a tick a reclaim holds off leaves it as it was: a branch is
     # recreated at the version the release recorded, which a reclaim reading the refs before it would delete. Held as a
     # release (ADR 0233), which no other work on the table's history shares: no ref is written between this tick's read
     # of the refs and its reclaim, and no create through the door lands a name nesting with one this recreates ([[LH-413]]).
     history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=record.table_uuid)
-    with history.hold_for(HistoryWork.RELEASE) as hold:
+    with history.held(HistoryWork.RELEASE):
         tags, plan, clones = _plan(dataset, record)
         if clones:
             # G4: a registered clone reads a version this release would let go of; only its own end releases its tag.
             _held_by_clones(control_root, storage_options, record, clones)
             return clones
         claimed = _mutate(control_root, storage_options, record.release_id, lambda current: _claim(current, now=now, tags=tags, plan=plan))
+        # ReleasePins: where the branches come back is pinned, and found condemned by no reclaim, before the first delete.
+        pins = _pinned_recreate_points(dataset, claimed, control_root=control_root, storage_options=storage_options)
         # G8: only what the plan read just now takes is deleted, of what the claim recorded where to recreate, so a ref its
         # owner moved off the residual, or cut again from clean history, since a tick that died recorded it stays.
         taken_now = {step.branch for step in plan}
@@ -505,12 +517,14 @@ def _release(
         if claimed.phase == "deleting":
             claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
         done.changes += _recreate(dataset, claimed)
-        _reclaim(dataset, claimed, storage_options=table_options, history=history, hold=hold, sessions=sessions)
+        _reclaim(dataset, claimed, storage_options=table_options, condemn=condemn)
         if record.held_by_clones:
             _report_held(control_root, storage_options, record.release_id, [])
         # G9: the end inside the hold, which a scheduling shares with nothing: a verification recording the release
         # again cannot land between the record's delete and the mark's, which would remove its new mark.
         _finish(control_root, storage_options, record)
+        for name in pins:
+            condemned_versions.unpin(cast("Any", dataset), name)
     log.info(
         "erasure_release_done",
         extra={"release": record.release_id, "table": record.table, "tags": claimed.tags, "branches": [step.branch for step in claimed.plan]},
@@ -584,7 +598,8 @@ def _taken(dataset: _Dataset, record: ReleaseRecord, *, placing: PlacedRef | Non
         if recorded_branch(meta.get("branch")) in branches or (recorded_branch(meta.get("branch")), meta.get("version")) in places
     }
     clones = {tag for tag in on if tag.startswith(clone_sources.TAG_PREFIX)}
-    return _Taken(tags=on - clones, clones=clones, branches=branches, forks=forks)
+    # The release's own pins keep where its branches come back, and are its finish's to delete.
+    return _Taken(tags=on - clones - _own_pins(record), clones=clones, branches=branches, forks=forks)
 
 
 def _plan(dataset: _Dataset, record: ReleaseRecord) -> tuple[list[str], list[Recreate], list[str]]:
@@ -656,7 +671,42 @@ def _recreate(dataset: _Dataset, record: ReleaseRecord) -> list[RefChange]:
     return changes
 
 
-def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: StorageOptions, history: TableHistory, hold: Hold, sessions: Sessions) -> None:
+def _pin_name(release_id: str, version: int) -> str:
+    """The pin the release ``release_id`` writes on main's ``version``: the same name on every tick, so a tick resumed
+    from the record writes the one a dead tick left, and its finish deletes it."""
+    return f"{condemned_versions.PIN_PREFIX}{hashlib.sha256(f'{release_id}:{version}'.encode()).hexdigest()[:32]}"
+
+
+def _own_pins(record: ReleaseRecord) -> set[str]:
+    """The pins ``record``'s release writes on where its branches come back (:func:`_pinned_recreate_points`)."""
+    return {_pin_name(record.release_id, step.version) for step in record.plan if step.parent is None}
+
+
+def _pinned_recreate_points(dataset: _Dataset, record: ReleaseRecord, *, control_root: str, storage_options: StorageOptions) -> set[str]:
+    """Pin each version of main the release records for a branch's return, then refuse one the table's condemned versions
+    name (ReleasePins, ADR 0246 §3): the pins' names, which the finish deletes. A refused release deletes its pins and
+    nothing else.
+
+    Raises:
+        RuntimeError: A recorded version is condemned: a reclaim may be deleting it, so no branch may come back there.
+        OSError: The store did not answer the pin or the read.
+    """
+    handle = cast("Any", dataset)
+    names = _own_pins(record)
+    try:
+        for version in sorted({step.version for step in record.plan if step.parent is None}):
+            condemned_versions.pin(handle, None, version, name=_pin_name(record.release_id, version))
+        condemned = condemned_versions.condemned(control_root, storage_options, table_uuid=record.table_uuid, dataset=handle, ref=None)
+        if hit := sorted(condemned & {step.version for step in record.plan if step.parent is None}):
+            raise RuntimeError(f"main's versions {hit}, where the release makes its branches again, are condemned: a reclaim may be deleting them")
+    except BaseException:
+        for name in names:
+            condemned_versions.unpin(handle, name)
+        raise
+    return names
+
+
+def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: StorageOptions, condemn: Condemner) -> None:
     """Main's cleanup at the obligation's retention, now that no ref the release could reach pins a residual: what the
     verification's reclaim left for the pins goes, as that reclaim would have taken it.
 
@@ -664,17 +714,7 @@ def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: Stora
         RuntimeError: The cleanup did not go through (its ``history:main`` surface failed); the tick hands its lease back.
     """
     report = ErasureReport(table=record.table, predicate="")
-    reclaim_refs(
-        report,
-        dataset,
-        [None],
-        clean={None},
-        retention=timedelta(days=record.retain_days),
-        storage_options=storage_options,
-        history=history,
-        hold=hold,
-        sessions=sessions,
-    )
+    reclaim_refs(report, dataset, [None], clean={None}, retention=timedelta(days=record.retain_days), storage_options=storage_options, condemn=condemn)
     if failed := [surface.detail for surface in report.surfaces if surface.outcome == "failed"]:
         raise RuntimeError(f"the reclaim after the release did not go through: {'; '.join(failed)}")
     log.info("erasure_release_reclaimed", extra={"release": record.release_id, "table": record.table, "versions": report.versions_reclaimed})

@@ -56,16 +56,14 @@ def _dataset(tmp: Path, name: str, *, fragments: int = 1) -> str:
     return uri
 
 
-def test_cleanup_enabled_on_a_dataset_with_history_may_reclaim_so_it_vends(tmp_path: Path) -> None:
-    """Reclamation is a write, and a dataset with superseded versions has something to reclaim."""
+def test_cleanup_enabled_on_a_dataset_with_history_may_reclaim_so_it_asks_the_catalog_for_a_batch(tmp_path: Path) -> None:
+    """Reclamation is a write, and a dataset with superseded versions has something to reclaim: the pass asks the catalog
+    for the batch first (ADR 0246) and vends only for the versions it licenses."""
     uri = _dataset(tmp_path, "versioned", fragments=2)
 
-    assert (
-        _probe_before_vending(
-            uri, StorageOptions(), policy=KEEP_ONE, directories=[], now=datetime.now(UTC), opened=DatasetOpener(uri, StorageOptions())
-        ).may_write
-        is True
-    )
+    probe = _probe_before_vending(uri, StorageOptions(), policy=KEEP_ONE, directories=[], now=datetime.now(UTC), opened=DatasetOpener(uri, StorageOptions()))
+
+    assert (probe.asks, probe.due, probe.victims) == (True, True, [1])
 
 
 def test_an_unreadable_dataset_says_MAY_WRITE(tmp_path: Path) -> None:

@@ -1,9 +1,9 @@
-"""Ref writes on one table share its history fence whatever their number, and a reclaim beside one is refused (ADR 0233
+"""Ref writes on one table share its history fence whatever their number, and an erasure's scheduling beside one is refused (ADR 0233
 §9, ``specs/catalog/Fence.tla``).
 
 Every tag and branch write takes the table's history fence (``lakehouse.history_fences``), so ref writes must never
 refuse ref writes. Measured on RustFS 1.0.3 with one shared fence record per table: of 16 concurrent tag writes on one
-table 4 answered 409, and of 64, 43, with no reclaim anywhere. Each write here goes through the catalog's own tag door,
+table 4 answered 409, and of 64, 43, with no other work anywhere. Each write here goes through the catalog's own tag door,
 on the local root and, in the lane that names an S3 store (``scripts/lifecycle_on_rustfs_check.sh``), on that store,
 whose conditional writes and listings arbitrate the fence.
 """
@@ -24,7 +24,7 @@ _TABLE = "lance_catalog$refs$t"
 _WRITES = 64
 
 
-def test_concurrent_ref_writes_all_land_and_a_reclaim_beside_one_is_refused(race_ns_client: TestClient) -> None:
+def test_concurrent_ref_writes_all_land_and_a_scheduling_beside_one_is_refused(race_ns_client: TestClient) -> None:
     from catalog.core.config import get_settings
 
     assert race_ns_client.post("/v1/namespace/lance_catalog$refs/create", json={}).status_code == 200
@@ -56,4 +56,4 @@ def test_concurrent_ref_writes_all_land_and_a_reclaim_beside_one_is_refused(race
     )
     history.take(HistoryWork.REFS)
     with pytest.raises(HistoryFencedError):
-        history.take(HistoryWork.RECLAIM)
+        history.take(HistoryWork.SCHEDULE)

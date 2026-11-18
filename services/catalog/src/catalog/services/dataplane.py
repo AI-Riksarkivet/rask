@@ -131,11 +131,11 @@ from lakehouse import (
     clone_sources,
     commit_records,
     commit_turns,
+    condemned_versions,
     data_directories,
     file_identities,
     idempotency,
     location_claims,
-    reclaim_marks,
     stored_objects,
     trash,
 )
@@ -146,7 +146,7 @@ from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base
 from lakehouse.fences import Hold
 from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
-from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from lakehouse.history_fences import HistoryWork
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
@@ -1345,33 +1345,18 @@ def rename_table(
     root: str,
     reparent: Reparent | None = None,
 ) -> tuple[list[str], str]:
-    """Rename a table by moving its pointer (:func:`_repointed`), holding its history as ref work when the rename moves it
-    into another namespace (ADR 0243, F3).
+    """Rename a table by moving its pointer (:func:`_repointed`), at once beside any reclaim (ADR 0246).
 
     A table's namespace chain is what its maintenance policy is read under, a hold at any level of it keeping its whole
-    history (ADR 0243 §8): a rename into a namespace that holds binds the table to that hold from its 200. A maintenance
-    pass reads the chain, holds the table's history as a reclaim, reads the chain again under that hold and deletes only
-    while it holds; so of a rename that moves the chain and a reclaim one sees the other: the rename answers 409
-    ConcurrentModification (14), retryable, while a reclaim deletes, and one that landed first is read by the pass under
-    its hold, which then deletes nothing. A rename within its namespace changes no chain, and takes no hold.
+    history: a rename into a namespace that holds binds the table to that hold. A reclaim batch condemns, then resolves the
+    chain from the table's claim and reads the policy along it (``catalog.services.reclaims.Governance``), so a batch that
+    condemns after this move reads the hold, and one that condemned before it finishes at most its batch. The answer is the
+    spec's and names no version.
 
     Raises:
-        ConcurrentModificationError: A reclaim holds the table's history, or this door's hold lapsed before it wrote
-            (code 14); as :func:`_repointed` otherwise.
+        As :func:`_repointed`.
     """
-    moved = partial(_repointed, ns, source, new_table_name, new_namespace_id, so=so, claims=claims, root=root, reparent=reparent)
-    # A table whose location's claim records no uuid has no pass: maintenance refuses it (`unidentified`), and its
-    # history fence is keyed by the uuid, so nothing reclaims beside its rename.
-    if source.uuid is None or rename_destination(source.segments, new_namespace_id, new_table_name)[:-1] == list(source.segments)[:-1]:
-        return moved()
-    history = TableHistory(control_root=claims.control_root, storage_options=claims.storage_options, table_uuid=source.uuid)
-    try:
-        return history.write_held(HistoryWork.REFS, moved)
-    except HistoryFencedError as exc:
-        raise ConcurrentModificationError(
-            f"cannot move {'.'.join(source.segments)} into another namespace while a reclaim holds its history: the namespace it enters may "
-            f"hold it, which the reclaim did not read; retry once it ends: {exc}"
-        ) from exc
+    return _repointed(ns, source, new_table_name, new_namespace_id, so=so, claims=claims, root=root, reparent=reparent)
 
 
 def _repointed(
@@ -4488,8 +4473,9 @@ def _ref_errors(kind: str, name: str, *, invalid_name: str | None = None) -> Gen
 
 def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableTagsRequest) -> ListTableTagsResponse:
     """List the table's tags as ``{name: TagContents{version, manifest_size, branch}}``, paged by name (``req.limit``,
-    ``req.page_token``): pylance lists every tag at once, so the page is cut here."""
-    listed = table.open_unchecked(so).tags.list()
+    ``req.page_token``): pylance lists every tag at once, so the page is cut here. The catalog's own pins
+    (:func:`require_whole`) are no caller's tags, and are left out."""
+    listed = {name: tag for name, tag in table.open_unchecked(so).tags.list().items() if not condemned_versions.is_pin(name)}
     page, next_token = paginate(sorted(listed), req.page_token, req.limit)
     tags: dict[str, dict[str, Any]] = {}
     for name, tag in ((name, listed[name]) for name in page):
@@ -4504,52 +4490,92 @@ def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableT
     return ListTableTagsResponse.model_validate({"tags": tags, "page_token": next_token})
 
 
-def require_whole(
-    table: table_claims.DoorTable,
-    dataset: lance.LanceDataset,
-    *,
-    branch: str | None,
-    version: int | None,
-    kind: str,
-    name: str,
-    marks: frozenset[tuple[str, str]],
-) -> None:
-    """Refuse a ref or a restore naming a version of ``branch`` (main for ``None``) a cleanup was removing (ADR 0243).
+class Pins:
+    """The pins a ref door wrote (PinFirst, ADR 0246), each deleted once the door has acted or been refused
+    (:func:`pinning`)."""
 
-    A version a trusted mark names (:func:`lakehouse.reclaim_marks.refused`): a cleanup wrote it under its hold, after a
-    confirm of its holds and before its first delete, so the version may stand over any deleted file, its blob sidecars
-    among them, whatever still stands. ``marks`` are the ones the door's take of the table's history listed
-    (:attr:`lakehouse.fences.Hold.marks`). No file of the version is listed: every reclaim marks before it deletes and
-    unmarks only after a cleanup call with no failed delete, so a version no mark names is one no cleanup touched
-    (``specs/maintenance/TablePass.tla`` RefsWhole, with the doors reading the mark alone), and the check costs a read per
-    mark and the ref's head and pins, never a listing that grows with the ref (F7). Asked while the door holds the
-    table's history as ref work, which every reclaim excludes, so the answer stands until the ref does. ``dataset`` is
-    the table's handle; ``kind`` and ``name`` say what the door writes, for its refusal. A ref's latest version
-    (``version`` ``None``) is its head, which no cleanup removes.
+    def __init__(self, dataset: lance.LanceDataset) -> None:
+        self._dataset = dataset
+        self._held: list[condemned_versions.Pinned] = []
+
+    def add(self, pinned: condemned_versions.Pinned | None) -> None:
+        if pinned is not None:
+            self._held.append(pinned)
+
+    def require_alive(self) -> None:
+        """Refuse an act a door would make past :data:`lakehouse.condemned_versions.DOOR_DEADLINE` after its pin: a reclaim
+        may since have taken the pin for a dead door's (A3').
+
+        Raises:
+            ServiceUnavailableError: The door ran too long; nothing was written (503, retryable).
+        """
+        try:
+            for pinned in self._held:
+                pinned.require_alive()
+        except TimeoutError as exc:
+            raise ServiceUnavailableError(f"this request ran too long to act on the version it pinned; nothing was written, retry: {exc}") from exc
+
+    def release(self) -> None:
+        for pinned in self._held:
+            condemned_versions.unpin(self._dataset, pinned.name)
+        self._held.clear()
+
+
+@contextmanager
+def pinning(dataset: lance.LanceDataset) -> Generator[Pins]:
+    """The pins a ref door writes on ``dataset``'s table while the block runs, every one deleted as it ends."""
+    pins = Pins(dataset)
+    try:
+        yield pins
+    finally:
+        pins.release()
+
+
+def require_whole(
+    table: table_claims.DoorTable, dataset: lance.LanceDataset, *, branch: str | None, version: int | None, kind: str, name: str
+) -> condemned_versions.Pinned | None:
+    """Pin ``version`` of ``branch`` (main for ``None``), then refuse it where the table's condemned versions name it
+    (PinFirst, ADR 0246); the pin, which the door deletes once it acted (:class:`Pins`).
+
+    The pin is a Lance tag, ``rask-pin-<32 hex>``, which only the catalog's identity can write (no vend reaches ``_refs/``,
+    measured) and every tag door refuses from a caller. Written first, then the record read: a reclaim batch condemns, then
+    reads the tags, so of the two at least one sees the other, and a version no entry names when the pin stands is one no
+    reclaim deletes while it stands (``specs/maintenance/Reclaim.tla`` RefsWhole). ``dataset`` is a handle of the table's
+    main; ``kind`` and ``name`` say what the door writes, for its refusal. A ref's latest version (``version`` ``None``) is
+    its head, which no batch condemns.
 
     Raises:
         TableVersionNotFoundError: The ref has no such version (code 11), as :func:`_ref_errors` answers it.
-        InvalidTableStateError: A cleanup marked the version; a later maintenance pass removes it (code 19).
-        ServiceUnavailableError: The store did not answer a read of a mark or of the ref, so whether a cleanup marked the
-            version is unknown (503); nothing was written.
+        InvalidTableStateError: The version is condemned: a reclaim may be deleting it (code 19).
+        ServiceUnavailableError: The store did not answer the pin or the read; nothing was written (503).
     """
     if version is None:
-        return
+        return None
     with _ref_errors(kind, name):
         dataset.checkout_version((branch, version) if branch is not None else version)
-    fence = table.history_fence()
     try:
-        marked = reclaim_marks.refused(fence.control_root, fence.storage_options, table_uuid=fence.table_uuid, marks=marks, dataset=dataset, ref=branch)
+        with _ref_errors(kind, name):
+            return table.pin_whole(dataset, branch, version)
+    except condemned_versions.CondemnedVersionError as exc:
+        log.warning("ref_on_a_condemned_version", extra={"kind": kind, "ref": name, "branch": branch, "version": version})
+        raise InvalidTableStateError(
+            f"version {version} of {branch or MAIN_BRANCH} is condemned: a reclaim may be deleting it, so no ref may name it and no restore bring it back"
+        ) from exc
     except OSError as exc:
         raise ServiceUnavailableError(
-            f"the store did not answer whether a cleanup marked version {version} of {branch or MAIN_BRANCH}, so no {kind} was written: {exc}"[:600]
+            f"the store did not answer whether version {version} of {branch or MAIN_BRANCH} is condemned, so no {kind} was written: {exc}"[:600]
         ) from exc
-    if version in marked:
-        log.warning("ref_on_a_version_being_reclaimed", extra={"kind": kind, "ref": name, "branch": branch, "version": version})
-        raise InvalidTableStateError(
-            f"version {version} of {branch or MAIN_BRANCH} is being reclaimed: a cleanup marked it before its first delete, "
-            "so no ref may name it and no restore bring it back; a later maintenance pass removes it"
-        )
+
+
+def refuse_a_pin_name(tag: str) -> None:
+    """Refuse a caller's tag named as a pin is: a pin keeps its version from every reclaim, and only the catalog's own
+    doors write or delete one (ADR 0246, B2).
+
+    Raises:
+        InvalidInputError: The name carries the pin prefix (code 13).
+    """
+    if condemned_versions.is_pin(tag):
+        raise InvalidInputError(f"tag {tag!r} carries the prefix {condemned_versions.PIN_PREFIX!r}, which the catalog keeps for its own pins")
 
 
 def _open_with_branch(table: table_claims.DoorTable, so: StorageOptions, branch: str | None) -> lance.LanceDataset:
@@ -4594,28 +4620,33 @@ type BeforeRef = Callable[[frozenset[tuple[str, str]], lance.LanceDataset, Place
 
 
 def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTableTagRequest, *, before_ref: BeforeRef | None = None) -> CreateTableTagResponse:
-    """Tag the given table version with a name (honoring the request's optional ``branch``), never while a reclaim runs.
-    ``before_ref`` is asked inside the table's history hold, before the tag is written.
+    """Tag the given table version with a name (honoring the request's optional ``branch``), never on a condemned version
+    (:func:`require_whole`). ``before_ref`` is asked inside the table's history hold, before the tag is written.
 
     Raises:
-        InvalidInputError: The tag's ref file would be longer than an object-store key segment ([[LH-283]]).
-        ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]), or this door's hold of it lapsed before
-            the tag; no tag was written.
+        InvalidInputError: The tag's ref file would be longer than an object-store key segment ([[LH-283]]), or its name
+            carries the pin prefix.
+        InvalidTableStateError: The version is condemned (code 19).
+        ConcurrentModificationError: An erasure's release or its scheduling holds the table's history, or this door's hold
+            of it lapsed before the tag; no tag was written.
     """
     _refuse_a_ref_name_no_key_segment_holds("tag", req.tag)
+    refuse_a_pin_name(req.tag)
     dataset = _open_with_branch(table, so, req.branch)
     branch = recorded_branch(req.branch)
+    with pinning(dataset) as pins:
 
-    def judge(hold: Hold) -> None:
-        if before_ref is not None:
-            before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=branch, version=req.version))
-        require_whole(table, dataset, branch=branch, version=req.version, kind="tag", name=req.tag, marks=hold.marks)
+        def judge(hold: Hold) -> None:
+            if before_ref is not None:
+                before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=branch, version=req.version))
+            pins.add(require_whole(table, dataset, branch=branch, version=req.version, kind="tag", name=req.tag))
 
-    def write() -> None:
-        with _ref_errors("tag", req.tag):
-            dataset.tags.create(req.tag, _tag_reference(branch, req.version))
+        def write() -> None:
+            pins.require_alive()
+            with _ref_errors("tag", req.tag):
+                dataset.tags.create(req.tag, _tag_reference(branch, req.version))
 
-    table.history_write(HistoryWork.REFS, write, judge=judge)
+        table.history_write(HistoryWork.REFS, write, judge=judge)
     return CreateTableTagResponse()
 
 
@@ -4657,39 +4688,49 @@ def tag_reference(dataset: lance.LanceDataset, tag: str) -> TagReference:
 
 def get_tag_version(table: table_claims.DoorTable, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:
     """Return the ref a tag names: its version and, for a tag on a branch, that branch (404 on an unknown tag)."""
+    if condemned_versions.is_pin(req.tag):
+        raise TableTagNotFoundError(f"tag {req.tag!r} not found")
     ref = tag_reference(table.open_unchecked(so), req.tag)
     return GetTableTagVersionResponse(version=ref.version, branch=ref.branch)
 
 
 def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTableTagRequest, *, before_ref: BeforeRef | None = None) -> UpdateTableTagResponse:
-    """Move an existing tag to a new table version (honoring the request's optional ``branch``), never while a reclaim runs.
-    ``before_ref`` is asked inside the table's history hold, before the tag is moved.
+    """Move an existing tag to a new table version (honoring the request's optional ``branch``), never onto a condemned
+    version (:func:`require_whole`). ``before_ref`` is asked inside the table's history hold, before the tag is moved.
 
     Raises:
-        TableTagNotFoundError: No tag can have the name: its ref file would be longer than a key segment ([[LH-283]]).
-        ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]), or this door's hold of it lapsed before
-            the move; the tag was not moved.
+        TableTagNotFoundError: No tag can have the name: its ref file would be longer than a key segment ([[LH-283]]), or
+            it is one of the catalog's pins.
+        InvalidTableStateError: The version is condemned (code 19).
+        ConcurrentModificationError: An erasure's release or its scheduling holds the table's history, or this door's hold
+            of it lapsed before the move; the tag was not moved.
     """
     _require_a_tag_a_key_segment_can_hold(req.tag)
+    if condemned_versions.is_pin(req.tag):
+        raise TableTagNotFoundError(f"tag {req.tag!r} not found")
     dataset = _open_with_branch(table, so, req.branch)
     branch = recorded_branch(req.branch)
+    with pinning(dataset) as pins:
 
-    def judge(hold: Hold) -> None:
-        if before_ref is not None:
-            before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=branch, version=req.version))
-        require_whole(table, dataset, branch=branch, version=req.version, kind="tag", name=req.tag, marks=hold.marks)
+        def judge(hold: Hold) -> None:
+            if before_ref is not None:
+                before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=branch, version=req.version))
+            pins.add(require_whole(table, dataset, branch=branch, version=req.version, kind="tag", name=req.tag))
 
-    def write() -> None:
-        with _ref_errors("tag", req.tag):
-            dataset.tags.update(req.tag, _tag_reference(branch, req.version))
+        def write() -> None:
+            pins.require_alive()
+            with _ref_errors("tag", req.tag):
+                dataset.tags.update(req.tag, _tag_reference(branch, req.version))
 
-    table.history_write(HistoryWork.REFS, write, judge=judge)
+        table.history_write(HistoryWork.REFS, write, judge=judge)
     return UpdateTableTagResponse()
 
 
 def delete_tag(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableTagRequest) -> DeleteTableTagResponse:
-    """Delete a tag from the table."""
+    """Delete a tag from the table; never one of the catalog's pins, which no caller holds."""
     _require_a_tag_a_key_segment_can_hold(req.tag)
+    if condemned_versions.is_pin(req.tag):
+        raise TableTagNotFoundError(f"tag {req.tag!r} not found")
     with _ref_errors("tag", req.tag):
         table.open_unchecked(so).tags.delete(req.tag)
     return DeleteTableTagResponse()
@@ -4764,11 +4805,11 @@ def create_branch(
     # JUDGED INSIDE THE TABLE'S BRANCH-CREATE HOLD ([[LH-413]]): `a` and `a/b` are two ref files no write on a ref makes
     # collide, so two creates of nesting names each passed a listing the other had not yet changed. The hold excludes
     # every other branch create on the table, so the listing judged here is the one this create commits against.
-    opened: list[lance.LanceDataset] = []
+    opened: list[lance.LanceDataset] = [table.open(so)]
+    pins = Pins(opened[0])
 
     def judge(hold: Hold) -> None:
-        dataset = table.open(so)
-        opened.append(dataset)
+        dataset = opened[0]
         branches = dataset.branches.list()
         if req.name in branches:
             raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
@@ -4784,9 +4825,10 @@ def create_branch(
             with _ref_errors("branch", source, invalid_name=req.name):
                 cut_at = req.from_version if req.from_version is not None else int(_source_head(dataset, req.from_branch))
             before_ref(hold.marks, dataset, PlacedRef(kind="branch", name=req.name, branch=req.from_branch, version=cut_at))
-        require_whole(table, dataset, branch=req.from_branch, version=req.from_version, kind="branch", name=source, marks=hold.marks)
+        pins.add(require_whole(table, dataset, branch=req.from_branch, version=req.from_version, kind="branch", name=source))
 
     def write() -> None:
+        pins.require_alive()
         try:
             with _ref_errors("branch", source, invalid_name=req.name):
                 opened[0].create_branch(req.name, _branch_reference(req))
@@ -4795,7 +4837,10 @@ def create_branch(
                 raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists") from None
             raise
 
-    table.history_write(HistoryWork.BRANCH, write, judge=judge)
+    try:
+        table.history_write(HistoryWork.BRANCH, write, judge=judge)
+    finally:
+        pins.release()
     return CreateTableBranchResponse()
 
 
@@ -4864,42 +4909,19 @@ def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: Delete
             "tag pins its branch. Delete or move the tag first. Nothing was deleted"
         )
     removed: list[RemovedBranch] = []
-    try:
-        for name in doomed:
-            try:
-                with _ref_errors("branch", name):
-                    dataset.branches.delete(name)
-            except TableBranchAlreadyExistsError as exc:
-                # The ref-conflict marker here is a pin made after the read above, not a name collision.
-                raise BranchDeleteStoppedError(
-                    f"deleting branch {req.name!r} stopped at {name!r}: a branch forked from it or a tag naming it since the check pins it. "
-                    f"Deleted before stopping: {[branch.name for branch in removed]}",
-                    removed,
-                ) from exc
-            removed.append(RemovedBranch(name=name, identifier=identifier_of(listed[name])))
-    finally:
-        _end_reclaim_marks(table, dataset, removed)
+    for name in doomed:
+        try:
+            with _ref_errors("branch", name):
+                dataset.branches.delete(name)
+        except TableBranchAlreadyExistsError as exc:
+            # The ref-conflict marker here is a pin made after the read above, not a name collision.
+            raise BranchDeleteStoppedError(
+                f"deleting branch {req.name!r} stopped at {name!r}: a branch forked from it or a tag naming it since the check pins it. "
+                f"Deleted before stopping: {[branch.name for branch in removed]}",
+                removed,
+            ) from exc
+        removed.append(RemovedBranch(name=name, identifier=identifier_of(listed[name])))
     return removed
-
-
-def _end_reclaim_marks(table: table_claims.DoorTable, dataset: lance.LanceDataset, removed: Sequence[RemovedBranch]) -> None:
-    """End the cleanup marks of each branch ``removed`` deleted, and settle the fork marks no branch needs any more
-    (:func:`lakehouse.reclaim_marks.ended`, ADR 0243 R3): a deleted branch's versions went with it, so a mark naming them
-    only made every pass vend and aged the oldest-mark gauge for ever. A mark this misses names an incarnation that no
-    longer stands, which no door trusts (a branch made again under the name has another) and the next reclaim removes."""
-    if not removed:
-        return
-    try:
-        fence = table.history_fence()
-    except UnidentifiedObjectError:
-        return
-    reclaim_marks.ended(
-        fence.control_root,
-        fence.storage_options,
-        table_uuid=fence.table_uuid,
-        dataset=dataset,
-        removed={branch.name: branch.identifier for branch in removed},
-    )
 
 
 def _forked_from(name: str, forks: Sequence[str]) -> InvalidTableStateError:

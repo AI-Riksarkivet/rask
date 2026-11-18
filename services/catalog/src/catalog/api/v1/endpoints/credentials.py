@@ -110,7 +110,7 @@ async def vend_credentials(
     tier: Annotated[
         Tier,
         Query(
-            description="`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction, deletion and index files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get and delete the whole prefix but its refs, and put nothing of the table; get and put the table's history fence, and get and delete its committed-file records, on the control root)."
+            description="`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction, deletion and index files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get and delete the whole prefix but its refs, and put nothing of the table; get and delete its committed-file records, and nothing else, on the control root)."
         ),
     ] = "read",
     # [[LH-055]] WHICH branch this credential is for. Naming one narrows the grant rather than widening
@@ -199,23 +199,14 @@ async def vend_credentials(
     # A write credential for the caller's own declaration is vended only after renewing it, and lasts no longer than its
     # fence (ADR 0227 §9, RedeclareRenews); a declaration another request acted on since answers 409 (14).
     at_most_seconds = None
-    project: str | None = None
-    if tier == "maintain":
-        # The project whose policy may govern the table, as maintenance reads it (`governing_policy`): a pass holds its
-        # policy fence, and those of its namespaces beneath the warehouse's directory, as a reclaim while it deletes (ADR
-        # 0243 §6), under this vend.
-        try:
-            project = await run_in_threadpool(maintenance_policies.governing_project, settings.registry_root, settings.storage_options(), location)
-        except (OSError, ValueError) as exc:
-            raise ServiceUnavailableError("the bucket's claim could not be read, so the policy fences a pass holds are unknown") from exc
     if tier == "write":
         at_most_seconds = await run_in_threadpool(
             partial(table_claims.renewed_for_its_declarer, table_claims.claim_store(settings), table.resolved, declarer=subject)
         )
     elif tier == "maintain":
-        # A maintain credential lives no longer than a hold of the table's history (ADR 0243 A1): a pass takes its hold
-        # after its vend, so once the hold lapses (its holder dead or paused) the store refuses every delete the credential
-        # signs, whatever `LANCE_VENDING_TTL_SECONDS` says, and no reclaim deletes beside a ref write the lapse admitted.
+        # Hygiene, a short-lived credential: a maintain vend lasts no longer than 15 minutes whatever
+        # `LANCE_VENDING_TTL_SECONDS` says. Nothing a reclaim may delete rests on it: a pass deletes only what the catalog's
+        # batch licensed, which no ref door admits after (ADR 0246, A1 gone).
         at_most_seconds = int(history_fences.HOLD.total_seconds())
     # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
     # (`vend_or_refuse`), never a bare 500.
@@ -229,7 +220,7 @@ async def vend_credentials(
             bases=bases.bases,
             data_directories=bases.data_directories,
             branch=branch,
-            records=TableRecords(control_root=settings.registry_root, table_uuid=table_uuid, warehouse=table.resolved.segments[0], project=project),
+            records=TableRecords(control_root=settings.registry_root, table_uuid=table_uuid),
             at_most_seconds=at_most_seconds,
         )
     )

@@ -50,6 +50,7 @@ from lance_namespace.errors import ErrorCode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse.base_refs import decoded_path, normalise
+from lakehouse.condemned_versions import Verdict
 from lakehouse.governed import fga
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from lakehouse.storage_options import StorageOptions
@@ -544,6 +545,26 @@ def disarm_cleanup(table_id: str, settings: MaintenanceSettings, *, branch: str 
     """
     door = _maintainer_door(table_id, settings, act="disarm", answer="a disarm of its commit-path cleanup", params={"branch": branch} if branch else {})
     return _parsed(_answered(settings, door), Disarmed, asked_for=door.asked_for)
+
+
+def condemn(table_id: str, settings: MaintenanceSettings, versions: list[int], *, branch: str | None) -> Verdict:
+    """Have the catalog run one reclaim batch of the ref ``branch`` (``None`` = main) of ``table_id`` (ADR 0246): ``versions``
+    condemned with whatever a dead batch or ``version/delete`` left on the ref, the pins and the governing policy read, and
+    the versions the pass may delete under its vend answered. Only the catalog writes a table's condemned versions; the
+    vend reaches nothing on the control root.
+
+    Raises:
+        VendingNotDirect: No catalog door is configured.
+        MaintenanceDenied: The door refused: this identity holds no can_vend_maintain on the table (403), or the table
+            changed since the door resolved it (409).
+        TableNotGoverned: The catalog names the table absent.
+        VendUndecided: The door could not be asked or decided nothing: the store did not answer, or the record kept
+            changing (503, 409 code 14); the next pass asks again.
+    """
+    door = _maintainer_door(
+        table_id, settings, act="condemn", answer="a reclaim batch", params={"branch": branch} if branch else {}, body={"versions": versions}
+    )
+    return _parsed(_answered(settings, door), Verdict, asked_for=door.asked_for)
 
 
 def raise_floor(table_id: str, settings: MaintenanceSettings, *, dry_run: bool) -> FloorRaised:

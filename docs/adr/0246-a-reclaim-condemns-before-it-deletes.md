@@ -1,9 +1,10 @@
 # 0246. A reclaim condemns before it deletes, and a door pins before it reads (2026-11-18)
 
-**Status:** proposed. The model-first step of a redesign of what protects a reclaim's deletes
-([ADR 0243](0243-a-tables-pass-deletes-nothing-a-door-answered-for.md)). No production code changed: the model, its
-configs and the measurements below are the evidence the code would be written to. **It carries one product decision for
-the owner (§9).** `specs/maintenance/TablePass.tla` stays the model of the code until the code changes.
+**Status:** accepted (2026-11-18), and implemented: it supersedes what [ADR 0243](0243-a-tables-pass-deletes-nothing-a-door-answered-for.md)
+built to protect a reclaim's deletes, which is deleted (§13). `specs/maintenance/Reclaim.tla` is the model of the code;
+`TablePass.tla` and its 22 configs are deleted. **It carries one product decision, taken for now and the owner's to
+overturn (§9).** §1 to §12 are the step that checked the design before the code; §13 says what the code changed in it
+and what was measured after.
 
 ## Context
 
@@ -14,7 +15,7 @@ review rounds each found reproduced blocking defects, 17 of the 23 later ones in
 alternative this ADR checks replaces all of them with two write-then-read orders on records nobody but the catalog
 writes, so that no lease, renewal or clock enters the argument for what a reclaim may delete.
 
-## Decision (proposed)
+## Decision
 
 ### 1. The design as the model has it
 
@@ -242,6 +243,12 @@ answer; under this design it answers 200 at once and promises every version not 
 versions that die are the same either way (a batch in flight finishes, ADR 0243 §12 F4's bound); what changes is the
 promise's wording and that a hold is never refused.
 
+**Taken for now (2026-11-18), the owner's to overturn.** Every policy set and delete, at the table, a namespace and the
+project, answers 200 at once with `condemned`, a list of `{table, branch, version}` read after its write: the versions
+already condemned of the tables the level governs, which a batch in flight may still delete (at most one batch of 16 per
+reclaim past its policy read, plus what `version/delete` or a dead batch condemned). A hold keeps every other version.
+A describe and a listing carry no `condemned`. A rename answers the spec's `RenameTableResponse` and names nothing.
+
 ### 10. What the model changed in the proposal it started from
 
 The analysis's scratch model (`Tomb`, condemn first, pin first) is refined where the model or a measurement required:
@@ -279,18 +286,128 @@ The analysis's scratch model (`Tomb`, condemn first, pin first) is refined where
 support B1 and B2 on RustFS 1.0.3 and pylance 13.0.0, and the erasure's interplay is closed by keeping four fence kinds
 and pinning the release's recreate points. Code follows only after the owner's decision of §9.
 
+### 13. What the code changed in the design, and what it deleted (2026-11-18)
+
+Implemented as modelled: one record per table (`lakehouse.condemned_versions`, `_condemned/table-<digest>.json`, a
+conditional rewrite of at most 32 rounds), one batch function (`Batch.condemn`, `read_pins`, `promote`, and
+`reclaim`), which every reclaim goes through (a pass through the catalog's `maintenance/condemn`, the catalog's
+`maintenance/run`, an erasure's verification and its release in process, `catalog.services.reclaims`), one pin
+protocol (`dataplane.require_whole`, `clone_sources.take`, the release's recreate points). Where the code forced a
+change, the model was changed first or the change is one the model already covers:
+
+1. **`base_reclaim` is in `Reclaim.tla`** (`RBase`, `RBDel`: the table's data directory listed after the cleanup, less
+   what every standing manifest names, a file `b` only version 1 names), moved from `TablePass.tla`, which is deleted.
+   Every gate config holds with it (`scripts/tla_check.sh Reclaim`: `Reclaim.cfg` 149,943 states, `ReclaimRelease.cfg`
+   792,006, `ReclaimBranchesTag.cfg` 519,575, `ReclaimTwo.cfg` 519,447) and every must-fail config fails as it did. What
+   `TablePass.tla` proved that `Reclaim.tla` did not: the writer in flight (A2) is `ReclaimWriter.cfg` and
+   `ReclaimWriterOutlivesAge.cfg`; a hold at any level is `RLevel`; the catalog's commit-time stamp was modelled by
+   neither (both let `Age` move any version at any time, which over-approximates every clock), and stays measured
+   (ADR 0243 §10).
+2. **`maintenance/run` reclaims in process, as before, through the one batch function**; it does not enqueue a pass. The
+   catalog holds no publish right on `maintenance.*` (the chart's NATS users), and the chart is not this change's to
+   edit. A reclaimer is a reclaimer in the model, whichever process it runs in. The catalog's in-process reclaims delete
+   under its own identity: the per-batch store sessions are deleted, since no lease is left for a session to die with.
+3. **`version/delete` only condemns** (§1), and its versions are finished by the table's next reclaim: its next pass
+   (a commit's follow-up, or the recheck, `MAINTENANCE_RECHECK_HOURS`, 24) or `maintenance/run`. A pass asks the
+   catalog for a batch when its victims meet the threshold, when the table's record stands (one listing of its key under
+   maintenance's own session, which may list the control root and read none of it), or when a dead door's pin waits.
+4. **A dead door's pin is swept (A3' adopted, `ReclaimSweep.cfg`)**: a batch deletes a pin older than `PIN_LIFETIME`
+   (24 h) by the tag's `created_at`, and a door refuses to act once `DOOR_DEADLINE` (12 h) has passed since its pin by
+   its own monotonic clock (503, retryable), so a swept pin's door can no longer act unless two catalog pods' clocks
+   disagree by 12 hours. Counted (`lance.reclaim.pins_swept`). Without the sweep, a dead door's pin on a version no
+   batch condemned would keep that version for good and need a hand to clear it.
+5. **A fork point an erasure took stays condemned while its branch stands**, and is not re-condemned by every batch of
+   its ref (`Batch.condemn` leaves it out of a batch's finish, `forks=True` alone names one): Lance keeps its manifest
+   whatever a cleanup is asked. The model's `RBegin` finishes it too, to no effect (`RDecide` keeps a fork's manifest).
+6. **The promise of a policy answer is about holds**: a set or delete that changes only retention binds the batches that
+   condemn after it, and a batch already past its policy read finishes under the earlier retention; `RetentionKept` is
+   about holds alone. A rename's answer is the spec's `RenameTableResponse`, which names no version: in the model a
+   rename's answer is a hold door's, whose promise holds in every config, and the code answers less.
+7. **An erasure's reclaims read the hold.** Before, an erasure's verification and release reclaimed whatever a
+   maintenance hold said; under §1 every reclaim reads it, so a held table's `history:<ref>` surface fails, naming the
+   hold, and its obligation stays open until the hold is lifted.
+8. **The condemned record is not backed up** by the control-root backup: its job's store policy names the prefixes it
+   reads (the chart), which this change does not edit. A restored control root starts with no record; a version a dead
+   batch left half removed is then unnamed until the next reclaim of its ref condemns it again. A follow-up names the
+   prefix in the chart's backup policy.
+9. **The maintain vend's policy fits every catalog-made shape**: 912 characters at two 63-character buckets, 1,142 with
+   a 75-character KMS key ARN (measured with `vending.counted_length`, 2026-11-18). The registration check stays for a
+   control root key prefix past about 900 characters or a KMS key id past about 450 (deployment configuration, not a
+   warehouse's); the register door's check stays, since a location of nine 60-character segments is 2,679 characters
+   and two data directories with a KMS key 2,077. The `HOLD` cap on a maintain vend (900 s) stays as hygiene, a
+   short-lived credential; nothing a reclaim deletes rests on it.
+
+**Deleted**: `lakehouse.policy_fences`, `lakehouse.reclaim_marks` (the victims and fork marks, their trust, judging and
+endings), `catalog.services.catalog_reclaims` (the holds, the per-batch sessions), the history fence's RECLAIM kind and
+its two mark kinds, a fence take's intent and `Hold.confirm_unchallenged`, the policy doors' fences and the rename's,
+the pass's mark probe, its re-read of the policy and the chain under holds (`PolicyRead`, `chain_now`,
+`_policy_changed`, `_history_held`), the maintain vend's grants on the history fence and the policy fences,
+`maintenance.reclaims.mark_oldest` and `MaintenanceReclaimMarkStale`, the held-back reasons `history_fenced`,
+`policy_fenced`, `policy_changed` and `marked`, `specs/maintenance/TablePass.tla` and its 22 configs.
+
+**Written**: `lakehouse.condemned_versions`, `catalog.services.reclaims`, the `maintenance/condemn` door
+(`can_vend_maintain`), `DoorTable.pin_whole` and `DoorTable.condemned`, `dataplane.Pins`, the release's pins, the
+policy answers' `condemned`, `version/list`'s filter, the tag doors' refusal of the pin prefix,
+`maintenance.reclaims.condemned` and `MaintenanceCondemnedVersionsStanding`, `held_back{reason="condemned"}`.
+
+**Each rule's test, and its reversal** (`tests/integration/test_a_reclaim_condemns_before_it_deletes.py` unless named;
+each case on moto and on the pinned RustFS 1.0.3 of `make lifecycle-rustfs-check`, pylance 13.0.0; the reversal applied
+to the code, the case run, the code restored):
+
+| Rule | Test | Reversal | Result |
+| --- | --- | --- | --- |
+| CondemnFirst | `test_a_ref_answered_200_beside_a_reclaims_deletes_names_a_whole_version` (tag, restore, branch, clone) | the batch writes no entry before the cleanup | 8 of 8 fail: each door answers 200 on a version whose data file is gone |
+| PinFirst | `test_a_door_that_read_the_record_before_a_batch_condemned_keeps_its_version` (tag, branch) | the door reads the record, then pins | 4 of 4 fail, as above |
+| KeepAfterDelete, GCOnlyGone | `test_a_version_whose_deletes_the_store_refused_stays_condemned_until_the_next_reclaim_finishes_it` | a rewrite drops `g` entries | 2 of 2 fail: a tag lands on a half-removed version |
+| GoUnpins | `test_a_dead_doors_pin_on_a_go_version_is_deleted_and_the_version_finished` | no pin on a `g` version deleted | 2 of 2 fail |
+| A3' | `test_a_dead_doors_pin_past_its_lifetime_is_swept` | no sweep | 2 of 2 fail |
+| PolicyAfterCondemn | `test_a_hold_answered_beside_a_reclaim_keeps_every_version_it_did_not_name` | the policy read before the condemn | the 6 cases held after the policy read fail; the 4 held before it pass, as they must (the batch reads the hold either way) |
+| HoldWritesFirst | `test_a_hold_door_writes_before_it_reads` | the door reads, then writes | 2 of 2 fail |
+| IdentityKeys | `test_entries_are_keyed_by_the_branchs_incarnation` | entries keyed by the branch's name | 2 of 2 fail |
+| A fork point stays condemned | `test_an_erasures_fork_point_stays_condemned_while_a_branch_keeps_it` (tag, restore) | the batch drops its fork entries as it licenses them | 4 of 4 fail |
+| ReleasePins | `services/catalog/tests/test_erasure_releases_a_pinning_branch_after_its_notice.py::test_a_release_pins_where_its_branches_come_back_before_its_first_delete` (local) | the release pins nothing | 1 of 1 fails |
+| B2 (no caller pin) | `test_a_caller_neither_plants_nor_lifts_a_pin` | the tag door takes the pin prefix | 2 of 2 fail |
+| B2 (no vend pin or entry) | `test_no_vended_credential_writes_a_pin_or_the_condemned_record.py` (RustFS only) | none: the store's answer | both tiers AccessDenied on every write |
+
+GoOnly and ExplicitPins are not shown failing on Lance: pylance 13.0.0's cleanup reads the tags before it lists the
+manifests (§5), so a pin that lands after the batch's read is honoured by Lance itself. They are the model's
+(`ReclaimTagsFirst.cfg` and the must-fail configs), and the code keeps them for a store or a Lance that reads the other
+way round.
+
+**Requests and latency, measured after** (RustFS 1.0.3 as a process, through `tests/integration/store_requests.py`, the
+real catalog app and the real pass, five rounds each, 2026-11-18; "before" is the parent commit's code, run by the same
+scratch test):
+
+| Operation | Before: requests, median | After: requests, median |
+| --- | --- | --- |
+| tag create | 27, 664 ms | 33 to 34, 772 ms (the pin's put, its listing and its delete, the record's read) |
+| restore | 64 to 65, 1,452 ms | 70 to 71, 1,564 ms |
+| `version/delete` of one version | 89 to 126 (it deleted), 2,727 ms | 28 to 40 (it condemns), 866 ms; with the `maintenance/run` that finishes it, 109 to 166, 3,106 ms |
+| policy set (table) | 22, 646 ms | 17, 534 ms |
+| a pass of the table, one version due | 159 to 237, 4,732 ms | 128 to 193, 3,511 ms |
+
+A pass's requests grow with the versions it lists, round by round, in both columns.
+
+**Counts.** Lines against the parent commit, this ADR's section included: about 3,430 added and 4,610 removed in all
+(net about -1,180); production Python 1,707 and 2,007 (net -300); tests 1,076 and 1,574 (net -498); `specs/` 60 and 839
+(net -779); the generated OpenAPI, operation table, client and port ledger 357 and 48. Collected offline tests: 3,965 before, 3,948 after (-17). Record kinds: the policy fences, the
+victims mark and the fork mark go (3), the condemned record comes (1). Guards: a fence take's intent and challenger,
+`confirm_unchallenged`, the policy doors' and the rename's fences, the pass's mark probe and its policy re-read go; the
+batch, the pin before a ref door's read and the tag doors' pin-prefix refusal come. Model configs: `TablePass.tla`'s 22
+go and no config is added. Alerts: `MaintenanceReclaimMarkStale` goes and `MaintenanceCondemnedVersionsStanding` comes.
+
 ## The four facts
 
 - **GitOps**: met; no new chart value.
 - **Cloud native**: met; every exclusion is a record or a tag on the store any replica reads.
 - **Lance-namespace/table-idiomatic**: improved. `version/delete` does what the spec says; a pin is a Lance tag; cleanup
   is restricted by its documented `versions`.
-- **Zero trust**: improved. The maintain vend reaches nothing on the control root and its policy shrinks from 1,964 to 701
-  characters; no vend can write under `_refs/` (measured); no clock enters what a reclaim may delete.
+- **Zero trust**: improved. The maintain vend reaches nothing on the control root and its policy shrinks from 1,964 to 912
+  characters at two 63-character buckets (§13); no vend can write under `_refs/` (measured); no clock enters what a reclaim may delete.
 
 ## Not modelled
 
-`base_reclaim`, staged manifests and committed-file records (TablePass.tla checks `base_reclaim` under A2); a drop,
+Staged manifests and committed-file records; a drop,
 undrop and purge; the erasure's scheduling and notices beyond `CondemnedErasure.tla`'s overrides; the release taking a
 dead door's pin on a residual; two tags on one version; a branch whose own versions name its fork's files; a hold lifted;
 batches larger than the model's versions; Q2.

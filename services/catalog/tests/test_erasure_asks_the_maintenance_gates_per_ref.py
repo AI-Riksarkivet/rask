@@ -22,15 +22,15 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from unheld_batches import unheld
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
-from catalog.services.erasure import ErasureReport, no_sessions, ref_heads, verify
+from catalog.services.erasure import ErasureReport, ref_heads, verify
 from lakehouse import base_registry
-from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
 
 
@@ -63,10 +63,9 @@ def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path
         predicate=_PREDICATE,
         retention=timedelta(0),
         trusted=recorded,
-        history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
+        condemn=unheld(f"{uri}-control", f"erased-{uri.rsplit('/', 1)[-1]}", uri),
         derived=list,
         before_untag=lambda _tags: None,
-        sessions=no_sessions,
     )
 
     history = {s.surface: (s.outcome, s.detail) for s in report.surfaces if s.surface.startswith("history:")}
@@ -78,38 +77,6 @@ def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path
 def _versions(uri: str) -> dict[str, list[int]]:
     """Each ref's retained versions."""
     return {ref: [int(v["version"]) for v in lance.dataset(uri).checkout_version((ref, None)).versions()] for ref in ("main", "work")}
-
-
-def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
-    """Lance reads the refs once per reclaim, so a tag or branch written meanwhile could pin a version it deletes; the
-    verification reclaims no ref, says so per ref, and leaves the obligation open for the next verification."""
-    uri = str(tmp_path / "subjects")
-    lance.write_dataset(_rows("alice", "bob"), uri, data_storage_version="2.2", enable_stable_row_ids=True)
-    lance.dataset(uri).create_branch("work")
-    recorded = ref_heads(lance.dataset(uri))
-    erasure_job(uri, _PREDICATE).run()
-    versions = _versions(uri)
-    history = TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid="0b5d8a8c-2f6e-4d1a-9c3b-7e1f0a2d4c6b")
-    history.take(HistoryWork.REFS)
-
-    report = verify(
-        lance.dataset(uri),
-        storage_options=StorageOptions(),
-        reopen=lambda: lance.dataset(uri),
-        table="t",
-        predicate=_PREDICATE,
-        retention=timedelta(0),
-        trusted=recorded,
-        history=history,
-        derived=list,
-        before_untag=lambda _tags: None,
-        sessions=no_sessions,
-    )
-
-    outcomes = {s.surface: s.outcome for s in report.surfaces if s.surface.startswith("history:")}
-    assert outcomes == {"history:main": "failed", "history:work": "failed"}, report.surfaces
-    assert _versions(uri) == versions, "a reclaim ran while a ref write held the history"
-    assert report.settled is False
 
 
 def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

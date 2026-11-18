@@ -57,7 +57,15 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask
-from tests.integration.maintenance_vend_doors import CATALOG_URL, MAINTAIN_TIER_DOOR, VENDED, described_by, maintain_tier_door
+from tests.integration.maintenance_vend_doors import (
+    CATALOG_URL,
+    MAINTAIN_TIER_DOOR,
+    MAINTAINER_DOOR,
+    VENDED,
+    described_by,
+    forwarded_to,
+    maintain_tier_door,
+)
 
 
 _TABLE_ID: list[str] = ["lance_catalog", "db", "t"]
@@ -414,10 +422,13 @@ def _refused(_location: str) -> httpx.Response:
 
 
 @contextmanager
-def _maintain_door_answering(*answers: httpx.Response) -> Generator[respx.MockRouter]:
-    """The maintain-tier door answering each ask in turn: the expiry's, then the forget's."""
+def _maintain_door_answering(catalog: httpx.Client, *answers: httpx.Response) -> Generator[respx.MockRouter]:
+    """The maintain-tier door answering each ask in turn: the expiry's, then the forget's; the reclaim batches are the
+    real catalog's (ADR 0246)."""
     with respx.mock() as router:
         router.post(url__regex=MAINTAIN_TIER_DOOR, params={"tier": "maintain"}).mock(side_effect=list(answers))
+        router.post(url__regex=MAINTAINER_DOOR).mock(side_effect=forwarded_to(catalog))
+        router.route().pass_through()
         yield router
 
 
@@ -444,7 +455,7 @@ def test_a_record_is_forgotten_once_no_retained_version_names_its_files(
     assert create is not None and overwrite is not None, "precondition: each version names its transaction"
     transactions = {"create": create.uuid, "overwrite": overwrite.uuid}
 
-    passed = estate.passed(location, reclaiming=True, door=_maintain_door_answering(_vended(location), forget_answer(location)))
+    passed = estate.passed(location, reclaiming=True, door=_maintain_door_answering(estate.client, _vended(location), forget_answer(location)))
 
     assert (passed.overwritten_files, (passed.refused_by, passed.refused_table_id), estate.recorded()) == (
         [],

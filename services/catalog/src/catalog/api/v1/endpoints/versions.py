@@ -19,6 +19,7 @@ from lance_namespace import (
     BatchCreateTableVersionsResponse,
     BatchDeleteTableVersionsRequest,
     BatchDeleteTableVersionsResponse,
+    ConcurrentModificationError,
     CreateTableVersionRequest,
     CreateTableVersionResponse,
     DescribeTableVersionRequest,
@@ -26,6 +27,8 @@ from lance_namespace import (
     InvalidInputError,
     ListTableVersionsRequest,
     ListTableVersionsResponse,
+    ServiceUnavailableError,
+    TableBranchNotFoundError,
     UnsupportedOperationError,
 )
 
@@ -38,8 +41,6 @@ from catalog.api.dependencies import (
     ResolverDep,
     SettingsDep,
     StorageOptionsDep,
-    VendorDep,
-    ancestor_uuids,
 )
 from catalog.api.pagination import ListLimit, paginate_versions
 from catalog.api.security import CurrentToken, current_subject
@@ -47,10 +48,9 @@ from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.vending import CredentialVendor
-from catalog.services import catalog_reclaims, committed_files, dataplane, maintenance, managed_versions, table_inputs
+from catalog.services import committed_files, dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
-from lakehouse import branch_layout, commit_records, commit_turns, stored_objects
+from lakehouse import commit_records, commit_turns, condemned_versions, records
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.storage_options import StorageOptions
@@ -164,6 +164,9 @@ def list_table_versions(
     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
     listings — and the cursor is this layer's. The full list is what the backend returns unbounded
     (measured: no limit gives all seven), and `ListLimit` still bounds what leaves the door.
+
+    A CONDEMNED VERSION IS NOT LISTED (ADR 0246): its record was deleted by ``version/delete``, or a reclaim may be
+    deleting its files, and no door will name it again. A record that cannot be read answers 503 rather than list one.
     """
     req = ListTableVersionsRequest(
         id=parse_identifier(id),
@@ -177,7 +180,11 @@ def list_table_versions(
     # The backend reports a branch the table lacks as a missing table; opening the ref answers the spec's 22 ([[LH-406]]).
     table.open_unchecked(so, branch=dataplane.recorded_branch(branch))
     answer = table.read_natively("list_table_versions", req)
-    rows = list(answer.versions or [])
+    try:
+        condemned = table.condemned(table.open_unchecked(so), dataplane.recorded_branch(branch))
+    except OSError as exc:
+        raise ServiceUnavailableError(f"the table's condemned versions could not be read, so its versions are not listed: {exc}"[:600]) from exc
+    rows = [row for row in answer.versions or [] if row.version not in condemned]
     by_version = {row.version: row for row in rows}
     try:
         page, next_token = paginate_versions(list(by_version), page_token, limit, descending=bool(descending))
@@ -393,50 +400,53 @@ async def batch_delete_table_versions(
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
-    resolver: ResolverDep,
-    vendor: VendorDep,
 ) -> BatchDeleteTableVersionsResponse:
-    """Delete old versions of this table — never the current one, and never one a tag or a branch pins.
+    """Delete the version records of old versions of this table — never the current one, and never one a tag or a
+    branch pins.
 
-    ``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for "through the
-    latest". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:
-    Lance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again
-    by the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a
-    child branch pins is refused (409), naming the pin. Every range is judged before anything is
-    deleted, and ``branch`` scopes the delete to that ref's own history.
+    The spec's operation (``lance_docs/ns_catalog/spec.yaml``, BatchDeleteTableVersions: "deletes version tracking
+    records, NOT the actual table data"): each version named is CONDEMNED (ADR 0246), which ``version/list`` leaves out
+    and every tag, branch, restore and clone door refuses (409, code 19) from this answer on, and nothing is deleted
+    here; the next reclaim of the ref (a maintenance pass, ``maintenance/run``) deletes its files, unless a hold at a level
+    that can govern the table keeps them, which lifting is a separate, audited act at a policy door. ``deleted_count`` is
+    how many records it condemned.
 
-    Owner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which
-    no retention judges and deletion protection does not guard (protection guards dropping the table, not its history,
-    ADR 0150). A version that must survive is tagged. A HOLD IS JUDGED (ADR 0243 §8): while ``cleanup_enabled`` is false at
-    any level that can govern the table (its own policy, a namespace's above it, its project's) the delete answers 409
-    InvalidTableState (19), since lifting the hold is a separate, audited act at a policy door. It is held as a
-    maintenance pass is (``catalog.services.catalog_reclaims``): the table's history and each level's policy fence, its
-    targets marked before the first delete, every hold confirmed before each cleanup call; a ref write or a policy write
-    holding a fence answers 409 ConcurrentModification (14). Each cleanup call deletes under a session minted for it
-    before its confirm (ADR 0243 R5), and a delete the store refused answers 503 ServiceUnavailable, naming how many, its
-    versions marked for the next delete (R3).
+    ``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for "through the latest". A range
+    that reaches the current version is refused (400), the spec's ``{0, -1}`` included: Lance commits by
+    put-if-not-exists on the next number, so a deleted latest manifest is minted again by the next write and a pinned
+    ``(table, version)`` would name different rows. A version a tag or a child branch pins is refused (409), naming the
+    pin. Every range is judged before anything is condemned, and ``branch`` scopes the delete to that ref's own history.
+
+    Owner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which no
+    retention judges and deletion protection does not guard (protection guards dropping the table, not its history, ADR
+    0150). A version that must survive is tagged.
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    namespace_uuids = await ancestor_uuids(resolver, table.resolved.segments)
-    return await run_in_threadpool(partial(_delete_versions, table, so, body, settings=settings, namespace_uuids=namespace_uuids, vendor=vendor))
+    return await run_in_threadpool(partial(_delete_versions, table, so, body, settings=settings))
 
 
-def _delete_versions(
-    table: DoorTable, so: StorageOptions, body: BatchDeleteTableVersionsRequest, *, settings: Settings, namespace_uuids: list[str], vendor: CredentialVendor
-) -> BatchDeleteTableVersionsResponse:
+def _delete_versions(table: DoorTable, so: StorageOptions, body: BatchDeleteTableVersionsRequest, *, settings: Settings) -> BatchDeleteTableVersionsResponse:
     ds = table.open_unchecked(so, branch=body.branch)
+    main = table.open_unchecked(so)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
-    # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
-    # version this deletes. A ref write holding it answers this request 409.
-    # [[LH-232]] Each transaction file the cleanup removes is recorded; Lance records the rest itself.
-    with (
-        catalog_reclaims.held(table, settings, namespace_uuids=namespace_uuids) as held,
-        stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, body.branch), so),
-    ):
-        session = catalog_reclaims.sessions(vendor, settings, str(table.location))(body.branch)
-        marked = catalog_reclaims.marked(held, table, ref=body.branch, session=session)
-        deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, marked=marked)
-    return BatchDeleteTableVersionsResponse(deleted_count=deleted)
+
+    def condemn(versions: list[int]) -> list[int]:
+        try:
+            return condemned_versions.condemn_named(
+                settings.registry_root,
+                settings.storage_options(),
+                table_uuid=table.resolved.require_uuid(),
+                location=table.location,
+                dataset=main,
+                ref=body.branch,
+                versions=versions,
+            )
+        except condemned_versions.RefGoneError as exc:
+            raise TableBranchNotFoundError(str(exc)) from exc
+        except records.RecordChangedError as exc:
+            raise ConcurrentModificationError(f"the table's condemned versions kept changing; nothing was condemned, retry: {exc}") from exc
+        except OSError as exc:
+            raise ServiceUnavailableError(f"the table's condemned versions could not be read, so nothing was condemned: {exc}"[:600]) from exc
+
+    return BatchDeleteTableVersionsResponse(deleted_count=maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, condemn=condemn))

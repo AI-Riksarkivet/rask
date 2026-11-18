@@ -291,16 +291,18 @@ def test_creating_a_branch_that_already_exists_mints_BRANCH_ALREADY_EXISTS(table
         ("branches/create", lambda table: create_branch(table, StorageOptions(), CreateTableBranchRequest(id=TABLE_ID, name="fresh"))),
     ],
 )
-def test_a_ref_write_while_a_reclaim_holds_the_tables_history_mints_CONCURRENT_MODIFICATION(table: DoorTable, tmp_path: Path, door: str, call: _Call) -> None:
-    """Spec code 14, and no ref written: Lance's reclaim reads the refs once, so a ref written while it runs can name a
-    version it then deletes ([[LH-308]]). The caller retries once the reclaim ends."""
+def test_a_ref_write_while_an_erasures_release_holds_the_tables_history_mints_CONCURRENT_MODIFICATION(
+    table: DoorTable, tmp_path: Path, door: str, call: _Call
+) -> None:
+    """Spec code 14, and no ref written: an erasure's release takes every ref on a residual, so a ref written while it
+    runs could put one there after its plan (G1 of ``specs/catalog/Erasure.tla``). The caller retries once it ends."""
     dataset = table.open_unchecked(StorageOptions())
     refs = (dataset.tags.list(), dataset.branches.list())
-    TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table.resolved.require_uuid()).take(HistoryWork.RECLAIM)
+    TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table.resolved.require_uuid()).take(HistoryWork.RELEASE)
 
     with pytest.raises(ConcurrentModificationError) as caught:
         call(table)
 
-    assert caught.value.code == 14, f"{door} minted code {caught.value.code} while a reclaim held the history, not 14"
+    assert caught.value.code == 14, f"{door} minted code {caught.value.code} while a release held the history, not 14"
     reopened = table.open_unchecked(StorageOptions())
-    assert (reopened.tags.list(), reopened.branches.list()) == refs, f"{door} wrote a ref while a reclaim held the history"
+    assert (reopened.tags.list(), reopened.branches.list()) == refs, f"{door} wrote a ref while a release held the history"

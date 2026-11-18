@@ -15,17 +15,22 @@ from __future__ import annotations
 import logging
 from functools import partial
 
+import anyio.from_thread
 import lance
 from fastapi.concurrency import run_in_threadpool
+from lance_namespace import LanceNamespace
 from pydantic import BaseModel
 
+from catalog.api.dependencies import namespace_for_table
 from catalog.api.ticks import Tick
 from catalog.core.config import fresh_lance_session
-from catalog.core.vending import vendor_for
-from catalog.services import catalog_reclaims, erasure_release, table_claims
+from catalog.core.namespace import NO_WAREHOUSE
+from catalog.services import erasure_release, reclaims, table_claims
+from catalog.services.erasure import Condemner
 from lakehouse.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimStore
+from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.storage_options import StorageOptions
 
 
@@ -53,7 +58,7 @@ async def tick(ctx: Tick) -> ErasureReleaseTick:
         now=ctx.clock(),
         open_location=partial(_open, storage_options=ctx.storage_options),
         table_options=ctx.storage_options,
-        sessions_at=partial(catalog_reclaims.sessions, vendor_for(settings), settings),
+        condemn_at=partial(_condemners, ctx),
     )
     claims = table_claims.claim_store(settings)
     changes = released.changes
@@ -74,6 +79,32 @@ async def tick(ctx: Tick) -> ErasureReleaseTick:
         await ctx.control.emit(notice)
     log.info("erasure_release_tick", extra={"changed": len(changes), "held_notices": len(released.notices)})
     return ErasureReleaseTick(changed=len(changes))
+
+
+def _namespace_of(ctx: Tick, segments: list[str]) -> LanceNamespace:
+    """The connection the table ``segments`` names lives in, resolved as a door resolves it, from the tick's thread; the
+    one that holds nothing where it cannot be, under which a batch keeps the whole table (``Governance.held_by``)."""
+    try:
+        return anyio.from_thread.run(namespace_for_table, ctx.request, ctx.settings, segments)
+    except Exception as exc:  # noqa: BLE001 — no connection names no namespace, which keeps the table whole
+        log.warning("erasure_release_namespace_unread", extra={"table": segments, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        return NO_WAREHOUSE
+
+
+def _condemners(ctx: Tick, record: erasure_release.ReleaseRecord, main: lance.LanceDataset) -> Condemner:
+    """How the release of ``record`` asks the catalog for each batch of its reclaim (ADR 0246): the policy along the
+    table's chain read through its warehouse's connection."""
+    settings = ctx.settings
+    so = settings.storage_options()
+    governance = reclaims.Governance(
+        registry_root=settings.registry_root,
+        storage_options=so,
+        claims=table_claims.claim_store(settings),
+        location=record.location,
+        table_uuid=record.table_uuid,
+        namespace=_namespace_of(ctx, record.table.split(CATALOG_DELIMITER)),
+    )
+    return reclaims.condemners(governance, settings.registry_root, so, main)
 
 
 def _named_now(claims: ClaimStore, change: erasure_release.RefChange) -> str:

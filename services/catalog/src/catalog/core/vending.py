@@ -42,7 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
-from lakehouse import file_identities, history_fences, policy_fences, store_session
+from lakehouse import file_identities, store_session
 from lakehouse.base_refs import decoded_path, location_within, normalise
 from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
@@ -73,8 +73,8 @@ _VENDED_NOTHING: Final = "no credential was vended"
 #:   (data, transaction, deletion and index files, and a staged manifest), never a final manifest, a ref, a
 #:   delete or a put over a file a commit added (ADR 0242). The catalog commits the version.
 #: * ``maintain`` — the maintenance identity's reclaim (``can_vend_maintain``): get and delete anywhere in the prefix but
-#:   its refs, because cleanup deletes versions and what only they reference, and the table's own records a reclaim
-#:   writes on the control root (:class:`TableRecords`). It puts nothing of the table: the commits maintenance makes are
+#:   its refs, because cleanup deletes versions and what only they reference, and the records of its committed files
+#:   (:class:`TableRecords`). It puts nothing of the table: the commits maintenance makes are
 #:   the catalog's, at its maintainer doors ([[LH-575]]).
 #:
 #: The vocabulary a vend door's ``tier`` query accepts, so it names no tier a door must never vend.
@@ -167,32 +167,14 @@ class VendedSession(BaseModel):
         )
 
 
-#: A holder's token in its object's name, as IAM matches it: one ``?`` per character of the 32-hex id a take mints
-#: (:class:`lakehouse.fences.HolderFence`), so the grant reaches names of a holder's length only.
-_HOLDER_TOKEN: Final = "?" * 32
-
-
 class TableRecords(BaseModel):
-    """Where one table's records are kept on the control root, which its maintain-tier vend may write ([[LH-219]]).
+    """Where one table's records are kept on the control root, which its maintain-tier vend may reach ([[LH-219]]).
 
-    Maintenance signs every write of a reclaim with the table's vend, so the vend reaches the table's history fence
-    (:mod:`lakehouse.history_fences`) and the records of its committed files, to get and delete
-    (:mod:`lakehouse.file_identities`). It never puts one of those: a holder that could would record a replaced file as
-    the one committed. No other record on the control root, and none of another table.
-
-    THE FENCE'S DIRECTORY, AND OF IT ONLY KEYS SHAPED AS A RECLAIM'S HOLDER ARE WRITTEN. A take lists the table's fence
-    directory and reads the holders it judges, then creates its own holder object, renews it and deletes it
-    (:class:`lakehouse.fences.HolderFence`): the vend lists exactly that directory, gets every object in it, and puts and
-    deletes every key ``<directory>/reclaim-<32 characters>.json``, the one kind maintenance takes. An IAM ``?`` matches any
-    one character, a ``/`` included, so the grant also reaches a 32-character name holding a slash, below a subdirectory
-    (``reclaim-<15>/<16>.json``), and any body: no name the fence defines fits below one (a holder's name is at least 38
-    characters, a mark's 48), and a take judges only names directly in the directory, a holder's kind by its key, so what
-    the vend can plant is at most a reclaim's hold on its own table for one hold, swept after (``HolderFence._excluding``).
-    It cannot put, rewrite or remove a ref writer's or a release's hold, nor an erasure release's mark
-    (``erasure_release``), so a compromised maintenance pod cannot admit its reclaim beside a ref write or hide a scheduled
-    release from a ref's writer; a lapsed holder of another kind it meets is left to the catalog's next take, which sweeps
-    it. Measured on RustFS 1.0.3 with a non-root user's AssumeRole and this session policy (ADR 0233 §9): ``?`` is enforced
-    there, a 31-character name and ``reclaim-x/erasure-release.<id>.json`` refused, a slash in a 32-character name taken.
+    Maintenance forgets the records of the files a table's commits added once no retained version needs them, signed by
+    the table's vend (:mod:`lakehouse.file_identities`): the vend gets and deletes those records, and never puts one (a
+    holder that could would record a replaced file as the one committed). No other record on the control root, and none of
+    another table: a reclaim's condemned versions, its pins and the table's history fence are the catalog's own to write
+    (ADR 0246), so the vend reaches none of them.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -201,57 +183,17 @@ class TableRecords(BaseModel):
     control_root: str
     #: The uuid the catalog minted for the table, which keys every record kept for it (ADR 0173 §8).
     table_uuid: str
-    #: The table's warehouse, its name's first segment, beneath whose directory the policy fence of every namespace of its
-    #: chain lies (``lakehouse.policy_fences.warehouse_directory``); ``None`` grants no namespace's.
-    warehouse: str | None = None
-    #: The project whose policy may govern the table, whose policy fence a pass holds too; ``None`` grants none.
-    project: str | None = None
 
     def maintain_statements(self) -> list[dict[str, object]]:
-        """The policy statements granting what a maintain-tier vend writes of these records.
-
-        THE CLEANUP'S MARK (:mod:`lakehouse.reclaim_marks`) is put and deleted at ``<fence>/reclaim.<32>.json``, a
-        reclaim's holder at ``<fence>/reclaim-<32>.json``, both by one grant, ``<fence>/reclaim?<32 ?>.json``: what it
-        reaches beyond the two is a name of their length below a subdirectory or with another separator, which no take
-        judges (a holder's name needs the ``-``, a mark's the ``.``) and the catalog's next take sweeps once it has stood a
-        hold; ``reclaim-x/erasure-release.<id>.json`` and every longer name stay refused (F8).
-
-        THE POLICY FENCES (ADR 0243 §6): every policy fence is listed and read (who holds one, never a policy or a secret),
-        and written only beneath the directory of the namespace fences of the table's own warehouse and its own project's
-        fence, under a name ending ``/reclaim-*.json``: a reclaim's holder, or a name below a subdirectory of a fence, which
-        no take judges and the catalog's next take sweeps once lapsed. A policy door's hold (``set-``), a policy, and every
-        other warehouse's and project's fence are the catalog's alone. Not each of the table's own levels exactly: an STS
-        session policy holds 2,048 characters (:data:`SESSION_POLICY_LIMIT`), and a grant of about 200 per level does not
-        fit a chain of three under a long bucket name, where these scopes cost the same at any depth (measured with
-        :func:`counted_length`: 249 characters under a 17-character control bucket, 387 under a 63-character one). The
-        statements carry no ``Sid``, which a store needs for nothing and which the limit counts.
+        """The policy statement granting what a maintain-tier vend does with these records. It carries no ``Sid``, which a
+        store needs for nothing and which the 2,048 characters a session policy holds count.
 
         Raises:
             ValueError: The control root is no S3 location, or it or the uuid holds IAM policy syntax.
         """
         _reject_iam_policy_syntax("table uuid", self.table_uuid)
         root = _policy_path(self.control_root, "control root")
-        bucket, _, root_key = root.partition("/")
-
-        def under(directory: str) -> str:
-            return "/".join(part for part in (root_key, directory) if part)
-
-        fence = under(history_fences.fence_directory(self.table_uuid))
-        listed, read, held = [f"{fence}/"], [f"{fence}/*"], [f"{fence}/{history_fences.HistoryWork.RECLAIM}?{_HOLDER_TOKEN}.json"]
-        reclaim = policy_fences.PolicyWork.RECLAIM
-        if self.warehouse is not None or self.project is not None:
-            # Listing and reading a policy fence tells its reader who holds it, never a policy or a secret, so every one is
-            # granted in one string; holding one is what is scoped.
-            listed.append(f"{under(policy_fences.PREFIX)}/*")
-            read.append(f"{under(policy_fences.PREFIX)}/*")
-        if self.warehouse is not None:
-            held.append(f"{under(policy_fences.warehouse_directory(self.warehouse))}/*/{reclaim}-*.json")
-        if self.project is not None:
-            held.append(f"{under(policy_fences.fence_directory('project', self.project))}/{reclaim}-*.json")
         return [
-            {"Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": f"arn:aws:s3:::{bucket}", "Condition": {"StringLike": {"s3:prefix": listed}}},
-            {"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"arn:aws:s3:::{bucket}/{key}" for key in read]},
-            {"Effect": "Allow", "Action": ["s3:PutObject", "s3:DeleteObject"], "Resource": [f"arn:aws:s3:::{bucket}/{key}" for key in held]},
             {
                 "Effect": "Allow",
                 "Action": ["s3:GetObject", "s3:DeleteObject"],
@@ -401,28 +343,29 @@ _MADE_TABLE_PREFIX: Final = "00000000-0000-0000-0000-000000000000"
 
 
 def require_a_maintain_policy_that_fits(*, bucket: str, control_root: str, kms_key: str | None, warehouse: str, project: str) -> None:
-    """Refuse a warehouse on ``bucket`` whose tables' maintain-tier session policy STS would refuse (F8, ADR 0243 §7.2).
+    """Refuse a warehouse of ``project`` on ``bucket`` whose tables' maintain-tier session policy STS would refuse.
 
     A pass of a table deletes only under its table's maintain-tier vend, so a warehouse whose vend cannot be minted is one
-    whose passes reclaim nothing, for good. Measured with :func:`counted_length` (2026-11-18): a catalog-made table's
-    maintain policy is 1,964 characters when the warehouse's bucket and the control root's are both 63 characters, the
-    longest S3 allows, with no KMS key, so every such warehouse fits with 84 to spare; what can still push one past is a
-    KMS key's grant (about 150 characters and the key's ARN) or a control root holding a key prefix, which this refuses
-    at registration, before any table is made, naming the limit. A table registered at a deeper location is refused its
-    vend alone, 400 SessionPolicyTooLong, as a long branch name is.
+    whose passes reclaim nothing, for good. Measured with :func:`counted_length` (2026-11-18, ADR 0246): a catalog-made
+    table's maintain policy is 912 characters when the warehouse's bucket and the control root's are both 63 characters,
+    the longest S3 allows, and 1,142 with a 75-character KMS key ARN, since the vend reaches no record on the control root
+    but its committed files'. What can still push it past 2,048 is the deployment's own configuration, a control root
+    holding a key prefix of about 900 characters or a KMS key id of about 450, which this refuses at registration, before
+    any table is made, naming the limit. A table registered at a deeper location, or declaring data directories, is judged
+    at its register door (:func:`require_a_table_maintain_policy_that_fits`).
 
     Raises:
         InvalidInputError: The policy would be past :data:`SESSION_POLICY_LIMIT` (400, code 13).
     """
     if not control_root.startswith("s3://"):
         return
-    records = TableRecords(control_root=control_root, table_uuid=_MADE_TABLE_PREFIX, warehouse=warehouse, project=project)
+    records = TableRecords(control_root=control_root, table_uuid=_MADE_TABLE_PREFIX)
     counted = counted_length(build_session_policy(bucket, _MADE_TABLE_PREFIX, "maintain", records=records, kms_key=kms_key))
     if counted > SESSION_POLICY_LIMIT:
         raise InvalidInputError(
-            f"warehouse {warehouse!r} on bucket {bucket!r} would hold tables whose maintain-tier session policy is {counted} characters as a store "
-            f"counts it, past the {SESSION_POLICY_LIMIT:,} STS accepts, so maintenance could reclaim none of their history: a shorter bucket "
-            f"name ({len(bucket)} characters) fits, or the estate's control root ({len(control_root)}) or KMS key ({len(kms_key or '')}) shortened"
+            f"warehouse {warehouse!r} of project {project!r} on bucket {bucket!r} would hold tables whose maintain-tier session policy is {counted} "
+            f"characters as a store counts it, past the {SESSION_POLICY_LIMIT:,} STS accepts, so maintenance could reclaim none of their history: a "
+            f"shorter bucket name ({len(bucket)} characters) fits, or the estate's control root ({len(control_root)}) or KMS key ({len(kms_key or '')}) shortened"
         )
 
 
@@ -431,9 +374,9 @@ def require_a_table_maintain_policy_that_fits(location: str, *, bases: Sequence[
 
     NO SHAPE BOUND MAKES EVERY TABLE FIT. A registered table's location is a relative path of any depth the store keeps
     (``table_bases.require_registrable_location`` bounds its syntax, not its length), and its manifest may declare any
-    number of bases, each granted as a pair of statements of its own: measured with :func:`counted_length`, one base at two
-    63-character buckets costs about 440 characters, and a location 30 characters deeper than ``<bucket>/<uuid>`` 90, while
-    the catalog-made shape leaves 84 (:func:`require_a_maintain_policy_that_fits`). So the door that makes the shape refuses
+    number of bases, each granted as a pair of statements of its own: measured with :func:`counted_length` (2026-11-18, ADR
+    0246), each data directory under a 63-character bucket costs about 470 characters, so two past the catalog-made shape's
+    1,142 with a KMS key reach 2,077, and a location of nine 60-character segments alone 2,679. So the door that makes the shape refuses
     the one that would not fit, judged at its largest reading (every base granted, and as one the table reclaims in),
     before anything is attached, and a pass never meets a vend it can never be given.
 
@@ -1413,7 +1356,7 @@ class WebIdentityVendor:
 
 def vendor_for(settings: Settings) -> CredentialVendor:
     """The :class:`CredentialVendor` ``settings`` configure: the one the app serves its vend doors with, and the one a
-    reclaim outside a request mints each batch's session from (``catalog.services.catalog_reclaims``).
+    tick outside a request vends with.
 
     Raises:
         ValueError: ``web_identity`` mode without the catalog's identity.

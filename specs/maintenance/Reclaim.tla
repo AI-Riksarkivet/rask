@@ -1,11 +1,10 @@
 ---------------------------- MODULE Reclaim ----------------------------
 (***************************************************************************)
 (* What a reclaim may delete when it CONDEMNS FIRST and every door that    *)
-(* references a version PINS FIRST (ADR 0246, proposed). The design this   *)
-(* module checks replaces TablePass.tla's leases (the history fence's      *)
-(* RECLAIM holds, the policy fences and their intents, the victims and     *)
-(* fork marks, the credential capped to the hold): TablePass.tla stays     *)
-(* the model of the code until the code changes.                           *)
+(* references a version PINS FIRST (ADR 0246): the model of               *)
+(* lakehouse.condemned_versions, the catalog's batch door                 *)
+(* (catalog.services.reclaims), every ref door's pin and a pass's          *)
+(* deletes (maintenance.services.expiry, base_reclaim).                   *)
 (*                                                                         *)
 (* THE RECORD. A table carries one condemned-versions record on the        *)
 (* control root, written only by the catalog, by a conditional write       *)
@@ -50,6 +49,10 @@
 (*   RMan      its manifests; a version a standing branch is cut from      *)
 (*             keeps its manifest, and in an erasure's fork cleanup        *)
 (*             (ErasureFork) loses the files only it names (ADR 0243 R1)   *)
+(*   RBase     base_reclaim.unreferenced: the table's own data directory   *)
+(*             (Base, a plain base the root-scoped cleanup never touches,  *)
+(*             LH-286) listed, less what every standing manifest names     *)
+(*   RBDel     base_reclaim.reclaim's deletes, one at a time               *)
 (*                                                                         *)
 (* A REF DOOR (a tag create or update, a branch create, a restore, a      *)
 (* clone's source tag):                                                    *)
@@ -96,10 +99,13 @@
 (*       removes it. With no sweep, nothing is assumed: a dead door's pin   *)
 (*       keeps its version whole.                                          *)
 (*                                                                         *)
-(* NOT MODELLED: base_reclaim (it deletes only files no standing manifest  *)
-(* names, read after the cleanup, past the unverified age, which no door   *)
-(* brings back; TablePass.tla checks it under A2); the staged manifests    *)
-(* and committed-file records; a drop, undrop and purge (TableLifecycle);  *)
+(* NOT MODELLED: the staged manifests a pass removes, which no version      *)
+(* names, and the committed-file records it forgets, which govern no byte; *)
+(* a version expiring by the catalog's commit-time stamp (Age changes it   *)
+(* at any time, which over-approximates every clock, ADR 0243 §10); the    *)
+(* floor raise, a catalog commit like any writer's; a drop, undrop and     *)
+(* purge (TableLifecycle.tla: the purge deletes no registered table's      *)
+(* bytes, and a pass reads the trash again before it deletes);            *)
 (* the erasure's scheduling and notices (Erasure.tla, whose fence kinds    *)
 (* SCHEDULE, RELEASE, REFS and BRANCH stay: CondemnedErasure.tla checks    *)
 (* it with reclaims off the fence); two tags on one version; a batch of    *)
@@ -135,6 +141,8 @@ MaxOwn == 5
 \* A version is <<ref identity, number>>: main is "m"; a branch's incarnation is "b1" or "b2", numbered on from its fork.
 MainV(n) == <<"m", n>>
 Versions == {MainV(n) : n \in 1..MaxMain} \cup {<<i, n>> : i \in Incs, n \in 2..MaxOwn}
+\* "b" lies in one of the table's own data directories (a plain base, LH-286): Lance's root-scoped cleanup never deletes it.
+Base == {"b"}
 OwnFile(i, n) == i \o "_" \o ToString(n)
 
 VARIABLES manifests, names, files, mhead,
@@ -146,14 +154,15 @@ VARIABLES manifests, names, files, mhead,
           chosen,      \* the versions a reclaim chose past their retention, or version/delete named, or an erasure's fork cleanup took
           policy, answered,
           rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel,
+          bdel,        \* the base files a reclaim's base_reclaim listed to delete
           dpc, dv, dcond,
           wpc, relpc, relat,
           faults, badDelete, refusedWrong
 
 vars == <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, tomb, chosen, policy, answered,
-          rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, dpc, dv, dcond, wpc, relpc, relat,
+          rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, dpc, dv, dcond, wpc, relpc, relat,
           faults, badDelete, refusedWrong>>
-R == <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel>>
+R == <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel>>
 D == <<dpc, dv, dcond>>
 
 NoV == <<"none", 0>>
@@ -161,9 +170,9 @@ Proc == RefDoors \cup HoldDoors
 
 Init ==
   /\ manifests = {MainV(1), MainV(2)} \cup (IF InitBranch THEN {<<"b1", 2>>} ELSE {})
-  /\ names = [v \in Versions |-> CASE v = MainV(1) -> {"a", "s"} [] v = MainV(2) -> {"s", "c"}
+  /\ names = [v \in Versions |-> CASE v = MainV(1) -> {"a", "s", "b"} [] v = MainV(2) -> {"s", "c"}
                                        [] v[1] \in Incs -> {OwnFile(v[1], v[2])} [] OTHER -> {}]
-  /\ files = {"a", "s", "c"} \cup (IF InitBranch THEN {OwnFile("b1", 2)} ELSE {})
+  /\ files = {"a", "s", "c", "b"} \cup (IF InitBranch THEN {OwnFile("b1", 2)} ELSE {})
   /\ mhead = 2
   /\ binc = IF InitBranch THEN "b1" ELSE "none"
   /\ bfork = [i \in Incs |-> 1]
@@ -179,7 +188,7 @@ Init ==
   /\ rpc = [r \in Recl |-> "idle"] /\ rref = [r \in Recl |-> "m"] /\ rkind = [r \in Recl |-> "plain"]
   /\ rb = [r \in Recl |-> {}] /\ rfresh = [r \in Recl |-> {}] /\ rex = [r \in Recl |-> {}] /\ rgo = [r \in Recl |-> {}]
   /\ rheld = [r \in Recl |-> FALSE] /\ snapT = [r \in Recl |-> {}] /\ snapM = [r \in Recl |-> {}]
-  /\ del = [r \in Recl |-> {}] /\ mdel = [r \in Recl |-> {}]
+  /\ del = [r \in Recl |-> {}] /\ mdel = [r \in Recl |-> {}] /\ bdel = [r \in Recl |-> {}]
   /\ dpc = [d \in Proc \cup {"vdelete", "bdelete"} |-> IF d \in Doors THEN "idle" ELSE "done"]
   /\ dv = [d \in RefDoors |-> NoV]
   /\ dcond = [d \in HoldDoors |-> {}]
@@ -255,7 +264,7 @@ RBegin(r) ==
   /\ rex' = [rex EXCEPT ![r] = {}] /\ rgo' = [rgo EXCEPT ![r] = {}] /\ rheld' = [rheld EXCEPT ![r] = FALSE]
   \* Each batch has an id of its own: the entries an earlier batch of this reclaimer left are another batch's ("old").
   /\ tomb' = {IF e.b = r THEN [e EXCEPT !.b = "old"] ELSE e : e \in tomb}
-  /\ UNCHANGED <<snapT, snapM, del, mdel, pins, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<snapT, snapM, del, mdel, bdel, pins, chosen, policy, answered, badDelete>> /\ RKeep
 
 \* CondemnFirst removed: the entries are written only once the cleanup has run (the order today's marks had before §7.4).
 RCondemn(r) ==
@@ -263,7 +272,7 @@ RCondemn(r) ==
   /\ tomb' = IF On("CondemnFirst") THEN tomb \cup {[k |-> Key(v), b |-> r, s |-> "c"] : v \in rb[r]} ELSE tomb
   /\ chosen' = chosen \cup rfresh[r]
   /\ Go(r, After("condemn"))
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, pins, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, pins, policy, answered, badDelete>> /\ RKeep
 
 \* The table's tags read: a version a user tag or a pin names is excluded, unless (GoOnly) another batch's entry names it
 \* "g". Without GoOnly any other batch's entry licenses ignoring the pin.
@@ -274,14 +283,14 @@ RPins(r) ==
      IN /\ rex' = [rex EXCEPT ![r] = IF On("ExplicitPins") THEN (rb[r] \cap named) \ licensed ELSE {}]
         /\ rgo' = [rgo EXCEPT ![r] = IF On("ExplicitPins") THEN rb[r] \cap licensed ELSE {}]
   /\ Go(r, After("pins"))
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rheld, snapT, snapM, del, mdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rheld, snapT, snapM, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 
 \* The governing policy, one level at a time: a hold at any level keeps everything (ADR 0243 §8, unchanged).
 RLevel(r, n) ==
   /\ rpc[r] = "lvl" \o ToString(n)
   /\ rheld' = [rheld EXCEPT ![r] = rheld[r] \/ policy[Levels[n]] = "hold"]
   /\ Go(r, After("lvl" \o ToString(n)))
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, snapT, snapM, del, mdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, snapT, snapM, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 
 \* The reclaimer's own state set back to its rest, so states differing only in what a finished batch held are one.
 Rest(r, s) ==
@@ -289,7 +298,7 @@ Rest(r, s) ==
   /\ rref' = [rref EXCEPT ![r] = "m"] /\ rkind' = [rkind EXCEPT ![r] = "plain"] /\ rb' = [rb EXCEPT ![r] = {}]
   /\ rfresh' = [rfresh EXCEPT ![r] = {}] /\ rex' = [rex EXCEPT ![r] = {}] /\ rgo' = [rgo EXCEPT ![r] = {}]
   /\ rheld' = [rheld EXCEPT ![r] = FALSE] /\ snapT' = [snapT EXCEPT ![r] = {}] /\ snapM' = [snapM EXCEPT ![r] = {}]
-  /\ del' = [del EXCEPT ![r] = {}] /\ mdel' = [mdel EXCEPT ![r] = {}]
+  /\ del' = [del EXCEPT ![r] = {}] /\ mdel' = [mdel EXCEPT ![r] = {}] /\ bdel' = [bdel EXCEPT ![r] = {}]
 
 RPromote(r) ==
   /\ rpc[r] = "promote"
@@ -298,7 +307,7 @@ RPromote(r) ==
        ELSE /\ tomb' = {IF e.b = r THEN [e EXCEPT !.s = "g"] ELSE e : e \in {x \in tomb : ~(x.b = r /\ Resolve(x.k) \in rex[r])}}
             /\ pins' = IF On("GoUnpins") THEN {p \in pins : p[2] \notin rgo[r]} ELSE pins
             /\ Go(r, "snap")
-            /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel>>
+            /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel>>
   /\ UNCHANGED <<chosen, policy, answered, badDelete>> /\ RKeep
 
 \* Lance's cleanup reads what it keeps (the tags and pins, the branches it keeps the forks of, the heads) and the
@@ -310,12 +319,12 @@ RSnapT(r) ==
   /\ rpc[r] = "snap" /\ snapT[r] = {}
   /\ LanceOrder # "manifests" \/ snapM[r] # {}
   /\ snapT' = [snapT EXCEPT ![r] = RefsRead \cup {NoV}]
-  /\ UNCHANGED <<snapM, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, del, mdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<snapM, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 RSnapM(r) ==
   /\ rpc[r] = "snap" /\ snapM[r] = {}
   /\ LanceOrder # "tags" \/ snapT[r] # {}
   /\ snapM' = [snapM EXCEPT ![r] = manifests \cup {NoV}]
-  /\ UNCHANGED <<snapT, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, del, mdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<snapT, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 
 RDecide(r) ==
   /\ rpc[r] = "snap" /\ snapT[r] # {} /\ snapM[r] # {}
@@ -326,14 +335,15 @@ RDecide(r) ==
          fv == IF rkind[r] = "fork" THEN cand \ (st \ Forks) ELSE {}
          gone == dl \cup fv
          unverified == {f \in files : f \notin Named(sm) /\ f \notin Young}
-     IN /\ del' = [del EXCEPT ![r] = (Named(gone) \ Named(sm \ gone)) \cup unverified]
+     \* Lance's cleanup is root-scoped: the table's own data directory is base_reclaim's (RBase).
+     IN /\ del' = [del EXCEPT ![r] = ((Named(gone) \ Named(sm \ gone)) \cup unverified) \ Base]
         /\ mdel' = [mdel EXCEPT ![r] = dl]
         \* Every standing version of a standing ref whose files or manifest go is one this table's reclaims chose (or a
         \* client named), condemned now. A deleted branch's versions no door can name, and a version whose manifest
         \* another batch removed since this one listed it loses nothing more.
         /\ badDelete' = (badDelete \/ \E v \in gone : v \in manifests /\ Stands(v) /\ (v \notin chosen \/ Key(v) \notin TombKeys))
   /\ Go(r, "data")
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, pins, tomb, chosen, policy, answered>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, bdel, pins, tomb, chosen, policy, answered>> /\ RKeep
 
 RData(r) ==
   /\ rpc[r] = "data"
@@ -341,15 +351,35 @@ RData(r) ==
        THEN Go(r, "man") /\ UNCHANGED <<files, del>>
        ELSE \E f \in del[r] : files' = files \ {f} /\ del' = [del EXCEPT ![r] = @ \ {f}] /\ UNCHANGED rpc
   /\ UNCHANGED <<manifests, names, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, mdel, pins, tomb, chosen, policy, answered, badDelete>>
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>>
 
 RMan(r) ==
   /\ rpc[r] = "man"
   /\ IF mdel[r] = {}
-       THEN Rest(r, "idle") /\ UNCHANGED manifests
+       THEN Go(r, "base") /\ UNCHANGED <<manifests, mdel>>
        ELSE /\ \E v \in mdel[r] : manifests' = manifests \ {v} /\ mdel' = [mdel EXCEPT ![r] = @ \ {v}]
-            /\ UNCHANGED <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del>>
+            /\ UNCHANGED rpc
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, bdel>>
   /\ UNCHANGED <<names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
+  /\ UNCHANGED <<pins, tomb, chosen, policy, answered, badDelete>>
+
+\* base_reclaim, after the cleanup: the table's own data directory listed, less every file a standing manifest names
+\* ("b" was written with version 1, past the unverified age; a commit in flight stages nothing here, A2). A version naming
+\* a file it lists unnamed has its manifest gone, so no door can bring the file back: every ref door, and a restore,
+\* reads the version's manifest.
+RBase(r) ==
+  /\ rpc[r] = "base"
+  /\ bdel' = [bdel EXCEPT ![r] = {f \in Base \cap files : f \notin Named(manifests)}]
+  /\ Go(r, "bdel")
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+
+RBDel(r) ==
+  /\ rpc[r] = "bdel"
+  /\ IF bdel[r] = {}
+       THEN Rest(r, "idle") /\ UNCHANGED files
+       ELSE /\ \E f \in bdel[r] : files' = files \ {f} /\ bdel' = [bdel EXCEPT ![r] = @ \ {f}]
+            /\ UNCHANGED <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel>>
+  /\ UNCHANGED <<manifests, names, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
   /\ UNCHANGED <<pins, tomb, chosen, policy, answered, badDelete>>
 
 \* A reclaim that dies at any step: its entries stand.
@@ -362,7 +392,7 @@ RCrash(r) ==
 \* The store refuses its deletes (the vend expired): Lance counts them and returns, and the reclaim answers. With
 \* KeepAfterDelete its entries stand for the next reclaim; without it the batch takes them back as though nothing went.
 RRefused(r) ==
-  /\ rpc[r] \in {"data", "man"} /\ Fault
+  /\ rpc[r] \in {"data", "man", "bdel"} /\ Fault
   /\ Rest(r, "idle")
   /\ tomb' = IF On("KeepAfterDelete") THEN tomb ELSE tomb \ Own(r)
   /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, refusedWrong>>
@@ -373,7 +403,7 @@ RRestart(r) ==
   /\ rpc[r] = "dead"
   /\ Go(r, "idle")
   /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, pins, tomb, chosen, policy, answered, badDelete>>
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>>
 
 \* The catalog rewriting the record drops an entry whose version's manifest is gone or whose ref identity no longer
 \* stands. Without GCOnlyGone it also drops one whose batch is not running, its manifest standing.
@@ -575,7 +605,7 @@ RelResume ==
 
 \* ---------------------------------------------------------------- the spec
 RStep(r) == RBegin(r) \/ RCondemn(r) \/ RPins(r) \/ RLevel(r, 1) \/ RLevel(r, 2) \/ RLevel(r, 3) \/ RPromote(r)
-            \/ RSnapT(r) \/ RSnapM(r) \/ RDecide(r) \/ RData(r) \/ RMan(r)
+            \/ RSnapT(r) \/ RSnapM(r) \/ RDecide(r) \/ RData(r) \/ RMan(r) \/ RBase(r) \/ RBDel(r)
 DStep(d) == DPin(d) \/ DCheck(d) \/ DLatePin(d) \/ DAct(d) \/ DUnpin(d)
 PStep(d) == PWrite(d) \/ PRead(d) \/ PLate(d)
 RelStep == RelClaim \/ RelCheck \/ RelDelete \/ RelRecreate \/ RelFinish \/ RelResume

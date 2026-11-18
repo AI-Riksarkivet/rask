@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import location_claims, objectfs, reclaim_marks, stored_objects
+from lakehouse import condemned_versions, location_claims, objectfs, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.fences import Hold
@@ -155,36 +155,45 @@ def _holds(dataset: lance.LanceDataset, source: CloneSource) -> bool:
 
 
 def take(source: CloneSource, *, clone_location: str, control_root: str, storage_options: StorageOptions) -> None:
-    """Tag the source version the clone reads through, under the source's history fence.
+    """Tag the source version the clone reads through, under the source's history fence as a ref write.
 
-    The fence keeps a reclaim from deleting the version between the check that the source still keeps it and the tag
-    landing ([[LH-308]]), and the tag is written only once the hold is confirmed (``Fence.write_held``), so no tag lands after
-    the hold lapsed. A tag already naming that version is a retry's, and kept. One naming another version was left
-    by an earlier clone at the same location whose end could not delete it: the register door holds the location's
-    claim, so nothing reads through that tag any more, and it is moved to this clone's version.
+    The version is pinned, then the source's condemned versions read, before the tag (PinFirst, ADR 0246): a reclaim
+    condemns before it deletes and reads the pins after, so the clone never tags a version a reclaim is deleting. The tag
+    is written only once the fence's hold is confirmed (``Fence.write_held``), which an erasure's release excludes. A tag
+    already naming that version is a retry's, and kept. One naming another version was left by an earlier clone at the
+    same location whose end could not delete it: the register door holds the location's claim, so nothing reads through
+    that tag any more, and it is moved to this clone's version.
 
     Raises:
-        CloneSourceGoneError: The source no longer keeps the version, or the branch it is on.
-        lakehouse.history_fences.HistoryFencedError: A reclaim holds the source's history; nothing was written.
+        CloneSourceGoneError: The source no longer keeps the version, or the branch it is on, or it is condemned.
+        OSError: The store did not answer whether the version is condemned; nothing was written.
+        TimeoutError: The door ran past its pin's deadline; nothing was written.
+        lakehouse.history_fences.HistoryFencedError: An erasure's release holds the source's history; nothing was written.
     """
     tag = tag_of(clone_location)
     dataset = _open(source.location, storage_options)
     history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=source.table_uuid)
     standing: dict[str, Any] = {}
+    pinned: list[condemned_versions.Pinned] = []
 
-    def judge(hold: Hold) -> None:
+    def judge(_hold: Hold) -> None:
         standing["tag"] = held = dataset.tags.list().get(tag)
         if held is not None and (int(held["version"]), held.get("branch") or None) == (source.version, source.branch):
             return
         if not _holds(dataset, source):
             raise CloneSourceGoneError(f"version {source.version} of {source.table} is not retained")
-        # A version a trusted mark names is one a cleanup was removing (ADR 0243): the clone would read through a tag on
-        # data no reader can read.
-        refused = reclaim_marks.refused(control_root, storage_options, table_uuid=source.table_uuid, marks=hold.marks, dataset=dataset, ref=source.branch)
-        if source.version in refused:
-            raise CloneSourceGoneError(f"version {source.version} of {source.table} is being reclaimed: a cleanup marked it")
+        try:
+            pinned.append(
+                condemned_versions.pin_whole(
+                    control_root, storage_options, table_uuid=source.table_uuid, dataset=dataset, ref=source.branch, version=source.version
+                )
+            )
+        except condemned_versions.CondemnedVersionError as exc:
+            raise CloneSourceGoneError(f"version {source.version} of {source.table} is condemned: a reclaim may be deleting it") from exc
 
     def write() -> None:
+        for pin in pinned:
+            pin.require_alive()
         held = standing["tag"]
         if held is not None and (int(held["version"]), held.get("branch") or None) == (source.version, source.branch):
             return
@@ -195,7 +204,11 @@ def take(source: CloneSource, *, clone_location: str, control_root: str, storage
             dataset.tags.update(tag, _reference(source))
             log.warning("clone_source_retagged", extra={"source": source.table, "clone": clone_location, "from": held["version"], "to": source.version})
 
-    history.write_held(HistoryWork.REFS, write, judge=judge)
+    try:
+        history.write_held(HistoryWork.REFS, write, judge=judge)
+    finally:
+        for pin in pinned:
+            condemned_versions.unpin(dataset, pin.name)
 
 
 def release(source_location: str, *, clone_location: str, storage_options: StorageOptions) -> bool:

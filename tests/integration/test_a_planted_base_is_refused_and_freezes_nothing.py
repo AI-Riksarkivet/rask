@@ -235,7 +235,7 @@ def _maintained_through(client: TestClient, estate: _Estate, token_file: Path) -
     """
 
     def _forward(request: httpx.Request) -> httpx.Response:
-        answer = client.post(request.url.path, params=dict(request.url.params))
+        answer = client.post(request.url.path, params=dict(request.url.params), content=request.content, headers={"Content-Type": "application/json"})
         return httpx.Response(answer.status_code, content=answer.content, headers={"content-type": answer.headers.get("content-type", "")})
 
     token_file.write_text("sa-token\n")
@@ -257,6 +257,7 @@ def _maintained_through(client: TestClient, estate: _Estate, token_file: Path) -
     # Asked only when the pass finds something to write; a refusal's `vend_denied` is the door's own answer.
     with respx.mock(base_url="http://catalog.test", assert_all_called=False) as catalog:
         catalog.post("/management/v1/table/lance_catalog$db$attacker/credentials").mock(side_effect=_forward)
+        catalog.post("/management/v1/table/lance_catalog$db$attacker/maintenance/condemn").mock(side_effect=_forward)
         return table_pass.maintain_dataset(estate.attacker, readings=readings, settings=settings)
 
 

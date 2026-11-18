@@ -44,7 +44,7 @@ from lakehouse.storage_options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
-from maintenance.services.expiry import HISTORY_FENCED, DatasetResult
+from maintenance.services.expiry import DatasetResult
 from maintenance.services.table_pass import TableTask, held_location, run_table_pass
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 from tests.integration.store_requests import counted
@@ -230,13 +230,13 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
 
 
 def _outcome(kind: str, uri: str) -> DatasetResult:
-    """A dataset's result as the pass leaves it: failed, fenced off by a ref write, parked by the catalog's answer about
+    """A dataset's result as the pass leaves it: failed, a version left condemned, parked by the catalog's answer about
     the name it asked under, refused, dropped mid-pass, or run."""
     match kind:
         case "failed":
             return DatasetResult(uri=uri, error="maintain: the store refused the cleanup")
-        case "fenced":
-            return DatasetResult(uri=uri, skipped=HISTORY_FENCED)
+        case "condemned":
+            return DatasetResult(uri=uri, condemned=[1])
         case "parked":
             parked = DatasetResult(uri=uri)
             parked.park(f"the catalog answered 404 TableNotFound for {TABLE}", gate="table_not_governed", table_id=TABLE)
@@ -259,7 +259,7 @@ _RECHECK = timedelta(hours=72)
     ("policy", "staged_grace", "kind", "expected"),
     [
         pytest.param(KEEP_ONE, None, "failed", lambda now, _: now + _RETRY, id="a-failed-pass-is-retried"),
-        pytest.param(KEEP_ONE, None, "fenced", lambda now, _: now + _RETRY, id="a-history-fenced-pass-is-retried"),
+        pytest.param(KEEP_ONE, None, "condemned", lambda now, _: now + _RETRY, id="a-pass-that-left-a-version-condemned-is-retried"),
         # A rename or a drop landing during the pass changes the catalog's answer about the name it asked under.
         pytest.param(KEEP_ONE, None, "parked", lambda now, _: now + _RETRY, id="a-table-the-catalog-parked-is-asked-again"),
         pytest.param({"retention_days": 1}, None, "refused", lambda now, _: now + _RECHECK, id="a-refused-dataset-waits-for-the-recheck"),

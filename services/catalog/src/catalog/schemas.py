@@ -458,6 +458,34 @@ class GcRunResult(BaseModel):
     bytes_removed: int
 
 
+class CondemnRequest(RequestBody):
+    """One reclaim batch a reclaimer asks of the catalog (ADR 0246): the versions past their retention it would delete,
+    at most a batch of them; none to finish only what a dead batch or ``version/delete`` left condemned."""
+
+    versions: list[int] = Field(default_factory=list, max_length=16)
+
+
+class CondemnedBatch(BaseModel):
+    """The catalog's answer to one reclaim batch: what the reclaimer may delete now."""
+
+    #: What keeps the table's whole history, when a hold at a level that can govern it does: nothing may be deleted.
+    held_by: str | None = None
+    #: The versions the reclaimer may delete, each condemned and past its batch's pin and policy reads.
+    versions: list[int] = Field(default_factory=list)
+    #: The ref's versions left condemned that this batch does not license: a pin keeps them, or a hold.
+    standing: list[int] = Field(default_factory=list)
+
+
+class CondemnedVersion(BaseModel):
+    """A version a reclaim may be deleting: what a policy's answer does not promise (ADR 0246)."""
+
+    #: The table's name, as it is named now.
+    table: str
+    #: The branch the version is of, ``None`` for main.
+    branch: str | None = None
+    version: int
+
+
 class CleanupDisarmed(BaseModel):
     """What the disarm of a ref's commit-path cleanup did ([[LH-575]])."""
 
@@ -657,6 +685,10 @@ class PolicyResponse(BaseModel):
     #: A record is kept for the object; a describe of an object that holds none answers :class:`PolicyUnset`. Required,
     #: with no default, so the schema marks it on both answers and a typed client narrows the union on it.
     set: Literal[True]
+    #: On a set's answer: the versions of the tables the policy governs that were already condemned when it landed, read
+    #: after its write (ADR 0246). A reclaim may be deleting them; every other version is kept as the policy says. Absent
+    #: on a describe or a listing.
+    condemned: list[CondemnedVersion] | None = None
 
 
 class PolicyUnset(BaseModel):
@@ -679,6 +711,9 @@ class PolicyDeleteResponse(BaseModel):
     status: str
     kind: str
     id: str
+    #: The versions of the tables the deleted policy governed that were already condemned when it went, read after the
+    #: delete (ADR 0246): a reclaim may be deleting them. A hold that governs the tables keeps every version it does not name.
+    condemned: list[CondemnedVersion] = Field(default_factory=list)
 
 
 class ProjectPoliciesResponse(BaseModel):

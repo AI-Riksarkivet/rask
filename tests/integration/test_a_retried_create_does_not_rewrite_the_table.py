@@ -252,7 +252,8 @@ class TestARetriedAppendLandsOnce:
         landed is searched, where it was taken as unwritten and the write landed again).
 
         ``its-version-deleted-since`` (ADR 0240 §12, SearchWhole): another write lands after it and the owner deletes the
-        version the write landed as (``version/delete``), inside the key's lifetime. The search cannot read that version,
+        version the write landed as (``version/delete``, its manifest deleted by the table's next reclaim, ADR 0246), inside
+        the key's lifetime. The search cannot read that version,
         so it cannot prove the write did not land: the resend is refused 409 InvalidTableState (19) and writes nothing.
         ``its-version-deleted-as-it-is-searched``: the delete lands between the listing of the window and the read of that
         version, so the listing still names it; the read fails, the listing read again says the version is gone, and the
@@ -310,6 +311,8 @@ class TestARetriedAppendLandsOnce:
             removed = before + len(later)
             deleted = real_ns_client.post(f"{table}/version/delete", json={"ranges": [{"start_version": removed, "end_version": removed + 1}]})
             assert (deleted.status_code, deleted.json().get("deleted_count")) == (200, 1), deleted.text
+            finished = real_ns_client.post("/management/v1/table/lance_catalog$db$lost/maintenance/run", json={"retain_versions": 10_000})
+            assert (finished.status_code, finished.json().get("old_versions_removed")) == (200, 1), finished.text
         if after == "its-version-deleted-as-it-is-searched":
             listings = iter([{*range(1, before + 3)}])
             relisted = dataplane._listed_versions

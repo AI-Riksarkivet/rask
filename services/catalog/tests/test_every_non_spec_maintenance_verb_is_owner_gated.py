@@ -19,7 +19,8 @@ catalog's non-spec composite verbs live. They share one property that makes the 
 either destroys version history, rewrites fragments, or replaces an index, so `can_drop` is the floor
 for all of them and a cheaper answer is always wrong. The two maintainer doors are the stated exception
 (ADR 0204, [[LH-575]]): a disarm removes the keys that would let a commit delete versions, and a floor raise
-commits a stamp that changes no row, so they sit at the maintainer rung the sweep holds, and every verb added
+commits a stamp that changes no row, so they sit at the maintainer rung the sweep holds; a condemn (ADR 0246) runs the
+batch a table's pass deletes under, and sits at the rung of the maintain vend that pass deletes with. Every verb added
 next still meets the owner bar.
 """
 
@@ -32,8 +33,9 @@ from catalog.api.fga_deps import _action_relation
 
 
 OWNER_RELATION = "can_drop"
-#: The maintainer doors: neither destroys history, rewrites a fragment nor replaces an index.
-MAINTAINER_DOORS = {"maintenance/disarm": "can_maintain", "maintenance/floor": "can_maintain"}
+#: The maintainer doors: neither destroys history, rewrites a fragment nor replaces an index, and the condemn batch a
+#: pass's maintain vend deletes under.
+MAINTAINER_DOORS = {"maintenance/disarm": "can_maintain", "maintenance/floor": "can_maintain", "maintenance/condemn": "can_vend_maintain"}
 
 
 def _maintenance_suffixes() -> list[str]:

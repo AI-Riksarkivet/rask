@@ -119,12 +119,11 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
-from lakehouse import branch_layout, clone_sources, reclaim_marks, stored_objects
+from lakehouse import branch_layout, clone_sources, condemned_versions, stored_objects
 from lakehouse.base_refs import normalise
 from lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
+from lakehouse.condemned_versions import Verdict
 from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
-from lakehouse.fences import Hold
-from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 
@@ -391,10 +390,9 @@ def verify(
     predicate: str,
     retention: timedelta,
     trusted: Mapping[str, int],
-    history: TableHistory,
     derived: Callable[[], Sequence[SurfaceResult]],
     before_untag: Callable[[Sequence[DroppedTag]], None],
-    sessions: Sessions,
+    condemn: Condemner,
 ) -> ErasureReport:
     """Judge every ref's head on bytes, drop the tags pinning the subject, reclaim each clean ref, verify every retained
     version of every ref, and name every table derived from this one.
@@ -408,12 +406,11 @@ def verify(
     to zero: an erasure is not a licence to destroy unrelated history, and a requester that means to reclaim
     everything says so with ``retain_days=0``. ``trusted`` maps each ref (`main` or a branch name) to the last version
     whose `CreateIndex` commits are read as provenance, the heads :func:`ref_heads` read when the obligation was
-    recorded; a ref it does not name, a branch cut since, offers none. It has no default for the same reason. ``history``
-    is where the table's history fence is kept, which the reclaim holds ([[LH-308]]) and its marks are written in
-    (:class:`lakehouse.reclaim_marks.Reclaim`), and it has no default for the same reason. ``derived`` judges the tables derived from this one, a surface each
-    (:func:`catalog.services.erasure_derived.judge`); one that raises is a failed ``derived`` surface, and it has no
-    default for the same reason. ``sessions`` names what each ref's reclaim deletes through, a session minted per batch
-    before its confirm where the catalog vends (:data:`Sessions`), and has no default for the same reason. ``before_untag`` is handed the tags step 2 is about to delete, before it deletes any, so
+    recorded; a ref it does not name, a branch cut since, offers none. It has no default for the same reason. ``derived``
+    judges the tables derived from this one, a surface each (:func:`catalog.services.erasure_derived.judge`); one that
+    raises is a failed ``derived`` surface, and it has no default for the same reason. ``condemn`` asks the catalog's batch
+    of each ref's reclaim (:data:`Condemner`, ADR 0246), and has no default for the same reason. ``before_untag`` is
+    handed the tags step 2 is about to delete, before it deletes any, so
     what announces their deletion is filed first (ADR 0233); one that raises keeps every tag, a failed ``tags`` surface.
 
     EVERY SURFACE IS ATTEMPTED even when one fails, short of what would destroy history for nothing (the module's
@@ -450,7 +447,7 @@ def verify(
     #    the earlier one, and a version newer than it was inside that cleanup's window. A ref absent from `cutoffs` was
     #    not reclaimed, so nothing but that keeps its versions. A ref whose head still holds the subject is not
     #    reclaimed: its history would go while the subject's bytes stay in its live data files ([[LH-210]]).
-    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, retention=retention, history=history, storage_options=storage_options, sessions=sessions)
+    cutoffs = reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options, condemn=condemn)
 
     # 4. VERIFY EVERY REF, because every step above is an ATTEMPT and only this is evidence. Every head can be clean and
     #    the row still readable at a version a branch or a tag stands on, which is the one outcome an erasure must never
@@ -532,6 +529,11 @@ def _drop_subject_tags(
             # cleanup take files the clone has no other copy of, so the clone's own end releases it.
             report.surfaces.append(held_by_a_clone(name))
             continue
+        if condemned_versions.is_pin(name):
+            # A ref door's pin, standing for the length of its request (ADR 0246): deleted here, the door would act on a
+            # version a reclaim may then delete. The next verification finds it gone, or a reclaim sweeps a dead door's.
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="skipped", detail="kept: a ref door's pin, for the length of its request"))
+            continue
         if not every_head_clean:
             detail = "kept: not every head is clean, so dropping it could destroy a reproducibility pointer while the subject stays"
             report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="skipped", detail=detail))
@@ -602,34 +604,6 @@ def _label_surface(ref: str | None) -> str:
     return MAIN_BRANCH if ref is None else f"branch:{ref}"
 
 
-def _reclaim(
-    report: ErasureReport,
-    dataset: _Dataset,
-    deepest_first: Sequence[str | None],
-    *,
-    clean: Collection[str | None],
-    retention: timedelta,
-    history: TableHistory,
-    storage_options: StorageOptions,
-    sessions: Sessions,
-) -> dict[str | None, datetime]:
-    """Step 3: clean up every ref whose head is clean, deepest first; each reclaimed ref's cutoff.
-
-    Under the table's history fence, held for a reclaim ([[LH-308]]): Lance reads the refs once per cleanup, so a tag or
-    branch written meanwhile could pin a version it deletes. While a write of the table's refs holds it, no ref is
-    reclaimed and each says so, so the obligation stays open for the next verification.
-    """
-    try:
-        with history.hold_for(HistoryWork.RECLAIM) as hold:
-            return reclaim_refs(
-                report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options, history=history, hold=hold, sessions=sessions
-            )
-    except HistoryFencedError as exc:
-        log.info("erasure_history_fenced", extra={"table": report.table, "reason": str(exc)})
-        report.surfaces += [SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail=f"{exc} Not reclaimed.") for ref in deepest_first]
-        return {}
-
-
 def reclaim_refs(
     report: ErasureReport,
     dataset: Reclaimable,
@@ -638,19 +612,16 @@ def reclaim_refs(
     clean: Collection[str | None],
     retention: timedelta,
     storage_options: StorageOptions,
-    history: TableHistory,
-    hold: Hold,
-    sessions: Sessions,
+    condemn: Condemner,
 ) -> dict[str | None, datetime]:
-    """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff. Each transaction file a cleanup removes is
-    recorded ([[LH-232]]); Lance records the rest itself.
+    """Step 3: each clean ref's cleanup, deepest first; each reclaimed ref's cutoff. Each transaction file a cleanup
+    removes is recorded ([[LH-232]]); Lance records the rest itself.
 
-    THE ONE MARKED RECLAIM (:class:`lakehouse.reclaim_marks.Reclaim`, ADR 0233 §10, ADR 0243 F7): the caller holds the
-    table's history (``hold``, kept at ``history``) as a reclaim or a release, and each ref's cleanup marks each batch of
-    its victims before its first delete and confirms the hold before each, each batch deleting through ``sessions``' handle
-    minted before that confirm, so a cleanup this leaves part-way is one no ref door names, whatever files of it still
-    stand, and one frozen past its hold deletes nothing more (ADR 0243 R5). Its fork points, whose files it takes, stand
-    under fork marks while a branch keeps their manifests (ADR 0243 R1).
+    THE ONE RECLAIM EVERY CLEANUP GOES THROUGH (:func:`lakehouse.condemned_versions.reclaim`, ADR 0246): each batch of a
+    ref's victims is condemned, its pins read, its table's policy read and its entries promoted by the catalog
+    (``condemn``), and only what it licenses is deleted, so a cleanup this leaves part-way is one no ref door names,
+    whatever files of it still stand. A hold at any level keeps the ref whole, and its ``history:`` surface says so. Its
+    fork points, whose files it takes (ADR 0243 R1), stay condemned while a branch keeps their manifests.
 
     A registered clone of this table needs no refusal here: its tag keeps the version it reads, which every cleanup
     exempts and :func:`_drop_subject_tags` never drops (ADR 0198 §1).
@@ -677,19 +648,14 @@ def reclaim_refs(
                 log.warning("erasure_cleanup_refused", extra={"table": report.table, "ref": _label(ref), "reason": refused})
                 report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"maintenance refused: {refused}. Not reclaimed."))
                 continue
-            reclaim = reclaim_marks.Reclaim(
-                control_root=history.control_root,
-                storage_options=history.storage_options,
-                table_uuid=history.table_uuid,
-                ref=ref,
-                hold=hold,
-                before_each=hold.confirm,
-                session=sessions(ref),
-            )
+            victims = sorted({*condemned_versions.victims(cast("Any", handle), older_than=retention, retain_versions=None), *_fork_points(handle, ref)})
             with stored_objects.recording_removed_transactions(branch_layout.ref_root(dataset.uri, ref), storage_options):
-                done = reclaim.run(cast("Any", handle), older_than=retention, retain_versions=None, forks=True)
+                done = condemned_versions.reclaim(cast("Any", handle), victims, condemn(ref))
+            if done.held_by is not None:
+                report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"held: {done.held_by} keeps the whole history. Not reclaimed."))
+                continue
             if done.failed_deletes:
-                raise OSError(f"the store refused {done.failed_deletes} of this cleanup's deletes; its versions stay marked until a later reclaim")
+                raise OSError(f"the store refused {done.failed_deletes} of this cleanup's deletes; its versions stay condemned until a later reclaim")
             cutoffs[ref] = datetime.now(UTC) - retention
             versions, freed = done.old_versions, done.bytes_removed
             report.versions_reclaimed += versions
@@ -1299,13 +1265,22 @@ def _depth(name: str, forks: Mapping[str, _Reference | None]) -> int:
 #: because a bare version number means "on the handle's branch".
 type _Reference = tuple[str | None, int]
 
-#: For each ref, what its reclaim deletes through: a handle of the ref under a session minted for one batch, or ``None``
-#: to delete through the handle the erasure opened (``catalog.services.catalog_reclaims.sessions``, ADR 0243 R5).
-type Sessions = Callable[[str | None], Callable[[], Any] | None]
+#: For each ref, how its reclaim asks the catalog for each batch (``catalog.services.reclaims.condemner``, ADR 0246):
+#: the versions it asks for condemned, a version a branch is cut from among them, then the pins and the policy read.
+type Condemner = Callable[[str | None], Callable[[list[int]], Verdict]]
 
 
-def no_sessions(_ref: str | None) -> None:
-    """:data:`Sessions` for a catalog that mints none: every batch deletes through the handle the erasure opened."""
+def _fork_points(handle: Any, ref: str | None) -> set[int]:  # noqa: ANN401 — a pylance handle of the ref
+    """The versions of ``ref`` below its head a branch is cut from and no tag names: an erasure takes the files only
+    they name (ADR 0243 R1)."""
+    head = int(handle.version)
+    forked = {
+        int(entry["parent_version"])
+        for entry in handle.branches.list().values()
+        if isinstance(entry, dict) and recorded_branch(entry.get("parent_branch")) == ref and isinstance(entry.get("parent_version"), int)
+    }
+    tagged = {int(tag["version"]) for tag in handle.tags.list().values() if recorded_branch(tag.get("branch")) == ref}
+    return {version for version in forked if version < head and version not in tagged}
 
 
 def _label(ref: str | None) -> str:

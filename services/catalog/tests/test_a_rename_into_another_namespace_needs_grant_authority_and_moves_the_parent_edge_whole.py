@@ -224,11 +224,11 @@ def _the_destination_is_dropped_as_the_name_is_registered(scene: _Scene) -> None
     # drop sent once it holds it is refused (ADR 0233), and the register then finds no namespace to add the name into.
     real, pending = NamespaceFence.taking, [True]
 
-    def _taking(fence: NamespaceFence, work: str, *, intent: bool = False) -> Taken:
+    def _taking(fence: NamespaceFence, work: str) -> Taken:
         if pending and fence.name == "lance_catalog$managed" and work == NamespaceWork.ADD:
             pending.clear()
             _ok(scene.estate, "/v1/namespace/lance_catalog$managed/drop", json={})
-        return real(fence, work, intent=intent)
+        return real(fence, work)
 
     scene.monkeypatch.setattr(NamespaceFence, "taking", _taking)
 

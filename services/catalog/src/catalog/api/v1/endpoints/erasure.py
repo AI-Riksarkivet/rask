@@ -39,13 +39,13 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.announcing import Announcer, AnnouncerDep
-from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep, VendorDep
+from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings, fresh_lance_session
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref
 from catalog.schemas import ErasureRequest, ErasureVerifyRequest
-from catalog.services import announcement_intents, catalog_reclaims, dataplane, erasure, erasure_derived, erasure_obligations, erasure_release, table_claims
+from catalog.services import announcement_intents, dataplane, erasure, erasure_derived, erasure_obligations, erasure_release, reclaims, table_claims
 from catalog.services.announcement_intents import Announcement, ControlMessage, TagGone
 from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
@@ -53,7 +53,6 @@ from lakehouse import derived_tables
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.history_fences import TableHistory
 from lakehouse.records import RecordExistsError
 from lakehouse.storage_options import StorageOptions
 
@@ -180,7 +179,6 @@ async def verify_erasure(
     client: FgaClientDep,
     clock: ClockDep,
     announcer: AnnouncerDep,
-    vendor: VendorDep,
     token: CurrentToken = None,
 ) -> ErasureVerification:
     """Verify what the bring-your-own job left, and release the obligation when nothing but a scheduled release remains.
@@ -256,10 +254,9 @@ async def verify_erasure(
         predicate=body.predicate,
         retention=timedelta(days=obligation.retain_days),
         trusted=obligation.refs,
-        history=TableHistory(control_root=control_root, storage_options=control_options, table_uuid=table_uuid),
         derived=partial(erasure_derived.judge, settings, provenance, so, obligation=obligation, table=canonical),
         before_untag=_file_untags,
-        sessions=catalog_reclaims.sessions(vendor, settings, str(table.location)),
+        condemn=reclaims.condemners(reclaims.Governance.of(table, control_root, control_options), control_root, control_options, dataset),
     )
     # Each tag the verification dropped is announced as the tag door announces a deletion ([[LH-332]]): untargeted, naming
     # the tag and the ref it pinned, beside the obligation whose verification dropped it. AFTER the drops, so a tag still

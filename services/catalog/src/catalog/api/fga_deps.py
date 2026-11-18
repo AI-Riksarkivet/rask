@@ -224,6 +224,8 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # or which versions a cleanup may reach. The maintainer rung the sweep holds, which every owner keeps.
         "maintenance/disarm": "can_maintain",
         "maintenance/floor": "can_maintain",
+        # ADR 0246: one reclaim batch, which licenses a pass's deletes under its maintain-tier vend: the vend's own rung.
+        "maintenance/condemn": "can_vend_maintain",
         # [[LH-073]] erasure destroys the table's PAST — every ref's rows, the tags pinning the versions
         # that held them, and the history itself. That is a stronger claim than a drop, and `can_drop`
         # is the highest rung there is, so it gates here. The writer rung would let a plain data writer

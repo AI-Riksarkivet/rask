@@ -39,6 +39,7 @@ from tables_by_name import open_by_name
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings, get_settings
+from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
 from lakehouse import base_registry
 from lakehouse.ns_errors import install_problem_handlers
@@ -65,7 +66,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     branch-scoped reclaim removes 0 parent data files, a main-scoped one removes 2.
     """
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1], properties=with_minted_uuid(None)))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     create_table(ns, StorageOptions(), TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="db$rows")
     open_by_name(ns, StorageOptions(), TABLE_ID).insert(_rows(1, start=1))

@@ -45,6 +45,9 @@ CONTRACTS: Final = "_contracts"
 LABEL_DEFINITIONS: Final = "_label_definitions"
 LABELS: Final = "_labels"
 TABLE_INPUTS: Final = "_table_inputs"
+#: A table's condemned versions, keyed by its uuid: what a reclaim may be deleting, which every ref door refuses
+#: (``lakehouse.condemned_versions``, ADR 0246).
+CONDEMNED: Final = "_condemned"
 ROLES: Final = "_roles"
 PRINCIPALS: Final = "_principals"
 #: The tuples the catalog wrote from what git declares, one record each ([[XC-213]]).
@@ -61,8 +64,6 @@ COMMIT_TURNS: Final = "_commit_turns"
 HISTORY_FENCES: Final = "_history_fences"
 #: Each namespace name's fence: an add beneath it against its drop (``lakehouse.namespace_fences``).
 NAMESPACE_FENCES: Final = "_namespace_fences"
-#: Each namespace's and project's policy fence: a reclaim beneath it against a write of its policy (``lakehouse.policy_fences``).
-POLICY_FENCES: Final = "_policy_fences"
 IDEMPOTENCY: Final = "_idempotency"
 #: The window each fixed timer last claimed, one record a timer (``lakehouse.timers``).
 TIMERS: Final = "_timers"
@@ -107,8 +108,9 @@ QUEUE_PREFIXES: Final[frozenset[str]] = frozenset({LINEAGE_OUTBOX, CONTROL_OUTBO
 """The outboxes and the announcements filed for them: a restore would publish events the estate already acted on, so a
 queue's recovery is to be empty."""
 
-LEASE_PREFIXES: Final[frozenset[str]] = frozenset({COMMIT_TURNS, HISTORY_FENCES, NAMESPACE_FENCES, POLICY_FENCES, IDEMPOTENCY, TIMERS})
+LEASE_PREFIXES: Final[frozenset[str]] = frozenset({COMMIT_TURNS, HISTORY_FENCES, NAMESPACE_FENCES, IDEMPOTENCY, TIMERS})
 """The records that lapse: a restored one would hold a turn, a fence, an answer or a timer's window whose time has passed."""
 
-CONTROL_PREFIXES: Final[frozenset[str]] = RECORD_PREFIXES | QUEUE_PREFIXES | LEASE_PREFIXES | {NAMESPACE_INDEX, STAGING, BACKUPS}
-"""Every segment that holds the estate's own state, which no table's location crosses."""
+CONTROL_PREFIXES: Final[frozenset[str]] = RECORD_PREFIXES | QUEUE_PREFIXES | LEASE_PREFIXES | {CONDEMNED, NAMESPACE_INDEX, STAGING, BACKUPS}
+"""Every segment that holds the estate's own state, which no table's location crosses. The condemned versions are no
+record a backup copies: the backup job's store policy names the prefixes it reads, and this one is not among them."""

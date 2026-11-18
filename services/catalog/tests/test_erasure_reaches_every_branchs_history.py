@@ -28,9 +28,9 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 import pytest
+from unheld_batches import unheld
 
-from catalog.services.erasure import ErasureReport, no_sessions, ref_heads, verify
-from lakehouse.history_fences import TableHistory
+from catalog.services.erasure import ErasureReport, ref_heads, verify
 from lakehouse.storage_options import StorageOptions
 
 
@@ -56,10 +56,9 @@ def _verify(uri: str, retention: timedelta = _NOW, trusted: dict[str, int] | Non
         predicate=_PREDICATE,
         retention=retention,
         trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
-        history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
+        condemn=unheld(f"{uri}-control", f"erased-{uri.rsplit('/', 1)[-1]}", uri),
         derived=list,
         before_untag=lambda _tags: None,
-        sessions=no_sessions,
     )
 
 
@@ -348,9 +347,19 @@ def test_pinned_by_names_what_stands_on_the_residual(tmp_path: Path, names: tupl
     assert (again.residual_versions, again.complete) == ([], True)
 
 
+def _fork_point_unread(monkeypatch: pytest.MonkeyPatch, uri: str) -> None:
+    """Lance lists ``work`` alone, with its identity and no fork point: the branch stands, so a reclaim keys its entries
+    by that identity (ADR 0246, IdentityKeys), and where it was cut from cannot be read."""
+    branches = type(lance.dataset(uri).branches)
+    listed = branches.list
+    monkeypatch.setattr(
+        branches, "list", lambda self: {"work": {key: value for key, value in listed(self)["work"].items() if key not in ("parent_branch", "parent_version")}}
+    )
+
+
 def test_a_branch_whose_fork_point_cannot_be_read_is_still_erased(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
     uri = _subject_on_a_branch(tmp_path)
-    monkeypatch.setattr(type(lance.dataset(uri).branches), "list", lambda self: {"work": {}})
+    _fork_point_unread(monkeypatch, uri)
 
     report = erase(uri)
 
@@ -400,7 +409,7 @@ def test_an_unlistable_ref_set_is_not_verified_clean(
 def test_an_unreadable_fork_point_is_named_when_something_survives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
     """What keeps a residual is walked through fork points, so one that cannot be read may hide a holder."""
     uri = _tagged_branch(tmp_path, ("work", "deeper"))
-    monkeypatch.setattr(type(lance.dataset(uri).branches), "list", lambda self: {"work": {}})
+    _fork_point_unread(monkeypatch, uri)
 
     report = erase(uri)
 

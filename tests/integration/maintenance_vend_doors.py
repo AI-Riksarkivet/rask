@@ -33,8 +33,8 @@ CATALOG_URL = "http://catalog.test"
 VENDED = {"aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_endpoint": "http://store.vended.example"}
 #: The maintain-tier door's path, the table's id named: `/management/v1/table/{id}/credentials?tier=maintain`.
 MAINTAIN_TIER_DOOR = rf"^{CATALOG_URL}/management/v1/table/(?P<table>[^/]+)/credentials"
-#: A maintainer door's path, the table's id and the door named: `/management/v1/table/{id}/maintenance/{disarm|floor}`.
-MAINTAINER_DOOR = rf"^{CATALOG_URL}/management/v1/table/(?P<table>[^/]+)/maintenance/(?P<act>disarm|floor)"
+#: A maintainer door's path, the table's id and the door named: `/management/v1/table/{id}/maintenance/{disarm|floor|condemn}`.
+MAINTAINER_DOOR = rf"^{CATALOG_URL}/management/v1/table/(?P<table>[^/]+)/maintenance/(?P<act>disarm|floor|condemn)"
 
 
 def described_by(catalog: httpx.Client) -> Callable[[str], str]:
@@ -48,7 +48,7 @@ def described_by(catalog: httpx.Client) -> Callable[[str], str]:
     return _location
 
 
-def _forwarded_to(catalog: TestClient) -> Callable[..., httpx.Response]:
+def forwarded_to(catalog: httpx.Client) -> Callable[..., httpx.Response]:
     """A route's side effect sending the request maintenance made to the real catalog app ``catalog``, its path and query
     as sent, and answering with what the app answered."""
 
@@ -66,18 +66,26 @@ def maintain_tier_door(location_of: Callable[[str], str], *, catalog: TestClient
     """Answer each maintain-tier vend maintenance asks `CATALOG_URL` for, over the location ``location_of`` gives the table.
 
     With ``catalog``, the real catalog app answers maintenance's maintainer doors too (the route named ``maintainer``):
-    the disarm and the floor raise are that app's own commits (`catalog.services.maintenance_commits`), so their path,
-    query, body and answer are the app's, never a copy of them here ([[LH-575]]).
+    the disarm and the floor raise are that app's own commits (`catalog.services.maintenance_commits`), and each reclaim
+    batch is its own (`catalog.services.reclaims`), so their path, query, body and answer are the app's, never a copy of
+    them here ([[LH-575]], ADR 0246). Without it, a reclaim batch (the route named ``condemn``) is answered as a catalog
+    whose record names nothing and whose policy holds nothing answers it: every version asked is licensed. Whether the
+    catalog would license it is `tests/integration/test_a_reclaim_condemns_before_it_deletes.py`'s claim.
     """
 
     def _vend(_request: httpx.Request, table: str) -> httpx.Response:
         location = location_of(unquote(table))
         return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": VENDED}, "location": location})
 
+    def _licensed(request: httpx.Request, **_named: str) -> httpx.Response:
+        return httpx.Response(200, json={"versions": json.loads(request.content).get("versions", [])})
+
     with respx.mock(assert_all_called=False) as router:
         router.post(url__regex=MAINTAIN_TIER_DOOR, params={"tier": "maintain"}, name="vend").mock(side_effect=_vend)
         if catalog is not None:
-            router.post(url__regex=MAINTAINER_DOOR, name="maintainer").mock(side_effect=_forwarded_to(catalog))
+            router.post(url__regex=MAINTAINER_DOOR, name="maintainer").mock(side_effect=forwarded_to(catalog))
+        else:
+            router.post(url__regex=rf"^{CATALOG_URL}/management/v1/table/(?P<table>[^/]+)/maintenance/condemn", name="condemn").mock(side_effect=_licensed)
         router.route().pass_through()
         yield router
 
@@ -156,7 +164,7 @@ def catalog_doors(catalog: TestClient) -> Generator[respx.MockRouter]:
     which is the vend's pair (the app's own vendor vends nothing direct here: what its policy narrows is
     `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py`'s claim)."""
 
-    _forward = _forwarded_to(catalog)
+    _forward = forwarded_to(catalog)
 
     with respx.mock(assert_all_called=False) as router:
         router.post(url__regex=rf"{_TRASH_DOOR}/credentials$", name="credentials").mock(return_value=httpx.Response(200, json=_RECLAIM_SESSION))

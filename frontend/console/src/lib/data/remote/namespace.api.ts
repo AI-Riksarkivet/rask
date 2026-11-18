@@ -69,8 +69,8 @@ export const fetchNamespacePolicy = query(
 
 /** Set (or replace) the namespace-level maintenance policy — it governs every dataset under the
  *  namespace's prefix unless a table policy sets its own retention, and a hold (cleanup off) here
- *  binds every table beneath it whatever their own policies say. Owner-gated (can_delete); answers
- *  409 while a reclaim of a table beneath it runs; on success the active describe refreshes in the
+ *  binds every table beneath it whatever their own policies say. Owner-gated (can_delete); answers at
+ *  once, naming in `condemned` the versions a reclaim in flight may still delete; on success the active describe refreshes in the
  *  same flight. */
 export const setNamespacePolicy = command(
 	({ namespace }) => `Set the maintenance policy of namespace ${namespace}`,

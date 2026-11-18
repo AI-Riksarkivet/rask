@@ -1201,10 +1201,10 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
     return getattr(described, "location", None) or registered
 
 
-def _require_a_maintain_policy_that_fits(settings: Settings, *, location: str, warehouse: str) -> None:
+def _require_a_maintain_policy_that_fits(settings: Settings, *, location: str) -> None:
     """Refuse registering a dataset whose table's maintain-tier vend could never be minted (ADR 0243 R6): its location and
     the bases its manifest declares, judged as :func:`catalog.core.vending.require_a_table_maintain_policy_that_fits` does,
-    the table's records named as a pass's vend names them (a project's fence included, its longest case).
+    the table's committed-file records named as a pass's vend names them.
 
     Asked after the caller's authorization (a clone's sources), and only of a dataset on S3, where a vend is an STS
     session: a dataset it cannot read is left to the door's own refusal of it, which names what is wrong.
@@ -1218,7 +1218,7 @@ def _require_a_maintain_policy_that_fits(settings: Settings, *, location: str, w
         facts = dataset_facts(location, settings.storage_options())
     except (LanceNamespaceError, OSError, ValueError):
         return
-    records = TableRecords(control_root=settings.registry_root, table_uuid=str(uuid4()), warehouse=warehouse, project="registering")
+    records = TableRecords(control_root=settings.registry_root, table_uuid=str(uuid4()))
     require_a_table_maintain_policy_that_fits(location, bases=facts.base_uris, records=records, kms_key=settings.s3_sse_kms_key_id)
 
 
@@ -1331,7 +1331,7 @@ async def register_table(
     asked: set[str] = set()
     if not registered_already:
         asked = await _require_clone_sources(client, settings, token, location=f"{root.rstrip('/')}/{body.location}", so=so, context=context)
-        await run_in_threadpool(_require_a_maintain_policy_that_fits, settings, location=f"{root.rstrip('/')}/{body.location}", warehouse=segments[0])
+        await run_in_threadpool(_require_a_maintain_policy_that_fits, settings, location=f"{root.rstrip('/')}/{body.location}")
     # A new uuid for this table ([[LH-519]]), even where an earlier table's claim was released, and its grants under it,
     # written before the backend records the table so it never stands without them ([[LH-588]]). A request that
     # registers nothing takes them back: a refused registration changes nobody's access ([[LH-586]]).
@@ -1921,29 +1921,36 @@ async def restore_table(
 def _restore_holding_history(
     table: DoorTable, so: StorageOptions, body: RestoreTableRequest, *, transaction_properties: dict[str, str]
 ) -> tuple[RestoreTableResponse, int]:
-    """:func:`dataplane.restore`, while the door holds the table's history as a ref write does (ADR 0243).
+    """:func:`dataplane.restore`, with the version it brings back pinned first, while the door holds the table's history as
+    a ref write does (ADR 0246, ADR 0233).
 
-    A restore brings back the files of the version it names, so it pins that version as a tag does for as long as it
+    A restore brings back the files of the version it names, so it pins that version as a tag door does for as long as it
     runs: a reclaim that listed the table's versions before the restore committed would delete the files the restored
     head names (measured on pylance 13.0.0: 2 restores of 40 beside a cleanup at age 0 left a head no reader could read).
-    The hold excludes every reclaim, so the restore answers 409 while one deletes; and under it the version must still
-    be named by no cleanup's mark and hold every file it names (:func:`dataplane.require_whole`), since a cleanup that
-    stopped part-way leaves its versions standing over deleted files. A branch the table does not have is left to the
-    restore's own refusal (code 22). The commit is made only once the hold is confirmed (:meth:`DoorTable.history_write`).
+    The pin is written, then the table's condemned versions read (:func:`dataplane.require_whole`): a version a reclaim
+    condemned, which may stand over deleted files, is refused, and one it did not is kept by every reclaim while the pin
+    stands. A branch the table does not have is left to the restore's own refusal (code 22). The commit is made only once
+    the hold is confirmed (:meth:`DoorTable.history_write`), which an erasure's release excludes.
 
     Raises:
-        ConcurrentModificationError: A reclaim holds the table's history, or the hold lapsed before the commit (code 14).
-        InvalidTableStateError: A cleanup marked the version, or a file it names is gone (code 19).
-        ServiceUnavailableError: The store did not answer whether the version is whole (503).
+        ConcurrentModificationError: An erasure's release holds the table's history, or the hold lapsed before the commit
+            (code 14).
+        InvalidTableStateError: The version is condemned (code 19).
+        ServiceUnavailableError: The store did not answer whether the version is condemned (503).
     """
     branch = recorded_branch(body.branch)
+    dataset = table.open_unchecked(so)
+    with dataplane.pinning(dataset) as pins:
 
-    def judge(hold: Hold) -> None:
-        dataset = table.open_unchecked(so)
-        if branch is None or branch in dataset.branches.list():
-            dataplane.require_whole(table, dataset, branch=branch, version=body.version, kind="restore", name=branch or MAIN_BRANCH, marks=hold.marks)
+        def judge(_hold: Hold) -> None:
+            if branch is None or branch in dataset.branches.list():
+                pins.add(dataplane.require_whole(table, dataset, branch=branch, version=body.version, kind="restore", name=branch or MAIN_BRANCH))
 
-    return table.history_write(HistoryWork.REFS, partial(dataplane.restore, table, so, body, transaction_properties=transaction_properties), judge=judge)
+        def restore() -> tuple[RestoreTableResponse, int]:
+            pins.require_alive()
+            return dataplane.restore(table, so, body, transaction_properties=transaction_properties)
+
+        return table.history_write(HistoryWork.REFS, restore, judge=judge)
 
 
 @router.post("/{id}/stats", response_model_exclude_none=True)

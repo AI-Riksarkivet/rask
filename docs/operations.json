@@ -1113,6 +1113,18 @@
       "gate": "relation",
       "group": "maintenance",
       "method": "POST",
+      "operation_id": "condemn_versions_management_v1_table__id__maintenance_condemn_post",
+      "path": "/management/v1/table/{id}/maintenance/condemn",
+      "relation": "can_vend_maintain",
+      "spec": false,
+      "write_judge": true
+    },
+    {
+      "also_asks": [],
+      "asked_on": "table",
+      "gate": "relation",
+      "group": "maintenance",
+      "method": "POST",
       "operation_id": "disarm_commit_path_cleanup_management_v1_table__id__maintenance_disarm_post",
       "path": "/management/v1/table/{id}/maintenance/disarm",
       "relation": "can_maintain",

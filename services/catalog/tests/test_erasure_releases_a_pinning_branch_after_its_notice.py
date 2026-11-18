@@ -148,7 +148,9 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
     application.dependency_overrides[get_control_emitter] = lambda: emitter
     application.dependency_overrides[door.get_table_owners] = lambda: _owners
     application.dependency_overrides[get_clock] = lambda: clock
-    with TestClient(application, raise_server_exceptions=False) as client:
+    # The release tick resolves its table's connection as a door does; this app serves one namespace to every door.
+    with TestClient(application, raise_server_exceptions=False) as client, pytest.MonkeyPatch.context() as patched:
+        patched.setattr(release_tick, "_namespace_of", lambda _ctx, _segments: ns)
 
         def release() -> release_tick.ErasureReleaseTick:
             assert client.portal is not None, "the release ticks inside the app's lifespan"
@@ -308,10 +310,10 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
     assert _branches(ns) == expected
 
 
-def test_a_release_waits_while_a_reclaim_holds_the_tables_history(tmp_path: Path) -> None:
-    """A release recreates branches at the versions it recorded, and Lance's reclaim reads the refs once, so a branch
-    recreated while a reclaim runs could be cut from a version it deletes ([[LH-308]]). The tick changes no ref and
-    leaves the release for a later one."""
+def test_a_release_waits_while_a_ref_write_holds_the_tables_history(tmp_path: Path) -> None:
+    """A release takes every ref standing on a residual, and a ref written while it runs could put one there after its
+    plan read the refs (G1 of ``specs/catalog/Erasure.tla``). While a ref write holds the table's history the tick changes
+    no ref and leaves the release for a later one."""
     ns = _pinned_subtree(tmp_path / "data")
     emitter, clock = _Recorder(), _Clock()
     pins = [Pin(ref="tag:t1", holds="deeper@3"), Pin(ref="branch:deeper", holds="work@3"), Pin(ref="branch:work", holds="main@2")]
@@ -330,13 +332,62 @@ def test_a_release_waits_while_a_reclaim_holds_the_tables_history(tmp_path: Path
     )
     erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), release)
     branches, tags = _branches(ns), open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()
-    TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table_uuid).take(HistoryWork.RECLAIM)
+    TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table_uuid).take(HistoryWork.REFS)
 
     with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as (_client, run_release):
         tick = run_release()
 
     assert tick.changed == 0, tick
     assert (_branches(ns), open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()) == (branches, tags), (
-        "the release changed refs while a reclaim held the history"
+        "the release changed refs while a ref write held the history"
     )
     assert erasure_release.scheduled(str(tmp_path / "control"), StorageOptions(), release.release_id) is not None, "the release did not wait for a later tick"
+
+
+def test_a_release_pins_where_its_branches_come_back_before_its_first_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ReleasePins (ADR 0246 §3): a reclaim takes no fence, so one running between the release's delete of ``work`` and
+    its recreate, once main's head moved off the version ``work`` comes back at, would take that version, and the
+    branch would come back over deleted files or not at all. The release pins it before its first delete; the reclaim's
+    batch excludes it, and the subtree comes back whole."""
+    from lakehouse import condemned_versions
+
+    ns = _pinned_subtree(tmp_path / "data")
+    emitter, clock = _Recorder(), _Clock()
+    pins = [Pin(ref="tag:t1", holds="deeper@3"), Pin(ref="branch:deeper", holds="work@3"), Pin(ref="branch:work", holds="main@2")]
+    table_uuid, location = _table_uuid(ns, tmp_path), open_by_name(ns, StorageOptions(), _TABLE_ID).uri
+    release = erasure_release.new_release(
+        pins,
+        release_id="2" * 32,
+        table="db$subjects",
+        table_uuid=table_uuid,
+        location=location,
+        requested_by="user:dex~alice",
+        notified=["user:dex~alice"],
+        due_at=clock.now,
+        residual=[],
+        retain_days=0,
+    )
+    erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), release)
+    recreate = erasure_release._recreate
+
+    def _a_reclaim_between(dataset: Any, record: erasure_release.ReleaseRecord) -> Any:  # noqa: ANN401 — the release's own handle and answer
+        open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("frank"))
+        main = lance.dataset(location)
+
+        def _batch(versions: list[int]) -> condemned_versions.Verdict:
+            run = condemned_versions.Batch(str(tmp_path / "control"), StorageOptions(), table_uuid=table_uuid, location=location, dataset=main, ref=None)
+            run.condemn(versions)
+            run.read_pins()
+            return run.promote(None)
+
+        condemned_versions.reclaim(main, condemned_versions.victims(main, older_than=timedelta(0), retain_versions=None), _batch)
+        return recreate(dataset, record)
+
+    monkeypatch.setattr(erasure_release, "_recreate", _a_reclaim_between)
+    with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as (_client, run_release):
+        run_release()
+
+    assert _branches(ns) == {"work": (None, 2), "deeper": ("work", 2)}, _branches(ns)
+    work = open_by_name(ns, StorageOptions(), _TABLE_ID).checkout_version(("work", None))
+    assert sorted(work.to_table().column("pii").to_pylist()) == ["alice", "bob", "carol"], "the recreated branch does not read whole"
+    assert not [tag for tag in open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list() if condemned_versions.is_pin(tag)], "the release left its pins"

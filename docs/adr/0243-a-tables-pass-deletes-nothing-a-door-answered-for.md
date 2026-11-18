@@ -1,6 +1,6 @@
 # 0243. What a maintenance pass deletes is modelled in TLA+, and a pass deletes nothing a door answered for (2026-11-17)
 
-**Status:** accepted; the model of what ADR 0232 left out ("the pass's effects on the store"). Three findings, each
+**Status:** superseded in part by [ADR 0246](0246-a-reclaim-condemns-before-it-deletes.md) (2026-11-18): what protects a reclaim's deletes (the history fence's RECLAIM, the policy fences and their intents, the victims and fork marks, the per-batch sessions, the credential capped to the hold, `TablePass.tla`) is replaced by condemning before deleting and pinning before reading; what a hold means across levels (§8), the maintain vend's fit at registration and at the register door (§7.2, R6), the catalog's commit-time stamp (§10) and the measurements stand. Before that: accepted; the model of what ADR 0232 left out ("the pass's effects on the store"). Three findings, each
 confirmed against the real pass and the real catalog on moto and on the pinned RustFS 1.0.3, each fixed model first
 (owner's standing ruling: fix now). Amended 2026-11-18: an independent review found nine more problems, each reproduced
 first and FIXED model first (§7 to §11); one of them is a decision taken for the owner to overturn (§8, what a hold

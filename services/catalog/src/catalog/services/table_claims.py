@@ -38,7 +38,7 @@ from catalog.core.config import Settings
 from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.services import contracts, native
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
+from lakehouse import commit_records, commit_turns, condemned_versions, file_identities, history_fences, location_claims, trash
 from lakehouse.base_refs import decoded_path
 from lakehouse.fences import Hold
 from lakehouse.governed import fga
@@ -426,10 +426,43 @@ class DoorTable:
             control_root=self._claims.control_root, storage_options=self._claims.storage_options, table_uuid=self._resolved.require_uuid()
         )
 
+    @property
+    def claims(self) -> ClaimStore:
+        """The claim store the table's location claim is kept in, on the catalog's control root."""
+        return self._claims
+
+    def pin_whole(self, dataset: lance.LanceDataset, branch: str | None, version: int) -> condemned_versions.Pinned:
+        """Pin ``version`` of ``branch``, then refuse it where the table's condemned versions name it
+        (:func:`lakehouse.condemned_versions.pin_whole`), under the catalog's own credential.
+
+        Raises:
+            ValueError: Lance refused the pin (no such version).
+            CondemnedVersionError: The version is condemned.
+            OSError: The store did not answer.
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        return condemned_versions.pin_whole(
+            self._claims.control_root, self._claims.storage_options, table_uuid=self._resolved.require_uuid(), dataset=dataset, ref=branch, version=version
+        )
+
+    def condemned(self, dataset: lance.LanceDataset, branch: str | None) -> set[int]:
+        """The versions of ``branch`` (main for ``None``) the table's condemned versions name
+        (:func:`lakehouse.condemned_versions.condemned`); none for a table whose claim records no uuid, which no reclaim
+        reaches.
+
+        Raises:
+            OSError: The store did not answer, or the record does not parse.
+        """
+        if self._resolved.uuid is None:
+            return set()
+        return condemned_versions.condemned(
+            self._claims.control_root, self._claims.storage_options, table_uuid=self._resolved.uuid, dataset=dataset, ref=branch
+        )
+
     def history_write[T](self, work: history_fences.HistoryWork, write: Callable[[], T], *, judge: Callable[[Hold], None] | None = None) -> T:
         """``write`` while the table's history is held for ``work``, once ``judge`` passed under the hold and the hold is
-        confirmed (:meth:`lakehouse.fences.Fence.write_held`): how every door that writes a ref, a restore or a table's
-        policy under the history writes, so none answers for a write landed after its hold lapsed (ADR 0243, B4).
+        confirmed (:meth:`lakehouse.fences.Fence.write_held`): how every door that writes a ref or a restore under the
+        history writes, so none answers for a write landed after its hold lapsed (ADR 0233 G11).
 
         Raises:
             ConcurrentModificationError: Work that excludes ``work`` holds the history, or this door's hold lapsed before

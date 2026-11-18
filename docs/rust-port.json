@@ -19,7 +19,7 @@
   },
   "services": {
     "catalog": {
-      "operations": 179,
+      "operations": 180,
       "served": [],
       "not_served": [
         "GET /livez",
@@ -114,6 +114,7 @@
         "POST /management/v1/table/{id}/labels/describe",
         "POST /management/v1/table/{id}/labels/remove",
         "POST /management/v1/table/{id}/labels/set",
+        "POST /management/v1/table/{id}/maintenance/condemn",
         "POST /management/v1/table/{id}/maintenance/disarm",
         "POST /management/v1/table/{id}/maintenance/floor",
         "POST /management/v1/table/{id}/maintenance/preview",

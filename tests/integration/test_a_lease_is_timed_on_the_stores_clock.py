@@ -61,7 +61,7 @@ def _claim_taken_then_taken_over(storage_options: StorageOptions) -> Callable[[]
 
 def _hold_taken_then_another_kind(storage_options: StorageOptions) -> Callable[[], object]:
     history = TableHistory(control_root=f"s3://{BUCKET}/control", storage_options=storage_options, table_uuid=TABLE_UUID)
-    history.take(HistoryWork.RECLAIM)
+    history.take(HistoryWork.SCHEDULE)
     return lambda: history.take(HistoryWork.REFS)
 
 

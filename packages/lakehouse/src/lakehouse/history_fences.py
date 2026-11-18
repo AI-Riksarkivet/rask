@@ -1,17 +1,15 @@
-"""Who may change a table's history right now: a reclaim that deletes its versions, or a writer of its tags and branches ([[LH-308]]).
+"""Who may change a table's history right now: an erasure's release or its scheduling, or a writer of its tags and
+branches (ADR 0233).
 
-LANCE READS A TABLE'S REFS ONCE PER RECLAIM. ``cleanup_old_versions`` lists the referenced branches and the tags when it
-starts and deletes against that listing (``rust/lance/src/dataset/cleanup.rs:472-511`` at v13.0.0), and
-``lance_docs/lance/guide/tags_and_branches.md:79-80`` and ``:131-133`` promise only that a tagged version is exempt and that cleanup keeps a
-branch's files. Nothing in Lance orders a ref written meanwhile with the reclaim. Measured on pylance 13.0.0 with a tag
-or branch created on version 2 a few milliseconds into ``cleanup_old_versions(older_than=0)`` on a local store: the tag
-named a deleted version in 20 of 60 races, and the branch could not be read in 9 of 60.
+A RECLAIM TAKES NO FENCE. What keeps a ref written beside a reclaim off the versions the reclaim deletes is the
+condemned record and the door's pin (:mod:`lakehouse.condemned_versions`, ADR 0246): a reclaim condemns before it
+deletes, a ref door pins before it reads, and neither waits for the other. What the fence still orders is the erasure's
+work against the ref doors, below, and two branch creates.
 
-SO THE TWO NEVER OVERLAP ON ONE TABLE. Each takes the table's history fence first (:class:`TableHistory`), kept as one
-object per holder beneath the table's directory on the control root, keyed by the table's uuid (ADR 0173 §8,
-:func:`fence_directory`). Holders of one kind share it, since what the fence closes is a ref written while a reclaim
-runs, never two reclaims or two ref writes; a holder of the other kind refuses the take (:class:`HistoryFencedError`),
-and the caller answers 409 or leaves its reclaim for the next tick. The store picks the winner
+Each kind of work takes the table's history fence first (:class:`TableHistory`), kept as one object per holder beneath
+the table's directory on the control root, keyed by the table's uuid (ADR 0173 §8, :func:`fence_directory`). Holders
+of one kind share it; a holder of a kind that excludes the take refuses it (:class:`HistoryFencedError`), and the
+caller answers 409 or leaves its work for the next tick. The store picks the winner
 (:class:`lakehouse.fences.HolderFence`, ``specs/catalog/Fence.tla``).
 
 REF WRITES NEVER REFUSE REF WRITES. Every tag and branch write takes the fence, so ref writes share it whatever their
@@ -37,14 +35,12 @@ catalog refuses such a pair at create, judging the table's branch listing; :attr
 that excludes its own, so two creates on one table take turns and each judges a listing no other create changes
 before it commits.
 
-A HOLD IS KEPT FOR AS LONG AS ITS WORK RUNS ([[LH-575]]). A reclaim can run longer than one :data:`HOLD` (maintenance
-ends a pass's replica only at twice its 1,800 s bound), and a hold that ran out under it would admit a tag on a version
-it is deleting, so :meth:`TableHistory.held` renews its hold every third of :data:`HOLD` while its block runs: two
-renewals that fail in a row leave a third inside the hold. A holder that crashed renews nothing, so it fences the table for at most
-:data:`HOLD` after its last renewal. A renewal that finds its hold gone, or a release that finds it ended, logs
-``history_fence_lost`` or ``history_fence_outlived`` at ERROR. A renewal is written under the credential the take was,
-so a holder whose credential expires (a maintenance vend lasts 900 s) can renew no further, and the deletes it signs
-with that credential stop with it. Every hold is stamped and judged on the store's own clock
+A HOLD IS KEPT FOR AS LONG AS ITS WORK RUNS ([[LH-575]]). A release can run longer than one :data:`HOLD`, and a hold
+that ran out under it would admit a ref write beside it, so :meth:`TableHistory.held` renews its hold every third of
+:data:`HOLD` while its block runs: two renewals that fail in a row leave a third inside the hold. A holder that crashed
+renews nothing, so it fences the table for at most :data:`HOLD` after its last renewal. A renewal that finds its hold
+gone, or a release that finds it ended, logs ``history_fence_lost`` or ``history_fence_outlived`` at ERROR. Every hold
+is stamped and judged on the store's own clock
 (:attr:`lakehouse.records.StoreRead.at`, the ``Date`` of the read before each write), never a pod's, so a holder's lapse
 does not depend on two pods' clocks agreeing.
 
@@ -68,11 +64,9 @@ from lakehouse.storage_options import StorageOptions
 PREFIX: Final = control_prefixes.HISTORY_FENCES
 
 __all__ = [
-    "FORK_MARK",
     "HOLD",
     "PREFIX",
     "RELEASE_MARK",
-    "VICTIMS_MARK",
     "HistoryFencedError",
     "HistoryHolder",
     "HistoryWork",
@@ -102,17 +96,15 @@ def end(control_root: str, storage_options: StorageOptions, table_uuid: str) -> 
 
 
 #: How long a take, and each renewal of it, holds the fence: three renewal intervals, and short enough that a holder that
-#: crashed does not keep a table's refs, or its reclaim, waiting long.
+#: crashed does not keep a table's refs, or its release, waiting long.
 HOLD: Final = timedelta(minutes=15)
 
 
 class HistoryWork(StrEnum):
     """What a holder does to the table's history."""
 
-    #: Deletes versions: ``cleanup_old_versions`` in any of its callers.
-    RECLAIM = "reclaim"
-    #: Writes a tag or moves a branch's ref, each of which pins a version against a reclaim; a restore, which brings an old
-    #: version's files back, and a table's policy set or delete, which a reclaim reads under its hold, hold it too (ADR 0243).
+    #: Writes a tag or moves a branch's ref, each of which an erasure's release may have to take; a restore, which brings
+    #: an old version's files back, holds it too.
     REFS = "refs"
     #: Creates a branch: ref work no other branch create may share, since each judges the branch names the table holds.
     BRANCH = "branch"
@@ -126,32 +118,17 @@ class HistoryWork(StrEnum):
 #: one mark a take hands its holder, and one only the catalog's own credential can write.
 RELEASE_MARK: Final = "erasure-release"
 
-#: The kind of a cleanup's mark in a table's fence directory (:mod:`lakehouse.reclaim_marks`): the versions one cleanup call
-#: will remove, written under its RECLAIM hold before its first delete and removed once it returned with no failed delete.
-#: A maintain-tier vend may put and delete one (``catalog.core.vending.TableRecords``); a ref door refuses a version one
-#: names. Spelled as a reclaim's holder is but for one character (``reclaim.<32 hex>.json`` beside ``reclaim-<32
-#: hex>.json``), so one session-policy grant reaches both and nothing longer (F8).
-VICTIMS_MARK: Final = "reclaim"
-
-#: The kind of an erasure's fork mark (:mod:`lakehouse.reclaim_marks`): a version a branch was cut from whose files an
-#: erasure's cleanup took, which stands over them for as long as a branch keeps its manifest. Only the catalog's own
-#: credential writes or removes one (no maintain-tier grant names it), and no take sweeps it.
-FORK_MARK: Final = "forked"
-
-#: The kinds that keep refs off the table's history while they hold it: they delete versions, or write what a ref write
-#: must see before it lands. They share it with their own kind and with each other.
-_REF_FREE: Final = frozenset({HistoryWork.RECLAIM, HistoryWork.SCHEDULE})
 _REF_WRITES: Final = frozenset({HistoryWork.REFS, HistoryWork.BRANCH})
 
 
 def _excludes(held: HistoryWork, work: HistoryWork) -> bool:
-    """Whether a holder doing ``held`` refuses a take for ``work``: a ref write beside a reclaim or a scheduling, a second
-    branch create, or anything beside a release."""
+    """Whether a holder doing ``held`` refuses a take for ``work``: a ref write beside a scheduling, a second branch
+    create, or anything beside a release."""
     if HistoryWork.RELEASE in (held, work):
         return True
     if held is work:
         return work is HistoryWork.BRANCH
-    return {held, work} & _REF_FREE != set() and {held, work} & _REF_WRITES != set()
+    return HistoryWork.SCHEDULE in (held, work) and {held, work} & _REF_WRITES != set()
 
 
 class HistoryHolder(HolderRecord):
@@ -167,19 +144,17 @@ class HistoryFencedError(Exception):
 class TableHistory(HolderFence):
     """Where one table's history fence is kept: the control root, the credential that writes there, and the table's uuid.
 
-    A maintain-tier vend reaches this directory and no other of the control root: it lists it, reads every object in it,
-    and puts and deletes every key below ``reclaim-`` (``catalog.core.vending.TableRecords``), which is a reclaim's holder
-    objects and, since an IAM ``*`` matches ``/``, any name in a subdirectory below one. A take judges only the names this
-    fence defines directly in the directory, a holder's kind by its key (:class:`lakehouse.fences.HolderFence`), so what
-    the vend can plant is at most a reclaim's hold, for one hold; a lapsed holder of another kind, and whatever was planted,
-    is swept by the catalog's next take. It ends with the table (:func:`end`).
+    Only the catalog's own identity writes here: no vended tier reaches the control root (ADR 0246). A take judges only
+    the names this fence defines directly in the directory, a holder's kind by its key
+    (:class:`lakehouse.fences.HolderFence`); a lapsed holder, and whatever else stands there, is swept by the next take.
+    It ends with the table (:func:`end`).
     """
 
     log_name: ClassVar[str] = "history_fence"
     stored_field: ClassVar[str] = "uuid"
     holder_model: ClassVar[type[HolderRecord]] = HistoryHolder
     kinds: ClassVar[frozenset[str]] = frozenset(HistoryWork)
-    mark_kinds: ClassVar[frozenset[str]] = frozenset({RELEASE_MARK, VICTIMS_MARK, FORK_MARK})
+    mark_kinds: ClassVar[frozenset[str]] = frozenset({RELEASE_MARK})
 
     table_uuid: str
 

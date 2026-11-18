@@ -31,9 +31,9 @@ import lance
 import pyarrow as pa
 import pytest
 from lance.dataset import Tags
+from unheld_batches import unheld
 
-from catalog.services.erasure import ErasureReport, no_sessions, ref_heads, verify
-from lakehouse.history_fences import TableHistory
+from catalog.services.erasure import ErasureReport, ref_heads, verify
 from lakehouse.storage_options import StorageOptions
 
 
@@ -64,10 +64,9 @@ def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
             predicate=_PREDICATE,
             retention=retention,
             trusted=recorded,
-            history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
+            condemn=unheld(f"{uri}-control", f"erased-{uri.rsplit('/', 1)[-1]}", uri),
             derived=list,
             before_untag=lambda _tags: None,
-            sessions=no_sessions,
         )
 
     return _erase

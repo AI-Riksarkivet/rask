@@ -49,7 +49,7 @@ from lance_namespace import ErrorCode
 from moto.iam.access_control import IAMPolicy, PermissionResult
 from moto.sts.models import sts_backends
 
-from lakehouse import file_identities, history_fences, location_claims, trash
+from lakehouse import condemned_versions, file_identities, history_fences, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.record_store import record_key
 from tests.integration import store_requests
@@ -206,45 +206,28 @@ def test_a_vend_permits_only_what_its_tier_may_change(estate: _Estate, tier: _Ti
 
 
 def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(estate: _Estate) -> None:
-    """The reclaim holds its table's history fence and forgets the records of its committed files under the vend
-    (`lakehouse.history_fences`, `lakehouse.file_identities`), so the vend reaches those two of its own table; it puts no
-    committed-file record, since one it could put would record a replaced file as committed, and reaches no other table's.
-    Of the fence's directory it reads every object and writes and deletes only keys of a reclaim's holder's shape: never a
-    ref writer's hold, nor the mark of a scheduled erasure release, nor a mark below a subdirectory (ADR 0233 §9). The control root here is the table's bucket;
-    its listing is scoped by an `s3:prefix` condition this evaluator does not read, which RustFS enforces (measured, ADR
-    0233 §9)."""
+    """A reclaim forgets the records of its committed files under the vend (`lakehouse.file_identities`), so the vend
+    reaches those of its own table; it puts no committed-file record, since one it could put would record a replaced file
+    as committed, and reaches no other table's. It reaches nothing else on the control root: the table's condemned
+    versions and its history fence are the catalog's own to write (ADR 0246), so it neither reads nor writes either, and
+    no other table's records. The control root here is the table's bucket; its listing is scoped by an `s3:prefix`
+    condition this evaluator does not read, which RustFS enforces (measured, ADR 0233 §9)."""
     mine, other = estate.table_uuid(), uuid.uuid4().hex
     fence, token = history_fences.fence_directory(mine), uuid.uuid4().hex
 
     _, policy = estate.vend("maintain")
 
     asked = {
-        "holds-its-fence": ("s3:PutObject", f"{fence}/reclaim-{token}.json"),
-        "releases-its-hold": ("s3:DeleteObject", f"{fence}/reclaim-{token}.json"),
-        "reads-a-ref-writers-hold": ("s3:GetObject", f"{fence}/refs-{token}.json"),
         "forgets-its-records": ("s3:DeleteObject", f"{file_identities.records_of(mine)}/txn.json"),
         "records-no-file": ("s3:PutObject", f"{file_identities.records_of(mine)}/txn.json"),
-        "removes-no-ref-writers-hold": ("s3:DeleteObject", f"{fence}/refs-{token}.json"),
-        "rewrites-no-release-mark": ("s3:PutObject", f"{fence}/erasure-release.{token}.json"),
-        "removes-no-release-mark": ("s3:DeleteObject", f"{fence}/erasure-release.{token}.json"),
-        "plants-no-mark-below-a-subdirectory": ("s3:PutObject", f"{fence}/reclaim-x/erasure-release.{token}.json"),
-        "holds-no-other-fence": ("s3:PutObject", f"{history_fences.fence_directory(other)}/reclaim-{token}.json"),
+        "reads-no-condemned-versions": ("s3:GetObject", condemned_versions.record_key(mine)),
+        "writes-no-condemned-versions": ("s3:PutObject", condemned_versions.record_key(mine)),
+        "reads-no-ref-writers-hold": ("s3:GetObject", f"{fence}/refs-{token}.json"),
+        "holds-no-fence": ("s3:PutObject", f"{fence}/reclaim-{token}.json"),
         "forgets-no-other-records": ("s3:DeleteObject", f"{file_identities.records_of(other)}/txn.json"),
     }
     granted = {name: _permits(policy, action, estate.bucket, key) for name, (action, key) in asked.items()}
-    assert granted == {
-        "holds-its-fence": True,
-        "releases-its-hold": True,
-        "reads-a-ref-writers-hold": True,
-        "forgets-its-records": True,
-        "records-no-file": False,
-        "removes-no-ref-writers-hold": False,
-        "rewrites-no-release-mark": False,
-        "removes-no-release-mark": False,
-        "plants-no-mark-below-a-subdirectory": False,
-        "holds-no-other-fence": False,
-        "forgets-no-other-records": False,
-    }, policy
+    assert granted == {name: name == "forgets-its-records" for name in asked}, policy
 
 
 @pytest.mark.parametrize(

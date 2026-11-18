@@ -1,4 +1,4 @@
-"""A version delete removes only old, unpinned versions, so no version number is ever minted twice.
+"""A version delete condemns only old, unpinned versions, so no version number is ever minted twice.
 
 [[LH-206]]. Measured on pylance 12.0.0 against the `dir` backend's own `batch_delete_table_versions`
 (ranges are start-inclusive, end-exclusive — the spec's `VersionRange`):
@@ -31,7 +31,6 @@ from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDe
 from catalog.api.v1.endpoints import versions as version_door
 from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
-from catalog.services import maintenance
 from catalog.services.dataplane import create_table
 from lakehouse import base_registry
 from lakehouse.ns_errors import install_problem_handlers
@@ -91,13 +90,20 @@ def _delete(client: TestClient, *ranges: tuple[int, int], branch: str | None = N
     return client.post("/v1/table/db$alpha/version/delete", json=body)
 
 
-def test_an_old_untagged_version_is_deleted(client: TestClient, ns: LanceNamespace) -> None:
-    """The control: without it every refusal below would also pass against a door that deletes nothing."""
+def _listed(client: TestClient, *, branch: str | None = None) -> list[int]:
+    answer = client.post("/v1/table/db$alpha/version/list", params={} if branch is None else {"branch": branch})
+    assert answer.status_code == 200, answer.text
+    return sorted(int(row["version"]) for row in answer.json()["versions"])
+
+
+def test_an_old_untagged_version_is_condemned_and_no_longer_listed(client: TestClient, ns: LanceNamespace) -> None:
+    """The control: without it every refusal below would also pass against a door that condemns nothing. The door only
+    condemns (ADR 0246 §1); the table's next reclaim deletes the manifest."""
     answer = _delete(client, (1, 2))
 
     assert answer.status_code == 200, answer.text
     assert answer.json()["deleted_count"] == 1
-    assert _versions(ns) == [2, 3, 4]
+    assert _listed(client) == [2, 3, 4]
 
 
 @pytest.mark.parametrize("reaching", [(4, 5), (2, -1)], ids=["exactly-latest", "through-latest"])
@@ -152,29 +158,6 @@ def test_a_request_with_no_range_is_refused(client: TestClient, ns: LanceNamespa
     assert _versions(ns) == [1, 2, 3, 4]
 
 
-def test_a_tag_that_lands_after_the_pin_check_is_still_refused_and_named(client: TestClient, ns: LanceNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The pre-check reads the refs before the reclaim runs; a tag created in between must be refused by
-    the reclaim itself, with nothing deleted, rather than skipped while the untagged versions go."""
-    real = maintenance._refuse_pinned_versions
-    calls: list[int] = []
-
-    def tag_arrives_after_the_check(ds: Any, branch: str | None, targets: Any) -> None:  # noqa: ANN401 — the pylance handle
-        calls.append(1)
-        if len(calls) == 1:
-            ds.tags.create("late", 2)
-            return
-        real(ds, branch, targets)
-
-    monkeypatch.setattr(maintenance, "_refuse_pinned_versions", tag_arrives_after_the_check)
-
-    answer = _delete(client, (1, 3))
-
-    assert answer.status_code == 409, answer.text
-    assert answer.json()["code"] == 19
-    assert "late" in answer.json()["detail"]
-    assert _versions(ns) == [1, 2, 3, 4], "the untagged version 1 was deleted while the tagged one was refused"
-
-
 def test_one_refused_range_deletes_nothing_from_the_others(client: TestClient, ns: LanceNamespace) -> None:
     answer = _delete(client, (1, 2), (LATEST, LATEST + 1))
 
@@ -192,5 +175,5 @@ def test_a_branch_delete_removes_the_branch_version_and_leaves_main(client: Test
 
     assert answer.status_code == 200, answer.text
     assert answer.json()["deleted_count"] == 1
-    assert _versions(ns, branch=BRANCH) == [4, 6]
-    assert _versions(ns) == [1, 2, 3, 4], "a branch-scoped delete reached main"
+    assert _listed(client, branch=BRANCH) == [4, 6]
+    assert _listed(client) == [1, 2, 3, 4], "a branch-scoped delete reached main"

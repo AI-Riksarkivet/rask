@@ -10,9 +10,8 @@ from typing import Any, cast
 import pytest
 
 from catalog.services import maintenance
-from lakehouse.history_fences import HistoryWork, TableHistory
+from lakehouse import condemned_versions
 from lakehouse.manifest_wire import encode_varint
-from lakehouse.reclaim_marks import Reclaim
 from lakehouse.storage_options import StorageOptions
 
 
@@ -109,7 +108,7 @@ def test_run_gc_REFUSES_an_unknown_flag() -> None:
 
     ds = _FakeDs(version=1, versions=[], tags={}, feature_flags=(64, 64))
     with pytest.raises(UnsupportedOperationError, match="data overlays"):
-        maintenance.run_gc(ds, retention_days=7, retain_versions=2, branch=None, marked=cast("Any", None))
+        maintenance.run_gc(ds, retention_days=7, retain_versions=2, branch=None, condemn=cast("Any", None))
     assert ds.cleaned is None, "the delete ran anyway — the refusal came too late"
 
 
@@ -146,10 +145,13 @@ def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) 
     assert describe_gc_unsupported_flags(*manifest_feature_flags(ds)) is None, "premise gone: the CRON refuses this clone's GC too"
     source_files = sorted(p.name for p in (tmp_path / "src.lance" / "data").iterdir())
 
-    history = TableHistory(control_root=str(tmp_path / "control"), storage_options=StorageOptions(), table_uuid="clone")
-    with history.hold_for(HistoryWork.RECLAIM) as hold:
-        marked = Reclaim(control_root=history.control_root, storage_options=StorageOptions(), table_uuid="clone", ref=None, hold=hold)
-        result = maintenance.run_gc(ds, retention_days=0, retain_versions=1, branch=None, marked=marked)
+    def condemn(versions: list[int]) -> condemned_versions.Verdict:
+        run = condemned_versions.Batch(str(tmp_path / "control"), StorageOptions(), table_uuid="clone", location=clone, dataset=lance.dataset(clone), ref=None)
+        run.condemn(versions)
+        run.read_pins()
+        return run.promote(None)
+
+    result = maintenance.run_gc(ds, retention_days=0, retain_versions=1, branch=None, condemn=condemn)
 
     assert result["ok"] is True
     assert sorted(p.name for p in (tmp_path / "src.lance" / "data").iterdir()) == source_files, "the reclaim deleted the SOURCE's files"

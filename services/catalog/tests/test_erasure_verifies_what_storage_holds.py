@@ -32,6 +32,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
+from unheld_batches import unheld
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
@@ -39,9 +40,8 @@ from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
-from catalog.services.erasure import ErasureReport, no_sessions, ref_heads, verify
+from catalog.services.erasure import ErasureReport, ref_heads, verify
 from lakehouse import base_registry
-from lakehouse.history_fences import TableHistory
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
 
@@ -100,10 +100,9 @@ def _verify(
         predicate=_PREDICATE,
         retention=retention,
         trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
-        history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
+        condemn=unheld(f"{uri}-control", f"erased-{uri.rsplit('/', 1)[-1]}", uri),
         derived=list,
         before_untag=lambda _tags: None,
-        sessions=no_sessions,
     )
 
 

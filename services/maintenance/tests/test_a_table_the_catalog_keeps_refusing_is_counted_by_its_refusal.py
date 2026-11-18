@@ -66,10 +66,11 @@ def _refused(status: int, body: dict[str, Any]) -> VendAnswer:
 
 
 def _execute(maintain_one: Callable[..., DatasetResult], uri: str, *, vend: VendAnswer) -> DatasetResult:
-    """One dataset's pass through the real vend client."""
+    """One dataset's pass through the real vend client; the reclaim batch the pass asks for first is refused as its vend is."""
     settings = MaintenanceSettings.model_validate({"s3_bucket": "lake", "catalog_url": CATALOG, "min_versions_to_expire": 1})
     with respx.mock(assert_all_called=False) as router:
         router.post(VEND_URL).mock(return_value=vend(uri))
+        router.post(f"{CATALOG}/management/v1/table/{TABLE_ID}/maintenance/condemn").mock(return_value=vend(uri))
         return maintain_one(uri, settings, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1), table_id=TABLE_ID)
 
 

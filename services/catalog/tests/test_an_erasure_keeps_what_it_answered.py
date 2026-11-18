@@ -39,7 +39,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import announcement_intents, erasure_release
 from catalog.services.dataplane import create_table, read_arrow_body
-from lakehouse import clone_sources
+from lakehouse import clone_sources, condemned_versions
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -173,7 +173,9 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, emitter: _Recorder, clock: _
     application.dependency_overrides[door.get_table_owners] = lambda: _owners
     application.dependency_overrides[get_clock] = lambda: clock
     application.dependency_overrides[require_can_reclaim_trash] = _reclaimer
-    with TestClient(application, raise_server_exceptions=False) as client:
+    # The release tick resolves its table's connection as a door does; this app serves one namespace to every door.
+    with TestClient(application, raise_server_exceptions=False) as client, pytest.MonkeyPatch.context() as patched:
+        patched.setattr(release_tick, "_namespace_of", lambda _ctx, _segments: ns)
 
         def release() -> release_tick.ErasureReleaseTick:
             assert client.portal is not None, "the release ticks inside the app's lifespan"
@@ -344,7 +346,8 @@ def test_whoever_puts_a_ref_the_release_takes_is_told_before_it_runs(
                     return getattr(self._tags, name)
 
                 def create(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — pylance's own arguments
-                    if failing:
+                    # The caller's tag, never the pin its door writes first (ADR 0246).
+                    if failing and not condemned_versions.is_pin(str(args[0])):
                         failing.clear()
                         if lands:
                             self._tags.create(*args, **kwargs)

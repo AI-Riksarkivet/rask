@@ -40,33 +40,31 @@ from lakehouse import (
     auto_cleanup,
     base_refs,
     base_registry,
+    condemned_versions,
     data_directories,
     location_claims,
     maintenance_policies,
     objectfs,
-    policy_fences,
-    reclaim_marks,
     trash,
     warehouse_records,
 )
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse.condemned_versions import Verdict
 from lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.history_fences import TableHistory
 from lakehouse.lance_session import affordable_cache_bytes
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.maintenance_due import delete_due
-from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.storage_options import StorageOptions, on_s3
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
     CatalogRefusal,
     record_base_fragments_holding_deleted_rows,
+    record_condemned,
     record_dataset_swept,
     record_failed,
-    record_mark_age,
     record_mixed_file_versions,
     record_overwritten_files,
     record_reclaim_held_back,
@@ -78,18 +76,13 @@ from maintenance.core.metrics import (
 from maintenance.services import base_reclaim, committed_files, credentials
 from maintenance.services.due import refresh_due, table_ids_of
 from maintenance.services.expiry import (
-    HISTORY_FENCED,
-    POLICY_CHANGED,
-    POLICY_FENCED,
-    Chain,
     DatasetOpener,
     DatasetResult,
     ExpiryPolicy,
     ExpiryTarget,
-    PolicyRead,
-    count_reclaimable,
     expire_versions,
     lost_staged_manifests,
+    reclaimable,
 )
 from maintenance.services.floor import raise_stands
 from maintenance.services.naming import PolicyOwners, TableIds, claim_store, policy_owners, read_uuids
@@ -140,9 +133,6 @@ class PassReadings(BaseModel):
     policy_unreadable: str | None = None
     #: The maintain-tier vends this pass was answered, one serving the table and every branch ([[LH-576]]).
     vends: credentials.PassVends = Field(default_factory=credentials.PassVends)
-    #: Where the policy in ``context`` was read, which each expiry reads again once it holds the table's history
-    #: (ADR 0243); ``None`` where no policy was read, which reclaims nothing.
-    policy_read: PolicyRead | None = None
 
 
 class NamedDataset(BaseModel):
@@ -161,11 +151,14 @@ class WriteProbe(BaseModel):
     armed: bool = False
     data_storage_version: str | None = None
     mixed_data_file_versions: bool = False
-    #: The versions the policy would reclaim, as Lance counted them on the probe's handle; ``None`` when not counted.
-    reclaimable_versions: int | None = None
-    #: Whether a cleanup's mark stands in the table's history: a dead cleanup's victims, perhaps half removed, which the
-    #: pass finishes whatever its threshold while its policy reclaims them, or a mark it judges (:mod:`lakehouse.reclaim_marks`).
-    marked: bool = False
+    #: The versions the policy would reclaim, as Lance's dry run named them on the probe's handle.
+    victims: list[int] = Field(default_factory=list)
+    #: Whether the catalog is asked for a batch before the vend (ADR 0246): the victims meet the threshold, the table's
+    #: condemned versions are recorded (a dead batch's, ``version/delete``'s, to be finished whatever the threshold), or
+    #: a dead door's pin waits to be swept.
+    asks: bool = False
+    #: Whether the victims meet the policy's threshold, so the first batch names them.
+    due: bool = False
 
 
 def emit_zero_baselines() -> None:
@@ -189,19 +182,12 @@ def base_record_reader(settings: MaintenanceSettings, options: StorageOptions) -
     return partial(base_registry.read_base_record, registry)
 
 
-def _marked(_ds: lance.LanceDataset, *, control_root: str, options: StorageOptions, table_uuid: str) -> bool:
-    """Whether a cleanup's mark stands in the table's history, and its age reported (F5).
-
-    One listing of the table's history fence directory under maintenance's own session, which lists every bucket and reads
-    none of the fence's objects, so a mark is known here by its name alone: the expiry reads it under its hold, with the
-    vend, and judges it there (:class:`lakehouse.reclaim_marks.Reclaim`). The age of the oldest is the store's reading,
-    and the worker exports the oldest of every table it passed (``maintenance.reclaims.mark_oldest``).
-    """
-    age = reclaim_marks.oldest(control_root, options, table_uuid=table_uuid)
-    record_mark_age(table_uuid, age, now=datetime.now(UTC))
-    if age is not None:
-        log.info("maintenance_victims_marked", extra={"uuid": table_uuid, "oldest_seconds": int(age.total_seconds())})
-    return age is not None
+def _a_dead_doors_pin(ds: lance.LanceDataset, *, now: datetime) -> bool:
+    """Whether a pin on the table is older than a door can live (A3'), which only the catalog's batch may delete."""
+    return any(
+        condemned_versions.is_pin(name) and isinstance(created := tag.get("created_at"), datetime) and now - created > condemned_versions.PIN_LIFETIME
+        for name, tag in ds.tags.list().items()
+    )
 
 
 def _probe_before_vending(
@@ -212,7 +198,7 @@ def _probe_before_vending(
     directories: list[base_registry.RecordedBase],
     now: datetime,
     opened: DatasetOpener,
-    marks: Callable[[lance.LanceDataset], bool] | None = None,
+    recorded: Callable[[], bool] | None = None,
 ) -> WriteProbe:
     """Could expiry write anything at all on this dataset?
 
@@ -230,25 +216,26 @@ def _probe_before_vending(
 
     CONSERVATIVE BY CONSTRUCTION: an unreadable dataset answers `True`, because skipping a dataset that WOULD have been
     maintained is the failure this service exists to prevent while a spare credential is only a cost. Logged, never
-    silent: the conservative answer otherwise hides a real fault as an extra credential. A cleanup that stopped part-way
-    is one more thing to write: its victims, marked, are finished below the threshold or its mark judged (``marks``, ADR
-    0243). A mark is looked for whatever the policy, so a held table's half-removed victims are counted too.
+    silent: the conservative answer otherwise hides a real fault as an extra credential. Versions are written only once
+    the catalog licenses them (ADR 0246), so the probe asks it first (``asks``) where the victims meet the threshold, a
+    condemned version is recorded (``recorded``), or a dead door's pin waits to be swept.
     """
     try:
         ds = opened()
         armed = policy.cleanup_enabled and bool(auto_cleanup.armed_keys(ds.config()))
-        counted = count_reclaimable(ds, policy) if policy.cleanup_enabled else None
-        reclaimable = counted is not None and counted >= policy.min_reclaimable
+        victims = reclaimable(ds, policy) if policy.cleanup_enabled else []
+        due = policy.cleanup_enabled and len(victims) >= policy.min_reclaimable
         stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
         lost = policy.cleanup_enabled and bool(lost_staged_manifests(uri, options, version=ds.version).past(policy.staged_grace))
-        marked = marks is not None and marks(ds)
+        asks = policy.cleanup_enabled and (due or (recorded is not None and recorded()) or _a_dead_doors_pin(ds, now=now))
         return WriteProbe(
-            may_write=armed or reclaimable or stranded or lost or (policy.cleanup_enabled and marked),
+            may_write=armed or stranded or lost,
             armed=armed,
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
-            reclaimable_versions=counted,
-            marked=marked,
+            victims=victims,
+            asks=asks,
+            due=due,
         )
     except Exception as exc:
         log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
@@ -413,8 +400,8 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     ``__manifest`` names it as ([[LH-219]]), asked for where the probe finds something to write.
 
     One name feeds the vend and the result, so the table a credential is scoped to and the table events name cannot
-    disagree. The pass holds that table's history fence, keyed by its uuid and written under the vend, while it deletes
-    ([[LH-308]]), so a pass over a branch holds the same fence as a pass over its table.
+    disagree. The versions it deletes are the ones the catalog's batch licensed (``maintenance/condemn``, ADR 0246), asked
+    for before the vend, so a held table, or one whose candidates a door pinned, is vended nothing to delete them.
     """
     table = named.table
     options = settings.storage_options()
@@ -422,69 +409,33 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     directories = _data_directories(uri, uuid=named.owners.table_uuid, readings=readings, settings=settings, options=options, opened=opened)
     now = readings.context.now
     ref = _branch_of(uri, table, readings=readings)
-    marks = partial(_marked, control_root=settings.resolved_control_root, options=options, table_uuid=named.owners.table_uuid)
-    probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now, opened=opened, marks=marks)
-    target = ExpiryTarget(uri=uri, storage_options=options, table_id=table, data_directories=directories, now=now, ref=ref, marked=probe.marked)
-    if not probe.may_write:
-        # Read on the handle the expiry reads too, which no commit has moved: Lance's count is not asked again.
-        return _marks_reported(
-            expire_versions(target.model_copy(update={"reclaimable_versions": probe.reclaimable_versions}), policy, opener=opened), named.owners.table_uuid
-        )
+    recorded = partial(condemned_versions.recorded, settings.resolved_control_root, options, named.owners.table_uuid)
+    probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now, opened=opened, recorded=recorded)
+    condemn = partial(credentials.condemn, table, settings, branch=ref)
+    target = ExpiryTarget(uri=uri, storage_options=options, table_id=table, data_directories=directories, now=now, ref=ref, victims=probe.victims)
+    first: Verdict | None = None
+    if probe.asks:
+        try:
+            first = condemn(probe.victims[: condemned_versions.BATCH] if probe.due else [])
+        except _VEND_STOPS as exc:
+            return _condemned_reported(_stopped_by_vend(probe, target, exc), named.owners.table_uuid, ref)
+        target = target.model_copy(update={"first": first, "condemn": condemn, "victims": probe.victims if probe.due else []})
+    if not (probe.may_write or (first is not None and first.held_by is None and bool(first.versions))):
+        # Read on the handle the expiry reads too, which no commit has moved: Lance's dry run is not asked again.
+        return _condemned_reported(expire_versions(target, policy, opener=opened), named.owners.table_uuid, ref)
     try:
         vended = readings.vends.write_options_for(uri, settings, table_id=table)
     except _VEND_STOPS as exc:
-        return _stopped_by_vend(probe, target, exc)
+        return _condemned_reported(_stopped_by_vend(probe, target, exc), named.owners.table_uuid, ref)
     disarm = _disarm(uri, table, readings=readings, settings=settings) if probe.armed else DisarmOutcome()
-    history = TableHistory(control_root=settings.resolved_control_root, storage_options=vended, table_uuid=named.owners.table_uuid)
-    held = {
-        "write_options": vended,
-        "history": history,
-        "table_uuid": named.owners.table_uuid,
-        "control_root": settings.resolved_control_root,
-        "policy_read": readings.policy_read,
-        "policy_fences": policy_fences.levels(
-            settings.resolved_control_root,
-            vended,
-            warehouse=table.split(CATALOG_DELIMITER)[0],
-            namespace_uuids=named.owners.namespace_uuids,
-            project=readings.policy_read.project if readings.policy_read is not None else None,
-        ),
-        "rechain": partial(chain_now, readings.policy_read.location, settings) if readings.policy_read is not None else None,
-    }
-    return _marks_reported(disarm.onto(expire_versions(target.model_copy(update=held), policy)), named.owners.table_uuid)
+    held = {"write_options": vended, "table_uuid": named.owners.table_uuid, "control_root": settings.resolved_control_root}
+    return _condemned_reported(disarm.onto(expire_versions(target.model_copy(update=held), policy)), named.owners.table_uuid, ref)
 
 
-def _marks_reported(result: DatasetResult, table_uuid: str) -> DatasetResult:
-    """``result``, the table forgotten by the oldest mark's age when its pass left no mark it counts: one it finished or
-    judged, or one an erasure left on a version a branch keeps, which no reclaim can finish (``reclaim_marks.Reclaim``)."""
-    if not result.marks_left:
-        record_mark_age(table_uuid, None, now=datetime.now(UTC))
+def _condemned_reported(result: DatasetResult, table_uuid: str, ref: str | None) -> DatasetResult:
+    """``result``, with the versions of its ref left condemned and standing counted (``maintenance.reclaims.condemned``)."""
+    record_condemned(table_uuid, ref, len(result.condemned))
     return result
-
-
-def chain_now(location: str, settings: MaintenanceSettings) -> Chain | None:
-    """The levels above the table at ``location`` whose policy can govern it, read now: each namespace of the chain its
-    location's claim names it under, and its bucket's project; ``None`` where the table no longer resolves, or a read
-    failed, either of which a pass under its holds reads as a changed chain and deletes nothing (F3).
-
-    The same reads :func:`read_for` makes before the holds, so of a rename into another namespace (which holds the
-    table's history as ref work, ``dataplane.rename_table``) and a pass's holds, one sees the other.
-    """
-    options = settings.storage_options()
-    try:
-        held = location_claims.holder(claim_store(settings), location)
-        if held is None:
-            return None
-        root = f"s3://{location.removeprefix('s3://').split('/', 1)[0]}" if on_s3(location) else settings.resolved_control_root
-        ids = table_ids_of(root, options, segments=held.segments)
-        owners = policy_owners(ids, held.table, claims=claim_store(settings)) if ids is not None else None
-        if owners is None:
-            return None
-        project = maintenance_policies.governing_project(settings.resolved_control_root, options, location)
-    except (OSError, ValueError) as exc:
-        log.warning("maintenance_chain_unread_under_hold", extra={"location": location, "error": f"{type(exc).__name__}: {exc}"[:300]})
-        return None
-    return Chain(namespace_uuids=owners.namespace_uuids, project=project)
 
 
 def _expire_in_span(
@@ -901,23 +852,9 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
         except maintenance_policies.UnreadablePolicyError as exc:
             log.error("maintenance_policy_unreadable", extra={"uuid": held.uuid, "table": held.table, "error": str(exc)[:300]})
             return None
-        try:
-            project = maintenance_policies.governing_project(settings.resolved_control_root, options, location)
-        except (OSError, ValueError) as exc:
-            log.error("maintenance_policy_unreadable", extra={"uuid": held.uuid, "table": held.table, "error": f"bucket claim: {exc}"[:300]})
-            return None
         policies = [policy] if policy is not None else []
-        read = PolicyRead(
-            policy_root=settings.resolved_policy_root,
-            claims_root=settings.resolved_control_root,
-            location=location,
-            table_uuid=owners.table_uuid,
-            namespace_uuids=owners.namespace_uuids,
-            policy=policy,
-            project=project,
-        )
         context = PlanContext(policies=policies, now=now, older_than=timedelta(days=settings.older_than_days))
-        return PassReadings(table_ids=ids, context=context, table=held.table, owners=owners, policy_read=read)
+        return PassReadings(table_ids=ids, context=context, table=held.table, owners=owners)
     context = PlanContext(policies=policies, now=now, older_than=timedelta(days=settings.older_than_days))
     return PassReadings(table_ids=ids, context=context, table=held.table, owners=owners)
 
@@ -1038,11 +975,11 @@ def staged_due_at(ds: lance.LanceDataset, uri: str, *, policy: ExpiryPolicy, opt
 def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: MaintenanceSettings) -> datetime | None:
     """When the dataset ``result`` names next needs a pass, read afresh after this one: its versions, its staged
     manifests and its policy's cadence. A dataset the pass could not decide on, or that the catalog's answer about its
-    name parked, or whose cleanup marks still stand, is retried after ``retry_seconds``; a refused one, and one nothing comes due on, waits for its next
-    commit or the recheck. So is one whose due record could not be evaluated: the record stays as it was, and a recheck
+    name parked, or whose versions stay condemned while no hold keeps them, is retried after ``retry_seconds``; a refused
+    one, and one nothing comes due on, waits for its next commit or the recheck. So is one whose due record could not be evaluated: the record stays as it was, and a recheck
     a day out would leave a compaction or an index optimize it now names unlisted for that long."""
     now = readings.context.now
-    if result.error is not None or result.skipped in (HISTORY_FENCED, POLICY_FENCED, POLICY_CHANGED) or result.refused_by in _ASKED_AGAIN or result.marks_left:
+    if result.error is not None or result.refused_by in _ASKED_AGAIN or (result.condemned and result.held_by is None):
         return now + timedelta(seconds=settings.retry_seconds)
     if result.refused is not None or result.trashed is not None:
         return None

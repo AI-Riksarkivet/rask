@@ -7,7 +7,7 @@ model dump, a log line or an error that echoes one of these models carries neith
 ([[LH-072]]).
 
 Each model is built as its service builds it: the catalog signing with the session its ServiceAccount token was exchanged
-for (ADR 0170), and maintenance's expiry pass holding its own key pair in the table's history fence beside the vend it
+for (ADR 0170), and maintenance's expiry pass holding its own key pair beside the vend it
 signs with. Only the STS exchange and the catalog's vend door (with respx, at the URL maintenance asks) are played.
 """
 
@@ -33,7 +33,6 @@ from lakehouse import store_session
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.context import DiagnosticFormatter
 from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.history_fences import TableHistory
 from lakehouse.idempotency import KeyBinding
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
@@ -138,11 +137,10 @@ def _keyed_door(rig: _Rig) -> BaseModel:
 
 
 def _expiry_target(rig: _Rig) -> BaseModel:
-    """As the sweep hands it to the expiry pass: its own key pair in the history fence, and the vend the pass signs with."""
+    """As the sweep hands it to the expiry pass: its own key pair, and the vend the pass signs with."""
     rig.door.post(f"{_CATALOG_URL}/management/v1/table/{_TABLE}/credentials", params={"tier": "maintain"}).mock(return_value=httpx.Response(200, json=_VEND))
     options = rig.maintenance.storage_options()
-    history = TableHistory(control_root=rig.maintenance.resolved_control_root, storage_options=options, table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
-    target = ExpiryTarget(uri=_URI, storage_options=options, table_id=_TABLE, history=history)
+    target = ExpiryTarget(uri=_URI, storage_options=options, table_id=_TABLE)
     target.storage_options = credentials.write_options_for(_URI, rig.maintenance, table_id=_TABLE)
     return target
 

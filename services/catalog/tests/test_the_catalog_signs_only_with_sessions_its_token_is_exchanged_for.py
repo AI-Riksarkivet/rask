@@ -271,30 +271,37 @@ def test_a_vend_whose_policy_sts_would_refuse_is_refused_naming_why(sessions: _R
     assert len(sessions.sessions()) == exchanged, "the store was asked to take a policy the catalog knew it refuses"
 
 
-@pytest.mark.parametrize(("kms_key", "refused"), [(None, False), (KMS_KEY, True)], ids=["two-63-character-buckets", "and-a-kms-key"])
-def test_a_warehouse_whose_tables_maintain_policy_sts_would_refuse_is_refused_at_registration(kms_key: str | None, refused: bool) -> None:
+@pytest.mark.parametrize(
+    ("kms_key", "prefix", "counted"),
+    [(None, "", 912), (KMS_KEY, "", 1142), (KMS_KEY, "/" + "k" * 900, 2043), (KMS_KEY, "/" + "k" * 910, None)],
+    ids=["two-63-character-buckets", "and-a-kms-key", "a-control-root-prefix-that-fits", "a-control-root-prefix-past-the-limit"],
+)
+def test_a_warehouse_whose_tables_maintain_policy_sts_would_refuse_is_refused_at_registration(kms_key: str | None, prefix: str, counted: int | None) -> None:
     """F8: a pass deletes only under its table's maintain-tier vend, whose session policy names the warehouse's bucket, the
-    control root's and the table's uuid. At the longest legal names (both buckets 63 characters, a catalog-made table at
-    ``<bucket>/<uuid>``) it fits, with a margin (1,964 of 2,048 characters, measured); a KMS key's grant carries it past,
-    and such a warehouse is refused at registration (400, code 13) naming the limit, before any table its passes could not
-    reclaim is made. R6: that worst catalog-made shape is the worst legal one, pinned at its size: a registered table
-    deeper than it, or declaring a base, is judged at the register door
+    table's uuid and its committed files' records on the control root, and no other control-root record (ADR 0246). At
+    the longest legal names (both buckets 63 characters, a catalog-made table at ``<bucket>/<uuid>``) it fits with room, a
+    KMS key included; what carries it past 2,048 is the deployment's control root key prefix, and such an estate's
+    warehouse is refused at registration (400, code 13) naming the limit, before any table its passes could not reclaim
+    is made. R6: a registered table deeper than that shape, or declaring a base, is judged at the register door
     (``vending.require_a_table_maintain_policy_that_fits``)."""
     from lance_namespace import InvalidInputError
 
     from catalog.core import vending
 
+    control_root = f"s3://{'c' * 63}{prefix}"
+
     def _register() -> None:
-        vending.require_a_maintain_policy_that_fits(bucket="b" * 63, control_root=f"s3://{'c' * 63}", kms_key=kms_key, warehouse="w" * 63, project="p" * 63)
+        vending.require_a_maintain_policy_that_fits(bucket="b" * 63, control_root=control_root, kms_key=kms_key, warehouse="w" * 63, project="p" * 63)
 
     made = "00000000-0000-0000-0000-000000000000"
-    records = vending.TableRecords(control_root=f"s3://{'c' * 63}", table_uuid=made, warehouse="w" * 63, project="p" * 63)
+    records = vending.TableRecords(control_root=control_root, table_uuid=made)
     worst = vending.counted_length(vending.build_session_policy("b" * 63, made, "maintain", records=records, kms_key=kms_key))
-    assert worst == (2194 if refused else 1964), worst
-    if refused:
+    if counted is None:
+        assert worst > vending.SESSION_POLICY_LIMIT, worst
         with pytest.raises(InvalidInputError, match="2,048"):
             _register()
     else:
+        assert worst == counted, worst
         _register()
 
 

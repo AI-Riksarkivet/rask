@@ -155,7 +155,8 @@ def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch, bus: BusDouble) 
 
 
 def _vends_for(asked: list[str], options: dict[str, str]) -> respx.MockRouter:
-    """The catalog's vend door, answering the table it governs at ``URI`` and recording every table id it is asked for."""
+    """The catalog's vend door, answering the table it governs at ``URI`` and recording every table id it is asked for, and
+    its reclaim batch as a catalog whose record names nothing and whose policy holds nothing answers it (ADR 0246)."""
 
     def _vend(request: httpx.Request) -> httpx.Response:
         table = request.url.path.removeprefix("/management/v1/table/").removesuffix("/credentials")
@@ -164,8 +165,12 @@ def _vends_for(asked: list[str], options: dict[str, str]) -> respx.MockRouter:
         location = URI if table == TABLE else BRANCHED
         return httpx.Response(200, json={"mode": "direct", "credentials": credentials, "location": location})
 
+    def _licensed(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"versions": json.loads(request.content).get("versions", [])})
+
     router = respx.mock(base_url=CATALOG, assert_all_called=False)
     router.post(url__regex=r"/management/v1/table/.+/credentials").mock(side_effect=_vend)
+    router.post(url__regex=r"/management/v1/table/.+/maintenance/condemn").mock(side_effect=_licensed)
     return router
 
 

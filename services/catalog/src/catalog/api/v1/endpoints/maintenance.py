@@ -14,6 +14,9 @@ rewrites on its own compute, and commits through ``version/create``, which judge
 ``maintenance/disarm`` and ``maintenance/floor`` make the two commits maintenance's passes need, under the catalog's own
 credential, since its vend puts nothing of a table ([[LH-575]], :mod:`catalog.services.maintenance_commits`). Both sit at
 the maintainer rung (``can_maintain``), which the maintenance identity holds and every owner keeps.
+
+``maintenance/condemn`` runs one reclaim batch for a pass, which deletes what it licenses under its own maintain-tier
+vend (ADR 0246); it sits at the maintain vend's rung (``can_vend_maintain``), the maintenance identity's alone.
 """
 
 from __future__ import annotations
@@ -28,10 +31,21 @@ from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import DoorTableDep, FgaClientDep, ResolverDep, SettingsDep, StorageOptionsDep, VendorDep, ancestor_uuids
+from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
-from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
-from catalog.services import catalog_reclaims, maintenance, maintenance_commits, table_claims
+from catalog.schemas import (
+    CleanupDisarmed,
+    CondemnedBatch,
+    CondemnRequest,
+    DueTable,
+    FloorRaised,
+    FloorRaiseRequest,
+    GcPreview,
+    GcRequest,
+    GcRunResult,
+    MaintenanceDueResponse,
+)
+from catalog.services import maintenance, maintenance_commits, reclaims, table_claims
 from lakehouse import branch_layout, maintenance_due, stored_objects
 from lakehouse.governed import fga
 
@@ -81,10 +95,6 @@ async def run_maintenance(
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
-    resolver: ResolverDep,
-    vendor: VendorDep,
     branch: Annotated[
         str | None, Query(description="The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files.")
     ] = None,
@@ -100,28 +110,44 @@ async def run_maintenance(
     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
     parent's data files, counted before and after — rather than which ref the door opened.
 
-    HELD AS A MAINTENANCE PASS IS (ADR 0243 §8, ``catalog.services.catalog_reclaims``): the table's history and the policy
-    fence of each level above it, the governing policy read under them, the victims marked before the first delete, and
-    every hold confirmed before each cleanup call, each call deleting under a session minted for it before that confirm
-    (ADR 0243 R5). A hold at any level that can govern the table answers 409 InvalidTableState (19), a ref write or a
-    policy write holding a fence 409 ConcurrentModification (14), and a run the store refused a delete of 503
-    ServiceUnavailable, naming how many, its versions marked for the next run (R3)."""
+    THROUGH THE ONE RECLAIM A PASS GOES THROUGH (ADR 0246, ``catalog.services.reclaims``): each batch of 16 versions
+    condemned, its pins read, the governing policy read along the table's chain as it stands then, its entries promoted,
+    and only what that licenses deleted. A hold at any level that can govern the table answers 409 InvalidTableState (19),
+    nothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions
+    condemned for the next reclaim."""
     ds = await run_in_threadpool(partial(table.open, so, branch=branch))
-    namespace_uuids = await ancestor_uuids(resolver, table.resolved.segments)
+    main = await run_in_threadpool(partial(table.open_unchecked, so))
 
     def _reclaim() -> maintenance.GcRunData:
-        # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
-        # version this deletes. A ref write holding it answers this request 409.
         # [[LH-232]] Each transaction file the cleanup removes is recorded; Lance records the rest itself.
-        with (
-            catalog_reclaims.held(table, settings, namespace_uuids=namespace_uuids) as held,
-            stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, branch), so),
-        ):
-            session = catalog_reclaims.sessions(vendor, settings, str(table.location))(branch)
-            marked = catalog_reclaims.marked(held, table, ref=branch, session=session)
-            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch, marked=marked)
+        governance = reclaims.Governance.of(table, settings.registry_root, settings.storage_options())
+        condemn = reclaims.condemner(governance, settings.registry_root, settings.storage_options(), main, ref=branch)
+        with stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, branch), so):
+            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch, condemn=condemn)
 
     return GcRunResult(**await run_in_threadpool(_reclaim))
+
+
+@table_router.post("/{id}/maintenance/condemn")
+async def condemn_versions(
+    id: str,
+    body: CondemnRequest,
+    table: DoorTableDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    branch: Annotated[str | None, Query(description="The ref whose versions to condemn. Omit for main.")] = None,
+) -> CondemnedBatch:
+    """One reclaim batch, run by the catalog for a reclaimer that deletes under its own maintain-tier vend (ADR 0246): the
+    versions asked condemned with whatever a dead batch or ``version/delete`` left condemned on the ref, the table's tags
+    and pins read, the governing policy read level by level, the entries promoted, and the answer names the versions the
+    reclaimer may delete now. The maintenance identity's rung (``can_vend_maintain``): the maintain vend already deletes
+    anything in the table, and this licenses only what no ref door may name."""
+    main = await run_in_threadpool(partial(table.open_unchecked, so))
+    governance = reclaims.Governance.of(table, settings.registry_root, settings.storage_options())
+    verdict = await run_in_threadpool(
+        partial(reclaims.batch, governance, settings.registry_root, settings.storage_options(), main, ref=branch, versions=body.versions)
+    )
+    return CondemnedBatch.model_validate(verdict.model_dump())
 
 
 @table_router.post("/{id}/maintenance/disarm")

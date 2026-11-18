@@ -4,9 +4,9 @@
 current version, the pins on THIS ref (a version tagged on this branch, or one a child branch was cut
 from, is NEVER collected), the retain-last-N window, and the age cutoff — it never mutates. ``run_gc``
 performs the reclaim with the SAME tag exemption the sweep uses (``error_if_tagged_old_versions=False``),
-so a long-lived tag can't stall GC. ``delete_versions`` backs the spec's version-delete door
-with the same reclaim, for named versions, and refuses a pinned one instead of skipping it. Pure over a
-Lance dataset handle, so these are unit-testable with a fake ``ds``.
+so a long-lived tag can't stall GC. ``delete_versions`` backs the spec's version-delete door: it condemns the named
+versions and deletes nothing, and refuses a pinned one instead of skipping it. Pure over a Lance dataset handle, so these
+are unit-testable with a fake ``ds``.
 
 The reclaims are gated by :func:`require_reclaimable`, the sweep's own root-scoped gate. :func:`require_compactable`
 is the layout gate a compaction a client stages is judged against at ``version/create``, the one maintenance asks before
@@ -16,22 +16,25 @@ it lists a table as due for compaction.
 from __future__ import annotations
 
 import logging
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
 
 from lance_namespace import InvalidInputError, InvalidTableStateError, ServiceUnavailableError, UnsupportedOperationError
 
-from lakehouse import branch_layout
+from lakehouse import branch_layout, condemned_versions
 from lakehouse.compaction_gate import compaction_refusal
 from lakehouse.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
 from lakehouse.version_retention import ExplainedDataset, fork_versions, reclaimable_versions, recorded_branch, tag_versions
 
 
 if TYPE_CHECKING:
-    from lakehouse.reclaim_marks import Reclaim
+    from lakehouse.condemned_versions import Verdict
     from lakehouse.storage_options import StorageOptions
+
+#: How a reclaim asks the catalog's batch for each group of versions (``catalog.services.reclaims.condemner``).
+type Condemn = Callable[[list[int]], Verdict]
 
 
 log = logging.getLogger(__name__)
@@ -204,32 +207,43 @@ def _age_bound(retention_days: int | None) -> timedelta:
     return timedelta(days=retention_days) if retention_days else timedelta(0)
 
 
-def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, branch: str | None, marked: Reclaim) -> GcRunData:
+def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, branch: str | None, condemn: Condemn) -> GcRunData:
     """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, as in maintenance's own expiry.
 
     Tagged versions are what keeps a registered clone readable: its tag on this table pins the version it reads
     (ADR 0198 §1). See :func:`require_reclaimable`, which gates this door on maintenance's own root-scoped gate.
-    ``branch`` is the ref ``ds`` opens, for :func:`refuse_a_reclaim_over_nested_branches`. ``marked`` is the one marked
-    reclaim every cleanup goes through (``catalog.services.catalog_reclaims``, ADR 0243 §9).
+    ``branch`` is the ref ``ds`` opens, for :func:`refuse_a_reclaim_over_nested_branches`. ``condemn`` asks the catalog's
+    batch of each 16 versions (:func:`lakehouse.condemned_versions.reclaim`, ADR 0246), which the one reclaim every cleanup
+    goes through deletes only what it licenses.
+
+    Raises:
+        InvalidTableStateError: A hold at a level that can govern the table keeps its whole history (19); nothing was
+            deleted.
+        ServiceUnavailableError: The store refused a read or a delete (503, retryable).
     """
     require_reclaimable(ds)
     refuse_a_reclaim_over_nested_branches(ds, branch)
     with _a_store_refusal_retried():
-        stats = marked.run(cast("Any", ds), older_than=_age_bound(retention_days), retain_versions=retain_versions)
-    _refuse_a_refused_delete(stats.failed_deletes, removed=stats.old_versions)
+        victims = condemned_versions.victims(cast("Any", ds), older_than=_age_bound(retention_days), retain_versions=retain_versions)
+        done = condemned_versions.reclaim(cast("Any", ds), victims, condemn)
+    if done.held_by is not None:
+        raise InvalidTableStateError(
+            f"a maintenance policy holds the table's whole history ({done.held_by}: cleanup_enabled false), so no version is deleted; lift the hold "
+            "at its policy door first. Nothing was deleted"
+        )
+    _refuse_a_refused_delete(done.failed_deletes, removed=done.old_versions)
     return {
         "ok": True,
-        "old_versions_removed": stats.old_versions,
-        "bytes_removed": stats.bytes_removed,
+        "old_versions_removed": done.old_versions,
+        "bytes_removed": done.bytes_removed,
     }
 
 
 @contextmanager
 def _a_store_refusal_retried() -> Generator[None]:
-    """A reclaim the store refused a read or a delete of, as the retryable refusal it is: a batch's session that expired
-    (its door frozen past its hold, ADR 0243 R5) is refused by the store, and Lance raises its refusal as an IO
-    ``ValueError`` or ``OSError`` (measured on RustFS 1.0.3: ``ExpiredToken`` on the batch's first listing). Nothing more
-    was deleted, and the batch's mark, once written, stands.
+    """A reclaim the store refused a read or a delete of, as the retryable refusal it is: Lance raises its refusal as an
+    IO ``ValueError`` or ``OSError`` (measured on RustFS 1.0.3: ``ExpiredToken`` on a cleanup's first listing). Nothing
+    more was deleted, and the batch's versions stay condemned.
 
     Raises:
         ServiceUnavailableError: Lance's cleanup failed on the store (503, retryable).
@@ -240,15 +254,15 @@ def _a_store_refusal_retried() -> Generator[None]:
         if "LanceError(IO)" not in str(exc):
             raise
         raise ServiceUnavailableError(
-            "the store refused this reclaim's reads or deletes, so nothing more was deleted and the versions it was removing stay marked, which "
+            "the store refused this reclaim's reads or deletes, so nothing more was deleted and the versions it was removing stay condemned, which "
             "no tag, branch, restore or clone names: retry"
         ) from exc
 
 
 def _refuse_a_refused_delete(failed: int, *, removed: int) -> None:
     """A reclaim the store refused a delete of is no success: Lance counts a refused delete and returns
-    (``CleanupStats.failed_deletes``, measured on pylance 13.0.0), and its versions stay marked, so no door names them until
-    a later reclaim finishes them (ADR 0243 R3).
+    (``CleanupStats.failed_deletes``, measured on pylance 13.0.0), and its versions stay condemned, so no door names them
+    until a later reclaim finishes them (KeepAfterDelete, ADR 0246).
 
     Raises:
         ServiceUnavailableError: ``failed`` is not 0 (503, retryable).
@@ -256,7 +270,7 @@ def _refuse_a_refused_delete(failed: int, *, removed: int) -> None:
     if failed:
         raise ServiceUnavailableError(
             f"the store refused {failed} of this reclaim's deletes after {removed} versions were removed; the versions it was removing stay "
-            "marked, so no tag, branch, restore or clone names them, and the next run finishes them: retry"
+            "condemned, so no tag, branch, restore or clone names them, and the next reclaim finishes them: retry"
         )
 
 
@@ -295,28 +309,18 @@ def _refuse_pinned_versions(ds: VersionedDataset, branch: str | None, targets: S
         raise InvalidTableStateError(f"refused: {', '.join(sorted(pins))} pins a version in the range; delete the pin first. Nothing was deleted")
 
 
-def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, int]], branch: str | None, marked: Reclaim) -> int:
-    """Delete the versions ``ranges`` name on ``ds``'s ref (DESTRUCTIVE); return how many were removed.
+def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, int]], branch: str | None, condemn: Callable[[list[int]], list[int]]) -> int:
+    """Delete the version records ``ranges`` name on ``ds``'s ref; return how many were condemned.
 
-    ``cleanup_old_versions(versions=...)``, measured on pylance 12.0.0: the current version is never
-    removed, a tagged one raises under ``error_if_tagged_old_versions=True``, a version a branch was cut
-    from is kept, and data files only the removed versions referenced go with them. A pin is refused
-    before the call so the caller learns which one; a tag that lands between that check and the call is
-    refused by the call and named from a second read. A tag or branch created while the call runs is
-    not seen: Lance reads the refs once, and nothing serializes ref creation with a reclaim (measured
-    with 60 concurrent races: a tag named a deleted version in 31, and ``run_gc`` loses the same race). A version a
-    registered clone reads is pinned by the clone's tag, so it is refused like any tagged one (ADR 0198 §1). ``marked``
-    is the one marked reclaim every cleanup goes through (``catalog.services.catalog_reclaims``, ADR 0243 §9).
+    The spec's operation (``lance_docs/ns_catalog/spec.yaml``, BatchDeleteTableVersions: "deletes version tracking records,
+    NOT the actual table data"): ``condemn`` writes each version into the table's condemned versions
+    (:func:`lakehouse.condemned_versions.condemn_named`), which ``version/list`` leaves out and every ref door refuses
+    from then on, and deletes nothing; the next reclaim of the ref finishes them unless a hold keeps them (ADR 0246). A
+    version a tag or a branch pins is refused before anything is condemned, naming the pin, and a version a registered
+    clone reads is pinned by the clone's tag, so it is refused like any tagged one (ADR 0198 §1).
     """
     targets = versions_in_ranges(ranges, current=int(ds.version))
     require_reclaimable(ds)
     refuse_a_reclaim_over_nested_branches(ds, branch)
     _refuse_pinned_versions(ds, branch, targets)
-    try:
-        with _a_store_refusal_retried():
-            stats = marked.run(cast("Any", ds), older_than=None, retain_versions=None, versions=targets, error_if_tagged=True)
-    except (OSError, ServiceUnavailableError):
-        _refuse_pinned_versions(ds, branch, targets)
-        raise
-    _refuse_a_refused_delete(stats.failed_deletes, removed=stats.old_versions)
-    return stats.old_versions
+    return len(condemn(targets))

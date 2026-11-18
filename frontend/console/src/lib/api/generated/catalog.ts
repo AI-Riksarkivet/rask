@@ -937,8 +937,8 @@ export interface paths {
         put?: never;
         /**
          * Delete Namespace Policy
-         * @description Remove the namespace's maintenance policy (idempotent) — owner-gated by the router. Answers 409 (code 14,
-         *     retryable) while a reclaim of a table beneath it runs.
+         * @description Remove the namespace's maintenance policy (idempotent) — owner-gated by the router. The answer names the versions
+         *     already condemned beneath it.
          */
         post: operations["delete_namespace_policy_management_v1_namespace__id__policy_delete_post"];
         delete?: never;
@@ -980,8 +980,8 @@ export interface paths {
          * Set Namespace Policy
          * @description Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth: its
          *     retention and cadence unless a table policy or a nearer namespace's sets them, and a hold (``cleanup_enabled`` false)
-         *     over every table beneath it whatever their own policies say. Answers 409 (ConcurrentModification, code 14, retryable)
-         *     while a reclaim of a table beneath it runs. Owner-gated by the router (``can_delete``).
+         *     over every table beneath it whatever their own policies say. Answers at once, naming the versions already condemned
+         *     of every table beneath it (``condemned``), which it does not promise. Owner-gated by the router (``can_delete``).
          */
         post: operations["set_namespace_policy_management_v1_namespace__id__policy_set_post"];
         delete?: never;
@@ -1092,8 +1092,8 @@ export interface paths {
         put?: never;
         /**
          * Delete Project Policy
-         * @description Remove the project's maintenance policy (idempotent) — admin-gated. Answers 409 (code 14, retryable) while a
-         *     reclaim of a table it governs runs.
+         * @description Remove the project's maintenance policy (idempotent) — admin-gated. The answer names the versions already condemned
+         *     of every table in the project's warehouses.
          */
         post: operations["delete_project_policy_management_v1_project__id__policy_delete_post"];
         delete?: never;
@@ -1136,9 +1136,9 @@ export interface paths {
          * Set Project Policy
          * @description Set (or replace) the project-level maintenance policy (#84) — the tenant-wide default the sweep
          *     falls back to when no table or namespace policy matches, and, when it holds (``cleanup_enabled`` false), a hold over
-         *     every table in the project's buckets whatever their own policies say. Answers 409 (ConcurrentModification, code 14,
-         *     retryable) while a reclaim of a table it governs runs. Admin-gated (``can_administer`` on
-         *     ``project:<id>``, checked explicitly — see the module docstring).
+         *     every table in the project's buckets whatever their own policies say. Answers at once, naming the versions already
+         *     condemned of every table in the project's warehouses (``condemned``), which it does not promise. Admin-gated
+         *     (``can_administer`` on ``project:<id>``, checked explicitly — see the module docstring).
          *
          *     The record's ``buckets`` are the project's ACTIVE warehouse buckets, resolved from the warehouse
          *     registry NOW: a warehouse provisioned after this set is not covered until the policy is re-set
@@ -2147,6 +2147,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/table/{id}/maintenance/condemn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Condemn Versions
+         * @description One reclaim batch, run by the catalog for a reclaimer that deletes under its own maintain-tier vend (ADR 0246): the
+         *     versions asked condemned with whatever a dead batch or ``version/delete`` left condemned on the ref, the table's tags
+         *     and pins read, the governing policy read level by level, the entries promoted, and the answer names the versions the
+         *     reclaimer may delete now. The maintenance identity's rung (``can_vend_maintain``): the maintain vend already deletes
+         *     anything in the table, and this licenses only what no ref door may name.
+         */
+        post: operations["condemn_versions_management_v1_table__id__maintenance_condemn_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/table/{id}/maintenance/disarm": {
         parameters: {
             query?: never;
@@ -2248,12 +2272,11 @@ export interface paths {
          *     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
          *     parent's data files, counted before and after — rather than which ref the door opened.
          *
-         *     HELD AS A MAINTENANCE PASS IS (ADR 0243 §8, ``catalog.services.catalog_reclaims``): the table's history and the policy
-         *     fence of each level above it, the governing policy read under them, the victims marked before the first delete, and
-         *     every hold confirmed before each cleanup call, each call deleting under a session minted for it before that confirm
-         *     (ADR 0243 R5). A hold at any level that can govern the table answers 409 InvalidTableState (19), a ref write or a
-         *     policy write holding a fence 409 ConcurrentModification (14), and a run the store refused a delete of 503
-         *     ServiceUnavailable, naming how many, its versions marked for the next run (R3).
+         *     THROUGH THE ONE RECLAIM A PASS GOES THROUGH (ADR 0246, ``catalog.services.reclaims``): each batch of 16 versions
+         *     condemned, its pins read, the governing policy read along the table's chain as it stands then, its entries promoted,
+         *     and only what that licenses deleted. A hold at any level that can govern the table answers 409 InvalidTableState (19),
+         *     nothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions
+         *     condemned for the next reclaim.
          */
         post: operations["run_maintenance_management_v1_table__id__maintenance_run_post"];
         delete?: never;
@@ -2274,7 +2297,7 @@ export interface paths {
         /**
          * Delete Table Policy
          * @description Remove the table's maintenance policy (idempotent) — owner-gated by the router. The table is then governed by its
-         *     nearest namespace's, else its project's, policy; answers 409 (code 14, retryable) while a reclaim of the table runs.
+         *     nearest namespace's, else its project's, policy; the answer names its versions already condemned.
          */
         post: operations["delete_table_policy_management_v1_table__id__policy_delete_post"];
         delete?: never;
@@ -2317,8 +2340,8 @@ export interface paths {
          * @description Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``).
          *
          *     Its settings govern the table over any namespace's or project's, but for a hold: ``cleanup_enabled`` false at any level
-         *     that can govern the table keeps its whole history, and this record cannot lift a farther level's. Answers 409
-         *     (ConcurrentModification, code 14, retryable) while a reclaim of the table runs.
+         *     that can govern the table keeps its whole history, and this record cannot lift a farther level's. Answers at once,
+         *     naming the table's versions already condemned (``condemned``), which it does not promise.
          */
         post: operations["set_table_policy_management_v1_table__id__policy_set_post"];
         delete?: never;
@@ -4313,25 +4336,25 @@ export interface paths {
         put?: never;
         /**
          * Batch Delete Table Versions
-         * @description Delete old versions of this table — never the current one, and never one a tag or a branch pins.
+         * @description Delete the version records of old versions of this table — never the current one, and never one a tag or a
+         *     branch pins.
          *
-         *     ``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for "through the
-         *     latest". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:
-         *     Lance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again
-         *     by the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a
-         *     child branch pins is refused (409), naming the pin. Every range is judged before anything is
-         *     deleted, and ``branch`` scopes the delete to that ref's own history.
+         *     The spec's operation (``lance_docs/ns_catalog/spec.yaml``, BatchDeleteTableVersions: "deletes version tracking
+         *     records, NOT the actual table data"): each version named is CONDEMNED (ADR 0246), which ``version/list`` leaves out
+         *     and every tag, branch, restore and clone door refuses (409, code 19) from this answer on, and nothing is deleted
+         *     here; the next reclaim of the ref (a maintenance pass, ``maintenance/run``) deletes its files, unless a hold at a level
+         *     that can govern the table keeps them, which lifting is a separate, audited act at a policy door. ``deleted_count`` is
+         *     how many records it condemned.
          *
-         *     Owner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which
-         *     no retention judges and deletion protection does not guard (protection guards dropping the table, not its history,
-         *     ADR 0150). A version that must survive is tagged. A HOLD IS JUDGED (ADR 0243 §8): while ``cleanup_enabled`` is false at
-         *     any level that can govern the table (its own policy, a namespace's above it, its project's) the delete answers 409
-         *     InvalidTableState (19), since lifting the hold is a separate, audited act at a policy door. It is held as a
-         *     maintenance pass is (``catalog.services.catalog_reclaims``): the table's history and each level's policy fence, its
-         *     targets marked before the first delete, every hold confirmed before each cleanup call; a ref write or a policy write
-         *     holding a fence answers 409 ConcurrentModification (14). Each cleanup call deletes under a session minted for it
-         *     before its confirm (ADR 0243 R5), and a delete the store refused answers 503 ServiceUnavailable, naming how many, its
-         *     versions marked for the next delete (R3).
+         *     ``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for "through the latest". A range
+         *     that reaches the current version is refused (400), the spec's ``{0, -1}`` included: Lance commits by
+         *     put-if-not-exists on the next number, so a deleted latest manifest is minted again by the next write and a pinned
+         *     ``(table, version)`` would name different rows. A version a tag or a child branch pins is refused (409), naming the
+         *     pin. Every range is judged before anything is condemned, and ``branch`` scopes the delete to that ref's own history.
+         *
+         *     Owner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which no
+         *     retention judges and deletion protection does not guard (protection guards dropping the table, not its history, ADR
+         *     0150). A version that must survive is tagged.
          */
         post: operations["batch_delete_table_versions_v1_table__id__version_delete_post"];
         delete?: never;
@@ -4388,6 +4411,9 @@ export interface paths {
          *     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
          *     listings — and the cursor is this layer's. The full list is what the backend returns unbounded
          *     (measured: no limit gives all seven), and `ListLimit` still bounds what leaves the door.
+         *
+         *     A CONDEMNED VERSION IS NOT LISTED (ADR 0246): its record was deleted by ``version/delete``, or a reclaim may be
+         *     deleting its files, and no door will name it again. A record that cannot be read answers 503 rather than list one.
          */
         post: operations["list_table_versions_v1_table__id__version_list_post"];
         delete?: never;
@@ -5838,6 +5864,39 @@ export interface components {
             target_rows_per_fragment?: number | null;
             /** Tasks */
             tasks: number;
+        };
+        /**
+         * CondemnRequest
+         * @description One reclaim batch a reclaimer asks of the catalog (ADR 0246): the versions past their retention it would delete,
+         *     at most a batch of them; none to finish only what a dead batch or ``version/delete`` left condemned.
+         */
+        CondemnRequest: {
+            /** Versions */
+            versions?: number[];
+        };
+        /**
+         * CondemnedBatch
+         * @description The catalog's answer to one reclaim batch: what the reclaimer may delete now.
+         */
+        CondemnedBatch: {
+            /** Held By */
+            held_by?: string | null;
+            /** Standing */
+            standing?: number[];
+            /** Versions */
+            versions?: number[];
+        };
+        /**
+         * CondemnedVersion
+         * @description A version a reclaim may be deleting: what a policy's answer does not promise (ADR 0246).
+         */
+        CondemnedVersion: {
+            /** Branch */
+            branch?: string | null;
+            /** Table */
+            table: string;
+            /** Version */
+            version: number;
         };
         /**
          * ContractResponse
@@ -8676,6 +8735,8 @@ export interface components {
         };
         /** PolicyDeleteResponse */
         PolicyDeleteResponse: {
+            /** Condemned */
+            condemned?: components["schemas"]["CondemnedVersion"][];
             /** Id */
             id: string;
             /** Kind */
@@ -8754,6 +8815,8 @@ export interface components {
             compact_enabled?: boolean;
             /** Compact Interval Hours */
             compact_interval_hours?: number | null;
+            /** Condemned */
+            condemned?: components["schemas"]["CondemnedVersion"][] | null;
             /** Id */
             id: string;
             kind: components["schemas"]["PolicyKind"];
@@ -13099,7 +13162,7 @@ export interface operations {
     vend_credentials_management_v1_table__id__credentials_post: {
         parameters: {
             query?: {
-                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction, deletion and index files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get and delete the whole prefix but its refs, and put nothing of the table; get and put the table's history fence, and get and delete its committed-file records, on the control root). */
+                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction, deletion and index files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get and delete the whole prefix but its refs, and put nothing of the table; get and delete its committed-file records, and nothing else, on the control root). */
                 tier?: "read" | "write" | "maintain";
                 /** @description The branch this credential is for. Naming one NARROWS the grant to that branch's own `<table>/tree/<branch>/`, and main drops to read-only: the write tier puts what a commit stages there (data, transaction, deletion and index files and a staged manifest), the maintain tier gets and deletes under its `_versions`, `_transactions`, `_deletions`, `_indices` and `data`. Omit for main. */
                 branch?: string;
@@ -13347,6 +13410,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ObjectLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    condemn_versions_management_v1_table__id__maintenance_condemn_post: {
+        parameters: {
+            query?: {
+                /** @description The ref whose versions to condemn. Omit for main. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CondemnRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CondemnedBatch"];
                 };
             };
             /** @description Validation Error */

@@ -754,7 +754,11 @@ def _tag(source: clone_sources.CloneSource, *, clone_location: str, so: StorageO
             "or tag it before cloning"
         ) from exc
     except HistoryFencedError as exc:
-        raise ConcurrentModificationError(f"a reclaim holds the history of {source.table}; retry the register") from exc
+        raise ConcurrentModificationError(f"an erasure's release holds the history of {source.table}; retry the register") from exc
+    except (OSError, TimeoutError) as exc:
+        raise ServiceUnavailableError(
+            f"whether version {source.version} of {source.table} is condemned could not be read; nothing was registered, retry"
+        ) from exc
 
 
 def release_admitted(admitted: Admitted, *, clone_location: str, so: StorageOptions, context: RegistrationContext) -> None:

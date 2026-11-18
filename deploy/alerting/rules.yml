@@ -850,15 +850,14 @@ groups:
             indefinitely. Break down by error.type; the per-dataset URI is on the trace span and in the
             maintenance_dataset_outcome log line, deliberately not on the metric (unbounded cardinality).
 
-      # STARVATION (ADR 0243 §11, F5). A pass that would reclaim keeps everything when a ref write holds the table's
-      # history, a policy write or its intent holds a fence above it, its policy changed since it read it, or a cleanup's
-      # victims stay marked, and every one of those reasons is passed again every `maintenance.queue.retrySeconds` (15
-      # minutes), so one table held back pass after pass adds four an hour, every hour, and never meets its retention or
-      # an erasure's deadline. 24h of held-back passes in every hour is a day of the seven an erasure release's grace
-      # gives (`catalog.erasure.releaseGraceDays`, 7 in the chart's values), leaving six to find the writer or the mark.
-      # ESTATE-WIDE, NOT ONE TABLE'S: the counter names a reason and no table (an open set would be unbounded
-      # cardinality), so many tables each held back briefly fire it as one starved table does; the table is in the
-      # reason's log line. One table's stale mark has its own measure, MaintenanceReclaimMarkStale below.
+      # STARVATION (ADR 0246). A pass that would reclaim keeps what it condemned when a pin keeps a version or the store
+      # refuses its deletes, or reclaims nothing when its table's maintain vend can never be minted, and every one of
+      # those is passed again every `maintenance.queue.retrySeconds` (15 minutes), so one table held back pass after pass
+      # adds four an hour, every hour, and never meets its retention or an erasure's deadline. 24h of held-back passes in
+      # every hour is a day of the seven an erasure release's grace gives (`catalog.erasure.releaseGraceDays`, 7 in the
+      # chart's values). ESTATE-WIDE, NOT ONE TABLE'S: the counter names a reason and no table (an open set would be
+      # unbounded cardinality); the table is in the reason's log line. The versions left condemned have their own
+      # measure, MaintenanceCondemnedVersionsStanding below.
       - alert: MaintenanceReclaimStarved
         expr: sum by (reason) (increase(maintenance_reclaims_held_back_total[1h])) > 0
         for: 24h
@@ -868,35 +867,34 @@ groups:
         annotations:
           summary: "Maintenance reclaims somewhere in the estate have been held back in every hour for a day"
           description: >-
-            Passes that would reclaim have kept everything, for the reason this alert names, in every hour of the last
-            day, across the estate: one table under constant ref writes, a policy that keeps changing, a policy door,
-            its intent or a reclaim holding a fence, or a cleanup's victims left marked; or many tables each held back
-            for a while. Under reason policy_too_long a table's maintain-tier vend can never be minted (its location or its
-            bases name more than STS's 2,048-character session policy holds): it is never reclaimed until it is
+            Passes that would reclaim have kept what they condemned, for the reason this alert names, in every hour of
+            the last day, across the estate: under reason condemned a version a pin keeps, or one whose deletes the store
+            keeps refusing; under reason policy_too_long a table's maintain-tier vend can never be minted (its location or
+            its bases name more than STS's 2,048-character session policy holds), and it is never reclaimed until it is
             registered again at a shorter location or with fewer bases. A starved table meets neither its retention nor
-            an erasure's deadline. Find the tables in the maintenance_history_fenced, maintenance_policy_fenced,
-            maintenance_policy_changed_mid_pass, maintenance_victims_marked or maintenance_vend_policy_too_long log
-            lines.
+            an erasure's deadline. Find the tables in the maintenance_versions_left_condemned or
+            maintenance_vend_policy_too_long log lines.
 
-      # ONE TABLE'S MARK LEFT STANDING (ADR 0243, F5). A cleanup's mark names versions no ref door may pin or bring back
-      # until a later reclaim finishes or judges it; a pass meets it every `retrySeconds`. One standing for a day is a
-      # reclaim whose deletes the store keeps refusing, or half-removed versions a policy that now keeps them holds, on
-      # one table: the worker exports the age of the oldest it has seen as one series with no table label
-      # (`maintenance.reclaims.mark_oldest`, unit s, so `maintenance_reclaims_mark_oldest_seconds`), and the table is
-      # named in the maintenance_victims_marked log line. A day of the seven an erasure release's grace gives, as above.
-      - alert: MaintenanceReclaimMarkStale
-        expr: max(maintenance_reclaims_mark_oldest_seconds) > 86400
-        for: 15m
+      # VERSIONS LEFT CONDEMNED (ADR 0246). A condemned version is one no tag, branch, restore or clone may name, which
+      # the next reclaim finishes; the worker exports how many stand in the tables it last passed, as one series with no
+      # table label (`maintenance.reclaims.condemned`, so `maintenance_reclaims_condemned`), and names each table in the
+      # maintenance_versions_left_condemned log line. A version `version/delete` condemned stands until the table's next
+      # pass; one standing for a day is a store refusing a reclaim's deletes, a dead door's pin (a batch sweeps it after
+      # a day), or a hold keeping what `version/delete` condemned. An erasure's fork point, condemned while its branch
+      # stands, is not counted.
+      - alert: MaintenanceCondemnedVersionsStanding
+        expr: max(maintenance_reclaims_condemned) > 0
+        for: 24h
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "A cleanup's mark has stood for more than a day"
+          summary: "Versions have stood condemned for more than a day"
           description: >-
-            A table's versions have stood marked by a cleanup for more than a day: no tag, branch or restore may name
-            them, and a pass meets the mark every retry without finishing it, because the store refuses its deletes or
-            a policy now keeps the versions it half removed. Find the table in the maintenance_victims_marked log line
-            (oldest_seconds) and read why its reclaim's deletes fail, or lift the hold so a pass may finish them.
+            Versions of a table have stood condemned for more than a day: no tag, branch, restore or clone may name them,
+            and the passes that meet them have not finished them. Find the table in the
+            maintenance_versions_left_condemned log line, then read why its reclaim's deletes fail, or lift the hold that
+            keeps what version/delete condemned; a dead door's pin is swept by the batch after a day.
 
       # The worker's heartbeat is the hourly audit (`maintenance.queue.auditSchedule`): a NATS message schedule puts it
       # on the work queue once an hour whatever the replica count, and one worker runs it. Its stopping is silent by
