@@ -40,9 +40,8 @@ from catalog.core.vending import CredentialVendor
 from catalog.schemas import CreateWarehouseRequest, DeleteProfile
 from catalog.services import declaration, project_admins, warehouses
 from catalog.services import projects as project_registry
-from catalog.services.control_records import GIT, MANAGED_BY, ProtectionChange
+from catalog.services.control_records import GIT, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
-from lakehouse import protection
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.governed import fga
 from lakehouse.warehouse_records import DeleteMode, WarehouseRecord
@@ -118,11 +117,11 @@ class _Converger:
                 self._settings, self._client, self._announcer, project_id=declared.id, admin=None, author=DECLARATION
             )
             changed = True
-        if protection.is_protected(record) != declared.protected:
+        if record.is_protected != declared.protected:
             change = _PROTECTED_BY if declared.protected else _UNPROTECTED_BY
             await project_doors.protect_project(self._settings, self._control, declared.id, change=change, actor=DECLARATION.actor)
             changed = True
-        if record.get(MANAGED_BY) != GIT:
+        if record.managed_by != GIT:
             await run_in_threadpool(project_registry.set_project_manager, self._root, self._so, declared.id, manager=GIT)
             changed = True
         if changed:
@@ -172,9 +171,9 @@ class _Converger:
         """Hand back to its own doors each project and warehouse git stopped declaring; its data and grants stay."""
         projects = {project.id for project in declared.projects}
         for record in await run_in_threadpool(project_registry.list_projects, self._root, self._so):
-            if record.get(MANAGED_BY) == GIT and record["id"] not in projects:
-                await run_in_threadpool(project_registry.set_project_manager, self._root, self._so, record["id"], manager=None)
-                self.tick.released.append(f"project:{record['id']}")
+            if record.managed_by == GIT and record.id not in projects:
+                await run_in_threadpool(project_registry.set_project_manager, self._root, self._so, record.id, manager=None)
+                self.tick.released.append(f"project:{record.id}")
         declared_warehouses = {warehouse.id for warehouse in declared.warehouses}
         for record in await run_in_threadpool(warehouses.list_warehouses, self._root, self._so):
             if record.managed_by == GIT and record.id not in declared_warehouses:
@@ -205,9 +204,7 @@ class _Converger:
             if not await self._attempt(f"grant:{grant.object}#{grant.relation}", partial(self._grant, self._client, grant)):
                 ungranted.add(grant.object)
         standing, unread = await run_in_threadpool(project_registry.read_projects, self._root, self._so)
-        released = {f"project:{record['id']}" for record in standing if not record.get(project_registry.DELETING_BY)} - {
-            f"project:{project.id}" for project in declared.projects
-        }
+        released = {f"project:{record.id}" for record in standing if not record.is_being_deleted} - {f"project:{project.id}" for project in declared.projects}
         # A project whose record cannot be read may be a released one, whose admins are handed over, or one that is
         # gone, whose admins are revoked: its admins are left as they are and the tick says so. Every other revoke runs.
         unjudged = {f"project:{PurePosixPath(path).stem}" for path in unread}

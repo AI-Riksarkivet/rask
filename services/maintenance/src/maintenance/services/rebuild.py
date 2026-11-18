@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from lakehouse.project_records import ProjectRecord
 from lakehouse.warehouse_records import WarehouseRecord
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, rebuild_tenancy
 
@@ -83,7 +84,7 @@ class RebuildReport(BaseModel):
     error: str | None = None
 
 
-def _needs_an_admin(record: dict[str, str]) -> str:
+def _needs_an_admin(record: ProjectRecord) -> str:
     """Why this tenant cannot be repaired here, phrased so the next step is obvious.
 
     NOT A GRANT, DELIBERATELY. `seed_project_admin` writes `user:<created_by> admin project:<id>` at
@@ -92,7 +93,7 @@ def _needs_an_admin(record: dict[str, str]) -> str:
     today, so re-asserting it re-grants exactly the person an operator may have taken care to remove.
     The finding names the id the record holds so a human can make that call in one request.
     """
-    creator = record.get("created_by")
+    creator = record.created_by
     return (
         f"holds no tuples and needs an admin grant — a decision, not a repair. The record's `created_by` is {creator!r}; "
         "it records who CREATED the tenant, not who may administer it now, so this pass will not re-grant it."
@@ -128,8 +129,8 @@ def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[Rebuil
     unjustified: dict[str, str] = {}
 
     for record in sources.project_records or []:
-        if (project := record.get("id")) in stranded:
-            unjustified[f"project:{project}"] = _needs_an_admin(record)
+        if record.id in stranded:
+            unjustified[f"project:{record.id}"] = _needs_an_admin(record)
 
     # THE STRUCTURAL HALF, and the only half that writes. Scoped to warehouses under a project the
     # report found stranded, because that is where the pointer is provably gone: a whole-estate

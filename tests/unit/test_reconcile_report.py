@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -357,17 +358,27 @@ def test_an_unreadable_trash_index_degrades_only_the_categories_that_read_it(tmp
 
 
 def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A truncated scan that reads as "all clear" is worse than no scan. A paginated bucket listing and an
-    unreadable registry record each land in `incomplete`, while the categories built on them still report what they
-    DID see."""
+    """A truncated scan that reads as "all clear" is worse than no scan. A paginated bucket listing, a registry record
+    that is not JSON and one that is JSON and no record of its registry each land in `incomplete`, while the categories
+    built on them still report what they DID see."""
     estate = _Estate(tmp_path)
     estate.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a"], truncated=True)
-    Path(estate.control_root.removeprefix("file://"), "_projects", "zzz-corrupt.json").write_text("{truncated")
+    control = Path(estate.control_root.removeprefix("file://"))
+    (control / "_projects" / "zzz-corrupt.json").write_text("{truncated")
+    # Names an id, and a delete started by nobody.
+    (control / "_projects" / "zzz-deleting.json").write_text(json.dumps({"id": "zzz-deleting", "deleting_by": ""}))
+    # Names everything the listing asks of a warehouse record, and a status no door writes.
+    paused = {"id": "zzz-paused", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "status": "paused"}
+    (control / "_warehouses").mkdir(exist_ok=True)
+    (control / "_warehouses" / "zzz-paused.json").write_text(json.dumps(paused))
 
     report = estate.run(monkeypatch)
     reasons = {scan.source: scan.reason for scan in report.incomplete}
     assert "storage:buckets" in reasons and "ONE PAGE" in reasons["storage:buckets"]
-    assert "registry:projects" in reasons and "unreadable" in reasons["registry:projects"]
+    assert "status is not what a record holds" in reasons["registry:warehouses"]
+    by_source = [(scan.source, scan.reason) for scan in report.incomplete if scan.source == "registry:projects"]
+    assert len(by_source) == 2 and any("unreadable" in reason for _, reason in by_source), by_source
+    assert any("deleting_by is not what a record holds" in reason for _, reason in by_source), by_source
     # ...and the run is still a full report, not a failure: every category was reached.
     assert set(report.counts) == set(mod.CATEGORIES) - {"unregistered_datasets", "absent_datasets"}
 

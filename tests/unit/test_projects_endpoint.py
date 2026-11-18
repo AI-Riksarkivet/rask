@@ -24,6 +24,7 @@ from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from lakehouse.project_records import ProjectRecord
 from lakehouse.storage_options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord
 
@@ -108,7 +109,7 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     membership FGA holds for a project no registry knows, which lists nothing.
     """
     _patch_records(monkeypatch, _RECORDS)
-    monkeypatch.setattr(ep.project_registry, "list_projects", lambda _root, _so: [{"id": "fresh"}])
+    monkeypatch.setattr(ep.project_registry, "list_projects", lambda _root, _so: [ProjectRecord(id="fresh")])
     checks: list[tuple[str, str, str]] = []
 
     async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:

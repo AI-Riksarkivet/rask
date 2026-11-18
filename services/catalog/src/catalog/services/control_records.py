@@ -34,29 +34,12 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict[
         return json.loads(stream.readall().decode("utf-8"))
 
 
-# --------------------------------------------------------------------------- #
-# The DECLARED shape of each registry record (CAT-CORE-12).
-#
-# All three listings used to parse into a raw dict and hand-check it with `.get()` truthiness, which
-# answers "present and non-empty" and never "the right type". Every consumer treats these fields as
-# strings — the bucket-claim guard compares `record["bucket"] == bucket`, the resolver feeds
-# `root_uri` straight into a namespace connection — so a record whose `bucket` is a list passed the
-# guard, was returned as live, and then matched no claim at all. That is the wrong direction to fail
-# in on a guard whose job is refusing a second project's claim on somebody's bucket.
-#
-# `extra="allow"` because these records carry lifecycle fields the identity check has no business
-# knowing about (`status`, `protected`, `primary`, `created_at`, …) and a model that dropped them
-# would silently disarm a quarantine. Only the fields every consumer keys on are declared.
-# --------------------------------------------------------------------------- #
+# The declared shape of a bucket claim. A project's and a warehouse's records are `lakehouse.project_records` and
+# `lakehouse.warehouse_records`. The fields a consumer keys on are declared, so a claim whose `bucket` is a list is no
+# claim rather than one that matches no bucket; every other field rides along (`extra="allow"`).
 
 
-class _Record(BaseModel):
-    """Base for the registry record shapes: identity is validated, everything else rides along."""
-
-    model_config = ConfigDict(extra="allow")
-
-
-class BucketClaimRecord(_Record):
+class BucketClaimRecord(BaseModel):
     """Which PROJECT owns a bucket, written once so the store arbitrates rival claims.
 
     Keyed by bucket and carrying the project rather than the warehouse id, because one project
@@ -64,17 +47,11 @@ class BucketClaimRecord(_Record):
     `projects_claiming_bucket` encodes by subtracting the caller's own project.
     """
 
+    model_config = ConfigDict(extra="allow")
+
     bucket: str = Field(min_length=1)
     project: str = Field(min_length=1)
     warehouse_id: str = Field(min_length=1)
-
-
-class ProjectRecord(_Record):
-    """A tenant. Existence lives in the record, so the id is the whole of its identity."""
-
-    id: str = Field(min_length=1)
-    #: The principal key of the caller who started its delete, while that delete is unfinished ([[LH-576]]).
-    deleting_by: str | None = Field(default=None, min_length=1)
 
 
 #: The record fields deletion protection writes on a warehouse or project record: the flag
@@ -128,46 +105,15 @@ def with_protection(record: dict[str, str], change: ProtectionChange) -> dict[st
     return {**unprotected, "protected": "true", "protected_by": change.by} if change.protected else unprotected
 
 
-def validated_or_refuse(record: object, model: type[_Record], *, event: str, path: str) -> dict[str, str]:
-    """``record`` as a plain dict if it matches ``model``, else REFUSE — the strict sibling of
-    :func:`validated`, for a reader that has no skip list to hand back.
+def validated_or_refuse(record: object, model: type[BucketClaimRecord], *, event: str, path: str) -> dict[str, str]:
+    """``record`` as a plain dict if it is a bucket claim, else REFUSE.
 
-    THE TOLERANT FORM CANNOT SERVE A SINGULAR READ, and the difference is not strictness for its own
-    sake. `validated` answers ``None`` on a malformed record, which is exactly right for a listing —
-    one tenant's corruption must not void an estate-wide result, and the destructive callers get their
-    fail-closed behaviour from being told WHICH paths were skipped. A singular reader has no such
-    channel: its only return value is the record, so ``None`` there does not mean "unreadable", it
-    means ABSENT, and the caller acts on that.
-
-    THE CONSEQUENCE IS NOT SYMMETRIC BETWEEN CALLERS, which is why this raises rather than leaving each
-    one to decide. For a warehouse's own doors an absent `get_warehouse` is a 404 and fail-closed. For the
-    router it is "no such warehouse" ([[LH-593]]), and a name whose warehouse is absent is answered as absent,
-    so a record nobody can parse would silently answer every one of a tenant's names as not there.
-
-    `ServiceUnavailableError` and not a new type, so one unreadable record answers the same way whichever
-    door reached it.
+    A claim read by its key has no skip list to hand back: its only other answer is "unclaimed", and a bucket whose
+    claim nobody can parse would then be free for a second project to take. `ServiceUnavailableError`, so an
+    unreadable control record answers the same way whichever door reached it.
     """
     try:
         return model.model_validate(record).model_dump(mode="json", exclude_unset=True)
     except ValidationError as exc:
         log.warning(event, extra={"path": path, "error": exc.errors(include_url=False)})
         raise ServiceUnavailableError(f"control record {path!r} could not be read as {model.__name__} — refusing rather than treating it as absent") from exc
-
-
-def validated(record: object, model: type[_Record], *, event: str, path: str) -> dict[str, str] | None:
-    """``record`` as a plain dict if it matches ``model``, else ``None`` with a warning.
-
-    TOLERANT BY DESIGN, and the tolerance is the point: these registries feed listings whose own
-    docstrings promise that one bad object never voids the whole result (a single tenant's corruption
-    would otherwise be an estate-wide control-plane outage). So a refusal is a SKIP, logged under the
-    caller's own event name, never an exception — the destructive callers get their fail-closed
-    behaviour from being told WHICH paths were skipped, not from this raising.
-
-    Returns the validated dump rather than the input, so a consumer can rely on the declared fields
-    being the declared types.
-    """
-    try:
-        return model.model_validate(record).model_dump(mode="json", exclude_unset=True)
-    except ValidationError as exc:
-        log.warning(event, extra={"path": path, "error": exc.errors(include_url=False)})
-        return None

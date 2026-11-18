@@ -46,12 +46,13 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse import control_prefixes, location_claims, trash, warehouse_records
+from lakehouse import control_prefixes, location_claims, project_records, trash, warehouse_records
 from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
 from lakehouse.lance_session import open_dataset
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
+from lakehouse.project_records import ProjectRecord, UnreadableProjectRecordError
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 from lakehouse.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
 from lakehouse.warehouse_records import UnreadableWarehouseRecordError, WarehouseRecord
@@ -693,7 +694,7 @@ class Sources(BaseModel):
     #: categories read this same snapshot, so they cannot disagree about the store's contents.
     tuples: TupleScan | None = None
     tuples_error: str | None = None
-    project_records: list[dict[str, str]] | None = None
+    project_records: list[ProjectRecord] | None = None
     project_records_error: str | None = None
     warehouse_records: list[WarehouseRecord] | None = None
     warehouse_records_error: str | None = None
@@ -791,6 +792,23 @@ async def _registry_source(
     return records, None
 
 
+async def _project_source(sources: Sources, *, control_root: str, storage_options: StorageOptions) -> tuple[list[ProjectRecord] | None, str | None]:
+    """The project registry as records, one that is no project record folded into ``sources.incomplete`` beside the
+    skips the listing itself reports."""
+    listed, error = await _registry_source(
+        sources, source_name="registry:projects", control_root=control_root, storage_options=storage_options, prefix=_PROJECTS_PREFIX, required=("id",)
+    )
+    if listed is None:
+        return None, error
+    records: list[ProjectRecord] = []
+    for raw in listed:
+        try:
+            records.append(project_records.read(raw, at=f"{_PROJECTS_PREFIX} ({raw.get('id')})"))
+        except UnreadableProjectRecordError as exc:
+            sources.incomplete.append(IncompleteScan(source="registry:projects", reason=str(exc)))
+    return records, None
+
+
 async def _warehouse_source(sources: Sources, *, control_root: str, storage_options: StorageOptions) -> tuple[list[WarehouseRecord] | None, str | None]:
     """The warehouse registry as records, one that is no warehouse record folded into ``sources.incomplete`` beside the
     skips the listing itself reports."""
@@ -876,9 +894,7 @@ async def load_sources(
         (sources.trash, sources.trash_error),
     ) = await asyncio.gather(
         _fga_source(sources, grants),
-        _registry_source(
-            sources, source_name="registry:projects", control_root=control_root, storage_options=storage_options, prefix=_PROJECTS_PREFIX, required=("id",)
-        ),
+        _project_source(sources, control_root=control_root, storage_options=storage_options),
         _warehouse_source(sources, control_root=control_root, storage_options=storage_options),
         _bucket_source(sources, bucket_client),
         _trash_source(sources, control_root=control_root, storage_options=storage_options),
@@ -982,7 +998,7 @@ def build_report(
     ``served`` is the warehouses each scanned root serves (:func:`served_by_root`), read off the same registry snapshot.
     """
     report = ReconcileReport(checked_at=datetime.now(UTC).isoformat(), incomplete=list(sources.incomplete))
-    project_ids = {str(r["id"]) for r in sources.project_records or []}
+    project_ids = {record.id for record in sources.project_records or []}
     warehouse_ids = {record.id for record in sources.warehouse_records or []}
     # The shared input orders, named once. Three categories read the tuple scan and the project
     # registry; three read the warehouse registry. Naming them is what stops a fourth category from

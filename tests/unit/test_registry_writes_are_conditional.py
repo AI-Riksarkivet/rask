@@ -29,6 +29,7 @@ import pytest
 
 from catalog.services import warehouses
 from catalog.services.control_records import ProtectionChange
+from lakehouse.project_records import ProjectRecord
 from lakehouse.records import RecordChangedError, RecordMissingError
 from lakehouse.storage_options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord
@@ -186,15 +187,17 @@ def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: 
 
     monkeypatch.setattr(rec, "_replace_json", racing_replace)
 
-    written = projects.upsert_project(control_root, StorageOptions(), {"id": "acme", "created_at": "t2", "created_by": "user:bob"})
+    written = projects.upsert_project(
+        control_root, StorageOptions(), ProjectRecord.model_validate({"id": "acme", "created_at": "t2", "created_by": "user:bob"})
+    )
 
     assert fired["n"] == 1, "the conditional write seam was never reached — the race was not exercised"
-    assert written["protected"] == "true", "the re-POST disarmed deletion protection nobody asked to disarm"
+    assert written.protected == "true", "the re-POST disarmed deletion protection nobody asked to disarm"
     live = projects.get_project(control_root, StorageOptions(), "acme")
     assert live is not None
-    assert live["protected"] == "true"
+    assert live.protected == "true"
     # Identity belongs to the ORIGINAL create — a re-POST never resets a tenant's age or author.
-    assert (live["created_at"], live["created_by"]) == ("t0", "user:anna")
+    assert (live.created_at, live.created_by) == ("t0", "user:anna")
 
 
 def test_a_project_that_vanished_is_a_conflict_not_a_resurrection(control_root: str) -> None:
@@ -202,7 +205,7 @@ def test_a_project_that_vanished_is_a_conflict_not_a_resurrection(control_root: 
     from catalog.services import projects
 
     with pytest.raises(RecordMissingError):
-        projects.upsert_project(control_root, StorageOptions(), {"id": "gone", "created_at": "t", "created_by": "user:x"})
+        projects.upsert_project(control_root, StorageOptions(), ProjectRecord.model_validate({"id": "gone", "created_at": "t", "created_by": "user:x"}))
 
 
 def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_root: str) -> None:

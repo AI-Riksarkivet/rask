@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
-from typing import Final, Self
+from typing import Any, Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -117,7 +117,7 @@ class WarehouseRecord(BaseModel):
             return estate
         return 0.0 if self.delete_mode is DeleteMode.HARD else float(self.trash_grace_days or 0)
 
-    def stored(self) -> dict[str, str]:
+    def stored(self) -> dict[str, Any]:
         """The record as it is written: the fields it was built or read with, and no other."""
         return self.model_dump(mode="json", exclude_unset=True)
 

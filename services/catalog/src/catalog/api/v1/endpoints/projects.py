@@ -83,8 +83,8 @@ from catalog.schemas import (
 from catalog.services import object_labels, role_grants, roles, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
-from catalog.services.control_records import GIT, MANAGED_BY, ProtectionChange
-from lakehouse import maintenance_policies, protection
+from catalog.services.control_records import GIT, ProtectionChange
+from lakehouse import maintenance_policies
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
@@ -92,6 +92,7 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.project_records import ProjectRecord
 from lakehouse.records import RecordExistsError, RecordMissingError
 from lakehouse.storage_options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord, WarehouseStatus
@@ -159,7 +160,7 @@ class Tenant(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     project: str
-    record: dict[str, str] | None = None
+    record: ProjectRecord | None = None
     warehouses: list[ProjectWarehouse] = Field(default_factory=list)
 
     def response(self, admins: list[str]) -> ProjectResponse:
@@ -167,14 +168,14 @@ class Tenant(BaseModel):
 
         Its deletion protection is its record's, so a tenant no record names is never protected.
         """
-        record = self.record or {}
+        record = self.record
         return ProjectResponse(
             project=self.project,
             warehouses=self.warehouses,
             admins=admins,
-            protected=protection.is_protected(record),
-            protected_by=record.get("protected_by"),
-            managed_by=GIT if record.get(MANAGED_BY) == GIT else "self",
+            protected=record is not None and record.is_protected,
+            protected_by=record.protected_by if record is not None else None,
+            managed_by=GIT if record is not None and record.managed_by == GIT else "self",
         )
 
 
@@ -189,12 +190,11 @@ async def _load_tenants(settings: CatalogStore) -> dict[str, Tenant]:
     grouped = _group_by_project(await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so))
     tenants = {project: Tenant(project=project, warehouses=held) for project, held in grouped.items()}
     for record in await run_in_threadpool(project_registry.list_projects, settings.registry_root, so):
-        project = str(record["id"])
-        tenants[project] = Tenant(project=project, record=record, warehouses=grouped.get(project, []))
+        tenants[record.id] = Tenant(project=record.id, record=record, warehouses=grouped.get(record.id, []))
     return tenants
 
 
-async def _converge_project(settings: CatalogStore, so: StorageOptions, record: dict[str, str]) -> dict[str, str]:
+async def _converge_project(settings: CatalogStore, so: StorageOptions, record: ProjectRecord) -> ProjectRecord:
     """The conditional re-POST write (diff2 F1 leg c) — shared by the sequential and lost-race paths.
 
     Both used to end in an unconditional `put_project` of a record assembled from a read taken earlier
@@ -206,14 +206,14 @@ async def _converge_project(settings: CatalogStore, so: StorageOptions, record: 
     except RecordMissingError:
         # Raced a concurrent tenant delete: retryable, never a blind re-create — code 14 -> 409, so
         # the caller retries into a clean mint rather than resurrecting a project just deleted.
-        raise ConcurrentModificationError(f"project {record['id']!r} write raced a concurrent delete; retry") from None
+        raise ConcurrentModificationError(f"project {record.id!r} write raced a concurrent delete; retry") from None
     except project_registry.ProjectBeingDeletedError:
         # Its id is free once the delete has revoked and ended what it held ([[LH-576]]): a tenant made over a delete
         # still running would hold whatever that delete has yet to take away.
-        raise ConcurrentModificationError(f"project {record['id']!r} is being deleted; create it once its delete has finished") from None
+        raise ConcurrentModificationError(f"project {record.id!r} is being deleted; create it once its delete has finished") from None
 
 
-async def _write_project_record(settings: CatalogStore, so: StorageOptions, record: dict[str, str], *, existing: dict[str, str] | None) -> dict[str, str]:
+async def _write_project_record(settings: CatalogStore, so: StorageOptions, record: ProjectRecord, *, existing: ProjectRecord | None) -> ProjectRecord:
     """Mint ``record``, or converge the ``existing`` record that stands onto it; the record as written."""
     if existing is not None:
         return await _converge_project(settings, so, record)
@@ -256,7 +256,7 @@ async def create_project(
 
 async def establish_project(
     settings: Settings, client: OpenFgaClient | None, announcer: Announcer, *, project_id: str, admin: str | None, author: Author | None
-) -> dict[str, str]:
+) -> ProjectRecord:
     """Make project ``project_id``, or converge the one that stands; its record as written.
 
     What the create door does once its caller is authorized, and what the catalog does for a project git declares
@@ -286,13 +286,13 @@ async def establish_project(
         else None
     )
     filed = announcer.announcing(door="create_project", target=obj, announcements=[created, *([admin_granted] if admin_granted is not None else [])])
-    record = {
-        "id": project_id,
-        "created_at": (existing.get("created_at") if existing else None) or datetime.now(UTC).isoformat(),
-        "created_by": (existing.get("created_by") if existing else None) or (author.subject if author is not None else ""),
-    }
+    wanted = ProjectRecord(
+        id=project_id,
+        created_at=(existing.created_at if existing else None) or datetime.now(UTC).isoformat(),
+        created_by=(existing.created_by if existing else None) or (author.subject if author is not None else ""),
+    )
     async with filed as filing:
-        record = await _write_project_record(settings, so, record, existing=existing)
+        record = await _write_project_record(settings, so, wanted, existing=existing)
         granted = await fga_deps.seed_project_admin(client, settings, author.subject if author is not None else None, project=project_id, admin=admin)
         log.info("project_created", extra={"project": project_id, "existing": existing is not None})
         await filing.send(created)
@@ -377,7 +377,7 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     return tenant.response(await _admins_for(client, settings, project_id))
 
 
-async def administered_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
+async def administered_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectRecord:
     """The record of ``project_id``, for a caller who administers it (``project:<id>#can_administer``).
 
     The record is read first, since the gate is on the tenant it names. NO EXISTENCE ORACLE (audit #4, the rule the
@@ -413,7 +413,7 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
     return record
 
 
-async def project_to_delete(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
+async def project_to_delete(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectRecord:
     """The record of ``project_id``, for its delete: a caller who administers it starts one, and once one has started,
     the caller who started it, an admin it has not reached, or the estate's owner finishes it ([[LH-576]]).
 
@@ -440,7 +440,7 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, settings.storage_options(), project_id)
     if record is None:
         raise TableNotFoundError(f"project not found: {project_id}")
-    starter = record.get(project_registry.DELETING_BY)
+    starter = record.deleting_by
     if starter is not None and starter == current_subject(token):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=f"project:{project_id}")
         return record
@@ -454,22 +454,22 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     return record
 
 
-def project_its_doors_protect(project_id: str, record: Annotated[dict[str, str], Depends(administered_project)], token: CurrentToken) -> None:
+def project_its_doors_protect(project_id: str, record: Annotated[ProjectRecord, Depends(administered_project)], token: CurrentToken) -> None:
     """Admit a change to the deletion protection of a project the caller administers and git does not declare ([[XC-213]]).
 
     Raises:
         PermissionDeniedError: Git declares the project, so its declaration owns the protection.
     """
-    refuse_what_git_declares(record.get(MANAGED_BY) if record is not None else None, obj=f"project:{project_id}", token=token)
+    refuse_what_git_declares(record.managed_by, obj=f"project:{project_id}", token=token)
 
 
-def project_its_doors_delete(project_id: str, record: Annotated[dict[str, str], Depends(project_to_delete)], token: CurrentToken) -> dict[str, str]:
+def project_its_doors_delete(project_id: str, record: Annotated[ProjectRecord, Depends(project_to_delete)], token: CurrentToken) -> ProjectRecord:
     """The record of a project the caller may delete and git does not declare ([[XC-213]]).
 
     Raises:
         PermissionDeniedError: Git declares the project, so removing it from the declaration comes first.
     """
-    refuse_what_git_declares(record.get(MANAGED_BY) if record is not None else None, obj=f"project:{project_id}", token=token)
+    refuse_what_git_declares(record.managed_by, obj=f"project:{project_id}", token=token)
     return record
 
 
@@ -530,7 +530,7 @@ async def protect_project(settings: CatalogStore, control: ControlEmitter, proje
     )
 
 
-async def _start_delete(project_id: str, record: dict[str, str], settings: CatalogStore, token: CurrentToken, *, force: bool) -> None:
+async def _start_delete(project_id: str, record: ProjectRecord, settings: CatalogStore, token: CurrentToken, *, force: bool) -> None:
     """Judge a delete's start, its protection and the project's emptiness, and record it on the project's record.
 
     Raises:
@@ -540,7 +540,7 @@ async def _start_delete(project_id: str, record: dict[str, str], settings: Catal
     so = settings.storage_options()
     # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
     # `project_to_delete` has proven the caller administers this tenant.
-    fga_deps.require_not_protected(protection.is_protected(record), kind="project", obj_id=project_id, force=force)
+    fga_deps.require_not_protected(record.is_protected, kind="project", obj_id=project_id, force=force)
 
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
     # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
@@ -626,7 +626,7 @@ async def delete_project(
     so = settings.storage_options()
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = fga_deps.wired(settings, client)
-    if record.get(project_registry.DELETING_BY) is None:
+    if not record.is_being_deleted:
         await _start_delete(project_id, record, settings, token, force=force)
     actor = f"user:{token.subject}" if token is not None else None
     obj = f"project:{project_id}"

@@ -23,6 +23,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+from lance_namespace import ServiceUnavailableError
+
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from lakehouse.storage_options import StorageOptions
@@ -52,4 +55,13 @@ def test_a_project_record_with_a_WRONG_TYPED_id_is_skipped(tmp_path: Path) -> No
     good = {"id": "acme", "created_at": "t", "created_by": "root"}
     seeding.put_project(_root(tmp_path), StorageOptions(), good)
     _write(tmp_path, "_projects", "zz-typed", {"id": ["acme"]})
-    assert proj_svc.list_projects(_root(tmp_path), StorageOptions()) == [good]
+    assert [record.stored() for record in proj_svc.list_projects(_root(tmp_path), StorageOptions())] == [good]
+
+
+def test_a_project_record_that_is_none_refuses_its_own_read_and_is_never_answered_as_absent(tmp_path: Path) -> None:
+    """Read by its id, a record that is no project record has no skip list to go on: the tenant is not "missing", which a
+    warehouse create and the project's delete would both act on."""
+    _write(tmp_path, "_projects", "acme", {"id": "acme", "deleting_by": ""})
+
+    with pytest.raises(ServiceUnavailableError, match="_projects/acme.json"):
+        proj_svc.get_project(_root(tmp_path), StorageOptions(), "acme")

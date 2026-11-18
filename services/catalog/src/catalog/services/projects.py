@@ -20,19 +20,14 @@ import json
 import logging
 
 import pyarrow.fs as pafs
+from lance_namespace import ServiceUnavailableError
 
-from catalog.services.control_records import (
-    ProjectRecord,
-    ProtectionChange,
-    read_json,
-    validated,
-    validated_or_refuse,
-    with_manager,
-    with_protection,
-)
+from catalog.services.control_records import ProtectionChange, read_json, with_manager, with_protection
 from lakehouse import control_prefixes
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
+from lakehouse.project_records import ProjectRecord, UnreadableProjectRecordError
+from lakehouse.project_records import read as read_project_record
 from lakehouse.records import RecordMissingError, create_json, mutate_json
 from lakehouse.storage_options import StorageOptions
 
@@ -56,7 +51,24 @@ class ProjectBeingDeletedError(Exception):
 _CALLER_OWNED = frozenset({"id"})
 
 
-def upsert_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> dict[str, str]:
+def _record(raw: object, *, path: str) -> ProjectRecord:
+    """``raw`` as a project record, for a reader whose only other answer is "absent".
+
+    A record nobody can parse refuses rather than reading as a missing tenant: `require_project_exists` gates warehouse
+    creation on the answer and the project's delete acts on it, so "does not exist" is a verdict.
+    `ServiceUnavailableError`, so one unreadable record answers the same way whichever door reached it.
+
+    Raises:
+        ServiceUnavailableError: The record cannot be read as a project's.
+    """
+    try:
+        return read_project_record(raw, at=path)
+    except UnreadableProjectRecordError as exc:
+        log.warning("project_record_malformed", extra={"path": path, "error": str(exc)})
+        raise ServiceUnavailableError(f"control record {path!r} could not be read as a project's — refusing rather than treating it as absent") from exc
+
+
+def upsert_project(control_root: str, storage_options: StorageOptions, wanted: ProjectRecord) -> ProjectRecord:
     """Idempotent re-create of an EXISTING project, CONDITIONAL on the record's ETag (diff2 F1 leg c).
 
     The same defect F4 closed on the warehouse rung, one rung up. The re-POST built a whole record
@@ -78,6 +90,8 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
     blind re-create), and :class:`ProjectBeingDeletedError` while a delete of the project stands unfinished.
     """
 
+    record = wanted.stored()
+
     def merge(live: dict[str, str]) -> dict[str, str]:
         if live.get(DELETING_BY):
             raise ProjectBeingDeletedError(f"project {record['id']!r} is being deleted")
@@ -87,10 +101,11 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
         merged["created_by"] = live.get("created_by") or record.get("created_by", "")
         return merged
 
-    return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", merge)
+    key = record_key(wanted.id)
+    return _record(mutate_json(control_root, storage_options, key, merge), path=key)
 
 
-def set_project_protection(control_root: str, storage_options: StorageOptions, project_id: str, change: ProtectionChange) -> dict[str, str] | None:
+def set_project_protection(control_root: str, storage_options: StorageOptions, project_id: str, change: ProtectionChange) -> ProjectRecord | None:
     """Apply ``change`` to project ``project_id``'s record, conditional on its ETag ([[LH-549]]).
 
     Every other field is the record's as it stands at the write (``mutate_json``).
@@ -105,32 +120,34 @@ def set_project_protection(control_root: str, storage_options: StorageOptions, p
         The updated record, or ``None`` when the project's record is gone: a project deleted between the caller's
         authorization and this write.
     """
+    key = record_key(project_id)
     try:
-        return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", lambda record: with_protection(record, change))
+        return _record(mutate_json(control_root, storage_options, key, lambda record: with_protection(record, change)), path=key)
     except RecordMissingError:
         return None
 
 
-def set_project_manager(control_root: str, storage_options: StorageOptions, project_id: str, *, manager: str | None) -> dict[str, str] | None:
+def set_project_manager(control_root: str, storage_options: StorageOptions, project_id: str, *, manager: str | None) -> ProjectRecord | None:
     """Record who owns project ``project_id``'s declaration ([[XC-213]]): ``git``, or its own doors for ``None``.
 
     Conditional on the record's ETag, every other field as it stands at the write. ``None`` is answered when the
     record is gone.
     """
+    key = record_key(project_id)
     try:
-        return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", lambda record: with_manager(record, manager))
+        return _record(mutate_json(control_root, storage_options, key, lambda record: with_manager(record, manager)), path=key)
     except RecordMissingError:
         return None
 
 
-def create_project_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
+def create_project_record(control_root: str, storage_options: StorageOptions, record: ProjectRecord) -> None:
     """Mint ``_projects/<id>.json`` iff absent — the STORE arbitrates (F1).
 
     Raises :class:`lakehouse.records.RecordExistsError` on a lost race; the caller
     re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
     like the sequential idempotent re-POST path.
     """
-    create_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
+    create_json(control_root, storage_options, record_key(record.id), record.stored())
 
 
 def record_key(project_id: str) -> str:
@@ -138,7 +155,7 @@ def record_key(project_id: str) -> str:
     return f"{_PROJECTS_PREFIX}/{project_id}.json"
 
 
-def get_project(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
+def get_project(control_root: str, storage_options: StorageOptions, project_id: str) -> ProjectRecord | None:
     """The project record, or ``None`` if the tenant does not exist or is being deleted ([[LH-576]]).
 
     A malformed record REFUSES rather than reading as a missing tenant: `require_project_exists` gates
@@ -147,18 +164,18 @@ def get_project(control_root: str, storage_options: StorageOptions, project_id: 
     but that delete's (:func:`get_project_record`), so no warehouse, role, grant or policy is made for it
     while its delete revokes and ends what it held."""
     record = get_project_record(control_root, storage_options, project_id)
-    return None if record is None or record.get(DELETING_BY) else record
+    return None if record is None or record.is_being_deleted else record
 
 
-def get_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
+def get_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> ProjectRecord | None:
     """The project's record as it stands, a delete it names included, or ``None`` when there is none: what the delete door
     reads to start or finish a delete. A malformed record refuses, as :func:`get_project` refuses it."""
     key = f"{_PROJECTS_PREFIX}/{project_id}.json"
     record = read_json(control_root, storage_options, key)
-    return validated_or_refuse(record, ProjectRecord, event="project_record_malformed", path=key) if record is not None else None
+    return _record(record, path=key) if record is not None else None
 
 
-def mark_deleting(control_root: str, storage_options: StorageOptions, project_id: str, *, by: str) -> dict[str, str] | None:
+def mark_deleting(control_root: str, storage_options: StorageOptions, project_id: str, *, by: str) -> ProjectRecord | None:
     """Record on the project's record that ``by`` started its delete, conditional on the record's ETag ([[LH-576]]).
 
     A delete another caller started first keeps its starter, so the record names one delete whoever asks again.
@@ -166,12 +183,10 @@ def mark_deleting(control_root: str, storage_options: StorageOptions, project_id
     Returns:
         The record as written, or ``None`` when it is gone: a delete finished meanwhile.
     """
+    key = record_key(project_id)
     try:
-        return mutate_json(
-            control_root,
-            storage_options,
-            f"{_PROJECTS_PREFIX}/{project_id}.json",
-            lambda record: record if record.get(DELETING_BY) else {**record, DELETING_BY: by},
+        return _record(
+            mutate_json(control_root, storage_options, key, lambda record: record if record.get(DELETING_BY) else {**record, DELETING_BY: by}), path=key
         )
     except RecordMissingError:
         return None
@@ -188,7 +203,7 @@ def delete_project_record(control_root: str, storage_options: StorageOptions, pr
         return
 
 
-def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[list[ProjectRecord], list[str]]:
     """``(readable project records, paths that are there and could NOT be read as one)``, unordered, a project being
     deleted among the records. An absent prefix yields ``([], [])``.
 
@@ -201,7 +216,7 @@ def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[l
         ServiceUnavailableError: The store did not answer a record's read.
     """
     fs, base = fs_and_base(control_root, storage_options)
-    out: list[dict[str, str]] = []
+    out: list[ProjectRecord] = []
     skipped: list[str] = []
     for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_PROJECTS_PREFIX}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
@@ -217,14 +232,15 @@ def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[l
             log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
             skipped.append(info.path)
             continue
-        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None:
-            out.append(valid)
-        else:
+        try:
+            out.append(read_project_record(record, at=info.path))
+        except UnreadableProjectRecordError as exc:
+            log.warning("project_record_malformed", extra={"path": info.path, "error": str(exc)})
             skipped.append(info.path)
     return out, skipped
 
 
-def list_projects(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+def list_projects(control_root: str, storage_options: StorageOptions) -> list[ProjectRecord]:
     """Every readable project record (unordered) but those being deleted, which are no tenant (:func:`get_project`): the
     tolerant half of :func:`read_projects`, for a caller that only enumerates. An absent registry prefix yields ``[]``.
 
@@ -232,4 +248,4 @@ def list_projects(control_root: str, storage_options: StorageOptions) -> list[di
     it would turn one tenant's registry corruption into an every-tenant outage. A read the store did not answer raises.
     A caller deciding from the registry that no record names a project reads :func:`read_projects` and its skipped paths.
     """
-    return [record for record in read_projects(control_root, storage_options)[0] if not record.get(DELETING_BY)]
+    return [record for record in read_projects(control_root, storage_options)[0] if not record.is_being_deleted]
