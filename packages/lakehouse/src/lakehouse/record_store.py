@@ -150,7 +150,8 @@ def list_records(
     must not stop every other tenant being maintained — and it is also why a caller making a DESTRUCTIVE
     decision must not use this: a record it cannot read is silently not in the answer. Such a caller passes
     ``strict``, and then a record it cannot read raises instead, so it decides on the whole listing or none. A caller that
-    reports what it skipped passes ``skipped``, and the path of each record skipped is appended to it.
+    reports what it skipped passes ``skipped``, and the path of each record skipped is appended to it. A record removed
+    between the listing and its read is neither: it is left out, as a listing taken an instant later would leave it out.
 
     Raises:
         ValueError: ``strict``, and a record is not a JSON object.
@@ -164,6 +165,9 @@ def list_records(
         try:
             with fs.open_input_stream(info.path) as stream:
                 loaded: Any = json.loads(stream.readall().decode())
+        except FileNotFoundError:
+            # Removed since the listing named it: no longer a record, and no record this listing failed to read.
+            continue
         except Exception as exc:
             log.warning(f"{event}_unreadable", extra={"path": info.path, "error": str(exc)})
             if strict:
