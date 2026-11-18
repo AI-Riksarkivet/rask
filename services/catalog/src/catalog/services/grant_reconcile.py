@@ -17,19 +17,20 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore, Settings
 from catalog.services import projects, table_claims, warehouses
 from lakehouse import location_claims, trash
 from lakehouse.governed import fga
+from lakehouse.governed.settings import FgaSettings
 
 
-def platform_objects(settings: Settings) -> frozenset[str]:
+def platform_objects(settings: FgaSettings) -> frozenset[str]:
     """The objects a deployment keeps for itself, which no registry names and no drift report reads as a ghost: the
     estate root and the estate's own warehouse, whose namespaces hang off it."""
     return frozenset({settings.fga_root_object, settings.fga_default_warehouse_object})
 
 
-def held_table_claims(settings: Settings) -> dict[str, location_claims.LocationClaim]:
+def held_table_claims(settings: CatalogStore) -> dict[str, location_claims.LocationClaim]:
     """Every held location claim recording a table's uuid, by the table's object (``table:<uuid>``): a live table's, a dropped one's the trash keeps
     a claim for, or one a door took for a table it is writing or died writing.
 

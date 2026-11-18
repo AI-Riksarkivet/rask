@@ -54,7 +54,8 @@ if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
 
     from catalog.api.security import Caller
-    from catalog.core.config import Settings
+    from catalog.core.config import CatalogStore, Settings
+    from lakehouse.governed.settings import FgaSettings
 
 
 log = logging.getLogger(__name__)
@@ -189,7 +190,7 @@ async def delete_role(
     return RoleDeleted(role=role, tuples_revoked=len(removed))
 
 
-async def _assignee(*, settings: Settings, role: RoleRecord, raw: str) -> str:
+async def _assignee(*, settings: CatalogStore, role: RoleRecord, raw: str) -> str:
     """The OpenFGA user ``raw`` names as an assignee of ``role``: a principal, or another standing role of its project."""
     user = fga.grantee_object(raw)
     if user.startswith("user:"):
@@ -205,7 +206,7 @@ async def _assignee(*, settings: Settings, role: RoleRecord, raw: str) -> str:
     return user
 
 
-def _admin_grant(*, client: OpenFgaClient, settings: Settings, token: Caller | None, role: RoleRecord) -> project_admins.Permit:
+def _admin_grant(*, client: OpenFgaClient, settings: FgaSettings, token: Caller | None, role: RoleRecord) -> project_admins.Permit:
     """Asks ``can_grant_admin`` on each project whose ``admin`` reaches ``role``; a refusal answers the missing role's
     404, as the role's own gate does."""
 

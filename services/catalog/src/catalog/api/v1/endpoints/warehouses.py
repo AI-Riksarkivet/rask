@@ -67,7 +67,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import ListLimit
 from catalog.api.security import Caller, CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespaces_api
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStorageSettings, CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import DEREGISTER_TABLE
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
@@ -102,6 +102,7 @@ from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.ns_errors import PartiallyApplied, status_for
 from lakehouse.records import RecordExistsError, RecordMissingError
@@ -331,7 +332,9 @@ async def _claim_the_bucket(
     return existing
 
 
-async def _require_a_conforming_store(settings: Settings, vendor: CredentialVendor, root_uri: str, *, warehouse_id: str, author: Author | None) -> None:
+async def _require_a_conforming_store(
+    settings: CatalogStorageSettings, vendor: CredentialVendor, root_uri: str, *, warehouse_id: str, author: Author | None
+) -> None:
     """Probe the store under ``root_uri`` before the record makes it routable ([[LH-481]], ADR 0089).
 
     Every Lance commit rests on the store refusing a second conditional put, every vended credential on it honouring
@@ -414,7 +417,7 @@ def _record_for(
 
 
 async def _write_record(
-    settings: Settings, body: CreateWarehouseRequest, record: dict[str, str], *, existing: dict[str, str] | None, protection: ProtectionChange | None
+    settings: CatalogStore, body: CreateWarehouseRequest, record: dict[str, str], *, existing: dict[str, str] | None, protection: ProtectionChange | None
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Mint ``record``, or merge it into the record that stands; the record the write replaced (empty for a mint) and
     the record it wrote, so the protection this write changed is announced and no other.
@@ -569,7 +572,7 @@ async def _set_warehouse_status(
 
 
 async def change_warehouse_status(
-    settings: Settings, control: ControlEmitter, warehouse_id: str, *, status: WarehouseStatus, actor: str | None
+    settings: CatalogStore, control: ControlEmitter, warehouse_id: str, *, status: WarehouseStatus, actor: str | None
 ) -> dict[str, str]:
     """Deactivate or activate warehouse ``warehouse_id`` and announce it; the record as written.
 
@@ -621,7 +624,7 @@ async def activate_warehouse(
     return await _set_warehouse_status(warehouse_id, "active", settings=settings, token=token, client=client, control=control)
 
 
-async def _require_project_admin(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str) -> None:
+async def _require_project_admin(client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, project: str) -> None:
     """Refuse a caller without ``can_administer`` on ``project``: the authority over its warehouses' destruction, and so
     over the lock on it."""
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
@@ -718,7 +721,7 @@ async def set_warehouse_protection(
 
 
 async def protect_warehouse(
-    settings: Settings, control: ControlEmitter, warehouse_id: str, *, project: str, change: ProtectionChange, actor: str | None
+    settings: CatalogStore, control: ControlEmitter, warehouse_id: str, *, project: str, change: ProtectionChange, actor: str | None
 ) -> None:
     """Arm or clear ``project``'s warehouse ``warehouse_id``'s deletion protection and announce it.
 
@@ -791,7 +794,7 @@ class _NamespaceSubtree(BaseModel):
         return [*self.descendants, *own]
 
 
-async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, held: list[str], *, force: bool) -> list[_NamespaceSubtree]:
+async def _cascade_subtrees(ns: LanceNamespace, settings: CatalogStore, held: list[str], *, force: bool) -> list[_NamespaceSubtree]:
     """Every namespace ``held`` directly in the warehouse with its subtree, enumerated and held to its protection before
     anything is removed.
 
@@ -821,7 +824,7 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, held: list[s
     return subtrees
 
 
-async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[str], *, purge: bool, table_uuid: str) -> bool:
+async def _detach_table(ns: LanceNamespace, settings: CatalogStore, segments: list[str], *, purge: bool, table_uuid: str) -> bool:
     """Detach one table the cascade listed from the catalog, its bytes left in place; ``False`` for one it did not detach.
 
     DETACH, NOT DROP: this door takes bytes only on ``?purge_bucket=true``, and that holds for the tables in its
@@ -904,7 +907,7 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
 
 
 async def _require_no_outside_clones(
-    ns: LanceNamespace | None, settings: Settings, *, subtrees: list[_NamespaceSubtree], trashed: list[dict[str, Any]]
+    ns: LanceNamespace | None, settings: CatalogStore, *, subtrees: list[_NamespaceSubtree], trashed: list[dict[str, Any]]
 ) -> None:
     """Refuse a ``?purge_bucket=true`` that would destroy a table a registered clone outside the warehouse reads, before
     anything changes (ADR 0198 §1): the purge empties the bucket, so a source's bytes go whatever its clones' tags say.
@@ -935,7 +938,7 @@ async def _require_no_outside_clones(
         ) from exc
 
 
-async def _forget_trashed(settings: Settings, entry: dict[str, Any], *, purge: bool) -> None:
+async def _forget_trashed(settings: CatalogStore, entry: dict[str, Any], *, purge: bool) -> None:
     """End what one trashed object kept for an undrop besides its grants, as the trash's own ending does
     (:func:`lakehouse.trash.end`): its records, a table's claim and base record, then its record.
 

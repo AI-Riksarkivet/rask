@@ -21,7 +21,7 @@ from typing import Final
 import pyarrow.fs as pafs
 from pydantic import BaseModel
 
-from catalog.core.config import Settings, shared_lance_session
+from catalog.core.config import CatalogStore, shared_lance_session
 from catalog.services import warehouses
 from lakehouse import control_prefixes, stored_objects
 from lakehouse.lance_session import open_dataset
@@ -43,7 +43,7 @@ class RootReclaim(BaseModel):
     versions_kept: int
 
 
-def roots(settings: Settings) -> list[str]:
+def roots(settings: CatalogStore) -> list[str]:
     """Every root an index can be at, once each: the catalog's own, and every registered warehouse's.
 
     A deactivated warehouse's root is reclaimed too: its index is the catalog's bookkeeping, not the tenant's data, and

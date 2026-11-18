@@ -24,7 +24,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
 from catalog.core import run_context
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore
 from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event, run_inputs
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane, table_inputs
@@ -39,7 +39,7 @@ def door_stamp(token: Caller | None, operation: str, run: RunContext | None = No
     return run_context.commit_properties(run, author=token.subject if token is not None else None, operation=operation)
 
 
-async def record_declared_inputs(settings: Settings, resolver: Resolver, run: RunContext | None, *, table: ResolvedTable, segments: list[str]) -> None:
+async def record_declared_inputs(settings: CatalogStore, resolver: Resolver, run: RunContext | None, *, table: ResolvedTable, segments: list[str]) -> None:
     """Record, before a door commits to ``table``, each input ``run`` declares, by the uuid the write judge authorized it as
     (:mod:`catalog.services.table_inputs`, [[LH-541]]); nothing for a run declaring none.
 

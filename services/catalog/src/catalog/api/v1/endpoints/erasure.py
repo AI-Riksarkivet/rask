@@ -40,7 +40,7 @@ from openfga_sdk import OpenFgaClient
 from catalog.api import fga_deps
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core.config import Settings
+from catalog.core.config import CatalogMaintenanceSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref
 from catalog.schemas import ErasureRequest, ErasureVerifyRequest
@@ -51,6 +51,7 @@ from lakehouse import derived_tables
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.history_fences import TableHistory
 from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.records import RecordExistsError
@@ -300,7 +301,7 @@ async def list_erasure_obligations(
 
 
 async def _hidden_derived(
-    surfaces: Sequence[SurfaceResult], *, late: Sequence[str], settings: Settings, client: OpenFgaClient | None, token: Caller | None
+    surfaces: Sequence[SurfaceResult], *, late: Sequence[str], settings: FgaSettings, client: OpenFgaClient | None, token: Caller | None
 ) -> frozenset[str]:
     """The derived tables ``surfaces`` and the ``late`` derived tables name that the caller may not see: none with
     authorization off, else every one the caller holds no ``can_get_metadata`` on, the rung lineage's derived door asks to
@@ -382,7 +383,7 @@ async def _schedule_release(
         )
 
 
-def _take_the_earlier_release(report: ErasureReport, earlier: erasure_release.ReleaseRecord | None, settings: Settings) -> None:
+def _take_the_earlier_release(report: ErasureReport, earlier: erasure_release.ReleaseRecord | None, settings: CatalogMaintenanceSettings) -> None:
     """Settle on the release an earlier verification scheduled under the obligation's id, only while it names every pin.
 
     A pin that release does not name would stay pinned with the obligation released, so the obligation stays open and
@@ -400,7 +401,7 @@ def _take_the_earlier_release(report: ErasureReport, earlier: erasure_release.Re
     report.settled = False
 
 
-def _pin_release(record: erasure_release.ReleaseRecord, settings: Settings) -> PinRelease:
+def _pin_release(record: erasure_release.ReleaseRecord, settings: CatalogMaintenanceSettings) -> PinRelease:
     return PinRelease(
         release_id=record.release_id,
         due_at=record.due_at,

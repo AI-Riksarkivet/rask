@@ -71,7 +71,7 @@ from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import json_arrow, provenance_guard
 from catalog.core.base_judge import BaseJudge, GovernedStorage
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import refuse_properties_kept_nowhere, reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, rename_destination
 from catalog.core.lineage_emit import (
@@ -107,6 +107,7 @@ from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import uuid_of
 from lakehouse.ns_errors import PartiallyApplied
@@ -852,7 +853,7 @@ async def drop_table(
 
 async def _drop(
     ns: LanceNamespace,
-    settings: Settings,
+    settings: CatalogStore,
     table: ResolvedTable,
     *,
     segments: list[str],
@@ -1034,7 +1035,7 @@ async def deregister_table(
     return response
 
 
-async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, *, segments: list[str]) -> DeregisterTableResponse:
+async def _detach(ns: LanceNamespace, settings: CatalogStore, table: ResolvedTable, *, segments: list[str]) -> DeregisterTableResponse:
     """Remove ``table``'s row from ``__manifest`` and release its location's claim; the bytes stay where they are.
 
     The door acts on the table its name resolved to, under the fence that holds the claim it read (ADR 0173 §7,
@@ -1479,7 +1480,7 @@ async def register_table(
 
 
 async def _require_clone_sources(
-    client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, location: str, so: StorageOptions, context: table_bases.RegistrationContext
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, location: str, so: StorageOptions, context: table_bases.RegistrationContext
 ) -> set[str]:
     """Refuse registering the dataset at ``location`` unless its caller may read and tag every source it reads through as
     a shallow clone (:data:`table_bases.CLONE_RELATIONS`); the uuids of the sources asked for, empty for a dataset that

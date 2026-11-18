@@ -54,6 +54,7 @@ from catalog.schemas import (
 )
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.settings import FgaSettings
 
 
 log = logging.getLogger(__name__)
@@ -152,7 +153,7 @@ def _can_relations(fga_type: str) -> tuple[str, ...]:
 
 
 async def _access_list(
-    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
 ) -> AccessListResponse:
     client = fga_deps.require_fga(settings, client, feature="access review")
     segments = parse_identifier(id)
@@ -266,7 +267,7 @@ async def list_project_access(id: str, client: FgaClientDep, settings: SettingsD
 
 async def _access_check(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     resolver: Resolver,
     fga_type: str,
@@ -319,7 +320,7 @@ async def check_namespace_access(
 
 
 async def _my_permissions(
-    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
 ) -> MyPermissionsResponse:
     """Answer every ``can_*`` on this object for the CALLER — the self-view.
 
@@ -664,7 +665,7 @@ def _graph_node(node_id: str) -> GraphNode:
 
 
 async def _access_graph(
-    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
 ) -> AccessGraphResponse:
     """The #81 authorization-graph primitive — one hop of the relationship graph around an object: the
     object, every subject directly granted a rung on it, and its ``parent``/``project`` container edge.
@@ -720,7 +721,7 @@ async def graph_namespace_access(id: str, client: FgaClientDep, settings: Settin
 _MANAGED_ACCESS_SUBJECT = "user:*"
 
 
-async def _read_managed_access(client: OpenFgaClient | None, settings: Settings, resolver: Resolver, fga_type: str, id: str) -> ManagedAccessResponse:
+async def _read_managed_access(client: OpenFgaClient | None, settings: FgaSettings, resolver: Resolver, fga_type: str, id: str) -> ManagedAccessResponse:
     """Is this container managed? The READ half, without which the flag is unusable in a UI.
 
     Reader-tier (``can_get_metadata``, via the suffix map), not the grant bar that SETS it. That is
@@ -758,7 +759,7 @@ async def get_warehouse_managed_access(
 
 
 async def _set_managed_access(
-    client: OpenFgaClient | None, announcer: Announcer, settings: Settings, token: Caller | None, resolver: Resolver, fga_type: str, id: str, enabled: bool
+    client: OpenFgaClient | None, announcer: Announcer, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str, enabled: bool
 ) -> ManagedAccessResponse:
     """Set or clear the flag, idempotently.
 

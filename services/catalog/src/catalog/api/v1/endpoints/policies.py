@@ -42,7 +42,7 @@ from lance_namespace import (
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, PolicyResponse, PolicyUnset, ProjectPoliciesResponse
 from catalog.services import projects as project_registry
@@ -98,7 +98,7 @@ def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[st
     return {**merged, "kind": kind, "id": canonical_id, **({"uuid": uuid} if uuid is not None else {})}
 
 
-async def _set(settings: Settings, kind: PolicyKind, key: str, compose: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
+async def _set(settings: CatalogStore, kind: PolicyKind, key: str, compose: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
     """Write the record ``compose`` merges onto the one stored, conditional on that record (`policies.set_policy`), once
     for all three rungs; the record written.
 
@@ -115,7 +115,7 @@ def _response(record: dict[str, object]) -> PolicyResponse:
     return PolicyResponse.model_validate({**record, "set": True})
 
 
-async def _describe(settings: Settings, *, kind: PolicyKind, key: str, canonical: str, uuid: str | None) -> PolicyResponse | PolicyUnset:
+async def _describe(settings: CatalogStore, *, kind: PolicyKind, key: str, canonical: str, uuid: str | None) -> PolicyResponse | PolicyUnset:
     """Read one policy, once for all three rungs: its record, or :class:`PolicyUnset` where the object holds none.
 
     Each route establishes its object before this read, a table's or namespace's by resolving its name and a
@@ -129,7 +129,7 @@ async def _describe(settings: Settings, *, kind: PolicyKind, key: str, canonical
     return _response({**record, "id": canonical})
 
 
-async def _delete(settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str) -> PolicyDeleteResponse:
+async def _delete(settings: CatalogStore, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs."""
     await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key)
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
@@ -224,7 +224,7 @@ async def delete_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsD
     return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=fga.canonical_object_id(namespace.segments))
 
 
-async def _namespace(id: str, ns: LanceNamespace, settings: Settings) -> fga_deps.GovernedObject:
+async def _namespace(id: str, ns: LanceNamespace, settings: CatalogStore) -> fga_deps.GovernedObject:
     """The namespace ``id`` names, with the uuid its policy is kept under; the root holds no policy."""
     segments = parse_identifier(id)
     if not segments:
@@ -315,7 +315,7 @@ async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentTo
     return await _delete(settings, control, token, "project", key=project, canonical=project)
 
 
-def _named_now(settings: Settings, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _named_now(settings: CatalogStore, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Each record, a table's named as its table is named now, which a rename since the policy was set changed; a
     table's whose table is gone governs nothing and is left out (``table_claims.names_now``)."""
     store = table_claims.claim_store(settings)

@@ -46,7 +46,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import CreateNamespaceRequest, LanceNamespace, NamespaceAlreadyExistsError
 from openfga_sdk import OpenFgaClient
 
-from catalog.core.config import Settings
+from catalog.core.config import CatalogLineageSettings, Settings
 from catalog.core.identifiers import parse_identifier, with_minted_uuid
 from catalog.core.lineage_emit import COMPACT_TABLE
 from catalog.schemas import PolicyRequest
@@ -62,7 +62,7 @@ log = logging.getLogger(__name__)
 ACTOR = "system:provenance-namespace"
 
 
-def is_provenance(namespace_id: str, settings: Settings) -> bool:
+def is_provenance(namespace_id: str, settings: CatalogLineageSettings) -> bool:
     """Whether ``namespace_id`` (a table's parent namespace, delimiter-joined) is the provenance namespace or inside it."""
     root = settings.provenance_namespace
     return bool(root) and (namespace_id == root or namespace_id.startswith(f"{root}{CATALOG_DELIMITER}"))
@@ -73,20 +73,20 @@ def is_provenance(namespace_id: str, settings: Settings) -> bool:
 _DECLARED_RELATION = "writer"
 
 
-def is_unannounced(namespace_id: str, operation: str, settings: Settings) -> bool:
+def is_unannounced(namespace_id: str, operation: str, settings: CatalogLineageSettings) -> bool:
     """Whether a write of ``operation`` under ``namespace_id`` goes unannounced: any in the provenance namespace but a
     compaction (``COMPACT_TABLE``)."""
     return operation != COMPACT_TABLE and is_provenance(namespace_id, settings)
 
 
-def announcer(segments: Sequence[str], settings: Settings) -> Callable[[str], bool]:
+def announcer(segments: Sequence[str], settings: CatalogLineageSettings) -> Callable[[str], bool]:
     """Whether a write of an operation on the table ``segments`` names is announced, as the emitter judges it
     (:func:`is_unannounced`): a door's table records the author only of what is announced (ADR 0187)."""
     parent = fga.parent_namespace_id(list(segments)) or ""
     return lambda operation: not is_unannounced(parent, operation, settings)
 
 
-def provenance_tuples(settings: Settings, *, namespace_uuid: str, parent: str | None) -> list[fga.ClientTuple]:
+def provenance_tuples(settings: CatalogLineageSettings, *, namespace_uuid: str, parent: str | None) -> list[fga.ClientTuple]:
     """The namespace's parent edge and a `writer` grant per configured writer, on the namespace's uuid ([[LH-524]])."""
     obj = fga.namespace_object(namespace_uuid)
     return [

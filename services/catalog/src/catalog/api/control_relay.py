@@ -50,7 +50,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ValidationError
 
 from catalog.api.ticks import Tick
-from catalog.core.config import Settings
+from catalog.core.config import CatalogControlBusSettings, Settings
 from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the control relay is a registered publish site
 from lakehouse.cloud_events import CloudEvent, control_envelope
@@ -169,7 +169,7 @@ def _action_of(event_json: str) -> str | None:
     return bounded(action) if isinstance(action, str) and action else None
 
 
-async def _republish(publisher: Bus, settings: Settings, envelope: CloudEvent) -> None:
+async def _republish(publisher: Bus, settings: CatalogControlBusSettings, envelope: CloudEvent) -> None:
     """Deliver ONE staged event onto the control topic, in the envelope derived from the staged event.
 
     Never the envelope of ``event.model_dump()``. Round-tripping through the model re-serializes ``occurred_at``,

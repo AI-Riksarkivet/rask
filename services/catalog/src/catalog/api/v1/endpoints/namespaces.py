@@ -57,7 +57,7 @@ from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import write_judge
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, with_minted_uuid
 from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_event
@@ -465,7 +465,7 @@ def describe_namespace(id: str, ns: NamespaceDep, body: DescribeNamespaceRequest
 
 async def _trash_subtree(
     ns: LanceNamespace,
-    settings: Settings,
+    settings: CatalogStore,
     token: Caller | None,
     segments: list[str],
     descendants: list[fga_deps.GovernedObject],
@@ -551,7 +551,7 @@ async def _trash_subtree(
 
 async def _trash_listed_table(
     ns: LanceNamespace,
-    settings: Settings,
+    settings: CatalogStore,
     item: fga_deps.GovernedObject,
     *,
     resolved: table_claims.ResolvedTable,
@@ -771,7 +771,7 @@ async def _destroy_listed_table(
     return True
 
 
-async def _identify(ns: LanceNamespace, settings: Settings, descendants: list[tuple[str, list[str]]]) -> list[fga_deps.GovernedObject]:
+async def _identify(ns: LanceNamespace, settings: CatalogStore, descendants: list[tuple[str, list[str]]]) -> list[fga_deps.GovernedObject]:
     """Every descendant a cascade is about to remove, with its uuid, read while it still stands.
 
     CONCURRENT (catalog-api-11): one independent read per descendant on the pre-flight of a cascade, so its latency
@@ -782,7 +782,7 @@ async def _identify(ns: LanceNamespace, settings: Settings, descendants: list[tu
     )
 
 
-async def _require_descendants_unprotected(settings: Settings, descendants: list[fga_deps.GovernedObject], *, force: bool) -> None:
+async def _require_descendants_unprotected(settings: CatalogStore, descendants: list[fga_deps.GovernedObject], *, force: bool) -> None:
     """Refuse a cascade that would destroy a PROTECTED descendant, naming the first one found.
 
     The guard at the named rung only sees the id in the URL; a cascade's unit of destruction is the

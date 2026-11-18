@@ -25,7 +25,7 @@ from catalog.api import announcing, fga_deps
 from catalog.api.announcing import AnnouncerDep
 from catalog.api.dependencies import ClockDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
 from catalog.api.security import Caller, CurrentSubject, CurrentToken
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import reclaim_or_refuse, role_session_name
 from catalog.schemas import CredentialResponse, TrashEndResponse, TrashRefusalRequest, TrashRefusalResponse, TrashReleaseResponse, VendedCredentials
@@ -166,7 +166,7 @@ def _audited(action: AuditAction, outcome: AuditOutcome, token: Caller | None, *
     audit(action, outcome, subject=token.subject if token is not None else None, resource=fga.object_of(kind, uuid), **fields)
 
 
-async def _noted(settings: Settings, *, kind: TrashKind, uuid: str, reason: str) -> InvalidTableStateError:
+async def _noted(settings: CatalogStore, *, kind: TrashKind, uuid: str, reason: str) -> InvalidTableStateError:
     """Note ``reason`` on the record, as maintenance's refusals are noted, and return the refusal for the door to raise."""
     await run_in_threadpool(partial(trash_reclaim.note_refusal, settings, kind=kind, uuid=uuid, reason=reason))
     return InvalidTableStateError(reason)

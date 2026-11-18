@@ -57,7 +57,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, vending, write_judge
-from catalog.core.config import Settings
+from catalog.core.config import CatalogAuthzSettings, CatalogLineageSettings, CatalogStore, Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
 from catalog.services import dataplane, native, object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
@@ -65,6 +65,7 @@ from lakehouse import object_records, protection, trash
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CATALOG_DELIMITER
@@ -797,7 +798,7 @@ async def _authorize_grant(
 async def require_grant_authority(
     request: Request,
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     resolver: Resolver,
     *,
@@ -871,7 +872,7 @@ def require_wired(client: OpenFgaClient | None) -> OpenFgaClient:
     return client
 
 
-def wired(settings: Settings, client: OpenFgaClient | None) -> OpenFgaClient | None:
+def wired(settings: FgaSettings, client: OpenFgaClient | None) -> OpenFgaClient | None:
     """The client to write and read grants with, ``None`` only where authorization is off.
 
     Off is what the setting says and nothing else ([[LH-237]], [[LH-585]]): a seed, a revoke or a listing that read a
@@ -884,7 +885,7 @@ def wired(settings: Settings, client: OpenFgaClient | None) -> OpenFgaClient | N
     return require_wired(client) if settings.fga_enabled else None
 
 
-def require_fga(settings: Settings, client: OpenFgaClient | None, *, feature: str) -> OpenFgaClient:
+def require_fga(settings: FgaSettings, client: OpenFgaClient | None, *, feature: str) -> OpenFgaClient:
     """The estate gate every FGA-BACKED door opens with, and the client it needs, in one call.
 
     Two refusals, and the distinction is deliberate: with FGA OFF the deployment genuinely does not
@@ -921,7 +922,7 @@ class Authorization(NamedTuple):
         return await fga.batch_check(self.client, user=self.subject, relation=relation, objects=list(objects))
 
 
-def authorization(settings: Settings, client: OpenFgaClient | None, token: Caller | None) -> Authorization | None:
+def authorization(settings: FgaSettings, client: OpenFgaClient | None, token: Caller | None) -> Authorization | None:
     """The client and the subject a decision is asked with, ``None`` only with FGA off, when every decision allows.
 
     Every gate and every listing that judges its items asks this, so none reads an authorization layer that is on as
@@ -983,7 +984,7 @@ def _batch_ids(body: Mapping[str, object]) -> Iterator[tuple[str | None, list[st
                 yield str(kind), segments
 
 
-async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Resolver, settings: Settings, *, user: str) -> None:
+async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Resolver, *, user: str) -> None:
     """Authorize body-keyed batch routes (no ``{id}`` path param); tables named in the body.
 
     version/commit/delete on an existing table -> ``can_write_data`` on the table; a
@@ -1070,7 +1071,7 @@ async def _rename_destination(request: Request, segments: list[str]) -> tuple[st
     return tuple(segments if destination is None else destination)
 
 
-async def _write_door(request: Request, settings: Settings) -> write_judge.Write | None:
+async def _write_door(request: Request) -> write_judge.Write | None:
     """The write this route is about to make, or ``None`` for a door the write judge does not decide.
 
     A write door is every non-read door on a table or materialized view, owner-rung ones included, and every
@@ -1122,7 +1123,7 @@ async def _write_door(request: Request, settings: Settings) -> write_judge.Write
 
 
 async def require_declared_inputs(
-    settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, run: run_context.RunContext
+    settings: FgaSettings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, run: run_context.RunContext
 ) -> dict[str, run_context.RunInput]:
     """Each input ``run`` declares, by the uuid of the table it names now, once each names a table the committer may read
     (ADR 0183 §2).
@@ -1176,7 +1177,7 @@ def _unreadable_input(entry: run_context.RunInput) -> InvalidInputError:
     )
 
 
-def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> write_judge.RungCheck | None:
+def _rung_check(settings: FgaSettings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> write_judge.RungCheck | None:
     """The write judge's rung check, asked through :func:`_require_rung`; ``None`` with FGA off, when every rung allows.
 
     Raises:
@@ -1252,7 +1253,7 @@ async def _judge(
 
 
 async def judge_staged_run(
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     injected: OpenFgaClient | None,
     resolver: Resolver,
@@ -1476,7 +1477,7 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, in
     A table or namespace is asked about as the object its name resolves to, ``table:<uuid>`` or ``namespace:<uuid>``
     (ADR 0173 §8, [[LH-524]]), through ``resolver``, which the door then reads the same resolution from.
     """
-    if (write := await _write_door(request, settings)) is not None:
+    if (write := await _write_door(request)) is not None:
         await _judge(request, settings, token, injected, resolver, write)
         return
     if not settings.fga_enabled:
@@ -1496,7 +1497,7 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, in
     # Body-keyed batch routes have no {id} path param — authorize by reading the body.
     if object_id is None:
         if path.rstrip("/") in _BATCH_PATHS:
-            await _authorize_batch(request, client, resolver, settings, user=token.subject)
+            await _authorize_batch(request, client, resolver, user=token.subject)
         # Other id-less routes (collection lists, health) need only authentication.
         return
 
@@ -2002,7 +2003,7 @@ class GovernedObject(BaseModel):
         return fga.object_of(self.kind, self.uuid)
 
 
-async def identify(ns: LanceNamespace, settings: Settings, kind: Literal["table", "namespace"], segments: list[str]) -> GovernedObject:
+async def identify(ns: LanceNamespace, settings: CatalogStore, kind: Literal["table", "namespace"], segments: list[str]) -> GovernedObject:
     """The object ``segments`` names now, with its uuid.
 
     Raises:
@@ -2016,7 +2017,7 @@ async def identify(ns: LanceNamespace, settings: Settings, kind: Literal["table"
     return GovernedObject(kind=kind, segments=segments, uuid=await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments))
 
 
-async def require_table_unprotected(settings: Settings, table: ResolvedTable, *, force: bool) -> None:
+async def require_table_unprotected(settings: CatalogStore, table: ResolvedTable, *, force: bool) -> None:
     """Refuse a door that destroys some of ``table`` while its protection record stands, unless ``force``.
 
     The record is read under the uuid the door's name resolved to (ADR 0173 §8): a table that gave up the name, or
@@ -2032,7 +2033,7 @@ async def require_table_unprotected(settings: Settings, table: ResolvedTable, *,
     require_not_protected(guard or {}, kind="table", obj_id=fga.canonical_object_id(table.segments), force=False)
 
 
-async def require_namespace_unprotected(settings: Settings, namespace: GovernedObject, *, force: bool) -> None:
+async def require_namespace_unprotected(settings: CatalogStore, namespace: GovernedObject, *, force: bool) -> None:
     """Refuse a door that removes ``namespace`` while its protection record stands, unless ``force``.
 
     Raises:
@@ -2044,7 +2045,7 @@ async def require_namespace_unprotected(settings: Settings, namespace: GovernedO
     require_not_protected(guard or {}, kind="namespace", obj_id=fga.canonical_object_id(namespace.segments), force=False)
 
 
-async def require_project_exists(settings: Settings, project: str) -> None:
+async def require_project_exists(settings: CatalogStore, project: str) -> None:
     """Refuse an operation naming a project the registry does not know.
 
     Existence is a LAYER-3 invariant (`open_hierarchy_lifecycle.md`): it comes from the project
@@ -2089,7 +2090,7 @@ def project_admin_for(token: Caller | None, named: str | None) -> str | None:
 
 async def seed_project_admin(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     actor: str | None,
     *,
     project: str,
@@ -2126,7 +2127,7 @@ def owned_object(resource: str, uuid: str) -> str:
     return fga.object_of("table" if resource == "table" else "namespace", uuid)
 
 
-async def parent_object_of(resolver: Resolver, settings: Settings, resource: str, segments: list[str]) -> str | None:
+async def parent_object_of(resolver: Resolver, settings: FgaSettings, resource: str, segments: list[str]) -> str | None:
     """The object a just-created child's ``parent`` edge names: the object its parent's name is governed as
     (:meth:`Resolver.object`), ``warehouse:<id>`` for a name directly in a warehouse and the parent namespace's uuid
     object below it ([[LH-593]]).
@@ -2148,7 +2149,7 @@ async def parent_object_of(resolver: Resolver, settings: Settings, resource: str
 
 async def seed_ownership(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     resolver: Resolver,
     *,
@@ -2198,7 +2199,7 @@ async def seed_ownership(
 
 
 async def seed_before_write(
-    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
 ) -> None:
     """:func:`seed_ownership` for the table ``uuid`` its door minted and is about to write: its grants stand before the
     table does ([[LH-588]]), so no table stands without them.
@@ -2215,7 +2216,7 @@ async def seed_before_write(
 
 
 async def seed_namespace_before_write(
-    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
 ) -> None:
     """Grant the creator ``owner`` of the namespace ``uuid`` its door minted and is about to write, and the ``parent``
     edge it inherits through, so no namespace stands without them ([[LH-585]]).
@@ -2244,7 +2245,7 @@ async def seed_namespace_before_write(
         raise
 
 
-async def _namespace_parent(resolver: Resolver, settings: Settings, segments: list[str]) -> str:
+async def _namespace_parent(resolver: Resolver, settings: FgaSettings, segments: list[str]) -> str:
     """:func:`parent_object_of` for a namespace, which always names one: its warehouse, or the namespace above it."""
     parent = await parent_object_of(resolver, settings, "namespace", segments)
     if parent is None:
@@ -2253,7 +2254,7 @@ async def _namespace_parent(resolver: Resolver, settings: Settings, segments: li
 
 
 async def name_namespace_child(
-    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
 ) -> None:
     """Name the namespace ``uuid`` a child of its parent, now that it stands there: the end of its create.
 
@@ -2272,7 +2273,7 @@ async def name_namespace_child(
 
 async def take_back_seed(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     segments: list[str],
@@ -2293,7 +2294,7 @@ async def take_back_seed(
 
 
 async def take_back_unless_namespace_stands(
-    ns: LanceNamespace, client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, segments: list[str], uuid: str, reason: str
+    ns: LanceNamespace, client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, segments: list[str], uuid: str, reason: str
 ) -> None:
     """Take back the grants written for the namespace ``uuid``, whose create door is failing or kept another namespace,
     unless the namespace stands under ``segments``: a create whose answer the store lost may have landed, and a namespace
@@ -2319,7 +2320,7 @@ class ParentChangedError(ConcurrentModificationError):
 
 async def undo_a_create_whose_parent_is_unread(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     resource: Literal["table", "namespace"],
@@ -2345,7 +2346,7 @@ async def undo_a_create_whose_parent_is_unread(
 
 
 async def require_parent_as_authorized(
-    ns: LanceNamespace, settings: Settings, client: OpenFgaClient | None, resolver: Resolver, *, resource: str, segments: list[str]
+    ns: LanceNamespace, settings: FgaSettings, client: OpenFgaClient | None, resolver: Resolver, *, resource: str, segments: list[str]
 ) -> None:
     """Refuse a create whose parent namespace is not the one the request was authorized on, asked once the backend
     has recorded the new object ([[LH-585]]).
@@ -2377,7 +2378,7 @@ async def require_parent_as_authorized(
 
 async def undo_then_take_back(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     segments: list[str],
@@ -2457,7 +2458,7 @@ class GrantsBeforeWrite:
 _TENANT_HELD = frozenset({"namespace", "table", "materialized_view", "warehouse", "project"})
 
 
-async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, *, fga_type: str, segments: list[str], settings: Settings) -> None:
+async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, *, fga_type: str, segments: list[str], settings: CatalogStore) -> None:
     """Refuse granting a role from one tenant a rung on another tenant's object: a namespace's, a table's or a view's
     tenant is the project of the warehouse its name begins with ([[LH-593]]), a warehouse's is named by its own record
     ([[LH-555]]), a project's is its own id, and a role's the project its own edge names ([[LH-557]]).
@@ -2498,7 +2499,7 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
     raise InvalidInputError(f"{grantee!r} belongs to project {min(owned_by)!r} and cannot be granted on {segments[0]!r}, which belongs to {held_by}")
 
 
-def _tenant_of(settings: Settings, fga_type: str, first_segment: str) -> str | None:
+def _tenant_of(settings: CatalogStore, fga_type: str, first_segment: str) -> str | None:
     """The project an object of ``fga_type`` belongs to, from its id's ``first_segment``: a project's own id, else the
     project of the warehouse it names, which is a warehouse's own id and the first segment of every name in one
     ([[LH-593]]). ``None`` when the registry names none."""
@@ -2625,7 +2626,7 @@ async def _return_to_source(authz: Authorization, *, obj: str, source: str, dest
 
 
 async def parent_edge_mover(
-    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, obj: str, source: list[str], destination: list[str]
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, obj: str, source: list[str], destination: list[str]
 ) -> dataplane.Reparent | None:
     """How a rename of table ``source`` to ``destination`` takes ``obj``'s parent edge along, or ``None`` when it has
     none to take: the rename keeps its namespace, or FGA is off (:func:`authorization`).
@@ -2660,7 +2661,7 @@ async def parent_edge_mover(
     )
 
 
-async def revoke_ownership(client: OpenFgaClient | None, settings: Settings, *, obj: str, token: Caller | None, origin: fga.TupleOrigin) -> None:
+async def revoke_ownership(client: OpenFgaClient | None, settings: FgaSettings, *, obj: str, token: Caller | None, origin: fga.TupleOrigin) -> None:
     """Delete every FGA tuple on ``obj`` (the revoke counterpart of :func:`seed_ownership`), recorded as ``origin``:
     ``lifecycle_delete`` for an object a door dropped or detached, ``create`` for a create taking back the grants it
     wrote. The trail is the only record of why a grant went, so the two are never one label ([[LH-585]]).
@@ -2685,7 +2686,7 @@ async def revoke_ownership(client: OpenFgaClient | None, settings: Settings, *, 
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
 
 
-async def revoke_removed_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> int:
+async def revoke_removed_object(client: OpenFgaClient | None, settings: FgaSettings, obj: str, *, token: Caller | None) -> int:
     """Delete every tuple on ``obj``, an object a lifecycle delete removed, and return how many the server removed.
 
     Distinct from :func:`revoke_ownership` in two ways that matter to a cascade: the audit origin is
@@ -2701,7 +2702,7 @@ async def revoke_removed_object(client: OpenFgaClient | None, settings: Settings
     return len(removed)
 
 
-async def revoke_ghost_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> int:
+async def revoke_ghost_object(client: OpenFgaClient | None, settings: FgaSettings, obj: str, *, token: Caller | None) -> int:
     """Delete every tuple on ``obj``, an object no registry names ([[LH-061]]'s repair half), and return how many went.
 
     The origin is ``drift_repair``: nothing was destroyed, the object was already gone, and the revoke is justified only
@@ -2714,7 +2715,7 @@ async def revoke_ghost_object(client: OpenFgaClient | None, settings: Settings, 
     return len(await fga.revoke_object_tuples(client, obj, actor=actor, origin="drift_repair"))  # noqa: TID251
 
 
-async def write_registry_edges(client: OpenFgaClient | None, settings: Settings, edges: list[fga.ClientTuple], *, token: Caller | None) -> None:
+async def write_registry_edges(client: OpenFgaClient | None, settings: FgaSettings, edges: list[fga.ClientTuple], *, token: Caller | None) -> None:
     """Write ``edges``, structural tuples a registry record justifies, under the ``registry_rebuild`` origin ([[LH-061]]):
     no person granted them, they were reconstructed from the record. A no-op when FGA is off; a 503 when it is on
     with no client wired."""
@@ -2724,7 +2725,7 @@ async def write_registry_edges(client: OpenFgaClient | None, settings: Settings,
     await fga.write_tuples(client, edges, actor=actor, origin="registry_rebuild")  # noqa: TID251
 
 
-async def revoke_expired_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> list[fga.ClientTuple]:
+async def revoke_expired_object(client: OpenFgaClient | None, settings: FgaSettings, obj: str, *, token: Caller | None) -> list[fga.ClientTuple]:
     """Delete every tuple on ``obj``, a trashed object whose deadline has passed, and return what the server removed.
 
     The origin is ``trash_expired`` (ADR 0146): nobody revoked them and nothing was destroyed, the grace period ended
@@ -2817,7 +2818,7 @@ async def orphaned_children(client: OpenFgaClient | None, settings: Settings, co
     )
 
 
-def _trashed_objects(settings: Settings) -> set[str]:
+def _trashed_objects(settings: CatalogStore) -> set[str]:
     """The FGA objects of every table and namespace in the trash, by the uuid each record keeps.
 
     Read whole ([[LH-572]]): a record that cannot be read may be a trashed object of the subtree, whose grants and
@@ -2840,7 +2841,7 @@ def _trashed_objects(settings: Settings) -> set[str]:
 
 async def require_can_drop_table(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     table: ResolvedTable,
@@ -2914,7 +2915,7 @@ async def require_staged_operation(
 
 async def require_rename_destination(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     resolver: Resolver,
     *,
@@ -2941,7 +2942,7 @@ async def require_rename_destination(
 
 async def require_relation(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     relation: str,
@@ -2960,7 +2961,7 @@ async def require_relation(
     await authz.require(relation, obj, label=label)
 
 
-async def require_any_relation(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, doors: list[tuple[str, str]]) -> None:
+async def require_any_relation(client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, doors: list[tuple[str, str]]) -> None:
     """Gate on ANY of ``doors``, each a ``(relation, object)`` pair, through the audited :func:`_require_any` core.
 
     For a handler that two rungs open, one on its object and one above it (a tenant's record: a member's, or the estate
@@ -2980,7 +2981,7 @@ async def require_any_relation(client: OpenFgaClient | None, settings: Settings,
 
 async def require_relation_on_a_path(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     relation: str,
@@ -3009,7 +3010,7 @@ async def require_relation_on_a_path(
 
 async def require_classifier_to_copy_a_label(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     table: table_claims.DoorTable,
@@ -3041,7 +3042,7 @@ async def require_classifier_to_copy_a_label(
 
 async def require_classifier_to_set_labels(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     obj: str,
@@ -3064,7 +3065,7 @@ async def require_classifier_to_set_labels(
         await authz.require("can_apply", f"classification:{value}")
 
 
-async def require_run_rule_authority(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str | None) -> None:
+async def require_run_rule_authority(client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, project: str | None) -> None:
     """Raise 403 unless the caller may declare or drop a namespace's ``rask.requires_run`` (ADR 0211).
 
     That is the namespace's project admin (``can_administer`` on ``project:<project>``), or the estate admin
@@ -3081,7 +3082,7 @@ async def require_run_rule_authority(client: OpenFgaClient | None, settings: Set
 
 async def require_can_create_warehouse(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     project: str,
@@ -3143,7 +3144,7 @@ async def seed_warehouse(
     )
 
 
-def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> list[fga.ClientTuple]:
+def cascade_tuples(settings: CatalogAuthzSettings, *, warehouse_id: str, project: str) -> list[fga.ClientTuple]:
     """The tuples a warehouse needs to be REACHABLE and MAINTAINED — its project edge, plus the sweep's grant.
 
     Shared by the create path and the backfill so the two cannot drift: a backfill that writes a different set
@@ -3168,13 +3169,13 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
     ]
 
 
-def maintainer_tuples(settings: Settings, obj: str) -> list[fga.ClientTuple]:
+def maintainer_tuples(settings: CatalogAuthzSettings, obj: str) -> list[fga.ClientTuple]:
     """The maintenance rung of each of ``LANCE_FGA_MAINTAINERS`` on the warehouse ``obj``: one builder for every writer of
     it (a warehouse's create, the boot backfill, the declaration converge on the estate's own warehouse)."""
     return [fga.ClientTuple(user=fga.user_object(subject), relation="maintenance", object=obj) for subject in settings.fga_maintainers]
 
 
-def own_users(settings: Settings) -> set[str]:
+def own_users(settings: CatalogLineageSettings) -> set[str]:
     """The release's own accounts (``LANCE_OWN_ACCOUNTS``) as the users a tuple names."""
     return {fga.user_object(account) for account in settings.own_accounts}
 

@@ -24,7 +24,7 @@ import pyarrow.fs as pafs
 from lance_namespace import InternalError, ServiceUnavailableError
 from pydantic import BaseModel
 
-from catalog.core.config import Settings, shared_lance_session
+from catalog.core.config import CatalogStore, shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.services import manifest_reclaim, table_claims
 from lakehouse import location_claims
@@ -66,7 +66,7 @@ class _Row(BaseModel):
         return stored if "://" in stored else f"{root}/{stored}"
 
 
-def current_names(settings: Settings, objects: Iterable[str]) -> dict[str, str]:
+def current_names(settings: CatalogStore, objects: Iterable[str]) -> dict[str, str]:
     """The name each ``table:<uuid>`` and ``namespace:<uuid>`` in ``objects`` holds now, keyed by the object.
 
     An object of any other type, one whose id is not a uuid, and one no root names now (gone, trashed, or unread) is
@@ -128,7 +128,7 @@ def _last_segment(location: str) -> str:
     return location.rstrip("/").rsplit("/", 1)[-1]
 
 
-def _roots(settings: Settings) -> list[str]:
+def _roots(settings: CatalogStore) -> list[str]:
     """Every root an index can be at (:func:`manifest_reclaim.roots`); none when the warehouse registry cannot be read."""
     try:
         return manifest_reclaim.roots(settings)

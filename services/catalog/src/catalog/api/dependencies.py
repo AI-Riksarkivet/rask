@@ -31,6 +31,7 @@ from lakehouse import trash
 from lakehouse.control_emit import ControlEmitter, NoopControlEmitter
 from lakehouse.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.governed import fga
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.outage import store_refusal
@@ -242,7 +243,7 @@ async def get_provenance_namespace(request: Request, settings: SettingsDep) -> L
 ProvenanceNamespaceDep = Annotated[LanceNamespace | None, Depends(get_provenance_namespace)]
 
 
-def warehouse_object(settings: Settings, warehouse_id: str) -> str | None:
+def warehouse_object(settings: FgaSettings, warehouse_id: str) -> str | None:
     """The FGA object the warehouse a name's first segment names is governed as, or ``None`` for a segment no warehouse id can be."""
     if warehouse_id == settings.estate_warehouse:
         return settings.fga_default_warehouse_object

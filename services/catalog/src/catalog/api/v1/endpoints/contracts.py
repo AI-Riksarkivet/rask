@@ -23,7 +23,7 @@ from lance_namespace import ConcurrentModificationError, InvalidTableStateError
 
 from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore
 from catalog.schemas import ContractResponse
 from catalog.services import contracts
 from catalog.services.table_claims import DoorTable
@@ -50,13 +50,13 @@ def _answer(table: DoorTable, record: contracts.ContractRecord | None) -> Contra
     )
 
 
-def _held(settings: Settings, table: DoorTable) -> contracts.ContractRecord | None:
+def _held(settings: CatalogStore, table: DoorTable) -> contracts.ContractRecord | None:
     # The record is kept under the uuid the router authorized, so the door first asks that the name still holds it.
     table.require_held()
     return contracts.held(settings.registry_root, settings.storage_options(), table.resolved.require_uuid())
 
 
-def _standing(settings: Settings, table: DoorTable) -> contracts.ContractRecord | None:
+def _standing(settings: CatalogStore, table: DoorTable) -> contracts.ContractRecord | None:
     """As :func:`_held`, for the doors that replace or remove the record: one that cannot be read is theirs to end."""
     table.require_held()
     return contracts.standing(settings.registry_root, settings.storage_options(), table.resolved.require_uuid())

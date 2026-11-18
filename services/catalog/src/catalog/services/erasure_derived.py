@@ -55,7 +55,7 @@ import lance
 from lance_namespace import DescribeTableRequest, LanceNamespace, NamespaceNotFoundError, TableNotFoundError
 from pydantic import BaseModel, ConfigDict
 
-from catalog.core.config import Settings
+from catalog.core.config import CatalogLineageSettings, CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import erasure_obligations, native, table_claims, table_inputs
 from catalog.services.erasure import OPEN_OUTCOMES, SurfaceResult, derived_key, derived_surface
@@ -136,7 +136,7 @@ def watch_released(settings: Settings, ns: LanceNamespace | None, so: StorageOpt
 
 
 def _late(
-    settings: Settings,
+    settings: CatalogStore,
     so: StorageOptions,
     derivation: _Derivation,
     *,
@@ -159,7 +159,7 @@ type _Claimed = Callable[[], tuple[frozenset[str], Mapping[str, str]]]
 
 
 def _judged_walk(
-    settings: Settings,
+    settings: CatalogStore,
     so: StorageOptions,
     derivation: _Derivation,
     *,
@@ -229,7 +229,7 @@ def _run_time(event_time: object) -> datetime | None:
     return at if at.tzinfo is not None else at.replace(tzinfo=UTC)
 
 
-def _edge_list(settings: Settings, ns: LanceNamespace | None, so: StorageOptions) -> lance.LanceDataset | None:
+def _edge_list(settings: CatalogLineageSettings, ns: LanceNamespace | None, so: StorageOptions) -> lance.LanceDataset | None:
     """The edge list at its latest version; ``None`` where the catalog keeps no provenance namespace, or lineage has created
     no edge list in it, so no edge was ever recorded."""
     if ns is None:
@@ -241,7 +241,7 @@ def _edge_list(settings: Settings, ns: LanceNamespace | None, so: StorageOptions
     return open_dataset(str(described.location), storage_options=so.in_clear() or None, session=fresh_session())
 
 
-def _claimed(settings: Settings) -> tuple[frozenset[str], Mapping[str, str]]:
+def _claimed(settings: CatalogStore) -> tuple[frozenset[str], Mapping[str, str]]:
     """The uuid of every table a location claim is held for (a live table's, and a recoverably dropped one's whose undrop it
     keeps), and the store key of every other table a released claim still records."""
     held: set[str] = set()

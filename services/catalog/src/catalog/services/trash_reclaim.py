@@ -35,7 +35,7 @@ from typing import Any, Final
 
 from lance_namespace import NamespaceNotFoundError, TableNotFoundError
 
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore
 from catalog.core.vending import ReclaimScope
 from catalog.services import table_claims
 from lakehouse import clone_sources, location_claims, trash
@@ -56,7 +56,7 @@ _UNRELEASED: Final = (
 )
 
 
-def read_record(settings: Settings, kind: TrashKind, uuid: str) -> dict[str, Any]:
+def read_record(settings: CatalogStore, kind: TrashKind, uuid: str) -> dict[str, Any]:
     """The trash record of the ``kind`` object ``uuid`` names.
 
     Raises:
@@ -71,7 +71,7 @@ def read_record(settings: Settings, kind: TrashKind, uuid: str) -> dict[str, Any
     raise TableNotFoundError(f"no trashed table holds the uuid {uuid}")
 
 
-def location_claim(settings: Settings, record: dict[str, Any]) -> LocationClaim | None:
+def location_claim(settings: CatalogStore, record: dict[str, Any]) -> LocationClaim | None:
     """The claim on the record's location, held or released; ``None`` for a record naming no location, or no claim.
 
     Raises:
@@ -99,7 +99,7 @@ def vend_refusal(record: dict[str, Any], claim: LocationClaim | None, *, kind: T
     return None
 
 
-def clone_refusal(settings: Settings, record: dict[str, Any]) -> str | None:
+def clone_refusal(settings: CatalogStore, record: dict[str, Any]) -> str | None:
     """Why a released table's bytes are kept, or ``None``: a registered clone reads its files (ADR 0198 §1).
 
     The clone's tag is what says so (:mod:`lakehouse.clone_sources`), and the clone's own end releases it, so the purge
@@ -113,7 +113,7 @@ def clone_refusal(settings: Settings, record: dict[str, Any]) -> str | None:
     return None
 
 
-def end_refusal(settings: Settings, record: dict[str, Any], claim: LocationClaim | None, *, kind: TrashKind, uuid: str, now: datetime) -> str | None:
+def end_refusal(settings: CatalogStore, record: dict[str, Any], claim: LocationClaim | None, *, kind: TrashKind, uuid: str, now: datetime) -> str | None:
     """Why the record is not ended yet, or ``None``: released, and naming no byte or at its own place holding none.
 
     A released table record whose bytes are gone is ended at any time, as the purge leaves one after its deletes and a
@@ -146,7 +146,7 @@ def release_refusal(record: dict[str, Any], *, now: datetime) -> str | None:
     return f"the record is not {trash.RELEASE_SETTLE} past its deadline, so an undrop admitted at it may still be finishing"
 
 
-def scope_of(settings: Settings, record: dict[str, Any], *, uuid: str) -> ReclaimScope:
+def scope_of(settings: CatalogStore, record: dict[str, Any], *, uuid: str) -> ReclaimScope:
     """What the purge of ``record`` deletes: its table's bytes at its location, and in the data directories its claim
     names ([[LH-286]], :func:`lakehouse.data_directories.directories_to_end`).
 
@@ -159,17 +159,17 @@ def scope_of(settings: Settings, record: dict[str, Any], *, uuid: str) -> Reclai
     return ReclaimScope(location=location, data_directories=tuple(directory_uri(directory) for directory in directories))
 
 
-def stamp_released(settings: Settings, *, kind: TrashKind, uuid: str, now: datetime) -> bool:
+def stamp_released(settings: CatalogStore, *, kind: TrashKind, uuid: str, now: datetime) -> bool:
     """Stamp the record released once its grants are revoked; ``False`` when it is gone, purged or undropped since."""
     return trash.mark_released(settings.registry_root, settings.storage_options(), uuid, kind=kind, now=now)
 
 
-def note_refusal(settings: Settings, *, kind: TrashKind, uuid: str, reason: str) -> int | None:
+def note_refusal(settings: CatalogStore, *, kind: TrashKind, uuid: str, reason: str) -> int | None:
     """Note a refusal on the record and return its new attempt count; ``None`` when the note could not be made."""
     return trash.note_refusal(settings.registry_root, settings.storage_options(), uuid, kind=kind, reason=reason)
 
 
-def _registry(settings: Settings) -> BaseRegistry:
+def _registry(settings: CatalogStore) -> BaseRegistry:
     return BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
 
 
@@ -193,7 +193,7 @@ def _place_refusal(location: str, claim: LocationClaim | None, *, uuid: str) -> 
     return None
 
 
-def _objects_held(settings: Settings, record: dict[str, Any], *, uuid: str) -> int:
+def _objects_held(settings: CatalogStore, record: dict[str, Any], *, uuid: str) -> int:
     """How many objects the record's location, in both spellings, and the data directories its claim names still hold."""
     so = settings.storage_options()
     location = trash.location_of(record)

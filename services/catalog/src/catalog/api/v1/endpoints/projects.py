@@ -71,7 +71,7 @@ from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.declared import Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken, current_subject
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore, Settings
 from catalog.schemas import (
     CreateProjectRequest,
     DeleteProjectResponse,
@@ -90,6 +90,7 @@ from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import RecordExistsError, RecordMissingError
 from lakehouse.storage_options import StorageOptions
@@ -139,7 +140,7 @@ def _group_by_project(records: list[dict[str, str]]) -> dict[str, list[ProjectWa
 _ADMINS_TIMEOUT_SECONDS = 2.0
 
 
-async def _admins_for(client: OpenFgaClient | None, settings: Settings, project: str) -> list[str]:
+async def _admins_for(client: OpenFgaClient | None, settings: FgaSettings, project: str) -> list[str]:
     """The project's effective ``can_administer`` subjects via ``fga.list_users`` (#51), or ``[]``.
 
     Degrades on an outage: FGA off yields ``[]`` outright (on with no client wired it is the 503 every gate answers); an OpenFGA outage
@@ -189,7 +190,7 @@ class Tenant(BaseModel):
         )
 
 
-async def _load_tenants(settings: Settings) -> dict[str, Tenant]:
+async def _load_tenants(settings: CatalogStore) -> dict[str, Tenant]:
     """The tenant map: PROJECT REGISTRY ∪ warehouse-derived (blocking S3/FS IO → threadpool).
 
     Registry records define the tenants — a fresh project has zero warehouses and must still list.
@@ -205,7 +206,7 @@ async def _load_tenants(settings: Settings) -> dict[str, Tenant]:
     return tenants
 
 
-async def _converge_project(settings: Settings, so: StorageOptions, record: dict[str, str]) -> dict[str, str]:
+async def _converge_project(settings: CatalogStore, so: StorageOptions, record: dict[str, str]) -> dict[str, str]:
     """The conditional re-POST write (diff2 F1 leg c) — shared by the sequential and lost-race paths.
 
     Both used to end in an unconditional `put_project` of a record assembled from a read taken earlier
@@ -224,7 +225,7 @@ async def _converge_project(settings: Settings, so: StorageOptions, record: dict
         raise ConcurrentModificationError(f"project {record['id']!r} is being deleted; create it once its delete has finished") from None
 
 
-async def _write_project_record(settings: Settings, so: StorageOptions, record: dict[str, str], *, existing: dict[str, str] | None) -> dict[str, str]:
+async def _write_project_record(settings: CatalogStore, so: StorageOptions, record: dict[str, str], *, existing: dict[str, str] | None) -> dict[str, str]:
     """Mint ``record``, or converge the ``existing`` record that stands onto it; the record as written."""
     if existing is not None:
         return await _converge_project(settings, so, record)
@@ -321,7 +322,7 @@ async def establish_project(
     return record
 
 
-async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
+async def _visible_projects(client: OpenFgaClient | None, settings: FgaSettings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
     """Which of ``candidates`` (the registry's project ids) this caller may list, or ``None`` for every tenant.
 
     ``None`` for the estate admin, and with FGA off, as for every gate. Otherwise the candidates are batch-checked on
@@ -520,7 +521,7 @@ async def set_project_protection(
     return ProtectionResponse(id=project_id, protected=body.protected)
 
 
-async def protect_project(settings: Settings, control: ControlEmitter, project_id: str, *, change: ProtectionChange, actor: str | None) -> None:
+async def protect_project(settings: CatalogStore, control: ControlEmitter, project_id: str, *, change: ProtectionChange, actor: str | None) -> None:
     """Arm or clear project ``project_id``'s deletion protection and announce it.
 
     What the protection door does once its caller is authorized, and what the catalog does for a project whose
@@ -541,7 +542,7 @@ async def protect_project(settings: Settings, control: ControlEmitter, project_i
     )
 
 
-async def _start_delete(project_id: str, record: dict[str, str], settings: Settings, token: CurrentToken, *, force: bool) -> None:
+async def _start_delete(project_id: str, record: dict[str, str], settings: CatalogStore, token: CurrentToken, *, force: bool) -> None:
     """Judge a delete's start, its protection and the project's emptiness, and record it on the project's record.
 
     Raises:

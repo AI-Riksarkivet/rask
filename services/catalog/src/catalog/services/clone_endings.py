@@ -62,7 +62,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, Field
 
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore
 from catalog.services import table_claims
 from lakehouse import base_registry, clone_endings, clone_sources, location_claims, objectfs, records
 from lakehouse.base_refs import decoded_path, key_uri, store_of
@@ -149,14 +149,14 @@ def refuse_registration_while_ending(claims: location_claims.ClaimStore, locatio
         raise ConcurrentModificationError(_STILL_ENDING)
 
 
-def listing(settings: Settings) -> list[CloneEnding]:
+def listing(settings: CatalogStore) -> list[CloneEnding]:
     """Every ending standing, oldest first: one listing, and one read for each ending found."""
     claims = table_claims.claim_store(settings)
     endings = [found.ending for digest, filing in clone_endings.standing(claims) if (found := clone_endings.read(claims, digest, filing)) is not None]
     return sorted(endings, key=lambda ending: ending.filed_at)
 
 
-def finish(ns: LanceNamespace, settings: Settings, digest: str, filing: str, *, token: str) -> FinishOutcome:
+def finish(ns: LanceNamespace, settings: CatalogStore, digest: str, filing: str, *, token: str) -> FinishOutcome:
     """Finish the ending ``filing`` filed under ``digest``: release what its door named and remove it, on the claim this
     finish read and fenced (the module's docstring has each case).
 
@@ -195,7 +195,7 @@ def finish(ns: LanceNamespace, settings: Settings, digest: str, filing: str, *, 
     return outcome
 
 
-def _finished(ns: LanceNamespace, settings: Settings, claims: location_claims.ClaimStore, found: clone_endings.EndingRead, *, token: str) -> FinishOutcome:
+def _finished(ns: LanceNamespace, settings: CatalogStore, claims: location_claims.ClaimStore, found: clone_endings.EndingRead, *, token: str) -> FinishOutcome:
     """Release what the ending ``found`` names on the claim read here, fenced for this finish, and remove the ending last.
 
     Raises:
@@ -232,7 +232,7 @@ def _finished(ns: LanceNamespace, settings: Settings, claims: location_claims.Cl
     return FinishOutcome(table=ending.table, uuid=ending.uuid, released=released)
 
 
-def _settle_a_registration(settings: Settings, claims: location_claims.ClaimStore, ending: CloneEnding) -> FinishOutcome:
+def _settle_a_registration(settings: CatalogStore, claims: location_claims.ClaimStore, ending: CloneEnding) -> FinishOutcome:
     """Settle the ending a registration left while the clone it registered stands at its location.
 
     A clone whose base record names every source the ending does was admitted, and its own end files an ending from

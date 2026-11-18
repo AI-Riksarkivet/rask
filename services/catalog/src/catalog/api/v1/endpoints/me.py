@@ -38,10 +38,10 @@ from openfga_sdk import OpenFgaClient
 from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core.config import Settings
 from catalog.schemas import MeProject, MeResponse
 from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.settings import FgaSettings
 
 
 log = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ def _claim(token: Caller, name: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-async def _estate_standing(client: OpenFgaClient, settings: Settings, sub: str, relation: str, deadline: float) -> bool:
+async def _estate_standing(client: OpenFgaClient, settings: FgaSettings, sub: str, relation: str, deadline: float) -> bool:
     """Whether the caller holds ``relation`` on the fixed root object, or ``False`` when OpenFGA cannot say.
 
     Display-only (gates nothing here), so it is not audited and degrades to ``False`` on an OpenFGA

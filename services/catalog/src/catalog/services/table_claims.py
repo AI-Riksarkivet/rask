@@ -34,7 +34,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore
 from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.services import contracts, native
 from catalog.services.object_uuids import UnidentifiedObjectError
@@ -86,7 +86,7 @@ class DoorFence(BaseModel):
     token: str
 
 
-def claim_store(settings: Settings) -> ClaimStore:
+def claim_store(settings: CatalogStore) -> ClaimStore:
     """The claims live on the control root beside the trash and base records, written with its credential."""
     return ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
 

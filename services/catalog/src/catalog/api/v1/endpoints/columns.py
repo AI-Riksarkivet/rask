@@ -48,7 +48,6 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import formats, provenance_guard
-from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
     ADD_COLUMNS,
@@ -60,6 +59,7 @@ from catalog.core.lineage_emit import (
 from catalog.services import dataplane
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed import fga
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import PLATFORM_PREFIX
 
 
@@ -77,7 +77,7 @@ from lakehouse.naming import PLATFORM_PREFIX
 
 async def _require_classifier_for_governance_keys(
     client: OpenFgaClient | None,
-    settings: Settings,
+    settings: FgaSettings,
     token: Caller | None,
     *,
     table: ResolvedTable,

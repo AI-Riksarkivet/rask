@@ -30,11 +30,11 @@ from catalog.api import announcing, fga_deps
 from catalog.api.announcing import AnnouncerDep
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
-from catalog.core.config import Settings
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.settings import FgaSettings
 
 
 if TYPE_CHECKING:
@@ -66,7 +66,7 @@ def _direct_grants(tuples: list[Any], obj: str) -> list[Member]:
     return [Member(user=t.user, relation=t.relation) for t in tuples if t.object == obj and t.relation in GRANTABLE]
 
 
-def _client_or_conflict(client: OpenFgaClient | None, settings: Settings) -> OpenFgaClient:
+def _client_or_conflict(client: OpenFgaClient | None, settings: FgaSettings) -> OpenFgaClient:
     """The FGA client, or a clear refusal. Membership IS tuples — with authz off there is nothing to
     write, and pretending otherwise would report a grant that never happened.
 

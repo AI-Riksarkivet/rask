@@ -181,7 +181,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
             {"commit_table": {"id": ["acme-wh", "db1", "b"]}},  # generic writer tier
         ],
     }
-    asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, NamedResolver(), settings, user="dex~alice"))
+    asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, NamedResolver(), user="dex~alice"))
 
     # 4. A rename: the rung the router asks on its source and the one its door asks where the table lands, each within
     #    the source's namespace and into another.

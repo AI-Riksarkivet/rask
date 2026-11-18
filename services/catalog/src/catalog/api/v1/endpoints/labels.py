@@ -37,7 +37,7 @@ from lance_namespace import (
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import LabelDefinitionRequest, LabelledObjectsResponse, ObjectLabelsResponse, RemoveLabelRequest, SetLabelRequest
 from catalog.services import object_labels, table_claims, warehouses
@@ -73,7 +73,7 @@ _LABELLED: Final[dict[LabelScope, tuple[ControlAction, ControlAction]]] = {
 }
 
 
-async def _project_of(settings: Settings, segments: Sequence[str]) -> str:
+async def _project_of(settings: CatalogStore, segments: Sequence[str]) -> str:
     """The project the object ``segments`` names lies in: its warehouse's.
 
     Raises:
@@ -86,13 +86,13 @@ async def _project_of(settings: Settings, segments: Sequence[str]) -> str:
     return project
 
 
-async def _defined(settings: Settings, project: str) -> dict[str, LabelDefinition]:
+async def _defined(settings: CatalogStore, project: str) -> dict[str, LabelDefinition]:
     return {
         defined.name: defined for defined in await run_in_threadpool(object_labels.definitions, settings.registry_root, settings.storage_options(), project)
     }
 
 
-async def _describe(settings: Settings, *, kind: LabelScope, segments: Sequence[str], uuid: str) -> ObjectLabelsResponse:
+async def _describe(settings: CatalogStore, *, kind: LabelScope, segments: Sequence[str], uuid: str) -> ObjectLabelsResponse:
     """The object's labels, and the labels its project defines for its kind, which its owner may attach."""
     attachment = await run_in_threadpool(object_labels.attachment_of, settings.registry_root, settings.storage_options(), kind, uuid)
     defined = await _defined(settings, await _project_of(settings, segments))
@@ -105,7 +105,7 @@ async def _describe(settings: Settings, *, kind: LabelScope, segments: Sequence[
     )
 
 
-async def _uuid_now(ns: LanceNamespace, settings: Settings, kind: LabelScope, segments: Sequence[str]) -> str | None:
+async def _uuid_now(ns: LanceNamespace, settings: CatalogStore, kind: LabelScope, segments: Sequence[str]) -> str | None:
     """The uuid of the object the name holds now, ``None`` when it holds none."""
     try:
         return (await fga_deps.identify(ns, settings, kind, list(segments))).uuid
@@ -205,7 +205,7 @@ async def remove_table_label(
     return await _remove(settings, control, token, body, kind="table", segments=table.segments, uuid=table.require_uuid())
 
 
-async def _namespace(id: str, ns: NamespaceDep, settings: Settings) -> fga_deps.GovernedObject:
+async def _namespace(id: str, ns: NamespaceDep, settings: CatalogStore) -> fga_deps.GovernedObject:
     segments = parse_identifier(id)
     if len(segments) < 2:
         raise InvalidInputError("labels attach to a namespace inside a warehouse, not to the root or a warehouse")
@@ -243,7 +243,7 @@ def _project(id: str) -> str:
     return id
 
 
-async def _registered(settings: Settings, project: str) -> str:
+async def _registered(settings: CatalogStore, project: str) -> str:
     """``project``, once its gate passed, if the registry holds it.
 
     Raises:
@@ -273,7 +273,7 @@ async def _administered_project(id: str, settings: Settings, token: Caller | Non
     return await _registered(settings, project)
 
 
-async def _standing(settings: Settings, found: Sequence[Attachment]) -> list[tuple[Attachment, str]]:
+async def _standing(settings: CatalogStore, found: Sequence[Attachment]) -> list[tuple[Attachment, str]]:
     """Each of ``found`` whose object stands, with the name it holds now.
 
     An object in the trash keeps its records for an undrop and is addressed by nobody meanwhile, so it is neither listed

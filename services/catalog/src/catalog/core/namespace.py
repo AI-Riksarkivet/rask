@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core import formats
 from catalog.core.base_judge import require_sanctioned_bases
-from catalog.core.config import Settings, StorePlane, shared_lance_session
+from catalog.core.config import CatalogMaintenanceSettings, Settings, StorePlane, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
 from lakehouse import auto_cleanup
 from lakehouse.clone_sources import CloneReference, clone_reference
@@ -116,7 +116,7 @@ class NamespaceConnections:
             self._keys[built] = key
             return built
 
-    def _young(self, key: _ConnectionKey, settings: Settings) -> LanceNamespace | None:
+    def _young(self, key: _ConnectionKey, settings: CatalogMaintenanceSettings) -> LanceNamespace | None:
         """The connection built under ``key``, while it is younger than the age a connection is served for."""
         if (entry := self._built.get(key)) is None or self._clock() - entry[1] >= settings.connection_max_age_seconds:
             return None

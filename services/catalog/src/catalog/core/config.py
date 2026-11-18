@@ -191,6 +191,78 @@ class CatalogReadBounds(BaseSettings):
         )
 
 
+class CatalogStore(CatalogStorageSettings, CatalogReadBounds):
+    """Where the catalog keeps its tables and its control records, and how it reaches them under the credential in force.
+
+    What a function takes when the store is all it reads: the roots, and the options and properties a Lance or
+    object-store call is opened with. Most of the catalog reads nothing else of its configuration.
+    """
+
+    root: str = Field(default="s3://lance-catalog", alias="LANCE_REST_ROOT")
+    control_root: str = Field(default="", alias="LANCE_CONTROL_ROOT")
+
+    @property
+    def registry_root(self) -> str:
+        """Where the control records live, the warehouse registry among them (defaults to the catalog `root` bucket)."""
+        return self.control_root or self.root
+
+    def s3_key_pair(self) -> S3KeyPair:
+        """What the catalog signs object-store requests with: the session its token was exchanged for, or the environment's pair.
+
+        Raises:
+            StoreCredentialUnavailableError: No unexpired session is held (503).
+        """
+        return key_pair_in_force(self.web_identity, self.env_pair)
+
+    def namespace_properties(self, *, root: str | None = None, plane: StorePlane = "metadata") -> dict[str, str]:
+        """Return properties for ``lance_namespace.connect(impl, properties)``, bounded for ``plane``.
+
+        ``root`` lets a WAREHOUSE-rooted connection differ from the estate default; the ``storage.``
+        property vocabulary is spelled here once, because a caller composing these names itself is how
+        one of them drifts.
+
+        THE ENDPOINT IS NOT OVERRIDABLE, and that is the [[LH-205]] invariant stated as a signature: these
+        properties carry the estate's own credential, so the only store they may address is the estate's.
+        A warehouse record naming another store is refused before a connection is built
+        (``catalog.core.store_endpoint``); its credential would belong in the secret store
+        with the record naming a reference, and no door consumes one yet.
+
+        The ``storage.`` properties are :meth:`storage_options` in clear, at the call that connects: the ``dir`` namespace
+        hands each to Lance's object store with the prefix removed
+        (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:21`). The credential is the one in force when
+        this is called (:meth:`s3_key_pair`), so a caller holding the result past a renewal holds a session the store will
+        expire.
+        """
+        return {
+            "root": root or self.root,
+            # The `__manifest` rewrite builds no index of its own ([[LH-251]]). Measured over moto at 100 and 1,000
+            # objects on pylance 13.0.0, the spec's three indexes made a create 16 store requests instead of 12 and a
+            # describe 6 instead of 3: the unindexed table is one data file, read in one GET. Set, not left to the
+            # backend's default, so a default that changes does not change this.
+            "inline_optimization_enabled": "false",
+            # A table is a row of this root's `__manifest`, and nothing else. Left on, the backend's compatibility mode
+            # also reads every `<name>.lance` directory at the root as a table of the root namespace
+            # (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md` § ListTables; measured on pylance
+            # 13.0.0: the root listing named such a directory, and describe opened it), bytes the catalog holds no record,
+            # claim or grant for ([[LH-295]]).
+            "dir_listing_enabled": "false",
+            **{f"{_STORAGE_PREFIX}{key}": value for key, value in self.storage_options(plane=plane).in_clear().items()},
+        }
+
+    def timeouts_for(self, plane: StorePlane) -> StoreTimeouts:
+        """The object-store call bounds of ``plane`` (see `CatalogReadBounds`)."""
+        return self.store_timeouts if plane == "metadata" else self.data_store_timeouts
+
+    def storage_options(self, *, plane: StorePlane = "metadata") -> StorageOptions:
+        """The catalog's own object-store options, under the credential in force (:meth:`s3_key_pair`), bounded for ``plane``.
+
+        ``allow_http`` is derived from the endpoint's scheme (:func:`lance_storage_options`), never set on its own, so a TLS
+        endpoint cannot keep permission to fall back to plaintext.
+        """
+        options = lance_storage_options(self.s3_endpoint, self.s3_key_pair(), self.s3_region, virtual_hosted=self.s3_virtual_hosted)
+        return options.with_options(self.timeouts_for(plane).storage_options())
+
+
 class CatalogControlBusSettings(BaseSettings):
     """The control lane: where governance events are published and staged.
 
@@ -200,7 +272,6 @@ class CatalogControlBusSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    control_root: str = Field(default="", alias="LANCE_CONTROL_ROOT")
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream, distinct from the
     # OpenLineage data events above). When on, mutations publish a `CatalogControlEvent` on the
     # `catalog.control.v1` topic over this process's own connection to the bus, and each replica follows it on that
@@ -410,8 +481,7 @@ class Settings(
     GovernedAuthSettings,
     SignatureDoorSettings,
     LanceSessionCaps,
-    CatalogStorageSettings,
-    CatalogReadBounds,
+    CatalogStore,
     CatalogControlBusSettings,
     CatalogLineageSettings,
     CatalogMaintenanceSettings,
@@ -442,7 +512,6 @@ class Settings(
 
     # Catalog
     impl: str = Field(default="dir", alias="LANCE_REST_IMPL")
-    root: str = Field(default="s3://lance-catalog", alias="LANCE_REST_ROOT")
     #: The path prefix the platform's Gateway publishes the catalog under and forwards unrewritten (the chart's
     #: `rask.catalogPublicPrefix`, `/api/catalog`), which the catalog strips itself from the bytes its client sent
     #: (`catalog.api.path_reading`, [[LH-526]]). A route rewriting the prefix instead rebuilds the path from its decoded
@@ -515,11 +584,6 @@ class Settings(
     # platform's own buckets (`objectStore.buckets`, `lance.platformBuckets`); comma-separated, empty = only the
     # root/registry buckets are reserved.
     reserved_buckets: str = Field(default="", alias="LANCE_RESERVED_BUCKETS")
-
-    @property
-    def registry_root(self) -> str:
-        """Where the control records live, the warehouse registry among them (defaults to the catalog `root` bucket)."""
-        return self.control_root or self.root
 
     @property
     def reserved_bucket_set(self) -> frozenset[str]:
@@ -625,53 +689,6 @@ class Settings(
         require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="LANCE")
         return self
 
-    def s3_key_pair(self) -> S3KeyPair:
-        """What the catalog signs object-store requests with: the session its token was exchanged for, or the environment's pair.
-
-        Raises:
-            StoreCredentialUnavailableError: No unexpired session is held (503).
-        """
-        return key_pair_in_force(self.web_identity, self.env_pair)
-
-    def namespace_properties(self, *, root: str | None = None, plane: StorePlane = "metadata") -> dict[str, str]:
-        """Return properties for ``lance_namespace.connect(impl, properties)``, bounded for ``plane``.
-
-        ``root`` lets a WAREHOUSE-rooted connection differ from the estate default; the ``storage.``
-        property vocabulary is spelled here once, because a caller composing these names itself is how
-        one of them drifts.
-
-        THE ENDPOINT IS NOT OVERRIDABLE, and that is the [[LH-205]] invariant stated as a signature: these
-        properties carry the estate's own credential, so the only store they may address is the estate's.
-        A warehouse record naming another store is refused before a connection is built
-        (``catalog.core.store_endpoint``); its credential would belong in the secret store
-        with the record naming a reference, and no door consumes one yet.
-
-        The ``storage.`` properties are :meth:`storage_options` in clear, at the call that connects: the ``dir`` namespace
-        hands each to Lance's object store with the prefix removed
-        (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:21`). The credential is the one in force when
-        this is called (:meth:`s3_key_pair`), so a caller holding the result past a renewal holds a session the store will
-        expire.
-        """
-        return {
-            "root": root or self.root,
-            # The `__manifest` rewrite builds no index of its own ([[LH-251]]). Measured over moto at 100 and 1,000
-            # objects on pylance 13.0.0, the spec's three indexes made a create 16 store requests instead of 12 and a
-            # describe 6 instead of 3: the unindexed table is one data file, read in one GET. Set, not left to the
-            # backend's default, so a default that changes does not change this.
-            "inline_optimization_enabled": "false",
-            # A table is a row of this root's `__manifest`, and nothing else. Left on, the backend's compatibility mode
-            # also reads every `<name>.lance` directory at the root as a table of the root namespace
-            # (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md` § ListTables; measured on pylance
-            # 13.0.0: the root listing named such a directory, and describe opened it), bytes the catalog holds no record,
-            # claim or grant for ([[LH-295]]).
-            "dir_listing_enabled": "false",
-            **{f"{_STORAGE_PREFIX}{key}": value for key, value in self.storage_options(plane=plane).in_clear().items()},
-        }
-
-    def timeouts_for(self, plane: StorePlane) -> StoreTimeouts:
-        """The object-store call bounds of ``plane`` (see `CatalogReadBounds`)."""
-        return self.store_timeouts if plane == "metadata" else self.data_store_timeouts
-
     @model_validator(mode="after")
     def _validate_outbox_prefixes(self) -> Self:
         """Refuse to boot with the two lanes sharing one outbox prefix.
@@ -690,15 +707,6 @@ class Settings(
                 "what it cannot parse, so a shared prefix destroys the staged control events instead of relaying them"
             )
         return self
-
-    def storage_options(self, *, plane: StorePlane = "metadata") -> StorageOptions:
-        """The catalog's own object-store options, under the credential in force (:meth:`s3_key_pair`), bounded for ``plane``.
-
-        ``allow_http`` is derived from the endpoint's scheme (:func:`lance_storage_options`), never set on its own, so a TLS
-        endpoint cannot keep permission to fall back to plaintext.
-        """
-        options = lance_storage_options(self.s3_endpoint, self.s3_key_pair(), self.s3_region, virtual_hosted=self.s3_virtual_hosted)
-        return options.with_options(self.timeouts_for(plane).storage_options())
 
 
 @lru_cache

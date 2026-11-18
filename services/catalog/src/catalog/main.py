@@ -33,7 +33,7 @@ from catalog.api.v1.router import api_router
 from catalog.core import base_judge
 from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
 from catalog.core.commit_ids import CommitIdKeyHolder, commit_ids_ready_check, make_commit_ids
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import CatalogReadBounds, CatalogStore, Settings, get_settings
 from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
@@ -106,7 +106,7 @@ async def _backfill_warehouse_grants(app: FastAPI) -> None:
         log.info("warehouse_grant_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
 
 
-def bound_lance_scans(settings: Settings) -> None:
+def bound_lance_scans(settings: CatalogReadBounds) -> None:
     """Give every scan this process builds the catalog's bounds, unless the operator set Lance's own variable ([[LH-247]]).
 
     `/query` and `analyze_plan` are served by the native backend, which builds its scanner in Rust from
@@ -358,7 +358,7 @@ def _follow_control_events(app: FastAPI, settings: Settings, bus: Bus | None, lo
     loops.keep("catalog-control-lane", partial(bus.follow, CONTROL_STREAM, CONTROL_TOPIC, ControlLane(app, settings).handle))
 
 
-def _dependencies(app: FastAPI, settings: Settings, bus: Bus | None) -> list[Dependency]:
+def _dependencies(app: FastAPI, settings: CatalogStore, bus: Bus | None) -> list[Dependency]:
     """What the catalog reads to know it can serve: its store under its own session (the control root's listing), OpenFGA
     under its own credential, the bus where the chart names one, and the secret store its keys are read from."""
     dependencies = [

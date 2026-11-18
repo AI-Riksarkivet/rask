@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 from catalog.api.dependencies import ObjectUuids, estate_namespace, namespace_for_table
 from catalog.api.ticks import Tick
 from catalog.core.commit_ids import commit_ids_of
-from catalog.core.config import Settings
+from catalog.core.config import CatalogLineageSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
 from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
@@ -170,7 +170,7 @@ async def _live_tables(request: Request, settings: Settings) -> _LiveTables:
     return live
 
 
-def _feed_location(settings: Settings, ns: LanceNamespace) -> str | None:
+def _feed_location(settings: CatalogLineageSettings, ns: LanceNamespace) -> str | None:
     """Where ``provenance$events`` lives, or ``None`` before lineage has created it.
 
     Raises:

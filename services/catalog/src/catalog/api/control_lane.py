@@ -43,7 +43,7 @@ from lakehouse.lineage.signing import RefusalReason, control_signature_of, verif
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from catalog.core.config import Settings
+    from catalog.core.config import Settings, SignatureDoorSettings
 
 
 log = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def control_event_in(delivery: Delivery) -> tuple[dict[str, Any], CatalogControl
     return (data if isinstance(data, dict) else {}), event
 
 
-async def judge(app: FastAPI, settings: Settings, arrived: dict[str, Any], event: CatalogControlEvent) -> DoorVerdict:
+async def judge(app: FastAPI, settings: SignatureDoorSettings, arrived: dict[str, Any], event: CatalogControlEvent) -> DoorVerdict:
     """The control doors' verdict on ``event``, judged over ``arrived``: the event's data exactly as delivered, since a
     model dump grows the fields a schema defaults, and the signer signed what it wrote. ``retry`` when the keys the
     signature is checked against could not be read."""

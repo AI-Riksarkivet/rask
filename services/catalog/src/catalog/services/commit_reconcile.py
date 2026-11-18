@@ -39,7 +39,7 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core import lineage_emit, run_context
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore, Settings
 from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
 from lakehouse import auto_cleanup, commit_records, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
@@ -189,7 +189,7 @@ def _listed_refs(dataset: lance.LanceDataset) -> list[tuple[str | None, str | No
     return [(None, None), *((name, dataplane.identifier_of(listed[name])) for name in sorted(listed))]
 
 
-def mark_registered_heads(settings: Settings, so: StorageOptions, *, location: str, table_uuid: str) -> None:
+def mark_registered_heads(settings: CatalogStore, so: StorageOptions, *, location: str, table_uuid: str) -> None:
     """Mark every ref of the dataset at ``location`` at its head, under ``table_uuid``: a pass then looks only for the
     commits made after the register that attaches it ([[LH-550]]).
 

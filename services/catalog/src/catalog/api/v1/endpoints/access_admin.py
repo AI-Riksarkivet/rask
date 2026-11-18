@@ -36,7 +36,7 @@ from catalog.api import announcing, fga_deps
 from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core.config import Settings
+from catalog.core.config import CatalogStore, Settings
 from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier
 from catalog.schemas import (
     AccessCheckBody,
@@ -194,7 +194,7 @@ async def _held_object(resolver: Resolver, obj: str) -> str:
     return held
 
 
-async def _named(resolver: Resolver, settings: Settings, obj: str) -> tuple[str, str | None]:
+async def _named(resolver: Resolver, settings: CatalogStore, obj: str) -> tuple[str, str | None]:
     """The object a caller named as OpenFGA holds it (:func:`_held_object`), and the name it holds now, so an answer reads
     the same whichever form the caller asked in.
 

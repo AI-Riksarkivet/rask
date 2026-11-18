@@ -62,6 +62,7 @@ from lakehouse.governed.decider import (
     DecisionLocateResult,
     TableDecision,
 )
+from lakehouse.governed.settings import FgaSettings
 from lakehouse.location_claims import ClaimStore
 
 
@@ -172,7 +173,7 @@ def _refused(caller: str, route: str, reason: str, **asked: str) -> InvalidInput
     return InvalidInputError(reason)
 
 
-async def _in_scope(client: OpenFgaClient, settings: Settings, *, caller: Caller, objects: list[str]) -> frozenset[str]:
+async def _in_scope(client: OpenFgaClient, settings: FgaSettings, *, caller: Caller, objects: list[str]) -> frozenset[str]:
     """The objects of ``objects`` the caller may be answered about ([[LH-563]]).
 
     Every one, for a caller holding the scope on the estate root, asked first as one check on the estate root. Otherwise
