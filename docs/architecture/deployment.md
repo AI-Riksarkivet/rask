@@ -128,6 +128,15 @@ issuer, routes the `lance.audit` instrumentation scope to a store that refuses u
 admits that scope only from the lakehouse's own ServiceAccounts (`system:serviceaccount:<namespace>:<release>-sa-catalog`, `-sa-lineage`, `-sa-maintenance`), since any ServiceAccount of the cluster can ask for a token of the audience.
 Development's is the observability fixture's Collector; see *Observability* below.
 
+## Prerequisites in production: encryption between pods
+
+The release's own pods reach each other over plain HTTP inside the cluster: lineage and maintenance present their
+`rask-catalog` ServiceAccount token to the catalog's Service. **Encrypting traffic between pods is the platform's**
+(ADR 0220): the CNI's transparent encryption (Cilium's WireGuard or IPsec) or a service mesh with mTLS. rask renders no
+certificate for its own Services. On a cluster that encrypts nothing between pods, a party able to read the pod network
+can replay a first-party token against its one audience for up to its ten-minute life. Every hop that leaves the
+release is `https://` or `tls://`, and the render refuses a real deployment that names a plaintext one.
+
 ## Prerequisites in production: OpenFGA and its Postgres
 
 The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind it (the
