@@ -221,8 +221,9 @@ def test_the_cadence_skips_inside_the_interval(tmp_path: Path) -> None:
 
 
 def test_tag_pinned_version_survives_any_retention_policy(tmp_path: Path) -> None:
-    # CONTRACT (the goal's protection clause): retention never removes anything a tag pins: Lance exempts
-    # tagged versions from cleanup. Driven with real Lance.
+    # CONTRACT (the goal's protection clause): retention never removes anything a tag pins, and a tag an old version
+    # carries does not stop the pass from reclaiming the untagged ones beside it. Driven with real Lance, under a write
+    # credential: a pass holding none reclaims nothing at all.
     uri = str(tmp_path / "ds")
     table = pa.table({"n": pa.array([1], pa.int64())})
     lance.write_dataset(table, uri, mode="overwrite")  # v1
@@ -230,13 +231,12 @@ def test_tag_pinned_version_survives_any_retention_policy(tmp_path: Path) -> Non
     lance.write_dataset(table, uri, mode="append")  # v3
     lance.dataset(uri).tags.create("blessed", 1)
 
-    result = expire_versions(ExpiryTarget(uri=uri, storage_options={}), ExpiryPolicy(older_than=None, retain_versions=1))
+    result = expire_versions(ExpiryTarget(uri=uri, storage_options={}, write_options={}), ExpiryPolicy(older_than=None, retain_versions=1))
     assert result.error is None, result.error
 
     ds = lance.dataset(uri)
-    assert ds.count_rows() == 3  # the head is intact
-    pinned = lance.dataset(uri, version=1)  # the tagged version is still checkout-able
-    assert pinned.count_rows() == 1
+    assert sorted(entry["version"] for entry in ds.versions()) == [1, 3], "the tagged version and the head stay; the untagged one between them goes"
+    assert (ds.count_rows(), lance.dataset(uri, version=1).count_rows()) == (3, 1)
 
 
 def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: Any) -> None:

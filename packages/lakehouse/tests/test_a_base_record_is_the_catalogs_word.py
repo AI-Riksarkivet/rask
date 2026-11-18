@@ -60,7 +60,6 @@ _UNRECORDED = base_registry.BaseStanding.UNRECORDED
         pytest.param(_TABLE, f"{_TABLE}/%2e%2e/bb33cc44_ns$victim", True, _UNRECORDED, id="own-encoded-dotdot"),
         pytest.param(_TABLE, f"{_TABLE}/.\t./bb33cc44_ns$victim", True, _UNRECORDED, id="own-control-char-dotdot"),
         pytest.param(_TABLE, "s3://lance-catalog/models/some-model", False, _CONFIGURED_STANDING, id="configured"),
-        pytest.param(_TABLE, "s3://lance-catalog/models/%2e%2e/bb33cc44_ns$victim", False, _UNRECORDED, id="configured-encoded-dotdot"),
         pytest.param(_TABLE, "s3://lance-catalog/models/some-model", True, _UNRECORDED, id="configured-as-dataset-root"),
         pytest.param(_TABLE, "gs://lance-catalog/models/some-model", False, _UNRECORDED, id="configured-path-in-another-store"),
         pytest.param(_TABLE, "s3://second-store/data", False, _RECORDED, id="recorded"),

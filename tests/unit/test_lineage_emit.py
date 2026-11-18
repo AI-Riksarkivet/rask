@@ -184,7 +184,9 @@ def _emitting(bus: BusDouble) -> BusEmitter:
 def test_the_emitter_names_the_table_under_the_catalogs_endpoint_with_its_version_and_author() -> None:
     bus = BusDouble()
     asyncio.run(_emitting(bus).emit_create(table_id="a$b", namespace="a", author="alice", version=3))
-    [event] = bus.events
+    [sent] = bus.sent
+    assert sent.topic == "lineage.events.v1"
+    event = sent.event
     output = _written(event)
     # Every dataset is named under the catalog's endpoint, not the table's parent namespace ([[LH-553]]).
     assert output["namespace"] == DEFAULT_DATASET_NAMESPACE
@@ -337,22 +339,6 @@ def test_the_catalog_emits_on_the_bus_or_not_at_all() -> None:
     assert isinstance(_make(), BusEmitter)
     assert isinstance(_make(enabled=False), NoopEmitter)  # disabled: no-op
     assert isinstance(_make(bus=None), NoopEmitter)  # no connection to the bus: no-op
-
-
-def test_the_bus_emitter_publishes_the_event_on_its_topic() -> None:
-    bus = BusDouble()
-    emitter = BusEmitter(
-        bus,
-        "lineage.events.v1",
-        job_namespace="lance-catalog",
-        dataset_namespace=DEFAULT_DATASET_NAMESPACE,
-        timeout_seconds=5.0,
-    )
-    asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1))
-    [sent] = bus.sent
-    assert sent.topic == "lineage.events.v1"
-    assert _written(sent.event)["name"] == "a$b"  # the spec-correct OpenLineage event is the envelope's data
-    assert _facets(sent.event)["rask_author"]["sub"] == "alice"  # the verified catalog author
 
 
 def _emit_failures(reader: InMemoryMetricReader) -> dict[str, int]:

@@ -166,10 +166,9 @@ def test_the_maintenance_identity_gets_the_maintain_tier_credential(governed: tu
 @pytest.mark.parametrize(
     "held",
     [
+        # An owner, who is a maintainer and holds no vend rung, is refused by the model itself: its own suite pins that
+        # (`model.fga.yaml`, `can_vend_maintain: false` for an owner; ADR 0156 C4, [[LH-473]]).
         pytest.param({"can_write_data"}, id="a-writer"),
-        # An owner is a maintainer and keeps every maintainer door; the whole-prefix policy is not one of them
-        # (ADR 0156 C4, [[LH-473]]).
-        pytest.param({"can_write_data", "can_maintain"}, id="an-owner"),
     ],
 )
 def test_only_the_maintenance_identity_obtains_the_maintain_tier(

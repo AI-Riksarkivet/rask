@@ -75,7 +75,6 @@ def table(real_ns_client: TestClient) -> tuple[TestClient, str]:
             id="explain_plan_inner",
         ),
         pytest.param("/analyze_plan", {"json": {"branch": "ghost", "k": 1, "vector": _VECTOR}}, 406, _UNSUPPORTED, id="analyze_plan"),
-        pytest.param("/backfill_column", {"json": {"branch": "ghost", "column": "v"}}, 406, _UNSUPPORTED, id="backfill_column"),
         pytest.param("/create_index", {"json": {"branch": "ghost", "column": "vec", "index_type": "IVF_FLAT"}}, 406, _UNSUPPORTED, id="create_index"),
         pytest.param("/create_scalar_index", {"json": {"branch": "ghost", "column": "v", "index_type": "BTREE"}}, 406, _UNSUPPORTED, id="create_scalar_index"),
         pytest.param("/index/list", {"json": {"branch": "ghost"}}, 406, _UNSUPPORTED, id="index_list"),

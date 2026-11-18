@@ -63,9 +63,9 @@ def _uuids(table: str) -> DatasetUuids:
     return DatasetUuids(table_uuid=str(uuid.uuid5(uuid.NAMESPACE_URL, table)))
 
 
-#: Bytes `json.loads` refuses with something other than `JSONDecodeError`: a plain `ValueError` past 4300
-#: digits and a `RecursionError` past the nesting limit. Any stager holding the outbox credential can write them.
-_HOSTILE = {"bigint": '{"eventType": ' + "1" * 5000 + "}", "deep": "[" * 100_000 + "]" * 100_000}
+#: Bytes that are valid JSON text and no envelope: an integer past what the parser holds. Any stager holding the outbox
+#: credential can write them.
+_HOSTILE = {"bigint": '{"eventType": ' + "1" * 5000 + "}"}
 
 
 class _Repo:

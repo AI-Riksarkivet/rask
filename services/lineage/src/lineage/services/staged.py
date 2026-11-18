@@ -23,14 +23,15 @@ def read_staged(record: str) -> CloudEvent:
     """The envelope a staged object holds: the event as ``data``, and the trace it was staged under (ADR 0209).
 
     Raises:
-        UnparseableEventError: for ANY bytes that hold no envelope, and for nothing else. Hostile input is refused with
-            more than one error type (an integer past 4300 digits is a plain `ValueError`, deep nesting a
-            `RecursionError`), and one such object, read oldest-first, would otherwise abort every drain tick and 500
-            both DLQ routes. The read does no I/O, so no transient failure can be mistaken for poison here.
+        UnparseableEventError: for ANY bytes that hold no envelope, and for nothing else. Every such body is refused
+            by the envelope's own parse as a `ValidationError` (measured 2026-11-18 on the locked pydantic: an integer
+            past the parser's range and a document nested 100,000 deep alike), and one such object, read oldest-first,
+            would otherwise abort every drain tick and 500 both DLQ routes. The read does no I/O, so no transient
+            failure can be mistaken for poison here.
     """
     try:
         return staged_envelope(record)
-    except (ValueError, RecursionError) as exc:  # pydantic's `ValidationError` is a `ValueError`
+    except ValueError as exc:  # pydantic's `ValidationError` is a `ValueError`
         raise UnparseableEventError(str(exc)) from exc
 
 

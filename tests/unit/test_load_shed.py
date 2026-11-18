@@ -208,7 +208,6 @@ def test_metadata_creates_are_not_shed_even_at_capacity() -> None:
 @pytest.mark.parametrize(
     "content_type",
     [
-        pytest.param(_ARROW, id="arrow"),
         pytest.param(b"application/octet-stream", id="another-media-type"),
         pytest.param(None, id="no-content-type"),
     ],

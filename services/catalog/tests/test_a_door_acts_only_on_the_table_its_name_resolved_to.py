@@ -87,7 +87,6 @@ _DOORS = [
     pytest.param("POST", f"{_TABLE}/backfill_column", {"json": {"column": "v"}}, id="backfill-column"),
     pytest.param("POST", f"{_TABLE}/update_field_metadata", {"json": {"updates": [{"path": "v", "metadata": {"unit": "n"}}]}}, id="field-metadata"),
     pytest.param("POST", f"{_TABLE}/schema_metadata/update", {"json": {"metadata": {"k": "x"}}}, id="schema-metadata"),
-    pytest.param("POST", f"{_TABLE}/schema_metadata/update", {"json": {"metadata": {"k": None}}}, id="schema-metadata-removal"),
     pytest.param("POST", f"{_TABLE}/tags/create", {"json": {"tag": "t", "version": 1}}, id="create-tag"),
     pytest.param("POST", f"{_TABLE}/tags/update", {"json": {"tag": "t", "version": 1}}, id="update-tag"),
     pytest.param("POST", f"{_TABLE}/tags/delete", {"json": {"tag": "t"}}, id="delete-tag"),

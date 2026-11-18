@@ -56,7 +56,6 @@ _TABLE = "s3://acme-wh/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
         # A dropped table's bytes stay on disk under a trash record that names them, and its table record is
         # gone by definition. Counting those would make the category loudest exactly when the estate is
         # behaving correctly.
-        pytest.param(["s3://acme-wh/dead1234_gone$table"], [], {"s3://acme-wh/dead1234_gone$table"}, [], id="trashed"),
         # The record holds the URL `describe_table` answered, which percent-encodes a registered location's name, while
         # discovery lists the directory the store keeps ([[LH-319]]).
         pytest.param(

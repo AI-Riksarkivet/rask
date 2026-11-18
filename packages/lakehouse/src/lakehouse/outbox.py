@@ -123,8 +123,8 @@ def stage_envelope(outbox_uri: str, storage_options: StorageOptions, envelope: C
 
 def staged_envelope(record: str) -> CloudEvent:
     """The envelope a staged object holds: the event as its producer signed it, as ``data``, and the trace it was
-    staged under. ``ValueError`` (a ``pydantic.ValidationError``) for bytes that hold none, ``RecursionError`` for a
-    document nested past the interpreter's limit."""
+    staged under. ``ValueError`` (a ``pydantic.ValidationError``) for bytes that hold none, a document nested past the
+    parser's limit included."""
     return CloudEvent.model_validate_json(record)
 
 
