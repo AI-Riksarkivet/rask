@@ -63,7 +63,7 @@ def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path
         predicate=_PREDICATE,
         retention=timedelta(0),
         trusted=recorded,
-        history=None,
+        history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
         derived=list,
         before_untag=lambda _tags: None,
     )

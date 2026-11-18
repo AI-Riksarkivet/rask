@@ -850,13 +850,15 @@ groups:
             indefinitely. Break down by error.type; the per-dataset URI is on the trace span and in the
             maintenance_dataset_outcome log line, deliberately not on the metric (unbounded cardinality).
 
-      # STARVATION (ADR 0243). A pass that would reclaim keeps everything when a ref write holds the table's history, a
-      # policy write holds a fence above it, its policy changed since it read it, or a cleanup's victims stay marked, and
-      # is passed again every `maintenance.queue.retrySeconds` (15 minutes), so one table held back pass after pass adds
-      # four an hour, every hour, and never meets its retention or an erasure's deadline. 24h of held-back passes in
-      # every hour is a day of the seven an erasure release's grace gives (`catalog.erasure.releaseGraceDays`, 7 in the
-      # chart's values), leaving six to find the writer or the mark. The counter names a reason and no table (an open
-      # set would be unbounded cardinality): the table is in the reason's log line.
+      # STARVATION (ADR 0243 §11, F5). A pass that would reclaim keeps everything when a ref write holds the table's
+      # history, a policy write or its intent holds a fence above it, its policy changed since it read it, or a cleanup's
+      # victims stay marked, and every one of those reasons is passed again every `maintenance.queue.retrySeconds` (15
+      # minutes), so one table held back pass after pass adds four an hour, every hour, and never meets its retention or
+      # an erasure's deadline. 24h of held-back passes in every hour is a day of the seven an erasure release's grace
+      # gives (`catalog.erasure.releaseGraceDays`, 7 in the chart's values), leaving six to find the writer or the mark.
+      # ESTATE-WIDE, NOT ONE TABLE'S: the counter names a reason and no table (an open set would be unbounded
+      # cardinality), so many tables each held back briefly fire it as one starved table does; the table is in the
+      # reason's log line. One table's stale mark has its own measure, MaintenanceReclaimMarkStale below.
       - alert: MaintenanceReclaimStarved
         expr: sum by (reason) (increase(maintenance_reclaims_held_back_total[1h])) > 0
         for: 24h
@@ -864,13 +866,34 @@ groups:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance reclaims have been held back in every hour for a day"
+          summary: "Maintenance reclaims somewhere in the estate have been held back in every hour for a day"
           description: >-
             Passes that would reclaim have kept everything, for the reason this alert names, in every hour of the last
-            day: a table under constant ref writes, a policy that keeps changing, a policy door or a reclaim holding a
-            fence, or a cleanup's victims left marked. Such a table meets neither its retention nor an erasure's
-            deadline. Find it in the maintenance_history_fenced, maintenance_policy_fenced,
-            maintenance_policy_changed_mid_pass or maintenance_victims_marked log lines.
+            day, across the estate: one table under constant ref writes, a policy that keeps changing, a policy door,
+            its intent or a reclaim holding a fence, or a cleanup's victims left marked; or many tables each held back
+            for a while. A starved table meets neither its retention nor an erasure's deadline. Find the tables in the
+            maintenance_history_fenced, maintenance_policy_fenced, maintenance_policy_changed_mid_pass or
+            maintenance_victims_marked log lines.
+
+      # ONE TABLE'S MARK LEFT STANDING (ADR 0243, F5). A cleanup's mark names versions no ref door may pin or bring back
+      # until a later reclaim finishes or judges it; a pass meets it every `retrySeconds`. One standing for a day is a
+      # reclaim whose deletes the store keeps refusing, or half-removed versions a policy that now keeps them holds, on
+      # one table: the worker exports the age of the oldest it has seen as one series with no table label
+      # (`maintenance.reclaims.mark_oldest`, unit s, so `maintenance_reclaims_mark_oldest_seconds`), and the table is
+      # named in the maintenance_victims_marked log line. A day of the seven an erasure release's grace gives, as above.
+      - alert: MaintenanceReclaimMarkStale
+        expr: max(maintenance_reclaims_mark_oldest_seconds) > 86400
+        for: 15m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "A cleanup's mark has stood for more than a day"
+          description: >-
+            A table's versions have stood marked by a cleanup for more than a day: no tag, branch or restore may name
+            them, and a pass meets the mark every retry without finishing it, because the store refuses its deletes or
+            a policy now keeps the versions it half removed. Find the table in the maintenance_victims_marked log line
+            (oldest_seconds) and read why its reclaim's deletes fail, or lift the hold so a pass may finish them.
 
       # The worker's heartbeat is the hourly audit (`maintenance.queue.auditSchedule`): a NATS message schedule puts it
       # on the work queue once an hour whatever the replica count, and one worker runs it. Its stopping is silent by

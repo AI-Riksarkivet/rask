@@ -98,7 +98,7 @@ from catalog.services.dataplane import PlacedRef, recorded_branch
 from catalog.services.erasure import ErasureReport, Pin, SurfaceResult, held_by_a_clone, reclaim_refs
 from lakehouse import clone_sources, control_prefixes, history_fences, stored_objects
 from lakehouse.control_events import CatalogControlEvent
-from lakehouse.fences import mark_name
+from lakehouse.fences import Hold, mark_name
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.record_store import delete_record, list_records, put_record
@@ -474,7 +474,7 @@ def _release(
     # release (ADR 0233), which no other work on the table's history shares: no ref is written between this tick's read
     # of the refs and its reclaim, and no create through the door lands a name nesting with one this recreates ([[LH-413]]).
     history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=record.table_uuid)
-    with history.held(HistoryWork.RELEASE):
+    with history.hold_for(HistoryWork.RELEASE) as hold:
         tags, plan, clones = _plan(dataset, record)
         if clones:
             # G4: a registered clone reads a version this release would let go of; only its own end releases its tag.
@@ -488,7 +488,7 @@ def _release(
         if claimed.phase == "deleting":
             claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
         done.changes += _recreate(dataset, claimed)
-        _reclaim(dataset, claimed, storage_options=table_options)
+        _reclaim(dataset, claimed, storage_options=table_options, history=history, hold=hold)
         if record.held_by_clones:
             _report_held(control_root, storage_options, record.release_id, [])
         # G9: the end inside the hold, which a scheduling shares with nothing: a verification recording the release
@@ -639,7 +639,7 @@ def _recreate(dataset: _Dataset, record: ReleaseRecord) -> list[RefChange]:
     return changes
 
 
-def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: StorageOptions) -> None:
+def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: StorageOptions, history: TableHistory, hold: Hold) -> None:
     """Main's cleanup at the obligation's retention, now that no ref the release could reach pins a residual: what the
     verification's reclaim left for the pins goes, as that reclaim would have taken it.
 
@@ -647,7 +647,9 @@ def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: Stora
         RuntimeError: The cleanup did not go through (its ``history:main`` surface failed); the tick hands its lease back.
     """
     report = ErasureReport(table=record.table, predicate="")
-    reclaim_refs(report, dataset, [None], clean={None}, retention=timedelta(days=record.retain_days), storage_options=storage_options)
+    reclaim_refs(
+        report, dataset, [None], clean={None}, retention=timedelta(days=record.retain_days), storage_options=storage_options, history=history, hold=hold
+    )
     if failed := [surface.detail for surface in report.surfaces if surface.outcome == "failed"]:
         raise RuntimeError(f"the reclaim after the release did not go through: {'; '.join(failed)}")
     log.info("erasure_release_reclaimed", extra={"release": record.release_id, "table": record.table, "versions": report.versions_reclaimed})

@@ -138,7 +138,6 @@ from lakehouse import (
     reclaim_marks,
     stored_objects,
     trash,
-    whole_versions,
 )
 from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
 from lakehouse.base_refs import decoded_path, decoded_segments, key_uri, location_in_store, normalise, store_of
@@ -147,7 +146,7 @@ from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base
 from lakehouse.fences import Hold
 from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
-from lakehouse.history_fences import HistoryWork
+from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
@@ -1271,6 +1270,46 @@ class Reparent(NamedTuple):
 
 
 def rename_table(
+    ns: LanceNamespace,
+    source: table_claims.ResolvedTable,
+    new_table_name: str,
+    new_namespace_id: list[str] | None,
+    *,
+    so: StorageOptions,
+    claims: location_claims.ClaimStore,
+    root: str,
+    reparent: Reparent | None = None,
+) -> tuple[list[str], str]:
+    """Rename a table by moving its pointer (:func:`_repointed`), holding its history as ref work when the rename moves it
+    into another namespace (ADR 0243, F3).
+
+    A table's namespace chain is what its maintenance policy is read under, a hold at any level of it keeping its whole
+    history (ADR 0243 §8): a rename into a namespace that holds binds the table to that hold from its 200. A maintenance
+    pass reads the chain, holds the table's history as a reclaim, reads the chain again under that hold and deletes only
+    while it holds; so of a rename that moves the chain and a reclaim one sees the other: the rename answers 409
+    ConcurrentModification (14), retryable, while a reclaim deletes, and one that landed first is read by the pass under
+    its hold, which then deletes nothing. A rename within its namespace changes no chain, and takes no hold.
+
+    Raises:
+        ConcurrentModificationError: A reclaim holds the table's history, or this door's hold lapsed before it wrote
+            (code 14); as :func:`_repointed` otherwise.
+    """
+    moved = partial(_repointed, ns, source, new_table_name, new_namespace_id, so=so, claims=claims, root=root, reparent=reparent)
+    # A table whose location's claim records no uuid has no pass: maintenance refuses it (`unidentified`), and its
+    # history fence is keyed by the uuid, so nothing reclaims beside its rename.
+    if source.uuid is None or rename_destination(source.segments, new_namespace_id, new_table_name)[:-1] == list(source.segments)[:-1]:
+        return moved()
+    history = TableHistory(control_root=claims.control_root, storage_options=claims.storage_options, table_uuid=source.uuid)
+    try:
+        return history.write_held(HistoryWork.REFS, moved)
+    except HistoryFencedError as exc:
+        raise ConcurrentModificationError(
+            f"cannot move {'.'.join(source.segments)} into another namespace while a reclaim holds its history: the namespace it enters may "
+            f"hold it, which the reclaim did not read; retry once it ends: {exc}"
+        ) from exc
+
+
+def _repointed(
     ns: LanceNamespace,
     source: table_claims.ResolvedTable,
     new_table_name: str,
@@ -4389,7 +4428,6 @@ def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableT
 
 def require_whole(
     table: table_claims.DoorTable,
-    so: StorageOptions,
     dataset: lance.LanceDataset,
     *,
     branch: str | None,
@@ -4400,45 +4438,38 @@ def require_whole(
 ) -> None:
     """Refuse a ref or a restore naming a version of ``branch`` (main for ``None``) a cleanup was removing (ADR 0243).
 
-    First, a version a standing mark names (:mod:`lakehouse.reclaim_marks`): a cleanup wrote it under its hold before its
-    first delete, so the version may stand over any deleted file, its blob sidecars among them, whatever still stands.
-    ``marks`` are the ones the door's take of the table's history listed (:attr:`lakehouse.fences.Hold.marks`). Then, for
-    a version no mark names, one missing a file its manifest names (:func:`lakehouse.whole_versions.missing_files`).
-    Asked while the door holds the table's history as ref work, which every reclaim excludes, so the answer stands until
-    the ref does. ``dataset`` is the table's handle; ``kind`` and ``name`` say what the door writes, for its refusal. A
-    ref's latest version (``version`` ``None``) is its head, which no cleanup removes.
+    A version a trusted mark names (:func:`lakehouse.reclaim_marks.refused`): a cleanup wrote it under its hold, after a
+    confirm of its holds and before its first delete, so the version may stand over any deleted file, its blob sidecars
+    among them, whatever still stands. ``marks`` are the ones the door's take of the table's history listed
+    (:attr:`lakehouse.fences.Hold.marks`). No file of the version is listed: every reclaim marks before it deletes and
+    unmarks only after a cleanup call with no failed delete, so a version no mark names is one no cleanup touched
+    (``specs/maintenance/TablePass.tla`` RefsWhole, with the doors reading the mark alone), and the check costs a read per
+    mark and the ref's head and pins, never a listing that grows with the ref (F7). Asked while the door holds the
+    table's history as ref work, which every reclaim excludes, so the answer stands until the ref does. ``dataset`` is
+    the table's handle; ``kind`` and ``name`` say what the door writes, for its refusal. A ref's latest version
+    (``version`` ``None``) is its head, which no cleanup removes.
 
     Raises:
         TableVersionNotFoundError: The ref has no such version (code 11), as :func:`_ref_errors` answers it.
-        InvalidTableStateError: A cleanup marked the version, or a file it names is gone; a later maintenance pass removes
-            it (code 19).
-        ServiceUnavailableError: The store did not answer a read of a mark or a file, so whether the version is whole is
-            unknown (503); nothing was written.
+        InvalidTableStateError: A cleanup marked the version; a later maintenance pass removes it (code 19).
+        ServiceUnavailableError: The store did not answer a read of a mark or of the ref, so whether a cleanup marked the
+            version is unknown (503); nothing was written.
     """
     if version is None:
         return
     with _ref_errors(kind, name):
-        opened = dataset.checkout_version((branch, version) if branch is not None else version)
+        dataset.checkout_version((branch, version) if branch is not None else version)
     fence = table.history_fence()
     try:
-        marked = reclaim_marks.marked_versions(
-            reclaim_marks.read(fence.control_root, fence.storage_options, table_uuid=fence.table_uuid, marks=marks), recorded_branch(branch)
-        )
-        gone = [] if version in marked else whole_versions.missing_files(opened, branch_layout.ref_root(table.location, branch), so)
+        marked = reclaim_marks.refused(fence.control_root, fence.storage_options, table_uuid=fence.table_uuid, marks=marks, dataset=dataset, ref=branch)
     except OSError as exc:
         raise ServiceUnavailableError(
-            f"the store did not answer whether version {version} of {branch or MAIN_BRANCH} is whole, so no {kind} was written: {exc}"[:600]
+            f"the store did not answer whether a cleanup marked version {version} of {branch or MAIN_BRANCH}, so no {kind} was written: {exc}"[:600]
         ) from exc
     if version in marked:
-        log.warning("ref_on_a_version_being_reclaimed", extra={"kind": kind, "ref": name, "branch": branch, "version": version, "marked": True})
+        log.warning("ref_on_a_version_being_reclaimed", extra={"kind": kind, "ref": name, "branch": branch, "version": version})
         raise InvalidTableStateError(
             f"version {version} of {branch or MAIN_BRANCH} is being reclaimed: a cleanup marked it before its first delete, "
-            "so no ref may name it and no restore bring it back; a later maintenance pass removes it"
-        )
-    if gone:
-        log.warning("ref_on_a_version_being_reclaimed", extra={"kind": kind, "ref": name, "branch": branch, "version": version, "gone": gone[:5]})
-        raise InvalidTableStateError(
-            f"version {version} of {branch or MAIN_BRANCH} is being reclaimed: {len(gone)} file(s) it names are gone (e.g. {gone[0]}), "
             "so no ref may name it and no restore bring it back; a later maintenance pass removes it"
         )
 
@@ -4500,7 +4531,7 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
     def judge(hold: Hold) -> None:
         if before_ref is not None:
             before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=branch, version=req.version))
-        require_whole(table, so, dataset, branch=branch, version=req.version, kind="tag", name=req.tag, marks=hold.marks)
+        require_whole(table, dataset, branch=branch, version=req.version, kind="tag", name=req.tag, marks=hold.marks)
 
     def write() -> None:
         with _ref_errors("tag", req.tag):
@@ -4568,7 +4599,7 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
     def judge(hold: Hold) -> None:
         if before_ref is not None:
             before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=branch, version=req.version))
-        require_whole(table, so, dataset, branch=branch, version=req.version, kind="tag", name=req.tag, marks=hold.marks)
+        require_whole(table, dataset, branch=branch, version=req.version, kind="tag", name=req.tag, marks=hold.marks)
 
     def write() -> None:
         with _ref_errors("tag", req.tag):
@@ -4675,7 +4706,7 @@ def create_branch(
             with _ref_errors("branch", source, invalid_name=req.name):
                 cut_at = req.from_version if req.from_version is not None else int(_source_head(dataset, req.from_branch))
             before_ref(hold.marks, dataset, PlacedRef(kind="branch", name=req.name, branch=req.from_branch, version=cut_at))
-        require_whole(table, so, dataset, branch=req.from_branch, version=req.from_version, kind="branch", name=source, marks=hold.marks)
+        require_whole(table, dataset, branch=req.from_branch, version=req.from_version, kind="branch", name=source, marks=hold.marks)
 
     def write() -> None:
         try:

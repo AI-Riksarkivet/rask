@@ -208,9 +208,11 @@ class TableRecords(BaseModel):
     def maintain_statements(self) -> list[dict[str, object]]:
         """The policy statements granting what a maintain-tier vend writes of these records.
 
-        THE CLEANUP'S MARK (:mod:`lakehouse.reclaim_marks`) is put and deleted at ``<fence>/reclaim-victims.<32>.json``
-        alone, directly in the fence's directory as a take reads one; a ``?`` that matches a ``/`` reaches a name below a
-        subdirectory, which no reader judges.
+        THE CLEANUP'S MARK (:mod:`lakehouse.reclaim_marks`) is put and deleted at ``<fence>/reclaim.<32>.json``, a
+        reclaim's holder at ``<fence>/reclaim-<32>.json``, both by one grant, ``<fence>/reclaim?<32 ?>.json``: what it
+        reaches beyond the two is a name of their length below a subdirectory or with another separator, which no take
+        judges (a holder's name needs the ``-``, a mark's the ``.``) and the catalog's next take sweeps once it has stood a
+        hold; ``reclaim-x/erasure-release.<id>.json`` and every longer name stay refused (F8).
 
         THE POLICY FENCES (ADR 0243 §6): every policy fence is listed and read (who holds one, never a policy or a secret),
         and written only beneath the directory of the namespace fences of the table's own warehouse and its own project's
@@ -233,11 +235,7 @@ class TableRecords(BaseModel):
             return "/".join(part for part in (root_key, directory) if part)
 
         fence = under(history_fences.fence_directory(self.table_uuid))
-        listed, read, held = (
-            [f"{fence}/"],
-            [f"{fence}/*"],
-            [f"{fence}/{history_fences.HistoryWork.RECLAIM}-{_HOLDER_TOKEN}.json", f"{fence}/{history_fences.VICTIMS_MARK}.{_HOLDER_TOKEN}.json"],
-        )
+        listed, read, held = [f"{fence}/"], [f"{fence}/*"], [f"{fence}/{history_fences.HistoryWork.RECLAIM}?{_HOLDER_TOKEN}.json"]
         reclaim = policy_fences.PolicyWork.RECLAIM
         if self.warehouse is not None or self.project is not None:
             # Listing and reading a policy fence tells its reader who holds it, never a policy or a secret, so every one is
@@ -393,6 +391,37 @@ _KMS_WRITE_ACTIONS = ("kms:Decrypt", "kms:GenerateDataKey")
 #: re-serialises it (`rustfs@1.0.3:rustfs/src/admin/service/session_policy.rs:34-39`). The policy is sent as compact,
 #: escaped (so ASCII) JSON, and judged by :func:`counted_length`, the longer of the two counts ([[LH-262]]).
 SESSION_POLICY_LIMIT: Final = 2048
+
+
+#: A table the catalog makes in a warehouse lives at ``<bucket>/<uuid>`` (ADR 0173 §5): the deepest location a pass of a
+#: catalog-made table vends for, whatever its name.
+_MADE_TABLE_PREFIX: Final = "00000000-0000-0000-0000-000000000000"
+
+
+def require_a_maintain_policy_that_fits(*, bucket: str, control_root: str, kms_key: str | None, warehouse: str, project: str) -> None:
+    """Refuse a warehouse on ``bucket`` whose tables' maintain-tier session policy STS would refuse (F8, ADR 0243 §7.2).
+
+    A pass of a table deletes only under its table's maintain-tier vend, so a warehouse whose vend cannot be minted is one
+    whose passes reclaim nothing, for good. Measured with :func:`counted_length` (2026-11-18): a catalog-made table's
+    maintain policy is 1,964 characters when the warehouse's bucket and the control root's are both 63 characters, the
+    longest S3 allows, with no KMS key, so every such warehouse fits with 84 to spare; what can still push one past is a
+    KMS key's grant (about 150 characters and the key's ARN) or a control root holding a key prefix, which this refuses
+    at registration, before any table is made, naming the limit. A table registered at a deeper location is refused its
+    vend alone, 400 SessionPolicyTooLong, as a long branch name is.
+
+    Raises:
+        InvalidInputError: The policy would be past :data:`SESSION_POLICY_LIMIT` (400, code 13).
+    """
+    if not control_root.startswith("s3://"):
+        return
+    records = TableRecords(control_root=control_root, table_uuid=_MADE_TABLE_PREFIX, warehouse=warehouse, project=project)
+    counted = counted_length(build_session_policy(bucket, _MADE_TABLE_PREFIX, "maintain", records=records, kms_key=kms_key))
+    if counted > SESSION_POLICY_LIMIT:
+        raise InvalidInputError(
+            f"warehouse {warehouse!r} on bucket {bucket!r} would hold tables whose maintain-tier session policy is {counted} characters as a store "
+            f"counts it, past the {SESSION_POLICY_LIMIT:,} STS accepts, so maintenance could reclaim none of their history: a shorter bucket "
+            f"name ({len(bucket)} characters) fits, or the estate's control root ({len(control_root)}) or KMS key ({len(kms_key or '')}) shortened"
+        )
 
 
 def counted_length(policy: dict[str, object]) -> int:

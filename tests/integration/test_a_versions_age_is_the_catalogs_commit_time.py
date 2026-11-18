@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import cast
 
 import httpx
@@ -24,6 +25,7 @@ import pytest
 
 from catalog.core import manifest_bytes
 from catalog.services.erasure import ErasureReport, reclaim_refs
+from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
 from tests.integration.conftest import RaceCatalog
 from tests.integration.test_the_store_refuses_a_put_over_a_committed_file import _HookedCommits
@@ -52,7 +54,7 @@ def _restamped(at: datetime) -> Callable[[lance_namespace.CreateTableVersionRequ
 
 @pytest.mark.parametrize("race_catalog", ["dir"], indirect=True)
 @pytest.mark.parametrize("skew", ["ahead", "behind"])
-def test_a_version_a_writer_stamps_on_a_wrong_clock_ages_by_the_catalogs(race_catalog: RaceCatalog, skew: str) -> None:
+def test_a_version_a_writer_stamps_on_a_wrong_clock_ages_by_the_catalogs(race_catalog: RaceCatalog, skew: str, tmp_path: Path) -> None:
     """Ahead: once superseded and two seconds old, the erasure release's own cleanup (``erasure.reclaim_refs``, what
     ``erasure_release._reclaim`` runs) at a retention of one second reclaims it; a release at retention 0 removes every
     superseded version whatever its stamp (measured on pylance 13.0.0), so the stamp bites at any retention above 0.
@@ -70,14 +72,18 @@ def test_a_version_a_writer_stamps_on_a_wrong_clock_ages_by_the_catalogs(race_ca
 
     if skew == "ahead":
         time.sleep(2)
-        reclaim_refs(
-            ErasureReport(table="lance_catalog$clocks$t", predicate=""),
-            lance.dataset(location),
-            [None],
-            clean={None},
-            retention=timedelta(seconds=1),
-            storage_options=StorageOptions(),
-        )
+        history = TableHistory(control_root=str(tmp_path), storage_options=StorageOptions(), table_uuid="clocks")
+        with history.hold_for(HistoryWork.RELEASE) as hold:
+            reclaim_refs(
+                ErasureReport(table="lance_catalog$clocks$t", predicate=""),
+                lance.dataset(location),
+                [None],
+                clean={None},
+                retention=timedelta(seconds=1),
+                storage_options=StorageOptions(),
+                history=history,
+                hold=hold,
+            )
     else:
         lance.dataset(location).cleanup_old_versions(older_than=timedelta(days=1), error_if_tagged_old_versions=False)
     kept = [int(entry["version"]) for entry in lance.dataset(location).versions()]

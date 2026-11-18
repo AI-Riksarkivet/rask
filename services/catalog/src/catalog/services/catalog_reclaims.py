@@ -4,13 +4,17 @@ THEIR CREDENTIAL NEVER DIES. A maintenance pass deletes under a maintain-tier ve
 (A1 of ``specs/maintenance/TablePass.tla``), so a pass frozen past its hold deletes nothing more once a door has been
 admitted beside it. These two doors delete with the catalog's own credential, which no hold bounds. So each holds what a
 pass holds (the table's history and the policy fence of each level above it, as reclaims), reads the policy that governs
-the table under those holds and refuses a table a hold at any level keeps, marks its cleanup's victims before its first
-delete (:mod:`lakehouse.reclaim_marks`), and CONFIRMS EVERY HOLD BEFORE EACH CLEANUP CALL it makes, one call per
-:data:`BATCH` versions. Confirming before each delete request is not open to it: Lance issues a cleanup's deletes with no
-hook between them. What stays open is a door frozen inside one call past its hold: that call's deletes of versions its
-mark names, which no ref door may name while the mark stands. A capped credential minted for the door would close that
-too, but only where the catalog vends (``LANCE_VENDING_MODE=web_identity``), and these doors must work where it vends
-nothing; so the confirm is the leaner of the two that holds everywhere.
+the table under those holds and refuses a table a hold at any level keeps, and reclaims through the one marked reclaim
+(:class:`lakehouse.reclaim_marks.Reclaim`), which CONFIRMS EVERY HOLD BEFORE EACH CLEANUP CALL it makes, one call per
+:data:`lakehouse.reclaim_marks.BATCH` versions, and only then marks that call's victims; an intent a policy door left
+beside one of its holds stops it there too (F4). Confirming before each delete request is not open to it: Lance issues a
+cleanup's deletes with no hook between them. What stays open is a door frozen inside one call past its hold: that call's
+deletes, of at most one batch of versions its own mark names, which no ref door may name while the mark stands; once a
+later reclaim finds the mark with its writer's hold gone and every file of its versions still standing, it removes it, so
+a door frozen before its first delete of that call and resuming after can leave that batch half removed and unmarked
+(stated in ADR 0243 §9). A capped credential minted for the door would close that too, but only where the catalog vends
+(``LANCE_VENDING_MODE=web_identity``), and these doors must work where it vends nothing; so the confirm is the leaner of
+the two that holds everywhere.
 
 ``version/delete`` is an explicit act by an authorized principal and is not judged by retention, but a hold
 (``cleanup_enabled`` false at any level that can govern the table) is: lifting the hold is a separate, audited act at a
@@ -24,25 +28,20 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Generator, Sequence
 from contextlib import ExitStack, contextmanager
-from typing import Final
 
 from lance_namespace import ConcurrentModificationError, InvalidTableStateError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core.config import Settings
 from catalog.services import table_claims
-from lakehouse import maintenance_policies, reclaim_marks
+from lakehouse import maintenance_policies, policy_fences, reclaim_marks
 from lakehouse.fences import Hold
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError, HistoryWork
-from lakehouse.policy_fences import PolicyFence, PolicyWork
+from lakehouse.policy_fences import PolicyWork
 
 
 log = logging.getLogger(__name__)
-
-#: How many versions one cleanup call removes between two confirms of the door's holds: Lance plans each call by reading
-#: the ref's retained manifests, so a call per version would read them once per version.
-BATCH: Final = 16
 
 
 class Held(BaseModel):
@@ -58,7 +57,7 @@ def _confirmed(holds: Sequence[Hold]) -> Callable[[], None]:
     def confirm() -> None:
         try:
             for hold in holds:
-                hold.confirm()
+                hold.confirm_unchallenged()
         except HistoryFencedError as exc:
             raise ConcurrentModificationError(f"this reclaim's hold lapsed before its next cleanup; nothing more was deleted, retry: {exc}") from exc
 
@@ -81,12 +80,7 @@ def held(table: table_claims.DoorTable, settings: Settings, *, namespace_uuids: 
         project = maintenance_policies.governing_project(settings.registry_root, so, table.location)
     except (OSError, ValueError) as exc:
         raise ServiceUnavailableError("the bucket's claim could not be read, so the policies that may hold the table are unknown; nothing was deleted") from exc
-    warehouse = table.segments[0]
-    levels = [
-        PolicyFence(control_root=settings.registry_root, storage_options=so, level="namespace", key=uuid, warehouse=warehouse) for uuid in namespace_uuids
-    ]
-    if project is not None:
-        levels.append(PolicyFence(control_root=settings.registry_root, storage_options=so, level="project", key=project))
+    levels = policy_fences.levels(settings.registry_root, so, warehouse=table.segments[0], namespace_uuids=list(namespace_uuids), project=project)
     with ExitStack() as stack:
         try:
             history = stack.enter_context(table.history_fence().hold_for(HistoryWork.RECLAIM))
@@ -120,24 +114,18 @@ def _refuse_a_held_table(table: table_claims.DoorTable, settings: Settings, *, n
         )
 
 
-def marked(held: Held, table: table_claims.DoorTable, *, ref: str | None) -> reclaim_marks.MarkedCleanup:
-    """Where the door's cleanups are marked, under the catalog's own credential, each call after a confirm of its holds.
+def marked(held: Held, table: table_claims.DoorTable, *, ref: str | None) -> reclaim_marks.Reclaim:
+    """Where the door reclaims ``ref``, under the catalog's own credential, each cleanup call after a confirm of its holds.
 
     Raises:
-        ServiceUnavailableError: The store failed a read of a standing mark (503); nothing was deleted.
         UnidentifiedObjectError: The table's location carries no claim recording a uuid.
     """
     fence = table.history_fence()
-    try:
-        standing = reclaim_marks.read(fence.control_root, fence.storage_options, table_uuid=fence.table_uuid, marks=held.history.marks)
-    except OSError as exc:
-        raise ServiceUnavailableError("the store did not answer reading a cleanup's mark, so nothing was deleted") from exc
-    return reclaim_marks.MarkedCleanup(
+    return reclaim_marks.Reclaim(
         control_root=fence.control_root,
         storage_options=fence.storage_options,
         table_uuid=fence.table_uuid,
         ref=ref,
-        standing=standing,
+        hold=held.history,
         before_each=held.confirm,
-        batch=BATCH,
     )

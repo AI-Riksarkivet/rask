@@ -17,6 +17,7 @@ import lance
 import pyarrow as pa
 from lance.blob import Blob
 
+from lakehouse.history_fences import TableHistory
 from lakehouse.maintenance_due import CompactionDue
 from lakehouse.storage_options import StorageOptions
 from maintenance.services.due import DueQuestion, compaction_due
@@ -24,7 +25,9 @@ from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarge
 
 
 def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: int | None = None) -> DatasetResult:
-    return expire_versions(ExpiryTarget(uri=uri, storage_options={}, write_options={}), ExpiryPolicy(older_than=older_than, retain_versions=retain_versions))
+    history = TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid="t")
+    target = ExpiryTarget(uri=uri, storage_options={}, write_options={}, history=history, table_uuid="t")
+    return expire_versions(target, ExpiryPolicy(older_than=older_than, retain_versions=retain_versions))
 
 
 def _compaction_due(uri: str) -> CompactionDue | None:

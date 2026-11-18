@@ -45,17 +45,22 @@
 (*            the others                                                   *)
 (*   PRecheck expiry._dropped_since, and (guard PolicyReread) the policy   *)
 (*            read again under the holds (expiry._policy_changed)          *)
-(*   PList    lakehouse.reclaim_marks: the victims Lance's own dry run     *)
-(*            names (explain_cleanup_old_versions) under the policy,       *)
-(*            written as this pass's mark (guard VictimMark) before any    *)
-(*            delete; a dead pass's victims are among them while the       *)
-(*            policy still reclaims them; then                             *)
+(*   PList    lakehouse.reclaim_marks.Reclaim, the one way every reclaim  *)
+(*            deletes (a pass, the catalog's maintenance/run and           *)
+(*            version/delete, an erasure's cleanups): (guard PolicyIntent) *)
+(*            a policy door's intent beside a hold stops it before its     *)
+(*            batch; each standing mark whose writer holds nothing (guard  *)
+(*            MarkLive) and every file of whose versions stands is removed;*)
+(*            then the victims, any part of what the policy reclaims, a    *)
+(*            dead cleanup's still reclaimable among them, written as this *)
+(*            reclaim's mark (guard VictimMark) before any delete; then    *)
 (*            cleanup_old_versions restricted to them (its `versions`),    *)
 (*            reading its refs, manifests and files once as it starts      *)
 (*            (lance cleanup.rs). One step: the pass holds the history, so *)
 (*            no ref moves between the dry run and the cleanup's reading,  *)
 (*            and the cleanup removes no version its `versions` omits      *)
-(*            (lance_docs/lance/guide/read_and_write.md, Cleanup)          *)
+(*            (lance_docs/lance/guide/read_and_write.md, Cleanup). One     *)
+(*            batch here; the code's batches of 16 each repeat this step.  *)
 (*   PDelData its deletes of transaction and data files, every one before  *)
 (*            any manifest (measured on pylance 13.0.0, ADR 0243 §3), one  *)
 (*            at a time in any order                                       *)
@@ -77,7 +82,8 @@
 (*   tag      dataplane.create_tag (and update_tag, create_branch,         *)
 (*            lakehouse.clone_sources' source tag): the history held as    *)
 (*            REFS, (guard VictimMark) the version refused when a standing *)
-(*            mark names it (dataplane.require_whole), then the ref        *)
+(*            mark names it (dataplane.require_whole), then the ref. The   *)
+(*            mark alone: the doors list no file of the version (F7)       *)
 (*   restore  api/v1/endpoints/tables._restore_holding_history: (guard     *)
 (*            RestoreFence) the history held as REFS, (VictimMark), then   *)
 (*            dataplane.restore's commit, which reads the restored         *)
@@ -88,7 +94,11 @@
 (*            the same hold while it deletes the table's record, which     *)
 (*            hands the table to its namespace's (B1)                      *)
 (*   nspolicy, projpolicy  the namespace's and the project's policy set    *)
-(*            doors, writing a hold: the level's policy fence held as SET  *)
+(*            doors, writing a hold: the level's policy fence held as SET; *)
+(*            a refused one is retried and leaves its holder standing as   *)
+(*            an intent (guard PolicyIntent, F4)                           *)
+(*   rename   a rename into a namespace that holds (dataplane.rename_table)*)
+(*            (guard RenameFence, F3): the history held as REFS            *)
 (*   writer   a commit through any door or version/create: no fence        *)
 (*                                                                         *)
 (* FAULTS, counted against MaxFaults: a pass that dies at any step         *)
@@ -126,12 +136,14 @@
 (* no byte; the floor raise, a catalog commit like any writer's; a version *)
 (* expiring by its writer's clock (ages here change at any time, which     *)
 (* over-approximates every clock; version/create stamps the catalog's own  *)
-(* commit time, ADR 0243 §9); the catalog's own reclaim doors,             *)
+(* commit time, ADR 0243 §10); the catalog's own reclaim doors,            *)
 (* maintenance/run and version/delete, which are passes of this shape      *)
-(* (the same holds, re-read, marks and per-version confirm) signed by the  *)
+(* (the same holds, re-read, marks and per-batch confirm) signed by the    *)
 (* catalog's own credential, which never dies: what holds them is a        *)
-(* confirm of every hold before each version's cleanup, which bounds a     *)
-(* frozen door to one version's deletes inside one HOLD (ADR 0243 §8).     *)
+(* confirm of every hold before each batch's cleanup, which bounds a       *)
+(* frozen door to one batch's deletes inside one HOLD (ADR 0243 §9); a     *)
+(* version a branch was cut from, whose files an erasure's cleanup takes   *)
+(* (its fork points, marked: ADR 0233 §10).                                *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -141,7 +153,7 @@ CONSTANTS Passes,       \* the passes of the table that may run; two only where 
           Off           \* the guards removed (Guards)
 
 Guards == {"RestoreFence", "PolicyReread", "PolicyDoorFence", "PolicyDeleteFence", "AncestorFence", "HoldAnyLevel",
-           "DoorConfirm", "VictimMark", "TagFence", "CredBeforeHold", "AgeFloor"}
+           "DoorConfirm", "VictimMark", "TagFence", "CredBeforeHold", "AgeFloor", "RenameFence", "PolicyIntent", "MarkLive"}
 ASSUME Off \subseteq Guards
 On(g) == g \notin Off
 
@@ -151,16 +163,19 @@ Base == {"b"}                \* in the table's own data directory
 Old == 1                     \* the version the tag and the restore name
 
 Levels == {"table", "ns", "proj"}
-PolicyDoors == {"policy", "pdelete", "nspolicy", "projpolicy"}
+PolicyDoors == {"policy", "pdelete", "nspolicy", "projpolicy", "rename"}
+\* The doors that write a level above the table, and are retried by their callers while a reclaim holds that level.
+LevelDoors == {"nspolicy", "projpolicy"}
 \* The fence a policy door holds, and the kind it holds it as.
-FenceOf(d) == CASE d \in {"policy", "pdelete"} -> "hist" [] d = "nspolicy" -> "ns" [] OTHER -> "proj"
+FenceOf(d) == CASE d \in {"policy", "pdelete", "rename"} -> "hist" [] d = "nspolicy" -> "ns" [] OTHER -> "proj"
 KindOf(d) == IF FenceOf(d) = "hist" THEN "refs" ELSE "set"
 \* Whether a door's take is there at all: the table's two policy doors each had a guard removed by a config.
-Fenced(d) == CASE d = "policy" -> On("PolicyDoorFence") [] d = "pdelete" -> On("PolicyDeleteFence") [] OTHER -> TRUE
+Fenced(d) == CASE d = "policy" -> On("PolicyDoorFence") [] d = "pdelete" -> On("PolicyDeleteFence") [] d = "rename" -> On("RenameFence") [] OTHER -> TRUE
 
 VARIABLES manifests, head, names, files, pinned, expired, policy,
           pc, pol, cred, victims, doomed, bcand,
-          marks,               \* [who, vs]: each standing mark of the versions a cleanup will remove
+          marks,               \* [who, vs]: each standing mark of the versions a cleanup will remove, and its writer
+                               \* while that writer still holds ("gone" once its holds were released or lapsed)
           holders,             \* [who, kind, fence] holds of the history fence and the ancestor policy fences
           tpc, rpc, dpc, wpc,  \* the tag and restore doors, the policy doors (a function) and the writer
           faults,
@@ -246,16 +261,38 @@ PRecheck(p) ==
 \* marked version), so the next pass finishes it; one a policy now keeps stays, marked, and no door may name it. Then
 \* Lance's cleanup, restricted to them: the files only they name, and the root's files no manifest names that are past
 \* the unverified age. Base files are never its.
+\* A policy door's intent on a fence the pass holds (guard PolicyIntent): a SET holder a refused door left standing.
+IntentOn(p) == \E h \in holders : h.kind = "set" /\ h.fence \in PassFences /\ h.who # p
+
+\* A standing mark a reclaim may judge (lakehouse.reclaim_marks): one whose writer holds nothing any more (guard
+\* MarkLive), so it deletes nothing more, and every file of every version it names still stands, so nothing was half
+\* removed and there is nothing to protect. A dead cleanup's mark over deleted files stays.
+Judged(m) == (On("MarkLive") => m.who = "gone") /\ \A v \in m.vs \cap manifests : Whole(v)
+
+\* Each batch begins by asking for an intent (PolicyIntent): one found stops the pass before it marks or deletes anything
+\* more (POLICY_FENCED). Otherwise the marks it may judge are removed, and the victims are written as this pass's mark
+\* before any delete: SOME of what the policy the pass planned under reclaims, which over-approximates every reclaim (a
+\* pass's dry run, the catalog's maintenance/run under its own retention, version/delete's explicit ranges, an erasure's
+\* cleanup), a pass's including what a dead cleanup's standing mark names that the policy still reclaims (it was past
+\* its retention, and no door pins a marked version), so the next pass finishes it; one a policy now keeps
+\* stays, marked, and no door may name it. Then Lance's cleanup, restricted to them: the files only they name, and the
+\* root's files no manifest names that are past the unverified age. Base files are never its.
 PList(p) ==
   /\ pc[p] = "list"
-  /\ LET v == IF pol[p] = "keep" THEN {x \in manifests : x # head /\ x \notin pinned /\ x \in expired} ELSE {}
-         kept == manifests \ v
-         verified == Named(v) \ Named(kept)
-         unverified == {f \in files : f \notin Named(manifests) /\ f \notin Young}
-     IN /\ victims' = [victims EXCEPT ![p] = v]
-        /\ doomed' = [doomed EXCEPT ![p] = (verified \cup unverified) \ Base]
-        /\ marks' = IF On("VictimMark") /\ v # {} THEN marks \cup {[who |-> p, vs |-> v]} ELSE marks
-  /\ pc' = [pc EXCEPT ![p] = "data"]
+  /\ IF On("PolicyIntent") /\ IntentOn(p)
+       THEN /\ pc' = [pc EXCEPT ![p] = "release"]
+            /\ UNCHANGED <<victims, doomed, marks>>
+       ELSE \E v \in SUBSET (IF pol[p] = "keep" THEN {x \in manifests : x # head /\ x \notin pinned /\ x \in expired} ELSE {}) :
+              LET eligible == IF pol[p] = "keep" THEN {x \in manifests : x # head /\ x \notin pinned /\ x \in expired} ELSE {}
+                  kept == manifests \ v
+                  verified == Named(v) \ Named(kept)
+                  unverified == {f \in files : f \notin Named(manifests) /\ f \notin Young}
+                  left == {m \in marks : ~Judged(m)}
+              IN /\ \A m \in left : m.who = "gone" => (m.vs \cap eligible) \subseteq v
+                 /\ victims' = [victims EXCEPT ![p] = v]
+                 /\ doomed' = [doomed EXCEPT ![p] = (verified \cup unverified) \ Base]
+                 /\ marks' = IF On("VictimMark") /\ v # {} THEN left \cup {[who |-> p, vs |-> v]} ELSE left
+                 /\ pc' = [pc EXCEPT ![p] = "data"]
   /\ UNCHANGED <<manifests, head, names, files, pinned, expired, policy, pol, cred, bcand, holders, tpc, rpc, dpc, wpc, faults, answered, unheldDelete>>
 
 Deleted(p) == unheldDelete' = (unheldDelete \/ ~Holds(p))
@@ -310,15 +347,19 @@ PBDel(p) ==
                 /\ UNCHANGED pc
   /\ UNCHANGED <<manifests, head, names, pinned, expired, policy, pol, cred, victims, doomed, marks, holders, tpc, rpc, dpc, wpc, faults, answered>>
 
+\* A pass's marks once it holds nothing: written by a writer that deletes nothing more.
+Orphaned(p) == {IF m.who = p THEN [m EXCEPT !.who = "gone"] ELSE m : m \in marks}
+
 PRelease(p) ==
   /\ pc[p] = "release"
   /\ holders' = Drop(p)
+  /\ marks' = Orphaned(p)
   /\ pc' = [pc EXCEPT ![p] = "idle"]
   /\ cred' = [cred EXCEPT ![p] = "none"]
   /\ victims' = [victims EXCEPT ![p] = {}]
   /\ doomed' = [doomed EXCEPT ![p] = {}]
   /\ bcand' = [bcand EXCEPT ![p] = {}]
-  /\ UNCHANGED <<manifests, head, names, files, pinned, expired, policy, pol, marks, tpc, rpc, dpc, wpc, faults, answered, unheldDelete>>
+  /\ UNCHANGED <<manifests, head, names, files, pinned, expired, policy, pol, tpc, rpc, dpc, wpc, faults, answered, unheldDelete>>
 
 \* ---------------------------------------------------------------- faults
 Crash(p) ==
@@ -338,8 +379,9 @@ Lapse(p) ==
   /\ Holds(p) /\ pc[p] # "release"
   /\ IF On("CredBeforeHold") THEN cred[p] # "live" ELSE faults < MaxFaults
   /\ holders' = Drop(p)
+  /\ marks' = Orphaned(p)
   /\ faults' = IF On("CredBeforeHold") THEN faults ELSE faults + 1
-  /\ UNCHANGED <<manifests, head, names, files, pinned, expired, policy, pc, pol, cred, victims, doomed, bcand, marks, tpc, rpc, dpc, wpc, answered, unheldDelete>>
+  /\ UNCHANGED <<manifests, head, names, files, pinned, expired, policy, pc, pol, cred, victims, doomed, bcand, tpc, rpc, dpc, wpc, answered, unheldDelete>>
 
 \* A task delivered again once its pass died (WorkQueue): the next pass of the table.
 Restart(p) ==
@@ -422,16 +464,27 @@ RWrite ==
   /\ holders' = Drop("restore")
   /\ UNCHANGED <<files, pinned, expired, policy, pc, pol, cred, victims, doomed, bcand, marks, faults, unheldDelete, tpc, dpc, wpc, answered>>
 
+\* A refused door answers 409. A level's door (LevelDoors) is retried by its caller, and (guard PolicyIntent) leaves its
+\* holder standing as an intent, which every reclaim's take refuses and every reclaim deleting meets before its next
+\* batch (lakehouse.fences.HolderFence.taking, policies._fenced); without one, it leaves nothing.
 DTake(d) ==
   /\ dpc[d] = "idle"
-  /\ LET t == TakeFor(Fenced(d), d, KindOf(d), FenceOf(d)) IN (dpc' = [dpc EXCEPT ![d] = IF t.ok THEN "check" ELSE "done"] /\ holders' = t.h)
+  /\ LET t == TakeFor(Fenced(d), d, KindOf(d), FenceOf(d))
+         intent == [who |-> d, kind |-> KindOf(d), fence |-> FenceOf(d)]
+     IN IF t.ok
+          THEN dpc' = [dpc EXCEPT ![d] = "check"] /\ holders' = t.h
+          ELSE IF d \in LevelDoors
+            THEN dpc' = dpc /\ holders' = (IF On("PolicyIntent") THEN holders \cup {intent} ELSE holders)
+            ELSE dpc' = [dpc EXCEPT ![d] = "done"] /\ holders' = holders
   /\ UNCHANGED <<tpc, rpc, wpc, answered>>
   /\ UNCHANGED DoorVars
 
+\* What each door writes: the table's hold, the table's record deleted, a namespace's or a project's hold, and a rename
+\* moving the table into a namespace that holds (whose hold then binds it: guard RenameFence).
 Written(d) ==
   CASE d = "policy" -> [policy EXCEPT !["table"] = "hold"]
     [] d = "pdelete" -> [policy EXCEPT !["table"] = "none"]
-    [] d = "nspolicy" -> [policy EXCEPT !["ns"] = "hold"]
+    [] d \in {"nspolicy", "rename"} -> [policy EXCEPT !["ns"] = "hold"]
     [] OTHER -> [policy EXCEPT !["proj"] = "hold"]
 
 \* The door answers 200 once its record stands. It answered for keeping the whole history where it wrote a hold, or where
@@ -497,4 +550,8 @@ DeletesHeld == ~unheldDelete
 
 \* Once faults stop, the next pass finishes what a dead one began: no version stands over deleted files.
 EventuallyWhole == <>[](\A v \in manifests : Whole(v))
+\* A level's policy door retried while reclaims keep coming beneath it lands (guard PolicyIntent): each pass in flight
+\* stops at its next batch, and none is admitted beside the intent. The pass here holds on every delivery, which stands
+\* for a backlog of reclaims beneath the level.
+PolicyLands == \A d \in Doors \cap LevelDoors : <>(dpc[d] = "done")
 =============================================================================

@@ -72,7 +72,7 @@ from catalog.core.fenced_namespace import fenced, holding_to_confirm
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import DEREGISTER_TABLE
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
-from catalog.core.vending import CredentialVendor, role_session_name
+from catalog.core.vending import CredentialVendor, require_a_maintain_policy_that_fits, role_session_name
 from catalog.schemas import (
     CreateWarehouseRequest,
     DeleteProfile,
@@ -198,7 +198,8 @@ def validated_ids(settings: Settings, body: CreateWarehouseRequest) -> Warehouse
     Raises:
         InvalidInputError: An id is malformed, the id is the estate's own warehouse, or the endpoint is not the estate's object store ([[LH-205]]): another store needs a credential the catalog
             resolves and consumes on every open, provision and vend, and no door consumes one, so admitting it would
-            have the estate's own key signed toward a host the caller chose.
+            have the estate's own key signed toward a host the caller chose. Or the maintain-tier session policy its tables'
+            passes need would be past what STS takes (``vending.require_a_maintain_policy_that_fits``, ADR 0243 F8).
     """
     warehouse_id = _validate_id(body.id, what="warehouse id")
     project = _validate_id(body.project, what="project id")
@@ -211,6 +212,9 @@ def validated_ids(settings: Settings, body: CreateWarehouseRequest) -> Warehouse
             "reference the catalog consumes on every open, provision and vend, and none is consumed yet, so the catalog "
             "would sign with the estate's own key toward that host. Omit `endpoint` to use the estate's store."
         )
+    require_a_maintain_policy_that_fits(
+        bucket=bucket, control_root=settings.registry_root, kms_key=settings.s3_sse_kms_key_id, warehouse=warehouse_id, project=project
+    )
     return warehouse_id, project, bucket
 
 

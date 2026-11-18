@@ -6,6 +6,7 @@ samples its streams and durable consumers under ``maintenance.queue.*`` (ADR 019
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Literal, get_args
 
 from opentelemetry import metrics
@@ -225,6 +226,30 @@ def record_reclaim_held_back(reason: HeldBack | None = None) -> None:
     """Count one dataset whose pass kept everything for ``reason``; ``None`` creates every reason's series at 0."""
     for each in get_args(HeldBack.__value__):
         _reclaims_held_back.add(1 if each == reason else 0, {"reason": each})
+
+
+#: The age of the oldest cleanup mark standing that this worker has seen, one series with no table label (F5): a mark
+#: names versions no door may pin or bring back, and one that stays is a table whose reclaim is starved (a delete the
+#: store keeps refusing) or whose half-removed versions a policy now keeps. Named without its unit, so the series is
+#: `maintenance_reclaims_mark_oldest_seconds` (deploy/alerting/rules.yml); the table is named in the log line
+#: `maintenance_victims_marked`. Synchronous, so a worker that has passed no table exports nothing.
+_mark_oldest = _meter.create_gauge(
+    "maintenance.reclaims.mark_oldest",
+    unit="s",
+    description="Age of the oldest cleanup mark standing in any table this worker last passed, on the store's clock (0 when none).",
+)
+#: Each table this worker found a mark in at its last pass, and when, on the worker's clock, that table's oldest mark was
+#: written; a table found with none is forgotten.
+_marks_written: dict[str, datetime] = {}
+
+
+def record_mark_age(table_uuid: str, age: timedelta | None, *, now: datetime) -> None:
+    """Note the age of the oldest mark ``table_uuid``'s pass found (``None`` for none), and export the oldest of all."""
+    if age is None:
+        _marks_written.pop(table_uuid, None)
+    else:
+        _marks_written[table_uuid] = now - age
+    _mark_oldest.set(max(((now - written).total_seconds() for written in _marks_written.values()), default=0.0))
 
 
 def record_trash_purge(

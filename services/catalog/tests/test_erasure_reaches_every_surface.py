@@ -26,6 +26,7 @@ import pyarrow as pa
 import pytest
 
 from catalog.services.erasure import ErasureReport, Pin, ref_heads, verify
+from lakehouse.history_fences import TableHistory
 from lakehouse.storage_options import StorageOptions
 
 
@@ -76,7 +77,7 @@ def _verify(uri: str, retention: timedelta = _NOW, trusted: dict[str, int] | Non
         predicate=_PREDICATE,
         retention=retention,
         trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
-        history=None,
+        history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
         derived=list,
         before_untag=lambda _tags: None,
     )
@@ -157,26 +158,26 @@ def test_retention_is_honoured_rather_than_forced_to_zero(table: str, erase: _Er
 
 
 def test_the_window_is_judged_against_the_cutoff_the_cleanup_measured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
-    """`cleanup_old_versions` measures its cutoff when it is called (measured on pylance 12.0.0), so an
-    instant taken before the call can place inside the window a version the cleanup was free to take.
-    The cleanup here is slowed until main v1 is older than its cutoff: the tag whose delete failed keeps
-    v1, and the report must not say the window does too."""
+    """The marked reclaim cleans up what Lance's dry run names when it is asked (`explain_cleanup_old_versions`, which
+    measures its cutoff when it is called, measured on pylance 13.0.0), so an instant taken before it can place inside
+    the window a version the cleanup was free to take. The dry run here is slowed until main v1 is older than its cutoff:
+    the tag whose delete failed keeps v1, and the report must not say the window does too."""
     uri = str(tmp_path / "window")
     lance.write_dataset(pa.table({"id": pa.array([1, 2]), "pii": pa.array([_SUBJECT, "bob"])}), uri)
     lance.dataset(uri).tags.create("pinned", 1)
     stamp = lance.dataset(uri).versions()[0]["timestamp"]
     assert isinstance(stamp, datetime)
     committed = stamp.astimezone(UTC)
-    cleanup = lance.LanceDataset.cleanup_old_versions
+    explain = lance.LanceDataset.explain_cleanup_old_versions
 
     def _slow(self: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:
         time.sleep(2)
-        return cleanup(self, *args, **kwargs)
+        return explain(self, *args, **kwargs)
 
     def _boom(self: Any, name: str) -> None:
         raise RuntimeError("tag store unavailable")
 
-    monkeypatch.setattr(lance.LanceDataset, "cleanup_old_versions", _slow)
+    monkeypatch.setattr(lance.LanceDataset, "explain_cleanup_old_versions", _slow)
     monkeypatch.setattr(type(lance.dataset(uri).tags), "delete", _boom)
     report = erase(uri, retention=datetime.now(UTC) - committed + timedelta(seconds=1))
 

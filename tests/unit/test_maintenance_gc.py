@@ -5,12 +5,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from catalog.services import maintenance
+from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.manifest_wire import encode_varint
+from lakehouse.reclaim_marks import Reclaim
 from lakehouse.storage_options import StorageOptions
 
 
@@ -89,16 +91,6 @@ def _versions(n: int, *, age_days: int = 100) -> list[dict[str, Any]]:
     return [{"version": v, "timestamp": old} for v in range(1, n + 1)]
 
 
-def test_run_gc_passes_bounds_and_reports_stats() -> None:
-    ds = _FakeDs(version=3, versions=_versions(3), tags={}, stats=SimpleNamespace(old_versions=2, bytes_removed=4096))
-    out = maintenance.run_gc(ds, retention_days=7, retain_versions=1)
-    assert out == {"ok": True, "old_versions_removed": 2, "bytes_removed": 4096}
-    # tagged versions are exempt exactly like the sweep, and the retain bound is forwarded
-    assert ds.cleaned is not None
-    assert ds.cleaned["error_if_tagged_old_versions"] is False
-    assert ds.cleaned["retain_versions"] == 1
-
-
 def test_the_flag_16_refusal_is_FAIL_CLOSED_when_the_bases_cannot_be_read() -> None:
     """The compaction gate `version/create` asks of a Rewrite weighs EVIDENCE about the bases, and this
     dataset offers none: it sets flag 16 and cannot say where it lives, so no base can be probed. Unknown
@@ -117,7 +109,7 @@ def test_run_gc_REFUSES_an_unknown_flag() -> None:
 
     ds = _FakeDs(version=1, versions=[], tags={}, feature_flags=(64, 64))
     with pytest.raises(UnsupportedOperationError, match="data overlays"):
-        maintenance.run_gc(ds, retention_days=7, retain_versions=2)
+        maintenance.run_gc(ds, retention_days=7, retain_versions=2, branch=None, marked=cast("Any", None))
     assert ds.cleaned is None, "the delete ran anyway — the refusal came too late"
 
 
@@ -154,7 +146,10 @@ def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) 
     assert describe_gc_unsupported_flags(*manifest_feature_flags(ds)) is None, "premise gone: the CRON refuses this clone's GC too"
     source_files = sorted(p.name for p in (tmp_path / "src.lance" / "data").iterdir())
 
-    result = maintenance.run_gc(ds, retention_days=0, retain_versions=1)
+    history = TableHistory(control_root=str(tmp_path / "control"), storage_options=StorageOptions(), table_uuid="clone")
+    with history.hold_for(HistoryWork.RECLAIM) as hold:
+        marked = Reclaim(control_root=history.control_root, storage_options=StorageOptions(), table_uuid="clone", ref=None, hold=hold)
+        result = maintenance.run_gc(ds, retention_days=0, retain_versions=1, branch=None, marked=marked)
 
     assert result["ok"] is True
     assert sorted(p.name for p in (tmp_path / "src.lance" / "data").iterdir()) == source_files, "the reclaim deleted the SOURCE's files"

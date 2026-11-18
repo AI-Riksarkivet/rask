@@ -119,10 +119,11 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
-from lakehouse import branch_layout, clone_sources, stored_objects
+from lakehouse import branch_layout, clone_sources, reclaim_marks, stored_objects
 from lakehouse.base_refs import normalise
 from lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
 from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
+from lakehouse.fences import Hold
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
@@ -390,7 +391,7 @@ def verify(
     predicate: str,
     retention: timedelta,
     trusted: Mapping[str, int],
-    history: TableHistory | None,
+    history: TableHistory,
     derived: Callable[[], Sequence[SurfaceResult]],
     before_untag: Callable[[Sequence[DroppedTag]], None],
 ) -> ErasureReport:
@@ -407,8 +408,8 @@ def verify(
     everything says so with ``retain_days=0``. ``trusted`` maps each ref (`main` or a branch name) to the last version
     whose `CreateIndex` commits are read as provenance, the heads :func:`ref_heads` read when the obligation was
     recorded; a ref it does not name, a branch cut since, offers none. It has no default for the same reason. ``history``
-    is where the table's history fence is kept, which the reclaim holds ([[LH-308]]); ``None`` holds none, and it has no
-    default for the same reason. ``derived`` judges the tables derived from this one, a surface each
+    is where the table's history fence is kept, which the reclaim holds ([[LH-308]]) and its marks are written in
+    (:class:`lakehouse.reclaim_marks.Reclaim`), and it has no default for the same reason. ``derived`` judges the tables derived from this one, a surface each
     (:func:`catalog.services.erasure_derived.judge`); one that raises is a failed ``derived`` surface, and it has no
     default for the same reason. ``before_untag`` is handed the tags step 2 is about to delete, before it deletes any, so
     what announces their deletion is filed first (ADR 0233); one that raises keeps every tag, a failed ``tags`` surface.
@@ -606,7 +607,7 @@ def _reclaim(
     *,
     clean: Collection[str | None],
     retention: timedelta,
-    history: TableHistory | None,
+    history: TableHistory,
     storage_options: StorageOptions,
 ) -> dict[str | None, datetime]:
     """Step 3: clean up every ref whose head is clean, deepest first; each reclaimed ref's cutoff.
@@ -615,11 +616,9 @@ def _reclaim(
     branch written meanwhile could pin a version it deletes. While a write of the table's refs holds it, no ref is
     reclaimed and each says so, so the obligation stays open for the next verification.
     """
-    if history is None:
-        return reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
     try:
-        with history.held(HistoryWork.RECLAIM):
-            return reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
+        with history.hold_for(HistoryWork.RECLAIM) as hold:
+            return reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options, history=history, hold=hold)
     except HistoryFencedError as exc:
         log.info("erasure_history_fenced", extra={"table": report.table, "reason": str(exc)})
         report.surfaces += [SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail=f"{exc} Not reclaimed.") for ref in deepest_first]
@@ -634,9 +633,16 @@ def reclaim_refs(
     clean: Collection[str | None],
     retention: timedelta,
     storage_options: StorageOptions,
+    history: TableHistory,
+    hold: Hold,
 ) -> dict[str | None, datetime]:
     """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff. Each transaction file a cleanup removes is
     recorded ([[LH-232]]); Lance records the rest itself.
+
+    THE ONE MARKED RECLAIM (:class:`lakehouse.reclaim_marks.Reclaim`, ADR 0233 §10, ADR 0243 F7): the caller holds the
+    table's history (``hold``, kept at ``history``) as a reclaim or a release, and each ref's cleanup marks each batch of
+    its victims before its first delete and confirms the hold before each, so a cleanup this leaves part-way is one no
+    ref door names, whatever files of it still stand.
 
     A registered clone of this table needs no refusal here: its tag keeps the version it reads, which every cleanup
     exempts and :func:`_drop_subject_tags` never drops (ADR 0198 §1).
@@ -663,10 +669,20 @@ def reclaim_refs(
                 log.warning("erasure_cleanup_refused", extra={"table": report.table, "ref": _label(ref), "reason": refused})
                 report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"maintenance refused: {refused}. Not reclaimed."))
                 continue
+            reclaim = reclaim_marks.Reclaim(
+                control_root=history.control_root,
+                storage_options=history.storage_options,
+                table_uuid=history.table_uuid,
+                ref=ref,
+                hold=hold,
+                before_each=hold.confirm,
+            )
             with stored_objects.recording_removed_transactions(branch_layout.ref_root(dataset.uri, ref), storage_options):
-                stats = handle.cleanup_old_versions(retention, error_if_tagged_old_versions=False)
+                done = reclaim.run(cast("Any", handle), older_than=retention, retain_versions=None, forks=True)
+            if done.failed_deletes:
+                raise OSError(f"the store refused {done.failed_deletes} of this cleanup's deletes; its versions stay marked until a later reclaim")
             cutoffs[ref] = datetime.now(UTC) - retention
-            versions, freed = int(getattr(stats, "old_versions", 0) or 0), int(getattr(stats, "bytes_removed", 0) or 0)
+            versions, freed = done.old_versions, done.bytes_removed
             report.versions_reclaimed += versions
             report.bytes_reclaimed += freed
             report.surfaces.append(SurfaceResult(surface=surface, outcome="reclaimed", detail=f"{versions} versions, {freed} bytes"))

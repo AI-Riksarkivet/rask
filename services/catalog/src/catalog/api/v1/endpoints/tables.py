@@ -1908,7 +1908,7 @@ def _restore_holding_history(
     def judge(hold: Hold) -> None:
         dataset = table.open_unchecked(so)
         if branch is None or branch in dataset.branches.list():
-            dataplane.require_whole(table, so, dataset, branch=branch, version=body.version, kind="restore", name=branch or MAIN_BRANCH, marks=hold.marks)
+            dataplane.require_whole(table, dataset, branch=branch, version=body.version, kind="restore", name=branch or MAIN_BRANCH, marks=hold.marks)
 
     return table.history_write(HistoryWork.REFS, partial(dataplane.restore, table, so, body, transaction_properties=transaction_properties), judge=judge)
 

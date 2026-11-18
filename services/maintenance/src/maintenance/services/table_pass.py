@@ -44,6 +44,7 @@ from lakehouse import (
     location_claims,
     maintenance_policies,
     objectfs,
+    policy_fences,
     reclaim_marks,
     trash,
     warehouse_records,
@@ -57,7 +58,6 @@ from lakehouse.lance_session import affordable_cache_bytes
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.maintenance_due import delete_due
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.policy_fences import PolicyFence
 from lakehouse.storage_options import StorageOptions, on_s3
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
@@ -66,6 +66,7 @@ from maintenance.core.metrics import (
     record_base_fragments_holding_deleted_rows,
     record_dataset_swept,
     record_failed,
+    record_mark_age,
     record_mixed_file_versions,
     record_overwritten_files,
     record_reclaim_held_back,
@@ -80,6 +81,7 @@ from maintenance.services.expiry import (
     HISTORY_FENCED,
     POLICY_CHANGED,
     POLICY_FENCED,
+    Chain,
     DatasetOpener,
     DatasetResult,
     ExpiryPolicy,
@@ -161,9 +163,9 @@ class WriteProbe(BaseModel):
     mixed_data_file_versions: bool = False
     #: The versions the policy would reclaim, as Lance counted them on the probe's handle; ``None`` when not counted.
     reclaimable_versions: int | None = None
-    #: Whether a standing mark names a version of the ref the policy reclaims: a dead cleanup's victims, half removed,
-    #: which the pass finishes whatever its threshold (:mod:`lakehouse.reclaim_marks`).
-    marked_due: bool = False
+    #: Whether a cleanup's mark stands in the table's history: a dead cleanup's victims, perhaps half removed, which the
+    #: pass finishes whatever its threshold while its policy reclaims them, or a mark it judges (:mod:`lakehouse.reclaim_marks`).
+    marked: bool = False
 
 
 def emit_zero_baselines() -> None:
@@ -187,16 +189,19 @@ def base_record_reader(settings: MaintenanceSettings, options: StorageOptions) -
     return partial(base_registry.read_base_record, registry)
 
 
-def _marked_due(_ds: lance.LanceDataset, *, control_root: str, options: StorageOptions, table_uuid: str) -> bool:
-    """Whether a cleanup's mark stands in the table's history: one that stopped part-way left its victims, perhaps over
-    deleted files, and the pass finishes them under its vend while its policy still reclaims them.
+def _marked(_ds: lance.LanceDataset, *, control_root: str, options: StorageOptions, table_uuid: str) -> bool:
+    """Whether a cleanup's mark stands in the table's history, and its age reported (F5).
 
     One listing of the table's history fence directory under maintenance's own session, which lists every bucket and reads
     none of the fence's objects, so a mark is known here by its name alone: the expiry reads it under its hold, with the
-    vend, and decides by its ref and versions there (:mod:`lakehouse.reclaim_marks`). A mark the policy now keeps costs
-    each pass of the table a vend until a policy reclaims its versions again, counted as ``held_back{reason="marked"}``.
+    vend, and judges it there (:class:`lakehouse.reclaim_marks.Reclaim`). The age of the oldest is the store's reading,
+    and the worker exports the oldest of every table it passed (``maintenance.reclaims.mark_oldest``).
     """
-    return reclaim_marks.named(control_root, options, table_uuid=table_uuid)
+    age = reclaim_marks.oldest(control_root, options, table_uuid=table_uuid)
+    record_mark_age(table_uuid, age, now=datetime.now(UTC))
+    if age is not None:
+        log.info("maintenance_victims_marked", extra={"uuid": table_uuid, "oldest_seconds": int(age.total_seconds())})
+    return age is not None
 
 
 def _probe_before_vending(
@@ -226,7 +231,8 @@ def _probe_before_vending(
     CONSERVATIVE BY CONSTRUCTION: an unreadable dataset answers `True`, because skipping a dataset that WOULD have been
     maintained is the failure this service exists to prevent while a spare credential is only a cost. Logged, never
     silent: the conservative answer otherwise hides a real fault as an extra credential. A cleanup that stopped part-way
-    is one more thing to write: its victims, marked, are finished below the threshold (``marks``, ADR 0243).
+    is one more thing to write: its victims, marked, are finished below the threshold or its mark judged (``marks``, ADR
+    0243). A mark is looked for whatever the policy, so a held table's half-removed victims are counted too.
     """
     try:
         ds = opened()
@@ -235,14 +241,14 @@ def _probe_before_vending(
         reclaimable = counted is not None and counted >= policy.min_reclaimable
         stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
         lost = policy.cleanup_enabled and bool(lost_staged_manifests(uri, options, version=ds.version).past(policy.staged_grace))
-        marked = policy.cleanup_enabled and marks is not None and marks(ds)
+        marked = marks is not None and marks(ds)
         return WriteProbe(
-            may_write=armed or reclaimable or stranded or lost or marked,
+            may_write=armed or reclaimable or stranded or lost or (policy.cleanup_enabled and marked),
             armed=armed,
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
             reclaimable_versions=counted,
-            marked_due=marked,
+            marked=marked,
         )
     except Exception as exc:
         log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
@@ -410,12 +416,14 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     directories = _data_directories(uri, uuid=named.owners.table_uuid, readings=readings, settings=settings, options=options, opened=opened)
     now = readings.context.now
     ref = _branch_of(uri, table, readings=readings)
-    marks = partial(_marked_due, control_root=settings.resolved_control_root, options=options, table_uuid=named.owners.table_uuid)
+    marks = partial(_marked, control_root=settings.resolved_control_root, options=options, table_uuid=named.owners.table_uuid)
     probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now, opened=opened, marks=marks)
-    target = ExpiryTarget(uri=uri, storage_options=options, table_id=table, data_directories=directories, now=now, ref=ref, marked_due=probe.marked_due)
+    target = ExpiryTarget(uri=uri, storage_options=options, table_id=table, data_directories=directories, now=now, ref=ref, marked=probe.marked)
     if not probe.may_write:
         # Read on the handle the expiry reads too, which no commit has moved: Lance's count is not asked again.
-        return expire_versions(target.model_copy(update={"reclaimable_versions": probe.reclaimable_versions}), policy, opener=opened)
+        return _marks_reported(
+            expire_versions(target.model_copy(update={"reclaimable_versions": probe.reclaimable_versions}), policy, opener=opened), named.owners.table_uuid
+        )
     try:
         vended = readings.vends.write_options_for(uri, settings, table_id=table)
     except _VEND_STOPS as exc:
@@ -428,23 +436,49 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
         "table_uuid": named.owners.table_uuid,
         "control_root": settings.resolved_control_root,
         "policy_read": readings.policy_read,
-        "policy_fences": _policy_fences(
-            named.owners, readings.policy_read, warehouse=table.split(CATALOG_DELIMITER)[0], control_root=settings.resolved_control_root, vended=vended
+        "policy_fences": policy_fences.levels(
+            settings.resolved_control_root,
+            vended,
+            warehouse=table.split(CATALOG_DELIMITER)[0],
+            namespace_uuids=named.owners.namespace_uuids,
+            project=readings.policy_read.project if readings.policy_read is not None else None,
         ),
+        "rechain": partial(chain_now, readings.policy_read.location, settings) if readings.policy_read is not None else None,
     }
-    return disarm.onto(expire_versions(target.model_copy(update=held), policy))
+    return _marks_reported(disarm.onto(expire_versions(target.model_copy(update=held), policy)), named.owners.table_uuid)
 
 
-def _policy_fences(owners: PolicyOwners, read: PolicyRead | None, *, warehouse: str, control_root: str, vended: StorageOptions) -> list[PolicyFence]:
-    """The policy fence of each level above the table whose policy can govern it, each namespace of its chain and its
-    project, under the vend, which grants each one's reclaim holder alone (ADR 0243 §6)."""
-    fences = [
-        PolicyFence(control_root=control_root, storage_options=vended, level="namespace", key=namespace_uuid, warehouse=warehouse)
-        for namespace_uuid in owners.namespace_uuids
-    ]
-    if read is not None and read.project is not None:
-        fences.append(PolicyFence(control_root=control_root, storage_options=vended, level="project", key=read.project))
-    return fences
+def _marks_reported(result: DatasetResult, table_uuid: str) -> DatasetResult:
+    """``result``, the table forgotten by the oldest mark's age when its pass left no mark it counts: one it finished or
+    judged, or one an erasure left on a version a branch keeps, which no reclaim can finish (``reclaim_marks.Reclaim``)."""
+    if not result.marks_left:
+        record_mark_age(table_uuid, None, now=datetime.now(UTC))
+    return result
+
+
+def chain_now(location: str, settings: MaintenanceSettings) -> Chain | None:
+    """The levels above the table at ``location`` whose policy can govern it, read now: each namespace of the chain its
+    location's claim names it under, and its bucket's project; ``None`` where the table no longer resolves, or a read
+    failed, either of which a pass under its holds reads as a changed chain and deletes nothing (F3).
+
+    The same reads :func:`read_for` makes before the holds, so of a rename into another namespace (which holds the
+    table's history as ref work, ``dataplane.rename_table``) and a pass's holds, one sees the other.
+    """
+    options = settings.storage_options()
+    try:
+        held = location_claims.holder(claim_store(settings), location)
+        if held is None:
+            return None
+        root = f"s3://{location.removeprefix('s3://').split('/', 1)[0]}" if on_s3(location) else settings.resolved_control_root
+        ids = table_ids_of(root, options, segments=held.segments)
+        owners = policy_owners(ids, held.table, claims=claim_store(settings)) if ids is not None else None
+        if owners is None:
+            return None
+        project = maintenance_policies.governing_project(settings.resolved_control_root, options, location)
+    except (OSError, ValueError) as exc:
+        log.warning("maintenance_chain_unread_under_hold", extra={"location": location, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        return None
+    return Chain(namespace_uuids=owners.namespace_uuids, project=project)
 
 
 def _expire_in_span(
@@ -998,11 +1032,11 @@ def staged_due_at(ds: lance.LanceDataset, uri: str, *, policy: ExpiryPolicy, opt
 def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: MaintenanceSettings) -> datetime | None:
     """When the dataset ``result`` names next needs a pass, read afresh after this one: its versions, its staged
     manifests and its policy's cadence. A dataset the pass could not decide on, or that the catalog's answer about its
-    name parked, is retried after ``retry_seconds``; a refused one, and one nothing comes due on, waits for its next
+    name parked, or whose cleanup marks still stand, is retried after ``retry_seconds``; a refused one, and one nothing comes due on, waits for its next
     commit or the recheck. So is one whose due record could not be evaluated: the record stays as it was, and a recheck
     a day out would leave a compaction or an index optimize it now names unlisted for that long."""
     now = readings.context.now
-    if result.error is not None or result.skipped in (HISTORY_FENCED, POLICY_FENCED, POLICY_CHANGED) or result.refused_by in _ASKED_AGAIN:
+    if result.error is not None or result.skipped in (HISTORY_FENCED, POLICY_FENCED, POLICY_CHANGED) or result.refused_by in _ASKED_AGAIN or result.marks_left:
         return now + timedelta(seconds=settings.retry_seconds)
     if result.refused is not None or result.trashed is not None:
         return None

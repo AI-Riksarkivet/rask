@@ -148,61 +148,6 @@ def identities(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -
     return {key: identity for key, identity in zip(keys, found, strict=True) if identity is not None}
 
 
-#: The most listings :func:`present` splits one directory's keys into: a shard per distinct leading characters of the
-#: keys' names, as many characters as keep the shards within this.
-_MOST_SHARDS: Final = 4 * MOST_AT_ONCE
-
-
-def present(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -> set[str]:
-    """Each of ``keys`` the store holds at ``<uri>/<key>`` now.
-
-    On S3, read off listings of only the prefixes the keys' names begin with, :data:`MOST_AT_ONCE` at once: the keys of
-    each directory are split into shards by their names' leading characters (as many as keep the shards within
-    :data:`_MOST_SHARDS`), each shard one paginated ``ListObjectsV2`` of that prefix, a page per thousand objects there.
-    Measured on RustFS 1.0.3 (ADR 0243 §5), one HEAD per key, sixteen at once, took 1.5 s at 1,000 keys and 15 s at
-    10,000, five to six times one sequential listing of the whole directory; the shards list in parallel what a listing
-    reads in turn. On a local root, one stat per key. Reads no byte of any object.
-
-    Raises:
-        OSError: The store refused, or could not be reached for, a listing or a stat: an outage is never answered as an
-            absence.
-    """
-    if not keys:
-        return set()
-    if not on_s3(uri):
-        fs, base = fs_and_base(uri, storage_options)
-        infos = fs.get_file_info([f"{base.rstrip('/')}/{key}" for key in keys])
-        return {key for key, info in zip(keys, infos, strict=True) if info.type == pafs.FileType.File}
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    bucket, _, root = uri.removeprefix("s3://").rstrip("/").partition("/")
-    under = f"{root}/" if root else ""
-    wanted = set(keys)
-    shards: set[str] = set()
-    by_directory: dict[str, list[str]] = {}
-    for key in wanted:
-        directory, _, name = key.rpartition("/")
-        by_directory.setdefault(directory, []).append(name)
-    for directory, names in by_directory.items():
-        width = max((n for n in range(5) if len({name[:n] for name in names}) <= _MOST_SHARDS), default=0)
-        shards.update(f"{directory}/{name[:width]}" if directory else name[:width] for name in names)
-    client = object_client(storage_options)
-
-    def listed(prefix: str) -> set[str]:
-        held: set[str] = set()
-        try:
-            for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{under}{prefix}"):
-                held.update(str(entry["Key"]).removeprefix(under) for entry in page.get("Contents", []))
-        except ClientError as exc:
-            raise OSError(f"the store refused listing {bucket}/{under}{prefix}: {exc}") from exc
-        except BotoCoreError as exc:
-            raise OSError(f"the store could not be reached listing {bucket}/{under}{prefix}: {exc}") from exc
-        return held & wanted
-
-    with ThreadPoolExecutor(max_workers=min(MOST_AT_ONCE, len(shards))) as pool:
-        return set().union(*pool.map(listed, sorted(shards)))
-
-
 def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -> dict[str, ObjectIdentity]:
     """Each object at ``<uri>/<key>`` the store holds, as :func:`identities` answers it, read off one listing of ``uri``.
 

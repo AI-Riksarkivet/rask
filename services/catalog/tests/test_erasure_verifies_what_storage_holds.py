@@ -41,6 +41,7 @@ from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from lakehouse import base_registry
+from lakehouse.history_fences import TableHistory
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
 
@@ -99,7 +100,7 @@ def _verify(
         predicate=_PREDICATE,
         retention=retention,
         trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
-        history=None,
+        history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
         derived=list,
         before_untag=lambda _tags: None,
     )

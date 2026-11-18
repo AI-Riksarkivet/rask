@@ -29,7 +29,7 @@ from lakehouse.version_retention import ExplainedDataset, fork_versions, reclaim
 
 
 if TYPE_CHECKING:
-    from lakehouse.reclaim_marks import MarkedCleanup
+    from lakehouse.reclaim_marks import Reclaim
     from lakehouse.storage_options import StorageOptions
 
 
@@ -203,26 +203,21 @@ def _age_bound(retention_days: int | None) -> timedelta:
     return timedelta(days=retention_days) if retention_days else timedelta(0)
 
 
-def run_gc(
-    ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, branch: str | None = None, marked: MarkedCleanup | None = None
-) -> GcRunData:
+def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, branch: str | None, marked: Reclaim) -> GcRunData:
     """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, as in maintenance's own expiry.
 
     Tagged versions are what keeps a registered clone readable: its tag on this table pins the version it reads
     (ADR 0198 §1). See :func:`require_reclaimable`, which gates this door on maintenance's own root-scoped gate.
-    ``branch`` is the ref ``ds`` opens, for :func:`refuse_a_reclaim_over_nested_branches`. ``marked`` is where the
-    cleanup's victims are marked before its first delete (``catalog.services.catalog_reclaims``, ADR 0243 §8).
+    ``branch`` is the ref ``ds`` opens, for :func:`refuse_a_reclaim_over_nested_branches`. ``marked`` is the one marked
+    reclaim every cleanup goes through (``catalog.services.catalog_reclaims``, ADR 0243 §9).
     """
     require_reclaimable(ds)
     refuse_a_reclaim_over_nested_branches(ds, branch)
-    if marked is not None:
-        stats: Any = marked.run(cast("Any", ds), older_than=_age_bound(retention_days), retain_versions=retain_versions)
-    else:
-        stats = ds.cleanup_old_versions(older_than=_age_bound(retention_days), retain_versions=retain_versions, error_if_tagged_old_versions=False)
+    stats = marked.run(cast("Any", ds), older_than=_age_bound(retention_days), retain_versions=retain_versions)
     return {
         "ok": True,
-        "old_versions_removed": int(getattr(stats, "old_versions", 0) or 0),
-        "bytes_removed": int(getattr(stats, "bytes_removed", 0) or 0),
+        "old_versions_removed": stats.old_versions,
+        "bytes_removed": stats.bytes_removed,
     }
 
 
@@ -261,7 +256,7 @@ def _refuse_pinned_versions(ds: VersionedDataset, branch: str | None, targets: S
         raise InvalidTableStateError(f"refused: {', '.join(sorted(pins))} pins a version in the range; delete the pin first. Nothing was deleted")
 
 
-def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, int]], branch: str | None, marked: MarkedCleanup | None = None) -> int:
+def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, int]], branch: str | None, marked: Reclaim) -> int:
     """Delete the versions ``ranges`` name on ``ds``'s ref (DESTRUCTIVE); return how many were removed.
 
     ``cleanup_old_versions(versions=...)``, measured on pylance 12.0.0: the current version is never
@@ -272,18 +267,15 @@ def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, 
     not seen: Lance reads the refs once, and nothing serializes ref creation with a reclaim (measured
     with 60 concurrent races: a tag named a deleted version in 31, and ``run_gc`` loses the same race). A version a
     registered clone reads is pinned by the clone's tag, so it is refused like any tagged one (ADR 0198 §1). ``marked``
-    is where the targets are marked before the first delete (``catalog.services.catalog_reclaims``, ADR 0243 §8).
+    is the one marked reclaim every cleanup goes through (``catalog.services.catalog_reclaims``, ADR 0243 §9).
     """
     targets = versions_in_ranges(ranges, current=int(ds.version))
     require_reclaimable(ds)
     refuse_a_reclaim_over_nested_branches(ds, branch)
     _refuse_pinned_versions(ds, branch, targets)
     try:
-        if marked is not None:
-            stats: Any = marked.run(cast("Any", ds), older_than=None, retain_versions=None, versions=targets, error_if_tagged=True)
-        else:
-            stats = ds.cleanup_old_versions(versions=targets, error_if_tagged_old_versions=True)
+        stats = marked.run(cast("Any", ds), older_than=None, retain_versions=None, versions=targets, error_if_tagged=True)
     except OSError:
         _refuse_pinned_versions(ds, branch, targets)
         raise
-    return int(getattr(stats, "old_versions", 0) or 0)
+    return stats.old_versions

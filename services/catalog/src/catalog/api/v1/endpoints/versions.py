@@ -431,6 +431,6 @@ def _delete_versions(
         catalog_reclaims.held(table, settings, namespace_uuids=namespace_uuids) as held,
         stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, body.branch), so),
     ):
-        marked = catalog_reclaims.marked(held, table, ref=dataplane.recorded_branch(body.branch))
+        marked = catalog_reclaims.marked(held, table, ref=body.branch)
         deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, marked=marked)
     return BatchDeleteTableVersionsResponse(deleted_count=deleted)

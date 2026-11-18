@@ -271,6 +271,27 @@ def test_a_vend_whose_policy_sts_would_refuse_is_refused_naming_why(sessions: _R
     assert len(sessions.sessions()) == exchanged, "the store was asked to take a policy the catalog knew it refuses"
 
 
+@pytest.mark.parametrize(("kms_key", "refused"), [(None, False), (KMS_KEY, True)], ids=["two-63-character-buckets", "and-a-kms-key"])
+def test_a_warehouse_whose_tables_maintain_policy_sts_would_refuse_is_refused_at_registration(kms_key: str | None, refused: bool) -> None:
+    """F8: a pass deletes only under its table's maintain-tier vend, whose session policy names the warehouse's bucket, the
+    control root's and the table's uuid. At the longest legal names (both buckets 63 characters, a catalog-made table at
+    ``<bucket>/<uuid>``) it fits, with a margin (1,964 of 2,048 characters, measured); a KMS key's grant carries it past,
+    and such a warehouse is refused at registration (400, code 13) naming the limit, before any table its passes could not
+    reclaim is made."""
+    from lance_namespace import InvalidInputError
+
+    from catalog.core import vending
+
+    def _register() -> None:
+        vending.require_a_maintain_policy_that_fits(bucket="b" * 63, control_root=f"s3://{'c' * 63}", kms_key=kms_key, warehouse="w" * 63, project="p" * 63)
+
+    if refused:
+        with pytest.raises(InvalidInputError, match="2,048"):
+            _register()
+    else:
+        _register()
+
+
 def test_a_session_the_catalog_cannot_renew_is_refused_once_it_expires(sessions: _Rig) -> None:
     """Fail closed: once the projected token is gone, nothing can be exchanged, and past its expiry the session signs nothing.
 

@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -33,7 +33,7 @@ from lance import blob_array
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel, SecretStr
 
-from lakehouse import fences, policy_fences
+from lakehouse import fences, history_fences, policy_fences
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
@@ -105,11 +105,35 @@ class _Estate(BaseModel):
         ds = lance.dataset(self.task.location, storage_options=self.store.options().in_clear())
         return ds if version is None else ds.checkout_version(version)
 
-    def reads(self, version: int | str | None = None) -> list[int] | str:
-        """The ids the table holds at ``version``, each row's payload read whole where it has one, or why a reader could
-        not read them."""
+    def versions(self) -> list[int]:
+        """The versions main holds now."""
+        return [int(entry["version"]) for entry in self.opened().versions()]
+
+    def written(self, count: int) -> None:
+        """``count`` more versions on main, each an overwrite."""
+        for n in range(count):
+            _ok(self.catalog.post(f"/v1/table/{T}/insert?mode=overwrite", content=_rows([100 + n]), headers=ARROW))
+
+    def marks(self) -> list[str]:
+        """The keys of the cleanup marks standing in the table's history fence directory."""
+        directory = history_fences.fence_directory(self.task.uuid)
+        listed = self.s3().list_objects_v2(Bucket=self.bucket, Prefix=f"{directory}/").get("Contents", [])
+        return [entry["Key"] for entry in listed if f"/{history_fences.VICTIMS_MARK}." in entry["Key"]]
+
+    def s3(self) -> Any:  # noqa: ANN401 — a boto3 S3 client
+        return boto3.client(
+            "s3",
+            endpoint_url=self.store.endpoint,
+            aws_access_key_id=self.store.access_key,
+            aws_secret_access_key=self.store.secret_key,
+            region_name="us-east-1",
+        )
+
+    def reads(self, version: int | str | None = None, *, location: str | None = None) -> list[int] | str:
+        """The ids the table (or the dataset at ``location``) holds at ``version``, each row's payload read whole where it
+        has one, or why a reader could not read them."""
         try:
-            opened = self.opened(version)
+            opened = self.opened(version) if location is None else lance.dataset(location, storage_options=self.store.options().in_clear())
             ids = sorted(opened.to_table(columns=["id"]).column("id").to_pylist())
             if "payload" in opened.schema.names:
                 for blob in opened.take_blobs("payload", indices=list(range(opened.count_rows()))):
@@ -262,13 +286,34 @@ def test_a_restore_answered_200_names_no_file_a_reclaim_beside_it_deletes(estate
     assert restored.status_code != 200 or estate.reads() == [1], f"the restore answered 200 and the head reads {estate.reads()}"
 
 
+#: The namespace a rename moves the table into, whose hold then binds it.
+HELD = "lance_catalog$held"
+#: The project a case gives the bucket to, so its policy may govern the table.
+PROJECT = "acme"
+
 #: Each policy door a case drives, and the request it makes: the table's hold, the table's record deleted (which hands the
-#: table to its namespace's, keeping every version), the namespace's hold.
+#: table to its namespace's, keeping every version), the namespace's hold, the project's hold, and a rename into a
+#: namespace that holds.
 _POLICY_DOORS = {
     "table-hold": (f"/management/v1/table/{T}/policy/set", {"cleanup_enabled": False}),
     "table-delete": (f"/management/v1/table/{T}/policy/delete", {}),
     "namespace-hold": (f"/management/v1/namespace/{NS}/policy/set", {"cleanup_enabled": False}),
+    "project-hold": (f"/management/v1/project/{PROJECT}/policy/set", {"cleanup_enabled": False}),
+    "rename-into-a-held-namespace": (f"/v1/table/{T}/rename", {"new_namespace_id": HELD.split("$"), "new_table_name": "t"}),
 }
+
+
+def _governed_by_a_project(estate: _Estate) -> None:
+    """The bucket made the one warehouse of project ``PROJECT``, as the catalog records a warehouse's bucket, so the
+    project's policy can govern the table."""
+    from catalog.core.config import get_settings
+    from catalog.services import projects, warehouses
+
+    settings = get_settings()
+    so = settings.storage_options()
+    projects.put_project(settings.registry_root, so, {"id": PROJECT, "created_at": "t", "created_by": "seed"})
+    warehouses.put_warehouse(settings.registry_root, so, {"id": "lance_catalog", "bucket": estate.bucket, "project": PROJECT, "status": "active"})
+    estate.s3().put_object(Bucket=estate.bucket, Key=f"_warehouses/bucket-claims/{estate.bucket}.json", Body=f'{{"project": "{PROJECT}"}}'.encode())
 
 
 @pytest.mark.parametrize(
@@ -280,6 +325,9 @@ _POLICY_DOORS = {
         ("namespace-hold", "before-the-pass"),
         ("namespace-hold", "at-its-cleanups-first-delete"),
         ("namespace-hold", "its-door-stalled-past-its-hold"),
+        ("project-hold", "at-its-cleanups-first-delete"),
+        ("rename-into-a-held-namespace", "before-its-hold"),
+        ("rename-into-a-held-namespace", "at-its-cleanups-first-delete"),
     ],
 )
 def test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version(estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: str, held_at: str) -> None:
@@ -291,12 +339,20 @@ def test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version(est
     the table's policy door holds the table's history as a ref write does, so it answers 409 beside a reclaim
     (PolicyDoorFence). B1: the table's policy DELETE, handing the table to its namespace's policy keeping every version,
     takes the same hold (PolicyDeleteFence). A namespace's hold binds every table beneath it whatever its own record says
-    (HoldAnyLevel, even with no pass running), and the pass holds the namespace's policy fence while it deletes, so the namespace's door answers 409
-    beside it (AncestorFence). B4: a namespace door whose process stalls past its hold after its take, while a pass is
-    admitted once the hold lapsed, writes only once a renewal shows its hold still stands (DoorConfirm)."""
+    (HoldAnyLevel, even with no pass running), and the pass holds the policy fence of its namespace and of its project
+    while it deletes, so their doors answer 409 beside it (AncestorFence). B4: a namespace door whose process stalls past
+    its hold after its take, while a pass is admitted once the hold lapsed, writes only once a renewal shows its hold
+    still stands (DoorConfirm). F3: a rename into a namespace that holds binds the table to that hold; it holds the
+    table's history as ref work, so it answers 409 beside a reclaim (RenameFence), and a pass that read the chain the
+    table left reads it again under its holds and deletes nothing when it changed."""
     if door == "table-delete":
         _ok(estate.catalog.post(f"/management/v1/namespace/{NS}/policy/set", json={"retain_versions": 100}))
-    standing = [entry["version"] for entry in estate.opened().versions()]
+    if door == "project-hold":
+        _governed_by_a_project(estate)
+    if door == "rename-into-a-held-namespace":
+        _ok(estate.catalog.post(f"/v1/namespace/{HELD}/create", json={}))
+        _ok(estate.catalog.post(f"/management/v1/namespace/{HELD}/policy/set", json={"cleanup_enabled": False}))
+    standing = estate.versions()
     path, body = _POLICY_DOORS[door]
 
     def _door() -> httpx.Response:
@@ -322,9 +378,9 @@ def test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version(est
             held.let_go()
             running.joined()
 
-    kept = [entry["version"] for entry in estate.opened().versions()]
+    kept = estate.versions()
     assert answered.status_code in (200, 409), answered.text
-    assert answered.status_code != 200 or kept == standing, f"the policy answered 200 over versions {standing}, and the pass left {kept}"
+    assert answered.status_code != 200 or kept == standing, f"the {door} answered 200 over versions {standing}, and the pass left {kept}"
 
 
 def _a_door_stalled_past_its_hold(estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: Callable[[], httpx.Response]) -> httpx.Response:
@@ -335,7 +391,7 @@ def _a_door_stalled_past_its_hold(estate: _Estate, monkeypatch: pytest.MonkeyPat
     confirm = fences.Hold.confirm
 
     def _stalled(hold: fences.Hold) -> None:
-        if isinstance(hold._fence, policy_fences.PolicyFence) and not resumed.is_set():  # noqa: SLF001 — which fence a hold is of
+        if isinstance(hold._fence, policy_fences.PolicyFence) and hold._work == "set" and not resumed.is_set():  # noqa: SLF001 — which fence and work a hold is of
             taken.set()
             assert resumed.wait(WAIT), "the test never resumed the door"
         confirm(hold)
@@ -357,67 +413,215 @@ def _a_door_stalled_past_its_hold(estate: _Estate, monkeypatch: pytest.MonkeyPat
     return answered
 
 
+def test_a_hold_beside_a_long_reclaim_lands_after_at_most_one_batch(estate: _Estate) -> None:
+    """F4: a namespace's hold asked while a pass reclaims 39 versions beneath it answers 409 and leaves an intent; the
+    pass deletes no more than the batch it is in (16 versions, ``reclaim_marks.BATCH``) and stops, and the hold asked
+    again lands (PolicyIntent). The hold's door had no bound: it answered 409 for as long as passes deleted beneath it,
+    and the deletes it was meant to stop went on."""
+    from lakehouse import reclaim_marks
+
+    estate.written(37)
+    path, body = _POLICY_DOORS["namespace-hold"]
+    with estate.proxy.holding(_a_cleanup_delete) as held:
+        running = _Running(estate)
+        assert held.reached(WAIT), "the pass's cleanup deleted nothing"
+        first = estate.catalog.post(path, json=body)
+        at_first = estate.versions()
+        held.let_go()
+        running.joined()
+    answered = first
+    for _ in range(20):
+        if answered.status_code == 200:
+            break
+        time.sleep(0.5)
+        answered = estate.catalog.post(path, json=body)
+    landed = estate.versions()
+    estate.passed()
+
+    assert (first.status_code, answered.status_code) == (409, 200), answered.text
+    deleted = len(set(at_first) - set(landed))
+    assert deleted <= reclaim_marks.BATCH, f"{deleted} versions were deleted after the hold's first 409"
+    assert estate.versions() == landed, "a version was deleted after the hold answered 200"
+
+
+def _clone_registered(estate: _Estate, version: int) -> tuple[httpx.Response, list[int] | str]:
+    """A shallow clone of ``version`` registered through the register door, and what a reader of it reads."""
+    location = f"s3://{estate.bucket}/clone"
+    estate.opened().shallow_clone(location, version, storage_options=estate.store.options().in_clear())
+    answered = estate.catalog.post(f"/v1/table/{NS}$clone/register", json={"location": "clone"})
+    return answered, estate.reads(location=location)
+
+
 @pytest.mark.parametrize(
-    ("door", "payload_bytes", "refused"),
+    ("door", "payload_bytes", "refused", "reclaimer"),
     [
-        ("tag", 0, "manifests"),
-        ("restore", 0, "manifests"),
-        ("tag", 5 * 1024 * 1024, "data-files-and-manifests"),
-        ("restore", 5 * 1024 * 1024, "data-files-and-manifests"),
+        ("tag", 0, "manifests", "pass"),
+        ("restore", 0, "manifests", "pass"),
+        ("tag", 5 * 1024 * 1024, "data-files-and-manifests", "pass"),
+        ("restore", 5 * 1024 * 1024, "data-files-and-manifests", "pass"),
+        ("clone", 5 * 1024 * 1024, "data-files-and-manifests", "pass"),
+        ("tag", 5 * 1024 * 1024, "data-files-and-manifests", "maintenance-run-on-main"),
     ],
 )
-def test_a_ref_answered_200_names_a_version_a_reader_can_read_whole(estate: _Estate, door: str, refused: str) -> None:
+def test_a_ref_answered_200_names_a_version_a_reader_can_read_whole(
+    estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: str, refused: str, reclaimer: str
+) -> None:
     """HalfRemoved: Lance's cleanup deletes the data files of the versions it removes, their blob sidecars, and their
-    manifests last (measured on pylance 13.0.0), and the pass's credential expires part-way, so the store refuses what is
-    left: versions 1 and 2 still stand, over deleted data, or (B2) over deleted sidecars with their data files standing. A
-    tag on version 1, or a restore of it, then answers 200 for a version no reader can read whole. The guard (VictimMark):
-    the pass marks its cleanup's victims before its first delete, and a ref door refuses a version a standing mark names,
-    whatever files still stand."""
+    manifests last (measured on pylance 13.0.0), and the reclaim's credential expires part-way, so the store refuses what
+    is left: versions 1 and 2 still stand, over deleted data, or (B2) over deleted sidecars with their data files standing.
+    A tag on version 1, a restore of it, or a clone registered on it then answers 200 for a version no reader can read
+    whole. The guard (VictimMark): every reclaim marks its victims before its first delete, and a ref door refuses a
+    version a standing mark names, whatever files still stand; F1: the catalog's ``maintenance/run?branch=main`` marked
+    them as of a ref named ``main``, which no door read as main's. Then (F6, F5) the next pass finishes them below its
+    threshold, which a mark makes it do, and the pass that left the mark asked for its table again after
+    ``retrySeconds``."""
 
     def _refused(request: StoreRequest) -> bool:
         return request.deletes("/_versions/") or (refused == "data-files-and-manifests" and request.deletes(".lance"))
 
     with estate.proxy.answering_expired(_refused):
-        estate.passed()
-    assert 1 in [entry["version"] for entry in estate.opened().versions()], "the pass removed version 1 whole, so nothing stands half-removed"
+        outcome = estate.passed() if reclaimer == "pass" else None
+        if outcome is None:
+            _ok(estate.catalog.post(f"/management/v1/table/{T}/maintenance/run?branch=main", json={"retain_versions": 1}))
+    assert 1 in estate.versions(), "the reclaim removed version 1 whole, so nothing stands half-removed"
 
     if door == "tag":
         answered = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "kept", "version": 1})
         read = estate.reads("kept")
-    else:
+    elif door == "restore":
         answered = estate.catalog.post(f"/v1/table/{T}/restore", json={"version": 1})
         read = estate.reads()
+    else:
+        answered, read = _clone_registered(estate, 1)
 
-    assert answered.status_code in (200, 409), answered.text
+    assert answered.status_code in (200, 400, 409), answered.text
     assert answered.status_code != 200 or read == [1], f"the {door} answered 200 for version 1, which reads {read}"
+    if outcome is not None:
+        retry = estate.settings().retry_seconds
+        due = outcome.next_due
+        assert due is not None and due <= datetime.now(UTC) + timedelta(seconds=retry), f"a pass that left a mark is next due at {due}"
+    monkeypatch.setenv("MAINTENANCE_MIN_VERSIONS_TO_EXPIRE", "100")
+    estate.passed()
+    assert (1 in estate.versions(), estate.marks()) == (False, []), "the next pass did not finish the versions a reclaim left marked"
 
 
-def test_a_ref_door_answers_a_store_that_cannot_say_whether_a_version_is_whole_503(estate: _Estate) -> None:
-    """A ref door judging a version no mark names asks the store for each file it names; a store that does not answer is
-    a 503 ServiceUnavailable, never the version's refusal as not whole (which tells its caller the version is being
-    reclaimed) and never a tag on a version nobody judged."""
+def _planted(estate: _Estate, versions: list[int]) -> str:
+    """A mark of ``versions`` of main put directly in the table's history fence directory, as a maintain-tier vend may put
+    one, naming no writer."""
+    key = f"{history_fences.fence_directory(estate.task.uuid)}/{history_fences.VICTIMS_MARK}.{uuid.uuid4().hex}.json"
+    body = f'{{"uuid": "{estate.task.uuid}", "ref": null, "versions": {versions}}}'
+    estate.s3().put_object(Bucket=estate.bucket, Key=key, Body=body.encode())
+    return key
 
-    def _a_listing_of_data_files(request: StoreRequest) -> bool:
-        return request.method == "GET" and "list-type" in request.query and "/data/" in f"/{request.query.get('prefix', [''])[0]}"
 
-    with estate.proxy.answering_unavailable(_a_listing_of_data_files):
+def _a_reclaim_stalled_past_its_holds(monkeypatch: pytest.MonkeyPatch, *, after_cleanups: int) -> tuple[threading.Event, threading.Event]:
+    """Stall the catalog's next reclaim door once it has made ``after_cleanups`` cleanup calls, before it confirms its holds
+    for the next, its renewals with it, so its holds (shortened to 2 s) lapse: the event set once it stalled, and the one
+    that resumes it."""
+    monkeypatch.setattr(history_fences, "HOLD", timedelta(seconds=2))
+    monkeypatch.setattr(policy_fences, "HOLD", timedelta(seconds=2))
+    stalled, resumed = threading.Event(), threading.Event()
+    renew, cleanup, confirm = fences.HolderFence.renew, lance.LanceDataset.cleanup_old_versions, fences.Hold.confirm
+    calls = [0]
+
+    def _renew(fence: fences.HolderFence, token: str) -> bool:
+        if token.startswith("reclaim-") and stalled.is_set():
+            assert resumed.wait(WAIT), "the test never resumed the door"
+        return renew(fence, token)
+
+    def _cleanup(dataset: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — pylance's untyped stats
+        done = cleanup(dataset, *args, **kwargs)
+        calls[0] += 1
+        return done
+
+    def _confirm(hold: fences.Hold) -> None:
+        if hold._work == "reclaim" and calls[0] == after_cleanups and not stalled.is_set():  # noqa: SLF001 — which work a hold is for
+            stalled.set()
+            assert resumed.wait(WAIT), "the test never resumed the door"
+        confirm(hold)
+
+    monkeypatch.setattr(fences.HolderFence, "renew", _renew)
+    monkeypatch.setattr(lance.LanceDataset, "cleanup_old_versions", _cleanup)
+    monkeypatch.setattr(fences.Hold, "confirm", _confirm)
+    return stalled, resumed
+
+
+@pytest.mark.parametrize("mark", ["planted-naming-the-head", "planted-naming-whole-versions", "a-door-whose-hold-lapsed-before-its-first-delete"])
+def test_a_mark_makes_a_door_refuse_only_what_it_can_truthfully_say(estate: _Estate, monkeypatch: pytest.MonkeyPatch, mark: str) -> None:
+    """F2: a mark is trusted only for what it can truthfully say. One naming a version at or above its ref's head, or one
+    a tag names, or more than a batch's worth, is no cleanup's: a door ignores it whole and the next reclaim removes it.
+    One naming versions every file of which still stands names nothing half-removed: a reclaim that finds it while its
+    writer holds nothing removes it. A door whose hold lapsed before its first delete wrote no mark (it confirms its holds
+    before it marks a batch). Before, a mark naming a standing version outlived every pass, and refused tags, branches and
+    restores on its versions, the head among them, for good."""
+    if mark == "planted-naming-the-head":
+        _planted(estate, list(range(1, 50)))
+        on_the_head = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "head", "version": estate.versions()[-1]})
+        assert on_the_head.status_code == 200, on_the_head.text
+        estate.passed()
+    elif mark == "planted-naming-whole-versions":
+        _ok(estate.catalog.post(f"/management/v1/table/{T}/policy/set", json={"retain_versions": 100}))
+        _planted(estate, [1, 2])
+        estate.passed()
+    else:
+        _stalled, resumed = _a_reclaim_stalled_past_its_holds(monkeypatch, after_cleanups=0)
+        threading.Timer(3, resumed.set).start()
+        refused = estate.catalog.post(f"/v1/table/{T}/version/delete", json={"ranges": [{"start_version": 1, "end_version": 3}]})
+        assert (refused.status_code, estate.versions()) == (409, [1, 2, 3]), refused.text
+
+    tagged = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "kept", "version": estate.versions()[0]})
+    assert (tagged.status_code, estate.marks()) == (200, []), tagged.text
+
+
+def test_a_ref_door_answers_a_store_that_cannot_say_whether_a_version_is_marked_503(estate: _Estate) -> None:
+    """A ref door reads each mark its take of the table's history listed; a store that does not answer the read is a 503
+    ServiceUnavailable, never the version's refusal as marked (which tells its caller the version is being reclaimed) and
+    never a tag on a version nobody judged."""
+    with estate.proxy.answering_expired(lambda request: request.deletes("/_versions/")):
+        estate.passed()
+    assert estate.marks(), "the pass left no mark"
+
+    with estate.proxy.answering_unavailable(lambda request: request.method == "GET" and f"/{history_fences.VICTIMS_MARK}." in request.path):
         answered = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "judged", "version": 1})
 
     assert (answered.status_code, "judged" in estate.opened().tags.list()) == (503, False), answered.text
 
 
-@pytest.mark.parametrize("door", ["maintenance-run", "version-delete"])
-def test_the_catalogs_own_reclaim_doors_delete_nothing_a_hold_keeps(estate: _Estate, door: str) -> None:
-    """The catalog's ``maintenance/run`` and ``version/delete`` delete with its own credential, and ``version/delete``
-    deleted under a hold ("authorization alone governs it"). A hold at any level that can govern the table, here its
-    namespace's over the table's own record keeping one version, now refuses both 409 InvalidTableState (19), read under
-    the holds every pass takes (``catalog.services.catalog_reclaims``); lifting the hold is a separate act."""
-    _ok(estate.catalog.post(f"/management/v1/namespace/{NS}/policy/set", json={"cleanup_enabled": False}))
-    standing = [entry["version"] for entry in estate.opened().versions()]
-    if door == "maintenance-run":
-        answered = estate.catalog.post(f"/management/v1/table/{T}/maintenance/run", json={"retention_days": 1, "retain_versions": 1})
-    else:
-        answered = estate.catalog.post(f"/v1/table/{T}/version/delete", json={"ranges": [{"start_version": 1, "end_version": 3}]})
-    kept = [entry["version"] for entry in estate.opened().versions()]
+_RECLAIM_DOORS = {
+    "maintenance-run": (f"/management/v1/table/{T}/maintenance/run", {"retain_versions": 1}),
+    "version-delete": (f"/v1/table/{T}/version/delete", {"ranges": [{"start_version": 1, "end_version": 20}]}),
+}
 
-    assert (answered.status_code, answered.json().get("code"), kept) == (409, 19, standing), answered.text
+
+@pytest.mark.parametrize("door", list(_RECLAIM_DOORS))
+@pytest.mark.parametrize("when", ["held-before-the-door", "held-between-its-batches"])
+def test_the_catalogs_own_reclaim_doors_delete_nothing_a_hold_keeps(estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: str, when: str) -> None:
+    """The catalog's ``maintenance/run`` and ``version/delete`` delete with its own credential, which never dies, and
+    ``version/delete`` deleted under a hold ("authorization alone governs it"). A hold at any level that can govern the
+    table, here its namespace's over the table's own record keeping one version, refuses both 409 InvalidTableState (19),
+    read under the holds every pass takes (``catalog.services.catalog_reclaims``). F6: a door frozen between two of its
+    batches past its holds, while the namespace's hold is admitted and answers 200, confirms its holds before its next
+    batch, finds them lapsed, and deletes nothing more (409 ConcurrentModification, 14)."""
+    hold = f"/management/v1/namespace/{NS}/policy/set"
+    path, body = _RECLAIM_DOORS[door]
+    estate.written(17)
+    if when == "held-before-the-door":
+        _ok(estate.catalog.post(hold, json={"cleanup_enabled": False}))
+        standing = estate.versions()
+        answered = estate.catalog.post(path, json=body)
+        assert (answered.status_code, answered.json().get("code"), estate.versions()) == (409, 19, standing), answered.text
+        return
+    stalled, resumed = _a_reclaim_stalled_past_its_holds(monkeypatch, after_cleanups=1)
+    answers: list[httpx.Response] = []
+    reclaiming = threading.Thread(target=lambda: answers.append(estate.catalog.post(path, json=body)), daemon=True)
+    reclaiming.start()
+    assert stalled.wait(WAIT), "the door never came to its second batch"
+    time.sleep(2.5)
+    held = estate.catalog.post(hold, json={"cleanup_enabled": False})
+    at_the_hold = estate.versions()
+    resumed.set()
+    reclaiming.join(WAIT)
+    (answered,) = answers
+
+    assert held.status_code == 200, held.text
+    assert (answered.status_code, estate.versions()) == (409, at_the_hold), answered.text

@@ -582,6 +582,27 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
       vend can no longer put `reclaim-*` keys of another length, and what it plants refuses ref writes at most as a
       reclaim's hold, never 500, and is gone after one hold; a release's record carries `pinned_at`.
 
+10. **The erasure's cleanups are the estate's one marked reclaim (2026-11-18, ADR 0243 §12 F7).** Found by a review of
+   ADR 0243: the verification's cleanup (`erasure.reclaim_refs`, held as a RECLAIM) and the release's cleanup after it
+   (`erasure_release._reclaim`, held as a RELEASE) called Lance's cleanup directly and wrote no mark, so a cleanup the
+   store cut short (a refused delete, a process killed) left versions standing over deleted files, a blob sidecar among
+   them, that only a file listing at the ref doors judged, and that listing missed sidecars. **FIXED:** both run
+   `lakehouse.reclaim_marks.Reclaim` under the hold they already take (`erasure._reclaim` now `hold_for`s it,
+   `erasure_release` passes the RELEASE hold down; `verify`'s `history` has no `None` any more): Lance's dry run names the
+   victims, each batch of 16 is marked after a confirm of the hold and before its first delete, and unmarked once its
+   call had no failed delete, so no ref door names a version a cleanup was removing. Two changes a reader sees:
+   - **The fork points are marked.** Measured on pylance 13.0.0: a version a branch was cut from keeps its manifest through
+     a cleanup, while the unrestricted cleanup the erasure ran deleted the files only that version named (the subject's
+     fragment), which is how a subject's bytes leave a version the branch keeps (the `dangling:<ref>@<n>` surface). A
+     cleanup restricted to its dry run's victims keeps those files; one that names the fork version deletes them as the
+     unrestricted one did. So the erasure's reclaim names its ref's fork versions no tag pins beside its victims
+     (`Reclaim.run(forks=True)`), and they stay marked for as long as the branch keeps their manifests: no tag, branch or
+     restore names a version standing over the subject's deleted files.
+   - **A refused delete fails the surface.** A cleanup whose delete the store refused reported `reclaimed`; it is now a
+     failed `history:<ref>` surface, so the obligation stays open and the next verification reclaims again.
+   - The window the report judges is the dry run's: the reclaim removes what Lance's dry run named when it was asked, so
+     `test_the_window_is_judged_against_the_cutoff_the_cleanup_measured` slows the dry run, where it slowed the cleanup.
+
 ## The four facts
 
 - **GitOps:** nothing here is declared in git; the obligations, releases, trash and fences are records on the control

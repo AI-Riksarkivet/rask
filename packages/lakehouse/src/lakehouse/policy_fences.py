@@ -40,6 +40,7 @@ from lance_namespace import ConcurrentModificationError
 
 from lakehouse import control_prefixes, history_fences
 from lakehouse.fences import HolderFence, HolderRecord
+from lakehouse.storage_options import StorageOptions
 
 
 PREFIX: Final = control_prefixes.POLICY_FENCES
@@ -97,6 +98,20 @@ def fence_directory(level: PolicyLevel, key: str, *, warehouse: str | None = Non
     if warehouse is None:
         raise ValueError(f"the policy fence of namespace {key!r} lies under its warehouse's directory, and none was named")
     return f"{warehouse_directory(warehouse)}/n{_digest(key)}"
+
+
+def levels(control_root: str, storage_options: StorageOptions, *, warehouse: str, namespace_uuids: list[str], project: str | None) -> list[PolicyFence]:
+    """The policy fence of every level above a table whose policy can govern it, each namespace of its chain (beneath its
+    ``warehouse``, its name's first segment) and its ``project``, on ``control_root`` under ``storage_options``: the one
+    place both a maintenance pass and the catalog's reclaim and policy doors find them, each naming the control root
+    its settings render from the chart's one ``objectStore.bucket``."""
+    fences = [
+        PolicyFence(control_root=control_root, storage_options=storage_options, level="namespace", key=namespace_uuid, warehouse=warehouse)
+        for namespace_uuid in namespace_uuids
+    ]
+    if project is not None:
+        fences.append(PolicyFence(control_root=control_root, storage_options=storage_options, level="project", key=project))
+    return fences
 
 
 class PolicyFence(HolderFence):

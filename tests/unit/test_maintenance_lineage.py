@@ -319,7 +319,9 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
     import lance
     import pyarrow as pa
 
+    from lakehouse.history_fences import TableHistory
     from lakehouse.provenance_stamp import declare_dataset_id
+    from lakehouse.storage_options import StorageOptions
     from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 
     forged = "victim$payroll"
@@ -329,9 +331,10 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
         lance.write_dataset(pa.table({"v": [2]}), uri, mode="append")  # a second version, so the pass reclaims one
     policy = ExpiryPolicy(older_than=None, retain_versions=1)
 
+    history = TableHistory(control_root=str(tmp_path / "control"), storage_options=StorageOptions(), table_uuid="t")
     results = [
-        expire_versions(ExpiryTarget(uri=named, storage_options={}, write_options={}, table_id="silver$plain"), policy),
-        expire_versions(ExpiryTarget(uri=unnamed, storage_options={}, write_options={}), policy),
+        expire_versions(ExpiryTarget(uri=named, storage_options={}, write_options={}, table_id="silver$plain", history=history, table_uuid="t"), policy),
+        expire_versions(ExpiryTarget(uri=unnamed, storage_options={}, write_options={}, history=history, table_uuid="t"), policy),
     ]
     assert [(r.error, r.old_versions_removed) for r in results] == [(None, 1), (None, 1)], results
 

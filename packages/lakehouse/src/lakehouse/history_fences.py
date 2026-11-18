@@ -125,10 +125,12 @@ class HistoryWork(StrEnum):
 #: one mark a take hands its holder, and one only the catalog's own credential can write.
 RELEASE_MARK: Final = "erasure-release"
 
-#: The kind of a cleanup's mark in a table's fence directory (:mod:`lakehouse.reclaim_marks`): the versions one cleanup will
-#: remove, written under its RECLAIM hold before its first delete and removed once it returned with no failed delete. A
-#: maintain-tier vend may put and delete one (``catalog.core.vending.TableRecords``); a ref door refuses a version one names.
-VICTIMS_MARK: Final = "reclaim-victims"
+#: The kind of a cleanup's mark in a table's fence directory (:mod:`lakehouse.reclaim_marks`): the versions one cleanup call
+#: will remove, written under its RECLAIM hold before its first delete and removed once it returned with no failed delete.
+#: A maintain-tier vend may put and delete one (``catalog.core.vending.TableRecords``); a ref door refuses a version one
+#: names. Spelled as a reclaim's holder is but for one character (``reclaim.<32 hex>.json`` beside ``reclaim-<32
+#: hex>.json``), so one session-policy grant reaches both and nothing longer (F8).
+VICTIMS_MARK: Final = "reclaim"
 
 #: The kinds that keep refs off the table's history while they hold it: they delete versions, or write what a ref write
 #: must see before it lands. They share it with their own kind and with each other.

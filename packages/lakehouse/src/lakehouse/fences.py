@@ -106,6 +106,9 @@ class Taken(BaseModel):
     token: str
     #: Each mark as ``(kind, id)``.
     marks: frozenset[tuple[str, str]] = frozenset()
+    #: The token of every other holder the listing showed standing, of any kind: a mark naming one as its writer is that
+    #: writer's while it holds (:mod:`lakehouse.reclaim_marks`).
+    holders: frozenset[str] = frozenset()
 
 
 class Fence(BaseModel):
@@ -158,8 +161,10 @@ class Fence(BaseModel):
         """
         return self.taking(work).token
 
-    def taking(self, work: str) -> Taken:
-        """:meth:`take`, with the marks the take's last listing showed.
+    def taking(self, work: str, *, intent: bool = False) -> Taken:
+        """:meth:`take`, with the marks the take's last listing showed. With ``intent``, a take refused leaves its holder
+        standing, unrenewed, as an intent: every take it excludes is refused until it lapses one hold later, and every
+        holder it excludes meets it at its next :meth:`Hold.confirm_unchallenged` (ADR 0243, F4).
 
         Raises:
             Exception: :meth:`refused`'s error: work that excludes ``work`` holds it.
@@ -217,8 +222,16 @@ class Fence(BaseModel):
         with self.hold_for(work, renewed=renewed):
             yield
 
+    def challenger(self, work: str, token: str) -> Excluding | None:
+        """A live holder of a kind ``work`` excludes, other than ``token``'s, as one listing shows them now.
+
+        Raises:
+            botocore.exceptions.ClientError: The store refused the listing or a read.
+        """
+        raise NotImplementedError
+
     @contextmanager
-    def hold_for(self, work: str, *, renewed: bool = True) -> Generator[Hold]:
+    def hold_for(self, work: str, *, renewed: bool = True, intent: bool = False) -> Generator[Hold]:
         """:meth:`held`, handing the block its :class:`Hold`, for a block whose last step must not land once the hold has
         lapsed (:meth:`Hold.confirm`).
 
@@ -229,9 +242,9 @@ class Fence(BaseModel):
             Exception: :meth:`refused`'s error: work that excludes ``work`` holds it; the block did not run.
             botocore.exceptions.ClientError: The store refused the take.
         """
-        taken = self.taking(work)
+        taken = self.taking(work, intent=intent)
         token = taken.token
-        hold = Hold(self, token, work, marks=taken.marks)
+        hold = Hold(self, token, work, marks=taken.marks, holders=taken.holders)
         if not renewed:
             try:
                 yield hold
@@ -248,7 +261,7 @@ class Fence(BaseModel):
             keeper.join(timeout=self._renewal_seconds())
             self.release(token)
 
-    def write_held[T](self, work: str, write: Callable[[], T], *, judge: Callable[[Hold], None] | None = None, renewed: bool = True) -> T:
+    def write_held[T](self, work: str, write: Callable[[], T], *, judge: Callable[[Hold], None] | None = None, renewed: bool = True, intent: bool = False) -> T:
         """``write`` while the fence is held for ``work``, once ``judge`` has passed under the hold and the hold is confirmed
         (:meth:`Hold.confirm`): the one way a door writes what its answer promises while it holds a fence (ADR 0243, B4).
 
@@ -258,12 +271,14 @@ class Fence(BaseModel):
         still stands, and the hold is renewed by it for one more :meth:`hold`, inside which the write lands
         (``specs/maintenance/TablePass.tla`` DoorConfirm, ``specs/catalog/Fence.tla`` F2).
 
+        ``intent`` is :meth:`taking`'s.
+
         Raises:
             Exception: :meth:`refused`'s error: work that excludes ``work`` holds the fence, or the hold lapsed before the
                 write; nothing was written.
             botocore.exceptions.ClientError: The store refused the take or the confirm.
         """
-        with self.hold_for(work, renewed=renewed) as hold:
+        with self.hold_for(work, renewed=renewed, intent=intent) as hold:
             if judge is not None:
                 judge(hold)
             hold.confirm()
@@ -274,11 +289,31 @@ class Hold:
     """One holder's take of a fence, which its block may confirm before a step that must not land once the hold lapsed,
     and the marks the fence's directory carried when it was taken."""
 
-    def __init__(self, fence: Fence, token: str, work: str, *, marks: frozenset[tuple[str, str]] = frozenset()) -> None:
+    def __init__(self, fence: Fence, token: str, work: str, *, marks: frozenset[tuple[str, str]] = frozenset(), holders: frozenset[str] = frozenset()) -> None:
         self._fence, self._token, self._work = fence, token, work
         #: Each mark (:data:`MARK_NAME`) the take's last listing showed, as ``(kind, id)``: written before this holder was
         #: admitted by work that excludes this holder's, or written beside it by work that shares with it.
         self.marks = marks
+        #: The token of every other holder the take's last listing showed standing (:attr:`Taken.holders`).
+        self.holders = holders
+
+    @property
+    def token(self) -> str:
+        """This holder's token: its kind of work and its id, as its object is named."""
+        return self._token
+
+    def confirm_unchallenged(self) -> None:
+        """:meth:`confirm`, then refuse when a holder this one excludes stands beside it: an intent a refused take left
+        (:meth:`Fence.taking`), which a holder that works in steps meets before its next step and stops for (ADR 0243, F4).
+
+        Raises:
+            Exception: The fence's :meth:`Fence.refused` error: the hold lapsed, or an intent stands.
+            FenceUnreadableError: The stored hold does not parse.
+            botocore.exceptions.ClientError: The store refused the renewal or the listing.
+        """
+        self.confirm()
+        if (other := self._fence.challenger(self._work, self._token)) is not None:
+            raise self._fence.refused(f"a {other.kind} waits for {self._fence.what}, so this {self._work} stops before its next step; retry once it ends")
 
     def confirm(self) -> None:
         """Renew the hold now, so a single step taken next lands inside it; refuse when it has lapsed (two renewals failed,
@@ -364,9 +399,10 @@ class HolderFence(Fence):
         marker = f"{self.directory}/"
         return path[path.find(marker) + len(marker) :]
 
-    def _excluding(self, work: str, *, mine: str | None) -> tuple[Excluding | None, datetime, frozenset[tuple[str, str]]]:
+    def _excluding(self, work: str, *, mine: str | None) -> tuple[Excluding | None, datetime, frozenset[tuple[str, str]], frozenset[str]]:
         """A live holder of a kind ``work`` excludes, other than ``mine``, as one listing of the directory shows them, the
-        store's clock at that listing, and the marks it shows; what has lapsed a whole hold ago is swept on the way.
+        store's clock at that listing, the marks it shows, and the token of every other holder it shows standing; what has
+        lapsed a whole hold ago is swept on the way.
 
         ONLY THE NAMES THE FENCE DEFINES, DIRECTLY IN ITS DIRECTORY, ARE JUDGED (``specs/catalog/Fence.tla`` F3). A holder is
         ``<kind>-<32 hex>.json`` with a kind of :attr:`kinds`, a mark ``<kind>.<32 hex>.json`` with a kind of
@@ -382,6 +418,7 @@ class HolderFence(Fence):
         listing = stored_objects.list_under_at(f"{self.control_root.rstrip('/')}/{self.directory}", self.storage_options)
         found: Excluding | None = None
         marks: set[tuple[str, str]] = set()
+        live: set[str] = set()
         for listed in listing.objects:
             relative = self._relative(listed.path)
             name = None if "/" in relative else relative
@@ -403,9 +440,10 @@ class HolderFence(Fence):
                 # read before writing it: one untouched for a whole hold has lapsed, whatever its kind or its body.
                 self._sweep(token)
                 continue
+            live.add(token)
             if found is None and self.excludes(named.group(2), work):
                 found = self._live(token, kind=named.group(2), stamped=listed.modified, at=listing.at)
-        return found, listing.at, frozenset(marks)
+        return found, listing.at, frozenset(marks), frozenset(live)
 
     def _live(self, token: str, *, kind: str, stamped: datetime, at: datetime) -> Excluding | None:
         """The hold the object of ``token`` stands for at ``at``, its kind its key's, or ``None`` once it is no hold: swept,
@@ -457,7 +495,7 @@ class HolderFence(Fence):
         except Exception as exc:
             log.warning(f"{self.log_name}_not_swept", extra={"subject": self.subject, "key": key, "reason": f"{type(exc).__name__}: {exc}"[:300]})
 
-    def taking(self, work: str) -> Taken:
+    def taking(self, work: str, *, intent: bool = False) -> Taken:
         """Hold the fence for ``work``: the token :meth:`release` ends the hold with, and the marks the second listing showed.
 
         One listing first: a live holder of a kind ``work`` excludes refuses it with nothing written. Then this take's own
@@ -469,21 +507,27 @@ class HolderFence(Fence):
             Exception: :meth:`refused`'s error: work that excludes ``work`` holds it.
             botocore.exceptions.ClientError: The store refused a read, a listing or a write.
         """
-        other, now, _marks = self._excluding(work, mine=None)
-        if other is not None:
-            raise self.refused(f"a {other.kind} holds {self.what} until {other.until.isoformat()}, so no {work} may start; retry once it ends")
+        other, now, _marks, _live = self._excluding(work, mine=None)
         token = f"{work}-{uuid.uuid4().hex}"
         mine = Holder(token=token, work=str(work), taken_at=now, expires_at=now + self.hold())
+        if other is not None:
+            if intent:
+                records.create_json(self.control_root, self.storage_options, self._key(token), self._object(mine))
+            raise self.refused(f"a {other.kind} holds {self.what} until {other.until.isoformat()}, so no {work} may start; retry once it ends")
         records.create_json(self.control_root, self.storage_options, self._key(token), self._object(mine))
         try:
-            other, _at, marks = self._excluding(work, mine=token)
+            other, _at, marks, live = self._excluding(work, mine=token)
         except Exception:
             stored_objects.remove_object(self.control_root, self.storage_options, self._key(token))
             raise
         if other is not None:
-            stored_objects.remove_object(self.control_root, self.storage_options, self._key(token))
+            if not intent:
+                stored_objects.remove_object(self.control_root, self.storage_options, self._key(token))
             raise self.refused(f"a {other.kind} took {self.what} beside this {work}, which yields to it; retry once it ends")
-        return Taken(token=token, marks=marks)
+        return Taken(token=token, marks=marks, holders=live)
+
+    def challenger(self, work: str, token: str) -> Excluding | None:
+        return self._excluding(work, mine=token)[0]
 
     def renew(self, token: str) -> bool:
         key = self._key(token)

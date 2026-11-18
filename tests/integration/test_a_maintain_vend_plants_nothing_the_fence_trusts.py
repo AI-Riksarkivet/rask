@@ -76,7 +76,9 @@ def _answer(call: Any) -> str:  # noqa: ANN401 — a boto3 call
 
 def test_a_maintain_vend_plants_nothing_a_ref_write_trusts(monkeypatch: pytest.MonkeyPatch) -> None:
     root = (os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"])
-    bucket, user, secret = f"vend-{uuid.uuid4().hex[:12]}", f"catalog{uuid.uuid4().hex[:8]}", secrets.token_urlsafe(24)
+    # F8: the longest bucket name S3 allows, as the control and the data bucket both, and a table at its root as the catalog
+    # makes one: the maintain policy at its longest, which the store must take.
+    bucket, user, secret = f"vend-{uuid.uuid4().hex}{'v' * 26}", f"catalog{uuid.uuid4().hex[:8]}", secrets.token_urlsafe(24)
     store = _client(*root)
     store.create_bucket(Bucket=bucket)
     canned = {
@@ -88,7 +90,7 @@ def test_a_maintain_vend_plants_nothing_a_ref_write_trusts(monkeypatch: pytest.M
     _admin(root, "set-user-or-group-policy", {"policyName": user, "userOrGroup": user, "isGroup": "false"})
     table_uuid, namespace_uuid, other_namespace = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
     records = TableRecords(control_root=f"s3://{bucket}", table_uuid=table_uuid, warehouse="lance_catalog", project="acme")
-    policy = build_session_policy(bucket, f"data/{table_uuid}", "maintain", records=records)
+    policy = build_session_policy(bucket, table_uuid, "maintain", records=records)
     sts = boto3.client("sts", endpoint_url=_STORE, region_name="us-east-1", aws_access_key_id=user, aws_secret_access_key=secret, config=_PATH_STYLE)
     session = sts.assume_role(RoleArn="arn:aws:iam::000000000000:role/vend", RoleSessionName="vend", DurationSeconds=900, Policy=json.dumps(policy))
     vend = _client(session["Credentials"]["AccessKeyId"], session["Credentials"]["SecretAccessKey"], session["Credentials"]["SessionToken"])
@@ -109,8 +111,8 @@ def test_a_maintain_vend_plants_nothing_a_ref_write_trusts(monkeypatch: pytest.M
     project = policy_fences.fence_directory("project", "acme")
     hex32 = uuid.uuid4().hex
     reach = {
-        "a-cleanups-mark": _answer(lambda: vend.put_object(Bucket=bucket, Key=f"{fence}/reclaim-victims.{hex32}.json", Body=b"{}")),
-        "its-cleanups-mark-removed": _answer(lambda: vend.delete_object(Bucket=bucket, Key=f"{fence}/reclaim-victims.{hex32}.json")),
+        "a-cleanups-mark": _answer(lambda: vend.put_object(Bucket=bucket, Key=f"{fence}/reclaim.{hex32}.json", Body=b"{}")),
+        "its-cleanups-mark-removed": _answer(lambda: vend.delete_object(Bucket=bucket, Key=f"{fence}/reclaim.{hex32}.json")),
         "a-reclaim-at-its-namespace": _answer(lambda: vend.put_object(Bucket=bucket, Key=f"{level}/reclaim-{hex32}.json", Body=b"{}")),
         "a-reclaim-at-its-project": _answer(lambda: vend.put_object(Bucket=bucket, Key=f"{project}/reclaim-{hex32}.json", Body=b"{}")),
         "its-namespaces-holders-listed": _answer(lambda: vend.list_objects_v2(Bucket=bucket, Prefix=f"{level}/")),

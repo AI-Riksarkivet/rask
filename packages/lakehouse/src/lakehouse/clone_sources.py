@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import branch_layout, location_claims, objectfs, reclaim_marks, stored_objects, whole_versions
+from lakehouse import location_claims, objectfs, reclaim_marks, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.fences import Hold
@@ -178,14 +178,11 @@ def take(source: CloneSource, *, clone_location: str, control_root: str, storage
             return
         if not _holds(dataset, source):
             raise CloneSourceGoneError(f"version {source.version} of {source.table} is not retained")
-        # A version a cleanup marked, or one missing a file it names, is one a cleanup that stopped part-way was removing
-        # (ADR 0243): the clone would read through a tag on data no reader can read.
-        marks = reclaim_marks.read(control_root, storage_options, table_uuid=source.table_uuid, marks=hold.marks)
-        if source.version in reclaim_marks.marked_versions(marks, source.branch):
+        # A version a trusted mark names is one a cleanup was removing (ADR 0243): the clone would read through a tag on
+        # data no reader can read.
+        refused = reclaim_marks.refused(control_root, storage_options, table_uuid=source.table_uuid, marks=hold.marks, dataset=dataset, ref=source.branch)
+        if source.version in refused:
             raise CloneSourceGoneError(f"version {source.version} of {source.table} is being reclaimed: a cleanup marked it")
-        version = dataset.checkout_version((source.branch, source.version) if source.branch is not None else source.version)
-        if gone := whole_versions.missing_files(version, branch_layout.ref_root(_dataset_key(source.location), source.branch), storage_options):
-            raise CloneSourceGoneError(f"version {source.version} of {source.table} is being reclaimed: {len(gone)} file(s) it names are gone")
 
     def write() -> None:
         held = standing["tag"]

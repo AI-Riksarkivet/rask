@@ -524,8 +524,37 @@ tests:
               service: "maintenance"
               reason: "history_fenced"
             exp_annotations:
-              summary: "Maintenance reclaims have been held back in every hour for a day"
-              description: "Passes that would reclaim have kept everything, for the reason this alert names, in every hour of the last day: a table under constant ref writes, a policy that keeps changing, a policy door or a reclaim holding a fence, or a cleanup's victims left marked. Such a table meets neither its retention nor an erasure's deadline. Find it in the maintenance_history_fenced, maintenance_policy_fenced, maintenance_policy_changed_mid_pass or maintenance_victims_marked log lines."
+              summary: "Maintenance reclaims somewhere in the estate have been held back in every hour for a day"
+              description: "Passes that would reclaim have kept everything, for the reason this alert names, in every hour of the last day, across the estate: one table under constant ref writes, a policy that keeps changing, a policy door, its intent or a reclaim holding a fence, or a cleanup's victims left marked; or many tables each held back for a while. A starved table meets neither its retention nor an erasure's deadline. Find the tables in the maintenance_history_fenced, maintenance_policy_fenced, maintenance_policy_changed_mid_pass or maintenance_victims_marked log lines."
+
+  # M24 h3. One table's mark standing, its age sampled every 15 minutes, crossing a day at 24h → MaintenanceReclaimMarkStale
+  #         fires 15 minutes after; a mark a pass finished at 6h (the gauge back to 0) never does.
+  - interval: 15m
+    input_series:
+      - series: "maintenance_reclaims_mark_oldest_seconds"
+        values: "0+900x104"
+    alert_rule_test:
+      - eval_time: 23h
+        alertname: MaintenanceReclaimMarkStale
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: MaintenanceReclaimMarkStale
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+            exp_annotations:
+              summary: "A cleanup's mark has stood for more than a day"
+              description: "A table's versions have stood marked by a cleanup for more than a day: no tag, branch or restore may name them, and a pass meets the mark every retry without finishing it, because the store refuses its deletes or a policy now keeps the versions it half removed. Find the table in the maintenance_victims_marked log line (oldest_seconds) and read why its reclaim's deletes fail, or lift the hold so a pass may finish them."
+
+  - interval: 15m
+    input_series:
+      - series: "maintenance_reclaims_mark_oldest_seconds"
+        values: "0+900x24 0x80"
+    alert_rule_test:
+      - eval_time: 26h
+        alertname: MaintenanceReclaimMarkStale
+        exp_alerts: []
 
   # M24 i. Refusals outrunning half the swept datasets over an hour → MaintenanceRefusalsRising fires.
   - interval: 1m
