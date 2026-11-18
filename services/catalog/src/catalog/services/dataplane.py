@@ -34,7 +34,8 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 from botocore.exceptions import BotoCoreError, ClientError
-from lance.dataset import AlterColumn, Transaction
+from lance import Transaction
+from lance.dataset import AlterColumn  # noqa: TID251 — a type lance exports only from its dataset module, not an open
 from lance_namespace import (
     AlterTableAddColumnsRequest,
     AlterTableAddColumnsResponse,
@@ -131,6 +132,7 @@ from lakehouse import (
     data_directories,
     file_identities,
     location_claims,
+    manifest_names,
     stored_objects,
     trash,
 )
@@ -139,6 +141,7 @@ from lakehouse.base_refs import decoded_path, decoded_segments, location_in_stor
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
 from lakehouse.history_fences import HistoryWork
+from lakehouse.lance_session import open_dataset
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
@@ -825,7 +828,7 @@ def create_table(
             opened = (
                 overwriting.open_unchecked(so)
                 if overwriting is not None
-                else lance.dataset(existing, storage_options=so.in_clear(), session=shared_lance_session())
+                else open_dataset(existing, storage_options=so.in_clear(), session=shared_lance_session())
             )
             current = disarm_commit_path_cleanup(opened, segments)
             # The table's key, not the payload's: a key is fixed once set (`lance_docs/lance/format/table/index.md:87`).
@@ -1087,7 +1090,7 @@ def kept_table(ns: LanceNamespace, so: StorageOptions, segments: list[str]) -> C
 
 
 def _kept_at(location: str, so: StorageOptions) -> CreateTableResponse:
-    return CreateTableResponse(location=location, version=lance.dataset(location, storage_options=so.in_clear(), session=shared_lance_session()).version)
+    return CreateTableResponse(location=location, version=open_dataset(location, storage_options=so.in_clear(), session=shared_lance_session()).version)
 
 
 def _existing_location(ns: LanceNamespace, segments: list[str]) -> str | None:
@@ -1346,13 +1349,6 @@ def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
     return resolved, path
 
 
-#: A committed manifest's name under either naming scheme: ``{version}.manifest`` (V1) or
-#: ``{u64::MAX - version:020}.manifest`` (V2) (`lance_docs/lance/format/table/transaction.md` § Manifest Naming Schemes). A staged
-#: ``{version}.manifest-{uuid}`` (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:292`) and a detached
-#: ``d<id>.manifest`` name no version a reader resolves.
-_COMMITTED_MANIFEST: Final = re.compile(r"[0-9]+\.manifest")
-
-
 def holds_a_version(location: str, so: StorageOptions) -> bool:
     """Does the table at ``location`` hold a committed version, as the store keeps it? A table that does not is only declared.
 
@@ -1366,7 +1362,7 @@ def holds_a_version(location: str, so: StorageOptions) -> bool:
     """
     fs, path = dataset_fs(location, so)
     listed = fs.get_file_info(pafs.FileSelector(f"{path.rstrip('/')}/_versions", allow_not_found=True))
-    return any(info.type == pafs.FileType.File and _COMMITTED_MANIFEST.fullmatch(info.base_name) for info in listed)
+    return any(info.type == pafs.FileType.File and manifest_names.committed_version(info.base_name) is not None for info in listed)
 
 
 def verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
@@ -1548,15 +1544,15 @@ def commit_stamped[T](
                 recorded = True
                 fs, base = dataset_fs(location, so)
                 versions = f"{base.rstrip('/')}/_versions"
-                with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:
+                with fs.open_input_stream(f"{versions}/{manifest_names.detached_name(detached.version)}") as source:
                     body = manifest_bytes.with_manifest_version(source.read(), version)
-                with fs.open_output_stream(f"{versions}/d{finalize_id}.manifest") as sink:
+                with fs.open_output_stream(f"{versions}/{manifest_names.detached_name(finalize_id)}") as sink:
                     sink.write(body)
                 request = CreateTableVersionRequest(
                     id=table_id,
                     version=version,
                     branch=ref,
-                    manifest_path=f"{object_store_path(location)}/_versions/d{finalize_id}.manifest",
+                    manifest_path=f"{object_store_path(location)}/_versions/{manifest_names.detached_name(finalize_id)}",
                     manifest_size=len(body),
                 )
                 judged = commit_records.manifest_digest(body)
@@ -1688,7 +1684,7 @@ def committed_manifest_digest(location: str, so: StorageOptions, version: int) -
     """
     fs, base = dataset_fs(location, so)
     found: list[str] = []
-    for name in (f"{_MANIFEST_NAME_BASE - version:020d}.manifest", f"{version}.manifest"):
+    for name in manifest_names.committed_names(version):
         try:
             with fs.open_input_stream(f"{base.rstrip('/')}/_versions/{name}") as source:
                 found.append(commit_records.manifest_digest(source.read()))
@@ -1824,7 +1820,7 @@ class _CapturingNamespace(LanceNamespace):
         """The version planned on for the ref planned on; any other ref's own latest (pylance opens main first)."""
         if branch == self._ref:
             return self._planned
-        return int(lance.dataset(self.ref_location(branch), storage_options=self._so.in_clear() or None).version)
+        return int(open_dataset(self.ref_location(branch), storage_options=self._so.in_clear() or None, session=shared_lance_session()).version)
 
     def namespace_id(self) -> str:
         return "rask-stamped-commit"
@@ -1836,7 +1832,7 @@ class _CapturingNamespace(LanceNamespace):
         location = self.ref_location(branch)
         fs, base = dataset_fs(location, self._so)
         # V2 names first, as every table the catalog creates is named; a table written with V1 paths names `<n>.manifest`.
-        for name in (f"{_MANIFEST_NAME_BASE - version:020d}.manifest", f"{version}.manifest"):
+        for name in manifest_names.committed_names(version):
             info = fs.get_file_info(f"{base.rstrip('/')}/_versions/{name}")
             if info.type == pafs.FileType.File:
                 break
@@ -1875,11 +1871,6 @@ class _CapturingNamespace(LanceNamespace):
         return True
 
 
-#: A V2 manifest is named ``u64::MAX - version``, zero-padded to 20 digits (measured on pylance 13.0.0: version 2 is
-#: ``18446744073709551613.manifest``); a V1 one is named by the version itself.
-_MANIFEST_NAME_BASE: Final = (1 << 64) - 1
-
-
 def captured[T](
     table: table_claims.DoorTable,
     so: StorageOptions,
@@ -1900,7 +1891,7 @@ def captured[T](
     def plan(dataset: lance.LanceDataset) -> tuple[Transaction, T | None]:
         ref = recorded_branch(branch)
         namespace = _CapturingNamespace(table, so, ref=ref, planned=int(dataset.version))
-        handle = lance.dataset(namespace_client=namespace, table_id=table.segments, session=shared_lance_session())
+        handle = open_dataset(namespace_client=namespace, table_id=table.segments, session=shared_lance_session())
         handle = handle.checkout_version((ref, dataset.version) if ref is not None else dataset.version)
         measured = measure(handle) if measure is not None else None
         try:
@@ -1951,9 +1942,11 @@ def _staged_transaction(location: str, so: StorageOptions, manifest_path: str) -
     try:
         with fs.open_input_stream(f"{versions}/{name}") as source:
             body = manifest_bytes.with_manifest_version(source.read(), detached)
-        with fs.open_output_stream(f"{versions}/d{detached}.manifest") as sink:
+        with fs.open_output_stream(f"{versions}/{manifest_names.detached_name(detached)}") as sink:
             sink.write(body)
-        transaction = read_transaction(lance.dataset(location, version=detached, storage_options=so.in_clear() or None), detached)
+        transaction = read_transaction(
+            open_dataset(location, version=detached, storage_options=so.in_clear() or None, session=shared_lance_session()), detached
+        )
     finally:
         discard_detached_manifest(location, so, detached)
         delete_table_object(location, so, f"_versions/{name}")
@@ -1965,7 +1958,7 @@ def _staged_transaction(location: str, so: StorageOptions, manifest_path: str) -
 def discard_detached_manifest(location: str, so: StorageOptions, version: int) -> None:
     """Delete ``_versions/d<version>.manifest``, writing nothing else; the ``d`` prefix keeps the name apart from every
     manifest on the version line."""
-    delete_table_object(location, so, f"_versions/d{version}.manifest")
+    delete_table_object(location, so, f"_versions/{manifest_names.detached_name(version)}")
 
 
 def delete_table_object(location: str, so: StorageOptions, relative: str) -> None:

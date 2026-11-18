@@ -275,7 +275,7 @@ async def test_a_store_whose_history_cannot_be_read_is_not_written(monkeypatch: 
     _install(monkeypatch, fake, OLDER)
 
     with pytest.raises(ServiceUnavailableError):
-        await fga.provision("http://fga:8080", token_file=None, retry_attempts=1)
+        await fga.provision("http://fga:8080", token_file=None, retry=fga.ONE_ATTEMPT)
     assert fake.written == []
 
 
@@ -287,7 +287,7 @@ async def test_a_history_past_the_page_bound_is_refused_not_read_as_absent(monke
     _install(monkeypatch, fake, OLDER)
 
     with pytest.raises(ModelHistoryTooLongError):
-        await fga.provision("http://fga:8080", token_file=None, retry_attempts=1)
+        await fga.provision("http://fga:8080", token_file=None, retry=fga.ONE_ATTEMPT)
     assert fake.written == []
 
 

@@ -180,7 +180,7 @@ async def _republish(publisher: Bus, settings: Settings, envelope: CloudEvent) -
     stream stores a copy of an event it already holds once, inside its duplicate window. And every subscriber on this
     topic keys on it: a notifier keys what it delivers on it (a ledger on ``<event_id>@<ACTION>``).
     """
-    await publish_event(publisher, envelope, topic=CONTROL_TOPIC, timeout_seconds=settings.control_emit_timeout_seconds)
+    await publish_event(publisher, envelope, topic=CONTROL_TOPIC, timeout_seconds=settings.publish_timeout_seconds)
 
 
 async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifier | None) -> ControlRelayReport:

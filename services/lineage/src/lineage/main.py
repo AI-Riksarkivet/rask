@@ -17,7 +17,6 @@ from fastapi import FastAPI, Request
 
 from lakehouse.admission import judge_before_the_body
 from lakehouse.bus import Bus, bus_session
-from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
@@ -88,10 +87,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # Registered after everything it stops, so run before any of it is released.
         stack.push_async_callback(loops.stop)
         app.state.startup_complete = True
-        # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`, which uvicorn reaches only
-        # AFTER it has stopped accepting connections and drained, so a probe reading that flag alone would answer ready
-        # through the whole drain. Kubernetes sends SIGTERM at the START of termination. Owner ruling 2026-08-25.
-        stack.callback(arm_drain_on_sigterm(app))
         try:
             yield
         finally:

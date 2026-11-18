@@ -14,7 +14,7 @@
 {{- include "lance.busEnv" (list $root (ternary $root.Values.maintenance.appId "" (or .Values.maintenance.lineageEmit .Values.maintenance.controlEmit))) | nindent 0 }}
 {{- if $root.Values.maintenance.vendWriteCredentials }}
 - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
-- { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
+- { name: RASK_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
 - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ include "lance.saSubject" (list $root "maintenance") | quote }} }
 {{- end }}
 - { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ $arrival | quote }} }
@@ -22,7 +22,7 @@
 {{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 0 }}{{- end }}
 {{- end }}
 {{- if .Values.maintenance.lineageEmit }}
-- { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+- { name: RASK_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
 - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
 - { name: MAINTENANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $root | quote }} }
 {{- if .Values.services.lineage.outbox.enabled }}

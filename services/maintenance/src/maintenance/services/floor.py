@@ -65,6 +65,7 @@ from typing import TYPE_CHECKING
 import lance
 from pydantic import BaseModel
 
+from lakehouse.lance_session import open_dataset
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.storage_options import StorageOptions
@@ -125,7 +126,7 @@ def _read_floor(uri: str, storage_options: StorageOptions) -> _FloorReading | No
     read as "never raised" and commit another raise on a table raised already, a version bought for nothing each time.
     """
     try:
-        return _floor_and_stamp_of(lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()))
+        return _floor_and_stamp_of(open_dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()))
     except Exception as exc:  # noqa: BLE001 — an unreadable dataset refuses this raise, never the check
         log.warning("floor_read_failed", extra={"dataset": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return None

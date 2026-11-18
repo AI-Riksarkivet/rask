@@ -36,7 +36,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import UTC, datetime, timedelta
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Literal, NoReturn
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, Self
 
 import nats
 from nats.aio.client import Client
@@ -53,9 +53,10 @@ from nats.js.errors import (
 )
 from opentelemetry import propagate, trace
 from opentelemetry.trace import Link, SpanKind, StatusCode
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lakehouse.bus import BusSettings, pull
+from lakehouse.commit_records import is_canonical_uuid
 from lakehouse.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
 from maintenance.core.metrics import (
     ArrivalOutcome,
@@ -184,6 +185,17 @@ class Task(BaseModel):
     #: The interval an ``orphans`` check was held at, in hours: what its next interval is computed from. It rides the
     #: schedule's body, so a lost schedule loses it, and the check is held at the floor again.
     interval_hours: int = Field(default=ORPHAN_CHECK_FLOOR_HOURS, ge=1)
+
+    @model_validator(mode="after")
+    def _names_what_its_subject_is_built_from(self) -> Self:
+        """The uuid is a token of the task's subject and its claim's key, where a dot or a wildcard would name another
+        task's: the audit and the scan carry none, and every other kind carries a uuid."""
+        if self.kind in ("audit", "scan"):
+            if self.uuid:
+                raise ValueError(f"a {self.kind} task names no object, and this one names {self.uuid!r}")
+        elif not is_canonical_uuid(self.uuid):
+            raise ValueError(f"a {self.kind} task names its object by uuid, and {self.uuid!r} is none")
+        return self
 
     def ended(self) -> Task:
         """This task as its next try is held after a worker ended it: an orphan check starts again at the floor."""

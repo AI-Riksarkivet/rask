@@ -36,6 +36,7 @@ from lance_namespace import (
 )
 from unfiled_announcer import unfiled
 
+from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
 from catalog.services import warehouses
 from lakehouse.control_emit import NoopControlEmitter
@@ -159,12 +160,10 @@ def _delete(
 ) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
 
-    async def _resolved_then_deleted() -> Any:
-        # The door's gate is its `AdministeredWarehouseDep`, which FastAPI resolves before the handler runs.
-        record = await wh_ep.administered_warehouse(warehouse_id, settings, token, client)
+    async def _deleted() -> Any:
         return await wh_ep.delete_warehouse(
             warehouse_id=warehouse_id,
-            record=record,
+            keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             request=request,
             settings=settings,
             token=token,
@@ -176,7 +175,7 @@ def _delete(
             force=force,
         )
 
-    return asyncio.run(_resolved_then_deleted())
+    return asyncio.run(_deleted())
 
 
 # --------------------------------------------------------------------------- #

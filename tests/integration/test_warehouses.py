@@ -455,6 +455,26 @@ def test_a_purged_buckets_claim_goes_with_its_last_warehouse(client: TestClient,
     assert (kept.status_code, purged.status_code) == (409, 200), purged.text
 
 
+def test_a_replayed_delete_answers_the_first_one_and_leaves_a_warehouse_registered_since(
+    client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A delete sent again under its `Idempotency-Key` is answered with the first one's response and deletes nothing: a
+    warehouse registered under the id since is another warehouse, which the replay would otherwise purge."""
+    purged: list[str] = []
+    monkeypatch.setattr(wh_svc, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    _mk_projects(client, "acme")
+    keyed = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f70"}
+    assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}).status_code == 200
+
+    first = client.delete("/management/v1/warehouses/wh-a", params={"purge_bucket": "true"}, headers=keyed)
+    assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}).status_code == 200
+    again = client.delete("/management/v1/warehouses/wh-a", params={"purge_bucket": "true"}, headers=keyed)
+
+    assert (first.status_code, again.status_code, again.json()) == (200, 200, first.json()), again.text
+    assert (client.get("/management/v1/warehouses/wh-a").status_code, purged) == (200, ["wh-a"])
+
+
 def test_a_purge_that_fails_is_finished_by_the_same_call_again(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """The warehouse's record goes after its bucket's purge, so a purge that fails answers PartiallyApplied with the
     warehouse still standing, and the same call issued again purges the bucket and removes the warehouse."""

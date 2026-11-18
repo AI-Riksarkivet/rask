@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from lakehouse.base_refs import normalise
 from lakehouse.compaction_gate import compaction_refusal
 from lakehouse.governed.fga import canonical_object_id
+from lakehouse.lance_session import open_dataset
 from lakehouse.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
@@ -117,7 +118,7 @@ def evaluate_due(
 ) -> DueRecord | None:
     """The table's due record as of now, or ``None`` when neither a compaction nor an index optimize is due. Raises when
     the dataset cannot be read. ``opened`` answers a handle the caller already holds on the dataset as it now stands."""
-    ds = opened() if opened is not None else lance.dataset(question.location, storage_options=storage_options.in_clear(), session=shared_lance_session())
+    ds = opened() if opened is not None else open_dataset(question.location, storage_options=storage_options.in_clear(), session=shared_lance_session())
     compaction = compaction_due(ds, question, storage_options)
     indices = _indices_due(ds, question)
     if compaction is None and not indices:

@@ -26,13 +26,13 @@ Declared once in `packages/lakehouse/src/lakehouse/governed/settings.py`, one na
 
 ## The catalog
 
-The catalog's own settings carry the `LANCE_` prefix (`services/catalog/src/catalog/core/config.py`), for example:
+The catalog's own settings carry the `LANCE_` prefix, and a setting every lakehouse service reads under one name carries `RASK_` (`services/catalog/src/catalog/core/config.py`), for example:
 
 | Variable | Purpose |
 |---|---|
 | `LANCE_REST_IMPL` / `LANCE_REST_ROOT` | The namespace implementation and the object-store root it serves. |
 | `LANCE_LINEAGE_EMIT_ENABLED` | Announce every committed write on lineage (off in the code default, always on in the chart). |
-| `LANCE_LINEAGE_TOPIC` | The topic the announcement is published on, on the catalog's own connection to the bus (`RASK_BUS_URL`). The bus is the only transport: emission switched on with no bus named is refused at start. |
+| `RASK_LINEAGE_TOPIC` | The topic the announcement is published on, on the catalog's own connection to the bus (`RASK_BUS_URL`). The bus is the only transport: emission switched on with no bus named is refused at start. |
 | `LANCE_LINEAGE_OUTBOX_URI` | Stage each lineage event in the object store before publishing it. |
 | `LANCE_CONTROL_EMIT_ENABLED` | Broadcast the catalog's control-plane mutations on `catalog.control.v1`. |
 

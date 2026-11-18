@@ -36,9 +36,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse import control_prefixes, records, stored_objects, warehouse_records
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, read_record, record_key
@@ -312,30 +313,57 @@ def _table_state(table_uuid: str) -> str:
     return f"{STATE_PREFIX}/{table_uuid}"
 
 
-def _cadence_key(table_uuid: str, uri: str) -> str:
+def cadence_key(table_uuid: str, uri: str) -> str:
+    """The key of the cadence stamp of the dataset ``uri`` of the table ``table_uuid``."""
     # Per DATASET: a branch is a dataset of its own under its table's uuid, and a shared stamp would let one ref's pass
     # starve the others until the interval elapsed (audit 2026-07-16).
     return record_key(_table_state(table_uuid), "cadence", uri)
 
 
-def _policy_of(record: dict[str, Any]) -> str:
-    return f"{record['kind']}:{policy_key(record)}"
+class CadenceStamp(BaseModel):
+    """When a pass last maintained one dataset, and the policy it ran under."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: The policy the pass ran under, as ``<kind>:<key>``.
+    policy: str
+    #: The pass's clock. It carries its offset, so it compares with every other reading of the pass's clock.
+    last_maintained_at: AwareDatetime
+
+    @classmethod
+    def under(cls, record: dict[str, Any], at: datetime) -> CadenceStamp:
+        """The stamp of a pass at ``at`` under the policy ``record``."""
+        return cls(policy=f"{record['kind']}:{policy_key(record)}", last_maintained_at=at)
 
 
-def read_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, table_uuid: str, uri: str) -> str | None:
-    """A pass's ``last_maintained_at`` stamp for the dataset ``uri`` of the table ``table_uuid`` under the policy
-    ``record``, or ``None``. A stamp taken under another policy paces nothing: the policy that governs now has not
-    maintained the dataset yet."""
-    stamped = get_record(control_root, storage_options, _cadence_key(table_uuid, uri), event="maintenance_policy_state")
-    if stamped is None or stamped.get("policy") != _policy_of(record):
+def read_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, table_uuid: str, uri: str) -> datetime | None:
+    """When a pass last maintained the dataset ``uri`` of the table ``table_uuid`` under the policy ``record``, or
+    ``None``. A stamp taken under another policy paces nothing: the policy that governs now has not maintained the
+    dataset yet. Neither does a stamp that cannot be read as a time with its offset: an absent stamp maintains, and one
+    this reading refused would otherwise silence maintenance for as long as it stood.
+
+    Raises:
+        OSError: The store failed the read.
+    """
+    key = cadence_key(table_uuid, uri)
+    try:
+        held = read_record(control_root, storage_options, key)
+        if held is None:
+            return None
+        stamp = CadenceStamp.model_validate(held)
+    except ValueError:
+        log.warning("maintenance_policy_state_malformed", extra={"key": key})
         return None
-    value = stamped.get("last_maintained_at")
-    return value if isinstance(value, str) else None
+    return stamp.last_maintained_at if stamp == CadenceStamp.under(record, stamp.last_maintained_at) else None
 
 
-def write_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, table_uuid: str, uri: str, at: str) -> None:
-    """Persist a pass's ``last_maintained_at`` stamp for one dataset under the policy ``record`` (overwrite)."""
-    put_record(control_root, storage_options, _cadence_key(table_uuid, uri), {"policy": _policy_of(record), "last_maintained_at": at})
+def write_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, table_uuid: str, uri: str, at: datetime) -> None:
+    """Persist a pass's stamp for one dataset under the policy ``record`` (overwrite).
+
+    Raises:
+        pydantic.ValidationError: ``at`` carries no offset.
+    """
+    put_record(control_root, storage_options, cadence_key(table_uuid, uri), CadenceStamp.under(record, at).model_dump(mode="json"))
 
 
 def end_table_state(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:

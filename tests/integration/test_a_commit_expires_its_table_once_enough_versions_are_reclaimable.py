@@ -284,6 +284,9 @@ def _outcome(kind: str, uri: str) -> DatasetResult:
             return DatasetResult(uri=uri)
 
 
+#: A case's key naming the cadence stamp it holds in place of the one a pass writes; no policy field.
+_STAMP = "stamp"
+
 #: Each case's next pass, from the pass's clock and the commit times of the table's superseded versions, oldest first.
 type _Expected = Callable[[datetime, list[datetime]], datetime]
 _RETRY = timedelta(seconds=900)
@@ -304,6 +307,14 @@ _RECHECK = timedelta(hours=72)
         ),
         pytest.param(
             {"retention_days": 1, "compact_interval_hours": 30}, None, "ran", lambda now, _: now + timedelta(hours=30), id="the-policy-cadence-holds-it-later"
+        ),
+        # A stamp no pass wrote, carrying no offset, is no reading of when the dataset was maintained.
+        pytest.param(
+            {"retention_days": 1, "compact_interval_hours": 30, _STAMP: "without-an-offset"},
+            None,
+            "ran",
+            lambda _, superseded: superseded[THRESHOLD - 1] + timedelta(days=1),
+            id="a-stamp-without-an-offset-paces-nothing",
         ),
         pytest.param(KEEP_ONE, "30", "ran", lambda now, _: now + timedelta(seconds=60), id="never-sooner-than-a-minute"),
     ],
@@ -335,7 +346,11 @@ def test_a_tables_next_pass_comes_when_its_first_dataset_needs_one(
     now = datetime.now(UTC)
     if "compact_interval_hours" in policy:
         record = {"kind": "table", "id": TABLE, "uuid": task.uuid, **policy}
-        maintenance_policies.write_state(f"s3://{bucket}", store, record, table_uuid=task.uuid, uri=held_location(task.location), at=now.isoformat())
+        dataset = held_location(task.location)
+        if policy.get(_STAMP) == "without-an-offset":
+            seeding.put_cadence_stamp(f"s3://{bucket}", store, record, table_uuid=task.uuid, uri=dataset, at=now.replace(tzinfo=None).isoformat())
+        else:
+            maintenance_policies.write_state(f"s3://{bucket}", store, record, table_uuid=task.uuid, uri=dataset, at=now)
     held = location_claims.holder(location_claims.ClaimStore(control_root=f"s3://{bucket}", storage_options=store), task.location)
     assert held is not None
     readings = table_pass.read_for(task.location, held, configured, now=now)

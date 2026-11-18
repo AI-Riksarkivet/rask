@@ -64,6 +64,7 @@ from lakehouse import thread_pool
 from lakehouse.app import setup_logging
 from lakehouse.body_limit import BodySizeLimitMiddleware
 from lakehouse.deadline import RequestDeadlineMiddleware
+from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import configure_audit
 from lakehouse.no_store import NoStoreMiddleware
@@ -127,16 +128,29 @@ def _trace_every_request(app: FastAPI) -> None:
         FastAPIInstrumentor.instrument_app(app)
 
 
-def _watching_its_threads(lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]]) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-    """``lifespan``, entered once the serving loop's thread pool is reported (`lakehouse.thread_pool`)."""
+def _served(lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]]) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """``lifespan``, entered once the serving loop's thread pool is reported (`lakehouse.thread_pool`), with the drain
+    armed while it serves.
+
+    ARMED AT SIGTERM, for every service the factory builds (`lakehouse.draining.arm_drain_on_sigterm`). A lifespan's own
+    ``finally`` runs only after uvicorn has stopped accepting connections and drained, so a probe reading a flag set
+    there answers ready through the whole drain, and Kubernetes sends SIGTERM at the START of termination. Armed once
+    the service's lifespan has started, and restored before it is torn down, so the flag is set while everything the
+    service holds is still open. A process that serves this app with no lifespan (a worker answering its probes from a
+    thread) takes SIGTERM itself.
+    """
 
     @asynccontextmanager
-    async def watching(app: FastAPI) -> AsyncGenerator[None]:
+    async def serving(app: FastAPI) -> AsyncGenerator[None]:
         thread_pool.watch()
         async with lifespan(app):
-            yield
+            disarm = arm_drain_on_sigterm(app)
+            try:
+                yield
+            finally:
+                disarm()
 
-    return watching
+    return serving
 
 
 def _mount_docs(app: FastAPI) -> None:
@@ -202,7 +216,7 @@ def build_lance_service_app(
     app = _UncachedApp(
         title=title,
         version=version,
-        lifespan=_watching_its_threads(lifespan),
+        lifespan=_served(lifespan),
         docs_url=None,
         redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,

@@ -496,9 +496,9 @@ auth:
   # in either direction; `values-prod.yaml` does, so prod states its intent rather than inheriting it.
   # #41 compliance audit trail: structured who/what/outcome events for authn (success+failure), authz
   # (allow+deny), and credential vending on the dedicated `lance.audit` logger → OTLP → GreptimeDB. Rendered
-  # into LANCE_AUDIT_ENABLED only when auth is on (that is where a real subject exists); set false to silence
+  # into RASK_AUDIT_ENABLED only when auth is on (that is where a real subject exists); set false to silence
   # the stream even with auth on.
-  # -- Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.
+  # -- Emit the structured authn/authz/credential-vending audit stream (RASK_AUDIT_ENABLED); takes effect only with auth on. false silences it.
   audit: true
   # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writer (the catalog) and the openfga-model hook dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
   fgaApiUrl: ""
@@ -730,7 +730,7 @@ catalog:
 # on that connection too, from a durable consumer the stream Job declares with this topic as its filter
 # (templates/nats-stream-job.yaml).
 pubsub:
-  # -- Topic OpenLineage events are published on and each consumer of them is filtered to (LANCE_LINEAGE_TOPIC and siblings).
+  # -- Topic OpenLineage events are published on and each consumer of them is filtered to (RASK_LINEAGE_TOPIC).
   topic: lineage.events.v1
 
 # === Maintenance service (a worker on a NATS JetStream work queue, ADR 0198) =====================

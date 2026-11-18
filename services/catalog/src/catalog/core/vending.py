@@ -43,12 +43,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
 from lakehouse import file_identities, history_fences, store_session
-from lakehouse.base_refs import decoded_path, location_within, normalise
+from lakehouse.base_refs import decoded_path, location_within, names_a_location, normalise
 from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from lakehouse.features import CREATE_FORMAT, BasePathRef, TableFileFormat, manifest_base_path_refs, table_file_format
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
 from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.storage_options import StorageOptions
@@ -423,16 +424,17 @@ def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
     a file directory (``lance_docs/lance/format/table/layout.md``, Base Path System), never at a bucket. A base in its OWN bucket
     stays legitimate — containment here is about DEPTH, not about the bucket matching the table's.
 
-    ``..`` is refused on the reasoning ``uri_within`` already records: no location the catalog vends
-    contains one, so its presence is evidence the value was not vended.
+    A spelling that names no location (``lakehouse.base_refs.names_a_location``: a ``..`` segment, an empty one) is
+    refused too: ``<table>/../victim`` starts with the table's prefix and is not under it, and no location the catalog
+    vends is spelled that way, so its presence is evidence the value was not vended.
     """
     if not base_prefix:
         raise ValueError(
             f"base path {base!r} names a bucket root, so granting it would widen this credential to the whole bucket; "
             f"a base points at a dataset root or a file directory, never at a bucket"
         )
-    if ".." in base_prefix.split("/"):
-        raise ValueError(f"base path {base!r} contains a '..' segment; no location the catalog vends contains one")
+    if not names_a_location(base):
+        raise ValueError(f"base path {base!r} names no location (a '..' or empty segment); no location the catalog vends is spelled so")
 
 
 def _location_within(outer: tuple[str, str], inner: tuple[str, str]) -> bool:
@@ -533,11 +535,12 @@ def _covered(table_location: str, base: str, sanctioned_bases: Sequence[str]) ->
     statement already covers it. That is every base a BRANCH handle declares — its parent's root — and
     the vend doors judge the branch's own manifest ([[LH-279]]). A base outside it holding IAM policy syntax
     is one no statement can name without IAM reading the syntax, so the policy drops it, and the door answers server-mediated
-    rather than vend a credential that misses it ([[LH-437]]).
+    rather than vend a credential that misses it ([[LH-437]]). A base whose spelling names no location is one the
+    policy refuses to write a statement for, so the door answers server-mediated for it as well.
     """
     if location_within(table_location, base):
         return True
-    if held_iam_policy_syntax(base):
+    if held_iam_policy_syntax(base) or not names_a_location(base):
         return False
     try:
         return _base_is_sanctioned(split_s3_location(base), split_s3_location(table_location), sanctioned_bases)
@@ -574,7 +577,7 @@ def labelled_fields(dataset: Any) -> dict[int, tuple[str, dict[str, str]]]:  # n
 
     def walk(field: Any, prefix: str) -> None:  # noqa: ANN401 — a lance.LanceField
         path = f"{prefix}{field.name()}"
-        governed = {str(key): str(value) for key, value in (field.metadata or {}).items() if str(key).startswith("rask.")}
+        governed = {str(key): str(value) for key, value in (field.metadata or {}).items() if str(key).startswith(PLATFORM_PREFIX)}
         if governed:
             found[int(field.id())] = (path, governed)
         for child in field.children():

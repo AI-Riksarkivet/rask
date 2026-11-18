@@ -92,7 +92,7 @@ spec:
             {{- end }}
             - { name: LANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: LANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
-            - { name: LANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            - { name: RASK_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
             {{- end }}
@@ -135,7 +135,7 @@ spec:
             - { name: LANCE_FGA_MAINTAINERS, value: {{ include "lance.fgaMaintainers" $root | quote }} }
             - { name: LANCE_PROVENANCE_WRITERS, value: {{ toJson (list (include "lance.saSubject" (list $root "lineage"))) | quote }} }
             - { name: LANCE_OWN_ACCOUNTS, value: {{ include "lance.ownAccounts" $root | quote }} }
-            - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
+            - { name: RASK_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "catalog") | nindent 12 }}
@@ -237,7 +237,7 @@ spec:
             - { name: LINEAGE_FORWARD_API_KEY_SECRET, value: {{ .authSecret.name | quote }} }
             - { name: LINEAGE_FORWARD_API_KEY_FIELD, value: {{ .authSecret.key | quote }} }
             {{- end }}
-            - { name: LINEAGE_EVENTS_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            - { name: RASK_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- $delivery := required "services.lineage.delivery is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.services.lineage.delivery }}
             - { name: LINEAGE_DELIVERIES_IN_FLIGHT, value: {{ required "services.lineage.deliveriesInFlight is required" .Values.services.lineage.deliveriesInFlight | quote }} }
             - { name: LINEAGE_DELIVERY_ATTEMPTS, value: {{ required "services.lineage.delivery.attempts is required" $delivery.attempts | quote }} }
@@ -258,7 +258,7 @@ spec:
             {{- if .Values.auth.enabled }}
             {{- include "lance.governedOidcEnv" . | nindent 12 }}
             {{- include "lance.governedFgaEnv" (list . "lineage") | nindent 12 }}
-            - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
+            - { name: RASK_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "lineage") | nindent 12 }}
 
             {{- if (.Values.signing).enforce }}

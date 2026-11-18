@@ -110,7 +110,7 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     # `lakehouse.bus`), so a lineage outage never loses provenance. The HTTP /api/v1/lineage endpoint stays for
     # external producers.
     #: The topic lineage's events ride: the one its consumer takes, and the one the relay publishes a recovered event on.
-    events_topic: str = Field(default="lineage.events.v1", alias="LINEAGE_EVENTS_TOPIC")
+    lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")
     #: How many deliveries are handled at once, across this service's replicas: the consumer's `max_ack_pending`, which
     #: the chart declares from the same value, so the bus hands out no more than the replicas handle.
     deliveries_in_flight: int = Field(default=64, ge=1, alias="LINEAGE_DELIVERIES_IN_FLIGHT")
@@ -123,7 +123,7 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     #: Bounds the relay's re-publish of a drained event. An unbounded publish against a bus that does not answer
     #: would stall the tick — the relay failing hardest exactly when a backlog means it matters most, which is the
     #: same failure the bounded drain was introduced to avoid.
-    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_PUBLISH_TIMEOUT_SECONDS")
+    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_PUBLISH_TIMEOUT_SECONDS")
     # Seconds between two ticks of the relay, which drains the outbox, forwards to the configured graph backend and
     # prunes the feed, on lineage's own timer (`lineage/api/relay.py`). 0 = no relay.
     relay_period_seconds: float = Field(default=0, ge=0, alias="LINEAGE_RELAY_PERIOD_SECONDS")
@@ -163,10 +163,10 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     events_retention_days: int = Field(default=7, ge=0, alias="LINEAGE_EVENTS_RETENTION_DAYS")
 
     # Compliance audit trail (#41): gate the dedicated `lance.audit` stream (the DLQ-replay record) exactly
-    # like the catalog — the SHARED LANCE_AUDIT_ENABLED env (not a LINEAGE_* twin), so one flag governs the
+    # like the catalog — the SHARED RASK_AUDIT_ENABLED env (not a LINEAGE_* twin), so one flag governs the
     # estate's compliance posture. Default on; without the lifespan's configure_audit call the stream is
     # silently OFF (the logger inherits root WARNING and the INFO records drop before any handler).
-    audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
+    audit_enabled: bool = Field(default=True, alias="RASK_AUDIT_ENABLED")
 
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making

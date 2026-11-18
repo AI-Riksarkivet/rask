@@ -57,7 +57,6 @@ import ssl
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Annotated, Any, Final, NamedTuple
 from urllib.parse import urlsplit
 
@@ -67,6 +66,7 @@ from lance_namespace import UnauthenticatedError
 from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError
 
 from lakehouse.exceptions import ServiceUnavailableError
+from lakehouse.projected_token import read_token_file
 
 
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
@@ -172,10 +172,7 @@ class _FetchCredential:
     def headers(self) -> dict[str, str]:
         if self._token_file is None:
             return {}
-        token = Path(self._token_file).read_text().strip()
-        if not token:
-            raise OSError(f"the fetch credential at {self._token_file} is empty")
-        return {"Authorization": f"Bearer {token}"}
+        return {"Authorization": f"Bearer {read_token_file(self._token_file)}"}
 
     def verify(self) -> ssl.SSLContext | bool:
         return self.ssl_context if self.ssl_context is not None else True

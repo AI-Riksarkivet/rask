@@ -18,7 +18,6 @@ import logging
 from collections.abc import Callable, Sequence
 from uuid import UUID
 
-import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 from lance_namespace import (
@@ -46,6 +45,7 @@ from lakehouse import base_registry, blobs, clone_endings, clone_sources, contro
 from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.history_fences import HistoryFencedError
+from lakehouse.lance_session import open_dataset
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 
@@ -208,7 +208,7 @@ def _manifest_table_locations(root: str, storage_options: StorageOptions) -> lis
     fs, base = fs_and_base(root, storage_options)
     if fs.get_file_info(f"{base}/{_MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
-    manifest = lance.dataset(f"{root.rstrip('/')}/{_MANIFEST_DIR}", storage_options=storage_options.in_clear(), session=shared_lance_session())
+    manifest = open_dataset(f"{root.rstrip('/')}/{_MANIFEST_DIR}", storage_options=storage_options.in_clear(), session=shared_lance_session())
     rows = manifest.to_table(columns=["object_type", "location"])
     locations: list[str] = []
     for kind, stored in zip(rows.column("object_type").to_pylist(), rows.column("location").to_pylist(), strict=True):

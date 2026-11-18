@@ -31,6 +31,7 @@ from lakehouse import location_claims, objectfs, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.history_fences import HistoryWork, TableHistory
+from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.transactions import read_transaction
 
 
@@ -135,9 +136,8 @@ def _reference(source: CloneSource) -> int | tuple[str, int]:
 
 
 def _open(location: str, storage_options: StorageOptions) -> lance.LanceDataset:
-    import lance
 
-    return lance.dataset(location, storage_options=storage_options.in_clear())
+    return open_dataset(location, storage_options=storage_options.in_clear(), session=fresh_session())
 
 
 def _dataset_key(location: str) -> str:

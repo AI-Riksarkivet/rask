@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from lakehouse import location_claims, trash
 from lakehouse.base_registry import BaseRegistry
+from lakehouse.commit_records import is_canonical_uuid
 from lakehouse.control_emit import ControlEmitter
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.bucket_events import report_bucket_events
@@ -371,8 +372,13 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
     covered_checks = (await queue.held("schedule", "orphans") | await queue.held("task", "orphans")) if settings.orphan_check_enabled else set(tables)
     queued = {"tables": 0, "trash": 0, "checks": 0}
     now = datetime.now(UTC)
+    # A record naming its object by anything but a uuid can hold no task (`Task`), and must not end the audit for every
+    # record after it: it is said, and the rest are queued.
+    unnamed = sorted(uuid for uuid in (*tables, *trashed) if not is_canonical_uuid(uuid))
+    if unnamed:
+        log.error("maintenance_audit_record_names_no_uuid", extra={"uuids": unnamed[:20], "count": len(unnamed)})
     for uuid, location in tables.items():
-        if uuid in trashed:
+        if uuid in trashed or uuid in unnamed:
             continue
         if uuid not in covered_tables and await queue.enqueue(Task(kind="table", uuid=uuid, location=location)):
             queued["tables"] += 1
@@ -383,7 +389,7 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
         # A released or undated record's task ends holding nothing (:mod:`maintenance.services.trash_task`), so queueing
         # one would queue it again every hour. The daily scan's purge reaches a released record without a task, and an
         # undated one is never released (:func:`lakehouse.trash.release_at`).
-        if trash.is_released(record) or trash.release_at(record) is None:
+        if trash.is_released(record) or trash.release_at(record) is None or uuid in unnamed:
             continue
         task = Task(kind="trash", uuid=uuid, location=trash.location_of(record), trashed=trash.kind_of(record))
         if uuid not in covered_trash and await queue.enqueue(task):

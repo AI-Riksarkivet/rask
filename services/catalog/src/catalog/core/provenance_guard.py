@@ -42,10 +42,11 @@ import pyarrow as pa
 from lance_namespace import InvalidInputError
 
 from catalog.services import primary_keys
+from lakehouse.naming import PLATFORM_PREFIX
 
 
 #: Schema-metadata namespaces only the platform writes. A key under either is refused at every write door.
-RESERVED_METADATA_PREFIXES: Final = ("lineage.", "rask.")
+RESERVED_METADATA_PREFIXES: Final = ("lineage.", PLATFORM_PREFIX)
 
 
 def metadata_text(key: str | bytes) -> str:
@@ -78,7 +79,9 @@ def field_labels(schema: pa.Schema) -> dict[str, dict[str, str]]:
 
     def walk(field: pa.Field, prefix: str) -> None:
         path = f"{prefix}{field.name}"
-        if governed := {metadata_text(key): metadata_text(value) for key, value in (field.metadata or {}).items() if metadata_text(key).startswith("rask.")}:
+        if governed := {
+            metadata_text(key): metadata_text(value) for key, value in (field.metadata or {}).items() if metadata_text(key).startswith(PLATFORM_PREFIX)
+        }:
             found[path] = governed
         if pa.types.is_struct(field.type):
             for index in range(field.type.num_fields):

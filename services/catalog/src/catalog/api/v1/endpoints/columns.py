@@ -15,7 +15,7 @@ branch write is never reported — or recorded — against main (#100).
 from __future__ import annotations
 
 from functools import partial
-from typing import Annotated, Any, Final
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
@@ -60,6 +60,7 @@ from catalog.core.lineage_emit import (
 from catalog.services import dataplane
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed import fga
+from lakehouse.naming import PLATFORM_PREFIX
 
 
 #: The GOVERNANCE namespace in field metadata: keys the estate acts on, not user properties.
@@ -70,9 +71,8 @@ from lakehouse.governed import fga
 #: classification and make their own table directly vendable again, which is the separation-of-duties
 #: hole the reference model's "classify without holding data/DDL rights" names.
 #:
-#: A PREFIX rather than one key, matching `_INTERNAL_METADATA_PREFIX`'s shape on the table-level twin:
-#: the next governance key must not have to remember to add itself to a gate.
-GOVERNANCE_FIELD_PREFIX: Final = "rask."
+#: The gate is the platform's PREFIX rather than one key: the next governance key must not have to remember to add
+#: itself to a gate.
 
 
 async def _require_classifier_for_governance_keys(
@@ -106,7 +106,7 @@ async def _require_classifier_for_governance_keys(
     the same class of miss as reading only non-null values, one field over.
     """
     replaces = any(update.get("replace") for update in updates)
-    touched = sorted({key for update in updates for key in (update.get("metadata") or {}) if key.startswith(GOVERNANCE_FIELD_PREFIX)})
+    touched = sorted({key for update in updates for key in (update.get("metadata") or {}) if key.startswith(PLATFORM_PREFIX)})
     if not touched and not replaces:
         return
     await fga_deps.require_relation(client, settings, token, relation="can_classify", obj=fga.table_object(table.require_uuid()))
@@ -118,7 +118,7 @@ async def _require_classifier_for_governance_keys(
     # ONLY NON-NULL VALUES, because `apply` attaches a label and never detaches one. A clear names no
     # value to be delegated, and gating it on one would let a narrow grant strand a label its holder
     # could attach and nobody present could remove — so removal stays on the table rung alone.
-    values = {str(v) for update in updates for key, v in (update.get("metadata") or {}).items() if key.startswith(GOVERNANCE_FIELD_PREFIX) and v is not None}
+    values = {str(v) for update in updates for key, v in (update.get("metadata") or {}).items() if key.startswith(PLATFORM_PREFIX) and v is not None}
     for value in sorted(values):
         await fga_deps.require_relation(client, settings, token, relation="can_apply", obj=f"classification:{value}")
 

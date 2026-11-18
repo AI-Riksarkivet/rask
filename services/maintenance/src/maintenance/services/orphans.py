@@ -53,6 +53,7 @@ import lance
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
+from lakehouse import lance_session
 from lakehouse.features import unsupported_features, unsupported_features_from_open_error
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.storage_options import StorageOptions
@@ -216,7 +217,9 @@ def open_dataset(dataset_uri: str, storage_options: StorageOptions | None = None
     :func:`scan_dataset` holds the handle and hands it to :func:`referenced_paths_of` and to the layout gate
     (which reads the manifest's feature flags), so neither opens the dataset again.
     """
-    return lance.dataset(dataset_uri, storage_options=None if storage_options is None else storage_options.in_clear(), session=shared_lance_session())
+    return lance_session.open_dataset(
+        dataset_uri, storage_options=None if storage_options is None else storage_options.in_clear(), session=shared_lance_session()
+    )
 
 
 def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[str], int]:

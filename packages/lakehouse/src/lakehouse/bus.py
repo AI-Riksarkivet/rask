@@ -67,7 +67,6 @@ import random
 import ssl
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
-from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, Self
 
@@ -86,6 +85,7 @@ from lakehouse.bus_metrics import create_delivery_series, record_delivery, recor
 from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
 from lakehouse.context import continuing, current_trace_context
 from lakehouse.lifecycle import closed_quietly
+from lakehouse.projected_token import read_token_file
 
 
 if TYPE_CHECKING:
@@ -240,9 +240,9 @@ class BusSettings(BaseSettings):
         kubelet has replaced is the one presented.
 
         Raises:
-            OSError: The file is not there to read.
+            OSError: The file is not there to read, or holds no token.
         """
-        return Path(self.token_file).read_text(encoding="utf-8").strip()
+        return read_token_file(self.token_file)
 
     @property
     def encrypted(self) -> bool:

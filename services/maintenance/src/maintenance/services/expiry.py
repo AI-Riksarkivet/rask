@@ -11,7 +11,6 @@ runs ([[LH-575]]). Every gate here guards one of those deletes.
 from __future__ import annotations
 
 import logging
-import re
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
 from typing import Final, Literal
@@ -19,7 +18,7 @@ from typing import Final, Literal
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import trash
+from lakehouse import manifest_names, trash
 from lakehouse.base_registry import RecordedBase
 from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from lakehouse.features import (
@@ -30,6 +29,7 @@ from lakehouse.features import (
     unsupported_features_from_open_error,
 )
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from lakehouse.lance_session import open_dataset
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
 from lakehouse.stored_objects import delete_objects, list_under_at, recording_removed_transactions
@@ -256,7 +256,7 @@ class DatasetOpener:
     def __call__(self) -> lance.LanceDataset:
         if self._held is None:
             try:
-                self._held = lance.dataset(self._uri, storage_options=self._options.in_clear(), session=shared_lance_session())
+                self._held = open_dataset(self._uri, storage_options=self._options.in_clear(), session=shared_lance_session())
             except Exception as exc:  # noqa: BLE001 — raised again to each reader, which reports it as its own open's failure
                 self._held = exc
         if isinstance(self._held, Exception):
@@ -272,7 +272,7 @@ def _open(target: ExpiryTarget, opener: DatasetOpener | None = None) -> _Opened 
     and the lineage layer drops it.
     """
     try:
-        ds = opener() if opener is not None else lance.dataset(target.uri, storage_options=target.opened_with.in_clear(), session=shared_lance_session())
+        ds = opener() if opener is not None else open_dataset(target.uri, storage_options=target.opened_with.in_clear(), session=shared_lance_session())
         reader_flags, writer_flags = manifest_feature_flags(ds)
         return _Opened(
             ds=ds,
@@ -304,17 +304,6 @@ def count_reclaimable(ds: lance.LanceDataset, policy: ExpiryPolicy) -> int:
     return explained.stats.old_versions
 
 
-#: A manifest a stock writer stages, `<inverted version>.manifest-<uuid>` (ADR 0157). Lance's listing drops the name
-#: (`detect_scheme`, `rust/lance-table/src/io/commit.rs:138-150` at v13.0.0), so ``cleanup_old_versions`` never reclaims
-#: one.
-_STAGED_MANIFEST: Final = re.compile(r"^(?P<inverted>\d{20})\.manifest-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-_U64_MAX: Final = (1 << 64) - 1
-#: A detached manifest, `d<id>.manifest`: every catalog commit writes one to judge the version before it finalizes it,
-#: and deletes it (`catalog.services.dataplane.discard_detached_manifest`). One still there past the grace is a commit
-#: that died, or whose delete the store refused, between the two. Lance's cleanup keeps it: measured on pylance 13.0.0
-#: (2026-11-17), `cleanup_old_versions(older_than=0, delete_unverified=True)` left a `d5.manifest` and one whose id has
-#: the top bit set ([[LH-401]]).
-_DETACHED_MANIFEST: Final = re.compile(r"^d\d+\.manifest$")
 #: How long a detached manifest is kept at least, whatever the staged grace is set to. Unlike a manifest staged for a
 #: version the ref already holds, a detached one may belong to a commit still at work: it is read from when the catalog
 #: judges the version until the backend finalizes it, across the judgement, the commit's records and a wait for the
@@ -359,11 +348,15 @@ def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version:
     committer's own credential, which the write tier does not grant, and keeps one whose outcome it cannot prove
     (`lose_or_retain`, `rust/lance-table/src/io/commit/external_manifest.rs` at v13.0.0). Neither can land once another
     commit holds its version, and each is one more key every open of the table lists. One staged for a later version is
-    a commit still in flight, and is not one of these.
+    a commit still in flight, and is not one of these. ``cleanup_old_versions`` never reclaims a staged one: Lance's
+    listing drops the name (`detect_scheme`, `rust/lance-table/src/io/commit.rs:138-150` at v13.0.0).
 
-    A detached manifest (:data:`_DETACHED_MANIFEST`) is one of these whatever the version: the commit that wrote it
-    deletes it within the request, so one past :data:`DETACHED_MANIFEST_GRACE` belongs to a commit that ended without
-    doing so.
+    A detached manifest (:func:`lakehouse.manifest_names.is_detached`) is one of these whatever the version: every
+    catalog commit writes one to judge the version before it finalizes it, and deletes it within the request
+    (`catalog.services.dataplane.discard_detached_manifest`), so one past :data:`DETACHED_MANIFEST_GRACE` belongs to a
+    commit that died, or whose delete the store refused, between the two. Lance's cleanup keeps it: measured on pylance
+    13.0.0 (2026-11-17), `cleanup_old_versions(older_than=0, delete_unverified=True)` left a `d5.manifest` and one whose
+    id has the top bit set ([[LH-401]]).
 
     Its age is the store's reading alone ([[LH-575]], ADR 0179): the listing's ``Date`` against the stamp the store put
     on it, so a pod whose clock runs ahead removes nothing a commit may still be deciding on.
@@ -373,11 +366,11 @@ def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version:
     detached: set[str] = set()
     for listed in listing.objects:
         name = listed.path.rsplit("/", 1)[-1]
-        match = _STAGED_MANIFEST.match(name)
-        if _DETACHED_MANIFEST.match(name):
+        staged_for = manifest_names.staged_version(name)
+        if manifest_names.is_detached(name):
             detached.add(listed.path)
             lost[listed.path] = listed.modified
-        elif match is not None and _U64_MAX - int(match["inverted"]) <= version:
+        elif staged_for is not None and staged_for <= version:
             lost[listed.path] = listed.modified
     return LostManifests(put_at=lost, detached=frozenset(detached), at=listing.at)
 

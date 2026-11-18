@@ -38,6 +38,7 @@ from lance_namespace import InternalError, InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse import control_prefixes
+from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.record_store import delete_record, get_record, list_records, record_key
 from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage_options import StorageOptions
@@ -116,7 +117,7 @@ def require_name(name: str) -> str:
     """
     if not NAME_RE.match(name):
         raise InvalidInputError(f"label name {name!r} must match {NAME_RE.pattern}")
-    if name == "rask" or name.startswith("rask."):
+    if f"{name}.".startswith(PLATFORM_PREFIX):
         raise InvalidInputError(f"label name {name!r} is the platform's: names under rask are reserved")
     return name
 

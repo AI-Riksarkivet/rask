@@ -116,6 +116,7 @@ def test_an_event_that_moves_no_bytes_asks_for_nothing(operation: str) -> None:
     [
         pytest.param(_event("insert", uri=None), id="a-write-naming-no-location"),
         pytest.param(_event("drop_table", uri=None, uuid=None), id="a-drop-naming-no-uuid"),
+        pytest.param(_event("insert", uuid="6f1c2c1e.>"), id="a-write-naming-a-uuid-that-is-none"),
         pytest.param({**_event("insert"), "outputs": []}, id="no-output"),
         pytest.param({**_event("insert"), "run": {"runId": "r-1", "facets": {}}}, id="no-operation-facet"),
         pytest.param({"run": "not-a-dict", "outputs": [{"name": "t"}]}, id="malformed"),

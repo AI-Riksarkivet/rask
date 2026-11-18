@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from lakehouse import maintenance_policies
+from lakehouse.governed.store_credential import StoreCredentialUnavailableError
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import DueQuestion
 from maintenance.services.expiry import ExpiryPolicy
@@ -123,11 +124,21 @@ def resolve_plan(uri: str, *, context: PlanContext, owners: PolicyOwners) -> Dat
     return plan_from_policy(policy, older_than=context.older_than)
 
 
+def last_maintained(policy: dict[str, Any], *, settings: MaintenanceSettings, table_uuid: str, uri: str) -> datetime | None:
+    """When a pass last maintained this dataset under ``policy``, or ``None`` when none did or the store cannot say.
+
+    A stamp the store fails to give maintains, never the other way, or a lost stamp would silence maintenance for
+    ever; it is logged, so a persistently broken state prefix is visible.
+    """
+    try:
+        return maintenance_policies.read_state(settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=uri)
+    except (OSError, StoreCredentialUnavailableError) as exc:
+        log.warning("compaction_policy_state_unreadable", extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)})
+        return None
+
+
 def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, table_uuid: str, uri: str, now: datetime) -> str | None:
     """``policy_interval`` while the policy's ``compact_interval_hours`` has not elapsed since this dataset's stamp.
-
-    An unreadable, absent or malformed stamp maintains — never the other way, or a lost stamp would silence maintenance
-    forever — and is logged, so a persistently broken state prefix is visible.
 
     Raises:
         MalformedPolicyError: The policy's settings cannot be read.
@@ -135,17 +146,5 @@ def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, table
     interval = maintenance_policies.policy_settings(policy).compact_interval_hours
     if interval is None:
         return None
-    try:
-        stamped = maintenance_policies.read_state(settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=uri)
-    except Exception as exc:  # noqa: BLE001 — a lost stamp maintains
-        log.warning("compaction_policy_state_unreadable", extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)})
-        return None
-    if stamped is None:
-        return None
-    try:
-        elapsed = now - datetime.fromisoformat(stamped)
-    except (ValueError, TypeError):
-        # TypeError covers a naive stamp: `now` is aware, and aware-minus-naive raises.
-        log.warning("compaction_policy_state_malformed", extra={"policy": policy.get("id"), "uri": uri, "stamp": stamped})
-        return None
-    return "policy_interval" if elapsed < timedelta(hours=interval) else None
+    stamped = last_maintained(policy, settings=settings, table_uuid=table_uuid, uri=uri)
+    return "policy_interval" if stamped is not None and now - stamped < timedelta(hours=interval) else None

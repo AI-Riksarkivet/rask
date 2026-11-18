@@ -39,6 +39,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps, listings
+from catalog.api import idempotency as idem
 from catalog.api.announcing import AnnouncerDep
 from catalog.api.dependencies import (
     ControlEmitterDep,
@@ -143,6 +144,7 @@ def _collect_descendants(ns: LanceNamespace, segments: list[str]) -> list[tuple[
 @router.post("/{id}/create", response_model_exclude_none=True)
 async def create_namespace(
     id: str,
+    keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
@@ -170,6 +172,10 @@ async def create_namespace(
     # Check(can_get_metadata, warehouse:X) errors instead of answering — taking browsing down for the
     # whole bucket, its owners included. Shape rung, so 400, and before the native call.
     fga_deps.require_namespace_depth(segments)
+    # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
+    converge = await keyed.begin(endpoint="POST /v1/namespace/{id}/create", target=fga.canonical_object_id(segments))
+    if converge.replay is not None:
+        return CreateNamespaceResponse.model_validate(converge.replay.body)
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
     # [[LH-519]] A uuid for the namespace this request creates (ADR 0173 §2, §6). An ExistOk that keeps one answers
@@ -206,6 +212,7 @@ async def create_namespace(
             raise NamespaceAlreadyExistsError(
                 f"namespace {id!r} already exists without {write_judge.REQUIRES_RUN_PROPERTY}; the rule is declared once, at create"
             )
+        await converge.remember(200, response)
         return response
 
     async def _undo_create() -> None:
@@ -229,6 +236,7 @@ async def create_namespace(
         actor=f"user:{token.subject}" if token else None,
         extra={"mode": req.mode, "properties": req.properties},
     )
+    await converge.remember(200, response)
     return response
 
 
@@ -792,6 +800,7 @@ async def _require_descendants_unprotected(settings: Settings, descendants: list
 @router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_namespace(
     id: str,
+    keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
@@ -841,6 +850,10 @@ async def drop_namespace(
     # non-empty namespace, so there are never extra tuples to revoke on that path.
     cascade = DropBehavior.parse(req.behavior) is DropBehavior.CASCADE
     req.id = reconcile_body_id(segments, req.id)
+    # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
+    converge = await keyed.begin(endpoint="POST /v1/namespace/{id}/drop", target=fga.canonical_object_id(segments))
+    if converge.replay is not None:
+        return DropNamespaceResponse.model_validate(converge.replay.body)
     # The namespace the name resolves to now, with the uuid its records are kept under (ADR 0173 §8). A `Skip` of a
     # namespace that is not there answers here, before anything is enumerated.
     try:
@@ -848,7 +861,9 @@ async def drop_namespace(
     except NamespaceNotFoundError:
         if drop_mode is not DropMode.SKIP:
             raise
-        return DropNamespaceResponse()
+        answer = DropNamespaceResponse()
+        await converge.remember(200, answer)
+        return answer
     await fga_deps.require_namespace_unprotected(settings, dropped, force=force)
     descendants: list[fga_deps.GovernedObject] = []
     # Enumerated whenever a CASCADE is asked for — not only when FGA is on, as it used to be. A cascade
@@ -865,7 +880,9 @@ async def drop_namespace(
         except NamespaceNotFoundError:
             if drop_mode is not DropMode.SKIP:
                 raise
-            return DropNamespaceResponse()
+            answer = DropNamespaceResponse()
+            await converge.remember(200, answer)
+            return answer
         # Protection is a property of the SUBTREE, so it is checked against every id about to die, and
         # the refusal NAMES the protected descendant — "something in here is protected" is not an
         # answer anyone can act on. `force` turns this lock exactly as it does at the named rung.
@@ -943,7 +960,9 @@ async def drop_namespace(
             except NamespaceNotFoundError:
                 if drop_mode is not DropMode.SKIP:
                     raise
-                return DropNamespaceResponse()
+                answer = DropNamespaceResponse()
+                await converge.remember(200, answer)
+                return answer
         removed = [item for item in descendants if item.kind == "namespace" or tuple(item.segments) in removed_tables]
         # The record dies with the object — a reused id must not inherit protection nobody set on it. A recoverable cascade
         # clears its namespace's here, and its DESCENDANTS' only under force=true (an unforced cascade already proved none
@@ -981,6 +1000,7 @@ async def drop_namespace(
                 }
             )
         )
+    await converge.remember(200, response)
     return response
 
 
@@ -1000,6 +1020,7 @@ async def namespace_tasks(
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_namespace(
     id: str,
+    keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     root: NamespaceRootDep,
     settings: SettingsDep,
@@ -1031,6 +1052,10 @@ async def undrop_namespace(
     from, it answers 409."""
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
+    # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
+    converge = await keyed.begin(endpoint="POST /management/v1/namespace/{id}/undrop", target=canonical)
+    if converge.replay is not None:
+        return CreateNamespaceResponse.model_validate(converge.replay.body)
     so = settings.storage_options()
     trashed = await resolver.admitted_trash("namespace", segments)
     if not trashed:
@@ -1141,6 +1166,7 @@ async def undrop_namespace(
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"namespaces": len(namespace_records), "tables": len(table_records) - skipped, "declared_only_skipped": skipped},
     )
+    await converge.remember(200, response)
     return response
 
 

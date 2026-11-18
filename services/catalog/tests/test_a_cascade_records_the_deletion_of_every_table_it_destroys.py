@@ -89,7 +89,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     settings = SimpleNamespace(
         registry_root=str(control),
         root=str(tmp_path / "data"),
-        storage_options=lambda: StorageOptions(),
+        storage_options=lambda **_: StorageOptions(),
         trash_grace_days=0,
         fga_enabled=False,
     )

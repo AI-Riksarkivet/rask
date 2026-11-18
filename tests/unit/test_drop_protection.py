@@ -259,6 +259,7 @@ def test_a_protected_namespace_refuses_drop(tmp_path: Any) -> None:
         asyncio.run(
             n_ep.drop_namespace(
                 id="bronze",
+                keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
                 settings=settings,
                 token=None,
@@ -380,6 +381,7 @@ def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any, monkeypatch: py
         asyncio.run(
             t_ep.undrop_table(
                 id="bronze$gone",
+                keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
                 root=_ROOT,
                 settings=settings,
@@ -433,6 +435,7 @@ def test_a_cascade_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
         asyncio.run(
             n_ep.drop_namespace(
                 id="bronze",
+                keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
                 settings=settings,
                 token=None,
@@ -458,6 +461,7 @@ def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
     asyncio.run(
         n_ep.drop_namespace(
             id="bronze",
+            keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
             settings=settings,
             token=None,
@@ -516,6 +520,7 @@ def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False,
     return asyncio.run(
         n_ep.drop_namespace(
             id="bronze",
+            keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
             settings=settings,
             token=None,
@@ -588,6 +593,7 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any, monkeypatch:
     asyncio.run(
         n_ep.undrop_namespace(
             id="bronze",
+            keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
             root=_ROOT,
             settings=settings,
@@ -618,6 +624,7 @@ def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any, monke
         asyncio.run(
             n_ep.undrop_namespace(
                 id="bronze",
+                keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
                 root=_ROOT,
                 settings=settings,

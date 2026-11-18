@@ -40,12 +40,16 @@ from pydantic import BaseModel, InstanceOf
 
 from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
+from catalog.core.config import shared_lance_session
 from catalog.core.namespace import overlapping_segments
 from catalog.core.vending import labelled_fields
 from catalog.services import client_fragments, committed_files, contracts, dataplane, maintenance, primary_keys, row_digests, table_claims
-from lakehouse import base_registry, commit_records, commit_turns, features, file_identities
+from lakehouse import base_registry, commit_records, commit_turns, features, file_identities, manifest_names
+from lakehouse.auto_cleanup import AUTO_CLEANUP_PREFIX
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.features import CREATE_FORMAT, table_file_format
+from lakehouse.lance_session import open_dataset
+from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.storage_options import StorageOptions
 from lakehouse.transactions import read_transaction
@@ -110,7 +114,7 @@ def _listed_branches(table_location: str, so: StorageOptions) -> dict[str, objec
     bare error as an absent dataset.
     """
     try:
-        return dict(lance.dataset(table_location, storage_options=so.in_clear() or None).branches.list() or {})
+        return dict(open_dataset(table_location, storage_options=so.in_clear() or None, session=shared_lance_session()).branches.list() or {})
     except (OSError, ValueError) as exc:
         if reads_as_store_outage(exc):
             raise ServiceUnavailableError("the object store did not answer listing the table's branches") from exc
@@ -162,7 +166,7 @@ def _staged_uri(location: str, manifest_path: str) -> str:
     root = location.rstrip("/")
     prefix = f"{dataplane.object_store_path(root)}/_versions/"
     name = manifest_path.removeprefix(prefix) if manifest_path.startswith(prefix) else ""
-    if not name or "/" in name or ".manifest-" not in name or name.endswith(".manifest"):
+    if "/" in name or manifest_names.staged_version(name) is None:
         raise InvalidInputError(f"manifest_path {manifest_path!r} is not a staged manifest under the ref's _versions/")
     return f"{root}/_versions/{name}"
 
@@ -180,7 +184,7 @@ def _latest_version(location: str, so: StorageOptions) -> int:
             the slot a reclaimed version 1 left, which the finalize's put-if-not-exists fills as a create.
     """
     try:
-        return int(lance.dataset(location, storage_options=so.in_clear() or None).version)
+        return int(open_dataset(location, storage_options=so.in_clear() or None, session=shared_lance_session()).version)
     except (OSError, ValueError) as exc:
         if reads_as_store_outage(exc):
             raise ServiceUnavailableError("the object store did not answer reading the table's latest version") from exc
@@ -243,10 +247,12 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         manifest = source.read()
     stated = manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.VERSION_FIELD)
     detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
-    _write(location, so, f"d{detached_id}.manifest", manifest_bytes.with_manifest_version(manifest, detached_id))
-    _write(location, so, f"d{finalize_id}.manifest", manifest)
+    _write(location, so, manifest_names.detached_name(detached_id), manifest_bytes.with_manifest_version(manifest, detached_id))
+    _write(location, so, manifest_names.detached_name(finalize_id), manifest)
     try:
-        transaction = read_transaction(lance.dataset(location, version=detached_id, storage_options=so.in_clear() or None), detached_id)
+        transaction = read_transaction(
+            open_dataset(location, version=detached_id, storage_options=so.in_clear() or None, session=shared_lance_session()), detached_id
+        )
     except (OSError, ValueError) as exc:
         _discard(location, so, detached_id, finalize_id)
         if reads_as_store_outage(exc):
@@ -309,12 +315,7 @@ def _unmodelled_operation(manifest: bytes) -> str | None:
 
 
 def _open(staged: StagedVersion, so: StorageOptions) -> lance.LanceDataset:
-    return lance.dataset(staged.location, version=staged.detached_id, storage_options=so.in_clear() or None)
-
-
-#: Manifest config a stock commit may not carry: Lance runs auto-cleanup inside the commit that finds it armed, which
-#: deletes versions ([[LH-245]]).
-_ARMED_CLEANUP_PREFIX = "lance.auto_cleanup."
+    return open_dataset(staged.location, version=staged.detached_id, storage_options=so.in_clear() or None, session=shared_lance_session())
 
 
 class _Fragments(BaseModel):
@@ -448,7 +449,8 @@ def _refuse_config(proposed: lance.LanceDataset, current: lance.LanceDataset | N
     stay as the catalog wrote them."""
     after = dict(proposed.config())
     formats.refuse_flag_locking_keys([*after, *(proposed.schema.metadata or {})], door="commit refused")
-    armed = sorted(key for key in after if key.startswith(_ARMED_CLEANUP_PREFIX))
+    # Lance runs auto-cleanup inside the commit that finds it armed, which deletes versions ([[LH-245]]).
+    armed = sorted(key for key in after if key.startswith(AUTO_CLEANUP_PREFIX))
     if armed:
         raise InvalidInputError(f"commit refused: manifest config arms Lance auto-cleanup ({armed}), which deletes versions inside a commit")
     if steering := formats.compaction_config_keys(after):
@@ -456,7 +458,7 @@ def _refuse_config(proposed: lance.LanceDataset, current: lance.LanceDataset | N
             f"commit refused: manifest config carries {steering}, which Lance would plan a compaction from in place of the table's maintenance policy"
         )
     before = dict(current.config()) if current is not None else {}
-    if {k: v for k, v in after.items() if k.startswith("rask.")} != {k: v for k, v in before.items() if k.startswith("rask.")}:
+    if {k: v for k, v in after.items() if k.startswith(PLATFORM_PREFIX)} != {k: v for k, v in before.items() if k.startswith(PLATFORM_PREFIX)}:
         raise InvalidInputError("commit refused: rask.* table config is the catalog's own and is not changed by a commit")
 
 
@@ -540,7 +542,7 @@ def _held_counters(location: str, so: StorageOptions, version: int) -> _HeldCoun
     ``_versions/<u64::MAX - version>.manifest`` and a V1-named one ``_versions/<version>.manifest`` (``lance_docs/lance/format/table/transaction.md``).
     """
     fs, base = dataplane.dataset_fs(location, so)
-    for name in (f"{(1 << 64) - 1 - version}.manifest", f"{version}.manifest"):
+    for name in manifest_names.committed_names(version):
         try:
             with fs.open_input_stream(f"{base.rstrip('/')}/_versions/{name}") as source:
                 message = manifest_bytes.manifest_message(source.read())
@@ -907,7 +909,11 @@ def judge(
         UnsupportedOperationError: The version needs a Lance feature this catalog does not serve.
     """
     proposed = _open(staged, so)
-    current = None if staged.creates else lance.dataset(staged.location, version=staged.version - 1, storage_options=so.in_clear() or None)
+    current = (
+        None
+        if staged.creates
+        else open_dataset(staged.location, version=staged.version - 1, storage_options=so.in_clear() or None, session=shared_lance_session())
+    )
     _refuse_changed_invariants(proposed, current)
     _refuse_changed_schema_governance(proposed, current, operation=staged.operation)
     contracts.require_kept(contract, current.schema if current is not None else None, proposed.schema, door="version/create")
@@ -1005,7 +1011,7 @@ def finalize(
     writer waits rather than being refused, since pylance fails a commit whose finalize answered 409 with no version at its
     target as of unknown outcome (measured on pylance 13.0.0).
     """
-    path = f"{dataplane.object_store_path(staged.location.rstrip('/'))}/_versions/d{staged.finalize_id}.manifest"
+    path = f"{dataplane.object_store_path(staged.location.rstrip('/'))}/_versions/{manifest_names.detached_name(staged.finalize_id)}"
     judged = request.model_copy(update={"manifest_path": path})
     try:
         response = CreateTableVersionResponse.model_validate(table.finalize_staged_version(judged, writer=writer, kept=kept))

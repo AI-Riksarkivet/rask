@@ -37,6 +37,7 @@ import pytest
 from lance_namespace import DescribeNamespaceResponse, DropNamespaceRequest, DropNamespaceResponse, InvalidInputError, NamespaceNotFoundError
 from unfiled_announcer import unfiled
 
+from catalog.api.idempotency import KeyedDoor
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
 from catalog.core.modes import DropMode
@@ -108,6 +109,7 @@ async def _drop(
 
     return await ns_ep.drop_namespace(
         id="ghost",
+        keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
         ns=MagicMock(),
         settings=cast(Settings, _Settings()),
         token=None,

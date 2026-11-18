@@ -37,6 +37,7 @@ from lakehouse import auto_cleanup
 from lakehouse.clone_sources import CloneReference, clone_reference
 from lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.lance_session import open_dataset
 from lakehouse.lancekit.absence import reads_as_absent
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.storage_options import StorageOptions
@@ -287,7 +288,7 @@ def open_location(location: str, storage_options: StorageOptions, *, version: in
     Raises whatever pylance raises, which every caller translates into the spec's codes (:func:`_open_ref`,
     :func:`catalog.core.vending.dataset_facts`).
     """
-    first = lance.dataset(location, storage_options=storage_options.in_clear(), version=None if branch else version, session=shared_lance_session())
+    first = open_dataset(location, storage_options=storage_options.in_clear(), version=None if branch else version, session=shared_lance_session())
     return first.checkout_version((branch, version)) if branch else first
 
 
@@ -323,7 +324,7 @@ def _open_ref(location: str, storage_options: StorageOptions, table_id: list[str
             if version is not None and "_versions/" in message and ".manifest" in message:
                 raise TableVersionNotFoundError(f"table version {version} was not found") from exc
             raise TableNotFoundError(f"table has no readable dataset at its declared location ({location!r})") from exc
-    main = lance.dataset(location, storage_options=storage_options.in_clear(), session=shared_lance_session())
+    main = open_dataset(location, storage_options=storage_options.in_clear(), session=shared_lance_session())
     try:
         return open_location(location, storage_options, version=version, branch=branch)
     except (ValueError, OSError) as exc:
@@ -412,7 +413,7 @@ def registered_dataset_facts(location: str, storage_options: StorageOptions) -> 
     unchanged, so a caller that has to fail closed can.
     """
     try:
-        dataset = lance.dataset(location, storage_options=storage_options.in_clear(), session=shared_lance_session())
+        dataset = open_dataset(location, storage_options=storage_options.in_clear(), session=shared_lance_session())
     except (ValueError, OSError) as exc:
         refused = flags_from_open_error(exc)
         if refused is not None and mixes_data_file_versions(refused):

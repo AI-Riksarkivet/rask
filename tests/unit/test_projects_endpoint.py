@@ -20,6 +20,7 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.v1.endpoints import projects as ep
+from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -169,8 +170,8 @@ def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_list_users(_client: Any, *, relation: str, obj: str, **kw: Any) -> list[str]:
         calls.append((relation, obj))
         # Display-only path: a single attempt under the tight per-call budget — the wrapper's default
-        # bounded-retry ladder alone could exceed it, so the endpoint must pin retry_attempts=1.
-        assert kw == {"retry_attempts": 1}
+        # bounded-retry ladder alone could exceed it, so the endpoint must pin one attempt.
+        assert kw == {"retry": fga.ONE_ATTEMPT}
         return ["alice"] if obj == "project:acme" else []
 
     monkeypatch.setattr(ep.fga, "list_users", _fake_list_users)

@@ -35,7 +35,7 @@ from the bytes its client sent (`catalog.api.path_reading`, [[LH-526]]). Named b
 ## `- { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Va...`
 
 Load-shed cap on concurrent in-flight Arrow-IPC writes (each buffers up to maxBodyBytes).
-hasKey+ternary, not `| default`, for the same two reasons as LANCE_AUDIT_ENABLED below: a
+hasKey+ternary, not `| default`, for the same two reasons as RASK_AUDIT_ENABLED below: a
 key missing under `helm upgrade --reuse-values` must render the default (not "" → pydantic
 int_parsing crash), and the meaningful 0 (shedding off) must stay settable — Sprig's
 default() treats 0 as empty.
@@ -196,13 +196,13 @@ holds to what git declares ([[XC-011]]): the catalog's boot takes back a
 `writer` granted at the namespace's access door to an account outside the release stands ([[LH-563]]). Rendered empty,
 the boot takes back nothing, and a writer the release stopped naming keeps writing lineage's tables.
 
-## `- { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | qu...`
+## `- { name: RASK_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | qu...`
 
 #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
 hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty (making
 `false` un-settable), while a bare reference renders "" when the key is missing entirely —
 which `helm upgrade --reuse-values` from a pre-#41 release does (live crash 2026-07-15,
-pydantic bool_parsing on LANCE_AUDIT_ENABLED=""). hasKey defaults a MISSING key to true and
+pydantic bool_parsing on RASK_AUDIT_ENABLED=""). hasKey defaults a MISSING key to true and
 still honors an explicit false.
 
 ## `apiVersion: apps/v1`
@@ -295,10 +295,10 @@ cannot drift from theirs: `lance.governedOidcEnv` in _helpers.tpl.
 Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the model hook
 use (see the catalog twin above). Unset = provision-by-name at boot.
 
-## `- { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | qu...`
+## `- { name: RASK_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | qu...`
 
 #41. The SAME `auth.audit` key the catalog reads, because this service declares the
-same `LANCE_AUDIT_ENABLED` alias and the chart rendered it into the catalog alone —
+same `RASK_AUDIT_ENABLED` alias and the chart rendered it into the catalog alone —
 measured live 2026-09-09, the lever reached ONE service of ten while every other pod
 ran on its field default (§ Q17-27). hasKey+ternary for the reason recorded at the
 catalog's copy: `| default` makes an explicit false un-settable, and a bare reference

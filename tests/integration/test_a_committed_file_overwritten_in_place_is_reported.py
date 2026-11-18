@@ -376,7 +376,7 @@ def _a_cadence_that_skips_the_pass(estate: _Estate, location: str) -> None:
     """The table's own policy, its cadence stamped a minute ago, so its next pass is cut short by it."""
     policy: dict[str, object] = {"kind": "table", "id": _TABLE, "uuid": estate.table_uuid(), "compact_enabled": True, "compact_interval_hours": 24}
     seeding.put_policy(f"s3://{estate.bucket}", estate.key, policy)
-    stamped = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    stamped = datetime.now(UTC) - timedelta(minutes=1)
     maintenance_policies.write_state(f"s3://{estate.bucket}", estate.key, policy, table_uuid=estate.table_uuid(), uri=location, at=stamped)
 
 

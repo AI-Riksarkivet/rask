@@ -54,7 +54,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: so the `lance.audit` logger sat at NOTSET and followed `RASK_LOG_LEVEL` (§ Q17-27). Arming it is
     #: the precondition for § Q17-36 — maintenance's per-object outcome becoming a governed record rather
     #: than telemetry on a 14-day trace TTL.
-    audit_enabled: bool = Field(default=True, alias="MAINTENANCE_AUDIT_ENABLED")
+    audit_enabled: bool = Field(default=True, alias="RASK_AUDIT_ENABLED")
     # Datasets whose newest version is older than this are eligible for version GC (keep recent history).
     # ge=1 (not 0): timedelta(0) is falsy, so pylance collapses `older_than` to None and silently drops the
     # threshold — to GC aggressively, use a small positive value, not 0.
@@ -130,8 +130,8 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # next to the writes. Off by default; a publish the bus did not take stays staged and never fails a pass.
     lineage_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_LINEAGE_EMIT_ENABLED")
     # Bound each publish so a bus that does not answer can't stall a pass (best-effort → the outage is swallowed).
-    publish_timeout_seconds: float = Field(default=5.0, gt=0, alias="MAINTENANCE_PUBLISH_TIMEOUT_SECONDS")
-    lineage_topic: str = Field(default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC")
+    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_PUBLISH_TIMEOUT_SECONDS")
+    lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")
     # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
     # AGE. The job NAME, `expire_versions.<table_id>`, names the operation.
     lineage_job_namespace: str = Field(default="maintenance", alias="MAINTENANCE_LINEAGE_JOB_NAMESPACE")

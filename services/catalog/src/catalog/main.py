@@ -266,7 +266,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         topic=settings.lineage_topic,
         job_namespace=settings.lineage_job_namespace,
         dataset_namespace=settings.lineage_dataset_namespace,
-        timeout_seconds=settings.lineage_emit_timeout_seconds,
+        timeout_seconds=settings.publish_timeout_seconds,
         project_resolver=_resolve_project,
         # The provenance namespace's own rows are never announced (`services.provenance_namespace`).
         unannounced=lambda namespace, operation: provenance_namespace.is_unannounced(namespace, operation, settings),
@@ -293,7 +293,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     app.state.control_emitter = make_control_emitter(
         enabled=settings.control_emit_enabled,
         bus=bus,
-        timeout_seconds=settings.control_emit_timeout_seconds,
+        timeout_seconds=settings.publish_timeout_seconds,
         service="catalog",
         # SIGNED AS THIS CATALOG ([[XC-078]]), with the holder the lineage emitter signs with, for the person each
         # event names, BEFORE it is staged; None for a catalog with no store or no identity. An event it cannot sign is

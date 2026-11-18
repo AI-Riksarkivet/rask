@@ -7,7 +7,7 @@ filterable stream — routable and retainable independently of the noisy app INF
 OTLP to GreptimeDB like every other log, queryable by ``audit.action`` / ``audit.outcome`` / ``audit.subject``
 (the dedicated ``lance.audit`` logger name).
 
-The whole trail is gated by one flag (:func:`configure_audit`, from a service's ``LANCE_AUDIT_ENABLED``
+The whole trail is gated by one flag (:func:`configure_audit`, from a service's ``RASK_AUDIT_ENABLED``
 setting): a deployment turns audit on or off for its compliance posture by setting the dedicated logger's
 level. Fields are consistent across every call site, so a record never misses who / what / outcome.
 

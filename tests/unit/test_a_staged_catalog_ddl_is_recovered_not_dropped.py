@@ -530,7 +530,7 @@ def test_the_dlq_replay_re_publishes_the_staged_event_to_the_lineage_topic(tmp_p
 
     assert out.status == "replayed"
     assert publisher.events == [json.loads(staged_json)], "subscribers never hear of a replayed create; the re-publish must carry the staged event"
-    assert [sent.topic for sent in publisher.sent] == [settings.events_topic], "the replay announced the create somewhere other than the lineage topic"
+    assert [sent.topic for sent in publisher.sent] == [settings.lineage_topic], "the replay announced the create somewhere other than the lineage topic"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is None, "a replayed event must be dropped"
 
 

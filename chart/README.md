@@ -43,7 +43,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | age.user | string | `"lance"` | Postgres user every AGE client connects as; its password is the store's `postgres` secret (field `password`), never a value. |
 | allocator.arenaMax | int | `2` | MALLOC_ARENA_MAX set on every lakehouse container (lance.allocatorEnv) to cap glibc malloc arenas. Default 2. |
 | allocator.arrowMemoryPool | string | `"system"` | ARROW_DEFAULT_MEMORY_POOL on every lakehouse container; `system` routes Arrow through malloc so `arenaMax` bounds it. |
-| auth.audit | bool | `true` | Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it. |
+| auth.audit | bool | `true` | Emit the structured authn/authz/credential-vending audit stream (RASK_AUDIT_ENABLED); takes effect only with auth on. false silences it. |
 | auth.bootstrapAdmin | string | `""` | The person's principal (`<idp-id>~<user id>`, e.g. `dex~<userID>`) the catalog grants `owner` on the estate's own warehouse and `admin` on estate:rask from its declaration, moving both when it changes; a bare name fails the render. Empty = no administrator is declared. |
 | auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render. A real deployment refuses it off. |
 | auth.fgaApiUrl | string | `""` | The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writer (the catalog) and the openfga-model hook dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer. |
@@ -241,7 +241,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":""},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the platform's gateway; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
 | podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service running more than one replica. |
 | podDisruptionBudget.minAvailable | int | `1` | minAvailable of every rendered PodDisruptionBudget. |
-| pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage events are published on and each consumer of them is filtered to (LANCE_LINEAGE_TOPIC and siblings). |
+| pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage events are published on and each consumer of them is filtered to (RASK_LINEAGE_TOPIC). |
 | readOnlyWindow | bool | `false` | Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its timers, maintenance's worker takes no task, and lineage's relay is held. Flipping it rolls the three services. |
 | resources.age | object | `{"limits":{"cpu":"1","memory":"2Gi"},"requests":{"cpu":"250m","memory":"512Mi"}}` | CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases). |
 | resources.catalog | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful. |

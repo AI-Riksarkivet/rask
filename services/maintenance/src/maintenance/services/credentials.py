@@ -42,6 +42,7 @@ THE CREDENTIAL MAINTENANCE PRESENTS IS THE POD'S OWN SERVICE-ACCOUNT TOKEN, proj
 from __future__ import annotations
 
 import logging
+from functools import cache
 from time import monotonic
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -429,7 +430,6 @@ class _TrashEnded(BaseModel):
 class _GrantCensusAnswer(BaseModel):
     enabled: bool
     counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
-    truncated: str | None = None
 
 
 class GhostsRevoked(BaseModel):
@@ -674,7 +674,7 @@ def grant_census(settings: MaintenanceSettings) -> fga.GrantCensus | None:
     """
     door = _grants_door(settings, act="/census", answer="a grant census", method="GET")
     answer = _parsed(_answered(settings, door), _GrantCensusAnswer, asked_for=door.asked_for)
-    return fga.GrantCensus(counts_by_type=answer.counts_by_type, truncated=answer.truncated) if answer.enabled else None
+    return fga.GrantCensus(counts_by_type=answer.counts_by_type) if answer.enabled else None
 
 
 def revoke_ghosts(settings: MaintenanceSettings, objects: list[str]) -> GhostsRevoked:
@@ -780,6 +780,14 @@ def _grants_door(
     )
 
 
+@cache
+def _door_client() -> httpx.Client:
+    """The one client this process asks the catalog's doors with, so a pass's questions share its connections: a client
+    per question opens and closes a connection for each. It carries no identity: each question presents the pod's token
+    as the file holds it then (:func:`service_headers`)."""
+    return httpx.Client(timeout=_TIMEOUT_SECONDS)
+
+
 def _answered(settings: MaintenanceSettings, door: Door) -> httpx.Response:
     """The door's 2xx answer, presented as this service's own identity.
 
@@ -795,9 +803,7 @@ def _answered(settings: MaintenanceSettings, door: Door) -> httpx.Response:
         raise VendingNotDirect(f"no catalog door is configured (MAINTENANCE_CATALOG_URL is empty), so {door.answer} for {door.asked_for} cannot be asked for")
     headers = service_headers(settings)
     try:
-        response = httpx.request(
-            door.method, f"{settings.catalog_url.rstrip('/')}{door.path}", params=door.params, json=door.body, headers=headers, timeout=_TIMEOUT_SECONDS
-        )
+        response = _door_client().request(door.method, f"{settings.catalog_url.rstrip('/')}{door.path}", params=door.params, json=door.body, headers=headers)
     except httpx.HTTPError as exc:
         raise VendUndecided(f"the catalog's door could not be asked for {door.answer} for {door.asked_for}: {exc}") from exc
     if (refusal := _refusal_of(response, door, identity=settings.catalog_service_identity)) is not None:

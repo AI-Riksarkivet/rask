@@ -6,7 +6,7 @@ Nothing about the running system distinguishes "no lineage was emitted" from "no
 yet". That is why the wiring has to be asserted at render time rather than observed at runtime.
 
 The lakehouse's producers publish on the bus, each on a connection of its own: the catalog and maintenance on the topic
-their ``<APP>_LINEAGE_TOPIC`` names, and lineage republishes a recovered event on ``LINEAGE_EVENTS_TOPIC``. What takes
+their ``<APP>_LINEAGE_TOPIC`` names, and lineage republishes a recovered event on ``RASK_LINEAGE_TOPIC``. What takes
 them is a durable consumer the stream Job declares, filtered to one subject: lineage's ingest lane, and maintenance's
 write-event lane. A publisher's topic and a consumer's filter are each rendered from ``pubsub.topic``, and a template
 that stopped deriving one of them from it would publish where no consumer reads while every pod stays healthy. A
@@ -26,7 +26,7 @@ from tests.chart.chart_render import DEFAULT_ARGS, bus_consumers, containers, en
 
 #: Every env var that names the topic a service publishes lineage on: the catalog's (each committed write), maintenance's
 #: (its passes) and lineage's (a recovered event, published again).
-_PUBLISHER_TOPICS = ("LANCE_LINEAGE_TOPIC", "MAINTENANCE_LINEAGE_TOPIC", "LINEAGE_EVENTS_TOPIC")
+_PUBLISHER_TOPICS = ("RASK_LINEAGE_TOPIC", "RASK_LINEAGE_TOPIC", "RASK_LINEAGE_TOPIC")
 
 #: The consumers that take the topic: lineage's ingest lane and maintenance's write-event lane.
 _CONSUMERS = ((ingest_lane.STREAM, ingest_lane.CONSUMER), (queue.ARRIVALS_STREAM, queue.ARRIVALS_CONSUMER))

@@ -307,7 +307,7 @@ class CatalogDecider:
     @retry(
         retry=retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout)),
         stop=stop_after_attempt(_TRANSPORT_ATTEMPTS),
-        wait=wait_exponential_jitter(initial=fga.DEFAULT_RETRY_BACKOFF_SECONDS, max=fga.DEFAULT_RETRY_MAX_BACKOFF_SECONDS),
+        wait=wait_exponential_jitter(initial=fga.DEFAULT_RETRY.backoff_seconds, max=fga.DEFAULT_RETRY.max_backoff_seconds),
         reraise=True,
     )
     async def _post(self, route: str, question: BaseModel) -> httpx.Response:

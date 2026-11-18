@@ -52,7 +52,7 @@ from lance_namespace import InvalidInputError
 
 if TYPE_CHECKING:
     import lance
-    from lance.dataset import Transaction
+    from lance import Transaction
     from lance.fragment import LanceFragment
 
 

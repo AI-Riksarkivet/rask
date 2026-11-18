@@ -59,19 +59,17 @@ _FGA_DERIVED_CATEGORIES = {
 class _FakeGrants:
     """The catalog's grant census as the reconciler reads it (``GET /management/v1/grants/census``), built from tuples
     keyed by full object (``"project:acme"`` to its (user, relation) pairs) and counted as the catalog counts them:
-    bookkeeping relations are no grant. It can fail, or stop short of the store, the two answers the report must survive
-    without lying. The deployment's own objects are not in it, since the catalog counts without them.
+    bookkeeping relations are no grant. It can fail, the answer the report must survive without lying. The deployment's own objects are not in it, since the catalog counts without them.
     """
 
-    def __init__(self, tuples: dict[str, list[tuple[str, str]]] | None = None, *, error: Exception | None = None, endless: bool = False) -> None:
+    def __init__(self, tuples: dict[str, list[tuple[str, str]]] | None = None, *, error: Exception | None = None) -> None:
         self.tuples = tuples or {}
         self.error = error
-        self.endless = endless
 
     def census(self) -> fga_module.GrantCensus:
         if self.error is not None:
             raise self.error
-        counted = fga_module.GrantCensus(truncated="the tuple read hit its page ceiling with a cursor outstanding" if self.endless else None)
+        counted = fga_module.GrantCensus()
         for name, pairs in sorted(self.tuples.items()):
             kind, _, key = name.partition(":")
             for _user, relation in pairs:
@@ -359,17 +357,15 @@ def test_an_unreadable_trash_index_degrades_only_the_categories_that_read_it(tmp
 
 
 def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A truncated scan that reads as "all clear" is worse than no scan. A tuple cursor that never
-    ends, a paginated bucket listing, and an unreadable registry record each land in `incomplete` —
-    while the categories built on them still report what they DID see."""
+    """A truncated scan that reads as "all clear" is worse than no scan. A paginated bucket listing and an
+    unreadable registry record each land in `incomplete`, while the categories built on them still report what they
+    DID see."""
     estate = _Estate(tmp_path)
-    estate.fga.endless = True
     estate.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a"], truncated=True)
     Path(estate.control_root.removeprefix("file://"), "_projects", "zzz-corrupt.json").write_text("{truncated")
 
     report = estate.run(monkeypatch)
     reasons = {scan.source: scan.reason for scan in report.incomplete}
-    assert "fga:tuples" in reasons and "page ceiling" in reasons["fga:tuples"]
     assert "storage:buckets" in reasons and "ONE PAGE" in reasons["storage:buckets"]
     assert "registry:projects" in reasons and "unreadable" in reasons["registry:projects"]
     # ...and the run is still a full report, not a failure: every category was reached.

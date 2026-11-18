@@ -97,6 +97,8 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from lakehouse.projected_token import read_token_file
+
 
 if TYPE_CHECKING:
     from lakehouse.supervision import Supervisor
@@ -521,7 +523,7 @@ class SecretStore:
     def _log_in(self, deadline: float) -> _Login:
         settings = self._settings
         try:
-            projected = self._token_file.read_text(encoding="utf-8").strip()
+            projected = read_token_file(self._token_file)
         except (OSError, UnicodeError) as exc:
             # The exception's type alone, and no chain: a decoding error carries the bytes it was given, which are a token's.
             raise _NotServedError(f"the projected token {self._token_file} is unreadable: {type(exc).__name__}") from None

@@ -62,6 +62,7 @@ from catalog.services.erasure import OPEN_OUTCOMES, SurfaceResult, derived_key, 
 from catalog.services.erasure_obligations import ErasureObligation
 from lakehouse import derived_tables, location_claims, objectfs
 from lakehouse.base_refs import key_uri, store_of
+from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.lancekit.filters import in_lists
 from lakehouse.storage_options import StorageOptions
 
@@ -237,7 +238,7 @@ def _edge_list(settings: Settings, ns: LanceNamespace | None, so: StorageOptions
         described = native.call(ns, "describe_table", DescribeTableRequest(id=[*parse_identifier(settings.provenance_namespace), derived_tables.EDGES]))
     except (NamespaceNotFoundError, TableNotFoundError):
         return None
-    return lance.dataset(str(described.location), storage_options=so.in_clear() or None)
+    return open_dataset(str(described.location), storage_options=so.in_clear() or None, session=fresh_session())
 
 
 def _claimed(settings: Settings) -> tuple[frozenset[str], Mapping[str, str]]:

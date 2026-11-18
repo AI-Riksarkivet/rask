@@ -44,52 +44,69 @@ _EVERY_LOOP = pytest.mark.parametrize("loop", ["asyncio", "uvloop"])
 _APP = textwrap.dedent(
     """
     import asyncio
+    import logging
     import os
     import signal
     from contextlib import asynccontextmanager
 
-    from fastapi import FastAPI
+    from fastapi import APIRouter, Request
 
-    from lakehouse.draining import arm_drain_on_sigterm
+    from lakehouse.lance_app import build_lance_service_app
     from lakehouse.lifecycle import is_draining
+    from lakehouse.probes import Readiness, ReadinessStatus
+
+    routes = APIRouter()
 
 
     @asynccontextmanager
     async def lifespan(app):
-        disarm = arm_drain_on_sigterm(app)
         try:
             yield
         finally:
             print(f"TEARDOWN draining={is_draining(app)}", flush=True)
-            disarm()
 
 
-    app = FastAPI(lifespan=lifespan)
+    async def ready(_request: Request) -> Readiness:
+        return Readiness(status=ReadinessStatus.ready)
 
 
-    @app.get("/ping")
+    @routes.get("/ping")
     async def ping():
         return {"ok": True}
 
 
-    @app.get("/slow")
-    async def slow():
+    @routes.get("/slow")
+    async def slow(request: Request):
         print("SLOW_STARTED", flush=True)
         await asyncio.sleep(1.5)
-        return {"draining": is_draining(app)}
+        return {"draining": is_draining(request.app)}
 
 
-    @app.get("/stuck")
+    @routes.get("/stuck")
     async def stuck():
         print("STUCK_STARTED", flush=True)
         await asyncio.sleep(120)
         return {"finished": True}
 
 
-    @app.post("/leave")
+    @routes.post("/leave")
     async def leave():
         os.kill(os.getpid(), signal.SIGTERM)
         return {"acked": True}
+
+
+    # The lifespan arms nothing: an app the factory builds is drained by the factory.
+    app = build_lance_service_app(
+        title="armed",
+        docs_enabled=False,
+        audit_enabled=False,
+        lifespan=lifespan,
+        log=logging.getLogger("armed"),
+        ready_check=ready,
+        max_body_bytes=1 << 20,
+        request_deadline_seconds=300.0,
+        routers=[routes],
+    )
     """
 )
 

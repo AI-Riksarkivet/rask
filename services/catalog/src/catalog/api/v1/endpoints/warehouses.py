@@ -53,6 +53,7 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api import fga_deps
+from catalog.api import idempotency as idem
 from catalog.api.announcing import AnnouncerDep
 from catalog.api.declared import DECLARATION, Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import (
@@ -998,7 +999,7 @@ def _a_refusal(exc: BaseException) -> bool:
 @router.delete("/{warehouse_id}")
 async def delete_warehouse(
     warehouse_id: str,
-    record: DoorManagedWarehouseDep,
+    keyed: idem.KeyedDoorDep,
     request: Request,
     settings: SettingsDep,
     token: CurrentToken,
@@ -1019,7 +1020,7 @@ async def delete_warehouse(
     Order, and every step is load-bearing:
 
     1. The record must exist (404), read by :func:`administered_warehouse`.
-    2. **Authorize first**, in that same dependency. The gate runs before the protection and emptiness checks, so an unauthorized
+    2. **Authorize first**, in that same read. The gate runs before the protection and emptiness checks, so an unauthorized
        caller never learns whether the warehouse is protected or what it holds — a 409 listing another
        tenant's namespace names is a disclosure a 403 must beat to.
     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
@@ -1054,6 +1055,12 @@ async def delete_warehouse(
     Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
     reaches its bucket.
     """
+    # Asked before the record is read: a replay under the caller's key answers the first delete and reads nothing, so a
+    # warehouse registered under the id since is never the one a resent delete removes.
+    converge = await keyed.begin(endpoint="DELETE /management/v1/warehouses/{warehouse_id}", target=f"warehouse:{warehouse_id}")
+    if converge.replay is not None:
+        return DeleteWarehouseResponse.model_validate(converge.replay.body)
+    record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, settings, token, client), token)
     so = settings.storage_options()
     project = record["project"]
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
@@ -1259,7 +1266,7 @@ async def delete_warehouse(
         # Sent with what the delete dropped and purged, under the id the planned event was filed with.
         actual = planned.model_copy(update={"extra": {**planned.extra, "namespaces_dropped": namespaces_dropped, "objects_purged": purged}})
         await filing.send(deleted.model_copy(update={"message": ControlMessage(event=actual)}))
-    return DeleteWarehouseResponse(
+    answer = DeleteWarehouseResponse(
         id=warehouse_id,
         bucket=bucket,
         namespaces_dropped=namespaces_dropped,
@@ -1267,6 +1274,8 @@ async def delete_warehouse(
         bucket_purged=purge_bucket,
         objects_purged=purged,
     )
+    await converge.remember(200, answer)
+    return answer
 
 
 @router.post("/{warehouse_id}/validate", response_model_exclude_none=True)

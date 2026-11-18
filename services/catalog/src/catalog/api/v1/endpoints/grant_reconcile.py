@@ -49,7 +49,7 @@ async def grant_census(settings: SettingsDep, client: FgaClientDep) -> GrantCens
     if (client := fga_deps.wired(settings, client)) is None:
         return GrantCensusResponse(enabled=False)
     counted = await fga.census(client, exclude=grant_reconcile.platform_objects(settings))
-    return GrantCensusResponse(enabled=True, counts_by_type=counted.counts_by_type, truncated=counted.truncated)
+    return GrantCensusResponse(enabled=True, counts_by_type=counted.counts_by_type)
 
 
 @management_router.post("/ghosts/revoke")

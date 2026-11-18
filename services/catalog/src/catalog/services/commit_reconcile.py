@@ -45,13 +45,14 @@ from lakehouse import auto_cleanup, commit_records, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.features import flags_from_open_error
 from lakehouse.governed import fga
+from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.lancekit.filters import sql_literal
 from lakehouse.lineage.signing import SIGNATURE_FACET
 from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
+from lakehouse.manifest_names import committed_version
 from lakehouse.openlineage import BRANCH_IDENTIFIER
 from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.transactions import read_transaction
-from lakehouse.version_retention import manifest_version
 
 
 log = logging.getLogger(__name__)
@@ -125,7 +126,7 @@ def announced(feed_location: str, so: StorageOptions, table_uuid: str, *, since:
     one from ever being announced. ``signer`` is ``None`` for a catalog that signs nothing, whose announcements carry no
     signature to tell from a posted one's.
     """
-    feed = lance.dataset(feed_location, storage_options=so.in_clear() or None)
+    feed = open_dataset(feed_location, storage_options=so.in_clear() or None, session=fresh_session())
     rows = feed.to_table(
         columns=["event"],
         filter=f"array_has(table_uuids, {sql_literal(table_uuid)}) AND received_at >= TIMESTAMP {sql_literal(since.strftime('%Y-%m-%d %H:%M:%S'))}",
@@ -178,7 +179,7 @@ def _commits_named(event: dict[str, Any], table_uuid: str) -> Iterator[tuple[str
 
 def refs_of(location: str, so: StorageOptions) -> list[tuple[str | None, str | None]]:
     """Main and every branch of the table, each with its incarnation (pylance's ``branch_identifier``)."""
-    return _listed_refs(lance.dataset(location, storage_options=so.in_clear() or None))
+    return _listed_refs(open_dataset(location, storage_options=so.in_clear() or None, session=fresh_session()))
 
 
 def _listed_refs(dataset: lance.LanceDataset) -> list[tuple[str | None, str | None]]:
@@ -217,7 +218,7 @@ def _registered_heads(location: str, so: StorageOptions) -> dict[str, int]:
     if not dataplane.holds_a_version(location, so):
         return {}
     try:
-        dataset = lance.dataset(location, storage_options=so.in_clear() or None)
+        dataset = open_dataset(location, storage_options=so.in_clear() or None, session=fresh_session())
     except (OSError, ValueError) as exc:
         if flags_from_open_error(exc) is not None:
             return {}
@@ -354,7 +355,7 @@ def _versions_after(location: str, so: StorageOptions, branch: str | None, mark:
     Raises:
         ReconcileReadError: A retained version could not be opened.
     """
-    root = lance.dataset(location, storage_options=so.in_clear() or None)
+    root = open_dataset(location, storage_options=so.in_clear() or None, session=fresh_session())
     latest = root.checkout_version((branch, None)) if branch is not None else root
     retained = sorted(int(entry["version"]) for entry in latest.versions())
     for version in (v for v in retained if mark is None or v > mark):
@@ -380,7 +381,7 @@ def _stamped_versions(ref_location: str, so: StorageOptions) -> tuple[dict[int, 
         raise ReconcileReadError(f"the versions of {ref_location} could not be listed: {exc}") from exc
     stamped: dict[int, datetime] = {}
     for listed in listing.objects:
-        if (version := manifest_version(listed.path)) is not None:
+        if (version := committed_version(listed.path)) is not None:
             stamped[version] = max(stamped.get(version, listed.modified), listed.modified)
     return stamped, listing.at
 

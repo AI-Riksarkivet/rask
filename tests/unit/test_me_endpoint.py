@@ -18,6 +18,7 @@ import pytest
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.v1.endpoints import me as ep
+from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -74,7 +75,7 @@ def _wire(
     async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **kw: Any) -> bool:
         if calls is not None:
             calls.append((relation, obj))
-        assert kw == {"retry_attempts": 1}  # single attempt under the tight budget (the /management/v1/projects rule)
+        assert kw == {"retry": fga.ONE_ATTEMPT}  # single attempt under the tight budget (the /management/v1/projects rule)
         if isinstance(estate, Exception):
             raise estate
         return bool(estate[relation] if isinstance(estate, dict) else estate)
@@ -82,7 +83,7 @@ def _wire(
     async def _fake_list(_client: Any, *, user: str, relation: str, object_type: str, **kw: Any) -> Any:
         if calls is not None:
             calls.append((relation, object_type))
-        assert kw == {"retry_attempts": 1}
+        assert kw == {"retry": fga.ONE_ATTEMPT}
         outcome = lists.get(relation, [])
         if isinstance(outcome, Exception):
             raise outcome

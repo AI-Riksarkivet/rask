@@ -49,7 +49,7 @@ What its own session signs are reads no per-table credential could express: each
 the catalog's records, the daily scan's storage walk, each table's orphan check, and the purge's liveness read of every maintained
 root's `__manifest`.
 
-## `- { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth...`
+## `- { name: RASK_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth...`
 
 #41. The SAME `auth.audit` key every other lakehouse service reads, so the
 operator's one lever reaches the component that REWRITES BYTES too — it had no

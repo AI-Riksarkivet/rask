@@ -207,7 +207,9 @@ class CatalogControlBusSettings(BaseSettings):
     # connection by reading its stream by sequence (`api/control_lane.py`), and the poll endpoint reads the same stream.
     # Off by default, like lineage.
     control_emit_enabled: bool = Field(default=False, alias="LANCE_CONTROL_EMIT_ENABLED")
-    control_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_CONTROL_EMIT_TIMEOUT_SECONDS")
+    #: How long one publish on the bus may take, an OpenLineage event's and a control event's alike: a bus that does
+    #: not answer fails the publish, which stays staged, and never holds the request that made it.
+    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_PUBLISH_TIMEOUT_SECONDS")
     #: The most events one `GET /management/v1/events` answer reads off the stream, and the window a new poller is
     #: answered (the last this many). Each is one read by sequence on the bus.
     control_page_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_PAGE_SIZE")
@@ -241,8 +243,7 @@ class CatalogLineageSettings(BaseSettings):
     # It is published on NATS JetStream over this process's own connection (`lakehouse.bus`), the one transport.
     lineage_emit_enabled: bool = Field(default=False, alias="LANCE_LINEAGE_EMIT_ENABLED")
     #: The topic the emitter publishes on. Versioned: a breaking schema change is a new ``.vN``.
-    lineage_topic: str = Field(default="lineage.events.v1", alias="LANCE_LINEAGE_TOPIC")
-    lineage_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_LINEAGE_EMIT_TIMEOUT_SECONDS")
+    lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")
     lineage_job_namespace: str = Field(default="lance-catalog", alias="LANCE_LINEAGE_JOB_NAMESPACE")
     #: The namespace every table's OpenLineage dataset is named under: this catalog's endpoint,
     #: ``lance-namespace://<host><prefix>`` ([[LH-553]], OpenLineage's dataset naming: a catalog's tables are named by the
@@ -542,7 +543,7 @@ class Settings(
     # security-relevant action — authn success/failure, authz allow/deny, credential vending — carrying
     # who/what/resource/outcome. Default on so a governed deployment records an audit trail out of the box;
     # set false to silence the stream. The events only carry a real subject when OIDC is on.
-    audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
+    audit_enabled: bool = Field(default=True, alias="RASK_AUDIT_ENABLED")
 
     # Max request-body size (bytes) accepted on any route. The Arrow-IPC write endpoints buffer the whole
     # body in memory, so an unbounded POST (e.g. a multi-GB media blob pushed through the catalog instead of
@@ -731,7 +732,7 @@ def shared_lance_session() -> lance.Session:
     so a compaction writes NEW keys and a new version is never served stale. An OLD version is: measured
     on pylance 12.0.0, a version this session has read, whose manifest cleanup kept, keeps answering
     after cleanup deletes its data file, which is why a read that must see storage opens on
-    :func:`fresh_lance_session` instead.
+    `lakehouse.lance_session.fresh_session` instead.
     `lakehouse.lance_session` records its thread-safety under concurrent opens.
 
     ONE OBJECT per cap pair: `lance_session` is `@cache`d on its arguments, so every caller here gets
@@ -740,27 +741,6 @@ def shared_lance_session() -> lance.Session:
     from lakehouse.lance_session import lance_session
 
     return lance_session(*_affordable_caps())
-
-
-#: Each cache of an evidence session, at the floor `LanceSessionCaps` admits. Fixed, not clamped: see
-#: :func:`fresh_lance_session`.
-_EVIDENCE_CACHE_BYTES = 8 << 20
-
-
-def fresh_lance_session() -> lance.Session:
-    """A session nothing else has read through, for a read that is EVIDENCE — 8 MiB per cache, fixed.
-
-    The erasure's verification is the one such read today: it must report what storage holds, and the
-    shared session can answer a version whose files are gone (see :func:`shared_lance_session`).
-
-    OUTSIDE THE SHARED BUDGET, which the cgroup clamp sizes for ONE session: at those caps every
-    concurrent erasure would add a whole budget. It reads each retained version once, so a cache buys
-    it nothing, and the bound is 16 MiB per erasure in flight. Measured on pylance 12.0.0 over 301
-    versions: 34.9 MB at the shared caps, 8.4 MB at these.
-    """
-    import lance
-
-    return lance.Session(metadata_cache_size_bytes=_EVIDENCE_CACHE_BYTES, index_cache_size_bytes=_EVIDENCE_CACHE_BYTES)
 
 
 def _affordable_caps() -> tuple[int, int]:

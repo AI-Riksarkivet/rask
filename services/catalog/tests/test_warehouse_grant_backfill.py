@@ -12,6 +12,7 @@ import pytest
 
 from catalog.core.config import Settings
 from catalog.services import warehouse_grant_backfill
+from lakehouse.governed import fga
 
 
 def _settings(**overrides: object) -> Settings:
@@ -147,10 +148,10 @@ def _stub_client(monkeypatch) -> None:
 
 
 async def _provision(
-    _url: str, *, token_file: str | None, store_name: str = "lance-catalog", store_id: str | None = None, retry_attempts: int = 3
+    _url: str, *, token_file: str | None, store_name: str = "lance-catalog", store_id: str | None = None, retry: fga.RetryPolicy = fga.DEFAULT_RETRY
 ) -> tuple[str, str]:
     """`fga.provision`'s whole signature, as `_resolve` carries `fga.resolve`'s."""
-    del token_file, store_name, retry_attempts
+    del token_file, store_name, retry
     return (store_id or "store", "model")
 
 

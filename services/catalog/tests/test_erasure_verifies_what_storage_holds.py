@@ -647,7 +647,7 @@ def test_a_verification_the_door_cannot_open_answers_200_with_the_report(tmp_pat
     def _no_session() -> Any:
         raise OSError("cannot allocate the verification's session")
 
-    monkeypatch.setattr(door, "fresh_lance_session", _no_session)
+    monkeypatch.setattr(door, "fresh_session", _no_session)
     with _door(namespace, settings) as client:
         response = _verified(client, obligation)
 

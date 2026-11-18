@@ -73,7 +73,7 @@ def test_lineages_consumer_is_declared_with_the_numbers_lineages_lane_is_given(
 ) -> None:
     docs = render(*DEFAULT_ARGS, *flags)
     [rendered] = [env_of(container) for workload, name, container in containers(docs) if workload.endswith("-lineage") and name == "lineage"]
-    given = {name: value for name, value in rendered.items() if name.startswith(("LINEAGE_DELIVER", "LINEAGE_EVENTS_TOPIC"))}
+    given = {name: value for name, value in rendered.items() if name.startswith(("LINEAGE_DELIVER", "RASK_LINEAGE_TOPIC"))}
 
     lane = ingest_lane.lane(LineageSettings.model_validate(given))
     consumer = bus_consumers(docs)[lane.stream, lane.consumer]
@@ -84,7 +84,7 @@ def test_lineages_consumer_is_declared_with_the_numbers_lineages_lane_is_given(
         "max_ack_pending": in_flight,
         # No bound: lineage's lane parks a delivery itself, and a park its store did not take is delivered again.
         "max_deliver": -1,
-        "filter_subject": given["LINEAGE_EVENTS_TOPIC"],
+        "filter_subject": given["RASK_LINEAGE_TOPIC"],
         "deliver_policy": "by_start_sequence",
     }
 

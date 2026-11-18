@@ -42,7 +42,6 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final
 
-import lance
 import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
@@ -50,6 +49,7 @@ from pydantic import BaseModel, Field
 from lakehouse import control_prefixes, location_claims, trash
 from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
+from lakehouse.lance_session import open_dataset
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
@@ -405,7 +405,7 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions) -> list[st
     if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
     manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if on_s3(root) else f"{base}/{MANIFEST_DIR}"
-    dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
+    dataset = open_dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
     table = dataset.to_table(columns=["object_id", "object_type"])
     return sorted(
         {
@@ -431,7 +431,7 @@ def _tables(root: str, storage_options: StorageOptions) -> list[tuple[str, str |
     if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
     manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if on_s3(root) else f"{base}/{MANIFEST_DIR}"
-    dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
+    dataset = open_dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
     # `location` is TOLERATED ABSENT, not required: the spec's "Schema Extensibility" clause guarantees
     # no column on a manifest an older writer produced. Missing it yields no locations and [[LH-192]]
     # reports nothing — the fail-quiet direction for a detector.
@@ -750,8 +750,9 @@ def _bucket_of(root_uri: str) -> str | None:
 async def _fga_source(sources: Sources, grants: GrantCensusReader | None) -> tuple[TupleScan | None, str | None]:
     """ONE census of the store's grants feeding all four authz categories, so they cannot disagree about its contents.
 
-    A census the catalog stopped short of the store is an incomplete scan, never a silently short answer: it would invent
-    ghosts on the registry side and hide them on the grant side in the same run.
+    A census the catalog could not read to the end is no census: the catalog refuses it, and the categories built on it
+    are unavailable rather than computed from a short answer, which would invent ghosts on the registry side and hide
+    them on the grant side in the same run.
     """
     if grants is None:
         return None, _FGA_ABSENT
@@ -760,8 +761,6 @@ async def _fga_source(sources: Sources, grants: GrantCensusReader | None) -> tup
         return None, error
     if census is None:
         return None, _FGA_OFF
-    if census.truncated:
-        sources.incomplete.append(IncompleteScan(source="fga:tuples", reason=census.truncated))
     return TupleScan(counts_by_type=census.counts_by_type), None
 
 

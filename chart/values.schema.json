@@ -72,7 +72,7 @@
             "type": "object",
             "properties": {
                 "audit": {
-                    "description": "Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.",
+                    "description": "Emit the structured authn/authz/credential-vending audit stream (RASK_AUDIT_ENABLED); takes effect only with auth on. false silences it.",
                     "type": "boolean"
                 },
                 "bootstrapAdmin": {
@@ -1287,7 +1287,7 @@
             "type": "object",
             "properties": {
                 "topic": {
-                    "description": "Topic OpenLineage events are published on and each consumer of them is filtered to (LANCE_LINEAGE_TOPIC and siblings).",
+                    "description": "Topic OpenLineage events are published on and each consumer of them is filtered to (RASK_LINEAGE_TOPIC).",
                     "type": "string"
                 }
             },

@@ -51,7 +51,7 @@ router = APIRouter(prefix="/management/v1/me", tags=["me"])
 # ONE wall-clock budget for all the display-only FGA lookups (estate check + the two project lists,
 # sequential). Same rationale as /management/v1/projects' _ADMINS_TIMEOUT_SECONDS: a caller gives the whole request
 # a few seconds, and the wrapper's default bounded-retry ladder alone can exceed it — so each call runs a single
-# attempt (retry_attempts=1) under the shared deadline and degrades on expiry.
+# attempt (retry=fga.ONE_ATTEMPT) under the shared deadline and degrades on expiry.
 _LOOKUP_BUDGET_SECONDS = 2.0
 
 
@@ -75,7 +75,7 @@ async def _estate_standing(client: OpenFgaClient, settings: Settings, sub: str, 
     """
     try:
         async with asyncio.timeout_at(deadline):
-            return await fga.check(client, user=sub, relation=relation, obj=settings.fga_root_object, retry_attempts=1)
+            return await fga.check(client, user=sub, relation=relation, obj=settings.fga_root_object, retry=fga.ONE_ATTEMPT)
     except (ServiceUnavailableError, TimeoutError):
         log.warning("me_estate_standing_unavailable", extra={"relation": relation})
         return False
@@ -89,7 +89,7 @@ async def _project_ids(client: OpenFgaClient, sub: str, relation: str, deadline:
     """
     try:
         async with asyncio.timeout_at(deadline):
-            objects = (await fga.list_objects(client, user=sub, relation=relation, object_type="project", retry_attempts=1)).objects
+            objects = (await fga.list_objects(client, user=sub, relation=relation, object_type="project", retry=fga.ONE_ATTEMPT)).objects
     except (ServiceUnavailableError, TimeoutError):
         log.warning("me_projects_unavailable", extra={"relation": relation})
         return []

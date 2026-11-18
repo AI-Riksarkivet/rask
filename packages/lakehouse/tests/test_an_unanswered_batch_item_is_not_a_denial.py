@@ -30,8 +30,6 @@ from openfga_sdk.models.check_error import CheckError
 from lakehouse.governed import fga
 
 
-_NO_WAIT: dict[str, Any] = {"retry_backoff_seconds": 0.0, "retry_max_backoff_seconds": 0.0}
-
 #: Two per-item faults, each as OpenFGA reports it.
 _MISSING_RELATION = CheckError(input_error="validation_error", message="relation 'table#can_nope' not found")
 _TIMED_OUT = CheckError(internal_error="deadline_exceeded", message="context deadline exceeded")
@@ -65,7 +63,13 @@ class _BatchOpenFga:
 
 def _ask(client: _BatchOpenFga, objects: list[str], *, attempts: int = 1) -> dict[str, bool]:
     return asyncio.run(
-        fga.batch_check(cast("OpenFgaClient", client), user="dex~alice", relation="can_read_data", objects=objects, retry_attempts=attempts, **_NO_WAIT)
+        fga.batch_check(
+            cast("OpenFgaClient", client),
+            user="dex~alice",
+            relation="can_read_data",
+            objects=objects,
+            retry=fga.RetryPolicy(attempts=attempts, backoff_seconds=0.0, max_backoff_seconds=0.0),
+        )
     )
 
 
@@ -136,7 +140,13 @@ def _over_the_wire(objects: list[str]) -> dict[str, bool]:
         async with TestServer(app) as server:
             client = fga.make_client(str(server.make_url("")).rstrip("/"), _STORE_ID, _MODEL_ID, token_file=None)
             try:
-                return await fga.batch_check(client, user="dex~alice", relation="can_read_data", objects=objects, retry_attempts=1, **_NO_WAIT)
+                return await fga.batch_check(
+                    client,
+                    user="dex~alice",
+                    relation="can_read_data",
+                    objects=objects,
+                    retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
+                )
             finally:
                 await client.close()
 

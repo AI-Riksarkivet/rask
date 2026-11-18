@@ -6,6 +6,7 @@ its ETag, so these stand for the state an earlier request left, never for a requ
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from lakehouse import control_prefixes, maintenance_due, maintenance_policies
@@ -28,6 +29,13 @@ def put_policy(control_root: str, storage_options: StorageOptions, record: dict[
     """Hold ``record`` as the maintenance policy of the object it names, under the key the policy door writes."""
     key = record_key(maintenance_policies.PREFIX, record["kind"], maintenance_policies.policy_key(record))
     put_record(control_root, storage_options, key, record)
+
+
+def put_cadence_stamp(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, table_uuid: str, uri: str, at: str) -> None:
+    """Hold ``at`` as the cadence stamp of the dataset ``uri`` under the policy ``record``, whatever ``at`` spells: a
+    stamp maintenance's own writer would refuse to write."""
+    stamp = maintenance_policies.CadenceStamp.under(record, datetime.now(UTC)).model_dump(mode="json")
+    put_record(control_root, storage_options, maintenance_policies.cadence_key(table_uuid, uri), {**stamp, "last_maintained_at": at})
 
 
 def read_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> DueRecord | None:

@@ -2678,7 +2678,7 @@ export interface paths {
          *     Order, and every step is load-bearing:
          *
          *     1. The record must exist (404), read by :func:`administered_warehouse`.
-         *     2. **Authorize first**, in that same dependency. The gate runs before the protection and emptiness checks, so an unauthorized
+         *     2. **Authorize first**, in that same read. The gate runs before the protection and emptiness checks, so an unauthorized
          *        caller never learns whether the warehouse is protected or what it holds — a 409 listing another
          *        tenant's namespace names is a disclosure a 403 must beat to.
          *     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
@@ -7696,8 +7696,6 @@ export interface components {
             };
             /** Enabled */
             enabled: boolean;
-            /** Truncated */
-            truncated?: string | null;
         };
         /** GrantRequest */
         GrantRequest: {
@@ -11583,6 +11581,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -12151,7 +12150,9 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path: {
                 project_id: string;
             };
@@ -13612,7 +13613,9 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -14111,7 +14114,9 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path: {
                 warehouse_id: string;
             };
@@ -14537,7 +14542,9 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -14730,7 +14737,9 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path: {
                 id: string;
             };
@@ -16423,7 +16432,9 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path: {
                 id: string;
             };

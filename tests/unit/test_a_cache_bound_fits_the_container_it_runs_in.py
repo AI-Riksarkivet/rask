@@ -19,8 +19,13 @@ two impossible to drift apart.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import lance
+import pyarrow as pa
 import pytest
 
+from lakehouse import lance_session
 from lakehouse.lance_session import cache_budget_bytes
 
 
@@ -93,3 +98,22 @@ def test_the_LIMIT_is_re_read_and_never_cached(tmp_path, monkeypatch: pytest.Mon
 
     limit.write_text("2147483648\n")  # resized to 2Gi, no restart
     assert cache_budget_bytes(fraction=0.5) == 2147483648 // 2, "the budget was memoised across a resize"
+
+
+def test_the_evidence_session_is_held_to_its_own_small_bound(tmp_path: Path) -> None:
+    """`fresh_session` is a SECOND session beside a process's shared one, which the cgroup clamp sizes for
+    ONE; at the shared caps each evidence read in flight would add a whole budget. Such a read opens every
+    retained version once, so it gains nothing from a cache: measured on pylance 12.0.0 over these 251 versions of
+    growing fragment counts, a session at the shared caps held 23.5 MB."""
+
+    uri = str(tmp_path / "t.lance")
+    lance.write_dataset(pa.table({"id": list(range(100))}), uri)
+    for start in range(100, 25_100, 100):
+        lance.write_dataset(pa.table({"id": list(range(start, start + 100))}), uri, mode="append")
+
+    session = lance_session.fresh_session()
+    root = lance.dataset(uri, session=session)
+    for entry in root.versions():
+        root.checkout_version(entry["version"]).count_rows(filter="id = -1")
+
+    assert session.size_bytes() <= 16 << 20, f"{session.size_bytes()} bytes held by one evidence session"

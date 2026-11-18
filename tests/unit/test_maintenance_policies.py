@@ -25,6 +25,7 @@ from tests import seeding
 
 
 TABLE_UUID = "0b1e5c1a-0000-4000-8000-000000000001"
+_STAMPED = datetime(2026, 7, 16, tzinfo=UTC)
 
 
 def _policy(kind: str = "table", id_: str = "db$t", uuid: str = TABLE_UUID, **fields: Any) -> dict[str, Any]:
@@ -64,8 +65,8 @@ def test_state_stamps_live_apart_from_policies(tmp_path: Path) -> None:
     uri = "s3://bkt/u1_db$t"
     seeding.put_policy(root, StorageOptions(), record)
     assert mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri) is None
-    mp.write_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri, at="2026-07-16T00:00:00+00:00")
-    assert mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri) == "2026-07-16T00:00:00+00:00"
+    mp.write_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri, at=_STAMPED)
+    assert mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri) == _STAMPED
     assert len(mp.list_policies(root, StorageOptions())) == 1
 
 
@@ -76,14 +77,14 @@ def test_a_stamp_paces_only_its_dataset_under_the_policy_that_took_it(tmp_path: 
     root = str(tmp_path)
     record = _policy(kind="namespace", id_="silver", uuid="ns-silver", compact_interval_hours=6)
     main, branch = f"s3://bkt/{TABLE_UUID}", f"s3://bkt/{TABLE_UUID}/tree/work"
-    mp.write_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=main, at="2026-07-16T00:00:00+00:00")
+    mp.write_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=main, at=_STAMPED)
     replaced = _policy(compact_interval_hours=6)
     read = [
         mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=main),
         mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=branch),
         mp.read_state(root, StorageOptions(), replaced, table_uuid=TABLE_UUID, uri=main),
     ]
-    assert read == ["2026-07-16T00:00:00+00:00", None, None]
+    assert read == [_STAMPED, None, None]
 
 
 def test_list_policies_skips_a_corrupt_record(tmp_path: Path) -> None:
@@ -213,22 +214,9 @@ def test_the_cadence_skips_inside_the_interval(tmp_path: Path) -> None:
     # No stamp yet → maintain (an absent/lost stamp must never silence maintenance).
     assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
     # Fresh stamp → skip; stale stamp → maintain.
-    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at=(now - timedelta(hours=1)).isoformat())
+    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at=now - timedelta(hours=1))
     assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) == "policy_interval"
-    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at=(now - timedelta(hours=7)).isoformat())
-    assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
-
-
-def test_a_naive_or_malformed_stamp_maintains_instead_of_raising(tmp_path: Path) -> None:
-    # Audit 2026-07-16: `now` is timezone-aware, so aware-minus-naive raises TypeError — which must be
-    # contained (fail toward maintaining), not abort the sweep at this dataset every tick forever.
-    settings = _settings(tmp_path)
-    now = datetime.now(UTC)
-    uri = "s3://bkt/u1_db$t"
-    cadenced = _policy(compact_interval_hours=6)
-    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at=datetime.now().isoformat())
-    assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
-    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at="not-a-timestamp")
+    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at=now - timedelta(hours=7))
     assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
 
 

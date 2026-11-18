@@ -20,10 +20,10 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from catalog.api.ticks import Tick
-from catalog.core.config import fresh_lance_session
 from catalog.services import erasure_release, table_claims
 from lakehouse.control_emit import emit_control
 from lakehouse.governed import fga
+from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
 
@@ -38,7 +38,7 @@ class ErasureReleaseTick(BaseModel):
 
 
 def _open(location: str, storage_options: StorageOptions) -> lance.LanceDataset:
-    return lance.dataset(location, storage_options=storage_options.in_clear(), session=fresh_lance_session())
+    return open_dataset(location, storage_options=storage_options.in_clear(), session=fresh_session())
 
 
 async def tick(ctx: Tick) -> ErasureReleaseTick:

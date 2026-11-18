@@ -23,7 +23,7 @@ from typing import Final
 
 import lance
 import pyarrow.fs as pafs
-from lance.dataset import Transaction
+from lance import Transaction
 from opentelemetry import metrics
 
 from catalog.services import client_fragments

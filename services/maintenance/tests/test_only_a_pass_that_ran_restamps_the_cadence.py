@@ -50,7 +50,7 @@ def test_only_a_pass_that_ran_restamps_the_cadence(
     uri = str(tmp_path / "t.lance")
     lance.write_dataset(pa.table({"id": pa.array([1], pa.int64())}), uri)
     written: list[str] = []
-    monkeypatch.setattr(maintenance_policies, "read_state", lambda *_a, **_k: datetime.now(UTC).isoformat() if stamped else None)
+    monkeypatch.setattr(maintenance_policies, "read_state", lambda *_a, **_k: datetime.now(UTC) if stamped else None)
     monkeypatch.setattr(maintenance_policies, "write_state", lambda *a, **_k: written.append(str(a)))
     if refusal is not None:
         monkeypatch.setattr(table_pass, "expire_versions", refusal)

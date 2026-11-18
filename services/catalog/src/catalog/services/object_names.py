@@ -20,7 +20,6 @@ import json
 import logging
 from collections.abc import Iterable
 
-import lance
 import pyarrow.fs as pafs
 from lance_namespace import InternalError, ServiceUnavailableError
 from pydantic import BaseModel
@@ -30,6 +29,7 @@ from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.services import manifest_reclaim, table_claims
 from lakehouse import location_claims
 from lakehouse.governed import fga
+from lakehouse.lance_session import open_dataset
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import uuid_of
 from lakehouse.objectfs import fs_and_base
@@ -148,7 +148,7 @@ def _rows(root: str, storage_options: StorageOptions) -> list[_Row]:
         fs, base = fs_and_base(root, storage_options)
         if fs.get_file_info(f"{base}/{manifest_reclaim.MANIFEST_TABLE}/_versions").type != pafs.FileType.Directory:
             return []
-        index = lance.dataset(f"{root}/{manifest_reclaim.MANIFEST_TABLE}", storage_options=storage_options.in_clear(), session=shared_lance_session())
+        index = open_dataset(f"{root}/{manifest_reclaim.MANIFEST_TABLE}", storage_options=storage_options.in_clear(), session=shared_lance_session())
         read = index.to_table(columns=_COLUMNS, filter="object_type IN ('namespace', 'table')").to_pylist()
     except (OSError, ValueError, RuntimeError) as exc:
         log.warning("object_name_index_unread", extra={"root": root, "error": f"{type(exc).__name__}: {exc}"})

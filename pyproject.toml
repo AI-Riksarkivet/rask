@@ -176,6 +176,7 @@ extend-select = ["TID251", "FAST001", "T20"]
 "dapr".msg = "The lakehouse speaks to the bus through lakehouse.bus and to its secret store through lakehouse.governed.secrets, each on the process's own connection."
 "boto3".msg = "Build S3/STS clients through lakehouse.storage.s3_client / sts_client: a raw boto3 client carries no timeouts."
 "lance.write_dataset".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
+"lance.dataset".msg = "Open a dataset through lakehouse.lance_session.open_dataset, which takes the session the open reads through: an open that names none takes Lance's default 1 GiB + 6 GiB cache caps for that one handle."
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "lakehouse.bus.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
 "signal.signal".msg = "SIGTERM is taken only by lakehouse.draining; a second handler replaces the drain."

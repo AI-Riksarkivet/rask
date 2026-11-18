@@ -87,11 +87,11 @@ def _configured_to_publish(env: dict[str, str]) -> set[str]:
     and the topic variable or the control lane's one topic beside it."""
     topics: set[str] = set()
     if env.get("LANCE_LINEAGE_EMIT_ENABLED") == "true":
-        topics.add(env["LANCE_LINEAGE_TOPIC"])
+        topics.add(env["RASK_LINEAGE_TOPIC"])
     if env.get("LINEAGE_OUTBOX_URI"):
-        topics.add(env["LINEAGE_EVENTS_TOPIC"])
+        topics.add(env["RASK_LINEAGE_TOPIC"])
     if env.get("MAINTENANCE_LINEAGE_EMIT_ENABLED") == "true":
-        topics.add(env["MAINTENANCE_LINEAGE_TOPIC"])
+        topics.add(env["RASK_LINEAGE_TOPIC"])
     if "true" in (env.get("LANCE_CONTROL_EMIT_ENABLED"), env.get("MAINTENANCE_CONTROL_EMIT_ENABLED")):
         topics.add(CONTROL_TOPIC)
     return topics

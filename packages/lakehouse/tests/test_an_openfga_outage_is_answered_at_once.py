@@ -11,8 +11,6 @@ requests that reach the server.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -38,11 +36,11 @@ class _OpenFga:
 
 
 _ATTEMPTS = 2
-_NO_WAIT: dict[str, Any] = {"retry_attempts": _ATTEMPTS, "retry_backoff_seconds": 0.0, "retry_max_backoff_seconds": 0.0}
+_NO_WAIT = fga.RetryPolicy(attempts=_ATTEMPTS, backoff_seconds=0.0, max_backoff_seconds=0.0)
 
 
 async def _ask(client: OpenFgaClient) -> bool:
-    return await fga.check(client, user="dex~alice", relation="can_read", obj="table:t", **_NO_WAIT)
+    return await fga.check(client, user="dex~alice", relation="can_read", obj="table:t", retry=_NO_WAIT)
 
 
 @pytest.mark.asyncio

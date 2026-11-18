@@ -42,7 +42,7 @@ from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.history_fences import TableHistory
-from lakehouse.lance_session import affordable_cache_bytes
+from lakehouse.lance_session import affordable_cache_bytes, open_dataset
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.maintenance_due import delete_due
 from lakehouse.storage_options import StorageOptions, on_s3
@@ -74,7 +74,7 @@ from maintenance.services.expiry import (
 )
 from maintenance.services.floor import raise_stands
 from maintenance.services.naming import PolicyOwners, TableIds, claim_store, policy_owners, read_uuids
-from maintenance.services.plan import DatasetPlan, PlanContext, cadence_skip, resolve_plan
+from maintenance.services.plan import DatasetPlan, PlanContext, cadence_skip, last_maintained, resolve_plan
 
 
 log = logging.getLogger(__name__)
@@ -603,9 +603,7 @@ def _stamp_cadence(result: DatasetResult, *, table_uuid: str, plan: DatasetPlan,
     if maintenance_policies.policy_settings(policy).compact_interval_hours is None:
         return
     try:
-        maintenance_policies.write_state(
-            settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=result.uri, at=now.isoformat()
-        )
+        maintenance_policies.write_state(settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=result.uri, at=now)
     except Exception as exc:  # noqa: BLE001 — a lost stamp re-paces one dataset; it must not fail the pass
         log.warning("compaction_policy_stamp_failed", extra={"policy": policy.get("id"), "uri": result.uri, "error": str(exc)})
 
@@ -816,7 +814,7 @@ def _datasets_of(location: str, settings: MaintenanceSettings) -> list[str] | No
     """
     options = settings.storage_options()
     try:
-        dataset = lance.dataset(location, storage_options=options.in_clear(), session=shared_lance_session())
+        dataset = open_dataset(location, storage_options=options.in_clear(), session=shared_lance_session())
     except Exception as exc:  # noqa: BLE001 — the store's own answer below decides between an absent table and a fault
         if not objectfs.is_lance_dataset_root(location, options):
             return None
@@ -941,18 +939,8 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
     earliest = min(due, default=None)
     if earliest is None or plan.policy is None or (interval := maintenance_policies.policy_settings(plan.policy).compact_interval_hours) is None:
         return earliest
-    stamped = cadence_stamp(plan.policy, settings=settings, table_uuid=named.owners.table_uuid, uri=result.uri)
+    stamped = last_maintained(plan.policy, settings=settings, table_uuid=named.owners.table_uuid, uri=result.uri)
     return max(earliest, stamped + timedelta(hours=interval)) if stamped is not None else earliest
-
-
-def cadence_stamp(policy: dict[str, object], *, settings: MaintenanceSettings, table_uuid: str, uri: str) -> datetime | None:
-    """When the policy's cadence last let this dataset be maintained, or ``None`` when it never did or cannot tell."""
-    try:
-        stamped = maintenance_policies.read_state(settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=uri)
-        return datetime.fromisoformat(stamped) if stamped else None
-    except (OSError, ValueError, TypeError) as exc:
-        log.warning("compaction_policy_state_unreadable", extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)})
-        return None
 
 
 def next_due(results: list[DatasetResult], *, readings: PassReadings, settings: MaintenanceSettings) -> datetime:

@@ -16,6 +16,12 @@ from typing import Final
 CATALOG_DELIMITER: Final = "$"
 
 
+#: The prefix of every key the platform alone writes, wherever a key lives: a schema's or a field's metadata, a table's
+#: config, a namespace's properties, a commit's transaction properties, a label's name. Each door that takes a caller's
+#: keys judges them by this one spelling.
+PLATFORM_PREFIX: Final = "rask."
+
+
 #: The read-only property DescribeTable and DescribeNamespace answer an object's uuid under (ADR 0173 §11). A namespace
 #: keeps its own in its `__manifest` row's properties, which only its create writes and its undrop restores; a table's
 #: lives in its location's claim (``lakehouse.location_claims``). No door accepts a caller's ``rask.*``

@@ -883,8 +883,11 @@ governing their data. The project-scoped surface is the console's project page, 
 ## Gotchas
 
 - **An `Idempotency-Key` converges a resent write; it is optional on every keyed door** (`catalog.api.idempotency`,
-  `lakehouse.idempotency`): create, drop, rename, deregister, register, restore and insert. A key is one operation on one
+  `lakehouse.idempotency`): a table's create, declare, drop, undrop, rename, deregister, register, restore and insert, and
+  a namespace's create, drop and undrop. A project's and a warehouse's create and delete take none: a re-POST of a create
+  converges on its record, and a delete that failed part-way is finished by asking again. A key is one operation on one
   object (the door, and for an insert its mode and ref, and the object's canonical id), answered with its first response.
+  The declare door remembers its answer without the credential it vended: a replay's caller asks DescribeTable for one.
   A claim unanswered past `LEASE` (300 s) is taken over, and the claim says so (`TakenOver`): an append run again would
   land twice, so the insert door stamps the key on its commit (`rask.idempotency_key`, by the caller's scope, a property
   no stock commit may carry) and a takeover reads the ref's versions since that claim for it, answering with the commit

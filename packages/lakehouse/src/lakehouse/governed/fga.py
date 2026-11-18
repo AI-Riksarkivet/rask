@@ -97,16 +97,28 @@ log = logging.getLogger(__name__)
 _MODEL_PATH = Path(__file__).resolve().parent / "auth" / "model.json"
 _MODEL_DSL_PATH = _MODEL_PATH.with_name("model.fga")
 
-# Default resilience knobs. The real values are sourced from Settings and passed
-# into make_client / check / grant_on_create; these mirror the config defaults so
-# the module is usable (e.g. in tests) without a Settings instance.
 DEFAULT_TIMEOUT_SECONDS = 5.0
-DEFAULT_RETRY_ATTEMPTS = 3
-DEFAULT_RETRY_BACKOFF_SECONDS = 0.2
-DEFAULT_RETRY_MAX_BACKOFF_SECONDS = 2.0
-# Overall wall-clock budget for one logical call's retries, so a flapping OpenFGA
-# (whose own backoff can be long) cannot pin a request worker for minutes.
-DEFAULT_RETRY_OVERALL_BUDGET_SECONDS = 15.0
+
+
+class RetryPolicy(BaseModel):
+    """How one OpenFGA call retries a transient failure before it fails closed: every call's one statement of it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: Tries in all, the first included.
+    attempts: int = Field(default=3, ge=1)
+    #: The first wait between two tries, which doubles (with jitter) up to ``max_backoff_seconds``.
+    backoff_seconds: float = Field(default=0.2, ge=0)
+    max_backoff_seconds: float = Field(default=2.0, ge=0)
+    #: The wall clock one logical call's tries may take in all, so a flapping OpenFGA (whose own backoff can be long)
+    #: cannot pin a request worker for minutes.
+    overall_budget_seconds: float = Field(default=15.0, gt=0)
+
+
+#: What a call retries by when its caller names no policy.
+DEFAULT_RETRY: Final = RetryPolicy()
+#: One try and no wait, for a read on a path with a deadline of its own, which degrades rather than waits.
+ONE_ATTEMPT: Final = RetryPolicy(attempts=1)
 
 #: Calls in a row that end in an outage (each after its retries) before the circuit opens. While it is open every call
 #: is refused at once with the same 503, so a request does not pay the retry budget against an OpenFGA that is down.
@@ -145,11 +157,6 @@ class _UnansweredBatchItems(Exception):
 
 # Every exception class the read/write paths fail CLOSED on (→ 503), never propagate.
 _FAIL_CLOSED: tuple[type[BaseException], ...] = (ApiException, _UnansweredBatchItems, *_TRANSIENT_NETWORK)
-
-# Reading every tuple on one object (revoke-on-delete) is paginated; bound the page loop so a
-# pathological store / continuation-token bug can't spin forever. One object's grants are few, so
-# this ceiling is never reached in practice.
-_MAX_REVOKE_PAGES = 100
 
 # Parent types that declare a `child` relation in the model, and therefore take the inverse edge
 # `grant_on_create` writes for upward visibility. Deliberately a whitelist keyed on the PARENT's type:
@@ -439,12 +446,7 @@ def _log_retry(retry_state: RetryCallState) -> None:
     )
 
 
-def _retrying[T](
-    attempts: int,
-    backoff: float,
-    max_backoff: float,
-    overall_budget: float = DEFAULT_RETRY_OVERALL_BUDGET_SECONDS,
-) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
+def _retrying[T](policy: RetryPolicy) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Build a tenacity ``@retry`` decorator over transient OpenFGA failures.
 
     Retries both OpenFGA ``ApiException`` 429/5xx and raw transport errors (a down
@@ -454,8 +456,8 @@ def _retrying[T](
     """
     decorator = retry(
         retry=retry_if_exception(_is_transient),
-        stop=stop_after_attempt(max(1, attempts)) | stop_after_delay(overall_budget),
-        wait=wait_exponential_jitter(initial=backoff, max=max_backoff),
+        stop=stop_after_attempt(policy.attempts) | stop_after_delay(policy.overall_budget_seconds),
+        wait=wait_exponential_jitter(initial=policy.backoff_seconds, max=policy.max_backoff_seconds),
         before_sleep=_log_retry,
         reraise=True,
     )
@@ -471,9 +473,7 @@ async def _guarded[T](
     *,
     event: str,
     extra: dict[str, object] | None = None,
-    attempts: int,
-    backoff: float,
-    max_backoff: float,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> T:
     """Run one OpenFGA operation under the module's SINGLE resilience posture: retry, then fail closed.
 
@@ -496,7 +496,7 @@ async def _guarded[T](
         log.warning("openfga_circuit_open", extra=extra)
         raise ServiceUnavailableError("authorization service unavailable")
     try:
-        answer = await _retrying(attempts, backoff, max_backoff)(operation)()
+        answer = await _retrying(retry)(operation)()
     except _FAIL_CLOSED as exc:
         if _is_transient(exc):
             _CIRCUIT.outage()
@@ -781,9 +781,7 @@ async def _model_history(
     desired: Any,
     *,
     known_newest: str | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> ModelHistory:
     """The store's models read against ``desired``, paged newest first and stopped at the first match.
 
@@ -813,9 +811,7 @@ async def _model_history(
     return await _guarded(
         _do_read,
         event="openfga_read_model_unavailable",
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
 
 
@@ -825,7 +821,7 @@ async def provision(
     token_file: str | None,
     store_name: str = "lance-catalog",
     store_id: str | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> tuple[str, str]:
     """Idempotently ensure the catalog store + model exist; return ``(store_id, model_id)``.
 
@@ -852,7 +848,7 @@ async def provision(
     async with OpenFgaClient(client_configuration(api_url, token_file=token_file, store_id=store_id)) as client:
         # A store minted moments ago holds no model, so it never pays the read, which is also what keeps
         # a first boot from depending on a model that cannot exist yet.
-        history = ModelHistory() if store_is_new else await _model_history(client, model, retry_attempts=retry_attempts)
+        history = ModelHistory() if store_is_new else await _model_history(client, model, retry=retry)
         if history.carrying is not None:
             # THE STORE ALREADY HOLDS THIS IMAGE'S MODEL, so nothing is written ([[LH-201]]). Every
             # `write_authorization_model` mints an immutable version, so rewriting a held body grows the
@@ -933,7 +929,7 @@ async def resolve(
                 absent = OpenFgaModelAbsentError(f"OpenFGA at {api_url} holds no store named {store_name!r}")
             else:
                 async with OpenFgaClient(client_configuration(api_url, token_file=token_file, store_id=found)) as client:
-                    history = await _model_history(client, model, known_newest=known_newest, retry_attempts=1)
+                    history = await _model_history(client, model, known_newest=known_newest, retry=ONE_ATTEMPT)
                 if history.carrying is not None:
                     return found, str(history.carrying.id)
                 if history.newest is not None:
@@ -1084,9 +1080,7 @@ async def check(
     qualify: bool = True,
     contextual_tuples: list[ClientTuple] | None = None,
     context: dict[str, Any] | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> bool:
     """Return whether ``user:<user>`` has ``relation`` on ``obj`` (e.g. ``table:db1$t``).
 
@@ -1134,9 +1128,7 @@ async def check(
         _do_check,
         event="openfga_check_unavailable",
         extra={"relation": relation, "object": obj},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
 
 
@@ -1147,9 +1139,7 @@ async def batch_check(
     relation: str,
     objects: list[str],
     context: dict[str, Any] | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> dict[str, bool]:
     """Return ``{object: allowed}`` for one user across many objects in one round-trip.
 
@@ -1189,9 +1179,7 @@ async def batch_check(
         _do_batch_check,
         event="openfga_batch_check_unavailable",
         extra={"relation": relation},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
 
 
@@ -1245,9 +1233,7 @@ async def list_objects(
     object_type: str,
     qualify: bool = True,
     context: dict[str, Any] | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> ObjectListing:
     """Return the objects of ``object_type`` the user has ``relation`` on (e.g. ``table:…``).
 
@@ -1292,19 +1278,17 @@ async def list_objects(
         _do_list_objects,
         event="openfga_list_objects_unavailable",
         extra={"relation": relation, "object_type": object_type},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
 
 
-#: Tuples per page when enumerating the whole store. The server caps a Read page at 100, and the call
-#: is issued once per SWEEP rather than per object, so a larger number would buy nothing.
+#: Tuples per page of every whole read (:func:`read_all_tuples`): one object's, one subject's, or the store's. The
+#: server caps a Read page at 100, so a larger number would buy nothing.
 READ_PAGE_SIZE = 100
 
-#: Ceiling on pages, so a server that returns a non-advancing cursor cannot spin forever. 500 pages is
-#: 50,000 tuples — measured 2026-09-11, the whole estate is 5,027 across 51 pages, so this is an order
-#: of magnitude of headroom and still a bound.
+#: Ceiling on the pages of one whole read, so a server that returns a non-advancing cursor cannot spin forever. 500
+#: pages is 50,000 tuples: measured 2026-09-11, the whole estate is 5,027 across 51 pages, so the widest read (the
+#: census, which reads the store) has an order of magnitude of headroom, and one object's grants are far fewer.
 READ_MAX_PAGES = 500
 
 
@@ -1327,9 +1311,7 @@ async def list_users(
     user_relation: str | None = None,
     qualified: bool = False,
     context: dict[str, Any] | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> list[str]:
     """The ``user:`` subjects holding ``relation`` on ``obj`` (e.g. every reader of ``table:db1$t``),
     sorted — the access-review primitive (#51), the inverse of :func:`list_objects`.
@@ -1395,9 +1377,7 @@ async def list_users(
         _do_list_users,
         event="openfga_list_users_unavailable",
         extra={"relation": relation, "object": obj},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
 
 
@@ -1458,9 +1438,7 @@ async def expand(
     *,
     relation: str,
     obj: str,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> dict[str, Any]:
     """The userset TREE for ``relation`` on ``obj`` — how the grant is composed, not whether it holds.
 
@@ -1492,9 +1470,7 @@ async def expand(
         _do_expand,
         event="openfga_expand_unavailable",
         extra={"relation": relation, "object": obj},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
 
 
@@ -1532,9 +1508,7 @@ async def expand_tree(
     relation: str,
     obj: str,
     max_depth: int = 1,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> dict[str, Any]:
     """:func:`expand`, followed recursively — the FULL derivation chain, not one level of it.
 
@@ -1589,9 +1563,7 @@ async def expand_tree(
             client,
             relation=rel,
             obj=target,
-            retry_attempts=retry_attempts,
-            retry_backoff_seconds=retry_backoff_seconds,
-            retry_max_backoff_seconds=retry_max_backoff_seconds,
+            retry=retry,
         )
         await _resolve(node, target, depth, path | {key})
         return node
@@ -1631,13 +1603,7 @@ async def expand_tree(
             tupleset_relation = str(ttu.get("tupleset") or "").rpartition("#")[2]
             if not tupleset_relation:
                 return
-            edges = await read_object_tuples(
-                client,
-                target,
-                retry_attempts=retry_attempts,
-                retry_backoff_seconds=retry_backoff_seconds,
-                retry_max_backoff_seconds=retry_max_backoff_seconds,
-            )
+            edges = await read_object_tuples(client, target, retry=retry)
             parents = [t.user for t in edges if t.relation == tupleset_relation]
             expanded: list[dict[str, Any]] = []
             for parent in parents:
@@ -1656,9 +1622,7 @@ async def read_changes(
     page_size: int | None = None,
     continuation_token: str | None = None,
     start_time: str | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """The tuple CHANGELOG for one object type — every write and delete, in order, with timestamps.
 
@@ -1726,63 +1690,17 @@ async def read_changes(
         _do_read_changes,
         event="openfga_read_changes_unavailable",
         extra={"object_type": object_type},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
 
 
-async def read_object_tuples(
-    client: OpenFgaClient,
-    obj: str,
-    *,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
-) -> list[ClientTuple]:
-    """Return EVERY tuple whose object is ``obj`` (e.g. all grants on ``table:db1$t``), or raise.
+async def read_object_tuples(client: OpenFgaClient, obj: str, *, retry: RetryPolicy = DEFAULT_RETRY) -> list[ClientTuple]:
+    """Every tuple whose object is ``obj`` (all grants on ``table:<uuid>``), paged to the end (:func:`read_all_tuples`).
 
-    Paginated under the hood so the COMPLETE set comes back, not just the first page — the
-    revoke-on-delete caller must see every stale grant to remove it. Read-only/idempotent, so it
-    gets the same bounded retry + fail-closed treatment as :func:`check` (outage → 503).
-
-    A read that reaches the page ceiling with a continuation token still outstanding is NOT returned
-    (SKG-04): the answer would be a short list indistinguishable from a complete one, and its only
-    caller that mutates — :func:`revoke_object_tuples` — deletes exactly what it is handed, so a
-    silently-shortened read is a revoke that leaves live grants behind and reports success. The return
-    type therefore means "all of them" and nothing else; incompleteness leaves as the same
-    ``ServiceUnavailableError`` every other unanswerable read raises.
+    Raises:
+        ServiceUnavailableError: OpenFGA did not answer, or the read reached its page ceiling.
     """
-
-    async def _do_read() -> list[ClientTuple]:
-        collected: list[ClientTuple] = []
-        token: str | None = None
-        for _ in range(_MAX_REVOKE_PAGES):
-            options = _fresh_read_options(continuation_token=token) if token else _fresh_read_options()
-            response = await client.read(ReadRequestTupleKey(object=obj), options=options)
-            for t in response.tuples or []:
-                key = t.key
-                collected.append(ClientTuple(user=key.user, relation=key.relation, object=key.object, condition=getattr(key, "condition", None)))
-            token = response.continuation_token or None
-            if not token:
-                break
-        else:
-            # Hit the page ceiling with a token still outstanding → a PARTIAL set, which this function
-            # may not return. Raised rather than logged: for one object the ceiling is unreachable in
-            # practice, so reaching it means either a pathological store or a continuation-token bug,
-            # and both are states in which handing back "the grants on this object" is a lie.
-            log.error("openfga_read_truncated", extra={"object": obj, "max_pages": _MAX_REVOKE_PAGES})
-            raise ServiceUnavailableError(f"tuple listing for {obj} exceeded {_MAX_REVOKE_PAGES} pages — refusing to answer with a partial set")
-        return collected
-
-    return await _guarded(
-        _do_read,
-        event="openfga_read_unavailable",
-        extra={"object": obj},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
-    )
+    return await read_all_tuples(client, obj=obj, retry=retry)
 
 
 async def read_tuples(
@@ -1793,9 +1711,7 @@ async def read_tuples(
     obj: str | None = None,
     page_size: int | None = None,
     continuation_token: str | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> tuple[list[ClientTuple], str | None]:
     """One page of the OpenFGA Read API — the DIRECT tuples matching the filter, plus the next-page token.
 
@@ -1839,10 +1755,33 @@ async def read_tuples(
         _do_read_page,
         event="openfga_read_unavailable",
         extra={"object": obj, "user": user},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
+
+
+async def read_all_tuples(
+    client: OpenFgaClient, *, user: str | None = None, obj: str | None = None, relation: str | None = None, retry: RetryPolicy = DEFAULT_RETRY
+) -> list[ClientTuple]:
+    """Every direct tuple the filter matches (:func:`read_tuples`), paged to the end: the one loop every whole read runs.
+
+    The answer means "all of them" and nothing else. A caller that mutates deletes exactly what it is handed, and one
+    that counts decides which objects hold no grant, so a short list would be a revoke that leaves live grants behind
+    or a census that invents ghosts, each reporting success. ``READ_MAX_PAGES`` exists so a cursor that never ends
+    cannot spin a request; reaching it with a cursor outstanding is a pathological store or a continuation-token bug,
+    and leaves as the outage every other unanswerable read is.
+
+    Raises:
+        ServiceUnavailableError: OpenFGA did not answer a page, or ``READ_MAX_PAGES`` pages left a cursor outstanding.
+    """
+    found: list[ClientTuple] = []
+    token: str | None = None
+    for _ in range(READ_MAX_PAGES):
+        page, token = await read_tuples(client, user=user, obj=obj, relation=relation, page_size=READ_PAGE_SIZE, continuation_token=token, retry=retry)
+        found.extend(page)
+        if not token:
+            return found
+    log.error("openfga_read_truncated", extra={"object": obj, "user": user, "relation": relation, "max_pages": READ_MAX_PAGES})
+    raise ServiceUnavailableError(f"a tuple read (object {obj}, user {user}) exceeded {READ_MAX_PAGES} pages — refusing to answer with a partial set")
 
 
 # --------------------------------------------------------------------------- #
@@ -1927,14 +1866,8 @@ def _audit_tuples(action: AuditAction, tuples: list[ClientTuple], actor: str, or
 
 
 async def read_subject_tuples(client: OpenFgaClient, user: str, fga_type: str) -> list[ClientTuple]:
-    """Every direct tuple naming ``user`` on an object of ``fga_type``, page by page; an outage raises, never a short list."""
-    found: list[ClientTuple] = []
-    continuation: str | None = None
-    while True:
-        page, continuation = await read_tuples(client, user=user, obj=f"{fga_type}:", page_size=READ_PAGE_SIZE, continuation_token=continuation)
-        found.extend(page)
-        if not continuation:
-            return found
+    """Every direct tuple naming ``user`` on an object of ``fga_type``, paged to the end (:func:`read_all_tuples`)."""
+    return await read_all_tuples(client, user=user, obj=f"{fga_type}:")
 
 
 async def write_tuples(
@@ -1943,9 +1876,7 @@ async def write_tuples(
     *,
     actor: str,
     origin: TupleOrigin,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> None:
     """Persist relationship tuples (the single write path after a successful mutation).
 
@@ -1977,9 +1908,7 @@ async def write_tuples(
     await _guarded(
         _do_write,
         event="openfga_write_unavailable",
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+        retry=retry,
     )
     # A duplicate IS the post-condition holding, so it is audited like any other success —
     # otherwise re-running a seed silently erases the provenance of tuples that are present.
@@ -1995,9 +1924,7 @@ async def grant_on_create(
     origin: TupleOrigin,
     grant_owner: bool = True,
     parent_object: str | None = None,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> None:
     """Grant the creator ownership of a just-created object, in a single write.
 
@@ -2032,9 +1959,7 @@ async def grant_on_create(
         tuples,
         actor=actor,
         origin=origin,
-        retry_attempts=retry_attempts,
-        retry_backoff_seconds=retry_backoff_seconds,
-        retry_max_backoff_seconds=retry_max_backoff_seconds,
+        retry=retry,
     )
 
 
@@ -2096,9 +2021,7 @@ async def delete_tuples(
     *,
     actor: str,
     origin: TupleOrigin,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> list[ClientTuple]:
     """Delete relationship tuples (the revoke counterpart of :func:`write_tuples`); return those the server removed.
 
@@ -2121,7 +2044,7 @@ async def delete_tuples(
     # this is the only caller that must READ the failure before failing closed, because a
     # server-reported "already absent" is idempotent SUCCESS here and an outage is not. Folding it in
     # would mean teaching the shared helper a per-caller classifier, which is how the copies started.
-    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
+    @_retrying(retry)
     async def _delete_one(t: ClientTuple) -> None:
         await client.write(ClientWriteRequest(deletes=[t]))
 
@@ -2184,13 +2107,8 @@ async def revoke_undeclared(
         The tuples the server removed.
     """
     kept = {(t.user, t.relation) for t in declared}
-    stale: list[ClientTuple] = []
-    token: str | None = None
-    while True:
-        page, token = await read_tuples(client, obj=obj, relation=relation, continuation_token=token)
-        stale += [held for held in page if held.user in own and (held.user, held.relation) not in kept]
-        if not token:
-            break
+    held = await read_all_tuples(client, obj=obj, relation=relation)
+    stale = [found for found in held if found.user in own and (found.user, found.relation) not in kept]
     return await delete_tuples(client, stale, actor=actor, origin=origin)
 
 
@@ -2199,11 +2117,6 @@ async def revoke_undeclared(
 ADMIN_REVISION: Final = "admin_revision"
 BOOKKEEPING_RELATIONS: Final = frozenset({ADMIN_REVISION})
 
-#: One census reads at most this many pages of this many tuples: governance tuples are written at admin frequency, so
-#: the ceiling is unreachable on a real estate and exists so a continuation-token bug cannot spin a read forever.
-CENSUS_MAX_PAGES: Final = 200
-CENSUS_PAGE_SIZE: Final = 100
-
 
 class GrantCensus(BaseModel):
     """Every object's grant count, bucketed by its type: what a drift report's authorization categories read."""
@@ -2211,9 +2124,6 @@ class GrantCensus(BaseModel):
     #: ``{object_type: {object_id: tuple_count}}``, bookkeeping relations excluded: a project holding only its admin
     #: revision is as stranded as one holding nothing.
     counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
-    #: Why the read stopped short of the store, when it did: a short census would invent ghosts on the registry side and
-    #: hide them on the grant side in the same report, so a reader treats it as incomplete.
-    truncated: str | None = None
 
 
 async def census(client: OpenFgaClient, *, exclude: Collection[str] = ()) -> GrantCensus:
@@ -2228,18 +2138,12 @@ async def census(client: OpenFgaClient, *, exclude: Collection[str] = ()) -> Gra
     reported that 400 as ``ServiceUnavailableError``, a permanent outage on a healthy server.
     """
     counted = GrantCensus()
-    token: str | None = None
-    for _ in range(CENSUS_MAX_PAGES):
-        page, token = await read_tuples(client, page_size=CENSUS_PAGE_SIZE, continuation_token=token)
-        for item in page:
-            obj_type, _, obj_id = str(item.object).partition(":")
-            if not obj_id or item.relation in BOOKKEEPING_RELATIONS or str(item.object) in exclude:
-                continue
-            bucket = counted.counts_by_type.setdefault(obj_type, {})
-            bucket[obj_id] = bucket.get(obj_id, 0) + 1
-        if not token:
-            return counted
-    counted.truncated = f"the tuple read hit its {CENSUS_MAX_PAGES}-page ceiling with a cursor outstanding"
+    for item in await read_all_tuples(client):
+        obj_type, _, obj_id = str(item.object).partition(":")
+        if not obj_id or item.relation in BOOKKEEPING_RELATIONS or str(item.object) in exclude:
+            continue
+        bucket = counted.counts_by_type.setdefault(obj_type, {})
+        bucket[obj_id] = bucket.get(obj_id, 0) + 1
     return counted
 
 
@@ -2359,9 +2263,7 @@ async def revoke_object_tuples(
     *,
     actor: str,
     origin: TupleOrigin,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+    retry: RetryPolicy = DEFAULT_RETRY,
 ) -> list[ClientTuple]:
     """Delete EVERY tuple on ``obj`` — the revoke-on-delete cleanup. Returns WHAT the server removed.
 
@@ -2382,13 +2284,7 @@ async def revoke_object_tuples(
     revokes each object in it through the catalog's ``fga_deps.end_removed_subtree``, which finds them by
     those ``child`` edges. An outage part-way raises :class:`RevokeInterrupted` naming the tuples removed.
     """
-    tuples = await read_object_tuples(
-        client,
-        obj,
-        retry_attempts=retry_attempts,
-        retry_backoff_seconds=retry_backoff_seconds,
-        retry_max_backoff_seconds=retry_max_backoff_seconds,
-    )
+    tuples = await read_object_tuples(client, obj, retry=retry)
     if not tuples:
         return []
     # The inverse `child` edge is the ONE tuple about this object that a read by object cannot see:
@@ -2407,7 +2303,5 @@ async def revoke_object_tuples(
         doomed,
         actor=actor,
         origin=origin,
-        retry_attempts=retry_attempts,
-        retry_backoff_seconds=retry_backoff_seconds,
-        retry_max_backoff_seconds=retry_max_backoff_seconds,
+        retry=retry,
     )

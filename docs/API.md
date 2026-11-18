@@ -24,7 +24,7 @@ Auth: OIDC bearer (Dex) at the edge, per-route OpenFGA relations (`can_*`). Read
 writes on writer, and destructive/admin ops on owner. Fail-closed:
 an OpenFGA outage is `503`, a denial is `403`, a missing token is `401`.
 
-**Audit trail (#41, configurable via `LANCE_AUDIT_ENABLED`).** Every security-relevant *catalog* action —
+**Audit trail (#41, configurable via `RASK_AUDIT_ENABLED`).** Every security-relevant *catalog* action —
 authn success/failure, authz allow/deny (single, batch, and warehouse gates), credential vending — emits a
 structured event (who / what / resource / outcome) on the dedicated `lance.audit` logger, exported over
 OTLP under that instrumentation scope to the platform's gateway (in development into GreptimeDB) and queryable by `audit.action` / `audit.outcome` / `audit.subject`. Scope: the catalog

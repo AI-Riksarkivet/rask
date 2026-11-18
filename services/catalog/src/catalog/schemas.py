@@ -906,8 +906,6 @@ class GrantCensusResponse(BaseModel):
     enabled: bool
     #: ``{object_type: {object_id: tuple_count}}``, bookkeeping relations excluded.
     counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
-    #: Why the read stopped short of the store, when it did; a reader treats such a census as incomplete.
-    truncated: str | None = None
 
 
 class GhostRevokeRequest(RequestBody):

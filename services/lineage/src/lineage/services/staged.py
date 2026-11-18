@@ -64,5 +64,5 @@ async def republish_staged(publisher: Bus | None, settings: LineageSettings, sta
     if publisher is None:
         return
     await publish_event(
-        publisher, lineage_envelope(staged.data).with_trace_of(staged), topic=settings.events_topic, timeout_seconds=settings.publish_timeout_seconds
+        publisher, lineage_envelope(staged.data).with_trace_of(staged), topic=settings.lineage_topic, timeout_seconds=settings.publish_timeout_seconds
     )

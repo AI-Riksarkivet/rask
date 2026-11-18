@@ -38,3 +38,11 @@ def test_a_foreign_base_nobody_sanctioned_is_what_forces_the_fallback() -> None:
         f"the unsanctioned base was not singled out ({missed}) — the door would either proxy a table it "
         "could have vended directly, or direct-vend one whose bytes the policy cannot reach"
     )
+
+
+def test_a_base_spelled_through_a_parent_segment_forces_the_fallback() -> None:
+    """``<table>/../victim`` starts with the table's prefix and names a sibling. The policy refuses to write a
+    statement for it, so the door must not answer that the credential covers it."""
+    climbing = f"{TABLE}/../victim"
+
+    assert unsanctioned_bases(TABLE, [climbing], sanctioned_bases=["s3://acme-wh/"]) == (climbing,)

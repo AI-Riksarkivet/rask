@@ -86,6 +86,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, NoReturn, cast
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 import pytest_asyncio
@@ -248,6 +249,22 @@ asyncio.run(main(sys.argv[1]))
 """
 
 
+#: The table each uuid this module minted stands for, so a run is read by the table's name.
+_TABLES: dict[str, str] = {}
+
+
+def _uuid_of(table: str) -> str:
+    """The uuid the table named ``table`` carries in this module: the same one each time it is asked."""
+    minted = str(uuid5(NAMESPACE_URL, table))
+    _TABLES[minted] = table
+    return minted
+
+
+def _table_of(task: Task) -> str:
+    """The name of the table ``task`` is about; empty for the audit and the scan, which name none."""
+    return _TABLES.get(task.uuid, task.uuid)
+
+
 class _Runs:
     """Which worker ran which table's task, in order. A table in `held` holds its run until the test sets its event; a
     table in `at_start` has what its probe answers when the run starts kept in `seen`."""
@@ -260,16 +277,17 @@ class _Runs:
 
     def of(self, worker: str) -> Callable[[Task], Awaitable[None]]:
         async def run(task: Task) -> None:
-            if (probe := self.at_start.get(task.uuid)) is not None:
-                self.seen[task.uuid] = probe()
-            self.ran.append((worker, task.uuid))
-            gate = self.held.get(task.uuid)
+            table = _table_of(task)
+            if (probe := self.at_start.get(table)) is not None:
+                self.seen[table] = probe()
+            self.ran.append((worker, table))
+            gate = self.held.get(table)
             await (gate.wait() if gate is not None else asyncio.sleep(1.0))
 
         return run
 
-    def times(self, uuid: str) -> int:
-        return sum(1 for _, ran in self.ran if ran == uuid)
+    def times(self, table: str) -> int:
+        return sum(1 for _, ran in self.ran if ran == table)
 
 
 class _Ended(Exception):  # noqa: N818 — a replica's end, raised where a worker ends its process
@@ -674,8 +692,8 @@ async def fleet(declared: _Bus) -> AsyncIterator[_Fleet]:
         await made.stop()
 
 
-def _task(uuid: str, kind: TaskKind = "table") -> Task:
-    return Task(kind=kind, uuid=uuid, location=f"s3://bucket/{uuid}")
+def _task(table: str, kind: TaskKind = "table") -> Task:
+    return Task(kind=kind, uuid=_uuid_of(table), location=f"s3://bucket/{table}")
 
 
 # --- a worker's hold on its task --------------------------------------------------------------------------------------
@@ -686,7 +704,7 @@ async def test_a_pass_past_twice_its_bound_ends_its_workers_process(fleet: _Flee
     lane = await fleet.lane()
     assert await lane.enqueue(_task("hung")) is True, fleet.bus.refusals()
     hung = await fleet.doomed(1)
-    assert await _said(hung) == ["running", "hung"], f"a worker did not take the task; refused: {fleet.bus.refusals()}"
+    assert await _said(hung) == ["running", _uuid_of("hung")], f"a worker did not take the task; refused: {fleet.bus.refusals()}"
 
     ended = await _until(lambda: hung.returncode is not None, 30)
 
@@ -700,13 +718,13 @@ async def _outlived_every_delivery(fleet: _Fleet) -> tuple[TaskQueue, _Runs, boo
     assert await lane.enqueue(_task("killer")) is True, fleet.bus.refusals()
     for _ in range(_MAX_DELIVER):
         hung = await fleet.doomed(1)
-        assert await _said(hung) == ["running", "killer"], f"a worker did not take the task its table held; refused: {fleet.bus.refusals()}"
+        assert await _said(hung) == ["running", _uuid_of("killer")], f"a worker did not take the task its table held; refused: {fleet.bus.refusals()}"
         assert await _until(lambda hung=hung: hung.returncode is not None, 30), "a pass past twice its bound did not end its worker's process"
     runs = _Runs()
     await fleet.start("next", runs)
 
     async def killer_ended() -> bool:
-        return "killer" not in await lane.held("task", "table")
+        return _uuid_of("killer") not in await lane.held("task", "table")
 
     return lane, runs, await _until(killer_ended, _ACK_WAIT + 15)
 
@@ -722,7 +740,7 @@ async def test_a_task_that_outlived_its_worker_on_every_delivery_is_ended_unrun(
 async def test_a_task_that_outlived_its_worker_on_every_delivery_holds_its_tables_next_try(fleet: _Fleet) -> None:
     lane, _, _ = await _outlived_every_delivery(fleet)
 
-    assert "killer" in await lane.held("schedule", "table"), "an ended task's table holds no next try, so the hourly audit hands it back"
+    assert _uuid_of("killer") in await lane.held("schedule", "table"), "an ended task's table holds no next try, so the hourly audit hands it back"
 
 
 @pytest.mark.asyncio
@@ -734,7 +752,7 @@ async def test_a_task_put_late_in_its_workers_pull_stays_with_it_while_it_beats(
     pulled_at = await pulls.next_after(0, 15)
     await asyncio.sleep(max(0.0, pulled_at + _LATE_IN_PULL - asyncio.get_running_loop().time()))
     assert await lane.enqueue(_task("dying")) is True, fleet.bus.refusals()
-    assert await _said(dier) == ["running", "dying"], f"the doomed worker did not take the task; refused: {fleet.bus.refusals()}"
+    assert await _said(dier) == ["running", _uuid_of("dying")], f"the doomed worker did not take the task; refused: {fleet.bus.refusals()}"
     runs = _Runs()
     await fleet.start("second", runs)
 
@@ -763,7 +781,7 @@ async def test_a_killed_workers_task_goes_to_another_worker(fleet: _Fleet) -> No
     lane = await fleet.lane()
     dier = await fleet.doomed(600)
     assert await lane.enqueue(_task("dying")) is True, fleet.bus.refusals()
-    assert await _said(dier) == ["running", "dying"], f"the doomed worker did not take the task; refused: {fleet.bus.refusals()}"
+    assert await _said(dier) == ["running", _uuid_of("dying")], f"the doomed worker did not take the task; refused: {fleet.bus.refusals()}"
     runs = _Runs()
     await fleet.start("second", runs)
 
@@ -779,7 +797,7 @@ async def test_a_worker_the_bus_stops_answering_mid_pass_ends_its_process_before
     link = await fleet.link()
     stranded = await fleet.doomed(600, url=link.url)
     assert await lane.enqueue(_task("cut")) is True, fleet.bus.refusals()
-    assert await _said(stranded) == ["running", "cut"], f"the stranded worker did not take the task; refused: {fleet.bus.refusals()}"
+    assert await _said(stranded) == ["running", _uuid_of("cut")], f"the stranded worker did not take the task; refused: {fleet.bus.refusals()}"
     runs = _Runs()
     runs.at_start["cut"] = lambda: stranded.returncode
     await fleet.start("second", runs)
@@ -801,7 +819,7 @@ async def test_a_worker_whose_drain_ends_mid_pass_ends_its_process_before_its_ta
     lane = await fleet.lane()
     stopping = await fleet.doomed(600)
     assert await lane.enqueue(_task("drained")) is True, fleet.bus.refusals()
-    assert await _said(stopping) == ["running", "drained"], f"the stopping worker did not take the task; refused: {fleet.bus.refusals()}"
+    assert await _said(stopping) == ["running", _uuid_of("drained")], f"the stopping worker did not take the task; refused: {fleet.bus.refusals()}"
     runs = _Runs()
     runs.at_start["drained"] = lambda: stopping.returncode
     await fleet.start("second", runs)
@@ -830,7 +848,7 @@ async def _a_pass_ends_in_a_bus_cut(fleet: _Fleet) -> _CutSettle:
     link = await fleet.link()
     settler = await fleet.doomed(600, url=link.url)
     assert await lane.enqueue(_task("settled")) is True, fleet.bus.refusals()
-    assert await _said(settler) == ["running", "settled"], f"the settling worker did not take the task; refused: {fleet.bus.refusals()}"
+    assert await _said(settler) == ["running", _uuid_of("settled")], f"the settling worker did not take the task; refused: {fleet.bus.refusals()}"
     runs = _Runs()
     release = runs.held["settled"] = asyncio.Event()
     await fleet.start("second", runs)
@@ -927,7 +945,7 @@ async def test_a_late_ack_that_frees_a_live_passs_task_lets_no_second_pass_of_it
     deliveries: list[Msg] = []
 
     async def delivered(msg: Msg) -> None:
-        if msg.subject.endswith(".fenced"):
+        if msg.subject.endswith(f".{_uuid_of('fenced')}"):
             deliveries.append(msg)
 
     await rig.nc.subscribe(f"{INBOX_PREFIX}.>", cb=delivered)
@@ -942,7 +960,7 @@ async def test_a_late_ack_that_frees_a_live_passs_task_lets_no_second_pass_of_it
     await rig.settle()
 
     async def freed() -> bool:
-        return "fenced" not in await lane.held("task", "table")
+        return _uuid_of("fenced") not in await lane.held("task", "table")
 
     assert await _until(freed, 10), "a late ack did not free the task a live pass holds"
     assert await lane.enqueue(_task("fenced")) is True, "the queue refused a task for a table whose task a late ack freed"
@@ -980,12 +998,12 @@ async def test_each_follow_up_of_a_burst_runs_once(fleet: _Fleet) -> None:
     due = datetime.now(UTC) + timedelta(seconds=2)
     for task in _BURST:
         assert await lane.follow_up(task, due) is True
-    assert await _until(lambda: all(runs.times(task.uuid) for task in _BURST), 30), f"the burst's passes did not all run: {runs.ran}"
+    assert await _until(lambda: all(runs.times(_table_of(task)) for task in _BURST), 30), f"the burst's passes did not all run: {runs.ran}"
 
     # An ack wait past the last pass, in which no pass may run a second time: nothing to poll for.
     await asyncio.sleep(_ACK_WAIT + 1)
 
-    assert Counter(uuid for _, uuid in runs.ran) == Counter(task.uuid for task in _BURST), f"a burst's pass ran other than once: {runs.ran}"
+    assert Counter(table for _, table in runs.ran) == Counter(_table_of(task) for task in _BURST), f"a burst's pass ran other than once: {runs.ran}"
 
 
 async def _a_held_burst(fleet: _Fleet) -> list[tuple[str, str]]:
@@ -996,7 +1014,7 @@ async def _a_held_burst(fleet: _Fleet) -> list[tuple[str, str]]:
     runs = _Runs()
     released = asyncio.Event()
     for task in _BURST:
-        runs.held[task.uuid] = released
+        runs.held[_table_of(task)] = released
     await fleet.start("first", runs)
     await fleet.start("second", runs)
     await fleet.start("not-ready", runs, ready=lambda: False)
@@ -1006,7 +1024,7 @@ async def _a_held_burst(fleet: _Fleet) -> list[tuple[str, str]]:
     assert await _until(lambda: len(runs.ran) == 2, 30), f"the two ready workers did not each take a pass: {runs.ran}; refused: {fleet.bus.refusals()}"
     holding = list(runs.ran)
     released.set()
-    assert await _until(lambda: all(runs.times(task.uuid) for task in _BURST), 30), f"the burst's passes did not all run: {runs.ran}"
+    assert await _until(lambda: all(runs.times(_table_of(task)) for task in _BURST), 30), f"the burst's passes did not all run: {runs.ran}"
     return holding + runs.ran[2:]
 
 
@@ -1284,7 +1302,7 @@ class _StoreEvents:
 
     def claim(self, table: str, *, readable: bool) -> None:
         location_claims.take(
-            self.claims, f"s3://b/{table}", f"lance_catalog$db${table}", ["lance_catalog", "db", table], is_gone=lambda _claim: False, uuid=table
+            self.claims, f"s3://b/{table}", f"lance_catalog$db${table}", ["lance_catalog", "db", table], is_gone=lambda _claim: False, uuid=_uuid_of(table)
         )
         if not readable:
             key = self.control / location_claims.claim_key(f"s3://b/{table}")
@@ -1294,7 +1312,7 @@ class _StoreEvents:
     def make_readable(self, table: str) -> None:
         (self.control / location_claims.claim_key(f"s3://b/{table}")).rmdir()
         location_claims.take(
-            self.claims, f"s3://b/{table}", f"lance_catalog$db${table}", ["lance_catalog", "db", table], is_gone=lambda _claim: False, uuid=table
+            self.claims, f"s3://b/{table}", f"lance_catalog$db${table}", ["lance_catalog", "db", table], is_gone=lambda _claim: False, uuid=_uuid_of(table)
         )
 
     async def deliver(self, body: bytes) -> None:
@@ -1334,7 +1352,7 @@ class _StoreEvents:
 
     async def follow_up_held(self, table: str) -> bool:
         reader = await self.fleet.rig()
-        subject = Task(kind="table", uuid=table).follow_up_subject("schedule")
+        subject = Task(kind="table", uuid=_uuid_of(table)).follow_up_subject("schedule")
         return _held_at(await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": subject})) is not None
 
     def waits(self) -> list[int]:
@@ -1791,7 +1809,7 @@ async def test_two_tasks_holding_one_claim_never_run_at_once(fleet: _Fleet, monk
     monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 15.0)
     lane = await fleet.lane()
     runs = _Runs()
-    release = runs.held[first.uuid] = asyncio.Event()
+    release = runs.held[_table_of(first)] = asyncio.Event()
     for name in ("first-replica", "second-replica"):
         await fleet.start(name, runs)
     assert await lane.enqueue(first) is True
@@ -1943,7 +1961,7 @@ async def _a_task_run_past_twice_the_checks_bound(fleet: _Fleet, task: Task) -> 
     `maintenance.queue.maxPassSeconds` for the others): where the worker ended its process, in that time."""
     runs = _Runs()
     ended: list[str] = []
-    runs.held[task.uuid] = asyncio.Event()
+    runs.held[_table_of(task)] = asyncio.Event()
     queue = await fleet.lane()
     lane = await fleet.lane()
 
@@ -1967,7 +1985,7 @@ async def _a_task_run_past_twice_the_checks_bound(fleet: _Fleet, task: Task) -> 
     )
     fleet.on_stop.append(asyncio.create_task(replica.run_tasks()))
     assert await lane.enqueue(task) is True
-    assert await _until(lambda: runs.times(task.uuid) == 1, 15), f"the task never ran: {runs.ran}"
+    assert await _until(lambda: runs.times(_table_of(task)) == 1, 15), f"the task never ran: {runs.ran}"
     # Past twice the check's bound, inside the pass's: an end, or none, is what these seconds show.
     await asyncio.sleep(4)
     return ended
@@ -2004,7 +2022,7 @@ async def test_a_tables_first_check_is_held_once_and_a_held_one_keeps_its_time(f
     holds = [await lane.schedule_first(check, soon), await lane.schedule_first(check, later)]
 
     held = _held_at(await rig.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": check.subject("schedule")}))
-    assert (holds, "first-check" in await lane.held("schedule", "orphans")) == ([True, False], True)
+    assert (holds, _uuid_of("first-check") in await lane.held("schedule", "orphans")) == ([True, False], True)
     assert held is not None and abs((held - soon).total_seconds()) < 1, f"the held check's time was replaced: {held}"
 
 
@@ -2112,7 +2130,7 @@ async def test_a_fired_schedule_the_queue_refuses_is_counted_and_given_back(flee
     await asyncio.to_thread(fleet.bus.declare)
 
     async def queued() -> bool:
-        return "refused" in await queue.held("task", "table")
+        return _uuid_of("refused") in await queue.held("task", "table")
 
     assert (refused, await _until(queued, 60)) == (True, True), "the refused schedule was not counted, or not moved once the queue took it again"
 

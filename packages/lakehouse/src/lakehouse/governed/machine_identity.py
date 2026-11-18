@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, SERVICE_ACCOUNT_IDP, Principal
+from lakehouse.projected_token import EmptyTokenFileError, read_token_file
 
 
 log = logging.getLogger(__name__)
@@ -129,12 +130,11 @@ class IdentityTokenUnavailableError(ServiceUnavailableError):
 def read_identity_token(path: str | Path) -> str:
     """This pod's projected identity token, read now."""
     try:
-        token = Path(path).read_text().strip()
-    except OSError as exc:
+        return read_token_file(path)
+    except EmptyTokenFileError as exc:
+        raise IdentityTokenUnavailableError(f"the identity token at {path} is empty") from exc
+    except (OSError, UnicodeError) as exc:
         raise IdentityTokenUnavailableError(f"the identity token at {path} could not be read") from exc
-    if not token:
-        raise IdentityTokenUnavailableError(f"the identity token at {path} is empty")
-    return token
 
 
 def identity_bearer(path: str | Path) -> dict[str, str]:

@@ -46,8 +46,8 @@ def _version(client: TestClient, tid: str) -> int:
     return int(client.post(f"/v1/table/{tid}/describe", json={"load_detailed_metadata": True}).json()["version"])
 
 
-def _keyed_post_paths(app: Any) -> tuple[set[str], set[str]]:
-    """`(paths declaring Idempotency-Key, paths REQUIRING it)`, read off the generated OpenAPI.
+def _keyed_doors(app: Any) -> tuple[set[str], set[str]]:
+    """`(doors declaring Idempotency-Key, doors REQUIRING it)`, each as `METHOD path`, read off the generated OpenAPI.
 
     NOT off `app.routes`: the catalog mounts its versioned routers, so a walk over that finds ONE
     APIRoute and a roster gate built on it would pass by finding nothing — which is precisely the
@@ -58,11 +58,12 @@ def _keyed_post_paths(app: Any) -> tuple[set[str], set[str]]:
     declared: set[str] = set()
     required: set[str] = set()
     for path, ops in spec.get("paths", {}).items():
-        for param in (ops.get("post") or {}).get("parameters", []):
-            if param.get("in") == "header" and param.get("name") == "Idempotency-Key":
-                declared.add(path)
-                if param.get("required"):
-                    required.add(path)
+        for method in ("post", "delete"):
+            for param in (ops.get(method) or {}).get("parameters", []):
+                if param.get("in") == "header" and param.get("name") == "Idempotency-Key":
+                    declared.add(f"{method.upper()} {path}")
+                    if param.get("required"):
+                        required.add(f"{method.upper()} {path}")
     return declared, required
 
 
@@ -141,6 +142,22 @@ class TestTheDestructiveDoorsConvergeToo:
 
         assert second.status_code == 200, second.text
         assert second.json() == first.json()
+
+    def test_a_replayed_cascade_drop_of_a_namespace_answers_once_and_does_not_re_enter(self, real_ns_client: TestClient) -> None:
+        """A cascade removes every table beneath the namespace, so its replay finds no namespace: the drop that
+        succeeded would answer NamespaceNotFound, and one racing a namespace created since under the name would cascade
+        through that one."""
+        assert real_ns_client.post("/v1/namespace/lance_catalog$doomed/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$doomed$t/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+        headers = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f6b"}
+
+        first = real_ns_client.post("/v1/namespace/lance_catalog$doomed/drop", json={"behavior": "Cascade"}, headers=headers)
+        assert first.status_code == 200, first.text
+        assert real_ns_client.post("/v1/namespace/lance_catalog$doomed/create", json={}).status_code == 200
+        second = real_ns_client.post("/v1/namespace/lance_catalog$doomed/drop", json={"behavior": "Cascade"}, headers=headers)
+
+        assert (second.status_code, second.json()) == (200, first.json()), second.text
+        assert real_ns_client.post("/v1/namespace/lance_catalog$doomed/describe", json={}).status_code == 200, "the replay dropped the namespace created since"
 
     def test_a_replayed_rename_does_not_report_the_success_as_a_missing_source(self, real_ns_client: TestClient) -> None:
         assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
@@ -256,18 +273,28 @@ class TestEveryTableDoorThatMintsOrRetiresConverges:
 
     Pinned as a ROSTER rather than one test each, because the failure this guards is a door ADDED later
     without the key — and a per-door test cannot notice a door nobody wrote a test for.
+
+    A project's and a warehouse's create are not on it: a re-POST converges on the record, carrying the first one's
+    identity forward.
     """
 
     def test_the_full_roster_declares_the_header(self, real_ns_client: TestClient) -> None:
         want = {
-            "/v1/table/{id}/create",
-            "/v1/table/{id}/drop",
-            "/v1/table/{id}/rename",
-            "/v1/table/{id}/deregister",
-            "/v1/table/{id}/register",
-            "/v1/table/{id}/restore",
-            "/v1/table/{id}/insert",
+            "POST /v1/table/{id}/create",
+            "POST /v1/table/{id}/declare",
+            "POST /v1/table/{id}/drop",
+            "POST /v1/table/{id}/rename",
+            "POST /v1/table/{id}/deregister",
+            "POST /v1/table/{id}/register",
+            "POST /v1/table/{id}/restore",
+            "POST /v1/table/{id}/insert",
+            "POST /management/v1/table/{id}/undrop",
+            "POST /v1/namespace/{id}/create",
+            "POST /v1/namespace/{id}/drop",
+            "POST /management/v1/namespace/{id}/undrop",
+            "DELETE /management/v1/warehouses/{warehouse_id}",
+            "DELETE /management/v1/projects/{project_id}",
         }
-        keyed, _ = _keyed_post_paths(real_ns_client.app)
+        keyed, _ = _keyed_doors(real_ns_client.app)
 
         assert want <= keyed, f"these doors mint or retire an id and take no idempotency key: {sorted(want - keyed)}"

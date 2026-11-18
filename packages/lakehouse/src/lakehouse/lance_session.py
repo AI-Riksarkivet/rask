@@ -15,7 +15,7 @@ The fix is ONE ``lance.Session`` per process, capped explicitly:
   a service that MUTATES what it opens. An OLD version can be: measured on pylance 12.0.0, a version
   the session had read, whose manifest cleanup kept and whose data file it deleted, still answered its
   rows through the session while a new session raised "Not found". A read that is EVIDENCE of what
-  storage holds opens on a session nothing has read through (the catalog's ``fresh_lance_session``).
+  storage holds opens on a session nothing has read through (:func:`fresh_session`).
 - ``lance.Session`` is thread-safe (verified: 8 threads × 50 open+checkout, zero errors), which
   the maintenance worker needs — its lanes run passes that overlap.
 
@@ -29,11 +29,12 @@ from __future__ import annotations
 import logging
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 
 if TYPE_CHECKING:
     import lance
+    from lance_namespace import LanceNamespace
 
 
 #: Where a container states its own memory limit. v2 first — it is what cgroup-v2 hosts (k3s included)
@@ -136,4 +137,47 @@ def lance_session(metadata_cache_bytes: int, index_cache_bytes: int) -> lance.Se
     return lance.Session(
         metadata_cache_size_bytes=metadata_cache_bytes,
         index_cache_size_bytes=index_cache_bytes,
+    )
+
+
+#: Each cache of an evidence session, at the floor a service's own caps admit. Fixed, not clamped: see
+#: :func:`fresh_session`.
+EVIDENCE_CACHE_BYTES: Final = 8 << 20
+
+
+def fresh_session() -> lance.Session:
+    """A session nothing else has read through, for a read that is EVIDENCE of what storage holds: 8 MiB per cache, fixed.
+
+    A process's shared session can answer a version whose files are gone (the module docstring), so a read that must
+    report what storage holds opens here: an erasure's verification, a reconcile of what was committed, a clone
+    source's tags.
+
+    OUTSIDE THE SHARED BUDGET, which the cgroup clamp sizes for ONE session: at those caps every such read in flight
+    would add a whole budget. Each reads what it opens once, so a cache buys it nothing, and the bound is 16 MiB per
+    read in flight. Measured on pylance 12.0.0 over 301 versions: 34.9 MB at the shared caps, 8.4 MB at these.
+    """
+    import lance
+
+    return lance.Session(metadata_cache_size_bytes=EVIDENCE_CACHE_BYTES, index_cache_size_bytes=EVIDENCE_CACHE_BYTES)
+
+
+def open_dataset(
+    uri: str | None = None,
+    *,
+    session: lance.Session,
+    storage_options: dict[str, str] | None = None,
+    version: int | str | None = None,
+    namespace_client: LanceNamespace | None = None,
+    table_id: list[str] | None = None,
+) -> lance.LanceDataset:
+    """Open a dataset through ``session``: the one place a lakehouse process opens one.
+
+    The session is required because an open that names none takes Lance's default caps, 1 GiB of metadata and 6 GiB of
+    index, for that one handle and discards the cache with it. A caller names the process's shared session, or
+    :func:`fresh_session` for a read that is evidence of what storage holds.
+    """
+    import lance
+
+    return lance.dataset(  # noqa: TID251 — the one opener
+        uri, version=version, storage_options=storage_options, session=session, namespace_client=namespace_client, table_id=table_id
     )

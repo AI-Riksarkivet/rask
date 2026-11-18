@@ -39,6 +39,7 @@ from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from lakehouse.context import current_traceparent
+from lakehouse.naming import PLATFORM_PREFIX
 
 
 RUN_ID_HEADER: Final = "x-rask-run-id"
@@ -139,7 +140,7 @@ def from_properties(properties: Mapping[str, str] | None) -> RunContext | None:
             run id, a run id is no UUID or names no job namespace and name, or one of them is malformed.
     """
     properties = properties or {}
-    foreign = sorted(key for key in properties if key.startswith("rask.") and key not in PROPERTIES)
+    foreign = sorted(key for key in properties if key.startswith(PLATFORM_PREFIX) and key not in PROPERTIES)
     if foreign:
         raise InvalidInputError(f"commit refused: the rask.* transaction properties a commit may carry are {sorted(PROPERTIES)}, not {foreign}")
     return _parse(

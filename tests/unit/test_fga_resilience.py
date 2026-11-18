@@ -68,9 +68,7 @@ def test_check_fails_closed_on_network_error() -> None:
                 user="dex~alice",
                 relation="can_read_data",
                 obj="table:t",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
+                retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
             )
         )
 
@@ -174,9 +172,7 @@ def test_write_tuples_lands_siblings_when_one_tuple_already_exists() -> None:
             [owner, parent, dupe],
             actor="test",
             origin="admin_api",
-            retry_attempts=1,
-            retry_backoff_seconds=0.0,
-            retry_max_backoff_seconds=0.0,
+            retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
         )
     )
 
@@ -200,9 +196,7 @@ def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
                 [ClientTuple(user="user:alice", relation="owner", object="warehouse:wh-a")],
                 actor="test",
                 origin="admin_api",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
+                retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
             )
         )
     assert store.tuples == {("user:alice", "owner", "warehouse:wh-a")}, "a failed write mutated the store"

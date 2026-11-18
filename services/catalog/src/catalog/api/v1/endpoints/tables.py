@@ -315,6 +315,7 @@ async def _vend_on_spec_door(
 @router.post("/{id}/declare", response_model_exclude_none=True)
 async def declare_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     root: NamespaceRootDep,
     settings: SettingsDep,
@@ -349,6 +350,10 @@ async def declare_table(
             f"a declaration names no location: the catalog places a table it declares under the uuid it mints for it, got {body.location!r}"
         )
     segments = parse_identifier(id)
+    # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/declare", target=fga.canonical_object_id(segments))
+    if converge.replay is not None:
+        return DeclareTableResponse.model_validate(converge.replay.body)
     await fga_deps.require_parent_exists(ns, "table", segments)
     req = body or DeclareTableRequest()
     req.id = reconcile_body_id(segments, req.id)
@@ -402,6 +407,9 @@ async def declare_table(
         )
         await filing.send(declared)
         await filing.send(declared_event)
+    # Remembered without the credential the declaration vended: a record on the control root holds no secret, and a
+    # replay's caller asks DescribeTable for a credential of its own, as any reader of the table does.
+    await converge.remember(200, response.model_copy(update={"storage_options": None}))
     return response
 
 
@@ -1538,6 +1546,7 @@ async def table_tasks(
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     root: NamespaceRootDep,
     settings: SettingsDep,
@@ -1564,6 +1573,10 @@ async def undrop_table(
     """
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
+    # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
+    converge = await keyed.begin(endpoint="POST /management/v1/table/{id}/undrop", target=canonical)
+    if converge.replay is not None:
+        return RegisterTableResponse.model_validate(converge.replay.body)
     so = settings.storage_options()
     trashed = await resolver.admitted_trash("table", segments)
     if not trashed:
@@ -1631,6 +1644,7 @@ async def undrop_table(
         await filing.send(restored)
         await run_in_threadpool(trash.clear, settings.registry_root, so, record_uuid)
         await filing.send(restored_event)
+    await converge.remember(200, response)
     return response
 
 

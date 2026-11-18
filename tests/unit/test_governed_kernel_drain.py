@@ -100,9 +100,7 @@ def test_delete_tuples_audits_the_tuples_that_landed_before_it_fails(audit_rows:
                 doomed,
                 actor="admin",
                 origin="admin_api",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
+                retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
             )
         )
 
@@ -169,9 +167,7 @@ def test_expand_tree_does_not_call_a_diamond_a_cycle() -> None:
             relation="can_read",
             obj="table:t",
             max_depth=4,
-            retry_attempts=1,
-            retry_backoff_seconds=0.0,
-            retry_max_backoff_seconds=0.0,
+            retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
         )
     )
     branches = tree["union"]
@@ -184,43 +180,6 @@ def test_expand_tree_does_not_call_a_diamond_a_cycle() -> None:
         assert not owner.get("cycle"), f"the shared rung was mislabelled a cycle: {owner}"
         holders.append(owner["leaf"]["users"])
     assert holders == [["user:alice"], ["user:alice"]]
-
-
-# --------------------------------------------------------------------------- #
-# SKG-04 — a truncated read is not a complete one
-# --------------------------------------------------------------------------- #
-
-
-def test_read_object_tuples_refuses_to_return_a_truncated_set() -> None:
-    """SKG-04: hitting the page ceiling with a token still outstanding is a PARTIAL answer.
-
-    `revoke_object_tuples` deletes exactly what this returns, so a short list is a revoke that leaves
-    live grants behind and reports success. A warning tells an operator later; the caller must be
-    told now, and the module's fail-closed posture is the way it tells them.
-    """
-
-    class _EndlessClient:
-        def __init__(self) -> None:
-            self.reads = 0
-
-        async def read(self, _body: Any = None, options: Any = None, *_a: object, **_k: object) -> object:
-            del options
-            self.reads += 1
-            return SimpleNamespace(
-                tuples=[SimpleNamespace(key=SimpleNamespace(user=f"user:u{self.reads}", relation="reader", object="table:t", condition=None))],
-                continuation_token="more",
-            )
-
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.read_object_tuples(
-                _client(_EndlessClient()),
-                "table:t",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
 
 
 # --------------------------------------------------------------------------- #

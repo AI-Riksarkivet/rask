@@ -412,14 +412,17 @@ async def test_a_connection_that_cannot_be_opened_is_tried_again_and_each_fault_
     assert (ended, len(clients), [record.message for record in caplog.records]) == ([], 3, logged)
 
 
+@pytest.mark.parametrize(
+    "not_there_yet", [pytest.param(Path.unlink, id="no-file"), pytest.param(lambda file: file.write_text("\n"), id="a-file-holding-no-token")]
+)
 @pytest.mark.asyncio
 async def test_each_connect_presents_the_token_the_pod_holds_then_and_nothing_else(
-    monkeypatch: pytest.MonkeyPatch, as_catalog: Path, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, as_catalog: Path, caplog: pytest.LogCaptureFixture, not_there_yet: Callable[[Path], object]
 ) -> None:
     """The pod's token is all a connect presents, under the user's name and its own inbox, read as nats-py builds each
     connect: a pod whose token is not there yet is not connected and is tried again, and the token the kubelet has
     written by then is the one presented."""
-    as_catalog.unlink()
+    not_there_yet(as_catalog)
     presented: list[dict[str, Any]] = []
 
     def client() -> MagicMock:

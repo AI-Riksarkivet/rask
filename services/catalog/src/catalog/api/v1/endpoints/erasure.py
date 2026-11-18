@@ -40,7 +40,7 @@ from openfga_sdk import OpenFgaClient
 from catalog.api import fga_deps
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core.config import Settings, fresh_lance_session
+from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref
 from catalog.schemas import ErasureRequest, ErasureVerifyRequest
@@ -52,6 +52,7 @@ from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.history_fences import TableHistory
+from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.records import RecordExistsError
 from lakehouse.storage_options import StorageOptions
 
@@ -413,7 +414,7 @@ def _open_cold(location: str, storage_options: StorageOptions) -> lance.LanceDat
     """The verification's handle: the LOCATION the obligation was recorded on, not the id resolved again, so the
     evidence cannot come from anywhere else; on a session no request has read through, because the shared one can
     answer a version whose files the reclaim just deleted (see `erasure.verify`)."""
-    return lance.dataset(location, storage_options=storage_options.in_clear(), session=fresh_lance_session())
+    return open_dataset(location, storage_options=storage_options.in_clear(), session=fresh_session())
 
 
 # One exported router, as `router.py` mounts `_module.router` for every endpoint module.

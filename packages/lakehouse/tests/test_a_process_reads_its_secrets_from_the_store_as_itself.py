@@ -260,7 +260,7 @@ def test_a_fault_that_is_not_the_store_failing_to_serve_is_raised_never_reported
         store.read(SECRET, retries=1)
 
 
-@pytest.mark.parametrize("held", [pytest.param(None, id="no-file"), pytest.param(b"\xff\xfe", id="not-text")])
+@pytest.mark.parametrize("held", [pytest.param(None, id="no-file"), pytest.param(b"\xff\xfe", id="not-text"), pytest.param(b"\n", id="holding-no-token")])
 def test_a_projected_token_that_cannot_be_read_is_an_attempt_not_served_and_nothing_is_presented(
     store: SecretStore, secret_store: SecretStoreDouble, held: bytes | None
 ) -> None:

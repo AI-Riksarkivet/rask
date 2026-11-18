@@ -66,6 +66,7 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.api import announcing, fga_deps
+from catalog.api import idempotency as idem
 from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.declared import Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
@@ -151,7 +152,7 @@ async def _admins_for(client: OpenFgaClient | None, settings: Settings, project:
         return []
     try:
         async with asyncio.timeout(_ADMINS_TIMEOUT_SECONDS):
-            return await fga.list_users(client, relation="can_administer", obj=f"project:{project}", retry_attempts=1)
+            return await fga.list_users(client, relation="can_administer", obj=f"project:{project}", retry=fga.ONE_ATTEMPT)
     except (ServiceUnavailableError, TimeoutError):
         log.warning("project_admins_unavailable", extra={"project": project})
         return []
@@ -483,9 +484,6 @@ def project_its_doors_delete(project_id: str, record: Annotated[dict[str, str], 
     return record
 
 
-ProjectToDeleteDep = Annotated[dict[str, str], Depends(project_its_doors_delete)]
-
-
 @router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(project_its_doors_protect)])
 async def set_project_protection(
     project_id: str,
@@ -574,7 +572,7 @@ async def _start_delete(project_id: str, record: dict[str, str], settings: Setti
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
-    record: ProjectToDeleteDep,
+    keyed: idem.KeyedDoorDep,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -613,7 +611,7 @@ async def delete_project(
 
     Args:
         project_id: The project to retire.
-        record: Its registry record, its caller authorized on it (:func:`project_to_delete`).
+        keyed: The caller's `Idempotency-Key`, when it sent one.
         settings: The catalog's settings.
         token: The verified caller.
         client: The OpenFGA client its tuples are revoked through.
@@ -630,6 +628,12 @@ async def delete_project(
         ServiceUnavailableError: The store did not answer a read, or OpenFGA could not revoke its tuples; a delete
             recorded by then is finished by a retry.
     """
+    # Asked before the record is read: a replay under the caller's key answers the first delete and reads nothing, so a
+    # project registered under the id since is never the one a resent delete removes.
+    converge = await keyed.begin(endpoint="DELETE /management/v1/projects/{project_id}", target=f"project:{project_id}")
+    if converge.replay is not None:
+        return DeleteProjectResponse.model_validate(converge.replay.body)
+    record = project_its_doors_delete(project_id, await project_to_delete(project_id, settings, token, client), token)
     so = settings.storage_options()
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = fga_deps.wired(settings, client)
@@ -702,4 +706,6 @@ async def delete_project(
         # A structural edge names no person: `grant_changes` keeps a principal (`user:<principal>`) or a userset
         # (`role:x#assignee`, which the lane expands), never a `project`/`parent`/`child` edge whose user is an object.
         await filing.send_grant_changes(grants, removed, action="grant_revoked", actor=actor, reason="project_deleted")
-    return DeleteProjectResponse(project=project_id, tuples_revoked=len(removed))
+    answer = DeleteProjectResponse(project=project_id, tuples_revoked=len(removed))
+    await converge.remember(200, answer)
+    return answer

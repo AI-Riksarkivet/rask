@@ -48,6 +48,7 @@ from pydantic import BaseModel
 from lakehouse import location_claims
 from lakehouse.bus import processing
 from lakehouse.bus_delivery import envelope_of
+from lakehouse.commit_records import is_canonical_uuid
 from lakehouse.governed.signing_key import published_key_fetch
 from lakehouse.governed.store_credential import StoreCredentialUnavailableError
 from lakehouse.lineage.door import DoorMode, DoorVerdict, judge
@@ -97,7 +98,7 @@ def lane_task(event: object) -> LaneTask | None:
     anything it cannot read, a CloudEvent whose `data` is not an object included: events arrive off a bus and are
     client-controlled, so a malformed one is ignored rather than raised, which would turn one bad publish into a
     redelivery loop. A pass needs the table's location and a release needs its uuid, so a write naming no
-    location and a drop naming no uuid are acknowledged without a read: a pass must never be pointed at a location nobody
+    location, a drop naming no uuid and an event naming one that is no uuid are acknowledged without a read: a pass must never be pointed at a location nobody
     confirmed.
     """
     if not isinstance(event, dict):
@@ -109,6 +110,8 @@ def lane_task(event: object) -> LaneTask | None:
     if not isinstance(operation, str) or operation in _UNTOUCHED or (output := _first_output(event)) is None:
         return None
     uuid = dataset_uuids(output).table_uuid
+    if uuid is not None and not is_canonical_uuid(uuid):
+        return None
     if operation == _DROP:
         return LaneTask(kind="trash", uuid=uuid) if uuid else None
     if (location := _location_of(output)) is None:

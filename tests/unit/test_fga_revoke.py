@@ -56,26 +56,6 @@ def _keys(tuples: list[ClientTuple]) -> set[tuple[str, str, str]]:
     return {(t.user, t.relation, t.object) for t in tuples}
 
 
-def test_read_object_tuples_paginates_to_completion() -> None:
-    # A continuation token on page 1 MUST be followed, or a stale grant on page 2 is missed.
-    fake = _ReadDeleteClient(
-        [
-            ([_tuple("user:alice", "owner", "table:t"), _tuple("user:bob", "reader", "table:t")], "next"),
-            ([_tuple("namespace:db", "parent", "table:t")], ""),
-        ]
-    )
-    out = asyncio.run(fga.read_object_tuples(_client(fake), "table:t"))
-    assert fake.read_calls == 2
-    # The 2nd read MUST carry the continuation token from page 1 (else a >1-page object silently
-    # under-reads → partial revoke). The first read has no token; every read asks for a fresh answer ([[LH-488]]).
-    assert fake.read_options == [{"consistency": "HIGHER_CONSISTENCY"}, {"consistency": "HIGHER_CONSISTENCY", "continuation_token": "next"}]
-    assert _keys(out) == {
-        ("user:alice", "owner", "table:t"),
-        ("user:bob", "reader", "table:t"),
-        ("namespace:db", "parent", "table:t"),
-    }
-
-
 class _PartialMissingClient:
     """read returns 3 tuples; the MIDDLE one's delete raises the missing-delete 400 (a concurrent revoke).
     Per-tuple deletes must still remove the OTHER two — a single batched transactional delete would have

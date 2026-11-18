@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from lance.dataset import Transaction
+from lance import Transaction
 from opentelemetry import metrics
 
 

@@ -68,7 +68,6 @@ from contextlib import suppress
 from functools import partial
 from typing import Any
 
-import lance
 import pyarrow.fs as pafs
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
@@ -81,6 +80,7 @@ from lakehouse.control_emit import ControlEmitter, NoopControlEmitter, emit_cont
 from lakehouse.control_events import ControlAction, ControlObjectType, ControlUuids
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.data_directories import delete_directories, directories_to_end, directory_uri
+from lakehouse.lance_session import open_dataset
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.stored_objects import StoredObject, delete_objects, list_under
@@ -352,7 +352,7 @@ def _manifest_rows(root: str, storage_options: StorageOptions, *, where: str | N
         if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
             return []
         manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if on_s3(root) else f"{base}/{MANIFEST_DIR}"
-        dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
+        dataset = open_dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
         return dataset.to_table(columns=["object_id", "object_type", "location", "metadata"], filter=where).to_pylist()
     except Exception:  # noqa: BLE001 — ANY failure here must read as unreadable, never as a partial set
         log.warning("trash_purge_manifest_unreadable", extra={"root": root}, exc_info=True)

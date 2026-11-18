@@ -181,7 +181,7 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     policy = maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid)
     assert policy is not None, "precondition: the drop kept the policy for an undrop"
     # The cadence stamp a pass took while the table stood ([[LH-562]]).
-    maintenance_policies.write_state(estate.root, estate.key, policy, table_uuid=policy_uuid, uri=location, at=datetime.now(UTC).isoformat())
+    maintenance_policies.write_state(estate.root, estate.key, policy, table_uuid=policy_uuid, uri=location, at=datetime.now(UTC))
     trash.put(
         estate.root,
         estate.key,

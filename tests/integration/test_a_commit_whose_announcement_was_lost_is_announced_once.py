@@ -53,7 +53,7 @@ from lance_namespace import DescribeTableRequest, DescribeTableResponse, Interna
 from lakehouse import manifest_wire
 from lakehouse.bus_delivery import Outcome
 from lakehouse.listing_floor import FLOOR_KEY
-from lakehouse.version_retention import manifest_version
+from lakehouse.manifest_names import committed_version
 from tests.integration.lineage_app import catalog_tick, joined_bus, live_catalog, live_lineage
 from tests.traces import trace_id_of
 
@@ -105,7 +105,7 @@ def _stamped_behind(location: str, version: int, behind: timedelta) -> None:
     clock runs that far behind commits (the time is the writer's own, ``Manifest.timestamp``, field 7). The edit keeps the
     seconds' varint at its length, so no offset in the file moves."""
     versions = Path(location.removeprefix("file://")) / "_versions"
-    manifest = next(path for path in versions.iterdir() if manifest_version(path.name) == version)
+    manifest = next(path for path in versions.iterdir() if committed_version(path.name) == version)
     data = bytearray(manifest.read_bytes())
     (offset,) = struct.unpack_from("<Q", data, len(data) - 16)
     at, end = offset + 4, offset + 4 + struct.unpack_from("<I", data, offset)[0]
