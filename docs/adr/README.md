@@ -251,3 +251,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0242](0242-the-store-refuses-a-put-over-a-committed-file.md) |  | The store refuses a put over a committed file: the catalog seals what a commit adds (2026-11-17) | accepted |
 | [0243](0243-a-tables-pass-deletes-nothing-a-door-answered-for.md) |  | What a maintenance pass deletes is modelled in TLA+; three defects found and fixed (2026-11-17) | accepted |
 | [0244](0244-write-governance-is-modelled-in-tla.md) |  | Write governance is modelled in TLA+; a rule a write was judged under is the rule it lands under; four defects found and fixed (2026-11-18) | accepted |
+| [0246](0246-a-reclaim-condemns-before-it-deletes.md) |  | A reclaim condemns before it deletes, and a door pins before it reads: the model and the measurements (2026-11-18) | proposed |
