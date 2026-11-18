@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/management/v1/projects", tags=["roles"])
+management_router = APIRouter(prefix="/management/v1/projects", tags=["roles"])
 
 
 async def _project_gate(*, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, relation: str) -> OpenFgaClient:
@@ -97,7 +97,7 @@ async def _assignees(client: OpenFgaClient, role_id: uuid.UUID) -> list[str]:
     return sorted(t.user for t in await fga.read_object_tuples(client, obj) if t.object == obj and t.relation == roles.ASSIGNEE)
 
 
-@router.post("/{project_id}/roles", status_code=status.HTTP_201_CREATED)
+@management_router.post("/{project_id}/roles", status_code=status.HTTP_201_CREATED)
 async def create_role(
     project_id: ProjectId, body: RoleCreateRequest, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
 ) -> Role:
@@ -141,7 +141,7 @@ async def create_role(
     return Role(**record.model_dump(), assignees=[])
 
 
-@router.get("/{project_id}/roles")
+@management_router.get("/{project_id}/roles")
 async def list_roles(project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> RoleList:
     """The project's standing roles, ordered by name, gated on ``can_list_roles``; a role's assignees are its own read."""
     await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_list_roles")
@@ -149,14 +149,14 @@ async def list_roles(project_id: ProjectId, client: FgaClientDep, settings: Sett
     return RoleList(roles=[Role(**record.model_dump()) for record in records])
 
 
-@router.get("/{project_id}/roles/{role_id}")
+@management_router.get("/{project_id}/roles/{role_id}")
 async def get_role(project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> Role:
     """One role and its direct assignees, gated on the role's ``can_read``."""
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_read")
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
 
 
-@router.delete("/{project_id}/roles/{role_id}")
+@management_router.delete("/{project_id}/roles/{role_id}")
 async def delete_role(
     project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> RoleDeleted:
@@ -219,7 +219,7 @@ def _admin_grant(*, client: OpenFgaClient, settings: Settings, token: Caller | N
     return permit
 
 
-@router.put("/{project_id}/roles/{role_id}/assignees")
+@management_router.put("/{project_id}/roles/{role_id}/assignees")
 async def assign_role(
     project_id: ProjectId,
     role_id: uuid.UUID,
@@ -258,7 +258,7 @@ async def assign_role(
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
 
 
-@router.delete("/{project_id}/roles/{role_id}/assignees")
+@management_router.delete("/{project_id}/roles/{role_id}/assignees")
 async def unassign_role(
     project_id: ProjectId,
     role_id: uuid.UUID,

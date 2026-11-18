@@ -82,7 +82,7 @@ def emitted() -> list[dict[str, Any]]:
 def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:  # noqa: ANN001
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.router)
+    application.include_router(door.spec_router)
 
     control = tmp_path / "control"
     control.mkdir(exist_ok=True)

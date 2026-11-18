@@ -36,9 +36,10 @@ from lineage.models import DatasetEvent, RunEvent, parse_event, without_signatur
 from lineage.services.names import stamp_resolved_uuids
 
 
-# Unversioned like every sibling router — the composition layer (api/v1/router.py) mounts this one
-# under /api/v1, the OpenLineage HTTP-transport default path the docstring above names.
-router = APIRouter(tags=["ingest"])
+# `/api/v1/lineage` is the OpenLineage HTTP transport's default path (`OPENLINEAGE_URL` + `/api/v1/lineage`), an
+# external contract every zero-glue producer relies on, so the router carries that prefix itself and the mounted path
+# cannot move with the composition.
+router = APIRouter(prefix="/api/v1", tags=["ingest"])
 
 
 def _inlined(schema: dict[str, object]) -> dict[str, object]:

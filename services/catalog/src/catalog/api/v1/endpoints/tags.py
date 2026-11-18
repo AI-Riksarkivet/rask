@@ -28,7 +28,7 @@ from lakehouse.control_emit import emit_control
 from lakehouse.governed import fga
 
 
-router = APIRouter(prefix="/v1/table", tags=["tag"])
+spec_router = APIRouter(prefix="/v1/table", tags=["tag"])
 
 
 def _refuse_a_catalog_tag(tag: str) -> None:
@@ -46,14 +46,14 @@ def _refuse_a_catalog_tag(tag: str) -> None:
         )
 
 
-@router.post("/{id}/tags/list", response_model_exclude_none=True)
+@spec_router.post("/{id}/tags/list", response_model_exclude_none=True)
 def list_table_tags(id: str, table: DoorTableDep, so: StorageOptionsDep, limit: ListLimit, page_token: str | None = None) -> ListTableTagsResponse:
     """List the table's tags, a page at a time — wraps lance_namespace ListTableTags."""
     req = ListTableTagsRequest(id=parse_identifier(id), page_token=page_token, limit=limit)
     return dataplane.list_tags(table, so, req)
 
 
-@router.post("/{id}/tags/create", response_model_exclude_none=True)
+@spec_router.post("/{id}/tags/create", response_model_exclude_none=True)
 async def create_table_tag(
     id: str,
     body: CreateTableTagRequest,
@@ -88,14 +88,14 @@ async def create_table_tag(
     return response
 
 
-@router.post("/{id}/tags/version", response_model_exclude_none=True)
+@spec_router.post("/{id}/tags/version", response_model_exclude_none=True)
 def get_table_tag_version(id: str, body: GetTableTagVersionRequest, table: DoorTableDep, so: StorageOptionsDep) -> GetTableTagVersionResponse:
     """Resolve which table version a tag points to — wraps lance_namespace GetTableTagVersion."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
     return dataplane.get_tag_version(table, so, body)
 
 
-@router.post("/{id}/tags/update", response_model_exclude_none=True)
+@spec_router.post("/{id}/tags/update", response_model_exclude_none=True)
 async def update_table_tag(
     id: str,
     body: UpdateTableTagRequest,
@@ -127,7 +127,7 @@ async def update_table_tag(
     return response
 
 
-@router.post("/{id}/tags/delete", response_model_exclude_none=True)
+@spec_router.post("/{id}/tags/delete", response_model_exclude_none=True)
 async def delete_table_tag(
     id: str,
     body: DeleteTableTagRequest,

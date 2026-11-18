@@ -96,7 +96,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Sec
     apps = []
     for _ in range(2):
         app = FastAPI()
-        app.include_router(events.router)
+        app.include_router(events.management_router)
         app.dependency_overrides[get_settings] = lambda: settings
         app.state.bus = bus
         attach_published_keys(app)

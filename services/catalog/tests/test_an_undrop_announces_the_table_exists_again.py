@@ -77,7 +77,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     for door in (namespace_doors, table_doors):
-        application.include_router(door.router)
+        application.include_router(door.spec_router)
         application.include_router(door.management_router)
     control.mkdir(exist_ok=True)
     settings = SimpleNamespace(

@@ -87,8 +87,8 @@ def emitted() -> list[dict[str, Any]]:
 def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:  # noqa: ANN001
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(branch_door.router)
-    application.include_router(tag_door.router)
+    application.include_router(branch_door.spec_router)
+    application.include_router(tag_door.spec_router)
 
     # `registry_root` is not decoration: every ref door resolves the table's claim and holds its history fence on the
     # control root ([[LH-308]]), and a double without it fails inside the handler rather than at the assertion.

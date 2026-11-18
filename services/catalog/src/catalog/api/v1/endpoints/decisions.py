@@ -327,4 +327,3 @@ async def decide_locate(token: CurrentToken, settings: SettingsDep, body: Decisi
 
 
 #: Every route here is a management route; the spec prefix carries none.
-router = APIRouter()

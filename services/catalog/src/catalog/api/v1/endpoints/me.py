@@ -46,7 +46,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/management/v1/me", tags=["me"])
+management_router = APIRouter(prefix="/management/v1/me", tags=["me"])
 
 # ONE wall-clock budget for all the display-only FGA lookups (estate check + the two project lists,
 # sequential). Same rationale as /management/v1/projects' _ADMINS_TIMEOUT_SECONDS: a caller gives the whole request
@@ -96,7 +96,7 @@ async def _project_ids(client: OpenFgaClient, sub: str, relation: str, deadline:
     return sorted(o.removeprefix("project:") for o in objects)
 
 
-@router.get("")
+@management_router.get("")
 async def get_me(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> MeResponse:
     """Describe the signed-in caller: verified claims, estate standing, and tenant memberships.
 

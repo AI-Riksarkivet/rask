@@ -384,8 +384,3 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
 
 
 # The v1 aggregator includes one ``router`` per module — the four policy routers are stitched here.
-router = APIRouter()
-router.include_router(table_router)
-router.include_router(namespace_router)
-router.include_router(project_router)
-router.include_router(projects_router)

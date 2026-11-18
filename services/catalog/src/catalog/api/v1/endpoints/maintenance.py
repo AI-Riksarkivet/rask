@@ -189,9 +189,3 @@ def _due_view(record: maintenance_due.DueRecord, *, table: str) -> DueTable:
         policy=record.policy,
         evaluated_at=record.evaluated_at,
     )
-
-
-# One exported router, as `router.py` mounts `_module.router` for every endpoint module.
-router = APIRouter()
-router.include_router(table_router)
-router.include_router(due_router)

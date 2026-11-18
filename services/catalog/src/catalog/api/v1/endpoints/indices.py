@@ -40,7 +40,7 @@ from catalog.services import dataplane
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/table", tags=["index"])
+spec_router = APIRouter(prefix="/v1/table", tags=["index"])
 
 
 #: What both create doors answer: where an index is built instead.
@@ -61,21 +61,21 @@ def _index_named(index_name: str, body_name: str | None) -> str:
     return index_name
 
 
-@router.post("/{id}/create_index", response_model_exclude_none=True)
+@spec_router.post("/{id}/create_index", response_model_exclude_none=True)
 def create_index(id: str, body: CreateTableIndexRequest) -> CreateTableIndexResponse:
     """Refused 406: a vector index is built on the caller's compute and committed through ``version/create``."""
     reconcile_body_id(parse_identifier(id), body.id)
     raise UnsupportedOperationError(_BUILD_IT_YOURSELF)
 
 
-@router.post("/{id}/create_scalar_index", response_model_exclude_none=True)
+@spec_router.post("/{id}/create_scalar_index", response_model_exclude_none=True)
 def create_scalar_index(id: str, body: CreateTableIndexRequest) -> CreateTableScalarIndexResponse:
     """Refused 406: a scalar index is built on the caller's compute and committed through ``version/create``."""
     reconcile_body_id(parse_identifier(id), body.id)
     raise UnsupportedOperationError(_BUILD_IT_YOURSELF)
 
 
-@router.post("/{id}/index/list", response_model_exclude_none=True)
+@spec_router.post("/{id}/index/list", response_model_exclude_none=True)
 def list_table_indices(
     id: str,
     table: DoorTableDep,
@@ -109,7 +109,7 @@ def list_table_indices(
     return listed
 
 
-@router.post("/{id}/index/{index_name}/stats", response_model_exclude_none=True)
+@spec_router.post("/{id}/index/{index_name}/stats", response_model_exclude_none=True)
 def describe_table_index_stats(
     id: str,
     index_name: str,
@@ -137,7 +137,7 @@ def describe_table_index_stats(
     return stats
 
 
-@router.post("/{id}/index/{index_name}/drop", response_model_exclude_none=True)
+@spec_router.post("/{id}/index/{index_name}/drop", response_model_exclude_none=True)
 async def drop_table_index(
     id: str,
     index_name: str,

@@ -97,7 +97,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/management/v1/projects", tags=["projects"])
+management_router = APIRouter(prefix="/management/v1/projects", tags=["projects"])
 
 # The DNS-safe id shape the whole control plane enforces — a project id doubles as an FGA object id and a
 # registry filename, so a malformed one is rejected up front. SHARED (`catalog.core.identifiers`): this
@@ -240,7 +240,7 @@ async def _write_project_record(settings: Settings, so: StorageOptions, record: 
     return record
 
 
-@router.post("", response_model_exclude_none=True)
+@management_router.post("", response_model_exclude_none=True)
 async def create_project(
     settings: SettingsDep,
     token: CurrentToken,
@@ -351,7 +351,7 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
     return None if allowed is None else {p for p in candidates if allowed.get(f"project:{p}")}
 
 
-@router.get("")
+@management_router.get("")
 async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[ProjectResponse]:
     """The caller's tenants: every tenant for the estate admin, else the ones the caller is a member of.
 
@@ -368,7 +368,7 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
     return [tenants[project].response(project_admins) for project, project_admins in zip(projects, admins, strict=True)]
 
 
-@router.get("/{project_id}")
+@management_router.get("/{project_id}")
 async def get_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectResponse:
     """One tenant, in the list's shape, for the callers the list shows it to: the estate admin, or a member of it.
 
@@ -484,7 +484,7 @@ def project_its_doors_delete(project_id: str, record: Annotated[dict[str, str], 
     return record
 
 
-@router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(project_its_doors_protect)])
+@management_router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(project_its_doors_protect)])
 async def set_project_protection(
     project_id: str,
     body: SetProtectionRequest,
@@ -569,7 +569,7 @@ async def _start_delete(project_id: str, record: dict[str, str], settings: Setti
         raise TableNotFoundError(f"project not found: {project_id}")
 
 
-@router.delete("/{project_id}")
+@management_router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
     keyed: idem.KeyedDoorDep,

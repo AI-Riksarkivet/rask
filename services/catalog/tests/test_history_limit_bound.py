@@ -38,7 +38,7 @@ def test_a_refused_limit_is_a_422_not_a_surprising_page(bad: int) -> None:
     from fastapi.testclient import TestClient
 
     app = FastAPI()
-    app.include_router(versions_ep.router)
+    app.include_router(versions_ep.spec_router)
     app.include_router(versions_ep.management_router)
 
     # The route's own dependencies (namespace, settings, storage options, token, FGA client) cannot

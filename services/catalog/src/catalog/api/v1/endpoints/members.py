@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/management/v1/projects", tags=["members"])
+management_router = APIRouter(prefix="/management/v1/projects", tags=["members"])
 
 #: The tenant id shape, matching ``CONTROL_ID_RE`` (``core/identifiers.py``) — DNS-safe, 3–63 chars.
 #: Restated as a ``Path`` pattern so a malformed id is a 422 at the boundary rather than a 404 from a
@@ -81,7 +81,7 @@ def _client_or_conflict(client: OpenFgaClient | None, settings: Settings) -> Ope
     return client
 
 
-@router.get("/{project_id}/members")
+@management_router.get("/{project_id}/members")
 async def list_members(project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> MemberList:
     """Who holds which rung directly on this tenant — gated on ``can_read_assignments``.
 
@@ -98,7 +98,7 @@ async def list_members(project_id: ProjectId, client: FgaClientDep, settings: Se
     return MemberList(members=_direct_grants(tuples, obj))
 
 
-@router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
+@management_router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def grant_member(
     project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> MemberList:
@@ -147,7 +147,7 @@ async def grant_member(
     return MemberList(members=_direct_grants(existing, obj))
 
 
-@router.delete("/{project_id}/members", status_code=status.HTTP_200_OK)
+@management_router.delete("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def revoke_member(
     project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> MemberList:

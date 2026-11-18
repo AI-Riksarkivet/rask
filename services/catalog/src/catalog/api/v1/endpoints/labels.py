@@ -398,10 +398,3 @@ async def list_labelled_objects(
         limit=limit,
     )
     return LabelledObjectsResponse(project=project, objects=list(page), page_token=next_token)
-
-
-# One exported router, as `router.py` mounts `_module.router` for every endpoint module.
-router = APIRouter()
-router.include_router(table_router)
-router.include_router(namespace_router)
-router.include_router(projects_router)

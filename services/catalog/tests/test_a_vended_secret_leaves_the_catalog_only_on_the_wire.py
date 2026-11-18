@@ -102,8 +102,8 @@ def doors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClien
     """
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(tables.router)
-    application.include_router(credentials.router)
+    application.include_router(tables.spec_router)
+    application.include_router(credentials.management_router)
     application.state.vendor = _vendor()
     monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: VendFacts(read_version=1))
     monkeypatch.setattr(credentials, "dataset_facts", lambda location, storage_options, branch="": VendFacts(read_version=1))

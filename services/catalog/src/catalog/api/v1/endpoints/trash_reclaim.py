@@ -44,7 +44,6 @@ async def require_can_reclaim_trash(client: FgaClientDep, settings: SettingsDep,
     await fga_deps.require_relation(client, settings, token, relation="can_reclaim_trash", obj=settings.fga_root_object)
 
 
-router = APIRouter()
 management_router = APIRouter(prefix="/management/v1/trash", tags=["trash-reclaim"], dependencies=[Depends(require_can_reclaim_trash)])
 
 

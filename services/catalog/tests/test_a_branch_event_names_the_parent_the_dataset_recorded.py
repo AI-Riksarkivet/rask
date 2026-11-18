@@ -91,7 +91,7 @@ def emitted() -> list[dict[str, Any]]:
 def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:  # noqa: ANN001
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(branch_door.router)
+    application.include_router(branch_door.spec_router)
 
     settings = SimpleNamespace(storage_options=lambda: StorageOptions(), fga_enabled=False, registry_root=str(tmp_path / "control"))
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings

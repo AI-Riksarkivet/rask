@@ -56,7 +56,7 @@ from lakehouse.storage_options import StorageOptions
 log = logging.getLogger(__name__)
 
 
-router = APIRouter(prefix="/v1/table", tags=["version"])
+spec_router = APIRouter(prefix="/v1/table", tags=["version"])
 
 #: THE MANAGEMENT SURFACE ([[LH-021]]). This module serves SPEC operations on `router` and rask's own
 #: on this one — split by AUDIENCE rather than by topic, because a spec client discovering a verb like
@@ -125,13 +125,13 @@ def _batches_are_not_judged(operation: str) -> UnsupportedOperationError:
     return UnsupportedOperationError(f"{operation} is not supported: commit each table through CreateTableVersion, which the catalog judges per table")
 
 
-@router.post("/version/batch-create", response_model_exclude_none=True)
+@spec_router.post("/version/batch-create", response_model_exclude_none=True)
 def batch_create_table_versions(body: BatchCreateTableVersionsRequest) -> BatchCreateTableVersionsResponse:
     """Not supported (406): a batch finalizes several tables at once, and the catalog judges one at a time."""
     raise _batches_are_not_judged("BatchCreateTableVersions")
 
 
-@router.post("/batch-commit", response_model_exclude_none=True)
+@spec_router.post("/batch-commit", response_model_exclude_none=True)
 def batch_commit_tables(body: BatchCommitTablesRequest) -> BatchCommitTablesResponse:
     """Not supported (406): no sub-operation runs, ``declare_table`` and ``deregister_table`` included. Those two
     have their own doors, which carry the protection, ownership and lineage a batch would skip, and a version is
@@ -139,7 +139,7 @@ def batch_commit_tables(body: BatchCommitTablesRequest) -> BatchCommitTablesResp
     raise _batches_are_not_judged("BatchCommitTables")
 
 
-@router.post("/{id}/version/list", response_model_exclude_none=True)
+@spec_router.post("/{id}/version/list", response_model_exclude_none=True)
 def list_table_versions(
     id: str,
     table: DoorTableDep,
@@ -185,7 +185,7 @@ def list_table_versions(
     return answer
 
 
-@router.post("/{id}/version/create", response_model_exclude_none=True)
+@spec_router.post("/{id}/version/create", response_model_exclude_none=True)
 async def create_table_version(
     id: str,
     body: CreateTableVersionRequest,
@@ -313,7 +313,7 @@ async def create_table_version(
     return response
 
 
-@router.post("/{id}/version/describe", response_model_exclude_none=True)
+@spec_router.post("/{id}/version/describe", response_model_exclude_none=True)
 def describe_table_version(
     id: str,
     table: DoorTableDep,
@@ -337,7 +337,7 @@ def describe_table_version(
     return described
 
 
-@router.post("/{id}/version/delete", response_model_exclude_none=True)
+@spec_router.post("/{id}/version/delete", response_model_exclude_none=True)
 async def batch_delete_table_versions(
     id: str,
     body: BatchDeleteTableVersionsRequest,

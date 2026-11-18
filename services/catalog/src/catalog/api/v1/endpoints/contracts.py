@@ -33,7 +33,7 @@ from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
 
 
-router = APIRouter(prefix="/management/v1/table", tags=["contract"])
+management_router = APIRouter(prefix="/management/v1/table", tags=["contract"])
 
 
 def _actor(token: Caller | None) -> str | None:
@@ -78,14 +78,14 @@ def _require_described(table: DoorTable, so: StorageOptions, contract: contracts
             )
 
 
-@router.post("/{id}/contract/describe")
+@management_router.post("/{id}/contract/describe")
 async def describe_table_contract(id: str, table: DoorTableDep, settings: SettingsDep) -> ContractResponse:
     """The data contract the table holds, as the ODCS v3 document its owner set; ``contract`` is null for a table
     holding none. Read at ``can_get_metadata``."""
     return _answer(table, await run_in_threadpool(_held, settings, table))
 
 
-@router.post("/{id}/contract/set")
+@management_router.post("/{id}/contract/set")
 async def set_table_contract(
     id: str,
     document: Annotated[dict[str, Any], Body()],
@@ -132,7 +132,7 @@ async def set_table_contract(
     return _answer(table, record)
 
 
-@router.post("/{id}/contract/delete")
+@management_router.post("/{id}/contract/delete")
 async def delete_table_contract(id: str, table: DoorTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> ContractResponse:
     """Delete the table's data contract (idempotent): its commits are held to no contract after. Asked at
     ``can_set_contract``."""

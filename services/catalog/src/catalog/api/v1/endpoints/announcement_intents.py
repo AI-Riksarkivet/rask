@@ -23,7 +23,6 @@ from catalog.services import announcement_intents
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 
-router = APIRouter()
 management_router = APIRouter(prefix="/management/v1/announcement-intents", tags=["announcement-intents"], dependencies=[Depends(require_can_reclaim_trash)])
 
 #: The most filings one call judges, so a call stays bounded however long the audit was away; the audit asks again while

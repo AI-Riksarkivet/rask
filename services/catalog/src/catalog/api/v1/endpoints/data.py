@@ -91,7 +91,7 @@ class OctetStreamResponse(Response):
     media_type = _OCTET_STREAM
 
 
-router = APIRouter(prefix="/v1/table", tags=["data"])
+spec_router = APIRouter(prefix="/v1/table", tags=["data"])
 
 #: THE MANAGEMENT SURFACE ([[LH-021]]). This module serves SPEC operations on `router` and rask's own
 #: on this one — split by AUDIENCE rather than by topic, because a spec client discovering a verb like
@@ -104,7 +104,7 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["data-managem
 # `properties` map and none of them called it while it was private to this module.
 
 
-@router.post("/{id}/create", response_model_exclude_none=True)
+@spec_router.post("/{id}/create", response_model_exclude_none=True)
 async def create_table(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -213,7 +213,7 @@ async def create_table(
 
 # The published contract requires a body; the handler still accepts none, so a missing body meets the
 # same 400 `InvalidInput` as missing bounds instead of FastAPI's 422.
-@router.post("/{id}/insert", response_model_exclude_none=True)
+@spec_router.post("/{id}/insert", response_model_exclude_none=True)
 async def insert_into_table(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -326,7 +326,7 @@ MergeKeyQuery = Annotated[
 ]
 
 
-@router.post("/{id}/merge_insert", response_model_exclude_none=True)
+@spec_router.post("/{id}/merge_insert", response_model_exclude_none=True)
 async def merge_insert_into_table(
     id: str,
     table: DoorTableDep,
@@ -403,7 +403,7 @@ async def merge_insert_into_table(
     return response
 
 
-@router.post("/{id}/update", response_model_exclude_none=True)
+@spec_router.post("/{id}/update", response_model_exclude_none=True)
 async def update_table(
     id: str,
     body: UpdateTableRequest,
@@ -444,7 +444,7 @@ async def update_table(
     return response
 
 
-@router.post("/{id}/delete", response_model_exclude_none=True)
+@spec_router.post("/{id}/delete", response_model_exclude_none=True)
 async def delete_from_table(
     id: str,
     body: DeleteFromTableRequest,
@@ -634,7 +634,7 @@ def _reader(token: Caller | None) -> str:
     return token.subject if token is not None else "system:catalog"
 
 
-@router.post(
+@spec_router.post(
     "/{id}/query",
     responses=_serves(ARROW_FILE),
     response_class=ArrowFileResponse,
@@ -712,7 +712,7 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
     return StreamingResponse(data, media_type=ARROW_FILE)
 
 
-@router.post("/{id}/count_rows")
+@spec_router.post("/{id}/count_rows")
 def count_table_rows(
     id: str,
     table: DoorTableDep,
@@ -740,7 +740,7 @@ def count_table_rows(
     return JSONResponse(content=counted.count)
 
 
-@router.post("/{id}/explain_plan")
+@spec_router.post("/{id}/explain_plan")
 def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
@@ -769,7 +769,7 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     return JSONResponse(content=plan)
 
 
-@router.post("/{id}/analyze_plan")
+@spec_router.post("/{id}/analyze_plan")
 def analyze_table_query_plan(
     id: str,
     body: AnalyzeTableQueryPlanRequest,

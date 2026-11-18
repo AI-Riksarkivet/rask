@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 #: THE MANAGEMENT SURFACE ([[LH-021]]). These are rask's own operations, not Lance namespace ones —
 #: a spec client discovering them on `/v1/table` meets verbs the document never defines. They mount at
 #: `/management/v1` and inherit the same three rungs from `api/v1/router.py`.
-router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
+management_router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
 
 
 async def _ancestor_uuids(resolver: Resolver, segments: list[str]) -> list[str]:
@@ -107,7 +107,7 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
         raise InvalidTableStateError("the table's maintenance policy keeps its whole history, so no credential that could delete or rewrite it is vended")
 
 
-@router.post("/{id}/credentials", response_model_exclude_none=True, dependencies=[Depends(require_reclaimable_history)])
+@management_router.post("/{id}/credentials", response_model_exclude_none=True, dependencies=[Depends(require_reclaimable_history)])
 async def vend_credentials(
     id: str,
     table: DoorTableDep,

@@ -17,10 +17,10 @@ from catalog.core.identifiers import parse_identifier, reconcile_body_id, transa
 from lakehouse import trash
 
 
-router = APIRouter(prefix="/v1/transaction", tags=["transaction"])
+spec_router = APIRouter(prefix="/v1/transaction", tags=["transaction"])
 
 
-@router.post("/{id}/describe", response_model_exclude_none=True)
+@spec_router.post("/{id}/describe", response_model_exclude_none=True)
 async def describe_transaction(
     id: str, door: TransactionTableDep, resolver: ResolverDep, body: DescribeTransactionRequest | None = None
 ) -> DescribeTransactionResponse:
@@ -42,7 +42,7 @@ async def describe_transaction(
     return await run_in_threadpool(door.read_natively, "describe_transaction", DescribeTransactionRequest(id=segments))
 
 
-@router.post("/{id}/alter", response_model_exclude_none=True)
+@spec_router.post("/{id}/alter", response_model_exclude_none=True)
 def alter_transaction(id: str, body: AlterTransactionRequest) -> AlterTransactionResponse:
     """Decline every alteration: the spec's alter applies all its actions or none, and the backend applies none.
 

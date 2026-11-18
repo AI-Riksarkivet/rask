@@ -28,7 +28,7 @@ def _declared_media(route_path: str, method: str) -> set[str]:
     """What the generated OpenAPI says this door answers with on 200."""
     app = FastAPI()
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.include_router(door.router)
+    app.include_router(door.spec_router)
     app.include_router(door.management_router)
     operation = app.openapi()["paths"][route_path][method]
     return set(operation.get("responses", {}).get("200", {}).get("content", {}))

@@ -601,7 +601,8 @@ class _ResolvesOnce(_Forwarding):
 def _door(namespace: Any, settings: Settings) -> Generator[TestClient]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.router)
+    application.include_router(door.table_router)
+    application.include_router(door.obligations_router)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()

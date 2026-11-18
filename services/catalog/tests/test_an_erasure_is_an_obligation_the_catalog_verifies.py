@@ -102,7 +102,8 @@ def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: _Control
     settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(control))
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.router)
+    application.include_router(door.table_router)
+    application.include_router(door.obligations_router)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()

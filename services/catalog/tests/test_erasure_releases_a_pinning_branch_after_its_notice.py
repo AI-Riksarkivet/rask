@@ -130,7 +130,8 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
     )
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.router)
+    application.include_router(door.table_router)
+    application.include_router(door.obligations_router)
 
     table = f"table:{_table_uuid(ns, tmp_path)}"
 

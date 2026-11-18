@@ -115,7 +115,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/table", tags=["table"])
+spec_router = APIRouter(prefix="/v1/table", tags=["table"])
 
 #: THE MANAGEMENT SURFACE ([[LH-021]]). rask-only governance mounts here, not on the spec prefix: a
 #: spec client meeting `undrop` or `protection` on `/v1/table` has no way to tell a rask verb from a
@@ -175,7 +175,7 @@ async def _tables_of_every_warehouse(request: Request, settings: Settings) -> li
     return names
 
 
-@router.get("", response_model_exclude_none=True)
+@spec_router.get("", response_model_exclude_none=True)
 async def list_all_tables(
     request: Request,
     settings: SettingsDep,
@@ -312,7 +312,7 @@ async def _vend_on_spec_door(
 
 # `paginate` lives in `catalog.api.pagination`, shared by every catalog listing: two keyset implementations in one
 # service is two things to keep in step.
-@router.post("/{id}/declare", response_model_exclude_none=True)
+@spec_router.post("/{id}/declare", response_model_exclude_none=True)
 async def declare_table(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -546,7 +546,7 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None, *, named_by: str
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="describe", remedy=f"{named_by}. {remedy}" if named_by else remedy)
 
 
-@router.post("/{id}/describe", response_model_exclude_none=True)
+@spec_router.post("/{id}/describe", response_model_exclude_none=True)
 async def describe_table(
     id: str,
     table: DoorTableDep,
@@ -769,7 +769,7 @@ def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.Lanc
 #: server sends an empty body. A handler annotated `-> None` sends `application/json` with the four
 #: bytes `null`, which a strict client reads as a JSON document where the contract promised none.
 #: `response_class=Response` is what makes FastAPI emit nothing; `status_code=200` alone does not.
-@router.post("/{id}/exists", status_code=200, response_class=Response)
+@spec_router.post("/{id}/exists", status_code=200, response_class=Response)
 def table_exists(id: str, table: DoorTableDep, so: StorageOptionsDep, body: TableExistsRequest | None = None) -> Response:
     """Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error.
 
@@ -785,7 +785,7 @@ def table_exists(id: str, table: DoorTableDep, so: StorageOptionsDep, body: Tabl
     return Response(status_code=200)
 
 
-@router.post("/{id}/drop", response_model_exclude_none=True)
+@spec_router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_table(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -973,7 +973,7 @@ async def _drop(
     return response
 
 
-@router.post("/{id}/deregister", response_model_exclude_none=True)
+@spec_router.post("/{id}/deregister", response_model_exclude_none=True)
 async def deregister_table(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -1141,7 +1141,7 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
     return getattr(described, "location", None) or registered
 
 
-@router.post("/{id}/register", response_model_exclude_none=True)
+@spec_router.post("/{id}/register", response_model_exclude_none=True)
 async def register_table(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -1692,7 +1692,7 @@ async def set_table_protection(
     return ProtectionResponse(id=canonical, protected=body.protected)
 
 
-@router.post("/{id}/rename", response_model_exclude_none=True)
+@spec_router.post("/{id}/rename", response_model_exclude_none=True)
 async def rename_table(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -1801,7 +1801,7 @@ async def rename_table(
     return response
 
 
-@router.post("/{id}/restore", response_model_exclude_none=True)
+@spec_router.post("/{id}/restore", response_model_exclude_none=True)
 async def restore_table(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -1847,7 +1847,7 @@ async def restore_table(
     return response
 
 
-@router.post("/{id}/stats", response_model_exclude_none=True)
+@spec_router.post("/{id}/stats", response_model_exclude_none=True)
 def get_table_stats(
     id: str,
     table: DoorTableDep,

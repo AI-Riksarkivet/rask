@@ -118,7 +118,7 @@ _CONFORMANCE_CHECKS: Final = frozenset({SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, ENC
 #: The checks of the probe's write-tier leg, in the order it makes them.
 _WRITE_TIER_CHECKS: Final = (WRITE_TIER_ISSUE, STAGED_MANIFEST, FINAL_MANIFEST_CHECK, REF_CHECK)
 
-router = APIRouter(prefix="/management/v1/warehouses", tags=["warehouse"])
+management_router = APIRouter(prefix="/management/v1/warehouses", tags=["warehouse"])
 
 # A bucket/warehouse id must be a DNS-safe S3 bucket name fragment — validated here so a malformed id
 # can't produce an un-createable bucket or a path-traversing registry key. The pattern is SHARED
@@ -146,7 +146,7 @@ def _delete_profile_fields(profile: DeleteProfile | None) -> dict[str, str]:
     return {warehouses.DELETE_MODE: profile.mode.value, warehouses.TRASH_GRACE_DAYS: str(profile.grace_days)}
 
 
-@router.post("", response_model_exclude_none=True)
+@management_router.post("", response_model_exclude_none=True)
 async def create_warehouse(
     request: Request,
     settings: SettingsDep,
@@ -464,7 +464,7 @@ async def _write_record(
     return {}, record
 
 
-@router.get("", response_model_exclude_none=True)
+@management_router.get("", response_model_exclude_none=True)
 async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[WarehouseResponse]:
     """Every warehouse the caller can read. Governed like the metadata feeds: with FGA on, filtered to the
     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names)."""
@@ -477,7 +477,7 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
     return [WarehouseResponse.model_validate(r) for r in records]
 
 
-@router.get("/{warehouse_id}", response_model_exclude_none=True)
+@management_router.get("/{warehouse_id}", response_model_exclude_none=True)
 async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseResponse:
     """One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage)."""
     await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
@@ -487,7 +487,7 @@ async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: Current
     return WarehouseResponse.model_validate(record)
 
 
-@router.get("/{warehouse_id}/trash", response_model_exclude_none=True)
+@management_router.get("/{warehouse_id}/trash", response_model_exclude_none=True)
 async def list_warehouse_trash(
     warehouse_id: str,
     settings: SettingsDep,
@@ -594,7 +594,7 @@ async def change_warehouse_status(
     return updated
 
 
-@router.post("/{warehouse_id}/deactivate", response_model_exclude_none=True)
+@management_router.post("/{warehouse_id}/deactivate", response_model_exclude_none=True)
 async def deactivate_warehouse(
     warehouse_id: str,
     settings: SettingsDep,
@@ -608,7 +608,7 @@ async def deactivate_warehouse(
     return await _set_warehouse_status(warehouse_id, "deactivated", settings=settings, token=token, client=client, control=control)
 
 
-@router.post("/{warehouse_id}/activate", response_model_exclude_none=True)
+@management_router.post("/{warehouse_id}/activate", response_model_exclude_none=True)
 async def activate_warehouse(
     warehouse_id: str,
     settings: SettingsDep,
@@ -677,7 +677,7 @@ def warehouse_its_doors_manage(warehouse_id: str, record: AdministeredWarehouseD
 DoorManagedWarehouseDep = Annotated[dict[str, str], Depends(warehouse_its_doors_manage)]
 
 
-@router.post("/{warehouse_id}/protection", response_model_exclude_none=True)
+@management_router.post("/{warehouse_id}/protection", response_model_exclude_none=True)
 async def set_warehouse_protection(
     warehouse_id: str,
     body: SetProtectionRequest,
@@ -996,7 +996,7 @@ def _a_refusal(exc: BaseException) -> bool:
     return isinstance(exc, LanceNamespaceError) and status_for(int(exc.code)) < 500
 
 
-@router.delete("/{warehouse_id}")
+@management_router.delete("/{warehouse_id}")
 async def delete_warehouse(
     warehouse_id: str,
     keyed: idem.KeyedDoorDep,
@@ -1278,7 +1278,7 @@ async def delete_warehouse(
     return answer
 
 
-@router.post("/{warehouse_id}/validate", response_model_exclude_none=True)
+@management_router.post("/{warehouse_id}/validate", response_model_exclude_none=True)
 async def validate_warehouse_credentials(
     warehouse_id: str,
     settings: SettingsDep,

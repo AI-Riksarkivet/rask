@@ -30,7 +30,6 @@ from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 
-router = APIRouter()
 management_router = APIRouter(prefix="/management/v1/clone-endings", tags=["trash-reclaim"], dependencies=[Depends(require_can_reclaim_trash)])
 
 #: A digest names one location: the SHA-256 its tags, its claim and its endings are kept under.

@@ -16,13 +16,13 @@ from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import native
 
 
-router = APIRouter(prefix="/v1/materialized_view", tags=["materialized_view"])
+spec_router = APIRouter(prefix="/v1/materialized_view", tags=["materialized_view"])
 
 
 # The spec's success status, declared on the decorator. All three answer the spec's 406 Unsupported today
 # (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
-@router.post("/{id}/create", response_model_exclude_none=True, status_code=201)
+@spec_router.post("/{id}/create", response_model_exclude_none=True, status_code=201)
 async def create_materialized_view(
     id: str,
     body: CreateMaterializedViewRequest,
@@ -49,7 +49,7 @@ async def create_materialized_view(
 # The spec's success status, declared on the decorator. All three answer the spec's 406 Unsupported today
 # (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
-@router.post("/{id}/refresh", response_model_exclude_none=True, status_code=202)
+@spec_router.post("/{id}/refresh", response_model_exclude_none=True, status_code=202)
 def refresh_materialized_view(id: str, data_ns: DataNamespaceDep, body: RefreshMaterializedViewRequest | None = None) -> RefreshMaterializedViewResponse:
     """Rematerialize a materialized view via the native backend's ``refresh_materialized_view``."""
     req = body or RefreshMaterializedViewRequest()

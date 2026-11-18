@@ -35,7 +35,6 @@ async def require_can_reconcile_grants(client: FgaClientDep, settings: SettingsD
     await fga_deps.require_relation(client, settings, token, relation="can_reconcile_grants", obj=settings.fga_root_object)
 
 
-router = APIRouter()
 management_router = APIRouter(prefix="/management/v1/grants", tags=["grant-reconcile"], dependencies=[Depends(require_can_reconcile_grants)])
 
 

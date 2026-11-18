@@ -42,10 +42,10 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/management/v1/events", tags=["events"])
+management_router = APIRouter(prefix="/management/v1/events", tags=["events"])
 
 
-@router.get("")
+@management_router.get("")
 async def poll_control_events(
     request: Request,
     settings: SettingsDep,

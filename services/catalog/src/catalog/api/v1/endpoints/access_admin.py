@@ -280,10 +280,10 @@ async def estate_gate(client: FgaClientDep, settings: SettingsDep, token: Curren
 
 #: ONE DOOR for the whole router. See `estate_gate` — this replaces nine hand-written calls, and is
 #: declared here rather than at the top of the file only because it must follow the function it names.
-router = APIRouter(prefix="/management/v1/access", tags=["access"], dependencies=[Depends(estate_gate)])
+management_router = APIRouter(prefix="/management/v1/access", tags=["access"], dependencies=[Depends(estate_gate)])
 
 
-@router.get("/tuples")
+@management_router.get("/tuples")
 async def read_access_tuples(
     client: EstateFgaClient,
     resolver: ResolverDep,
@@ -428,7 +428,7 @@ async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Call
     return _as_access_tuple(tup)
 
 
-@router.post("/tuples")
+@management_router.post("/tuples")
 async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
     """Write ONE raw tuple (idempotent — a duplicate write is success), echoing the tuple as stored.
 
@@ -441,7 +441,7 @@ async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, r
     return await _mutate_tuple(client, announcer, token, held, write=True)
 
 
-@router.delete("/tuples")
+@management_router.delete("/tuples")
 async def delete_access_tuple(
     client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: NamedAccessTuple
 ) -> AccessTuple:
@@ -456,7 +456,7 @@ async def delete_access_tuple(
     return await _mutate_tuple(client, announcer, token, held, write=False)
 
 
-@router.get("/model")
+@management_router.get("/model")
 async def get_access_model(client: EstateFgaClient) -> AccessModelResponse:
     """The authorization model: the checked-in ``model.fga`` DSL text plus the id of the model this catalog checks against.
 
@@ -472,7 +472,7 @@ async def get_access_model(client: EstateFgaClient) -> AccessModelResponse:
     )
 
 
-@router.post("/check")
+@management_router.post("/check")
 async def check_access(client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessCheckBody) -> AccessCheckResult:
     """One ``(user, relation, object)`` OpenFGA Check over ANY model type — the estate-wide extension of
     the per-object ``…/access/check`` playground (#68), which stays as-is for table/namespace owners.
@@ -511,7 +511,7 @@ def _validated_relation(obj_or_type: str, relation: str) -> str:
     return relation
 
 
-@router.post("/list-objects")
+@management_router.post("/list-objects")
 async def list_access_objects(client: EstateFgaClient, settings: SettingsDep, token: CurrentToken, body: AccessListObjectsRequest) -> AccessListObjectsResponse:
     """ "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
 
@@ -549,7 +549,7 @@ async def list_access_objects(client: EstateFgaClient, settings: SettingsDep, to
     return AccessListObjectsResponse(objects=listing.objects, user=user, relation=relation, type=body.type, truncated=listing.truncated, names=names)
 
 
-@router.post("/list-users")
+@management_router.post("/list-users")
 async def list_access_users(
     client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessListUsersRequest
 ) -> AccessListUsersResponse:
@@ -593,7 +593,7 @@ async def list_access_users(
     )
 
 
-@router.post("/expand")
+@management_router.post("/expand")
 async def expand_access(
     client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessExpandRequest
 ) -> AccessExpandResponse:
@@ -631,7 +631,7 @@ async def expand_access(
     )
 
 
-@router.post("/simulate")
+@management_router.post("/simulate")
 async def simulate_access(
     client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessSimulateRequest
 ) -> AccessSimulateResult:
@@ -714,7 +714,7 @@ def _refuse_a_principal_git_declares(key: str, naming: list[fga.ClientTuple], se
         )
 
 
-@router.delete("/principals/{principal:path}")
+@management_router.delete("/principals/{principal:path}")
 async def delete_principal(
     principal: PrincipalPath, client: EstateFgaClient, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> PrincipalDeleted:
@@ -755,7 +755,7 @@ async def delete_principal(
     return PrincipalDeleted(record=record, revoked=revoked)
 
 
-@router.get("/principals/{principal:path}")
+@management_router.get("/principals/{principal:path}")
 async def read_principal(principal: PrincipalPath, settings: SettingsDep) -> PrincipalRecord:
     """The deletion record of an offboarded principal; 404 for one the door never removed."""
     record = await run_in_threadpool(principals.read_record, settings.registry_root, settings.storage_options(), _principal_key(principal))

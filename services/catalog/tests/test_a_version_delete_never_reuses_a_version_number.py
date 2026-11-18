@@ -75,7 +75,7 @@ def ns(tmp_path: Path) -> LanceNamespace:
 def client(ns: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(version_door.router)
+    application.include_router(version_door.spec_router)
     settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns

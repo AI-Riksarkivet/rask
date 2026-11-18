@@ -27,7 +27,6 @@ from lakehouse import idempotency
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 
-router = APIRouter()
 management_router = APIRouter(prefix="/management/v1/idempotency-keys", tags=["idempotency-keys"], dependencies=[Depends(require_can_reclaim_trash)])
 
 #: The most records one call reclaims, so a call stays bounded however long the scan was away; the scan asks again while

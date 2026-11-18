@@ -82,7 +82,8 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.router)
+    application.include_router(door.table_router)
+    application.include_router(door.due_router)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()

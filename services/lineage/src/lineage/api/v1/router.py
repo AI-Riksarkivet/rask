@@ -7,11 +7,7 @@ from fastapi import APIRouter
 from lineage.api.v1.endpoints import dlq, events, ingest, tables
 
 
+# One rule, as the catalog's: each endpoint module's router carries its own prefix, and this list mounts them.
 api_router = APIRouter()
-for _module in (events, tables, dlq):
-    api_router.include_router(_module.router)
-# The version prefix is a COMPOSITION decision, applied here rather than baked into the endpoint
-# router (F-LIN-14: ingest was the one self-versioning router). /api/v1/lineage is the
-# OpenLineage HTTP-transport default path (OPENLINEAGE_URL + /api/v1/lineage) — an external
-# contract every zero-glue producer relies on, so the mounted path must not move.
-api_router.include_router(ingest.router, prefix="/api/v1")
+for _router in (events.router, tables.router, dlq.router, ingest.router):
+    api_router.include_router(_router)

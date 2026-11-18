@@ -39,7 +39,7 @@ lance = pytest.importorskip("lance")
 def _app(ns: object, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, list[list[str]]]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(version_door.router)
+    application.include_router(version_door.spec_router)
     settings = SimpleNamespace(storage_options=dict, fga_enabled=False, root="")
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns

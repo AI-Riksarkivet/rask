@@ -34,10 +34,10 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/table", tags=["branch"])
+spec_router = APIRouter(prefix="/v1/table", tags=["branch"])
 
 
-@router.post("/{id}/branches/list", response_model_exclude_none=True)
+@spec_router.post("/{id}/branches/list", response_model_exclude_none=True)
 def list_table_branches(
     id: str,
     table: DoorTableDep,
@@ -50,7 +50,7 @@ def list_table_branches(
     return dataplane.list_branches(table, so, req)
 
 
-@router.post("/{id}/branches/create", response_model_exclude_none=True)
+@spec_router.post("/{id}/branches/create", response_model_exclude_none=True)
 async def create_table_branch(
     id: str,
     body: CreateTableBranchRequest,
@@ -122,7 +122,7 @@ def _recorded_parent(table: DoorTable, so: StorageOptions, body: CreateTableBran
     return recorded
 
 
-@router.post("/{id}/branches/delete", response_model_exclude_none=True)
+@spec_router.post("/{id}/branches/delete", response_model_exclude_none=True)
 async def delete_table_branch(
     id: str,
     body: DeleteTableBranchRequest,

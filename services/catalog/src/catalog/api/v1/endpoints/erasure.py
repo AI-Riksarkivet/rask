@@ -415,9 +415,3 @@ def _open_cold(location: str, storage_options: StorageOptions) -> lance.LanceDat
     evidence cannot come from anywhere else; on a session no request has read through, because the shared one can
     answer a version whose files the reclaim just deleted (see `erasure.verify`)."""
     return open_dataset(location, storage_options=storage_options.in_clear(), session=fresh_session())
-
-
-# One exported router, as `router.py` mounts `_module.router` for every endpoint module.
-router = APIRouter()
-router.include_router(table_router)
-router.include_router(obligations_router)

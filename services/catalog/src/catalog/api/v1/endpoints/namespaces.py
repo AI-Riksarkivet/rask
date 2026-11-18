@@ -82,7 +82,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/namespace", tags=["namespace"])
+spec_router = APIRouter(prefix="/v1/namespace", tags=["namespace"])
 
 #: THE MANAGEMENT SURFACE ([[LH-021]]). rask-only governance mounts here, not on the spec prefix: a
 #: spec client meeting `undrop` or `protection` on `/v1/table` has no way to tell a rask verb from a
@@ -141,7 +141,7 @@ def _collect_descendants(ns: LanceNamespace, segments: list[str]) -> list[tuple[
     return found
 
 
-@router.post("/{id}/create", response_model_exclude_none=True)
+@spec_router.post("/{id}/create", response_model_exclude_none=True)
 async def create_namespace(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -397,7 +397,7 @@ async def _create_or_replace_empty_namespace(
     return await run_in_threadpool(native.call, ns, "create_namespace", req)
 
 
-@router.get("/{id}/list", response_model_exclude_none=True)
+@spec_router.get("/{id}/list", response_model_exclude_none=True)
 async def list_namespaces(
     id: str,
     ns: NamespaceDep,
@@ -455,7 +455,7 @@ async def list_namespaces(
     return response
 
 
-@router.post("/{id}/describe", response_model_exclude_none=True)
+@spec_router.post("/{id}/describe", response_model_exclude_none=True)
 def describe_namespace(id: str, ns: NamespaceDep, body: DescribeNamespaceRequest | None = None) -> DescribeNamespaceResponse:
     """Return the metadata/properties of namespace ``id`` via ``describe_namespace``."""
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
@@ -797,7 +797,7 @@ async def _require_descendants_unprotected(settings: Settings, descendants: list
         fga_deps.require_not_protected(record or {}, kind=item.kind, obj_id=fga.canonical_object_id(item.segments), force=False)
 
 
-@router.post("/{id}/drop", response_model_exclude_none=True)
+@spec_router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_namespace(
     id: str,
     keyed: idem.KeyedDoorDep,
@@ -1223,7 +1223,7 @@ async def set_namespace_protection(
 #: server sends an empty body. A handler annotated `-> None` sends `application/json` with the four
 #: bytes `null`, which a strict client reads as a JSON document where the contract promised none.
 #: `response_class=Response` is what makes FastAPI emit nothing; `status_code=200` alone does not.
-@router.post("/{id}/exists", status_code=200, response_class=Response)
+@spec_router.post("/{id}/exists", status_code=200, response_class=Response)
 def namespace_exists(id: str, ns: NamespaceDep, body: NamespaceExistsRequest | None = None) -> Response:
     """Check that namespace ``id`` exists via ``namespace_exists`` — 200 on success (spec 0.9), else error."""
     req = NamespaceExistsRequest(id=reconcile_body_id(parse_identifier(id), body.id if body else None))
@@ -1231,7 +1231,7 @@ def namespace_exists(id: str, ns: NamespaceDep, body: NamespaceExistsRequest | N
     return Response(status_code=200)
 
 
-@router.get("/{id}/table/list", response_model_exclude_none=True)
+@spec_router.get("/{id}/table/list", response_model_exclude_none=True)
 async def list_tables(
     id: str,
     ns: NamespaceDep,

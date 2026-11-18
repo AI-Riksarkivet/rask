@@ -837,9 +837,3 @@ async def set_warehouse_managed_access(
 
 
 # The v1 aggregator includes one ``router`` per module — the table + namespace routers are stitched here.
-router = APIRouter()
-router.include_router(table_router)
-router.include_router(namespace_router)
-router.include_router(warehouse_router)
-router.include_router(project_router)
-router.include_router(classification_router)

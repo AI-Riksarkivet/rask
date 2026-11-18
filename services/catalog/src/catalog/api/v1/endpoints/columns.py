@@ -123,10 +123,10 @@ async def _require_classifier_for_governance_keys(
         await fga_deps.require_relation(client, settings, token, relation="can_apply", obj=f"classification:{value}")
 
 
-router = APIRouter(prefix="/v1/table", tags=["columns"])
+spec_router = APIRouter(prefix="/v1/table", tags=["columns"])
 
 
-@router.post("/{id}/add_columns", response_model_exclude_none=True)
+@spec_router.post("/{id}/add_columns", response_model_exclude_none=True)
 async def add_columns(
     id: str,
     body: AlterTableAddColumnsRequest,
@@ -159,7 +159,7 @@ async def add_columns(
     return response
 
 
-@router.post("/{id}/alter_columns", response_model_exclude_none=True)
+@spec_router.post("/{id}/alter_columns", response_model_exclude_none=True)
 async def alter_columns(
     id: str,
     body: AlterTableAlterColumnsRequest,
@@ -189,7 +189,7 @@ async def alter_columns(
     return response
 
 
-@router.post("/{id}/drop_columns", response_model_exclude_none=True)
+@spec_router.post("/{id}/drop_columns", response_model_exclude_none=True)
 async def drop_columns(
     id: str,
     body: AlterTableDropColumnsRequest,
@@ -222,7 +222,7 @@ async def drop_columns(
 # The spec's success status, declared on the decorator. All three answer the spec's 406 Unsupported today
 # (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
-@router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)
+@spec_router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)
 def backfill_column(
     id: str, body: AlterTableBackfillColumnsRequest, table: DoorTableDep, data_ns: DataNamespaceDep, so: StorageOptionsDep
 ) -> AlterTableBackfillColumnsResponse:
@@ -238,7 +238,7 @@ def backfill_column(
     return response
 
 
-@router.post("/{id}/update_field_metadata", response_model_exclude_none=True)
+@spec_router.post("/{id}/update_field_metadata", response_model_exclude_none=True)
 async def update_field_metadata(
     id: str,
     body: UpdateFieldMetadataRequest,
@@ -274,7 +274,7 @@ async def update_field_metadata(
     return response
 
 
-@router.post("/{id}/schema_metadata/update")
+@spec_router.post("/{id}/schema_metadata/update")
 async def update_table_schema_metadata(
     id: str,
     body: dict[str, Any],
