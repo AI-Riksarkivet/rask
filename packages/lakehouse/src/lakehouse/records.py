@@ -290,6 +290,49 @@ def replace_json(root_uri: str, storage_options: StorageOptions, key: str, recor
     _replace_json(root_uri, storage_options, key, record, etag=etag)
 
 
+def delete_json(root_uri: str, storage_options: StorageOptions, key: str, *, etag: str) -> None:
+    """Delete ``key`` iff the record there is still the one read with ``etag``, once and never retried: a writer that
+    emptied the record it read removes it, and a write landing since refuses the delete rather than being lost.
+
+    Measured 2026-11-18 on moto 5 and RustFS 1.0.3: a DeleteObject naming a stale If-Match answers 412 and keeps the
+    object, a current one deletes it, and one naming a key already gone answers 404 (moto) or 412 (RustFS).
+
+    Raises:
+        RecordChangedError: The record changed or went since that read.
+    """
+    if on_s3(root_uri):
+        from botocore.exceptions import ClientError
+
+        bucket, full_key = _s3_parts(root_uri, key)
+        try:
+            object_client(storage_options).delete_object(Bucket=bucket, Key=full_key, IfMatch=etag)
+        except ClientError as exc:
+            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if status in {404, 409, 412} or code in {"PreconditionFailed", "ConditionalRequestConflict", "NoSuchKey"}:
+                raise RecordChangedError(f"record {key!r} changed under {root_uri!r}") from exc
+            raise
+        return
+
+    fs, path = pafs.FileSystem.from_uri(root_uri)
+    if not isinstance(fs, pafs.LocalFileSystem):
+        raise NotImplementedError(f"conditional delete is not supported for root {root_uri!r} ({type(fs).__name__})")
+    target = os.path.join(path.rstrip("/"), key)
+    try:
+        handle = open(target, "rb")  # noqa: SIM115 — closed by the `with` below, which the lock needs open first
+    except FileNotFoundError as exc:
+        raise RecordChangedError(f"record {key!r} changed under {root_uri!r}") from exc
+    with handle as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            if os.fstat(fh.fileno()).st_nlink == 0 or hashlib.sha256(fh.read()).hexdigest() != etag:
+                raise RecordChangedError(f"record {key!r} changed under {root_uri!r}")
+            # Unlinked under the lock: a replace waiting on it finds the file unlinked and refuses (:func:`_replace_json`).
+            os.unlink(target)
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
 def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any], *, etag: str) -> None:
     """Overwrite ``key`` iff its current ETag is ``etag``. Raises :class:`RecordChangedError` if not.
 
@@ -333,7 +376,9 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, reco
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
             fh.seek(0)
-            if hashlib.sha256(fh.read()).hexdigest() != etag:
+            # A record deleted while this waited for the lock (:func:`delete_json`) is unlinked with its bytes intact: a
+            # write into it would be lost, so it is a record that changed.
+            if os.fstat(fh.fileno()).st_nlink == 0 or hashlib.sha256(fh.read()).hexdigest() != etag:
                 raise RecordChangedError(f"record {key!r} changed under {root_uri!r}")
             fh.seek(0)
             fh.truncate()

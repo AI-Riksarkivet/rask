@@ -480,6 +480,9 @@ class CondemnedBatch(BaseModel):
     versions: list[int] = Field(default_factory=list)
     #: The ref's versions left condemned that this batch does not license: a pin keeps them, or a hold.
     standing: list[int] = Field(default_factory=list)
+    #: When ``versions`` is not empty, the instant the licence ends: the reclaimer deletes them only under a credential
+    #: the store refuses by then, one minted before it asked for this batch (ADR 0246 §14).
+    licensed_until: datetime | None = None
 
 
 class CondemnedVersion(BaseModel):
@@ -489,7 +492,19 @@ class CondemnedVersion(BaseModel):
     table: str
     #: The branch the version is of, ``None`` for main.
     branch: str | None = None
+    #: Which incarnation of that branch (the ``branch_identifier`` ``list_branches`` answers in a branch's metadata),
+    #: ``None`` for main: a branch deleted and made again under its name repeats its version numbers, and a version of
+    #: the incarnation standing now is promised unless this names it.
+    branch_identifier: str | None = None
     version: int
+
+
+class CondemnedBeneath(BaseModel):
+    """What a policy door finds condemned beneath it, read after its write (ADR 0246): its answer's three fields."""
+
+    condemned: list[CondemnedVersion] = Field(default_factory=list)
+    condemned_beyond: int = 0
+    condemned_unread: list[str] = Field(default_factory=list)
 
 
 class CleanupDisarmed(BaseModel):
@@ -692,9 +707,14 @@ class PolicyResponse(BaseModel):
     #: with no default, so the schema marks it on both answers and a typed client narrows the union on it.
     set: Literal[True]
     #: On a set's answer: the versions of the tables the policy governs that were already condemned when it landed, read
-    #: after its write (ADR 0246). A reclaim may be deleting them; every other version is kept as the policy says. Absent
-    #: on a describe or a listing.
+    #: after its write (ADR 0246), at most 100. A reclaim may be deleting them; every other version is kept as the policy
+    #: says. Absent on a describe or a listing.
     condemned: list[CondemnedVersion] | None = None
+    #: On a set's answer: how many more condemned versions there were than ``condemned`` names.
+    condemned_beyond: int | None = None
+    #: On a set's answer: the condemned records that could not be read, each of which may name a version beneath the
+    #: policy that a reclaim may be deleting; the policy stands as written.
+    condemned_unread: list[str] | None = None
 
 
 class PolicyUnset(BaseModel):
@@ -718,8 +738,13 @@ class PolicyDeleteResponse(BaseModel):
     kind: str
     id: str
     #: The versions of the tables the deleted policy governed that were already condemned when it went, read after the
-    #: delete (ADR 0246): a reclaim may be deleting them. A hold that governs the tables keeps every version it does not name.
+    #: delete (ADR 0246), at most 100: a reclaim may be deleting them. A hold that governs the tables keeps every version it
+    #: does not name.
     condemned: list[CondemnedVersion] = Field(default_factory=list)
+    #: How many more condemned versions there were than ``condemned`` names.
+    condemned_beyond: int = 0
+    #: The condemned records that could not be read, each of which may name a version beneath the deleted policy.
+    condemned_unread: list[str] = Field(default_factory=list)
 
 
 class ProjectPoliciesResponse(BaseModel):

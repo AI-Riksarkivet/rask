@@ -4475,7 +4475,7 @@ def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableT
     """List the table's tags as ``{name: TagContents{version, manifest_size, branch}}``, paged by name (``req.limit``,
     ``req.page_token``): pylance lists every tag at once, so the page is cut here. The catalog's own pins
     (:func:`require_whole`) are no caller's tags, and are left out."""
-    listed = {name: tag for name, tag in table.open_unchecked(so).tags.list().items() if not condemned_versions.is_pin(name)}
+    listed = {name: tag for name, tag in table.open_unchecked(so).tags.list().items() if not condemned_versions.is_reserved(name)}
     page, next_token = paginate(sorted(listed), req.page_token, req.limit)
     tags: dict[str, dict[str, Any]] = {}
     for name, tag in ((name, listed[name]) for name in page):
@@ -4498,9 +4498,8 @@ class Pins:
         self._dataset = dataset
         self._held: list[condemned_versions.Pinned] = []
 
-    def add(self, pinned: condemned_versions.Pinned | None) -> None:
-        if pinned is not None:
-            self._held.append(pinned)
+    def add(self, pinned: condemned_versions.Pinned) -> None:
+        self._held.append(pinned)
 
     def require_alive(self) -> None:
         """Refuse an act a door would make past :data:`lakehouse.condemned_versions.DOOR_DEADLINE` after its pin: a reclaim
@@ -4532,8 +4531,8 @@ def pinning(dataset: lance.LanceDataset) -> Generator[Pins]:
 
 
 def require_whole(
-    table: table_claims.DoorTable, dataset: lance.LanceDataset, *, branch: str | None, version: int | None, kind: str, name: str
-) -> condemned_versions.Pinned | None:
+    table: table_claims.DoorTable, dataset: lance.LanceDataset, *, branch: str | None, version: int, kind: str, name: str
+) -> condemned_versions.Pinned:
     """Pin ``version`` of ``branch`` (main for ``None``), then refuse it where the table's condemned versions name it
     (PinFirst, ADR 0246); the pin, which the door deletes once it acted (:class:`Pins`).
 
@@ -4541,16 +4540,19 @@ def require_whole(
     measured) and every tag door refuses from a caller. Written first, then the record read: a reclaim batch condemns, then
     reads the tags, so of the two at least one sees the other, and a version no entry names when the pin stands is one no
     reclaim deletes while it stands (``specs/maintenance/Reclaim.tla`` RefsWhole). ``dataset`` is a handle of the table's
-    main; ``kind`` and ``name`` say what the door writes, for its refusal. A ref's latest version (``version`` ``None``) is
-    its head, which no batch condemns.
+    main; ``kind`` and ``name`` say what the door writes, for its refusal.
+
+    ``version`` is a number, never "the latest": a door acts on the number it pinned and passes that number to Lance. A
+    Lance ref call given no version resolves it against the HANDLE, which may be older than the ref (measured on pylance
+    13.0.0: ``create_branch(name, None)`` and ``tags.create(name, None)`` on a handle opened at version 2, main since at 4,
+    cut and tagged 2), and a version no pin kept may be condemned and deleted under it. A door with no version named
+    resolves it fresh (:func:`_source_head`).
 
     Raises:
         TableVersionNotFoundError: The ref has no such version (code 11), as :func:`_ref_errors` answers it.
         InvalidTableStateError: The version is condemned: a reclaim may be deleting it (code 19).
         ServiceUnavailableError: The store did not answer the pin or the read; nothing was written (503).
     """
-    if version is None:
-        return None
     with _ref_errors(kind, name):
         dataset.checkout_version((branch, version) if branch is not None else version)
     try:
@@ -4568,14 +4570,14 @@ def require_whole(
 
 
 def refuse_a_pin_name(tag: str) -> None:
-    """Refuse a caller's tag named as a pin is: a pin keeps its version from every reclaim, and only the catalog's own
-    doors write or delete one (ADR 0246, B2).
+    """Refuse a caller's tag named under the prefix the catalog keeps for its own tags: a pin keeps its version from every
+    reclaim, and only the catalog writes or deletes one (ADR 0246, B2).
 
     Raises:
-        InvalidInputError: The name carries the pin prefix (code 13).
+        InvalidInputError: The name carries the reserved prefix (code 13).
     """
-    if condemned_versions.is_pin(tag):
-        raise InvalidInputError(f"tag {tag!r} carries the prefix {condemned_versions.PIN_PREFIX!r}, which the catalog keeps for its own pins")
+    if condemned_versions.is_reserved(tag):
+        raise InvalidInputError(f"tag {tag!r} carries the prefix {condemned_versions.RESERVED_PREFIX!r}, which the catalog keeps for its own tags")
 
 
 def _open_with_branch(table: table_claims.DoorTable, so: StorageOptions, branch: str | None) -> lance.LanceDataset:
@@ -4593,9 +4595,10 @@ def _open_with_branch(table: table_claims.DoorTable, so: StorageOptions, branch:
     return dataset
 
 
-def _tag_reference(branch: str | None, version: int | None) -> int | tuple[str | None, int | None] | None:
-    """Map the spec's optional ``branch`` + ``version`` to a pylance tag ``reference``: a bare int resolves
-    against the CURRENT branch (main), so a branch-scoped tag must pass the ``(branch, version)`` tuple."""
+def _tag_reference(branch: str | None, version: int) -> int | tuple[str, int]:
+    """Map a ref's ``branch`` + ``version`` to the pylance ``reference`` a tag or a branch is put on: a bare int resolves
+    against the CURRENT branch (main), so a branch-scoped one must pass the ``(branch, version)`` tuple. Always a number
+    (:func:`require_whole`)."""
     return (branch, version) if branch is not None else version
 
 
@@ -4688,7 +4691,7 @@ def tag_reference(dataset: lance.LanceDataset, tag: str) -> TagReference:
 
 def get_tag_version(table: table_claims.DoorTable, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:
     """Return the ref a tag names: its version and, for a tag on a branch, that branch (404 on an unknown tag)."""
-    if condemned_versions.is_pin(req.tag):
+    if condemned_versions.is_reserved(req.tag):
         raise TableTagNotFoundError(f"tag {req.tag!r} not found")
     ref = tag_reference(table.open_unchecked(so), req.tag)
     return GetTableTagVersionResponse(version=ref.version, branch=ref.branch)
@@ -4706,7 +4709,7 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
             of it lapsed before the move; the tag was not moved.
     """
     _require_a_tag_a_key_segment_can_hold(req.tag)
-    if condemned_versions.is_pin(req.tag):
+    if condemned_versions.is_reserved(req.tag):
         raise TableTagNotFoundError(f"tag {req.tag!r} not found")
     dataset = _open_with_branch(table, so, req.branch)
     branch = recorded_branch(req.branch)
@@ -4729,24 +4732,11 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
 def delete_tag(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableTagRequest) -> DeleteTableTagResponse:
     """Delete a tag from the table; never one of the catalog's pins, which no caller holds."""
     _require_a_tag_a_key_segment_can_hold(req.tag)
-    if condemned_versions.is_pin(req.tag):
+    if condemned_versions.is_reserved(req.tag):
         raise TableTagNotFoundError(f"tag {req.tag!r} not found")
     with _ref_errors("tag", req.tag):
         table.open_unchecked(so).tags.delete(req.tag)
     return DeleteTableTagResponse()
-
-
-def _branch_reference(req: CreateTableBranchRequest) -> int | tuple[str | None, int | None] | None:
-    """Map the spec's ``from_branch`` / ``from_version`` to pylance ``create_branch``'s ``reference``.
-
-    fromBranch + fromVersion → ``(branch, version)``; fromBranch only → ``(branch, None)`` (latest of that
-    branch); fromVersion only → the ``version`` int (on main); neither → ``None`` (latest of main).
-    """
-    if req.from_branch is not None:
-        return (req.from_branch, req.from_version)
-    if req.from_version is not None:
-        return req.from_version
-    return None
 
 
 def list_branches(table: table_claims.DoorTable, so: StorageOptions, req: ListTableBranchesRequest) -> ListTableBranchesResponse:
@@ -4790,7 +4780,12 @@ def create_branch(
     So the door reads the branch list, and confirms by RE-READING when the create still fails.
 
     ``before_ref`` is asked inside the table's history hold, once the source is established and before the branch is
-    created, with the version the branch is cut from: the source's latest when the request names none.
+    created, with the version the branch is cut from: the source's latest, read fresh, when the request names none, and
+    that number is the one pinned and cut at (:func:`require_whole`).
+
+    Raises:
+        ConcurrentModificationError: A reclaim of a branch deleted under the name holds a live licence (code 14, retryable
+            once the instant it names has passed, :func:`refuse_a_name_a_licence_holds`).
     """
     # Names the backend cannot use are refused BEFORE the listing read: `main` is absent from
     # `branches.list()` (the default ref is implicit), so the collision check below cannot see it.
@@ -4807,6 +4802,7 @@ def create_branch(
     # every other branch create on the table, so the listing judged here is the one this create commits against.
     opened: list[lance.LanceDataset] = [table.open(so)]
     pins = Pins(opened[0])
+    cut: list[int] = [0]
 
     def judge(hold: Hold) -> None:
         dataset = opened[0]
@@ -4821,17 +4817,20 @@ def create_branch(
         # renders differently again and matches nothing, falling through as Internal 18.
         if req.from_branch is not None and req.from_branch not in branches:
             raise TableBranchNotFoundError(f"source branch {req.from_branch!r} not found")
+        refuse_a_name_a_licence_holds(table, req.name)
+        # The version the branch is cut from, a NUMBER read fresh where the request names none (:func:`require_whole`):
+        # that number is pinned, judged and passed to Lance.
+        with _ref_errors("branch", source, invalid_name=req.name):
+            cut[0] = req.from_version if req.from_version is not None else _source_head(dataset, req.from_branch)
         if before_ref is not None:
-            with _ref_errors("branch", source, invalid_name=req.name):
-                cut_at = req.from_version if req.from_version is not None else int(_source_head(dataset, req.from_branch))
-            before_ref(hold.marks, dataset, PlacedRef(kind="branch", name=req.name, branch=req.from_branch, version=cut_at))
-        pins.add(require_whole(table, dataset, branch=req.from_branch, version=req.from_version, kind="branch", name=source))
+            before_ref(hold.marks, dataset, PlacedRef(kind="branch", name=req.name, branch=req.from_branch, version=cut[0]))
+        pins.add(require_whole(table, dataset, branch=req.from_branch, version=cut[0], kind="branch", name=source))
 
     def write() -> None:
         pins.require_alive()
         try:
             with _ref_errors("branch", source, invalid_name=req.name):
-                opened[0].create_branch(req.name, _branch_reference(req))
+                opened[0].create_branch(req.name, _tag_reference(req.from_branch, cut[0]))
         except OSError:
             if req.name in table.open(so).branches.list():
                 raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists") from None
@@ -4845,8 +4844,31 @@ def create_branch(
 
 
 def _source_head(dataset: lance.LanceDataset, branch: str | None) -> int:
-    """The latest version of ``branch`` (main for ``None``), which a branch cut from it with no version names."""
-    return int(dataset.version) if branch is None else int(dataset.checkout_version((branch, None)).version)
+    """The latest version of ``branch`` (main for ``None``) as the store holds it now, which a branch cut from it with no
+    version names: ``(ref, None)`` resolves fresh, where the handle's own version is the one it was opened at (measured on
+    pylance 13.0.0: a handle at 2, main since at 4, ``checkout_version((None, None))`` answered 4)."""
+    return int(dataset.checkout_version((branch, None)).version)
+
+
+def refuse_a_name_a_licence_holds(table: table_claims.DoorTable, name: str) -> None:
+    """Refuse a branch create under ``name``, read free, while a live reclaim licence names a version under it (NameGuard,
+    ADR 0246 §14): a licence names numbers under the name's path, and Lance deletes by number under the path the name holds
+    when the cleanup runs, so a branch made again now could lose the versions it repeats the numbers of. A branch delete
+    is never refused for it.
+
+    Raises:
+        ConcurrentModificationError: A licence under the name ends at the instant named (409 code 14, retryable then).
+        ServiceUnavailableError: The store did not answer the record's read (503).
+    """
+    try:
+        until = table.licensed_under(name)
+    except OSError as exc:
+        raise ServiceUnavailableError(f"whether a reclaim still deletes under the name {name!r} could not be read, so no branch was made: {exc}"[:600]) from exc
+    if until is not None:
+        raise ConcurrentModificationError(
+            f"a reclaim of the branch {name!r} deleted before may still delete by number under its name until {until.isoformat()}, so no branch is "
+            "made under it before then: retry after that instant"
+        )
 
 
 class RemovedBranch(BaseModel):

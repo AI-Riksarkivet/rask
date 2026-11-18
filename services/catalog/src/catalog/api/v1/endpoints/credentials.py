@@ -40,7 +40,7 @@ from catalog.core.vending import (
 )
 from catalog.schemas import CredentialResponse, VendedCredentials
 from catalog.services import table_claims
-from lakehouse import history_fences, maintenance_policies
+from lakehouse import condemned_versions, maintenance_policies
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.version_retention import recorded_branch
@@ -204,10 +204,11 @@ async def vend_credentials(
             partial(table_claims.renewed_for_its_declarer, table_claims.claim_store(settings), table.resolved, declarer=subject)
         )
     elif tier == "maintain":
-        # Hygiene, a short-lived credential: a maintain vend lasts no longer than 15 minutes whatever
-        # `LANCE_VENDING_TTL_SECONDS` says. Nothing a reclaim may delete rests on it: a pass deletes only what the catalog's
-        # batch licensed, which no ref door admits after (ADR 0246, A1 gone).
-        at_most_seconds = int(history_fences.HOLD.total_seconds())
+        # LOAD-BEARING: a maintain vend lasts no longer than `CREDENTIAL_LIFETIME` (15 minutes) whatever
+        # `LANCE_VENDING_TTL_SECONDS` says, so a vend minted before a reclaim batch is asked dies by the end of that batch's
+        # licence (assumption C, ADR 0246 §14): Lance deletes by number under a branch's name, and the name may be made
+        # again once the licence has ended. A pass acts on a batch only where this expiry is covered.
+        at_most_seconds = int(condemned_versions.CREDENTIAL_LIFETIME.total_seconds())
     # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
     # (`vend_or_refuse`), never a bare 500.
     vended = await run_in_threadpool(

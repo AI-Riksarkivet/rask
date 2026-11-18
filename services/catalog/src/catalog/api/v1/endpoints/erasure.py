@@ -256,7 +256,7 @@ async def verify_erasure(
         trusted=obligation.refs,
         derived=partial(erasure_derived.judge, settings, provenance, so, obligation=obligation, table=canonical),
         before_untag=_file_untags,
-        condemn=reclaims.condemners(reclaims.Governance.of(table, control_root, control_options), control_root, control_options, dataset),
+        condemn=reclaims.erasure_reclaims(reclaims.Governance.of(table, control_root, control_options), settings, dataset),
     )
     # Each tag the verification dropped is announced as the tag door announces a deletion ([[LH-332]]): untargeted, naming
     # the tag and the ref it pinned, beside the obligation whose verification dropped it. AFTER the drops, so a tag still

@@ -112,7 +112,9 @@ async def run_maintenance(
 
     THROUGH THE ONE RECLAIM A PASS GOES THROUGH (ADR 0246, ``catalog.services.reclaims``): each batch of 16 versions
     condemned, its pins read, the governing policy read along the table's chain as it stands then, its entries promoted,
-    and only what that licenses deleted. A hold at any level that can govern the table answers 409 InvalidTableState (19),
+    and only what that licenses deleted, under a maintain session the catalog minted for the batch before asking it, which
+    the store refuses once the licence ends (``reclaims.minter``; on a key pair, the residual ADR 0246 §14 states). A hold
+    at any level that can govern the table answers 409 InvalidTableState (19),
     nothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions
     condemned for the next reclaim."""
     ds = await run_in_threadpool(partial(table.open, so, branch=branch))
@@ -121,9 +123,9 @@ async def run_maintenance(
     def _reclaim() -> maintenance.GcRunData:
         # [[LH-232]] Each transaction file the cleanup removes is recorded; Lance records the rest itself.
         governance = reclaims.Governance.of(table, settings.registry_root, settings.storage_options())
-        condemn = reclaims.condemner(governance, settings.registry_root, settings.storage_options(), main, ref=branch)
+        reclaim = reclaims.in_process(governance, settings, main, ref=branch, handle=ds)
         with stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, branch), so):
-            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch, condemn=condemn)
+            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch, reclaim=reclaim)
 
     return GcRunResult(**await run_in_threadpool(_reclaim))
 

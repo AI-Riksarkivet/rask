@@ -95,6 +95,7 @@ RECORD_PREFIXES: Final[frozenset[str]] = frozenset(
         ERASURE_RELEASES,
         CONTRACTS,
         TABLE_INPUTS,
+        CONDEMNED,
         ROLES,
         PRINCIPALS,
         DECLARED_GRANTS,
@@ -111,6 +112,7 @@ queue's recovery is to be empty."""
 LEASE_PREFIXES: Final[frozenset[str]] = frozenset({COMMIT_TURNS, HISTORY_FENCES, NAMESPACE_FENCES, IDEMPOTENCY, TIMERS})
 """The records that lapse: a restored one would hold a turn, a fence, an answer or a timer's window whose time has passed."""
 
-CONTROL_PREFIXES: Final[frozenset[str]] = RECORD_PREFIXES | QUEUE_PREFIXES | LEASE_PREFIXES | {CONDEMNED, NAMESPACE_INDEX, STAGING, BACKUPS}
-"""Every segment that holds the estate's own state, which no table's location crosses. The condemned versions are no
-record a backup copies: the backup job's store policy names the prefixes it reads, and this one is not among them."""
+CONTROL_PREFIXES: Final[frozenset[str]] = RECORD_PREFIXES | QUEUE_PREFIXES | LEASE_PREFIXES | {NAMESPACE_INDEX, STAGING, BACKUPS}
+"""Every segment that holds the estate's own state, which no table's location crosses. The condemned versions are a
+record a backup copies: restored without them, a version a dead batch left half removed, or an erasure's fork point,
+would be one no ref door refuses."""

@@ -1002,24 +1002,33 @@ governing their data. The project-scoped surface is the console's project page, 
   pins read (a version one names is excluded unless ANOTHER batch's entry names it `g`; a pin older than
   `PIN_LIFETIME`, a day, is swept as a dead door's), the governing policy read level by level on the chain the table's
   claim names THEN (`reclaims.Governance.held_by`; a hold at any level keeps everything, a record that cannot be read
-  too), then one conditional write promoting its own entries to `g` (or removing them under a hold) and deleting the
-  pins on another batch's `g` versions; the reclaimer then runs `cleanup_old_versions(versions=...,
-  error_if_tagged_old_versions=False)` on what it licensed, under its maintain vend, which reaches NOTHING on the control
-  root. A batch whose deletes the store refused keeps its entries for the next. (3) **Every ref door pins first**
-  (`dataplane.require_whole`: a `rask-pin-<32 hex>` Lance tag on the version, then the record read; a condemned version
-  is 409 code 19, an unreadable record 503; the door acts, then unpins in a `finally`, and refuses to act once
-  `DOOR_DEADLINE` passed since its pin): tag create and update, branch create, restore, a clone's source tag
-  (`clone_sources.take`, `CloneSourceGoneError`), and the erasure release's recreate points. The tag doors refuse the
-  `rask-pin-` prefix from callers and hide pins from their listing. (4) **`version/delete` only condemns** (the spec's
-  "deletes version tracking records, NOT the actual table data"); `version/list` leaves condemned versions out; the next
-  reclaim finishes them unless a hold keeps them. (5) **A policy door (set or delete, at the table, a namespace, the
-  project) writes, then reads the record, and answers 200 at once** naming in `condemned` the versions already
-  condemned of the tables it governs, which its promise does not reach; a rename answers at once and promises nothing.
-  The history fence keeps four kinds (REFS, BRANCH, SCHEDULE, RELEASE) for the erasure; no reclaim takes it. The pass asks
-  the catalog for a batch when its victims meet the threshold, when the table's record stands (one listing under its own
-  session), or when a dead door's pin waits; `maintenance.reclaims.condemned` gauges the versions left condemned, and
-  `MaintenanceCondemnedVersionsStanding` warns past a day. A maintain-tier credential is still vended for at most
-  `HOLD` (900 s), as hygiene: nothing a reclaim deletes rests on it. Its policy is 912 characters at two 63-character
+  too; an erasure's batch reads no hold), then one conditional write promoting its own entries to `g` with the licence's
+  instant `licensed_until` (`LICENCE`, 17 minutes; or removing them under a hold) and deleting the pins on another
+  batch's `g` versions; a branch's batch then reads the branches and licenses nothing where its incarnation went. The
+  reclaimer runs `cleanup_old_versions(versions=..., error_if_tagged_old_versions=False)` on what it licensed, under a
+  credential minted before it asked whose stamped expiry plus `CLOCK_MARGIN` is no later than `licensed_until`
+  (`condemned_versions.covers`; a pass's first batch, asked before its vend, is asked again): Lance deletes by NUMBER
+  under the path a branch's name holds, so a licence is good only while the name means one incarnation, and a branch
+  create under a name a live licence names answers 409 code 14 naming the instant. The maintain vend reaches NOTHING on
+  the control root. A batch whose deletes the store refused keeps its entries for the next. (3) **Every ref door pins
+  first, a version NUMBER** (`dataplane.require_whole`: one the request names, or the source's head read fresh; a
+  `rask-pin-<32 hex>` Lance tag on it, then the record read; a condemned version is 409 code 19, an unreadable record 503;
+  the door acts with that number, then unpins in a `finally`, and refuses to act once `DOOR_DEADLINE` passed since its
+  pin): tag create and update, branch create, restore, a clone's source tag (`clone_sources.take`,
+  `CloneSourceGoneError`), and the erasure release's recreate points (its own `rask-release-<32 hex>` pins, which no sweep
+  takes). The tag doors refuse the `rask-` prefix from callers and hide such tags from their listing. (4)
+  **`version/delete` only condemns** (the spec's "deletes version tracking records, NOT the actual table data"), then
+  reads the tags and pins and takes back what one names; `version/list` leaves condemned versions out; the next reclaim
+  finishes them unless a hold keeps them. (5) **A policy door (set or delete, at the table, a namespace, the project)
+  writes, then reads the records standing (a table's record stands only while it has entries), and answers 200 at once**
+  naming in `condemned` at most 100 versions already condemned of the tables it governs (each with its
+  `branch_identifier`), which its promise does not reach, counting the rest in `condemned_beyond` and naming a record it
+  could not read in `condemned_unread`; a rename answers at once and promises nothing. The history fence keeps four kinds
+  (REFS, BRANCH, SCHEDULE, RELEASE) for the erasure; no reclaim takes it. The pass asks the catalog for a batch when its
+  victims meet the threshold, when the table's record stands (one listing under its own session), or when a dead door's
+  pin waits; `maintenance.reclaims.condemned` gauges the versions left condemned, and
+  `MaintenanceCondemnedVersionsStanding` warns past a day. A maintain-tier credential is vended for at most
+  `CREDENTIAL_LIFETIME` (900 s), which a licence's end rests on. Its policy is 912 characters at two 63-character
   buckets and 1,143 with a KMS key (measured); a warehouse whose tables' maintain policy would not fit (a control root
   key prefix past about 900 characters, a KMS key id past about 450) is refused at registration
   (`vending.require_a_maintain_policy_that_fits`, 400 code 13); a registration at a deep location, or with data
@@ -1444,39 +1453,59 @@ governing their data. The project-scoped surface is the console's project page, 
   main only, measured on pylance 12.0.0). A branch write also carries `lance.branchIdentifier`, the last
   uuid of pylance's `branch_identifier` chain, because a recreated branch restarts its numbering. Pinned
   by `tests/integration/test_a_write_event_names_the_commit_it_made.py`, which drives every branch door.
-- **`version/delete` reclaims through `cleanup_old_versions(versions=[...])`, never the `dir` backend's raw
-  manifest delete** ([[LH-206]], `maintenance.delete_versions`). Measured on pylance 12.0.0, the raw delete
-  removes every manifest on `{0, -1}` (describe 200, the table unopenable), and a range ending at latest
-  rolls the table back so the next append mints that number again. The door refuses any range
-  that reaches the current version (400; ranges are end-exclusive), refuses a version a tag or a child
-  branch pins (409, naming it), and judges every range before deleting any. The reclaim also removes data files only
-  those versions referenced, so a version a registered clone reads is kept by the clone's tag (ADR 0198 §1): this door
-  refuses it as it refuses any tagged version, `maintenance/run` exempts it as every cleanup exempts a tagged version,
-  and the erasure's verification reports the tag as a `held` surface it never drops, which the clone's own end
-  releases (`erasure._HELD_BY_A_CLONE`).
-  **A ref written during a reclaim is held off by the table's history fence** ([[LH-308]], ADR 0176,
-  `lakehouse.history_fences`). Lance reads tags and branches once per `cleanup_old_versions`
-  (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
-  20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
-  erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
-  `tags/update`, `branches/create`, and as ref work `restore` and a table's `policy/set` and `policy/delete`, ADR 0243) holds the fence,
-  one object per holder under the table's directory `_history_fences/table-<digest>/` (`fences.HolderFence`,
-  `history_fences.fence_directory`; a take judges only the names the fence defines directly in the directory, a
-  holder's kind by its KEY whatever its body says, live until it is a hold old on the store's clock, and sweeps whatever
-  else stands there once lapsed, so what maintenance's vend can plant is at most a reclaim's hold, never a 500 nor a
-  mark, F3 of `specs/catalog/Fence.tla`; the directory ends with the table, `history_fences.end`); holders of one kind share it whatever their number,
-  never contending for a write (measured on RustFS 1.0.3 through the tag door: 16 of 16 and 64 of 64 concurrent tag writes
-  answered 200, against 7 to 9 of 16 and 36 to 39 of 64 refused with one record per table, ADR 0233 §9,
-  `tests/integration/test_a_tables_ref_writes_share_its_history.py`), the other kind is refused 409 code
-  14 (`DoorTable.history_write`), and a fenced expiry is `skipped="history_fenced"`, its table's pass tried again after
-  `retrySeconds` (`table_pass._dataset_due_at`). A branch create holds the kind `branch`, which also excludes another
+- **`version/delete` condemns, and deletes nothing** (the spec's `BatchDeleteTableVersions` "deletes version tracking
+  records, NOT the actual table data"; ADR 0246, `maintenance.delete_versions`, `condemned_versions.condemn_named`).
+  The door refuses any range that reaches the current version (400; ranges are end-exclusive) and judges every range
+  first; then, in a batch's order, it writes the versions into the table's condemned record under a batch id of its own,
+  THEN reads the tags, the pins and the branches cut from the ref, and where one names a version it takes its entries
+  back and answers 409 naming it (a pin as "a request in flight"); a version a registered clone reads is refused like any
+  tagged one (ADR 0198 §1). Condemned, a version leaves `version/list`, every ref door refuses it (409, code 19), and the
+  ref's next reclaim finishes it unless a hold keeps it (`ReclaimVDeleteReadsFirst.cfg` fails the other order).
+- **A reclaim condemns before it deletes, and a ref door pins before it reads** (ADR 0246, `specs/maintenance/Reclaim.tla`,
+  `lakehouse.condemned_versions`, `catalog.services.reclaims`). No reclaim takes the history fence. Every reclaim (a
+  pass through `maintenance/condemn`, `maintenance/run`, an erasure's verification and its release) asks the catalog for
+  each batch of at most 16 versions: it condemns them in the table's record (`_condemned/table-<digest>.json`, one per
+  table, standing only while it has entries: its last entry's rewrite deletes it under the ETag read), reads the tags and
+  pins, reads the governing policy level by level (an erasure's batch reads none: which of an erasure and a hold wins is
+  the owner's open question, §14 of the ADR), promotes its entries `g` with `licensed_until` (`LICENCE`, 17 minutes,
+  from now), and answers what the reclaimer may delete. The reclaimer runs `cleanup_old_versions(versions=...,
+  error_if_tagged_old_versions=False)` under a credential minted BEFORE it asked (`condemned_versions.reclaim`,
+  `RefReclaim.mint`): a pass's maintain vend, capped at `CREDENTIAL_LIFETIME` (15 minutes) by the vend door, or a
+  maintain session the catalog mints for its own in-process reclaims (`reclaims.minter`; on a key pair, `mode_b`, it
+  deletes under the catalog's own key, the residual). A batch is acted on only under a credential whose stamped expiry,
+  plus `CLOCK_MARGIN`, is no later than its `licensed_until` (`covers`). Lance's `versions=` deletes by NUMBER under the
+  path the handle names, so a licence is good only while a branch's name means one incarnation: a branch create (and an
+  erasure release's recreate) under a name a live licence names is refused 409 code 14 naming the instant
+  (`dataplane.refuse_a_name_a_licence_holds`, NameGuard), a deleted incarnation's `g` entries are kept until their
+  licence passes (GCAfterLicence), and a branch batch reads the branches after its promotion and licenses nothing where its
+  incarnation went (StandsAfterGo). A branch delete is never refused for a reclaim.
+  Every ref door (tag create and update, branch create, restore, a clone's source tag, the release's recreate points)
+  acts on a version NUMBER: one resolved fresh where the request names none (`dataplane._source_head`: a Lance ref call
+  given no version resolves it against the handle, measured on pylance 13.0.0), pinned with a Lance tag
+  `rask-pin-<32 hex>` (`require_whole`), then the record read (a condemned version is refused, 409 code 19), then the act
+  with that number, then the pin deleted. The tag doors refuse and hide every tag under the prefix `rask-` the catalog
+  keeps for its own (`condemned_versions.RESERVED_PREFIX`). A door's pin left by a dead door is swept by a batch once
+  older than `PIN_LIFETIME` (A3'); an erasure release's pins are `rask-release-<32 hex>`, a kind no sweep takes, removed
+  by the release at its end alone. A policy door (set or delete at any level, a rename) writes, then reads the records
+  standing, and answers 200 naming at most 100 condemned versions (`condemned`, each with its `branch_identifier`),
+  counting the rest (`condemned_beyond`) and naming any record it could not read (`condemned_unread`).
+  Pinned by `tests/integration/test_a_reclaim_condemns_before_it_deletes.py` (every rule, each reversed, ADR 0246 §14).
+- **A ref write and an erasure's release still share the table's history fence** ([[LH-308]], ADR 0233,
+  `lakehouse.history_fences`): one object per holder under `_history_fences/table-<digest>/` (`fences.HolderFence`; a take
+  judges only the names the fence defines directly in the directory, a holder's kind by its KEY whatever its body says,
+  live until it is a hold old on the store's clock, F3 of `specs/catalog/Fence.tla`; the directory ends with the table,
+  `history_fences.end`). The kinds are REFS, BRANCH, SCHEDULE and RELEASE; RECLAIM is gone. Holders of one kind share it
+  whatever their number (measured on RustFS 1.0.3 through the tag door: 16 of 16 and 64 of 64 concurrent tag writes
+  answered 200, ADR 0233 §9, `tests/integration/test_a_tables_ref_writes_share_its_history.py`), the other kind is
+  refused 409 code 14 (`DoorTable.history_write`). A branch create holds the kind `branch`, which also excludes another
   branch create, so two creates of nesting names on one table take turns and each judges a listing no other create
-  changes (ADR 0179, [[LH-413]]). An erasure's release holds the kind `release`, which excludes every kind, its own
-  included, from its plan to its reclaim (ADR 0233). The verification records a release while it holds the kind
-  `schedule` (which, as a reclaim does, excludes every ref write), writing the release's mark in the fence's directory
-  (`erasure-release.<id>.json`, `fences.MARK_NAME`) and then its record; every ref write's take lists the directory, so
-  a ref door that sees a mark reads that release and, when the release will take its ref, files and sends the caller an
-  `erasure_release_scheduled` naming the ref (`erasure_release.RefNotices`, `api/ref_notices.putting_ref`, ADR 0233 §9).
+  changes (ADR 0179, [[LH-413]]). An erasure's release holds the kind `release`, which excludes every ref door, from its
+  plan to its reclaim (ADR 0233), and pins where its branches come back (ReleasePins). The verification records a
+  release while it holds the kind `schedule` (which excludes every ref write), writing the release's mark in the
+  fence's directory (`erasure-release.<id>.json`, `fences.MARK_NAME`) and then its record; every ref write's take lists the
+  directory, so a ref door that sees a mark reads that release and, when the release will take its ref, files and sends
+  the caller an `erasure_release_scheduled` naming the ref (`erasure_release.RefNotices`, `api/ref_notices.putting_ref`,
+  ADR 0233 §9).
   Whether the release takes a ref is ONE predicate, `erasure_release._taken`, which the door (`takes`, over the table
   with its ref put), the tick's plan and its deletes all ask: a ref still standing on a residual, where a pin stood
   (`ReleaseRecord.pinned_at`), or in a taken subtree, whatever its name; a pinning tag moved onto a clean version, or a
@@ -1487,7 +1516,7 @@ governing their data. The project-scoped surface is the console's project page, 
   A table with no release scheduled carries no mark, and its ref writes read nothing more. A hold lapses after 15
   minutes on the store's clock.
   Pinned by `services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py` and
-  `tests/integration/test_no_reclaim_deletes_a_version_while_a_ref_is_written.py`.
+  `tests/integration/test_a_tables_ref_writes_share_its_history.py`.
 - **An erasure is an obligation a bring-your-own job fulfils and the catalog verifies** ([[LH-493]], ADR 0163).
   `POST /management/v1/table/{id}/erasure` (owner rung) plans the predicate (400 with nothing recorded when Lance
   refuses it), disarms every ref and records the obligation (`catalog.services.erasure_obligations`,

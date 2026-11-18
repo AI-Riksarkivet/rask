@@ -27,7 +27,7 @@ ls "$root"/chart/charts/*.tgz >/dev/null 2>&1 || { echo "!! chart/charts holds n
 
 cd "$root"
 stop() {
-  kill "${store_pid:-}" 2>/dev/null || true
+  kill "${licence_pid:-}" "${store_pid:-}" 2>/dev/null || true
   wait 2>/dev/null || true
   rm -rf "$work"
 }
@@ -58,6 +58,11 @@ if [ "${KEEP_UP:-}" = 1 ]; then
   echo "RASK_LIFECYCLE_STORE_ENDPOINT=$endpoint RASK_LIFECYCLE_STORE_ACCESS_KEY=rask-lifecycle-root RASK_LIFECYCLE_STORE_SECRET_KEY=$RASK_LIFECYCLE_STORE_SECRET_KEY (pid $store_pid, $work)"
   exit 0
 fi
+# The store refuses a reclaim's session once the licence it deletes under ends (ADR 0246 §14, assumption C): it waits the
+# licence out (about 17 minutes; RustFS issues no shorter session), so it runs beside every other test of the lane.
+uv run --no-sync pytest tests/integration/test_no_vended_credential_writes_a_pin_or_the_condemned_record.py -k licence -p no:cacheprovider -rA "$@" \
+  >"$work/licence.log" 2>&1 &
+licence_pid=$!
 uv run --no-sync pytest \
   tests/integration/test_a_lifecycle_door_keeps_what_it_answered_beside_a_concurrent_door.py \
   tests/integration/test_a_cascade_keeps_what_it_answered.py \
@@ -69,6 +74,8 @@ uv run --no-sync pytest \
   -k s3 -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"
 # No vended credential writes a pin or a table's condemned versions (ADR 0246, B2): the store's own refusal of the real
 # maintain and write vends, which only this lane's store can mint.
-uv run --no-sync pytest tests/integration/test_no_vended_credential_writes_a_pin_or_the_condemned_record.py -p no:cacheprovider -rA "$@"
+uv run --no-sync pytest tests/integration/test_no_vended_credential_writes_a_pin_or_the_condemned_record.py -k "not licence" -p no:cacheprovider -rA "$@"
 # A reclaim beside the doors on its history (ADR 0246), its deletes held or refused on the wire in front of the store.
 uv run --no-sync pytest tests/integration/test_a_reclaim_condemns_before_it_deletes.py -k rustfs -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"
+wait "$licence_pid" || { cat "$work/licence.log" >&2; exit 1; }
+tail -3 "$work/licence.log"

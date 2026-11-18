@@ -2288,7 +2288,9 @@ export interface paths {
          *
          *     THROUGH THE ONE RECLAIM A PASS GOES THROUGH (ADR 0246, ``catalog.services.reclaims``): each batch of 16 versions
          *     condemned, its pins read, the governing policy read along the table's chain as it stands then, its entries promoted,
-         *     and only what that licenses deleted. A hold at any level that can govern the table answers 409 InvalidTableState (19),
+         *     and only what that licenses deleted, under a maintain session the catalog minted for the batch before asking it, which
+         *     the store refuses once the licence ends (``reclaims.minter``; on a key pair, the residual ADR 0246 §14 states). A hold
+         *     at any level that can govern the table answers 409 InvalidTableState (19),
          *     nothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions
          *     condemned for the next reclaim.
          */
@@ -5911,6 +5913,8 @@ export interface components {
         CondemnedBatch: {
             /** Held By */
             held_by?: string | null;
+            /** Licensed Until */
+            licensed_until?: string | null;
             /** Standing */
             standing?: number[];
             /** Versions */
@@ -5923,6 +5927,8 @@ export interface components {
         CondemnedVersion: {
             /** Branch */
             branch?: string | null;
+            /** Branch Identifier */
+            branch_identifier?: string | null;
             /** Table */
             table: string;
             /** Version */
@@ -8773,6 +8779,13 @@ export interface components {
         PolicyDeleteResponse: {
             /** Condemned */
             condemned?: components["schemas"]["CondemnedVersion"][];
+            /**
+             * Condemned Beyond
+             * @default 0
+             */
+            condemned_beyond?: number;
+            /** Condemned Unread */
+            condemned_unread?: string[];
             /** Id */
             id: string;
             /** Kind */
@@ -8853,6 +8866,10 @@ export interface components {
             compact_interval_hours?: number | null;
             /** Condemned */
             condemned?: components["schemas"]["CondemnedVersion"][] | null;
+            /** Condemned Beyond */
+            condemned_beyond?: number | null;
+            /** Condemned Unread */
+            condemned_unread?: string[] | null;
             /** Id */
             id: string;
             kind: components["schemas"]["PolicyKind"];

@@ -1,11 +1,14 @@
 """The catalog's side of every reclaim (ADR 0246): each batch a reclaimer asks for, run here under the catalog's own
-identity, the only one that writes a table's condemned versions or a pin (:mod:`lakehouse.condemned_versions`).
+identity, the only one that writes a table's condemned versions or a pin (:mod:`lakehouse.condemned_versions`), and the
+credential the catalog's own reclaims delete under.
 
 A batch condemns, reads the pins, then reads the policy that governs the table (:meth:`Governance.held_by`), then
 promotes. The policy is read AFTER the condemn and the levels it is read under are resolved then too, from the table's
 location claim as it stands (PolicyAfterCondemn): a policy door, a rename into a namespace that holds among them, writes,
 then reads the condemned versions, so of the door and the batch at least one sees the other. A record that cannot be
-read keeps the table whole (``maintenance_policies.governing_policy``): fail closed.
+read keeps the table whole (``maintenance_policies.governing_policy``): fail closed. An erasure's reclaims read no
+maintenance hold (``holds=False``): which of an erasure and a retention hold wins is the owner's open question, and this
+design leaves it as it was (ADR 0246 §14).
 
 Every function is blocking IO; callers threadpool it.
 """
@@ -14,22 +17,34 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from typing import Any, Final
 
 import lance
 from lance_namespace import LanceNamespace, ServiceUnavailableError, TableBranchNotFoundError
-from pydantic import BaseModel, ConfigDict, SkipValidation
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
+from catalog.core.base_judge import BaseJudge
+from catalog.core.config import Settings
+from catalog.core.vending import dataset_facts, require_vendable_bases, role_session_name, vend_or_refuse, vendor_for
 from catalog.services import object_uuids, table_claims
 from lakehouse import condemned_versions, location_claims, maintenance_policies, records
-from lakehouse.condemned_versions import Verdict
+from lakehouse.condemned_versions import Credential, RefReclaim, Verdict
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.storage_options import StorageOptions
+from lakehouse.version_retention import recorded_branch
 
 
 log = logging.getLogger(__name__)
 
 #: What one batch is asked: the versions to condemn, and whether a version a branch is cut from may be among them.
 type Condemn = Callable[[list[int]], Verdict]
+
+#: The name the catalog's own reclaim sessions carry at the store, whose trail records it (:func:`role_session_name`).
+_SESSION_NAME: Final = role_session_name("catalog-reclaim")
+
+#: The most condemned versions a policy door names; past it the answer counts the rest (``condemned_beyond``).
+CONDEMNED_SHOWN: Final = 100
 
 
 class Governance(BaseModel):
@@ -97,10 +112,12 @@ def batch(
     ref: str | None,
     versions: Sequence[int],
     forks: bool = False,
+    holds: bool = True,
 ) -> Verdict:
     """One batch of ``ref``'s reclaim, run to its verdict (:class:`lakehouse.condemned_versions.Batch`): ``versions``
-    condemned with whatever a dead batch or ``version/delete`` left on the ref, the pins read, the policy read, the
-    entries promoted. ``main`` is a handle of the table's main, under the catalog's own credential.
+    condemned with whatever a dead batch or ``version/delete`` left on the ref, the pins read, the policy read where
+    ``holds`` asks for it (an erasure's reclaims do not), the entries promoted. ``main`` is a handle of the table's main,
+    under the catalog's own credential.
 
     Raises:
         TableBranchNotFoundError: ``ref`` is a branch the table does not have (code 22).
@@ -111,7 +128,7 @@ def batch(
         run = condemned_versions.Batch(control_root, storage_options, table_uuid=governance.table_uuid, location=governance.location, dataset=main, ref=ref)
         run.condemn(versions, forks=forks)
         run.read_pins()
-        verdict = run.promote(governance.held_by())
+        verdict = run.promote(governance.held_by() if holds else None)
     except condemned_versions.RefGoneError as exc:
         raise TableBranchNotFoundError(str(exc)) from exc
     except records.RecordChangedError as exc:
@@ -125,17 +142,85 @@ def batch(
     return verdict
 
 
-def condemner(
-    governance: Governance, control_root: str, storage_options: StorageOptions, main: lance.LanceDataset, *, ref: str | None, forks: bool = False
-) -> Condemn:
-    """How an in-process reclaim of ``ref`` asks for each batch (:func:`lakehouse.condemned_versions.reclaim`)."""
-    return lambda versions: batch(governance, control_root, storage_options, main, ref=ref, versions=versions, forks=forks)
+def minter(settings: Settings, location: str, ref: str | None, fallback: Any) -> Callable[[], Credential]:  # noqa: ANN401 — a lance.LanceDataset
+    """How a reclaim the catalog runs in process mints each batch's credential (:func:`condemned_versions.reclaim`): a
+    maintain-tier session for the table, minted for the batch through the catalog's web identity before the batch is
+    asked and lasting at most :data:`condemned_versions.CREDENTIAL_LIFETIME`, with the grants the maintain vend gives a pass
+    of the ref (none on the control root), and the ref opened under it, so a reclaim frozen past its licence's instant
+    deletes nothing more. Where the catalog has no web identity (``LANCE_VENDING_MODE=mode_b``, the development fixtures on
+    a key pair) nothing is minted: the batch deletes through ``fallback``, the ref's handle under the catalog's own key
+    pair, which no store expires (the residual of ADR 0246 §14).
+
+    Raises:
+        ServiceUnavailableError: The store refused, or could not answer, the exchange or a read of the ref (503).
+        InvalidTableStateError: A base the catalog did not sanction (409).
+    """
+    if settings.vending_mode != "web_identity":
+        return lambda: Credential(dataset=fallback, expires_at=None)
+    vendor = vendor_for(settings)
+    branch = recorded_branch(ref) or ""
+    facts = dataset_facts(location, settings.storage_options(), branch=branch)
+    bases = require_vendable_bases(location, facts, BaseJudge.from_settings(settings))
+
+    def mint() -> Credential:
+        vended = vend_or_refuse(
+            vendor,
+            table_location=location,
+            tier="maintain",
+            session_name=_SESSION_NAME,
+            bases=bases.bases,
+            data_directories=bases.data_directories,
+            branch=branch,
+            at_most_seconds=int(condemned_versions.CREDENTIAL_LIFETIME.total_seconds()),
+        )
+        if vended is None:
+            return Credential(dataset=fallback, expires_at=None)
+        opened = lance.dataset(location, storage_options=vended.as_storage_options().in_clear())
+        return Credential(
+            dataset=opened if branch == "" else opened.checkout_version((branch, None)),
+            expires_at=datetime.fromtimestamp(vended.expires_at_millis / 1000, UTC),
+        )
+
+    return mint
 
 
-def condemners(governance: Governance, control_root: str, storage_options: StorageOptions, main: lance.LanceDataset) -> Callable[[str | None], Condemn]:
-    """For each ref of an erasure's reclaim, how it asks for each batch: a version a branch is cut from among what it may
-    condemn, since the erasure takes the files only that version names (ADR 0243 R1)."""
-    return lambda ref: condemner(governance, control_root, storage_options, main, ref=ref, forks=True)
+def in_process(
+    governance: Governance,
+    settings: Settings,
+    main: lance.LanceDataset,
+    *,
+    ref: str | None,
+    handle: Any,
+    forks: bool = False,
+    holds: bool = True,  # noqa: ANN401 — a lance.LanceDataset
+) -> RefReclaim:
+    """How a reclaim of ``ref`` the catalog runs in process (``maintenance/run``, an erasure's verification and its
+    release) asks for each batch and mints each batch's credential; ``handle`` is the ref's handle under the catalog's
+    own credential (:func:`minter`'s fallback)."""
+    return RefReclaim(
+        condemn=lambda versions: batch(
+            governance, settings.registry_root, settings.storage_options(), main, ref=ref, versions=versions, forks=forks, holds=holds
+        ),
+        mint=minter(settings, governance.location, ref, handle),
+    )
+
+
+def erasure_reclaims(governance: Governance, settings: Settings, main: lance.LanceDataset) -> Callable[[str | None, Any], RefReclaim]:
+    """For each ref of an erasure's reclaim and its handle, how it asks for each batch and mints each batch's credential:
+    a version a branch is cut from among what it may condemn, since the erasure takes the files only that version names
+    (ADR 0243 R1), and no maintenance hold read (``holds=False``, ADR 0246 §14)."""
+    return lambda ref, handle: in_process(governance, settings, main, ref=ref, handle=handle, forks=True, holds=False)
+
+
+class Found(BaseModel):
+    """What a policy door finds condemned beneath it, read after its write."""
+
+    #: ``(table, branch, branch identifier, version)`` of each version found, by table, branch and version; the identifier
+    #: names the incarnation of the branch (``None`` for main), since a branch made again under its name repeats numbers.
+    #: ``(table, branch, version)`` of each version found, by table, branch and version.
+    named: list[tuple[str, str | None, str | None, int]] = Field(default_factory=list)
+    #: What could not be read: each a record (or the listing of them) that may name a version beneath the door.
+    unread: list[str] = Field(default_factory=list)
 
 
 def condemned_versions_of(
@@ -145,24 +230,36 @@ def condemned_versions_of(
     *,
     table_uuid: str | None = None,
     within: Callable[[list[str]], bool] | None = None,
-) -> list[tuple[str, str | None, int]]:
-    """``(table, branch, version)`` of every condemned version of the table ``table_uuid``, or of every table whose name
-    now ``within`` takes (each record's table named by its location's claim; a gone table's left out): what a policy's
-    answer does not promise (ADR 0246).
-
-    Raises:
-        OSError: The store did not answer, or a record does not parse.
+) -> Found:
+    """Every condemned version of the table ``table_uuid`` (one read of its record), or of every table whose name now
+    ``within`` takes (one listing of the records standing, then a read of each, each record's table named by its
+    location's claim; a gone table's left out): what a policy's answer does not promise (ADR 0246). A record stands only
+    while its table has a reclaim in flight or stuck, so a door reads those and no other. What cannot be read is named in
+    :attr:`Found.unread`, never raised: the door's write has landed.
     """
     if table_uuid is not None:
-        found, _etag = condemned_versions.read_record(registry_root, storage_options, table_uuid)
-        held = [found] if found is not None else []
+        try:
+            found, _etag = condemned_versions.read_record(registry_root, storage_options, table_uuid)
+        except OSError as exc:
+            log.warning("condemned_record_unread", extra={"table_uuid": table_uuid, "error": str(exc)[:300]})
+            return Found(unread=[condemned_versions.record_key(table_uuid)])
+        standing = condemned_versions.Standing(records=[found] if found is not None else [])
     else:
-        held = condemned_versions.every_record(registry_root, storage_options)
-    named: list[tuple[str, str | None, int]] = []
-    for record in held:
+        try:
+            standing = condemned_versions.every_record(registry_root, storage_options)
+        except OSError as exc:
+            log.warning("condemned_records_unlisted", extra={"error": str(exc)[:300]})
+            return Found(unread=["the listing of the condemned records"])
+    named: set[tuple[str, str | None, str | None, int]] = set()
+    for record in standing.records:
         if not record.entries or (name := table_claims.current_name(claims, record.location, record.uuid)) is None:
             continue
         if within is not None and not within(name.split(CATALOG_DELIMITER)):
             continue
-        named.extend((name, entry.ref, entry.version) for entry in record.entries)
-    return sorted(named, key=lambda found: (found[0], found[1] or "", found[2]))
+        named.update((name, entry.ref, None if entry.ref is None else entry.ref_id, entry.version) for entry in record.entries)
+    return Found(named=sorted(named, key=_ordered), unread=standing.unread)
+
+
+def _ordered(found: tuple[str, str | None, str | None, int]) -> tuple[str, str, str, int]:
+    """A condemned version's place in a policy door's answer: by table, branch (main first) and version."""
+    return found[0], found[1] or "", found[2] or "", found[3]

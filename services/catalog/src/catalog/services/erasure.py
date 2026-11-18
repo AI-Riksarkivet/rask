@@ -122,7 +122,7 @@ from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_mess
 from lakehouse import branch_layout, clone_sources, condemned_versions, stored_objects
 from lakehouse.base_refs import normalise
 from lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
-from lakehouse.condemned_versions import Verdict
+from lakehouse.condemned_versions import RefReclaim
 from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
@@ -529,10 +529,13 @@ def _drop_subject_tags(
             # cleanup take files the clone has no other copy of, so the clone's own end releases it.
             report.surfaces.append(held_by_a_clone(name))
             continue
-        if condemned_versions.is_pin(name):
-            # A ref door's pin, standing for the length of its request (ADR 0246): deleted here, the door would act on a
-            # version a reclaim may then delete. The next verification finds it gone, or a reclaim sweeps a dead door's.
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="skipped", detail="kept: a ref door's pin, for the length of its request"))
+        if condemned_versions.is_reserved(name):
+            # A ref door's pin, standing for the length of its request, or a release's on where its branches come back
+            # (ADR 0246): deleted here, its holder would act on a version a reclaim may then delete. The next verification
+            # finds a door's gone, or a reclaim sweeps a dead door's; a release removes its own at its end.
+            report.surfaces.append(
+                SurfaceResult(surface=f"tag:{name}", outcome="skipped", detail="kept: the catalog's pin, for the length of its holder's work")
+            )
             continue
         if not every_head_clean:
             detail = "kept: not every head is clean, so dropping it could destroy a reproducibility pointer while the subject stays"
@@ -618,10 +621,11 @@ def reclaim_refs(
     removes is recorded ([[LH-232]]); Lance records the rest itself.
 
     THE ONE RECLAIM EVERY CLEANUP GOES THROUGH (:func:`lakehouse.condemned_versions.reclaim`, ADR 0246): each batch of a
-    ref's victims is condemned, its pins read, its table's policy read and its entries promoted by the catalog
-    (``condemn``), and only what it licenses is deleted, so a cleanup this leaves part-way is one no ref door names,
-    whatever files of it still stand. A hold at any level keeps the ref whole, and its ``history:`` surface says so. Its
-    fork points, whose files it takes (ADR 0243 R1), stay condemned while a branch keeps their manifests.
+    ref's victims is condemned, its pins read and its entries promoted by the catalog (``condemn``), and only what it
+    licenses is deleted, under a credential minted for the batch, so a cleanup this leaves part-way is one no ref door
+    names, whatever files of it still stand. A maintenance hold is not read: which of an erasure and a hold wins is the
+    owner's open question, and an erasure reclaims a held table as it did before ADR 0246 (§14). Its fork points, whose
+    files it takes (ADR 0243 R1), stay condemned while a branch keeps their manifests.
 
     A registered clone of this table needs no refusal here: its tag keeps the version it reads, which every cleanup
     exempts and :func:`_drop_subject_tags` never drops (ADR 0198 §1).
@@ -650,7 +654,7 @@ def reclaim_refs(
                 continue
             victims = sorted({*condemned_versions.victims(cast("Any", handle), older_than=retention, retain_versions=None), *_fork_points(handle, ref)})
             with stored_objects.recording_removed_transactions(branch_layout.ref_root(dataset.uri, ref), storage_options):
-                done = condemned_versions.reclaim(cast("Any", handle), victims, condemn(ref))
+                done = condemned_versions.reclaim(victims, condemn(ref, handle))
             if done.held_by is not None:
                 report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"held: {done.held_by} keeps the whole history. Not reclaimed."))
                 continue
@@ -1265,9 +1269,10 @@ def _depth(name: str, forks: Mapping[str, _Reference | None]) -> int:
 #: because a bare version number means "on the handle's branch".
 type _Reference = tuple[str | None, int]
 
-#: For each ref, how its reclaim asks the catalog for each batch (``catalog.services.reclaims.condemner``, ADR 0246):
-#: the versions it asks for condemned, a version a branch is cut from among them, then the pins and the policy read.
-type Condemner = Callable[[str | None], Callable[[list[int]], Verdict]]
+#: For each ref and its handle, how its reclaim asks the catalog for each batch and mints the credential each batch deletes
+#: under (``catalog.services.reclaims.erasure_reclaims``, ADR 0246): the versions it asks for condemned, a version a branch
+#: is cut from among them, then the pins read; no maintenance hold read.
+type Condemner = Callable[[str | None, Any], RefReclaim]
 
 
 def _fork_points(handle: Any, ref: str | None) -> set[int]:  # noqa: ANN401 — a pylance handle of the ref

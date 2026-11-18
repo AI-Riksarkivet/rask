@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any, NoReturn
 from uuid import uuid4
 
@@ -444,6 +445,18 @@ class DoorTable:
         return condemned_versions.pin_whole(
             self._claims.control_root, self._claims.storage_options, table_uuid=self._resolved.require_uuid(), dataset=dataset, ref=branch, version=version
         )
+
+    def licensed_under(self, name: str) -> datetime | None:
+        """The instant the last live reclaim licence under the free branch name ``name`` ends
+        (:func:`lakehouse.condemned_versions.licensed_under`); ``None`` where none, or for a table whose claim records no
+        uuid, which no reclaim reaches.
+
+        Raises:
+            OSError: The store did not answer, or the record does not parse.
+        """
+        if self._resolved.uuid is None:
+            return None
+        return condemned_versions.licensed_under(self._claims.control_root, self._claims.storage_options, table_uuid=self._resolved.uuid, name=name)
 
     def condemned(self, dataset: lance.LanceDataset, branch: str | None) -> set[int]:
         """The versions of ``branch`` (main for ``None``) the table's condemned versions name

@@ -148,9 +148,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
     application.dependency_overrides[get_control_emitter] = lambda: emitter
     application.dependency_overrides[door.get_table_owners] = lambda: _owners
     application.dependency_overrides[get_clock] = lambda: clock
-    # The release tick resolves its table's connection as a door does; this app serves one namespace to every door.
-    with TestClient(application, raise_server_exceptions=False) as client, pytest.MonkeyPatch.context() as patched:
-        patched.setattr(release_tick, "_namespace_of", lambda _ctx, _segments: ns)
+    with TestClient(application, raise_server_exceptions=False) as client:
 
         def release() -> release_tick.ErasureReleaseTick:
             assert client.portal is not None, "the release ticks inside the app's lifespan"
@@ -370,7 +368,7 @@ def test_a_release_pins_where_its_branches_come_back_before_its_first_delete(tmp
     erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), release)
     recreate = erasure_release._recreate
 
-    def _a_reclaim_between(dataset: Any, record: erasure_release.ReleaseRecord) -> Any:  # noqa: ANN401 — the release's own handle and answer
+    def _a_reclaim_between(dataset: Any, record: erasure_release.ReleaseRecord, **places: Any) -> Any:  # noqa: ANN401 — the release's own handle and answer
         open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("frank"))
         main = lance.dataset(location)
 
@@ -380,8 +378,9 @@ def test_a_release_pins_where_its_branches_come_back_before_its_first_delete(tmp
             run.read_pins()
             return run.promote(None)
 
-        condemned_versions.reclaim(main, condemned_versions.victims(main, older_than=timedelta(0), retain_versions=None), _batch)
-        return recreate(dataset, record)
+        reclaim = condemned_versions.RefReclaim(condemn=_batch, mint=lambda: condemned_versions.Credential(dataset=main, expires_at=None))
+        condemned_versions.reclaim(condemned_versions.victims(main, older_than=timedelta(0), retain_versions=None), reclaim)
+        return recreate(dataset, record, **places)
 
     monkeypatch.setattr(erasure_release, "_recreate", _a_reclaim_between)
     with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as (_client, run_release):
@@ -390,4 +389,4 @@ def test_a_release_pins_where_its_branches_come_back_before_its_first_delete(tmp
     assert _branches(ns) == {"work": (None, 2), "deeper": ("work", 2)}, _branches(ns)
     work = open_by_name(ns, StorageOptions(), _TABLE_ID).checkout_version(("work", None))
     assert sorted(work.to_table().column("pii").to_pylist()) == ["alice", "bob", "carol"], "the recreated branch does not read whole"
-    assert not [tag for tag in open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list() if condemned_versions.is_pin(tag)], "the release left its pins"
+    assert not [tag for tag in open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list() if condemned_versions.is_reserved(tag)], "the release left its pins"

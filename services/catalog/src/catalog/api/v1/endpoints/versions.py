@@ -441,6 +441,7 @@ def _delete_versions(table: DoorTable, so: StorageOptions, body: BatchDeleteTabl
                 dataset=main,
                 ref=body.branch,
                 versions=versions,
+                refuse_pinned=partial(maintenance.refuse_pinned_versions, ds, body.branch),
             )
         except condemned_versions.RefGoneError as exc:
             raise TableBranchNotFoundError(str(exc)) from exc

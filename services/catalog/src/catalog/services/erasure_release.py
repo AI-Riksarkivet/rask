@@ -58,7 +58,13 @@ so one running between the release's delete of a branch and its recreate would t
 at, should main's head have moved off it: the release writes a pin on each version it records for a branch's return,
 then reads the table's condemned versions and refuses one an entry names, before its first delete, and deletes the pins
 once it finished. A tick that died leaves them, and the next tick, which resumes from the record, writes the same pins
-(:func:`_pin_name`). A dead door's pin on a residual is one of the refs it takes.
+(:func:`lakehouse.condemned_versions.release_pin_name`). They are of a kind no sweep of dead doors' pins takes: a release
+keeps no door's deadline and resumes whenever its tick runs, however long it stalled (``ReclaimReleaseSwept.cfg`` fails
+without it). A dead door's pin on a residual is one of the refs it takes.
+
+**A BRANCH COMES BACK ONLY ONCE NO LICENCE NAMES ITS NAME** (ADR 0246 §14, NameGuard). A reclaim's licence deletes by number
+under a branch's name, so the recreate refuses while a batch of the deleted incarnation holds a live licence under it, and
+the next tick makes it again.
 
 **NOBODY IS TOLD TWICE AND NOBODY IS LEFT UNTOLD** (ADR 0233). The verification files the release's notices before it
 writes the record (:mod:`catalog.services.announcement_intents`, on :func:`notice_target`), each notice under an id fixed
@@ -90,7 +96,6 @@ place the identifier is written ([[LH-281]]). The release needs only the refs, w
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
 from collections.abc import Callable, Sequence
@@ -516,7 +521,7 @@ def _release(
         done.changes += _delete(dataset, claimed, tags=tags, plan=[step for step in claimed.plan if step.branch in taken_now])
         if claimed.phase == "deleting":
             claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
-        done.changes += _recreate(dataset, claimed)
+        done.changes += _recreate(dataset, claimed, control_root=control_root, storage_options=storage_options)
         _reclaim(dataset, claimed, storage_options=table_options, condemn=condemn)
         if record.held_by_clones:
             _report_held(control_root, storage_options, record.release_id, [])
@@ -657,13 +662,21 @@ def _delete(dataset: _Dataset, record: ReleaseRecord, *, tags: Sequence[str], pl
     return changes
 
 
-def _recreate(dataset: _Dataset, record: ReleaseRecord) -> list[RefChange]:
-    """Every branch top-down at its recorded reference; one already back is skipped."""
+def _recreate(dataset: _Dataset, record: ReleaseRecord, *, control_root: str, storage_options: StorageOptions) -> list[RefChange]:
+    """Every branch top-down at its recorded reference; one already back is skipped.
+
+    Raises:
+        RuntimeError: A live licence names a branch's name (NameGuard): a reclaim of the incarnation the release deleted
+            may still delete by number under it, so the next tick makes it again; the branches made before stand.
+        OSError: The store did not answer the record's read.
+    """
     changes: list[RefChange] = []
     present = set(dataset.branches.list() or {})
     for step in record.plan:
         if step.branch in present:
             continue
+        if (until := condemned_versions.licensed_under(control_root, storage_options, table_uuid=record.table_uuid, name=step.branch)) is not None:
+            raise RuntimeError(f"branch {step.branch!r} comes back once a reclaim's licence under its name ends at {until.isoformat()}")
         dataset.create_branch(step.branch, reference=(step.parent, step.version))
         present.add(step.branch)
         extra = {"branch": step.branch, "parent_branch": step.parent, "parent_version": step.version, "release_id": record.release_id}
@@ -671,15 +684,9 @@ def _recreate(dataset: _Dataset, record: ReleaseRecord) -> list[RefChange]:
     return changes
 
 
-def _pin_name(release_id: str, version: int) -> str:
-    """The pin the release ``release_id`` writes on main's ``version``: the same name on every tick, so a tick resumed
-    from the record writes the one a dead tick left, and its finish deletes it."""
-    return f"{condemned_versions.PIN_PREFIX}{hashlib.sha256(f'{release_id}:{version}'.encode()).hexdigest()[:32]}"
-
-
 def _own_pins(record: ReleaseRecord) -> set[str]:
     """The pins ``record``'s release writes on where its branches come back (:func:`_pinned_recreate_points`)."""
-    return {_pin_name(record.release_id, step.version) for step in record.plan if step.parent is None}
+    return {condemned_versions.release_pin_name(record.release_id, step.version) for step in record.plan if step.parent is None}
 
 
 def _pinned_recreate_points(dataset: _Dataset, record: ReleaseRecord, *, control_root: str, storage_options: StorageOptions) -> set[str]:
@@ -695,7 +702,7 @@ def _pinned_recreate_points(dataset: _Dataset, record: ReleaseRecord, *, control
     names = _own_pins(record)
     try:
         for version in sorted({step.version for step in record.plan if step.parent is None}):
-            condemned_versions.pin(handle, None, version, name=_pin_name(record.release_id, version))
+            condemned_versions.pin(handle, None, version, name=condemned_versions.release_pin_name(record.release_id, version))
         condemned = condemned_versions.condemned(control_root, storage_options, table_uuid=record.table_uuid, dataset=handle, ref=None)
         if hit := sorted(condemned & {step.version for step in record.plan if step.parent is None}):
             raise RuntimeError(f"main's versions {hit}, where the release makes its branches again, are condemned: a reclaim may be deleting them")

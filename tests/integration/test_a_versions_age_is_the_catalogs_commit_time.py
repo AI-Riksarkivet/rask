@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import lance
@@ -34,17 +34,18 @@ from tests.integration.test_the_store_refuses_a_put_over_a_committed_file import
 TABLE_ID = ["lance_catalog", "clocks", "t"]
 
 
-def unheld(control_root: str, table_uuid: str, uri: str) -> Callable[[str | None], Callable[[list[int]], condemned_versions.Verdict]]:
-    """Each ref's reclaim batches as the catalog runs them for a table no policy holds (``catalog.services.reclaims``)."""
+def unheld(control_root: str, table_uuid: str, uri: str) -> Callable[[str | None, Any], condemned_versions.RefReclaim]:
+    """Each ref's reclaim batches as the catalog runs them for an erasure (``catalog.services.reclaims``), each deleted
+    through the ref's own handle."""
 
-    def of(ref: str | None) -> Callable[[list[int]], condemned_versions.Verdict]:
+    def of(ref: str | None, handle: Any) -> condemned_versions.RefReclaim:  # noqa: ANN401 — a lance.LanceDataset of the ref
         def batch(versions: list[int]) -> condemned_versions.Verdict:
             run = condemned_versions.Batch(control_root, StorageOptions(), table_uuid=table_uuid, location=uri, dataset=lance.dataset(uri), ref=ref)
             run.condemn(versions, forks=True)
             run.read_pins()
             return run.promote(None)
 
-        return batch
+        return condemned_versions.RefReclaim(condemn=batch, mint=lambda: condemned_versions.Credential(dataset=handle, expires_at=None))
 
     return of
 

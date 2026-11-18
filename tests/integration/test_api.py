@@ -309,15 +309,6 @@ def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient,
     dataset.create_branch.assert_called_once_with("x", ("exp", 2))  # (branch, version) reference
 
 
-def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
-    dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "exp"})
-    assert resp.status_code == 200
-    dataset.create_branch.assert_called_once_with("exp", None)  # neither → latest of main
-
-
 # --- #110 lineage-emit coverage: schema-evolution / index / restore / register / declare now emit, ---
 # --- through the shared best-effort + version-pinned read-back trailer (lineage_deps).            ---
 

@@ -42,6 +42,7 @@ THE CREDENTIAL MAINTENANCE PRESENTS IS THE POD'S OWN SERVICE-ACCOUNT TOKEN, proj
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -254,6 +255,8 @@ class Vended(BaseModel):
     #: to sign with (``StorageOptions.from_flat``).
     storage_options: StorageOptions
     location: str | None
+    #: When the store stops honouring the session, as the door answered it; ``None`` where it named none.
+    expires_at: datetime | None = None
 
 
 def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str) -> StorageOptions:
@@ -333,6 +336,11 @@ class PassVends(BaseModel):
             self.held[table_id] = kept
         return _handed_over(kept.vended, uri=uri, table_id=table_id, settings=settings)
 
+    def expires_for(self, table_id: str) -> datetime | None:
+        """When the vend this pass holds for ``table_id`` dies, as the door answered it; ``None`` for none named."""
+        kept = self.held.get(table_id)
+        return None if kept is None else kept.vended.expires_at
+
 
 def _at_own_store(options: StorageOptions, settings: MaintenanceSettings) -> StorageOptions:
     """The vended credential, used at maintenance's own store address ([[LH-489]]) under its own store timeouts.
@@ -393,6 +401,8 @@ class _VendedCredentials(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     storage_options: dict[str, str]
+    #: When the session the store issued expires, in milliseconds since the epoch.
+    expires_at_millis: int | None = None
 
 
 class _VendAnswer(BaseModel):
@@ -904,4 +914,7 @@ def _vended_from(response: httpx.Response, *, asked_for: str) -> Vended:
         raise VendUndecided(f"the catalog's vend for {asked_for} names a credential that cannot be signed with: {exc}") from exc
     if storage_options.key_pair is None:
         raise VendUndecided(f"the catalog's vend for {asked_for} names no key pair to sign with")
-    return Vended(storage_options=storage_options, location=answer.location or None)
+    millis = answer.credentials.expires_at_millis
+    return Vended(
+        storage_options=storage_options, location=answer.location or None, expires_at=None if millis is None else datetime.fromtimestamp(millis / 1000, UTC)
+    )

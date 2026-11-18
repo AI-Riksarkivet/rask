@@ -38,12 +38,18 @@
 (*             on another batch's "g" versions deleted: Lance keeps every  *)
 (*             tagged version, so a dead door's pin would keep a half       *)
 (*             removed version so for good                                 *)
+(*             Each "g" entry carries its licence (l) until licensed_until; *)
+(*             a batch of branch b then reads the branches (StandsAfterGo) *)
+(*             and licenses nothing where its incarnation went             *)
 (*   RSnap     lance cleanup_old_versions(versions=batch,                  *)
 (*             error_if_tagged_old_versions=False): it reads the refs      *)
 (*             (tags, pins, branches, heads) and the manifests, in an      *)
 (*             order lance_docs does not state (LanceOrder; measured on    *)
 (*             pylance 13.0.0: branches, tags, then manifests), and keeps  *)
-(*             every version a tag it read names                           *)
+(*             every version a tag it read names. It names NUMBERS, and    *)
+(*             deletes the versions of those numbers under the PATH the    *)
+(*             handle names: whichever incarnation branch b's name holds   *)
+(*             when it lists (measured on pylance 13.0.0)                  *)
 (*   RData     its transaction and data files, every one before any       *)
 (*             manifest (measured on pylance 13.0.0, ADR 0243 §3)          *)
 (*   RMan      its manifests; a version a standing branch is cut from      *)
@@ -65,11 +71,19 @@
 (* Each side writes, then reads the other's write: on a linearizable store *)
 (* at least one sees the other. No lease, no renewal and no clock.         *)
 (*                                                                         *)
+(* A BRANCH CREATE reads the name free, then the record: a live licence   *)
+(* under the name refuses it (NameGuard), as it holds off the release's    *)
+(* recreate; a deleted incarnation's licensed entries are dropped only     *)
+(* once their licence has passed (GCAfterLicence). A branch delete is      *)
+(* never refused for a reclaim.                                            *)
+(*                                                                         *)
 (* A POLICY DOOR (the table's, a namespace's, a project's hold, and a     *)
 (* rename into a namespace that holds) writes, then (HoldWritesFirst)      *)
 (* reads the record, and answers 200 naming the versions already           *)
 (* condemned: it promises every other standing version.                    *)
-(* VERSION/DELETE condemns the versions it names and deletes nothing.     *)
+(* VERSION/DELETE condemns the versions it names, then reads the tags and *)
+(* pins and takes back an entry one names (VDeleteCondemnsFirst); it      *)
+(* deletes nothing.                                                        *)
 (* THE ERASURE'S RELEASE still holds the history fence as RELEASE, which  *)
 (* excludes every ref door (G1 of Erasure.tla) and no reclaim: it records *)
 (* main's head, (ReleasePins) pins it and reads the record, deletes the    *)
@@ -97,7 +111,17 @@
 (*   A3' (only where a pin sweep is adopted, PinSweep = "dead"): a pin is  *)
 (*       swept only once its door can no longer act. ReclaimPinSweepLive    *)
 (*       removes it. With no sweep, nothing is assumed: a dead door's pin   *)
-(*       keeps its version whole.                                          *)
+(*       keeps its version whole. A release's pin is of a kind no sweep    *)
+(*       takes (ReleasePinKind; ReclaimReleaseSwept removes it).            *)
+(*   C (CredentialDies). A batch's credential is minted before the batch   *)
+(*       is asked and lives at most CREDENTIAL_LIFETIME, and the store's    *)
+(*       clock and the catalog's agree within CLOCK_MARGIN, so the store    *)
+(*       refuses it once its licence's instant (licensed_until, the         *)
+(*       catalog's clock) has passed (LicenceEnds kills it).               *)
+(*       ReclaimCredentialOutlivesLicence removes it. LicenceEnds is taken  *)
+(*       only where branch b's name can be made again; elsewhere a          *)
+(*       credential dying mid-cleanup is RRefused, a fault, and the         *)
+(*       liveness configs assume a cleanup ends within its licence.         *)
 (*                                                                         *)
 (* NOT MODELLED: the staged manifests a pass removes, which no version      *)
 (* names, and the committed-file records it forgets, which govern no byte; *)
@@ -111,7 +135,9 @@
 (* it with reclaims off the fence); two tags on one version; a batch of    *)
 (* more than the versions here; a branch whose own versions name its       *)
 (* fork's files (each branch version here names a file of its own, the     *)
-(* erasure's shape); a hold lifted.                                        *)
+(* erasure's shape); a hold lifted; a reclaimer that lists its victims on   *)
+(* one incarnation of branch b and asks for its batch once the name holds  *)
+(* another (RBegin picks the ref and its versions in one step).            *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
@@ -125,7 +151,8 @@ CONSTANTS Recl,        \* the reclaimers that may run at once (a pass, version/d
           Off          \* the guards removed (Guards)
 
 Guards == {"CondemnFirst", "PinFirst", "ExplicitPins", "PolicyAfterCondemn", "HoldWritesFirst", "GoOnly", "GCOnlyGone",
-           "KeepAfterDelete", "IdentityKeys", "ReleasePins", "AgeFloor", "GoUnpins"}
+           "KeepAfterDelete", "IdentityKeys", "ReleasePins", "AgeFloor", "GoUnpins", "NameGuard", "GCAfterLicence",
+           "StandsAfterGo", "CredentialDies", "ReleasePinKind", "VDeleteCondemnsFirst"}
 ASSUME Off \subseteq Guards
 ASSUME LanceOrder \in {"tags", "manifests", "any"} /\ PinSweep \in {"none", "dead", "any"}
 On(g) == g \notin Off
@@ -155,15 +182,18 @@ VARIABLES manifests, names, files, mhead,
           policy, answered,
           rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel,
           bdel,        \* the base files a reclaim's base_reclaim listed to delete
+          rcred,       \* whether the store still honours the credential the reclaimer minted before its batch
+          snapI,       \* the incarnation the reclaimer's path held when Lance listed its manifests ("m" for main)
           dpc, dv, dcond,
+          vdv,         \* the version version/delete names
           wpc, relpc, relat,
           faults, badDelete, refusedWrong
 
 vars == <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, tomb, chosen, policy, answered,
-          rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, dpc, dv, dcond, wpc, relpc, relat,
-          faults, badDelete, refusedWrong>>
-R == <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel>>
-D == <<dpc, dv, dcond>>
+          rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI, dpc, dv, dcond, vdv,
+          wpc, relpc, relat, faults, badDelete, refusedWrong>>
+R == <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI>>
+D == <<dpc, dv, dcond, vdv>>
 
 NoV == <<"none", 0>>
 Proc == RefDoors \cup HoldDoors
@@ -189,9 +219,11 @@ Init ==
   /\ rb = [r \in Recl |-> {}] /\ rfresh = [r \in Recl |-> {}] /\ rex = [r \in Recl |-> {}] /\ rgo = [r \in Recl |-> {}]
   /\ rheld = [r \in Recl |-> FALSE] /\ snapT = [r \in Recl |-> {}] /\ snapM = [r \in Recl |-> {}]
   /\ del = [r \in Recl |-> {}] /\ mdel = [r \in Recl |-> {}] /\ bdel = [r \in Recl |-> {}]
+  /\ rcred = [r \in Recl |-> FALSE] /\ snapI = [r \in Recl |-> "none"]
   /\ dpc = [d \in Proc \cup {"vdelete", "bdelete"} |-> IF d \in Doors THEN "idle" ELSE "done"]
   /\ dv = [d \in RefDoors |-> NoV]
   /\ dcond = [d \in HoldDoors |-> {}]
+  /\ vdv = NoV
   /\ wpc = [w \in {"writer", "bwriter"} |-> IF w \in Doors THEN "idle" ELSE "done"]
   /\ relpc = IF "release" \in Doors /\ InitBranch THEN "idle" ELSE "done"
   /\ relat = 0
@@ -215,6 +247,11 @@ Young == IF On("AgeFloor") THEN files ELSE files \ {"w"}
 
 \* An entry's key: the version's ref identity (IdentityKeys), or the ref's NAME as a branch name resolves today.
 NameOf(i) == IF i = "m" THEN "m" ELSE "b"
+\* An entry's licence (field l) is live from its batch's promotion until its stated instant, licensed_until.
+LiveUnder(n) == \E e \in tomb : NameOf(e.k[1]) = n /\ e.s = "g" /\ e.l
+\* NameGuard: a branch created under the name b, by a door or the erasure's release, waits out every live licence under
+\* that name: a licence names a path and numbers, and Lance's cleanup deletes by number under the path the name holds.
+NameFree == ~On("NameGuard") \/ ~LiveUnder("b")
 Key(v) == IF On("IdentityKeys") THEN v ELSE <<NameOf(v[1]), v[2]>>
 Resolve(k) == IF k[1] = "b" THEN <<binc, k[2]>> ELSE k
 TombKeys == {e.k : e \in tomb}
@@ -243,6 +280,9 @@ OfRef(i) == {v \in manifests : v[1] = i}
 Refs == {"m"} \cup (IF binc = "none" THEN {} ELSE {binc})
 
 RKeep == UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
+\* The path a batch's cleanup deletes under: main's, or branch b's name; the erasure's fork cleanup names a version of
+\* main, the ref the fork is cut from.
+PathOf(r) == IF rref[r] = "m" \/ rkind[r] = "fork" THEN "m" ELSE "b"
 
 \* The batch: some of the ref's versions past retention that no entry names, and every standing version of the ref an
 \* entry names (a dead batch's, version/delete's, another reclaim's). The erasure's fork cleanup instead names the version
@@ -262,17 +302,20 @@ RBegin(r) ==
         /\ rref' = [rref EXCEPT ![r] = binc] /\ rkind' = [rkind EXCEPT ![r] = "fork"]
   /\ Go(r, Steps[1])
   /\ rex' = [rex EXCEPT ![r] = {}] /\ rgo' = [rgo EXCEPT ![r] = {}] /\ rheld' = [rheld EXCEPT ![r] = FALSE]
+  \* The credential the batch's cleanup deletes under is minted before the batch is asked, so it dies by the licence's
+  \* instant, which the promotion states (CredentialDies, LicenceEnds).
+  /\ rcred' = [rcred EXCEPT ![r] = TRUE]
   \* Each batch has an id of its own: the entries an earlier batch of this reclaimer left are another batch's ("old").
   /\ tomb' = {IF e.b = r THEN [e EXCEPT !.b = "old"] ELSE e : e \in tomb}
-  /\ UNCHANGED <<snapT, snapM, del, mdel, bdel, pins, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<snapT, snapM, del, mdel, bdel, snapI, pins, chosen, policy, answered, badDelete>> /\ RKeep
 
 \* CondemnFirst removed: the entries are written only once the cleanup has run (the order today's marks had before §7.4).
 RCondemn(r) ==
   /\ rpc[r] = "condemn"
-  /\ tomb' = IF On("CondemnFirst") THEN tomb \cup {[k |-> Key(v), b |-> r, s |-> "c"] : v \in rb[r]} ELSE tomb
+  /\ tomb' = IF On("CondemnFirst") THEN tomb \cup {[k |-> Key(v), b |-> r, s |-> "c", l |-> FALSE] : v \in rb[r]} ELSE tomb
   /\ chosen' = chosen \cup rfresh[r]
   /\ Go(r, After("condemn"))
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, pins, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI, pins, policy, answered, badDelete>> /\ RKeep
 
 \* The table's tags read: a version a user tag or a pin names is excluded, unless (GoOnly) another batch's entry names it
 \* "g". Without GoOnly any other batch's entry licenses ignoring the pin.
@@ -283,14 +326,14 @@ RPins(r) ==
      IN /\ rex' = [rex EXCEPT ![r] = IF On("ExplicitPins") THEN (rb[r] \cap named) \ licensed ELSE {}]
         /\ rgo' = [rgo EXCEPT ![r] = IF On("ExplicitPins") THEN rb[r] \cap licensed ELSE {}]
   /\ Go(r, After("pins"))
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rheld, snapT, snapM, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 
 \* The governing policy, one level at a time: a hold at any level keeps everything (ADR 0243 §8, unchanged).
 RLevel(r, n) ==
   /\ rpc[r] = "lvl" \o ToString(n)
   /\ rheld' = [rheld EXCEPT ![r] = rheld[r] \/ policy[Levels[n]] = "hold"]
   /\ Go(r, After("lvl" \o ToString(n)))
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, snapT, snapM, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, snapT, snapM, del, mdel, bdel, rcred, snapI, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 
 \* The reclaimer's own state set back to its rest, so states differing only in what a finished batch held are one.
 Rest(r, s) ==
@@ -299,38 +342,60 @@ Rest(r, s) ==
   /\ rfresh' = [rfresh EXCEPT ![r] = {}] /\ rex' = [rex EXCEPT ![r] = {}] /\ rgo' = [rgo EXCEPT ![r] = {}]
   /\ rheld' = [rheld EXCEPT ![r] = FALSE] /\ snapT' = [snapT EXCEPT ![r] = {}] /\ snapM' = [snapM EXCEPT ![r] = {}]
   /\ del' = [del EXCEPT ![r] = {}] /\ mdel' = [mdel EXCEPT ![r] = {}] /\ bdel' = [bdel EXCEPT ![r] = {}]
+  /\ rcred' = [rcred EXCEPT ![r] = FALSE] /\ snapI' = [snapI EXCEPT ![r] = "none"]
 
+\* Promoted, each own entry carries its licence (l) until its instant. A batch of branch b then reads the branches
+\* (StandsAfterGo): one whose incarnation no longer stands under the name licenses nothing, so a name made free after its
+\* promotion is free only of a licence no reclaimer acts on, and a name made free before it is one a create's record read
+\* finds licensed.
 RPromote(r) ==
   /\ rpc[r] = "promote"
   /\ IF rheld[r]
        THEN /\ tomb' = tomb \ Own(r) /\ Rest(r, "idle") /\ UNCHANGED pins
-       ELSE /\ tomb' = {IF e.b = r THEN [e EXCEPT !.s = "g"] ELSE e : e \in {x \in tomb : ~(x.b = r /\ Resolve(x.k) \in rex[r])}}
-            /\ pins' = IF On("GoUnpins") THEN {p \in pins : p[2] \notin rgo[r]} ELSE pins
-            /\ Go(r, "snap")
-            /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel>>
+       ELSE /\ tomb' = {IF e.b = r THEN [e EXCEPT !.s = "g", !.l = TRUE] ELSE e : e \in {x \in tomb : ~(x.b = r /\ Resolve(x.k) \in rex[r])}}
+            \* GoUnpins takes a door's pin, never the release's, which only the release removes (ReleasePinKind).
+            /\ pins' = IF On("GoUnpins") THEN {p \in pins : p[1] = "rel" \/ p[2] \notin rgo[r]} ELSE pins
+            /\ Go(r, IF PathOf(r) = "b" THEN "verify" ELSE "snap")
+            /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI>>
   /\ UNCHANGED <<chosen, policy, answered, badDelete>> /\ RKeep
+
+RVerify(r) ==
+  /\ rpc[r] = "verify"
+  /\ IF ~On("StandsAfterGo") \/ rref[r] = binc
+       THEN Go(r, "snap") /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI>>
+       ELSE Rest(r, "idle")
+  /\ UNCHANGED <<pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 
 \* Lance's cleanup reads what it keeps (the tags and pins, the branches it keeps the forks of, the heads) and the
 \* manifests, in either order (LanceOrder); then it decides. A tagged, pinned or head version is kept; a version a
 \* standing branch is cut from keeps its manifest, and its files too unless named explicitly by the erasure's cleanup.
 RefsRead == tagged \cup PinVs \cup Heads \cup Forks
 FirstRead(r) == rpc[r] = "snap" /\ snapT[r] = {} /\ snapM[r] = {}
+\* Every read and delete of the cleanup is signed by the batch's credential: once the store no longer honours it, the
+\* cleanup's next request is refused (RCredDead).
 RSnapT(r) ==
-  /\ rpc[r] = "snap" /\ snapT[r] = {}
+  /\ rpc[r] = "snap" /\ snapT[r] = {} /\ rcred[r]
   /\ LanceOrder # "manifests" \/ snapM[r] # {}
   /\ snapT' = [snapT EXCEPT ![r] = RefsRead \cup {NoV}]
-  /\ UNCHANGED <<snapM, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<snapM, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, del, mdel, bdel, rcred, snapI, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+\* Lance lists the manifests under the reclaimer's PATH as it stands now: main's, or whichever incarnation branch b's name
+\* holds now, which need not be the one the batch condemned.
 RSnapM(r) ==
-  /\ rpc[r] = "snap" /\ snapM[r] = {}
+  /\ rpc[r] = "snap" /\ snapM[r] = {} /\ rcred[r]
   /\ LanceOrder # "tags" \/ snapT[r] # {}
   /\ snapM' = [snapM EXCEPT ![r] = manifests \cup {NoV}]
-  /\ UNCHANGED <<snapT, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ snapI' = [snapI EXCEPT ![r] = IF PathOf(r) = "m" THEN "m" ELSE binc]
+  /\ UNCHANGED <<snapT, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, del, mdel, bdel, rcred, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 
+\* cleanup_old_versions(versions=...) names NUMBERS, and Lance deletes the versions of those numbers under the path the
+\* handle names (its tree/<name>/_versions for a branch, measured on pylance 13.0.0): a version of the incarnation the
+\* path holds now whose number the batch licensed for another goes with them.
+Nums(S) == {<<NameOf(v[1]), v[2]>> : v \in S}
 RDecide(r) ==
-  /\ rpc[r] = "snap" /\ snapT[r] # {} /\ snapM[r] # {}
+  /\ rpc[r] = "snap" /\ snapT[r] # {} /\ snapM[r] # {} /\ rcred[r]
   /\ LET sm == snapM[r] \ {NoV}
          st == snapT[r] \ {NoV}
-         cand == (rb[r] \ rex[r]) \cap sm
+         cand == {v \in sm : v[1] = snapI[r] /\ <<NameOf(v[1]), v[2]>> \in Nums(rb[r] \ rex[r])}
          dl == IF rkind[r] = "plain" THEN cand \ st ELSE {}
          fv == IF rkind[r] = "fork" THEN cand \ (st \ Forks) ELSE {}
          gone == dl \cup fv
@@ -343,23 +408,23 @@ RDecide(r) ==
         \* another batch removed since this one listed it loses nothing more.
         /\ badDelete' = (badDelete \/ \E v \in gone : v \in manifests /\ Stands(v) /\ (v \notin chosen \/ Key(v) \notin TombKeys))
   /\ Go(r, "data")
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, bdel, pins, tomb, chosen, policy, answered>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, bdel, rcred, snapI, pins, tomb, chosen, policy, answered>> /\ RKeep
 
 RData(r) ==
-  /\ rpc[r] = "data"
+  /\ rpc[r] = "data" /\ rcred[r]
   /\ IF del[r] = {}
        THEN Go(r, "man") /\ UNCHANGED <<files, del>>
        ELSE \E f \in del[r] : files' = files \ {f} /\ del' = [del EXCEPT ![r] = @ \ {f}] /\ UNCHANGED rpc
   /\ UNCHANGED <<manifests, names, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>>
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, mdel, bdel, rcred, snapI, pins, tomb, chosen, policy, answered, badDelete>>
 
 RMan(r) ==
-  /\ rpc[r] = "man"
+  /\ rpc[r] = "man" /\ rcred[r]
   /\ IF mdel[r] = {}
        THEN Go(r, "base") /\ UNCHANGED <<manifests, mdel>>
        ELSE /\ \E v \in mdel[r] : manifests' = manifests \ {v} /\ mdel' = [mdel EXCEPT ![r] = @ \ {v}]
             /\ UNCHANGED rpc
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, bdel>>
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, bdel, rcred, snapI>>
   /\ UNCHANGED <<names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
   /\ UNCHANGED <<pins, tomb, chosen, policy, answered, badDelete>>
 
@@ -368,17 +433,17 @@ RMan(r) ==
 \* a file it lists unnamed has its manifest gone, so no door can bring the file back: every ref door, and a restore,
 \* reads the version's manifest.
 RBase(r) ==
-  /\ rpc[r] = "base"
+  /\ rpc[r] = "base" /\ rcred[r]
   /\ bdel' = [bdel EXCEPT ![r] = {f \in Base \cap files : f \notin Named(manifests)}]
   /\ Go(r, "bdel")
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, rcred, snapI, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
 
 RBDel(r) ==
-  /\ rpc[r] = "bdel"
+  /\ rpc[r] = "bdel" /\ rcred[r]
   /\ IF bdel[r] = {}
        THEN Rest(r, "idle") /\ UNCHANGED files
        ELSE /\ \E f \in bdel[r] : files' = files \ {f} /\ bdel' = [bdel EXCEPT ![r] = @ \ {f}]
-            /\ UNCHANGED <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel>>
+            /\ UNCHANGED <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, rcred, snapI>>
   /\ UNCHANGED <<manifests, names, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
   /\ UNCHANGED <<pins, tomb, chosen, policy, answered, badDelete>>
 
@@ -398,18 +463,45 @@ RRefused(r) ==
   /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, refusedWrong>>
   /\ UNCHANGED <<pins, chosen, policy, answered, badDelete>>
 
+\* The credential the batch minted is no longer honoured: the store refuses the cleanup's next request, which the
+\* reclaim answers as RRefused does, its entries standing (no fault: it is the licence's clock, not a failure).
+RCredDead(r) ==
+  /\ rpc[r] \in {"snap", "data", "man", "base", "bdel"} /\ ~rcred[r]
+  /\ Rest(r, "idle")
+  /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
+  /\ UNCHANGED <<pins, tomb, chosen, policy, answered, badDelete>>
+
 \* The task delivered again (WorkQueue): the next reclaim of the table.
 RRestart(r) ==
   /\ rpc[r] = "dead"
   /\ Go(r, "idle")
   /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, pins, tomb, chosen, policy, answered, badDelete>>
+  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI, pins, tomb, chosen, policy, answered, badDelete>>
+
+\* A licence's instant passes (licensed_until, on the catalog's clock). Its batch's credential was minted before the
+\* batch was asked and lives at most CREDENTIAL_LIFETIME, so by then the store refuses it (assumption C, CredentialDies:
+\* the store's clock and the catalog's agree within the margin the instant carries). Without CredentialDies the
+\* credential outlives the licence. Taken only where branch b's name can be made again (the only place a licence's end
+\* decides anything): elsewhere a credential that dies mid-cleanup is RRefused, a fault, and the liveness configs keep
+\* their assumption that a batch's cleanup ends within its licence.
+Licences == InitBranch \/ "branch" \in Doors \/ "release" \in Doors
+LicenceEnds ==
+  /\ Licences
+  /\ \E e \in tomb :
+    /\ e.l
+    /\ tomb' = {IF x.b = e.b /\ x.l THEN [x EXCEPT !.l = FALSE] ELSE x : x \in tomb}
+    /\ rcred' = IF On("CredentialDies") /\ e.b \in Recl THEN [rcred EXCEPT ![e.b] = FALSE] ELSE rcred
+    /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, chosen, policy, answered>>
+    /\ UNCHANGED <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, snapI>>
+    /\ UNCHANGED <<D, wpc, relpc, relat, faults, badDelete, refusedWrong>>
 
 \* The catalog rewriting the record drops an entry whose version's manifest is gone or whose ref identity no longer
-\* stands. Without GCOnlyGone it also drops one whose batch is not running, its manifest standing.
+\* stands; a gone identity's licensed entry only once its licence has passed (GCAfterLicence), so a create under its name
+\* finds it until then. Without GCOnlyGone it also drops one whose batch is not running, its manifest standing.
 GC ==
   \E e \in tomb :
-    /\ \/ Resolve(e.k) \notin manifests \/ ~Stands(Resolve(e.k))
+    /\ \/ Resolve(e.k) \notin manifests /\ Stands(Resolve(e.k))
+       \/ ~Stands(Resolve(e.k)) /\ (e.l => ~On("GCAfterLicence"))
        \/ ~On("GCOnlyGone") /\ e.b # "vd" /\ (e.b \in Recl => ~Running(e.b))
     /\ tomb' = tomb \ {e}
     /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, chosen, policy, answered>>
@@ -423,7 +515,7 @@ Age ==
     /\ UNCHANGED <<R, D, wpc, relpc, relat, faults, badDelete, refusedWrong>>
 
 \* ---------------------------------------------------------------- the ref doors
-DKeep == UNCHANGED <<R, wpc, relpc, relat, dcond, chosen, policy, answered, badDelete, expired>>
+DKeep == UNCHANGED <<R, wpc, relpc, relat, dcond, vdv, chosen, policy, answered, badDelete, expired>>
 DGo(d, s) == dpc' = [dpc EXCEPT ![d] = s]
 
 \* What a door may name: a tag, any standing version; a restore, a main version not the head; a branch create, a main
@@ -441,9 +533,13 @@ DPin(d) ==
   /\ DGo(d, "check")
   /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, tagged, tomb, faults, refusedWrong>> /\ DKeep
 
+\* A branch create reads the name free (Targets), then the record: a live licence under the name refuses it too (409,
+\* retryable once the licence's instant passes), which refuses only what no reclaim chose, so it is not refusedWrong.
 DCheck(d) ==
   /\ dpc[d] = "check"
-  /\ IF Key(dv[d]) \in TombKeys
+  /\ IF d = "branch" /\ ~NameFree
+       THEN /\ DGo(d, "done") /\ pins' = pins \ {<<d, dv[d]>>} /\ UNCHANGED refusedWrong
+     ELSE IF Key(dv[d]) \in TombKeys
        THEN /\ DGo(d, "done") /\ pins' = pins \ {<<d, dv[d]>>}
             /\ refusedWrong' = (refusedWrong \/ dv[d] \notin chosen)
        ELSE /\ DGo(d, IF On("PinFirst") THEN "act" ELSE "latepin") /\ UNCHANGED <<pins, refusedWrong>>
@@ -484,12 +580,15 @@ DCrash(d) ==
   /\ DGo(d, "dead")
   /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, tagged, pins, tomb, dv, refusedWrong>> /\ DKeep
 
-\* A sweep of pins: of a dead door's only (A3'), or of any (which must fail).
+\* A sweep of pins: of a dead door's only (A3'), or of any (which must fail). The release's pins are of a kind the sweep
+\* never takes (ReleasePinKind): a release is no door, keeps no deadline and resumes its recorded plan whenever its tick
+\* runs, so a stalled release is not a dead one. Without ReleasePinKind the sweep takes the pin of a release whose tick
+\* has stalled, as it takes a dead door's.
 Sweep ==
   /\ PinSweep # "none"
   /\ \E p \in pins :
-       /\ p[1] \in RefDoors
-       /\ PinSweep = "any" \/ dpc[p[1]] = "dead"
+       /\ \/ p[1] \in RefDoors /\ (PinSweep = "any" \/ dpc[p[1]] = "dead")
+          \/ p[1] = "rel" /\ ~On("ReleasePinKind") /\ relpc \in {"dead-recreating", "dead-claimed"}
        /\ pins' = pins \ {p}
   /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, tomb, chosen, policy, answered>>
   /\ UNCHANGED <<R, D, wpc, relpc, relat, faults, badDelete, refusedWrong>>
@@ -499,7 +598,7 @@ Sweep ==
 \* standing version. Without HoldWritesFirst it reads the record first.
 Promise(cond) == {v \in manifests : Stands(v) /\ Whole(v) /\ v \notin cond}
 PKeep == UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, tomb, chosen>>
-          /\ UNCHANGED <<R, dv, wpc, relpc, relat, faults, badDelete, refusedWrong>>
+          /\ UNCHANGED <<R, dv, vdv, wpc, relpc, relat, faults, badDelete, refusedWrong>>
 
 PWrite(d) ==
   /\ dpc[d] = "idle" /\ On("HoldWritesFirst")
@@ -516,16 +615,34 @@ PLate(d) ==
   /\ answered' = answered \cup Promise(dcond[d])
   /\ DGo(d, "done") /\ UNCHANGED dcond /\ PKeep
 
-\* version/delete: the versions it names (any standing version but a head) condemned; nothing deleted. A reclaim
-\* finishes them unless a hold keeps them.
-VDelete ==
-  /\ dpc["vdelete"] = "idle"
-  /\ \E v \in {x \in manifests : Stands(x) /\ x \notin Heads /\ x \notin CondemnedVs} :
-       /\ tomb' = tomb \cup {[k |-> Key(v), b |-> "vd", s |-> "c"]}
-       /\ chosen' = chosen \cup {v}
-  /\ DGo("vdelete", "done")
-  /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, policy, answered>>
-  /\ UNCHANGED <<R, dv, dcond, wpc, relpc, relat, faults, badDelete, refusedWrong>>
+\* version/delete: the version it names (any standing version but a head) condemned, then (VDeleteCondemnsFirst) the
+\* tags and pins read and its entry dropped where one names the version (the door answers 409, naming it); nothing
+\* deleted. A reclaim finishes what stands condemned unless a hold keeps it. Without VDeleteCondemnsFirst it reads the
+\* tags first, and a tag door that pinned after that read and read the record before the condemn lands its tag on a
+\* version left condemned for good.
+VKeep == UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, policy, answered>>
+         /\ UNCHANGED <<R, dv, dcond, wpc, relpc, relat, faults, badDelete, refusedWrong>>
+VTargets == {x \in manifests : Stands(x) /\ x \notin Heads /\ x \notin CondemnedVs}
+VCondemn ==
+  /\ dpc["vdelete"] = "idle" /\ On("VDeleteCondemnsFirst")
+  /\ \E v \in VTargets :
+       /\ tomb' = tomb \cup {[k |-> Key(v), b |-> "vd", s |-> "c", l |-> FALSE]}
+       /\ chosen' = chosen \cup {v} /\ vdv' = v
+  /\ DGo("vdelete", "read") /\ VKeep
+VRead ==
+  /\ dpc["vdelete"] = "read"
+  /\ tomb' = IF vdv \in tagged \cup PinVs THEN {e \in tomb : ~(e.b = "vd" /\ e.k = Key(vdv))} ELSE tomb
+  /\ DGo("vdelete", "done") /\ UNCHANGED <<chosen, vdv>> /\ VKeep
+VReadFirst ==
+  /\ dpc["vdelete"] = "idle" /\ ~On("VDeleteCondemnsFirst")
+  /\ \E v \in VTargets : vdv' = v /\ DGo("vdelete", IF v \in tagged \cup PinVs THEN "done" ELSE "write")
+  /\ UNCHANGED <<tomb, chosen>> /\ VKeep
+VLate ==
+  /\ dpc["vdelete"] = "write"
+  /\ tomb' = tomb \cup {[k |-> Key(vdv), b |-> "vd", s |-> "c", l |-> FALSE]}
+  /\ chosen' = chosen \cup {vdv}
+  /\ DGo("vdelete", "done") /\ UNCHANGED vdv /\ VKeep
+VDelete == VCondemn \/ VRead \/ VReadFirst \/ VLate
 
 \* A branch delete: Lance refuses one a tag (a pin among them) names a version of.
 BDelete ==
@@ -534,7 +651,7 @@ BDelete ==
   /\ binc' = "none"
   /\ DGo("bdelete", "done")
   /\ UNCHANGED <<manifests, names, files, mhead, bfork, bhead, used, expired, tagged, pins, tomb, chosen, policy, answered>>
-  /\ UNCHANGED <<R, dv, dcond, wpc, relpc, relat, faults, badDelete, refusedWrong>>
+  /\ UNCHANGED <<R, dv, dcond, vdv, wpc, relpc, relat, faults, badDelete, refusedWrong>>
 
 \* ---------------------------------------------------------------- the writers
 WKeep == UNCHANGED <<binc, bfork, bhead, used, expired, tagged, pins, tomb, chosen, policy, answered>>
@@ -582,9 +699,10 @@ RelDelete ==
   /\ \A v \in tagged : v[1] # binc
   /\ binc' = "none" /\ relpc' = "recreate"
   /\ UNCHANGED <<relat, pins, bfork, bhead, used, faults>> /\ LKeep
-\* Lance's create_branch reads the recorded version's manifest; one gone fails, and the tick goes no further.
+\* Lance's create_branch reads the recorded version's manifest; one gone fails, and the tick goes no further. A live
+\* licence under the name holds the recreate off as it refuses a door's (NameGuard): the tick fails and the next resumes.
 RelRecreate ==
-  /\ relpc = "recreate" /\ binc = "none" /\ Incs \ used # {} /\ MainV(relat) \in manifests
+  /\ relpc = "recreate" /\ binc = "none" /\ Incs \ used # {} /\ MainV(relat) \in manifests /\ NameFree
   /\ LET i == CHOOSE x \in Incs \ used : TRUE IN
        /\ binc' = i /\ used' = used \cup {i} /\ bfork' = [bfork EXCEPT ![i] = relat] /\ bhead' = [bhead EXCEPT ![i] = relat]
   /\ relpc' = "finish"
@@ -604,8 +722,8 @@ RelResume ==
   /\ UNCHANGED <<relat, pins, binc, bfork, bhead, used, faults>> /\ LKeep
 
 \* ---------------------------------------------------------------- the spec
-RStep(r) == RBegin(r) \/ RCondemn(r) \/ RPins(r) \/ RLevel(r, 1) \/ RLevel(r, 2) \/ RLevel(r, 3) \/ RPromote(r)
-            \/ RSnapT(r) \/ RSnapM(r) \/ RDecide(r) \/ RData(r) \/ RMan(r) \/ RBase(r) \/ RBDel(r)
+RStep(r) == RBegin(r) \/ RCondemn(r) \/ RPins(r) \/ RLevel(r, 1) \/ RLevel(r, 2) \/ RLevel(r, 3) \/ RPromote(r) \/ RVerify(r)
+            \/ RSnapT(r) \/ RSnapM(r) \/ RDecide(r) \/ RData(r) \/ RMan(r) \/ RBase(r) \/ RBDel(r) \/ RCredDead(r)
 DStep(d) == DPin(d) \/ DCheck(d) \/ DLatePin(d) \/ DAct(d) \/ DUnpin(d)
 PStep(d) == PWrite(d) \/ PRead(d) \/ PLate(d)
 RelStep == RelClaim \/ RelCheck \/ RelDelete \/ RelRecreate \/ RelFinish \/ RelResume
@@ -616,7 +734,7 @@ Next ==
   \/ \E d \in HoldDoors \cap Doors : PStep(d)
   \/ VDelete \/ BDelete \/ WStage \/ WCommit \/ BWrite
   \/ RelStep \/ RelCrash
-  \/ GC \/ Age \/ Sweep
+  \/ GC \/ Age \/ Sweep \/ LicenceEnds
 
 Fairness ==
   /\ \A r \in Recl : WF_vars(RStep(r)) /\ WF_vars(RRestart(r))
@@ -644,6 +762,9 @@ HalfOnlyCondemned == \A v \in manifests : (Stands(v) /\ ~Whole(v)) => v \in Cond
 DeletesCondemned == ~badDelete
 \* A door refuses only a version some reclaim, version/delete or fork cleanup chose.
 RefusedOnlyChosen == ~refusedWrong
+\* Once version/delete has answered, none of its entries names a version a caller's tag names: a tag on a condemned
+\* version would hide it from version/list and keep it condemned for as long as the tag stands.
+VDeleteSparesTags == dpc["vdelete"] = "done" => \A e \in tomb : e.b = "vd" => Resolve(e.k) \notin tagged
 
 \* Once faults stop, condemned versions are finished: no standing version stays over deleted files, unless a hold keeps it.
 EventuallyWhole == <>[](Held \/ \A v \in manifests : Stands(v) => Whole(v))

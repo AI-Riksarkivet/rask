@@ -5,7 +5,8 @@ A reclaim deletes only what the catalog's batch licensed, and every ref door pin
 on the lane's real store (``scripts/lifecycle_on_rustfs_check.sh``) with REAL vended credentials: a non-root user
 holding a canned policy over the catalog's bucket assumes a role with the catalog's own session policy, as the vendor
 does, at the maintain tier and the write tier, at the longest bucket name S3 allows. Each is refused a put and a delete
-of a pin, of the table's condemned versions and of a hold of its history fence, while the catalog's pin stands.
+of a pin, of the table's condemned versions and of a hold of its history fence, while the catalog's pin stands. And a
+maintain session dies with the licence it deletes under (assumption C of ``Reclaim.tla``, ADR 0246 §14).
 """
 
 from __future__ import annotations
@@ -13,7 +14,9 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -58,12 +61,12 @@ def _answer(call: Any) -> str:  # noqa: ANN401 — a boto3 call
     return "200"
 
 
-@pytest.mark.parametrize("tier", ["maintain", "write"])
-def test_a_vended_credential_neither_plants_nor_lifts_a_pin_or_an_entry(tier: str) -> None:
+def _vended(tier: str, bucket: str, table_uuid: str, *, seconds: int = 900) -> tuple[Any, dict[str, Any]]:
+    """A session the store's STS issues, as the vendor mints one, at ``tier`` over the table ``table_uuid`` in ``bucket``
+    (made here), to a non-root user holding a canned policy over the bucket: its client, and the session's credentials."""
     root = (os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"])
-    bucket, user, secret = f"pin-{uuid.uuid4().hex}{'p' * 27}", f"catalog{uuid.uuid4().hex[:8]}", secrets.token_urlsafe(24)
-    store = _client(*root)
-    store.create_bucket(Bucket=bucket)
+    user, secret = f"catalog{uuid.uuid4().hex[:8]}", secrets.token_urlsafe(24)
+    _client(*root).create_bucket(Bucket=bucket)
     canned = {
         "Version": "2012-10-17",
         "Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"]}],
@@ -71,12 +74,21 @@ def test_a_vended_credential_neither_plants_nor_lifts_a_pin_or_an_entry(tier: st
     _admin(root, "add-canned-policy", {"name": user}, json.dumps(canned).encode())
     _admin(root, "add-user", {"accessKey": user}, json.dumps({"secretKey": secret, "status": "enabled"}).encode())
     _admin(root, "set-user-or-group-policy", {"policyName": user, "userOrGroup": user, "isGroup": "false"})
-    table_uuid = str(uuid.uuid4())
     records = TableRecords(control_root=f"s3://{bucket}", table_uuid=table_uuid) if tier == "maintain" else None
     policy = build_session_policy(bucket, table_uuid, "maintain" if tier == "maintain" else "write", records=records)
+    assert counted_length(policy) <= SESSION_POLICY_LIMIT, counted_length(policy)
     sts = boto3.client("sts", endpoint_url=_STORE, region_name="us-east-1", aws_access_key_id=user, aws_secret_access_key=secret, config=_PATH_STYLE)
-    session = sts.assume_role(RoleArn="arn:aws:iam::000000000000:role/vend", RoleSessionName="vend", DurationSeconds=900, Policy=json.dumps(policy))
-    vend = _client(session["Credentials"]["AccessKeyId"], session["Credentials"]["SecretAccessKey"], session["Credentials"]["SessionToken"])
+    session = sts.assume_role(RoleArn="arn:aws:iam::000000000000:role/vend", RoleSessionName="vend", DurationSeconds=seconds, Policy=json.dumps(policy))
+    credentials = session["Credentials"]
+    return _client(credentials["AccessKeyId"], credentials["SecretAccessKey"], credentials["SessionToken"]), credentials
+
+
+@pytest.mark.parametrize("tier", ["maintain", "write"])
+def test_a_vended_credential_neither_plants_nor_lifts_a_pin_or_an_entry(tier: str) -> None:
+    root = (os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"])
+    bucket, table_uuid = f"pin-{uuid.uuid4().hex}{'p' * 27}", str(uuid.uuid4())
+    store = _client(*root)
+    vend, _credentials = _vended(tier, bucket, table_uuid)
     pin = f"{table_uuid}/_refs/tags/{condemned_versions.pin_name()}.json"
     store.put_object(Bucket=bucket, Key=pin, Body=b'{"version": 1}')
     record = condemned_versions.record_key(table_uuid)
@@ -92,4 +104,28 @@ def test_a_vended_credential_neither_plants_nor_lifts_a_pin_or_an_entry(tier: st
 
     assert set(answers.values()) == {"AccessDenied"}, answers
     assert store.get_object(Bucket=bucket, Key=pin)["Body"].read() == b'{"version": 1}', "the catalog's pin did not stand"
-    assert counted_length(policy) <= SESSION_POLICY_LIMIT, counted_length(policy)
+
+
+def test_the_store_refuses_a_maintain_session_once_the_licence_it_deletes_under_ends() -> None:
+    """C, the clock a licence rests on (ADR 0246 §14): a maintain session minted as the vend door mints one (the catalog's
+    maintain session policy, as long as the door's cap ``CREDENTIAL_LIFETIME``) before a batch is asked carries an expiry
+    the batch's licence covers (``covers``: the expiry the store stamped, plus the clocks' margin, no later than the
+    instant a promotion after it states), and once that instant has passed the store refuses a delete signed by it. RustFS
+    issues no session shorter than 900 s (measured 2026-11-18), so this waits the licence out, once, on the lane, in the
+    background of its other tests (``scripts/lifecycle_on_rustfs_check.sh``)."""
+    root = (os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"])
+    bucket, table_uuid = f"lic-{uuid.uuid4().hex[:20]}", str(uuid.uuid4())
+    vend, credentials = _vended("maintain", bucket, table_uuid, seconds=int(condemned_versions.CREDENTIAL_LIFETIME.total_seconds()))
+    licensed_until = datetime.now(UTC) + condemned_versions.LICENCE
+    key = f"{table_uuid}/data/a.lance"
+    store = _client(*root)
+    store.put_object(Bucket=bucket, Key=key, Body=b"bytes")
+    licensed = condemned_versions.Verdict(versions=[1], licensed_until=licensed_until)
+    assert condemned_versions.covers(licensed, condemned_versions.Credential(dataset=None, expires_at=credentials["Expiration"])), credentials["Expiration"]
+    assert _answer(lambda: vend.head_object(Bucket=bucket, Key=key)) == "200", "the session was refused before its licence ended"
+
+    time.sleep(max(0.0, (licensed_until - datetime.now(UTC)).total_seconds()) + 1)
+    refused = _answer(lambda: vend.delete_object(Bucket=bucket, Key=key))
+
+    assert refused in {"ExpiredToken", "AccessDenied", "InvalidAccessKeyId", "InvalidToken"}, refused
+    assert store.get_object(Bucket=bucket, Key=key)["Body"].read() == b"bytes", "a delete signed past the licence landed"

@@ -44,7 +44,6 @@ from lance_namespace import (
     InvalidInputError,
     LanceNamespace,
     NamespaceAlreadyExistsError,
-    ServiceUnavailableError,
 )
 
 from catalog.api import fga_deps
@@ -52,7 +51,16 @@ from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceD
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
-from catalog.schemas import CondemnedVersion, PolicyDeleteResponse, PolicyKind, PolicyRequest, PolicyResponse, PolicyUnset, ProjectPoliciesResponse
+from catalog.schemas import (
+    CondemnedBeneath,
+    CondemnedVersion,
+    PolicyDeleteResponse,
+    PolicyKind,
+    PolicyRequest,
+    PolicyResponse,
+    PolicyUnset,
+    ProjectPoliciesResponse,
+)
 from catalog.services import reclaims, table_claims, warehouses
 from catalog.services.control_records import PROJECT_UUID
 from lakehouse import maintenance_policies as policies
@@ -121,28 +129,26 @@ async def _set(settings: Settings, kind: PolicyKind, key: str, compose: Callable
         raise ConcurrentModificationError(f"the {kind} policy kept changing while it was set; set it again") from exc
 
 
-def _condemned_under(settings: Settings, *, table_uuid: str | None = None, within: Callable[[list[str]], bool] | None = None) -> list[CondemnedVersion]:
+def _condemned_under(settings: Settings, *, table_uuid: str | None = None, within: Callable[[list[str]], bool] | None = None) -> CondemnedBeneath:
     """The versions already condemned of the table ``table_uuid``, or of every table whose name now ``within`` takes,
-    read AFTER the door's write (HoldWritesFirst, ADR 0246): what its answer does not promise.
-
-    Raises:
-        ServiceUnavailableError: The condemned versions could not be read (503); the policy stands as written.
-    """
-    try:
-        found = reclaims.condemned_versions_of(
-            settings.registry_root, settings.storage_options(), table_claims.claim_store(settings), table_uuid=table_uuid, within=within
-        )
-    except OSError as exc:
-        raise ServiceUnavailableError(
-            f"the policy was written, and the versions already condemned beneath it could not be read, so which it does not promise is unknown: describe it again: {exc}"[
-                :600
-            ]
-        ) from exc
-    return [CondemnedVersion(table=name, branch=branch, version=version) for name, branch, version in found]
+    read AFTER the door's write (HoldWritesFirst, ADR 0246): what its answer does not promise, the first
+    :data:`reclaims.CONDEMNED_SHOWN` named and the rest counted. A record that cannot be read is named in the answer, never
+    a refusal: the policy stands as written."""
+    found = reclaims.condemned_versions_of(
+        settings.registry_root, settings.storage_options(), table_claims.claim_store(settings), table_uuid=table_uuid, within=within
+    )
+    return CondemnedBeneath(
+        condemned=[
+            CondemnedVersion(table=name, branch=branch, branch_identifier=identifier, version=version)
+            for name, branch, identifier, version in found.named[: reclaims.CONDEMNED_SHOWN]
+        ],
+        condemned_beyond=max(0, len(found.named) - reclaims.CONDEMNED_SHOWN),
+        condemned_unread=found.unread,
+    )
 
 
-def _response(record: dict[str, object], *, condemned: list[CondemnedVersion] | None = None) -> PolicyResponse:
-    return PolicyResponse.model_validate({**record, "set": True, "condemned": condemned})
+def _response(record: dict[str, object], *, condemned: CondemnedBeneath | None = None) -> PolicyResponse:
+    return PolicyResponse.model_validate({**record, "set": True, **(condemned.model_dump() if condemned is not None else {})})
 
 
 async def _describe(
@@ -165,7 +171,7 @@ async def _describe(
 
 
 async def _delete(
-    settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str, condemned: Callable[[], list[CondemnedVersion]]
+    settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str, condemned: Callable[[], CondemnedBeneath]
 ) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs; the answer names the versions
     already condemned beneath it (``condemned``, read after the delete): removing a record hands what it governed to the
@@ -185,7 +191,7 @@ async def _delete(
         actor=f"user:{token.subject}" if token else None,
         extra={"kind": kind},
     )
-    return PolicyDeleteResponse(status="deleted", kind=kind, id=canonical, condemned=named)
+    return PolicyDeleteResponse(status="deleted", kind=kind, id=canonical, **named.model_dump())
 
 
 @table_router.post("/{id}/policy/set", response_model_exclude_none=True)

@@ -173,9 +173,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, emitter: _Recorder, clock: _
     application.dependency_overrides[door.get_table_owners] = lambda: _owners
     application.dependency_overrides[get_clock] = lambda: clock
     application.dependency_overrides[require_can_reclaim_trash] = _reclaimer
-    # The release tick resolves its table's connection as a door does; this app serves one namespace to every door.
-    with TestClient(application, raise_server_exceptions=False) as client, pytest.MonkeyPatch.context() as patched:
-        patched.setattr(release_tick, "_namespace_of", lambda _ctx, _segments: ns)
+    with TestClient(application, raise_server_exceptions=False) as client:
 
         def release() -> release_tick.ErasureReleaseTick:
             assert client.portal is not None, "the release ticks inside the app's lifespan"
@@ -347,7 +345,7 @@ def test_whoever_puts_a_ref_the_release_takes_is_told_before_it_runs(
 
                 def create(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — pylance's own arguments
                     # The caller's tag, never the pin its door writes first (ADR 0246).
-                    if failing and not condemned_versions.is_pin(str(args[0])):
+                    if failing and not condemned_versions.is_reserved(str(args[0])):
                         failing.clear()
                         if lands:
                             self._tags.create(*args, **kwargs)

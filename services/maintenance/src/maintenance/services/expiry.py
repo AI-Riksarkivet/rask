@@ -144,6 +144,10 @@ class ExpiryTarget(BaseModel):
     #: pass then writes nothing, and a write it finds needed waits for the next pass rather than being signed by anything
     #: else.
     write_options: StorageOptions | None = None
+    #: When the store stops honouring ``write_options``, as the catalog's vend answered it; ``None`` for a vend that named
+    #: no expiry (a key pair, which no store expires: ADR 0246 §14's residual). A batch is deleted under the vend only
+    #: where it dies by the batch's licence's instant (:func:`lakehouse.condemned_versions.covers`).
+    write_expires: datetime | None = None
     #: The id the caller resolved, and vended the credential under.
     table_id: str | None = None
     #: The table's own data directories, as its base record names them; empty for a branch, whose files are its table's.
@@ -390,9 +394,12 @@ def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: 
     """Reclaim the versions the catalog licenses, a batch at a time (:func:`lakehouse.condemned_versions.reclaim`): each
     batch condemned, its pins read, the governing policy read and its entries promoted by the catalog
     (``maintenance/condemn``, ADR 0246), then ``cleanup_old_versions`` restricted to what it answered, under the vend.
-    The vend reaches nothing on the control root: a pass frozen for days that wakes deletes only versions an entry names
-    ``g``, which no ref door has admitted since. A version left condemned (pinned, or its deletes refused) keeps every
-    ref door off it, and is counted (``maintenance.reclaims.held_back{reason="condemned"}``).
+    The vend reaches nothing on the control root, and lasts at most :data:`condemned_versions.CREDENTIAL_LIFETIME`: a
+    batch is deleted only where the store refuses the vend by the batch's licence's instant
+    (:func:`condemned_versions.covers`), so a pass frozen past it deletes nothing more, and in particular nothing of a
+    branch made again under its name since (the first batch, asked before the vend, is asked again). A version left
+    condemned (pinned, or its deletes refused) keeps every ref door off it, and is counted
+    (``maintenance.reclaims.held_back{reason="condemned"}``).
 
     ``error_if_tagged_old_versions=False``: with the default, a pin written between the batch's pin read and Lance's own
     tag read makes the whole call raise (measured, ADR 0246 §5). Each transaction file the cleanup removes is recorded
@@ -402,8 +409,9 @@ def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: 
         result.condemned, result.held_by = target.first.standing, target.first.held_by
     if not _versions_due(policy, target) or target.condemn is None:
         return
+    credential = condemned_versions.Credential(dataset=ds, expires_at=target.write_expires)
     with recording_removed_transactions(target.uri, vend):
-        done = condemned_versions.reclaim(ds, target.victims, target.condemn, first=target.first)
+        done = condemned_versions.reclaim(target.victims, condemned_versions.RefReclaim(condemn=target.condemn, mint=lambda: credential), first=target.first)
     result.old_versions_removed, result.bytes_removed = done.old_versions, done.bytes_removed
     result.condemned, result.held_by = done.standing, done.held_by
     if done.standing and done.held_by is None:

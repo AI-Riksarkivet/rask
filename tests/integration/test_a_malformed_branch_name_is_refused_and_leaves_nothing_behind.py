@@ -50,8 +50,15 @@ def _create(client: TestClient, name: str) -> tuple[int, int | None]:
 
 
 def _branch_objects(table_dir: Path) -> list[str]:
-    """Everything under the table's branch directories (``tree/``) and its refs (``_refs/``)."""
-    return sorted(str(path.relative_to(table_dir)) for directory in ("tree", "_refs") for path in (table_dir / directory).rglob("*"))
+    """Every object under the table's branch directories (``tree/``) and its refs (``_refs/``), and every directory that
+    holds one: a directory a local root keeps once its last object went is none (an object store keeps no directory), as
+    the source's pin a branch create writes before Lance judges the name, then deletes, leaves ``_refs/tags/``."""
+    return sorted(
+        str(path.relative_to(table_dir))
+        for directory in ("tree", "_refs")
+        for path in (table_dir / directory).rglob("*")
+        if path.is_file() or any(child.is_file() for child in path.rglob("*"))
+    )
 
 
 @pytest.mark.parametrize(

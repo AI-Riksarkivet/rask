@@ -3210,6 +3210,18 @@
             ],
             "title": "Held By"
           },
+          "licensed_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Licensed Until"
+          },
           "standing": {
             "items": {
               "type": "integer"
@@ -3241,6 +3253,17 @@
               }
             ],
             "title": "Branch"
+          },
+          "branch_identifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Identifier"
           },
           "table": {
             "title": "Table",
@@ -9740,6 +9763,18 @@
             "title": "Condemned",
             "type": "array"
           },
+          "condemned_beyond": {
+            "default": 0,
+            "title": "Condemned Beyond",
+            "type": "integer"
+          },
+          "condemned_unread": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Condemned Unread",
+            "type": "array"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -9952,6 +9987,31 @@
               }
             ],
             "title": "Condemned"
+          },
+          "condemned_beyond": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condemned Beyond"
+          },
+          "condemned_unread": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condemned Unread"
           },
           "id": {
             "title": "Id",
@@ -20038,7 +20098,7 @@
     },
     "/management/v1/table/{id}/maintenance/run": {
       "post": {
-        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.\n\nTHROUGH THE ONE RECLAIM A PASS GOES THROUGH (ADR 0246, ``catalog.services.reclaims``): each batch of 16 versions\ncondemned, its pins read, the governing policy read along the table's chain as it stands then, its entries promoted,\nand only what that licenses deleted. A hold at any level that can govern the table answers 409 InvalidTableState (19),\nnothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions\ncondemned for the next reclaim.",
+        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.\n\nTHROUGH THE ONE RECLAIM A PASS GOES THROUGH (ADR 0246, ``catalog.services.reclaims``): each batch of 16 versions\ncondemned, its pins read, the governing policy read along the table's chain as it stands then, its entries promoted,\nand only what that licenses deleted, under a maintain session the catalog minted for the batch before asking it, which\nthe store refuses once the licence ends (``reclaims.minter``; on a key pair, the residual ADR 0246 \u00a714 states). A hold\nat any level that can govern the table answers 409 InvalidTableState (19),\nnothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions\ncondemned for the next reclaim.",
         "operationId": "run_maintenance_management_v1_table__id__maintenance_run_post",
         "parameters": [
           {

@@ -185,7 +185,7 @@ def base_record_reader(settings: MaintenanceSettings, options: StorageOptions) -
 def _a_dead_doors_pin(ds: lance.LanceDataset, *, now: datetime) -> bool:
     """Whether a pin on the table is older than a door can live (A3'), which only the catalog's batch may delete."""
     return any(
-        condemned_versions.is_pin(name) and isinstance(created := tag.get("created_at"), datetime) and now - created > condemned_versions.PIN_LIFETIME
+        condemned_versions.is_door_pin(name) and isinstance(created := tag.get("created_at"), datetime) and now - created > condemned_versions.PIN_LIFETIME
         for name, tag in ds.tags.list().items()
     )
 
@@ -428,7 +428,12 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     except _VEND_STOPS as exc:
         return _condemned_reported(_stopped_by_vend(probe, target, exc), named.owners.table_uuid, ref)
     disarm = _disarm(uri, table, readings=readings, settings=settings) if probe.armed else DisarmOutcome()
-    held = {"write_options": vended, "table_uuid": named.owners.table_uuid, "control_root": settings.resolved_control_root}
+    held = {
+        "write_options": vended,
+        "write_expires": readings.vends.expires_for(table),
+        "table_uuid": named.owners.table_uuid,
+        "control_root": settings.resolved_control_root,
+    }
     return _condemned_reported(disarm.onto(expire_versions(target.model_copy(update=held), policy)), named.owners.table_uuid, ref)
 
 

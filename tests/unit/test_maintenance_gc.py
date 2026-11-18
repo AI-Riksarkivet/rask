@@ -108,7 +108,7 @@ def test_run_gc_REFUSES_an_unknown_flag() -> None:
 
     ds = _FakeDs(version=1, versions=[], tags={}, feature_flags=(64, 64))
     with pytest.raises(UnsupportedOperationError, match="data overlays"):
-        maintenance.run_gc(ds, retention_days=7, retain_versions=2, branch=None, condemn=cast("Any", None))
+        maintenance.run_gc(ds, retention_days=7, retain_versions=2, branch=None, reclaim=cast("Any", None))
     assert ds.cleaned is None, "the delete ran anyway — the refusal came too late"
 
 
@@ -151,7 +151,8 @@ def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) 
         run.read_pins()
         return run.promote(None)
 
-    result = maintenance.run_gc(ds, retention_days=0, retain_versions=1, branch=None, condemn=condemn)
+    reclaim = condemned_versions.RefReclaim(condemn=condemn, mint=lambda: condemned_versions.Credential(dataset=ds, expires_at=None))
+    result = maintenance.run_gc(ds, retention_days=0, retain_versions=1, branch=None, reclaim=reclaim)
 
     assert result["ok"] is True
     assert sorted(p.name for p in (tmp_path / "src.lance" / "data").iterdir()) == source_files, "the reclaim deleted the SOURCE's files"
