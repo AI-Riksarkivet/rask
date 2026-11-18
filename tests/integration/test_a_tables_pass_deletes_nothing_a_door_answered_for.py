@@ -14,6 +14,7 @@ the same proxy as the pass, so a test can also answer the catalog's own reads as
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -308,12 +309,19 @@ def _governed_by_a_project(estate: _Estate) -> None:
     project's policy can govern the table."""
     from catalog.core.config import get_settings
     from catalog.services import projects, warehouses
+    from catalog.services.control_records import INCARNATION, PROJECT_INCARNATION
 
     settings = get_settings()
     so = settings.storage_options()
-    projects.put_project(settings.registry_root, so, {"id": PROJECT, "created_at": "t", "created_by": "seed"})
-    warehouses.put_warehouse(settings.registry_root, so, {"id": "lance_catalog", "bucket": estate.bucket, "project": PROJECT, "status": "active"})
-    estate.s3().put_object(Bucket=estate.bucket, Key=f"_warehouses/bucket-claims/{estate.bucket}.json", Body=f'{{"project": "{PROJECT}"}}'.encode())
+    made = "a" * 32
+    projects.put_project(settings.registry_root, so, {"id": PROJECT, "created_at": "t", "created_by": "seed", INCARNATION: made})
+    warehouses.put_warehouse(
+        settings.registry_root,
+        so,
+        {"id": "lance_catalog", "bucket": estate.bucket, "project": PROJECT, "status": "active", INCARNATION: "b" * 32, PROJECT_INCARNATION: made},
+    )
+    claim = {"bucket": estate.bucket, "project": PROJECT, PROJECT_INCARNATION: made, "warehouse_id": "lance_catalog"}
+    estate.s3().put_object(Bucket=estate.bucket, Key=f"_warehouses/bucket-claims/{estate.bucket}.json", Body=json.dumps(claim).encode())
 
 
 @pytest.mark.parametrize(
