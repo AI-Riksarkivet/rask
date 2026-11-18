@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
 
 import pyarrow.fs as pafs
@@ -65,6 +66,25 @@ TRASH_GRACE_DAYS = "trash_grace_days"
 #: What the warehouse probe's seal check last measured of the warehouse's store (ADR 0242): ``enforced``, ``unenforced``
 #: or ``untaggable``; absent where no check ran (a deployment vending no direct credential).
 SEALED = "sealed"
+#: When that check measured it, an ISO-8601 time on the catalog's clock: the age ``WarehouseSealUnmeasured`` reads, kept on
+#: the record so no restart of a replica resets it (ADR 0242 § Found by review, third round, B2).
+SEALED_AT = "sealed_at"
+
+
+def sealed_fields(sealed: str) -> dict[str, str]:
+    """The record fields a conclusive seal check writes: what it measured, and when."""
+    return {SEALED: sealed, SEALED_AT: datetime.now(UTC).isoformat()}
+
+
+def sealed_at(record: dict[str, Any]) -> datetime | None:
+    """When the seal ``record`` holds was measured; ``None`` where it holds no time it can be read as."""
+    at = record.get(SEALED_AT)
+    if not isinstance(at, str):
+        return None
+    try:
+        return datetime.fromisoformat(at)
+    except ValueError:
+        return None
 
 
 def grace_days(record: dict[str, str] | None, *, estate: float) -> float:
@@ -161,9 +181,9 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
 #: ``delete_mode`` and ``trash_grace_days`` are the warehouse's delete profile (ADR 0146), which its
 #: project's admin declares; a request naming one replaces both, so a hard profile keeps no grace.
 #:
-#: ``sealed`` is what the registration's seal check measured of the store (ADR 0242), replaced by every registration that
-#: measured one.
-_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint", "credential_ref", DELETE_MODE, TRASH_GRACE_DAYS, SEALED})
+#: ``sealed`` is what the registration's seal check measured of the store (ADR 0242), and ``sealed_at`` when, replaced by
+#: every registration that measured one.
+_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint", "credential_ref", DELETE_MODE, TRASH_GRACE_DAYS, SEALED, SEALED_AT})
 
 
 class WarehouseProjectConflict(Exception):
@@ -214,10 +234,10 @@ def set_warehouse_protection(
 
 def set_warehouse_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str, sealed: str) -> dict[str, str] | None:
     """Record what a validate's seal check measured of warehouse ``warehouse_id``'s store (ADR 0242): ``enforced``,
-    ``unenforced`` or ``untaggable``. Conditional on the record's ETag, every other field as it stands at the write;
-    ``None`` when the record is gone."""
+    ``unenforced`` or ``untaggable``, and when. Conditional on the record's ETag, every other field as it stands at the
+    write; ``None`` when the record is gone."""
     try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), lambda record: {**record, SEALED: sealed})
+        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), lambda record: {**record, **sealed_fields(sealed)})
     except RecordMissingError:
         return None
 
@@ -227,16 +247,19 @@ def set_warehouse_sealed(control_root: str, storage_options: StorageOptions, war
 _ESTATE_SEAL_PREFIX = f"{_REGISTRY_PREFIX}/estate-seal"
 
 
-def set_estate_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str, sealed: str) -> None:
-    """Record what the catalog's seal probe measured of the estate's own warehouse ``warehouse_id`` (ADR 0242)."""
-    put_record(control_root, storage_options, f"{_ESTATE_SEAL_PREFIX}/{warehouse_id}.json", {SEALED: sealed})
+def set_estate_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str, sealed: str) -> dict[str, str]:
+    """Record what the catalog's seal probe measured of the estate's own warehouse ``warehouse_id`` (ADR 0242), and when;
+    the record written."""
+    record = sealed_fields(sealed)
+    put_record(control_root, storage_options, f"{_ESTATE_SEAL_PREFIX}/{warehouse_id}.json", record)
+    return record
 
 
-def estate_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> str | None:
-    """What the catalog's seal probe last measured of the estate's own warehouse, ``None`` before its first probe."""
+def estate_seal(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, Any] | None:
+    """The record of what the catalog's seal probe last measured of the estate's own warehouse (:data:`SEALED`,
+    :data:`SEALED_AT`), ``None`` before its first probe."""
     record = get_record(control_root, storage_options, f"{_ESTATE_SEAL_PREFIX}/{warehouse_id}.json", event="estate_seal_unreadable")
-    sealed = None if record is None else record.get(SEALED)
-    return sealed if isinstance(sealed, str) else None
+    return record if record is not None and isinstance(record.get(SEALED), str) else None
 
 
 def set_warehouse_manager(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, manager: str | None) -> dict[str, str] | None:

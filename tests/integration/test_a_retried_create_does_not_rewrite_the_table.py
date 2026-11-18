@@ -223,7 +223,7 @@ class TestARetriedAppendLandsOnce:
         counted = real_ns_client.post("/v1/table/lance_catalog$db$grown/count_rows", json={})
         assert (_version(real_ns_client, "lance_catalog$db$grown"), counted.text) == (before + 2, "6"), "a replayed append appended again"
 
-    @pytest.mark.parametrize("after", ["one-takeover", "a-chain-of-takeovers", "a-takeover-refused-before-its-search"])
+    @pytest.mark.parametrize("after", ["one-takeover", "a-chain-of-takeovers", "a-takeover-refused-before-its-search", "its-version-deleted-since"])
     @pytest.mark.parametrize("door", ["insert-no-key", "insert-primary-key", "create-overwrite", "restore"])
     def test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
         self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: str, after: str
@@ -239,7 +239,12 @@ class TestARetriedAppendLandsOnce:
         key's record kept, where it started at that takeover's own claim and missed the write);
         ``a-takeover-refused-before-its-search``, the takeover was refused 409 before it searched, which gave the key back,
         and a third send claims the released key (ReleaseKeepsWritten: a released key whose record says a put may have
-        landed is searched, where it was taken as unwritten and the write landed again)."""
+        landed is searched, where it was taken as unwritten and the write landed again).
+
+        ``its-version-deleted-since`` (ADR 0240 §12, SearchWhole): another write lands after it and the owner deletes the
+        version the write landed as (``version/delete``), inside the key's lifetime. The search cannot read that version,
+        so it cannot prove the write did not land: the resend is refused 409 InvalidTableState (19) and writes nothing,
+        where it found no stamp and landed the write a second time."""
         from lance_namespace import ConcurrentModificationError
 
         from catalog.api import idempotency as keyed_doors
@@ -284,9 +289,18 @@ class TestARetriedAppendLandsOnce:
                 during.setattr(dataplane, "landed_under_key", busy)
                 refused = send()
                 assert (refused.status_code, refused.json().get("code")) == (409, 14), refused.text
+        if after == "its-version-deleted-since":
+            assert real_ns_client.post(f"{table}/insert?mode=append", content=rows(9), headers=ARROW_STREAM).status_code == 200
+            deleted = real_ns_client.post(f"{table}/version/delete", json={"ranges": [{"start_version": before + 1, "end_version": before + 2}]})
+            assert (deleted.status_code, deleted.json().get("deleted_count")) == (200, 1), deleted.text
         monkeypatch.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
         again = send()
 
+        if after == "its-version-deleted-since":
+            assert (again.status_code, again.json().get("code")) == (409, 19), again.text
+            assert f"version {before + 1} of the table" in again.json()["detail"], again.text
+            assert _version(real_ns_client, "lance_catalog$db$lost") == before + 2, "the write ran again after its version was deleted"
+            return
         assert again.status_code == 200, again.text
         if door.startswith("insert"):
             assert again.json() == {"num_inserted_rows": 2, "version": before + 1}

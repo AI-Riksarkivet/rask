@@ -163,18 +163,27 @@ class _VendingStore:
     any KMS key, so it refuses every write encrypting with one. `seal` is what it does with the catalog's seal (ADR 0242):
     `enforced` refuses a put over a tagged key, `unenforced` keeps the tag and refuses nothing, `untaggable` keeps no tags.
     It is both the vended writer's client and the catalog's own, so the probe's seal lands where its writer put. Each
-    refusal is the store's own answer (403 AccessDenied, 412 PreconditionFailed). `over_sealed` and `on_seal` are another
-    answer (a throttling, a 5xx) the store gives instead of its verdict, to a put over a sealed key or to the seal.
+    refusal is the store's own answer (403 AccessDenied, 412 PreconditionFailed). `over_sealed`, `multipart_over_sealed`
+    and `on_seal` are another answer (a throttling, a 5xx) the store gives instead of its verdict: to every write over a
+    sealed key, to a multipart begin of one alone, or to the seal.
     """
 
     def __init__(
-        self, *, honours_scope: bool, honours_conditional_put: bool, seal: str = "enforced", over_sealed: int | None = None, on_seal: int | None = None
+        self,
+        *,
+        honours_scope: bool,
+        honours_conditional_put: bool,
+        seal: str = "enforced",
+        over_sealed: int | None = None,
+        on_seal: int | None = None,
+        multipart_over_sealed: int | None = None,
     ) -> None:
         self.honours_scope = honours_scope
         self.honours_conditional_put = honours_conditional_put
         self.seal = seal
         self.over_sealed = over_sealed
         self.on_seal = on_seal
+        self.multipart_over_sealed = multipart_over_sealed
         self.scope = ""
         self.keys: dict[str, bytes] = {}
         self.sealed: set[str] = set()
@@ -209,6 +218,8 @@ class _VendingStore:
         return {}
 
     def create_multipart_upload(self, *, Bucket: str, Key: str, **_sse: object) -> dict[str, Any]:  # noqa: N803
+        if Key in self.sealed and self.multipart_over_sealed is not None:
+            raise _answered(self.multipart_over_sealed, "InternalError", "CreateMultipartUpload")
         self._check(Key, "CreateMultipartUpload")
         return {"UploadId": "u"}
 
@@ -267,6 +278,7 @@ _KMS_KEY = "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234
         (True, True, False, None, "untaggable", {}, "", 400, 13, "sealed: untaggable"),
         (True, True, False, None, "unenforced", {}, "wh-p", 200, None, None),
         (True, True, False, None, "unenforced", {"over_sealed": 503}, "", 503, 17, None),
+        (True, True, False, None, "unenforced", {"multipart_over_sealed": 500}, "", 400, 13, "sealed: unenforced"),
         (True, True, False, None, "enforced", {"on_seal": 429}, "", 503, 17, None),
     ],
     ids=[
@@ -279,6 +291,7 @@ _KMS_KEY = "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234
         "store-keeps-no-tags",
         "git-declares-the-warehouse-detection-only",
         "store-answers-a-put-over-a-sealed-file-with-a-5xx",
+        "store-takes-a-put-over-a-sealed-file-and-answers-its-multipart-with-a-5xx",
         "store-throttles-the-seal",
     ],
 )
@@ -309,7 +322,10 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     tags, is refused unless git declares the warehouse detection-only, which registers it with what was measured. Only the
     store's explicit refusal (403) is one (ADR 0242 § Found by review, second round): a 5xx to the put over the sealed file,
     or a throttling of the seal, measured nothing, and the create answers 503 with nothing registered, where it registered
-    a store that never refused the put as `enforced`, and refused a throttled one as `untaggable`."""
+    a store that never refused the put as `enforced`, and refused a throttled one as `untaggable`. A put the store took
+    over the sealed file is the proof of `unenforced` whatever the multipart begin answered (ADR 0242 § Found by review,
+    third round, B2): a 500 to the begin left it refused 400 `sealed: unenforced`, where it answered 503 and kept the
+    warehouse's last record."""
     vending = _VendingStore(honours_scope=honours_scope, honours_conditional_put=honours_conditional_put, seal=seal, **answers)
     monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending)
     monkeypatch.setattr(stored_objects, "object_client", lambda *a, **k: vending)
@@ -675,9 +691,12 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
         return {
             "estate": exported.get(settings.estate_warehouse),
             "wh-p": exported.get("wh-p"),
-            "estate-recorded": wh_svc.estate_sealed(control, StorageOptions(), settings.estate_warehouse),
+            "estate-recorded": (wh_svc.estate_seal(control, StorageOptions(), settings.estate_warehouse) or {}).get("sealed"),
             "wh-p-recorded": (wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {}).get("sealed"),
         }
+
+    def measured_at() -> dict[str, float]:
+        return {str((point.attributes or {})["lance.warehouse"]): float(point.value) for point in seal_posture._observe_measured(CallbackOptions())}
 
     async def unanswered(_settings: Any) -> None:
         raise OSError("the store did not answer the grant backfill")
@@ -689,12 +708,20 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
     vending.seal = "unenforced"
     ticks = [asyncio.run(seal_probe.probe_all(client.app, settings))]
     assert measured() == {"estate": "unenforced", "wh-p": "unenforced", "estate-recorded": "unenforced", "wh-p-recorded": "unenforced"}
+    concluded = measured_at()
     vending.seal, vending.over_sealed = "enforced", 503
     ticks.append(asyncio.run(seal_probe.probe_all(client.app, settings)))
     validated = client.post("/management/v1/warehouses/wh-p/validate")
 
     assert [(tick.measured, tick.unprobed) for tick in ticks] == [(2, 0), (0, 2)]
     assert measured() == {"estate": "unenforced", "wh-p": "unenforced", "estate-recorded": "unenforced", "wh-p-recorded": "unenforced"}
+    # The time of the last conclusive measurement stays where it was through the inconclusive tick and validate, and a
+    # replica that starts again reads it off the records, so `WarehouseSealUnmeasured` sees its age grow (ADR 0242 § Found
+    # by review, third round, B2).
+    assert set(concluded) == {settings.estate_warehouse, "wh-p"} and measured_at() == concluded
+    monkeypatch.setattr(seal_posture, "_postures", {})
+    seal_posture.load(settings)
+    assert measured_at() == concluded
     assert validated.status_code == 200, validated.text
     report = validated.json()
     assert (report["outcome"], report.get("sealed")) == ("inconclusive", None), report

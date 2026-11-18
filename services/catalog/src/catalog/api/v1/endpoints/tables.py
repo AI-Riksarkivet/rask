@@ -1836,7 +1836,8 @@ async def restore_table(
     An ``Idempotency-Key`` makes a resent restore converge on the first attempt's answer; the same key with another body
     is refused 400 (code 13). The version the restore lands carries the key and is landed only while the key is still this
     attempt's, so an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing, and a
-    resend taking the key over from an attempt lost unanswered answers the restore it landed (ADR 0240)."""
+    resend taking the key over from an attempt lost unanswered answers the restore it landed (ADR 0240); one whose search
+    for it meets a version since removed (a cleanup, or ``version/delete``) is refused 409 (code 19) and writes nothing: the catalog cannot tell whether the write landed there (ADR 0240 §12)."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # REWINDS the table to an older version. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await keyed.begin(endpoint="POST /v1/table/{id}/restore", target=fga.canonical_object_id(parse_identifier(id)))
@@ -1853,7 +1854,11 @@ async def restore_table(
     # its schema off one pinned open (best-effort: a readback failure never fails the committed restore).
     landed = None
     if converge.held is not None and converge.held.written_from is not None:
-        landed = await run_in_threadpool(lambda: dataplane.landed_under_key(table.open_unchecked(so, branch=body.branch), converge.held))
+        landed = await run_in_threadpool(
+            lambda: dataplane.landed_under_key(
+                table.open_unchecked(so, branch=body.branch), converge.held, table_location=table.location, branch=body.branch, so=so
+            )
+        )
     if landed is not None:
         # The restore a lapsed attempt under the key landed and never answered is the key's answer (ADR 0240).
         response, committed = RestoreTableResponse(transaction_id=landed[1].uuid), landed[0]

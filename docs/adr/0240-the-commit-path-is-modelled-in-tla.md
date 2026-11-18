@@ -6,8 +6,10 @@ and what its writer is told. Five defects were found, each confirmed against the
 (owner, 2026-11-17: "Fix in Python now"). An independent review of that fix found three more and a regression in the
 commonest write path; each was reproduced, modelled and fixed (§8 to §10). A joint review of the merged keyed-commit and
 seal fixes found a key that lands twice after a chain of takeovers or a refused one, and a rule pinned by no test;
-each was reproduced, modelled and fixed (§11). The seal's steps are modelled here too (ADR 0242 § Found by review,
-second round).
+each was reproduced, modelled and fixed (§11). A third review found a key landing twice after the version it landed as
+was removed, a search costing the table's whole history, a rule nothing needed, and a reconciler finish never retried;
+each was reproduced, modelled and fixed (§12). The seal's steps are modelled here too (ADR 0242 § Found by review,
+second and third rounds).
 
 ## Context
 
@@ -391,14 +393,77 @@ argued each of these in comments; nothing checked them against each other.
       unsealed for good; `EveryFileSealed` fails). The reconciler changes only the seal of a version, which no writer
       reads and a writer's own seal writes again, so it commutes with every writer step and is let run once every writer
       has ended, which keeps the gate's states down without hiding an interleaving.
-    - **The gate**, measured 2026-11-18 on four cores shared with other agents at a load average of 8 (`scripts/tla_check.sh
-      CommitPath`): seven configs that hold, sixteen that must fail, one on demand, in 89 s; 62 s at a load average of 4 to 5. `CommitPath.cfg` 152,820
-      states; `CommitPathKeys.cfg` 34,477; `CommitPathLane.cfg` 240,802 (one death and one replan:
-      `CommitPathLaneWide.cfg`, two of each, 436,319 states, is `ON DEMAND`); `CommitPathNested.cfg` 27;
-      `CommitPathOverwrite.cfg` 8,151; `CommitPathRebody.cfg` 3,475; `CommitPathRestore.cfg` 7,271.
+    - **The gate** then, measured 2026-11-18 on four cores shared with other agents at a load average of 8
+      (`scripts/tla_check.sh CommitPath`): seven configs that hold, sixteen that must fail, one on demand, in 89 s; §12
+      gives the gate as it stands.
+
+12. **Found by a third review, and FIXED (2026-11-18).** Each was reproduced first against the real catalog where it could
+    be, modelled, and its guard removed again after the fix to watch its config and its test fail. The reconciler's finish
+    and the seal probe's verdict are ADR 0242 § Found by review, third round (B1, B2); the model's part of B1 is here.
+    - **B3, a cleanup or `version/delete` removed the version a key's write landed as, and its resend landed it again**
+      (`KeyAppliedOnce`; REPRODUCED on the local root with the earlier search: the first attempt lands at v2 and loses its
+      answer, an append lands v3, the owner deletes v2 through `version/delete`, and the resend past the lease takes the
+      key over and searches `versions()`, which no longer names v2: an `/insert` to a table declaring no key answered 200
+      at v4, the rows landed twice; a keyed `/create` mode=Overwrite answered 200 at v4, overwriting the append; an
+      `/insert` to a table declaring a key answered 400 "the table already holds a row with primary key id = 7", for its
+      own write). Within a key's 24 h a policy keeping `retain_versions` with no age bound, or the owner tier's
+      `version/delete`, can remove any version but the head. **Decision: fail closed.** Guard **SearchWhole**: the
+      search reads the versions after `written_from` up to the ref's head from one listing of the ref's `_versions/`, and
+      when a version of that window is not listed it cannot prove the write did not land there: the door refuses 409
+      InvalidTableState (code 19), naming the versions it could not read, and never applies the write again
+      (`dataplane.landed_under_key`, `dataplane._listed_versions`). The refusal is a 4xx after the claim, so the key is
+      given back with its `written_from`, and every later send under it searches the same window and is refused the same
+      way. A window that is whole behaves as before. Model: `RemoveVersion` (a version other than the head marked gone,
+      once a behaviour; it stays in the history, so `KeyAppliedOnce` still counts it), `Scan` reads no gone version, and
+      `ScanUnwhole` refuses a window that holds one. Config `CommitPathSearchUnwhole.cfg` (SearchWhole off: the first
+      attempt appends and dies unanswered, a compaction lands after it, a cleanup removes the append, the resend searches,
+      finds nothing and appends again). Test
+      `test_a_retried_create_does_not_rewrite_the_table.py::TestARetriedAppendLandsOnce::test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit`,
+      its four doors crossed with `its-version-deleted-since` as well: each answers 409 code 19 naming the version and
+      leaves the table at its version; with the earlier search each landed the write again as above, and with the window
+      check removed from the new one each fails (the read of the removed version raises).
+      **Not taken: a pass that keeps every version a live key may have landed as.** A table's pass (ADR 0243) could keep
+      the versions newer than the oldest live key's `written_from`; but a key's record is filed by its caller's scope and
+      key (`_idempotency/<scope>/<key>.json`), not by table, so a pass would list and read every live key on the estate to
+      find the ones naming its table, on every pass of every table; it would keep up to a day of versions past what the
+      table's policy declares, so the history git declares would not be the history applied; and `version/delete` is the
+      owner's explicit act, which a key held by another caller would silently override. The refusal costs the pass
+      nothing and is the floor either way.
+    - **B4, the search read every manifest of the ref, whatever `written_from` said.** `landed_under_key` walked
+      `dataset.versions()`, which reads each version's manifest. Measured on pylance 13.0.0, a local root of 3,001 versions,
+      a window of 3, three samples each at a load average of 3.3: `versions()` 6.89, 6.85, 7.01 s; now one listing of
+      `_versions/` (which reads no manifest, a request per thousand objects on S3) and `read_transaction` of each version
+      in the window, 5 to 15 ms each, 0.038, 0.033, 0.043 s in all. `LanceDataset.read_transaction(version)` reads that
+      version's transaction alone, a version the handle was opened before included (measured: a handle at v1 read v4's),
+      so no second reader of the manifest was needed.
+    - **The lowest planned version was pinned by nothing, and nothing needs it.** The renewal kept `min(planned_on,
+      written_from)`; with "latest planned_on" every takeover, race and replay test stayed green. The model shows it
+      cannot matter: with the renewal recording the latest plan (`Renew`: `wfrom = plan + 1`) every gate config holds and
+      every config that must fail fails, as with the lowest. The reason: an attempt renews only after its takeover's
+      search found none of the key's writes (finding one, it answers instead), and a put of its own it lost did not land
+      (`land_keyed` reads the version it tried for its own transaction before it renews again; a stamped finalize is a
+      put-if-not-exists of the slot it lost), so no write under the key is at or before what a renewal plans on. The
+      `min()` is removed (`idempotency.renew`); the record keeps the latest plan, which narrows the next search's window.
+    - **The reconciler can fail and is retried** (ADR 0242 B1). `ReconcileFinish` reads the version after the
+      reconciler's mark (`rmark`) and finishes it; `ReconcileFails` (once a behaviour) is a finish the store refused, which
+      holds the mark before its version under guard **FinishHoldsMark** and moves it past without. Config
+      `CommitPathFinishPassed.cfg` (FinishHoldsMark off: an append's writer dies after landing, the reconciler's first
+      finish of it fails, and `EveryFileSealed` fails). `EveryFileSealed` is over retained versions: a removed version
+      names no file anyone reads.
+    - **The gate**, measured 2026-11-18 on two of four cores shared with other agents, at a load average of 3 to 4
+      (`taskset -c 0,1 scripts/tla_check.sh CommitPath`): seven configs that hold, eighteen that must fail, one on demand,
+      in 129 s; the whole `make tla-check`, every model, 54 that hold and 112 that must fail, in 14 min 17 s. `CommitPath.cfg` 243,536 states; `CommitPathKeys.cfg` 89,745; `CommitPathLane.cfg` 367,019
+      (`CommitPathLaneWide.cfg`, `ON DEMAND`, 732,046 states in 66 s); `CommitPathNested.cfg` 47;
+      `CommitPathOverwrite.cfg` 12,215; `CommitPathRebody.cfg` 3,927; `CommitPathRestore.cfg` 12,115. The removal and the
+      failed finish are in every gate config.
 
 ## What a client observes that differs
 
+- A keyed `/insert`, `/create` or `/restore` resent after its first attempt landed unanswered, when a version committed
+  since the key's first write was planned has been removed (a cleanup, `version/delete`), answers 409 InvalidTableState
+  (code 19) naming the versions, and writes nothing; every later send under the key answers the same (§12). It landed
+  the write a second time, or, on a table declaring a key, answered 400 for its own write.
+- A takeover's search costs the versions committed since the key's first write, not the table's history (§12).
 - A keyed write whose earlier attempts under its key all lost their answers, however many took the key over or were
   refused between, answers the version the first of them landed, never a second landing (§11).
 - A takeover of a keyed attempt that never reached a put no longer searches the table's versions: nothing it did can
@@ -452,8 +517,9 @@ keeps its seat.
 
 - The Rust catalog keeps the renewal before every put of a keyed write, the claim held in the request's context and read
   by the seams that land a version, the request digest in the key's binding, the refusal checked against the claim, an
-  answer recorded only over the attempt's own claim, the lowest planned version kept on the key's record for its life
-  and searched from by every claim after an unanswered put, and the seal of every data file before its version lands,
-  or changes this model first.
-- `make tla-check` runs the seven CommitPath gate configs and sixteen that must fail; `make tla-check-full` adds the wide
-  lane.
+  answer recorded only over the attempt's own claim, the latest planned version kept on the key's record across every
+  takeover and release and searched from by every claim after an unanswered put, the search refused where a version of
+  its window is gone, the seal of every data file before its version lands, and a reconciler finish that fails holding
+  the mark, or changes this model first.
+- `make tla-check` runs the seven CommitPath gate configs and eighteen that must fail; `make tla-check-full` adds the
+  wide lane.

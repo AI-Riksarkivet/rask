@@ -55,7 +55,14 @@
 (* inside its commit once landed (dataplane._land_rows, _write_blob). A    *)
 (* version whose writer died after it landed, its transaction file         *)
 (* unsealed, is found and finished by the commit reconciler                *)
-(* (commit_reconcile.finish_landed).                                       *)
+(* (commit_reconcile.finish_landed), which reads each ref's versions after *)
+(* its mark, oldest first; a finish that fails holds the mark before its   *)
+(* version, so the next pass tries it again (commit_reconcile.scan_ref).   *)
+(*                                                                         *)
+(* A version other than the head may be REMOVED while a key lives: a       *)
+(* cleanup (maintenance's pass, retain_versions with no age bound) or the  *)
+(* owner tier's version/delete. A search whose range holds one it cannot   *)
+(* read cannot prove the key's write did not land there.                   *)
 (* Every writer that lost its race takes the ref's commit turn, and every  *)
 (* finalize waits while another writer holds it (lakehouse/commit_turns.py *)
 (* TableTurns.take, wait, release; table_claims.DoorTable.finalize_version *)
@@ -108,13 +115,20 @@
 (*   AppendJudged     an append to a table declaring a key is committed    *)
 (*                    by commit_stamped and judged against the version it  *)
 (*                    lands on, a nested key included.                     *)
-(*   KeyKeepsFirst    a key's record keeps, for its whole life, the lowest *)
-(*                    version any attempt under it planned a put on        *)
-(*                    (_Claimed.written_from, set by the renewal before    *)
-(*                    each put), and a takeover searches every version     *)
-(*                    after it; without it a takeover searched from the    *)
-(*                    lapsed claim's own claim, which a chain of takeovers *)
-(*                    moves past the first attempt's commit.               *)
+(*   KeyKeepsFirst    a key's record keeps, across every takeover and      *)
+(*                    release, the version the last put under it was      *)
+(*                    planned on (_Claimed.written_from, set by the        *)
+(*                    renewal before each put), and a takeover searches    *)
+(*                    every version after it; without it a takeover        *)
+(*                    searched from the lapsed claim's own claim, which a  *)
+(*                    chain of takeovers moves past the first attempt's    *)
+(*                    commit. The latest plan, not the lowest: an attempt  *)
+(*                    renews only once its search found none of the key's  *)
+(*                    writes and its own last put did not land, so no      *)
+(*                    write under the key is at or before what it plans    *)
+(*                    on (checked: with the latest plan every gate holds   *)
+(*                    and every config that must fail fails, as with the   *)
+(*                    lowest, ADR 0240 §12).                               *)
 (*   ReleaseKeepsWritten  a released key whose record says an attempt may  *)
 (*                    have written is searched by the attempt claiming it  *)
 (*                    (idempotency.claim answers TakenOver); without it a  *)
@@ -123,6 +137,16 @@
 (*   SealBeforeLanding    every path that writes its data files before its *)
 (*                    commit seals and records them before the version     *)
 (*                    lands; without it they are sealed once it landed.    *)
+(*   FinishHoldsMark  a reconciler finish that fails holds the ref's mark  *)
+(*                    before its version (commit_reconcile.scan_ref's      *)
+(*                    contiguous), so the next pass finishes it; without   *)
+(*                    it the mark moves past the version for good.         *)
+(*   SearchWhole      a takeover's search whose range (the versions after  *)
+(*                    written_from) holds a version no longer readable     *)
+(*                    refuses, 409 InvalidTableState, the key's write      *)
+(*                    perhaps landed in a version since removed            *)
+(*                    (dataplane.landed_under_key); without it the search  *)
+(*                    reads past the gap, finds nothing, and writes again. *)
 (*                                                                         *)
 (* NOT MODELLED: branches (each ref is a history of its own, judged the    *)
 (* same way), the announcement after a commit (CommitAnnounce.tla), the    *)
@@ -146,7 +170,7 @@ CONSTANTS Mix,        \* which writers: "retry", "rebody", "lane", "keys", "nest
           Off         \* the guards and assumptions a config removes
 
 Guards == {"KeyBindsBody", "KeyRenews", "RenewIsOwn", "RecordOwnClaim", "RefusalHoldsKey", "TakeoverCounts", "AppendJudged",
-           "KeyKeepsFirst", "ReleaseKeepsWritten", "SealBeforeLanding"}
+           "KeyKeepsFirst", "ReleaseKeepsWritten", "SealBeforeLanding", "FinishHoldsMark", "SearchWhole"}
 Assumptions == {"StoreCAS", "LeaseOutlastsCommit", "TurnLapses", "Reconciles"}
 ASSUME Off \subseteq Guards \cup Assumptions
 On(g) == g \notin Off
@@ -179,10 +203,14 @@ Path(a) ==
     [] Kind(a) = "insert" -> (IF PKTable THEN "stamped" ELSE "lance")
     [] OTHER -> "stamped"
 \* The table holds key 1 before any writer starts, where a writer's harm needs it held.
-Seed == IF Mix = "nested" THEN <<[by |-> 0, op |-> "ins", k |-> 1, mark |-> FALSE, n |-> 1, path |-> "stamped", ds |-> TRUE, ts |-> TRUE]>> ELSE <<>>
+Seed == IF Mix = "nested" THEN <<[by |-> 0, op |-> "ins", k |-> 1, mark |-> FALSE, n |-> 1, path |-> "stamped", ds |-> TRUE, ts |-> TRUE, gone |-> FALSE]>> ELSE <<>>
+\* How many versions a behaviour may remove, and how many reconciler finishes may fail: one of each is what a removal's
+\* refusal and a held mark need to show, and a bound keeps the gate finite and its liveness checkable.
+MaxRemovals == 1
+MaxFinishFails == 1
 
-\* The key's record. `wfrom` is the first version a write under the key can have landed at, one past the lowest version an
-\* attempt under it planned a put on, 0 while none reached a put (idempotency._Claimed.written_from); `at` is the version
+\* The key's record. `wfrom` is the first version a write under the key can have landed at, one past the version the last
+\* renewal's put was planned on, 0 while none reached a put (idempotency._Claimed.written_from); `at` is the version
 \* the table was at when the attempt holding the claim claimed it, standing for the claim's own time, which a takeover
 \* searched from without KeyKeepsFirst. `first` is a ghost, the version the first recorded answer named.
 None == [st |-> "none", att |-> 0, body |-> 0, lapsed |-> FALSE, abody |-> 0, acnt |-> 0, aver |-> 0, first |-> 0, wfrom |-> 0, at |-> 0]
@@ -198,9 +226,14 @@ VARIABLES log,      \* the table's history: one record per version, in order
                     \* (400, the Idempotency-Key bound to another request), "conflict" (409)
           abody, acnt, aver,  \* an "ok" answer's body, row count and version
           turn,     \* the writer holding the ref's commit turn, 0 for none
-          faults
+          faults,
+          rmark,    \* the reconciler's mark on the ref: every version up to it was finished (commit_records.CommitMarks)
+          rfails,   \* reconciler finishes that failed so far
+          removals  \* versions removed so far
 
-vars == <<log, rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults>>
+vars == <<log, rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults, rmark, rfails, removals>>
+\* What only the reconciler and a removal change.
+others == <<rmark, rfails, removals>>
 
 RECURSIVE RowsUpTo(_)
 \* The key values the table holds once its first i versions have landed.
@@ -224,6 +257,7 @@ Init ==
   /\ abody = [a \in Actors |-> 0] /\ acnt = [a \in Actors |-> 0] /\ aver = [a \in Actors |-> 0]
   /\ turn = 0
   /\ faults = 0
+  /\ rmark = Len(Seed) /\ rfails = 0 /\ removals = 0
 
 Ended(a) == pc[a] \in {"done", "dead"}
 \* A keyed attempt's caller has its answer, its 503, or a dropped connection, and may send the write again.
@@ -278,11 +312,17 @@ Claim(a) ==
           /\ UNCHANGED <<ans, abody, acnt, aver, turn>>
   /\ UNCHANGED <<log, renewed, tries, told, faults>>
 
+\* The versions a takeover's search reads: every one after written_from (plan[a] is the first), up to the head.
+Range(a) == {i \in 1..Len(log) : i >= plan[a]}
+\* Whether a version of that range is no longer readable: the search cannot prove the key's write did not land there.
+Unwhole(a) == \E i \in Range(a) : log[i].gone
+
 \* dataplane.landed_under_key, on every keyed door that commits a version: the commit carrying the key among the versions
-\* after the one its search starts from, answered as its write was, its answer recorded.
+\* after the one its search starts from, answered as its write was, its answer recorded. A removed version is not read.
 Scan(a) ==
   /\ pc[a] = "scan"
-  /\ LET hits == {i \in 1..Len(log) : log[i].mark /\ i >= plan[a]} IN
+  /\ ~(On("SearchWhole") /\ Unwhole(a))
+  /\ LET hits == {i \in Range(a) : log[i].mark /\ ~log[i].gone} IN
      IF hits = {}
        THEN /\ pc' = [pc EXCEPT ![a] = "plan"]
             /\ UNCHANGED <<abody, acnt, aver>>
@@ -297,6 +337,14 @@ Scan(a) ==
 \* a 4xx, which gives the claim back as the attempt's own (keyed_door, idempotency.release).
 ScanRefused(a) ==
   /\ pc[a] = "scan"
+  /\ Finish(a, "conflict") /\ ReleaseIfMine(a)
+  /\ UNCHANGED <<log, plan, renewed, tries, told, abody, acnt, aver, faults>>
+
+\* SearchWhole: a search whose range holds a removed version refuses, non-retryable (409 InvalidTableState), and never
+\* writes; the refusal is a 4xx after the claim, which gives the claim back, its written_from kept, so every later send
+\* under the key searches the same range and is refused the same way.
+ScanUnwhole(a) ==
+  /\ pc[a] = "scan" /\ On("SearchWhole") /\ Unwhole(a)
   /\ Finish(a, "conflict") /\ ReleaseIfMine(a)
   /\ UNCHANGED <<log, plan, renewed, tries, told, abody, acnt, aver, faults>>
 
@@ -321,7 +369,7 @@ Plan(a) ==
 Renew(a) ==
   /\ pc[a] = "renew" /\ Free(a)
   /\ IF rec.st = "in" /\ (rec.att = a \/ ~On("RenewIsOwn"))
-       THEN /\ rec' = [rec EXCEPT !.lapsed = FALSE, !.wfrom = IF rec.wfrom = 0 \/ plan[a] + 1 < rec.wfrom THEN plan[a] + 1 ELSE rec.wfrom]
+       THEN /\ rec' = [rec EXCEPT !.lapsed = FALSE, !.wfrom = plan[a] + 1]
             /\ renewed' = [renewed EXCEPT ![a] = TRUE]
             /\ pc' = [pc EXCEPT ![a] = "put"]
             /\ UNCHANGED <<ans, turn>>
@@ -335,7 +383,7 @@ Stock(a) == Kind(a) \in {"stock", "maint"}
 \* A landed version: `ds` whether its data files are sealed and recorded, `ts` whether its transaction file is.
 Commit(a) == [by |-> a, op |-> CASE Kind(a) = "delete" -> "del" [] Kind(a) = "maint" -> "rw" [] Replaces(a) -> "ow" [] OTHER -> "ins",
               k |-> K(a), mark |-> Keyed(a), n |-> IF Kind(a) \in {"delete", "maint"} THEN 0 ELSE 1, path |-> Path(a),
-              ds |-> ~Lance(a) \/ On("SealBeforeLanding"), ts |-> ~Lance(a) /\ ~Stock(a)]
+              ds |-> ~Lance(a) \/ On("SealBeforeLanding"), ts |-> ~Lance(a) /\ ~Stock(a), gone |-> FALSE]
 \* A writer with something to seal once its version landed.
 SealsAfter(a) == Lance(a) \/ Stock(a)
 
@@ -396,7 +444,8 @@ Record(a) ==
   /\ Finish(a, "ok")
   /\ UNCHANGED <<log, plan, renewed, tries, told, abody, acnt, aver, faults>>
 
-Step(a) == Start(a) \/ Claim(a) \/ Scan(a) \/ ScanRefused(a) \/ Plan(a) \/ Renew(a) \/ Put(a) \/ SealLanded(a) \/ Record(a)
+Step(a) == (Start(a) \/ Claim(a) \/ Scan(a) \/ ScanRefused(a) \/ ScanUnwhole(a) \/ Plan(a) \/ Renew(a) \/ Put(a) \/ SealLanded(a) \/ Record(a))
+           /\ UNCHANGED others
 
 ---------------------------------------------------------------------------
 \* The environment.
@@ -405,42 +454,66 @@ Die(a) ==
   /\ pc[a] \notin {"start", "done", "dead"} /\ faults < MaxFaults
   /\ pc' = [pc EXCEPT ![a] = "dead"]
   /\ faults' = faults + 1
-  /\ UNCHANGED <<log, rec, plan, renewed, tries, told, ans, abody, acnt, aver, turn>>
+  /\ UNCHANGED <<log, rec, plan, renewed, tries, told, ans, abody, acnt, aver, turn>> /\ UNCHANGED others
 
 \* RequestDeadlineMiddleware answers 503 with no response begun; the door runs on.
 Told(a) ==
   /\ Keyed(a) /\ pc[a] \notin {"start", "done", "dead"} /\ ~told[a]
   /\ told' = [told EXCEPT ![a] = TRUE]
-  /\ UNCHANGED <<log, rec, pc, plan, renewed, tries, ans, abody, acnt, aver, turn, faults>>
+  /\ UNCHANGED <<log, rec, pc, plan, renewed, tries, ans, abody, acnt, aver, turn, faults>> /\ UNCHANGED others
 
 \* The key's lease passes on the store's clock; never between a renewal and the commit after it (A2).
 KeyLapse ==
   /\ rec.st = "in" /\ ~rec.lapsed
   /\ ~(On("LeaseOutlastsCommit") /\ rec.att \in Actors /\ pc[rec.att] = "put" /\ renewed[rec.att])
   /\ rec' = [rec EXCEPT !.lapsed = TRUE]
-  /\ UNCHANGED <<log, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults>>
+  /\ UNCHANGED <<log, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults>> /\ UNCHANGED others
 
 \* A turn lapses at its hold, its holder alive or not (A3).
 TurnLapse ==
   /\ turn # 0 /\ On("TurnLapses")
   /\ turn' = 0
-  /\ UNCHANGED <<log, rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, faults>>
+  /\ UNCHANGED <<log, rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, faults>> /\ UNCHANGED others
 
-\* The commit reconciler (A4, commit_reconcile.finish_landed): a landed version whose files are not all sealed and recorded
-\* is sealed and recorded, whoever wrote it, its writer alive or not. It changes only what no writer reads (a version's
-\* seal, which a writer's own seal of it makes again, the same write), so it commutes with every writer's step, and is let
-\* run once every writer has ended: the reconciler reads a version only once it is older than its grace.
-Reconcile ==
-  /\ On("Reconciles")
-  /\ \A a \in Actors : Ended(a)
-  /\ \E i \in 1..Len(log) :
-       /\ ~(log[i].ds /\ log[i].ts)
-       /\ log' = [log EXCEPT ![i].ds = TRUE, ![i].ts = TRUE]
-  /\ UNCHANGED <<rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults>>
+\* The commit reconciler (A4, commit_reconcile.scan_ref and finish_landed): each pass reads the ref's versions after its
+\* mark, oldest first, and finishes each, sealing and recording what a landed version names and no commit sealed, whoever
+\* wrote it, its writer alive or not; a removed version is not in the ref's listing and is passed over. It changes only
+\* what no writer reads (a version's seal, which a writer's own seal of it makes again, the same write), so it commutes
+\* with every writer's step, and is let run once every writer has ended: the reconciler reads a version only once it is
+\* older than its grace.
+Reconciling == On("Reconciles") /\ (\A a \in Actors : Ended(a)) /\ rmark < Len(log)
+AfterMark == log[rmark + 1]
 
-Next == (\E a \in Actors : Step(a) \/ Die(a) \/ Told(a)) \/ KeyLapse \/ TurnLapse \/ Reconcile
+ReconcileFinish ==
+  /\ Reconciling
+  /\ log' = IF AfterMark.gone THEN log ELSE [log EXCEPT ![rmark + 1].ds = TRUE, ![rmark + 1].ts = TRUE]
+  /\ rmark' = rmark + 1
+  /\ UNCHANGED <<rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults, rfails, removals>>
 
-Spec == Init /\ [][Next]_vars /\ \A a \in Actors : WF_vars(Step(a)) /\ WF_vars(TurnLapse) /\ WF_vars(Reconcile)
+\* The finish fails (the store refused or did not answer the seal or the record: committed_files.finish_landed answers
+\* False): with FinishHoldsMark the mark stays before the version and the next pass finishes it; without, the mark moves
+\* past it as past a finished one.
+ReconcileFails ==
+  /\ Reconciling /\ rfails < MaxFinishFails
+  /\ ~AfterMark.gone /\ ~(AfterMark.ds /\ AfterMark.ts)
+  /\ rfails' = rfails + 1
+  /\ rmark' = IF On("FinishHoldsMark") THEN rmark ELSE rmark + 1
+  /\ UNCHANGED <<log, rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults, removals>>
+
+\* A cleanup or the owner tier's version/delete removes a version that is not the head (a cleanup never removes the
+\* latest, and version/delete refuses it). The version stays in `log` as having landed, marked gone: no reader reads it,
+\* and KeyAppliedOnce still counts it.
+RemoveVersion ==
+  /\ removals < MaxRemovals
+  /\ \E i \in 1..(Len(log) - 1) :
+       /\ ~log[i].gone
+       /\ log' = [log EXCEPT ![i].gone = TRUE]
+  /\ removals' = removals + 1
+  /\ UNCHANGED <<rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults, rmark, rfails>>
+
+Next == (\E a \in Actors : Step(a) \/ Die(a) \/ Told(a)) \/ KeyLapse \/ TurnLapse \/ ReconcileFinish \/ ReconcileFails \/ RemoveVersion
+
+Spec == Init /\ [][Next]_vars /\ \A a \in Actors : WF_vars(Step(a)) /\ WF_vars(TurnLapse) /\ WF_vars(ReconcileFinish)
 
 ---------------------------------------------------------------------------
 \* PROPERTIES
@@ -487,9 +560,10 @@ EveryWriterEnds == <>[](\A a \in Actors : Ended(a))
 \* what it reads (ADR 0242).
 LandedDataSealed == \A i \in 1..Len(log) : log[i].ds
 
-\* Every file a landed version names is sealed and recorded in the end, its writer alive or not: the transaction file,
-\* which only the version's landing lets its writer seal, is finished by the reconciler when the writer died first.
-EveryFileSealed == <>[](\A i \in 1..Len(log) : log[i].ds /\ log[i].ts)
+\* Every file a retained landed version names is sealed and recorded in the end, its writer alive or not and a finish that
+\* failed included: the transaction file, which only the version's landing lets its writer seal, is finished by the
+\* reconciler when the writer died first.
+EveryFileSealed == <>[](\A i \in 1..Len(log) : log[i].gone \/ (log[i].ds /\ log[i].ts))
 
 TypeOK ==
   /\ pc \in [Actors -> {"start", "claim", "scan", "plan", "renew", "put", "seal", "record", "done", "dead"}]

@@ -3456,7 +3456,8 @@ export interface paths {
          *     An ``Idempotency-Key`` makes a resent create converge on the first attempt's answer ([[LH-576]]): it names one create,
          *     its mode, properties and rows included, so the same key with another body or other query parameters is refused 400
          *     (code 13). The version the create lands carries the key and is landed only while the key is still this attempt's, so
-         *     an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing (ADR 0240).
+         *     an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing (ADR 0240). A resend
+         *     whose search for an earlier attempt's commit meets a version since removed (a cleanup, or ``version/delete``) is refused 409 (code 19) and writes nothing: the catalog cannot tell whether the write landed there (ADR 0240 §12).
          *
          *     ``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob
          *     columns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``
@@ -3851,8 +3852,8 @@ export interface paths {
          *     refused 400. Its commit carries the key, so a resend that takes the key over from an attempt lost unanswered past its
          *     lease finds that attempt's commit and answers with it rather than appending again; the attempt renews its claim right
          *     before its commit, so one that a resend took the key over from while it still ran answers 409 and commits nothing
-         *     (ADR 0240). The same key with another body or other query parameters is refused 400 (code 13). Optional, as on every
-         *     keyed door (:mod:`catalog.api.idempotency`).
+         *     (ADR 0240). A resend whose search for that commit meets a version since removed (a cleanup, or ``version/delete``) is refused 409 (code 19) and writes nothing: the catalog cannot tell whether the write landed there (ADR 0240 §12). The same key with another body or other
+         *     query parameters is refused 400 (code 13). Optional, as on every keyed door (:mod:`catalog.api.idempotency`).
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;
@@ -4013,7 +4014,8 @@ export interface paths {
          *     An ``Idempotency-Key`` makes a resent restore converge on the first attempt's answer; the same key with another body
          *     is refused 400 (code 13). The version the restore lands carries the key and is landed only while the key is still this
          *     attempt's, so an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing, and a
-         *     resend taking the key over from an attempt lost unanswered answers the restore it landed (ADR 0240).
+         *     resend taking the key over from an attempt lost unanswered answers the restore it landed (ADR 0240); one whose search
+         *     for it meets a version since removed (a cleanup, or ``version/delete``) is refused 409 (code 19) and writes nothing: the catalog cannot tell whether the write landed there (ADR 0240 §12).
          */
         post: operations["restore_table_v1_table__id__restore_post"];
         delete?: never;

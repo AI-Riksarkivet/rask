@@ -141,7 +141,7 @@ from lakehouse import (
     whole_versions,
 )
 from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
-from lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
+from lakehouse.base_refs import decoded_path, decoded_segments, key_uri, location_in_store, normalise, store_of
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
 from lakehouse.fences import Hold
@@ -158,7 +158,7 @@ from lakehouse.records import RecordChangedError
 from lakehouse.schema import SchemaFields, facet_fields
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
-from lakehouse.version_retention import MAIN_BRANCH, recorded_branch
+from lakehouse.version_retention import MAIN_BRANCH, manifest_version, recorded_branch
 
 
 log = logging.getLogger(__name__)
@@ -896,7 +896,9 @@ def create_table(
         if key is not None and key.written_from is not None:
             # A key taken over from an attempt lost unanswered: the write it landed is the key's answer, never landed again
             # (ADR 0240).
-            landed = landed_under_key(lance.dataset(existing, storage_options=so.in_clear() or None, session=shared_lance_session()), key)
+            landed = landed_under_key(
+                lance.dataset(existing, storage_options=so.in_clear() or None, session=shared_lance_session()), key, table_location=existing, branch=None, so=so
+            )
             if landed is not None:
                 return CreateTableResponse(location=existing, version=landed[0])
         if normalized is CreateMode.OVERWRITE:
@@ -2990,28 +2992,65 @@ def delete_from_table(
     return DeleteFromTableResponse(version=version)
 
 
-def landed_under_key(dataset: lance.LanceDataset, key: idempotency.HeldKey | None) -> tuple[int, Transaction] | None:
-    """The version, and its transaction, that an earlier attempt under ``key`` landed on ``dataset``'s ref; ``None`` when
-    the request holds no key, no attempt under it reached a put, or none landed.
+def landed_under_key(
+    dataset: lance.LanceDataset, key: idempotency.HeldKey | None, *, table_location: str, branch: str | None, so: StorageOptions
+) -> tuple[int, Transaction] | None:
+    """The version, and its transaction, that an earlier attempt under ``key`` landed on ``dataset``'s ref (``branch`` of
+    the table at ``table_location``); ``None`` when the request holds no key, no attempt under it reached a put, or none
+    landed.
 
     For a key claimed after an attempt that renewed its claim before a put and never answered ([[LH-577]], ADR 0240): it
     may have landed its write and been lost before it recorded its answer, and the write run again would land twice. Every
-    keyed write's commit carries the key (:data:`IDEMPOTENCY_KEY_PROPERTY`), and every put under the key was planned on a
-    version at or after the lowest one its renewals recorded (``key.written_from``), so the versions after it are read,
-    newest first, for the key's stamp. No clock bounds the search: it reads exactly the versions committed since the
-    first put under the key was planned, the ref's own listing names them, and Lance keeps a version's transaction until
-    a cleanup removes it, which keeps every version younger than its retention (ADR 0240 §11).
+    keyed write's commit carries the key (:data:`IDEMPOTENCY_KEY_PROPERTY`), and every put under the key was planned on
+    ``key.written_from`` or after, so the versions after it up to the ref's head are read, newest first, for the key's
+    stamp: the ref's ``_versions/`` is listed once and each of those versions' transactions read alone
+    (``read_transaction``), so the search costs the window's versions and not the table's history (ADR 0240 §12, B4;
+    measured on pylance 13.0.0, a local root of 3,001 versions: ``versions()`` 7.5 s, which read every manifest, against
+    one listing and three reads of 5 to 15 ms each). No clock bounds it.
+
+    THE WINDOW MUST BE WHOLE. A cleanup (a policy keeping ``retain_versions`` with no age bound) or the owner tier's
+    ``version/delete`` can remove a version inside the key's lifetime, and a write landed there would be found nowhere:
+    a version after ``written_from`` that the listing no longer names cannot be proved not to hold the key's write, so the
+    search refuses rather than let the write land again (ADR 0240 §12, B3; the model's ``SearchWhole``,
+    ``CommitPathSearchUnwhole.cfg``).
+
+    Raises:
+        InvalidTableStateError: A version of the window is gone (409, code 19): the key's write may have landed in it, and
+            the catalog applies it under this key never again; every later send under the key is refused the same way.
+        OSError: The store refused, or could not be reached for, the listing or a read.
     """
     if key is None or key.written_from is None:
         return None
-    for entry in reversed(dataset.versions()):
-        version = int(entry["version"])
-        if version <= key.written_from:
-            return None
+    listed = _listed_versions(branch_layout.ref_root(table_location, recorded_branch(branch)), so)
+    window = range(key.written_from + 1, max(listed, default=key.written_from) + 1)
+    if gone := [version for version in window if version not in listed]:
+        named = ", ".join(str(version) for version in gone[:20]) + (f" and {len(gone) - 20} more" if len(gone) > 20 else "")
+        raise InvalidTableStateError(
+            f"the write under this Idempotency-Key may have landed in a version since removed: version {named} of the table, "
+            f"committed after the key's first write was planned on version {key.written_from}, is no longer readable, so the "
+            "catalog cannot tell whether the write landed and does not apply it again; read the table and send the write "
+            "under a new key if it is missing"
+        )
+    for version in reversed(window):
         transaction = dataset.read_transaction(version)
         if transaction is not None and (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) == key.mark:
             return version, transaction
     return None
+
+
+def _listed_versions(ref_root: str, so: StorageOptions) -> set[int]:
+    """Every version whose manifest the store lists under the ref rooted at ``ref_root``, in either naming scheme: one
+    listing of its ``_versions/``, a request per thousand objects on S3, which reads no manifest.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the listing.
+    """
+    versions = f"{key_uri(store_of(ref_root), decoded_path(ref_root))}/_versions" if on_s3(ref_root) else f"{ref_root.rstrip('/')}/_versions"
+    try:
+        listed = stored_objects.list_under(versions, so)
+    except (BotoCoreError, ClientError) as exc:
+        raise OSError(f"the versions of {ref_root} could not be listed: {exc}") from exc
+    return {version for entry in listed if (version := manifest_version(entry.path)) is not None}
 
 
 def inserted_rows(transaction: Transaction) -> int:

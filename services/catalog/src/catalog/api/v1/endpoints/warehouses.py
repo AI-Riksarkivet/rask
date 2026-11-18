@@ -261,7 +261,7 @@ async def establish_warehouse(
     if fences and client is not None and not await fga.fences_stand(client, fences):
         raise ConcurrentModificationError(f"project {project!r} was deleted while warehouse {warehouse_id!r} was made; nothing was made")
     replaced, record = await _write_record(settings, body, record, existing=existing, protection=protection)
-    seal_posture.observe(warehouse_id, record.get(warehouses.SEALED), required=bucket not in settings.seal_detection_only_buckets)
+    seal_posture.observe(warehouse_id, record, required=bucket not in settings.seal_detection_only_buckets)
     # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
     # catalog refuses a namespace whose parent has no row (measured on pylance 13.0.0). After the record, which makes
     # the root the warehouse's, and idempotent, so a re-POST converges a create that failed here.
@@ -477,7 +477,7 @@ def _record_for(
         # What a drop under this warehouse does (ADR 0146), CALLER-OWNED like the endpoint: named, it replaces the
         # live profile; omitted, the merge carries the live one forward.
         **_delete_profile_fields(body.delete_profile),
-        **({warehouses.SEALED: sealed} if sealed is not None else {}),
+        **(warehouses.sealed_fields(sealed) if sealed is not None else {}),
     }
     # Deletion protection (Decision 5) is what the request declares ([[LH-548]]): `true` arms it, `false` clears it, and
     # a request naming neither leaves it as it stands. A new warehouse's record takes it here; a re-create's merge takes
@@ -1429,8 +1429,8 @@ async def validate_warehouse_credentials(
         # Recorded and served, so a store that stopped enforcing the seal since registration shows on the warehouse and
         # pages (`WarehouseSealUnenforced`) from this validate on, whatever the declaration (ADR 0242 B4). A probe that was
         # inconclusive measured nothing, and the record keeps the seal last measured.
-        await run_in_threadpool(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed)
-        seal_posture.observe(warehouse_id, report.sealed, required=str(record["bucket"]) not in settings.seal_detection_only_buckets)
+        measured = await run_in_threadpool(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed)
+        seal_posture.observe(warehouse_id, measured, required=str(record["bucket"]) not in settings.seal_detection_only_buckets)
     return report
 
 
@@ -1580,10 +1580,6 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     return checks
 
 
-class _Inconclusive(Exception):
-    """A write of the seal check the store neither took nor refused with its explicit refusal."""
-
-
 def _run_seal_check(
     root_uri: str, *, vendor: CredentialVendor, store_endpoint: str, session_name: str, catalog_options: StorageOptions
 ) -> tuple[ProbeCheck, Sealed | None]:
@@ -1592,13 +1588,15 @@ def _run_seal_check(
     The credential is the write tier's for a probe table of its own under ``_validate/``, so it holds exactly what a
     stock writer's ``DescribeTable`` vend holds. It puts a probe file where a writer stages a data file; the catalog seals
     it under ``catalog_options``, its own identity, through the call every commit seals with
-    (:func:`lakehouse.stored_objects.seal`); the credential then puts over it and begins a multipart upload of it. Both
-    refused is ``enforced``; either taken is ``unenforced``, a store that keeps the tag and evaluates no
-    ``s3:ExistingObjectTag`` on a put; a seal refused is ``untaggable``. Only the store's explicit refusal (403
-    AccessDenied, which RustFS 1.0.3 answers a policy's Deny with, and the S3 error reference names a Deny's answer) counts
-    as one: any other answer to the seal or to either put, after the object client's retries, is ``inconclusive`` and
-    measures nothing, so a throttled or slow store is never recorded as enforcing or as untaggable. The probe file is removed under the catalog's
-    identity, which a seal does not stop deleting.
+    (:func:`lakehouse.stored_objects.seal`); the credential then begins a multipart upload of it and puts over it, both
+    always asked, and the verdict is read off both answers (:func:`_seal_verdict`): either taken is ``unenforced``, a
+    store that keeps the tag and evaluates no ``s3:ExistingObjectTag`` on a put, whatever the other answered; both refused
+    is ``enforced``; a seal refused is ``untaggable``. Only the store's explicit refusal (403 AccessDenied, which RustFS
+    1.0.3 answers a policy's Deny with, and the S3 error reference names a Deny's answer) counts as one: any other answer
+    to the seal, or to a write when no write was taken, after the object client's retries, is ``inconclusive`` and
+    measures nothing, so a throttled or slow store is never recorded as enforcing or as untaggable, and a store proven to
+    take a write is never recorded as unmeasured. The probe file is removed under the catalog's identity, which a seal
+    does not stop deleting.
     """
     bucket, prefix = split_s3_uri(root_uri.rstrip("/"))
     table = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate/{uuid.uuid4().hex}"
@@ -1615,16 +1613,16 @@ def _run_seal_check(
     writer = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.region)
     encrypted = _encryption_put_args(options.options)
 
-    def refused(write: Callable[[], object]) -> bool:
-        """Whether the store refused ``write`` with its explicit refusal (403): a write it took is ``False``, and any other
-        failure (a timeout, a throttling, a 5xx, after the client's retries) says nothing about the seal."""
+    def answer(write: Callable[[], object]) -> _SealAnswer:
+        """What the store answered ``write``: its explicit refusal (403), taking it, or neither (a timeout, a throttling, a
+        5xx, after the client's retries), which says nothing about the seal."""
         try:
             write()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — every answer but the store's refusal is the same verdict: none
             if stored_objects.refusal(exc):
-                return True
-            raise _Inconclusive(f"{type(exc).__name__}: {str(exc)[:160]}") from exc
-        return False
+                return _SealAnswer(outcome="refused")
+            return _SealAnswer(outcome="unanswered", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
+        return _SealAnswer(outcome="taken")
 
     try:
         writer.put_object(Bucket=bucket, Key=key, Body=b"seal-probe", **encrypted)
@@ -1646,13 +1644,13 @@ def _run_seal_check(
         def begin() -> None:
             upload.update(writer.create_multipart_upload(Bucket=bucket, Key=key, **encrypted))
 
+        # The multipart begin first: it leaves the sealed object as it is, where a put the store takes replaces the object
+        # and its tag, and a begin after it would measure an unsealed key.
         try:
-            put = refused(lambda: writer.put_object(Bucket=bucket, Key=key, Body=b"over-a-sealed-file", **encrypted))
-            multipart = refused(begin)
-        except _Inconclusive as exc:
-            return ProbeCheck(
-                name=SEAL_CHECK, outcome="inconclusive", detail=f"inconclusive: the store neither refused nor took a put over a sealed file: {exc}"
-            ), None
+            answers = {
+                "CreateMultipartUpload": answer(begin),
+                "PutObject": answer(lambda: writer.put_object(Bucket=bucket, Key=key, Body=b"over-a-sealed-file", **encrypted)),
+            }
         finally:
             if upload.get("UploadId"):
                 with suppress(Exception):
@@ -1660,7 +1658,36 @@ def _run_seal_check(
     finally:
         with suppress(Exception):
             stored_objects.delete_object(f"s3://{bucket}", catalog_options, key)
-    if put and multipart:
-        return ProbeCheck(name=SEAL_CHECK, outcome="pass"), "enforced"
-    taken = [name for name, was_refused in (("PutObject", put), ("CreateMultipartUpload", multipart)) if not was_refused]
-    return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail=f"unenforced: the store took {' and '.join(taken)} over a sealed file"), "unenforced"
+    return _seal_verdict(answers)
+
+
+class _SealAnswer(BaseModel):
+    """What the store answered one write of the seal check over the sealed file."""
+
+    model_config = ConfigDict(frozen=True)
+
+    outcome: Literal["refused", "taken", "unanswered"]
+    detail: str = ""
+
+
+def _seal_verdict(answers: dict[str, _SealAnswer]) -> tuple[ProbeCheck, Sealed | None]:
+    """The seal check's verdict from what the store answered each write over the sealed file (ADR 0242 § Found by review,
+    third round, B2):
+
+    | Any write taken | Any write unanswered | Verdict |
+    | --- | --- | --- |
+    | yes | either | ``unenforced``: one taken write is the proof, whatever the others answered |
+    | no | yes | ``inconclusive``: no proof either way, the record kept as last measured |
+    | no | no | ``enforced``: every write refused with the store's explicit refusal |
+    """
+    taken = [name for name, answered in answers.items() if answered.outcome == "taken"]
+    unanswered = {name: answered.detail for name, answered in answers.items() if answered.outcome == "unanswered"}
+    if taken:
+        also = "".join(f"; {name} was unanswered ({detail})" for name, detail in unanswered.items())
+        return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail=f"unenforced: the store took {' and '.join(taken)} over a sealed file{also}"), "unenforced"
+    if unanswered:
+        named = "; ".join(f"{name}: {detail}" for name, detail in unanswered.items())
+        return ProbeCheck(
+            name=SEAL_CHECK, outcome="inconclusive", detail=f"inconclusive: the store neither refused nor took a write over a sealed file ({named})"
+        ), None
+    return ProbeCheck(name=SEAL_CHECK, outcome="pass"), "enforced"

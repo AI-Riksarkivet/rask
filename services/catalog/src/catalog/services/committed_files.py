@@ -134,7 +134,7 @@ def seal_and_record(
         refused = isinstance(exc, stored_objects.SealRefusedError)
         _count_seal_failed(table_location, "after_landing" if landed is not None else "refused" if refused else "unavailable", exc)
         if landed is not None:
-            _count_unrecorded(table_location, landed, f"{type(exc).__name__}: {exc}")
+            count_unrecorded(table_location, landed, f"{type(exc).__name__}: {exc}")
             return None
         if refused:
             raise ServiceUnavailableError(
@@ -145,7 +145,7 @@ def seal_and_record(
     except (OSError, file_identities.FilesNotHeldError, LanceNamespaceError, BotoCoreError, ClientError) as exc:
         if landed is None:
             raise
-        _count_unrecorded(table_location, landed, f"{type(exc).__name__}: {exc}")
+        count_unrecorded(table_location, landed, f"{type(exc).__name__}: {exc}")
         return None
     if landed is not None:
         _unrecorded.add(0)
@@ -244,19 +244,23 @@ def finish_landed(
 ) -> bool:
     """Seal and record what the landed version ``after`` names over ``before`` and its commit's record (``recorded``, by
     transaction uuid) lacks: what a writer that died between its landing and its last seal left, and the files of a version
-    made with no seal of its own. Whether it finished anything; counted on ``catalog.committed_files.finished``. Run by the
-    commit reconciler on every version it reads (``commit_reconcile.scan_ref``), on its period. A failure is counted as
-    :func:`seal_and_record` counts one after landing, and the next pass tries again.
+    made with no seal of its own; one it finished is counted on ``catalog.committed_files.finished``. Run by the commit
+    reconciler on every version it reads (``commit_reconcile.scan_ref``), on its period.
+
+    Whether every file the version names is now sealed and recorded: ``False`` is a failure, counted as
+    :func:`seal_and_record` counts one after landing (``catalog.committed_files.unrecorded``), and the reconciler holds the
+    ref's mark before the version, so its next pass finishes it (ADR 0242 § Found by review, third round, B1). A finish
+    that fails on every pass is counted on every pass, which ``CommittedFilesUnrecorded`` reads.
     """
     try:
         paths = added_paths(before, after, root=table_root(table_location), branch=branch, so=so)
         held = recorded(transaction_uuid)
     except (OSError, ValueError, BotoCoreError, ClientError) as exc:
-        _count_unrecorded(table_location, int(after.version), f"{type(exc).__name__}: {exc}")
+        count_unrecorded(table_location, int(after.version), f"{type(exc).__name__}: {exc}")
         return False
     missing = [path for path in paths if held is None or path not in {file.path for file in held.files}]
     if not missing:
-        return False
+        return True
     if (
         seal_and_record(
             missing, table_location=table_location, so=so, transaction_uuid=transaction_uuid, record=record, landed=int(after.version), adding_to=held
@@ -427,7 +431,7 @@ def _ref_prefix(branch: str | None) -> str:
     return "" if branch is None else f"{BRANCH_CONTAINER}/{branch}/"
 
 
-def _count_unrecorded(table_location: str, version: int, reason: str) -> None:
+def count_unrecorded(table_location: str, version: int, reason: str) -> None:
     _unrecorded.add(1)
     log.error("committed_files_unrecorded", extra={"location": table_location, "version": version, "error": reason[:300]})
 

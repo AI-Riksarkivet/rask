@@ -112,12 +112,13 @@ class _Claimed(BaseModel):
     attempt: str
     #: When that attempt claimed it, or last renewed its claim, on the store's clock: the lease runs from here.
     claimed_at: datetime
-    #: The lowest version any attempt under the key planned a put on, set by the renewal right before each put
-    #: (:func:`renew`) and kept for the key's whole life: no takeover and no release moves it (ADR 0240 §11, KeyKeepsFirst,
-    #: ReleaseKeepsWritten). Every write under the key landed after it, so an attempt that claims the key looks for an
-    #: earlier attempt's write among the versions after it (:class:`TakenOver`). ``None`` while no attempt reached a put:
-    #: nothing under the key may have been written, and none can be by an attempt that no longer holds it, since its
-    #: renewal would find the claim another's.
+    #: The version the last put under the key was planned on, set by the renewal right before each put (:func:`renew`)
+    #: and moved by nothing else: no takeover and no release (ADR 0240 §11, KeyKeepsFirst, ReleaseKeepsWritten). Every
+    #: write under the key landed after it: an attempt renews only once its takeover's search found none of the key's
+    #: writes and its own put before was lost, so an attempt that claims the key looks for an earlier attempt's write
+    #: among the versions after it (:class:`TakenOver`; the latest plan rather than the lowest, checked on the model, ADR
+    #: 0240 §12). ``None`` while no attempt reached a put: nothing under the key may have been written, and none can be by
+    #: an attempt that no longer holds it, since its renewal would find the claim another's.
     written_from: int | None = None
 
 
@@ -388,9 +389,9 @@ def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: 
 def renew(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str, planned_on: int | None) -> None:
     """Renew the claim ``attempt`` holds, right before the commit it cannot take back: its lease starts again at the
     store's clock, under the ETag of the read that found the claim its own. ``planned_on`` is the version the put that
-    follows was planned on (``None`` for a write that lands no version): the record keeps the lowest one any attempt under
-    the key named (:attr:`_Claimed.written_from`), so whoever claims the key after looks for the write among the versions
-    after it, and the renewal is the write that says one may have landed before the put that could land it.
+    follows was planned on (``None`` for a write that lands no version, which keeps what the record holds): the record
+    keeps it (:attr:`_Claimed.written_from`), so whoever claims the key after looks for the write among the versions after
+    it, and the renewal is the write that says one may have landed before the put that could land it.
 
     A request's door runs on past its deadline (:mod:`lakehouse.deadline`), as long as the key's lease and longer, so a
     resend can take the key over while the first attempt still runs. The resend then looks for the first attempt's
@@ -410,7 +411,7 @@ def renew(root_uri: str, storage_options: StorageOptions, *, scope: str, key: st
         current = _stored(stored, key) if stored is not None else None
         if stored is None or not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
             raise KeyTakenOverError(f"idempotency key {key!r} is no longer held by this attempt: another attempt under the key took it over")
-        written_from = current.written_from if planned_on is None else min(planned_on, current.written_from if current.written_from is not None else planned_on)
+        written_from = current.written_from if planned_on is None else planned_on
         renewed = current.model_copy(update={"claimed_at": found.at, "written_from": written_from}).model_dump(mode="json")
         try:
             records.replace_json(root_uri, storage_options, record_key, renewed, etag=stored.etag)

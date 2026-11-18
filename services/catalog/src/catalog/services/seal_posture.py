@@ -1,10 +1,19 @@
-"""Whether each warehouse's store enforces the seal, exported for the alert that fires while one does not (ADR 0242 B4).
+"""Whether each warehouse's store enforces the seal, and when that was last measured, exported for the alerts that fire
+while one does not, or while nobody knows (ADR 0242 B4, § Found by review, third round, B2).
 
-The warehouse probe's seal check measures each warehouse's store at registration and on validate, and the record keeps
-what it measured (``sealed``). This process exports it as ``catalog.warehouse.seal``, one series per warehouse, 1, with
-the warehouse (``lance.warehouse``), what was measured (``lance.seal``: ``enforced``, ``unenforced``, ``untaggable``)
-and whether git requires it (``lance.seal_required``: ``false`` for a warehouse declared ``detection_only``). The
-alert ``WarehouseSealUnenforced`` (``deploy/alerting/rules.yml``) fires while any series is not ``enforced``.
+The warehouse probe's seal check measures each warehouse's store at registration, on validate and on the catalog's seal
+probe, and the record keeps what it measured (``sealed``) and when (``sealed_at``). This process exports them:
+
+- ``catalog.warehouse.seal``, one series per warehouse, 1, with the warehouse (``lance.warehouse``), what was measured
+  (``lance.seal``: ``enforced``, ``unenforced``, ``untaggable``) and whether git requires it (``lance.seal_required``:
+  ``false`` for a warehouse declared ``detection_only``). ``WarehouseSealUnenforced`` and ``WarehouseSealLost``
+  (``deploy/alerting/rules.yml``) fire while a series is not ``enforced``.
+- ``catalog.warehouse.seal_measured``, one series per warehouse, the Unix time of the last measurement that concluded.
+  A probe that learned nothing moves neither series, so a store whose probe stays inconclusive keeps exporting the
+  verdict it last had; ``WarehouseSealUnmeasured`` fires once that time is older than two of the probe's periods, which
+  it reads off the period the probe's timer exports (``timer.period``, ``timer="catalog-seal-probe"``,
+  :mod:`lakehouse.timers`), so a period git changes moves the alert with it. The time is the record's, read again at
+  every start, so no restart and no counter reset makes an unmeasured warehouse look fresh.
 
 Read from the registry at the catalog's start (:func:`load`), the estate's own warehouse from the record the catalog's
 seal probe keeps for it, updated by every registration, validate and seal probe in this process (:func:`observe`), and
@@ -16,9 +25,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Final
+from datetime import datetime
+from typing import Any, Final
 
 from opentelemetry import metrics
+from pydantic import BaseModel, ConfigDict
 
 from catalog.core.config import Settings
 from catalog.services import warehouses
@@ -32,16 +43,32 @@ _WAREHOUSE: Final = "lance.warehouse"
 _SEAL: Final = "lance.seal"
 _REQUIRED: Final = "lance.seal_required"
 
-#: Each warehouse's measured seal and whether git requires it, as this process last read or measured it.
-_postures: dict[str, tuple[str, bool]] = {}
+
+class _Posture(BaseModel):
+    """One warehouse's measured seal, whether git requires it, and when it was measured."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sealed: str
+    required: bool
+    #: ``None`` for a record that names no time it can be read as: it exports no ``seal_measured`` series.
+    at: datetime | None
+
+
+#: Each warehouse's posture as this process last read or measured it.
+_postures: dict[str, _Posture] = {}
 _registered = False
 
 
 def _observe(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
     return [
-        metrics.Observation(1, {_WAREHOUSE: warehouse, _SEAL: sealed, _REQUIRED: "true" if required else "false"})
-        for warehouse, (sealed, required) in sorted(_postures.items())
+        metrics.Observation(1, {_WAREHOUSE: warehouse, _SEAL: posture.sealed, _REQUIRED: "true" if posture.required else "false"})
+        for warehouse, posture in sorted(_postures.items())
     ]
+
+
+def _observe_measured(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
+    return [metrics.Observation(posture.at.timestamp(), {_WAREHOUSE: warehouse}) for warehouse, posture in sorted(_postures.items()) if posture.at is not None]
 
 
 def _register() -> None:
@@ -59,13 +86,20 @@ def _register() -> None:
             "whose committed files a write credential can replace with a 200."
         ),
     )
+    _meter.create_observable_gauge(
+        "catalog.warehouse.seal_measured",
+        callbacks=[_observe_measured],
+        unit="s",
+        description="Per warehouse, the Unix time the probe's seal check last concluded (enforced, unenforced or untaggable); a probe that learned nothing leaves it.",
+    )
 
 
-def observe(warehouse_id: str, sealed: str | None, *, required: bool) -> None:
-    """What a registration or a validate measured of ``warehouse_id``'s store; nothing for a check that never ran."""
+def observe(warehouse_id: str, record: dict[str, Any] | None, *, required: bool) -> None:
+    """What a registration, a validate or a seal probe recorded of ``warehouse_id``'s store (``record``, holding
+    :data:`warehouses.SEALED` and :data:`warehouses.SEALED_AT`); nothing for a record that holds no measurement."""
     _register()
-    if sealed is not None:
-        _postures[warehouse_id] = (sealed, required)
+    if record is not None and isinstance(sealed := record.get(warehouses.SEALED), str):
+        _postures[warehouse_id] = _Posture(sealed=sealed, required=required, at=warehouses.sealed_at(record))
 
 
 def forget(warehouse_id: str) -> None:
@@ -84,15 +118,13 @@ def load(settings: Settings) -> None:
         return
     detection_only = settings.seal_detection_only_buckets
     for record in records:
-        if (sealed := record.get(warehouses.SEALED)) is not None:
-            _postures[record["id"]] = (sealed, record.get("bucket") not in detection_only)
+        observe(str(record["id"]), record, required=record.get("bucket") not in detection_only)
     try:
-        estate = warehouses.estate_sealed(settings.registry_root, settings.storage_options(), settings.estate_warehouse)
+        estate = warehouses.estate_seal(settings.registry_root, settings.storage_options(), settings.estate_warehouse)
     except (OSError, ValueError) as exc:
         log.warning("seal_posture_unread", extra={"error": str(exc)[:300]})
         return
-    if estate is not None:
-        _postures[settings.estate_warehouse] = (estate, split_s3_uri(settings.root.rstrip("/"))[0] not in detection_only)
+    observe(settings.estate_warehouse, estate, required=split_s3_uri(settings.root.rstrip("/"))[0] not in detection_only)
 
 
 def load_in_background(settings: Settings) -> None:

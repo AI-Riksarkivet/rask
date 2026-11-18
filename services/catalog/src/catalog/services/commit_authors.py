@@ -3,10 +3,12 @@
 Every commit of an operation the doors announce records the caller its door authenticated
 (:mod:`lakehouse.commit_records`), and the commit reconciler signs a re-announcement only for that record. A
 detached commit (``dataplane.commit_stamped``) and a stock commit through ``version/create`` record before their
-finalize. The create door's ``write_dataset`` and an unkeyed ``/insert`` let Lance commit in one call, and Lance mints the
-transaction's uuid inside it, so the author is recorded just after the version lands, under the transaction its files
-were recorded under (:func:`catalog.services.committed_files.record_landed`): a crash or a store failure in between leaves
-the version unrecorded, so a lost announcement of it is counted unauthored and pages rather than being signed for anyone
+finalize. The create door's write (``dataplane._write_blob``) and an ``/insert`` to a table declaring no key
+(``dataplane._land_rows``) let Lance commit the fragments they wrote first, and Lance writes the transaction's file inside
+that commit, so the author is recorded just after the version lands, under the transaction uuid its data files were
+recorded under before it landed and its transaction file once it landed
+(:func:`catalog.services.committed_files.seal_and_record_transaction`): a crash or a store failure in between leaves the
+version unrecorded, so a lost announcement of it is counted unauthored and pages rather than being signed for anyone
 (owner, 2026-11-01).
 """
 

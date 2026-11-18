@@ -145,7 +145,8 @@ async def create_table(
     An ``Idempotency-Key`` makes a resent create converge on the first attempt's answer ([[LH-576]]): it names one create,
     its mode, properties and rows included, so the same key with another body or other query parameters is refused 400
     (code 13). The version the create lands carries the key and is landed only while the key is still this attempt's, so
-    an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing (ADR 0240).
+    an attempt a resend took the key over from while it ran answers 409 (code 14) and lands nothing (ADR 0240). A resend
+    whose search for an earlier attempt's commit meets a version since removed (a cleanup, or ``version/delete``) is refused 409 (code 19) and writes nothing: the catalog cannot tell whether the write landed there (ADR 0240 §12).
 
     ``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob
     columns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``
@@ -253,8 +254,8 @@ async def insert_into_table(
     refused 400. Its commit carries the key, so a resend that takes the key over from an attempt lost unanswered past its
     lease finds that attempt's commit and answers with it rather than appending again; the attempt renews its claim right
     before its commit, so one that a resend took the key over from while it still ran answers 409 and commits nothing
-    (ADR 0240). The same key with another body or other query parameters is refused 400 (code 13). Optional, as on every
-    keyed door (:mod:`catalog.api.idempotency`)."""
+    (ADR 0240). A resend whose search for that commit meets a version since removed (a cleanup, or ``version/delete``) is refused 409 (code 19) and writes nothing: the catalog cannot tell whether the write landed there (ADR 0240 §12). The same key with another body or other
+    query parameters is refused 400 (code 13). Optional, as on every keyed door (:mod:`catalog.api.idempotency`)."""
     segments = parse_identifier(id)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
@@ -278,7 +279,9 @@ async def insert_into_table(
     if converge.replay is not None:
         return InsertIntoTableResponse.model_validate(converge.replay.body)
     if converge.held is not None and converge.held.written_from is not None:
-        landed = await run_in_threadpool(lambda: dataplane.landed_under_key(table.open(so, branch=branch), converge.held))
+        landed = await run_in_threadpool(
+            lambda: dataplane.landed_under_key(table.open(so, branch=branch), converge.held, table_location=table.location, branch=branch, so=so)
+        )
         if landed is not None:
             found = InsertIntoTableResponse(version=landed[0], num_inserted_rows=dataplane.inserted_rows(landed[1]))
             await converge.remember(200, found)

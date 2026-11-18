@@ -1043,11 +1043,16 @@ governing their data. The project-scoped surface is the console's project page, 
   append to a table declaring no key is NOT stamped: `land_keyed` renews, then puts one Lance commit with no retry of its own
   (`max_retries=0`, which still rebases), so keyed appends land as concurrently as unkeyed ones; a lost put reads the
   version it tried for its own transaction before putting again. A claim unanswered past `LEASE` (300 s) is taken over.
-  The renewal before each put records the version the put was planned on, and the key's record keeps the lowest one for
-  its whole life (`_Claimed.written_from`), which no takeover and no release moves (ADR 0240 §11): every claim after an
+  The renewal before each put records the version the put was planned on (`_Claimed.written_from`, the latest plan: an
+  attempt renews only once its search found none of the key's writes, so nothing under the key is at or before it;
+  checked on the model, ADR 0240 §12), which no takeover and no release moves (ADR 0240 §11): every claim after an
   unanswered attempt that reached a put, a released key's included, is told so (`TakenOver(written_from)`), and every
-  door that lands a version looks for the key's stamp on the versions after it (`dataplane.landed_under_key`, no clock)
-  and answers what it finds ([[LH-577]]); a takeover of an attempt that reached no put searches nothing. An attempt whose key another took over answers 409 code 14 and lands nothing; one refused (4xx) after its
+  door that lands a version looks for the key's stamp on the versions after it (`dataplane.landed_under_key`, no clock:
+  one listing of the ref's `_versions/` and `read_transaction` of each version in the window, never `versions()`, which
+  reads every manifest) and answers what it finds ([[LH-577]]); a takeover of an attempt that reached no put searches
+  nothing. A window holding a version no longer listed (a cleanup or `version/delete` removed it inside the key's
+  lifetime) is refused 409 InvalidTableState (19) and the write is never applied again under that key (ADR 0240 §12,
+  SearchWhole). An attempt whose key another took over answers 409 code 14 and lands nothing; one refused (4xx) after its
   key was taken over answers 409 code 14 too, not its refusal (`keyed_door`); and an answer is recorded only over the
   attempt's own claim (`idempotency.record_outcome`), so the key's answer is never replaced. The insert and the restore
   record their answer right after their commit, before the lineage emit. `specs/catalog/CommitPath.tla` models it; every
@@ -1174,14 +1179,19 @@ governing their data. The project-scoped surface is the console's project page, 
   before its commit seals and records them BEFORE the version lands (`_write_blob`, `dataplane._land_rows`, through
   `committed_files.appended`), and only the transaction file Lance writes inside its commit is sealed after; a landed
   version whose record lacks a file it names is finished by the commit reconciler (`commit_reconcile.finish_landed`,
-  `catalog.committed_files.finished`; ADR 0242 § The order of effects). A seal the store refuses fails the
+  `catalog.committed_files.finished`; ADR 0242 § The order of effects), and a finish that fails holds the ref's mark
+  before its version, counted on `catalog.committed_files.unrecorded` every pass, so the next pass tries again (ADR 0242
+  § Found by review, third round, B1). A seal the store refuses fails the
   commit 503 before its version lands, unless git declares the warehouse's bucket detection-only
   (`catalog.declared.warehouses[].seal`, `LANCE_SEAL_DETECTION_ONLY_BUCKETS`, `committed_files.detection_only`); the
   warehouse probe's seal check (`vend_probe.SEAL_CHECK`) refuses a store that does not enforce the seal at registration
   unless git declares it so, records `sealed` on the warehouse and exports `catalog.warehouse.seal`
   (`WarehouseSealUnenforced`, `WarehouseSealLost`). Only the store's explicit refusal counts as one (403; 501 for a
   store keeping no tags, `stored_objects.refusal`): any other answer is `inconclusive`, which registers nothing (503),
-  leaves a validated record as it was, and fails a commit's seal 503, never `untaggable`. The catalog probes every
+  leaves a validated record as it was, and fails a commit's seal 503, never `untaggable`; but a write over the sealed
+  file the store TOOK makes the check `unenforced` whatever the other write answered (`warehouses._seal_verdict`'s
+  table). The record keeps when the seal was last measured (`sealed_at`), exported as `catalog.warehouse.seal_measured`,
+  and `WarehouseSealUnmeasured` fires on one older than two probe periods. The catalog probes every
   warehouse it serves, the estate's own included, at its start and on `catalog.sealProbe.periodSeconds`
   (`catalog.api.seal_probe`, the timer `catalog-seal-probe`), so the alert's signal moves on its own. A session policy past what a store counts (`vending.counted_length`:
   RustFS re-serialises a one-string `Resource` as a list) is refused 400 `SessionPolicyTooLong` naming each part's

@@ -1207,6 +1207,30 @@ groups:
             commit there with a 503. Restore the store's policy (ADR 0242 § What a platform S3 store must support), then
             validate the warehouse again (POST /management/v1/warehouses/{id}/validate).
 
+      # ADR 0242 § Found by review, third round, B2: a probe that learns nothing (the store answered every write over the
+      # sealed file with neither a refusal nor an admission) keeps the warehouse's last verdict, so the two rules above
+      # read a verdict that may be stale. `catalog.warehouse.seal_measured` is the time of the last conclusive
+      # measurement, kept on the warehouse's record and read again at every start, so no replica restart and no counter
+      # reset makes it fresh; the period is the one the probe's timer exports (`catalog.sealProbe.periodSeconds`, as
+      # `timer_period_seconds{timer="catalog-seal-probe"}`, which no replica exports where no probe runs on a period, and
+      # then the rule compares against nothing and stays quiet), so the rule moves with what git declares. `max by` reads
+      # the freshest replica's view.
+      - alert: WarehouseSealUnmeasured
+        expr: >-
+          time() - max by (lance_warehouse) (catalog_warehouse_seal_measured_seconds)
+          > 2 * scalar(max(timer_period_seconds{timer="catalog-seal-probe"}))
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "Warehouse {{ $labels.lance_warehouse }}'s seal has not been measured for two probe periods"
+          description: >-
+            No seal probe of this warehouse's store has concluded for more than two catalog.sealProbe.periodSeconds: the
+            store answers the probe's writes over a sealed file with neither a refusal nor an admission (a 5xx, a
+            throttling, a timeout), so catalog.warehouse.seal still exports the verdict it last measured, which may no
+            longer hold. The warehouse_seal_unprobed WARNING log names the warehouse and each check's answer; validate it
+            (POST /management/v1/warehouses/{id}/validate) once the store answers.
+
       # One table the catalog keeps refusing, or whose policy record cannot be read, which the ratio rule cannot see: an
       # id that holds no tuples is answered 403 at the vend door on every pass. Counted by what refused it, a closed
       # set whose series exist at 0 from a worker's start, so the first parked pass is an increase. A refused table is

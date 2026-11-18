@@ -444,10 +444,19 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 own = f"_transactions/{landed.read_version}-{landed.uuid}.txn"
                 data = [f"data/{late.get_fragments()[-1].data_files()[0].path}"]
                 assert recorded_paths() == data, "the data files are recorded before the version lands, and the transaction file is not"
-                finished_before = len(finished.added)
+                # The first tick's finish is refused by the same store (ADR 0242 § Found by review, third round, B1): it is
+                # counted, and the tick holds the ref's mark before the version, so a later tick finishes it. Before, the
+                # mark moved past the version and no tick read it again: the file stayed unrecorded for good.
+                finished_before, unrecorded_before = len(finished.added), len(files_unrecorded.added)
+                monkeypatch.setattr(file_identities, "record", refused_once_landed)
+                reconcile()
+                monkeypatch.setattr(file_identities, "record", real_files)
+                assert recorded_paths() == data
+                assert 1 in [amount for amount, _ in files_unrecorded.added[unrecorded_before:]], "the refused finish is counted"
+                reconcile()
                 reconcile()
                 assert recorded_paths() == sorted([*data, own])
-                assert [amount for amount, _ in finished.added[finished_before:]] == [1], "the tick finished the one version a landing left"
+                assert [amount for amount, _ in finished.added[finished_before:]] == [1], "a later tick finished the one version a landing left"
 
     assert [amount for amount, _ in counted.added] == [1, 1, 1, 1, 1]
     # The create, both inserts the catalog recorded, the refused one, the registered table's insert, and the late table's

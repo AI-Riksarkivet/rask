@@ -12,8 +12,10 @@ Each probe is the one registration and validate make (``endpoints.warehouses.pro
 and its verdict is kept as validate keeps it: a registered warehouse's on its record, the estate's on a record of its
 own (``warehouses.set_estate_sealed``), each exported on ``catalog.warehouse.seal`` (``catalog.services.seal_posture``).
 A probe that learned nothing (the store did not answer, refused nothing and admitted nothing, ADR 0242 § Found by review,
-second round) leaves the record as it was and is counted on ``catalog.warehouse.seal_unprobed``, so a store hiccup
-neither admits a store nor pages for one that still enforces.
+second round) leaves the record as it was, and the time it was measured with it, and is counted on
+``catalog.warehouse.seal_unprobed``, so a store hiccup neither admits a store nor pages for one that still enforces; a
+warehouse whose probe stays inconclusive for two periods pages on that time's age (``WarehouseSealUnmeasured``, § Found
+by review, third round, B2).
 """
 
 from __future__ import annotations
@@ -94,10 +96,10 @@ async def probe_all(app: FastAPI, settings: Settings) -> SealProbeTick:
                 log.warning("warehouse_seal_unprobed", extra={"warehouse": warehouse_id, "checks": [check.model_dump() for check in report.checks]})
             continue
         if record is None:
-            await run_in_threadpool(warehouses.set_estate_sealed, settings.registry_root, so, warehouse_id, report.sealed)
+            measured = await run_in_threadpool(warehouses.set_estate_sealed, settings.registry_root, so, warehouse_id, report.sealed)
         else:
-            await run_in_threadpool(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed)
-        seal_posture.observe(warehouse_id, report.sealed, required=bucket not in settings.seal_detection_only_buckets)
+            measured = await run_in_threadpool(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed)
+        seal_posture.observe(warehouse_id, measured, required=bucket not in settings.seal_detection_only_buckets)
         done.measured += 1
     log.info("warehouse_seal_probed", extra={"measured": done.measured, "unprobed": done.unprobed})
     return done

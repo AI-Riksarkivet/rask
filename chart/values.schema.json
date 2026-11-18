@@ -416,7 +416,7 @@
                     "type": "object",
                     "properties": {
                         "periodSeconds": {
-                            "description": "Seconds between two ticks of the timer on which the catalog probes the seal of every warehouse it serves (`LANCE_SEAL_PROBE_PERIOD_SECONDS`); a store that stops enforcing the seal is recorded and pages within one period.",
+                            "description": "Seconds between two ticks of the timer on which the catalog probes the seal of every warehouse it serves (`LANCE_SEAL_PROBE_PERIOD_SECONDS`); a store that stops enforcing the seal is recorded and pages within one period of the store answering the probe, and a warehouse whose probe concludes nothing for two periods pages as unmeasured.",
                             "type": "integer",
                             "minimum": 1
                         }
