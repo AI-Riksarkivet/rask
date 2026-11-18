@@ -552,7 +552,7 @@ async def _start_delete(project_id: str, record: dict[str, str], settings: Catal
     so = settings.storage_options()
     # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
     # `project_to_delete` has proven the caller administers this tenant.
-    fga_deps.require_not_protected(record, kind="project", obj_id=project_id, force=force)
+    fga_deps.require_not_protected(protection.is_protected(record), kind="project", obj_id=project_id, force=force)
 
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
     # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be

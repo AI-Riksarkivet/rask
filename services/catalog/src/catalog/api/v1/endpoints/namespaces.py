@@ -76,6 +76,7 @@ from lakehouse.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.governed import fga
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.protection import ProtectionRecord
 from lakehouse.storage_options import StorageOptions
 from lakehouse.trash import TrashRecord
 
@@ -793,7 +794,7 @@ async def _require_descendants_unprotected(settings: CatalogStore, descendants: 
         return
     records = await asyncio.gather(*(run_in_threadpool(protections.read, settings, item.kind, item.uuid) for item in descendants))
     for item, record in zip(descendants, records, strict=True):
-        fga_deps.require_not_protected(record or {}, kind=item.kind, obj_id=fga.canonical_object_id(item.segments), force=False)
+        fga_deps.require_not_protected(record is not None and record.protected, kind=item.kind, obj_id=fga.canonical_object_id(item.segments), force=False)
 
 
 @spec_router.post("/{id}/drop", response_model_exclude_none=True)
@@ -1198,7 +1199,7 @@ async def get_namespace_protection(id: str, ns: NamespaceDep, settings: Settings
     canonical = fga.canonical_object_id(segments)
     namespace = await fga_deps.identify(ns, settings, "namespace", segments)
     record = await run_in_threadpool(protections.read, settings, "namespace", namespace.uuid)
-    return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
+    return ProtectionResponse(id=canonical, protected=record is not None and record.protected, set_by=record.set_by if record is not None else None)
 
 
 @management_router.post("/{id}/protection", response_model_exclude_none=True)
@@ -1218,13 +1219,9 @@ async def set_namespace_protection(
     namespace = await fga_deps.identify(ns, settings, "namespace", segments)
     so = settings.storage_options()
     if body.protected:
-        record = {
-            "kind": "namespace",
-            "id": canonical,
-            "uuid": namespace.uuid,
-            "protected": "true",
-            "set_by": f"user:{token.subject}" if token is not None else "anonymous",
-        }
+        record = ProtectionRecord(
+            kind="namespace", id=canonical, uuid=namespace.uuid, protected=True, set_by=f"user:{token.subject}" if token is not None else "anonymous"
+        )
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
         await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "namespace", namespace.uuid)

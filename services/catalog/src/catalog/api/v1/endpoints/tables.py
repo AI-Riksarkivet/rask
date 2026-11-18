@@ -111,6 +111,7 @@ from lakehouse.governed.settings import FgaSettings
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import uuid_of
 from lakehouse.ns_errors import PartiallyApplied
+from lakehouse.protection import ProtectionRecord
 from lakehouse.storage_options import StorageOptions
 
 
@@ -1521,7 +1522,7 @@ async def get_table_protection(id: str, table: ResolvedTableDep, settings: Setti
     record's `set_by` comes back so a refused drop can name who armed it."""
     canonical = fga.canonical_object_id(table.segments)
     record = await run_in_threadpool(protections.read, settings, "table", table.require_uuid())
-    return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
+    return ProtectionResponse(id=canonical, protected=record is not None and record.protected, set_by=record.set_by if record is not None else None)
 
 
 @management_router.get("/{id}/tasks", response_model_exclude_none=True)
@@ -1671,13 +1672,9 @@ async def set_table_protection(
     table_uuid = table.require_uuid()
     so = settings.storage_options()
     if body.protected:
-        record = {
-            "kind": "table",
-            "id": canonical,
-            "uuid": table_uuid,
-            "protected": "true",
-            "set_by": f"user:{token.subject}" if token is not None else "anonymous",
-        }
+        record = ProtectionRecord(
+            kind="table", id=canonical, uuid=table_uuid, protected=True, set_by=f"user:{token.subject}" if token is not None else "anonymous"
+        )
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
         await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "table", table_uuid)

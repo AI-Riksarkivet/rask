@@ -62,7 +62,7 @@ from catalog.core.config import CatalogAuthzSettings, CatalogLineageSettings, Ca
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
 from catalog.services import dataplane, native, object_uuids, protections, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
-from lakehouse import object_records, protection, trash
+from lakehouse import object_records, trash
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.machine_identity import ServicePrincipal
@@ -1929,7 +1929,7 @@ def require_namespace_depth(segments: list[str]) -> None:
         )
 
 
-def require_not_protected(record: dict[str, str], *, kind: str, obj_id: str, force: bool) -> None:
+def require_not_protected(protected: bool, *, kind: str, obj_id: str, force: bool) -> None:
     """Refuse to delete an object marked ``protected`` unless the caller passed ``force=true``.
 
     Deletion protection (`open_hierarchy_lifecycle.md` Decision 5): an opt-in flag on the registry
@@ -1959,7 +1959,7 @@ def require_not_protected(record: dict[str, str], *, kind: str, obj_id: str, for
     container-shaped one is the closest. The table is the rung the spec covers and the rung clients are
     generated against, so it is the one where a wrong code has a reader.
     """
-    if force or not protection.is_protected(record):
+    if force or not protected:
         return
     refusal = InvalidTableStateError if kind == "table" else NamespaceNotEmptyError
     raise refusal(
@@ -2009,7 +2009,7 @@ async def require_table_unprotected(settings: CatalogStore, table: ResolvedTable
     if force:
         return
     guard = await run_in_threadpool(protections.read, settings, "table", table.require_uuid())
-    require_not_protected(guard or {}, kind="table", obj_id=fga.canonical_object_id(table.segments), force=False)
+    require_not_protected(guard is not None and guard.protected, kind="table", obj_id=fga.canonical_object_id(table.segments), force=False)
 
 
 async def require_namespace_unprotected(settings: CatalogStore, namespace: GovernedObject, *, force: bool) -> None:
@@ -2021,7 +2021,7 @@ async def require_namespace_unprotected(settings: CatalogStore, namespace: Gover
     if force:
         return
     guard = await run_in_threadpool(protections.read, settings, "namespace", namespace.uuid)
-    require_not_protected(guard or {}, kind="namespace", obj_id=fga.canonical_object_id(namespace.segments), force=False)
+    require_not_protected(guard is not None and guard.protected, kind="namespace", obj_id=fga.canonical_object_id(namespace.segments), force=False)
 
 
 async def require_project_exists(settings: CatalogStore, project: str) -> None:
@@ -2886,7 +2886,7 @@ async def require_staged_operation(
     table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
     if replaces:
         guard = await run_in_threadpool(protections.read, settings, "table", table_uuid)
-        require_not_protected(guard or {}, kind="table", obj_id=canonical, force=False)
+        require_not_protected(guard is not None and guard.protected, kind="table", obj_id=canonical, force=False)
     if authz is None:
         return
     await authz.require(relation, fga.table_object(table_uuid), label=f"table:{canonical}")

@@ -18,6 +18,7 @@ the native namespace is a recording stand-in so a refusal can assert the native 
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -127,7 +128,7 @@ def _protect(settings: Settings, kind: str, canonical: str) -> None:
     protection.set_protection(
         settings.registry_root,
         settings.storage_options(),
-        {"kind": kind, "id": canonical, "uuid": _uuid(canonical), "protected": "true", "set_by": "test"},
+        protection.ProtectionRecord.model_validate({"kind": kind, "id": canonical, "uuid": _uuid(canonical), "protected": "true", "set_by": "test"}),
     )
 
 
@@ -141,11 +142,35 @@ def test_protection_roundtrip_and_absence_means_unprotected(tmp_path: Any) -> No
     assert protection.get_protection(settings.registry_root, so, "table", pages) is None
     _protect(settings, "table", "bronze$pages")
     record = protection.get_protection(settings.registry_root, so, "table", pages)
-    assert record is not None and record["protected"] == "true"
+    assert record is not None and (record.protected, record.stored()["protected"]) == (True, "true")
     assert protection.get_protection(settings.registry_root, so, "table", "bronze$pages") is None, "a record is keyed by the uuid, never the name"
     assert protection.clear_protection(settings.registry_root, so, "table", pages) is True
     assert protection.get_protection(settings.registry_root, so, "table", pages) is None
     assert protection.clear_protection(settings.registry_root, so, "table", pages) is False
+
+
+@pytest.mark.parametrize(("flag", "armed"), [("TRUE", True), (True, True), ("False", False)], ids=["text-in-capitals", "a-json-true", "false"])
+def test_the_flag_reads_one_way_for_the_guard_and_for_the_door_that_answers_it(tmp_path: Any, flag: object, armed: bool) -> None:
+    """One reading of a stored flag, which the protection door answers and the drop's guard acts on."""
+    from pathlib import Path
+
+    from catalog.api.v1.endpoints import tables as t_ep
+    from lakehouse.record_store import record_key
+
+    settings = _settings(tmp_path)
+    filed = Path(settings.registry_root.removeprefix("file://")) / record_key(protection.PREFIX, "table", _uuid("bronze$pages"))
+    filed.parent.mkdir(parents=True, exist_ok=True)
+    filed.write_text(json.dumps({"kind": "table", "id": "bronze$pages", "uuid": _uuid("bronze$pages"), "protected": flag, "set_by": 7}))
+
+    answered = asyncio.run(t_ep.get_table_protection(id="bronze$pages", table=_resolved(settings), settings=settings))
+    ns: Any = _RecordingNamespace()
+    try:
+        _drop_table(settings, ns)
+        refused = False
+    except InvalidTableStateError:
+        refused = True
+
+    assert (answered.protected, answered.set_by, refused, bool(ns.calls)) == (armed, None, armed, not armed)
 
 
 def test_kinds_do_not_collide(tmp_path: Any) -> None:
@@ -198,7 +223,19 @@ def test_a_protected_table_refuses_drop_and_the_native_call_never_ran(tmp_path: 
     assert ns.calls == [], "the guard must run BEFORE the native call — bytes were touched"
 
 
-@pytest.mark.parametrize("body", ['["protected"]', "null", '{"protected": "tr'], ids=["a-list", "null", "cut-short"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        '["protected"]',
+        "null",
+        '{"protected": "tr',
+        '{"kind": "table", "uuid": "UUID", "protected": "maybe"}',
+        # A word a lax boolean parse would read as false, and so as unprotected.
+        '{"kind": "table", "uuid": "UUID", "protected": "no"}',
+        '{"kind": "table", "uuid": "UUID"}',
+    ],
+    ids=["a-list", "null", "cut-short", "a-flag-neither-true-nor-false", "a-word-for-false", "no-flag"],
+)
 def test_a_protection_record_that_cannot_be_read_refuses_the_drop_and_is_never_read_as_unprotected(tmp_path: Any, body: str) -> None:
     """A record is filed for the table and is no protection record. Whether its owner armed it is unknown, so the drop
     is refused before the native call, by the key the record is filed under."""
@@ -210,7 +247,7 @@ def test_a_protection_record_that_cannot_be_read_refuses_the_drop_and_is_never_r
     key = record_key(protection.PREFIX, "table", _uuid("bronze$pages"))
     filed = Path(settings.registry_root.removeprefix("file://")) / key
     filed.parent.mkdir(parents=True, exist_ok=True)
-    filed.write_text(body)
+    filed.write_text(body.replace("UUID", _uuid("bronze$pages")))
     ns: Any = _RecordingNamespace()
 
     with pytest.raises(InternalError, match=key):
@@ -297,7 +334,8 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
         )
     )
     assert result.protected is True
-    assert (protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) or {})["set_by"] == "anonymous"
+    armed = protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages"))
+    assert armed is not None and armed.set_by == "anonymous"
     result = asyncio.run(
         t_ep.set_table_protection(
             id="bronze$pages",
@@ -726,7 +764,9 @@ def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:
     ns: Any = _RecordingNamespace()
     _stand(settings, "db1$t", "db1$other")
     store = table_claims.claim_store(settings)
-    protection.set_protection(settings.registry_root, so, {"kind": "table", "id": "db1$t", "uuid": _uuid("db1$t"), "protected": "true", "set_by": "user:alice"})
+    protection.set_protection(
+        settings.registry_root, so, protection.ProtectionRecord(kind="table", id="db1$t", uuid=_uuid("db1$t"), protected=True, set_by="user:alice")
+    )
 
     read = asyncio.run(t_ep.get_table_protection("db1$t", table=table_claims.resolve(ns, store, ["db1", "t"]), settings=settings))
     assert (read.protected, read.set_by) == (True, "user:alice")
@@ -734,7 +774,7 @@ def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:
     assert (unarmed.protected, unarmed.set_by) == (False, None)
 
     protection.set_protection(
-        settings.registry_root, so, {"kind": "namespace", "id": "bronze", "uuid": _uuid("bronze"), "protected": "true", "set_by": "user:bob"}
+        settings.registry_root, so, protection.ProtectionRecord(kind="namespace", id="bronze", uuid=_uuid("bronze"), protected=True, set_by="user:bob")
     )
     ns_read = asyncio.run(n_ep.get_namespace_protection("bronze", ns=ns, settings=settings))
     assert (ns_read.protected, ns_read.set_by) == (True, "user:bob")

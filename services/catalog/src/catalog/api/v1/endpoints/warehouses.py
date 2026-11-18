@@ -97,7 +97,7 @@ from catalog.services.vend_probe import (
     ProbeReport,
     summarize_probe,
 )
-from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
+from lakehouse import base_registry, clone_sources, data_directories, location_claims, protection, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
@@ -1067,7 +1067,7 @@ async def delete_warehouse(
     project = record["project"]
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
     # state, so it runs strictly after the gate above.
-    fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)
+    fga_deps.require_not_protected(protection.is_protected(record), kind="warehouse", obj_id=warehouse_id, force=force)
 
     # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
     in_estate_store = names_the_estate_store(record.get("endpoint"), estate=settings.s3_endpoint)

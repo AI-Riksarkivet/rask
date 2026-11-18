@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from lance_namespace import InternalError
 
 from catalog.core.config import CatalogStore
 from lakehouse import protection
+from lakehouse.protection import ProtectedKind, ProtectionRecord
 
 
-def read(settings: CatalogStore, kind: str, uuid: str) -> dict[str, Any] | None:
+def read(settings: CatalogStore, kind: ProtectedKind, uuid: str) -> ProtectionRecord | None:
     """The protection record of the ``kind`` object ``uuid`` names, or ``None`` when none is filed (unprotected).
 
     Raises:

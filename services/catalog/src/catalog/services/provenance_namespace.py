@@ -54,6 +54,7 @@ from lakehouse import maintenance_policies, protection
 from lakehouse.governed import fga
 from lakehouse.maintenance_policies import PolicyRecord
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.protection import ProtectionRecord
 
 
 log = logging.getLogger(__name__)
@@ -152,7 +153,7 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
         protection.set_protection,
         settings.registry_root,
         settings.storage_options(),
-        {"kind": "namespace", "id": canonical, "uuid": namespace_uuid, "protected": "true", "set_by": ACTOR},
+        ProtectionRecord(kind="namespace", id=canonical, uuid=namespace_uuid, protected=True, set_by=ACTOR),
     )
     await run_in_threadpool(keep_declared_retention, settings, canonical=canonical, namespace_uuid=namespace_uuid)
     if settings.fga_enabled and client is not None:
