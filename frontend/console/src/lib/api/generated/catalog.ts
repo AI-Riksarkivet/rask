@@ -2756,24 +2756,31 @@ export interface paths {
          *        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
          *        yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,
          *        so re-issuing the call finishes it.
-         *     6. Tuples on ``warehouse:<id>``, then the bucket's purge and claim (step 7), then the registry record last: the
-         *        record is what this door is addressed by, so a failure before it leaves the warehouse for the re-issue.
-         *     7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
-         *        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
-         *        purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
-         *        still claims, or reserved platform storage — refuses BEFORE the cascade
-         *        (:func:`_require_bucket_purgeable`). A purge then releases the bucket's claim
-         *        (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping
-         *        the bytes keeps the claim, so no other project adopts what the bucket still holds.
+         *     6. Tuples on ``warehouse:<id>``, then the bucket's bytes (step 7), then the registry record, then the bucket's
+         *        claim: the record is what this door is addressed by, so a failure before it leaves the warehouse for the
+         *        re-issue, and the claim is released only once no record names the bucket.
+         *     7. **Bytes only on ``?purge_bucket=true``, and only under a claim the purge itself holds** (ADR 0241 §10 Q1). A
+         *        catalog entry is recoverable, a customer's bucket is not, so the two never share a default; a record-less bucket
+         *        is reported by the reconciler, not lost. A purge that would take bytes this warehouse does not solely own — a
+         *        bucket a same-project sibling still claims, or reserved platform storage — refuses BEFORE the cascade
+         *        (:func:`_require_bucket_purgeable`). Before its first delete the purge takes the bucket's claim for itself
+         *        (``warehouses.take_for_purge``: stamped ``purging`` under the read's ETag, where it names this warehouse's
+         *        project at its incarnation), which refuses every create on the bucket (409) until it ends; the bytes are deleted
+         *        while the claim read again is still its stamp (``warehouses.purge_bucket``), and the claim is released last
+         *        (``warehouses.end_purge``). A purge that dies leaves the stamp, and only this delete asked again resumes it. A
+         *        claim released, absent or naming anyone else keeps every byte: the record goes, and the answer's ``bytes_kept``
+         *        says why. Audited ``bucket_purge``: ``allow`` once the claim is taken and before the first delete, then
+         *        ``success``, or ``failure`` naming the ``stage`` it reached.
          *
          *     Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
          *     reaches its bucket.
          *
          *     **What a dead tenant left is the estate admin's to purge** (ADR 0241 §9 P3): a record made under an incarnation of its
          *     project that no longer stands, or one the converge tick ended, is administered by no tenant, and only
-         *     ``can_purge_dead_tenant_warehouse`` on the estate deletes it, with ``?purge_bucket=true``: its bytes are no tenant's to
-         *     keep, and a delete keeping them would keep the claim that blocks the bucket. The purge releases the claim, is audited
-         *     (``dead_tenant_purge``) and is announced as ``warehouse_deleted`` with ``dead_tenant: true``.
+         *     ``can_purge_dead_tenant_warehouse`` on the estate deletes it, with ``?purge_bucket=true``. Its record is stamped
+         *     ``purging`` first, so no create takes its key meanwhile; a claim no longer its own leaves the bucket untouched, its
+         *     catalog included. Announced as ``warehouse_deleted`` with ``dead_tenant: true``. The same relation reaches, by its
+         *     bucket in the warehouse's place, a dead incarnation's claim no record names (ADR 0241 §10 Q2).
          */
         delete: operations["delete_warehouse_management_v1_warehouses__warehouse_id__delete"];
         options?: never;
@@ -6790,6 +6797,8 @@ export interface components {
             bucket: string;
             /** Bucket Purged */
             bucket_purged: boolean;
+            /** Bytes Kept */
+            bytes_kept?: string | null;
             /** Id */
             id: string;
             /** Namespaces Dropped */

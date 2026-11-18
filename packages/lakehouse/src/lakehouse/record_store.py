@@ -137,7 +137,9 @@ def delete_record(control_root: str, storage_options: StorageOptions, key: str) 
     return stored_objects.delete_object(control_root, storage_options, key)
 
 
-def list_records(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str, strict: bool = False) -> list[dict[str, Any]]:
+def list_records(
+    control_root: str, storage_options: StorageOptions, prefix: str, *, event: str, strict: bool = False, skipped: list[str] | None = None
+) -> list[dict[str, Any]]:
     """Every readable record under ``prefix`` (unordered). An absent prefix yields ``[]``.
 
     NON-RECURSIVE on purpose: registries park their own state under a child prefix
@@ -147,7 +149,8 @@ def list_records(control_root: str, storage_options: StorageOptions, prefix: str
     is the tolerance every caller was written for — these feed maintenance sweeps, where one bad record
     must not stop every other tenant being maintained — and it is also why a caller making a DESTRUCTIVE
     decision must not use this: a record it cannot read is silently not in the answer. Such a caller passes
-    ``strict``, and then a record it cannot read raises instead, so it decides on the whole listing or none.
+    ``strict``, and then a record it cannot read raises instead, so it decides on the whole listing or none. A caller that
+    reports what it skipped passes ``skipped``, and the path of each record skipped is appended to it.
 
     Raises:
         ValueError: ``strict``, and a record is not a JSON object.
@@ -165,6 +168,8 @@ def list_records(control_root: str, storage_options: StorageOptions, prefix: str
             log.warning(f"{event}_unreadable", extra={"path": info.path, "error": str(exc)})
             if strict:
                 raise
+            if skipped is not None:
+                skipped.append(info.path)
             continue
         if isinstance(loaded, dict):
             records.append(loaded)
@@ -172,4 +177,6 @@ def list_records(control_root: str, storage_options: StorageOptions, prefix: str
             log.warning(f"{event}_malformed", extra={"path": info.path})
             if strict:
                 raise ValueError(f"the record at {info.path} is not a JSON object")
+            if skipped is not None:
+                skipped.append(info.path)
     return records

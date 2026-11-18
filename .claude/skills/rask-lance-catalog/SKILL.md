@@ -566,13 +566,24 @@ A table or namespace is named in OpenFGA by its uuid; a project and a warehouse 
   its policy doors and the role listing and gates all refuse or skip it, and it is reported
   (`catalog.incarnations.orphans`, `record_of_a_dead_tenant`) until it is gone. Past the request deadline plus five
   minutes the converge tick stamps an UNBORN one `ended_at`/`ended_reason` (never deleted: `warehouses.get_warehouse`
-  reads it as absent, `get_warehouse_record` reads it, a create of its id takes its key) and releases its bucket's claim
-  (stamped `released_at`, under the read's ETag, `warehouses.release_claim`) where the bucket holds only what a create
-  writes (`warehouses.written_by_others`: `_validate/` and the `__manifest` row of the warehouse alone); a claim of a dead
-  incarnation no record names is released the same way (§9 P3). A BORN orphan keeps its record and its claim until the
-  estate admin purges it: `DELETE /management/v1/warehouses/{id}?purge_bucket=true`, gated on
-  `estate#can_purge_dead_tenant_warehouse` (`warehouses.warehouse_to_delete`), audited `dead_tenant_purge` and announced
-  `warehouse_deleted` with `dead_tenant: true`. A project policy record of a dead incarnation governs no bucket claimed
+  reads it as absent, `get_warehouse_record` reads it, a create of its id takes its key only once its bucket's claim no
+  longer names it, `warehouses.require_key_free`, §10 Q2). Where the bucket holds only what a create writes
+  (`warehouses.written_by_others`: `_validate/` and the `__manifest` row of the warehouse alone), the tick takes the claim,
+  deletes exactly those objects, lists again and releases it only on an empty bucket (§10 Q6a); a claim of a dead
+  incarnation no record names is released the same way, or, holding anything else, reported as `bucket:<name>`. A BORN
+  orphan keeps its record and its claim until the estate admin purges it: `DELETE
+  /management/v1/warehouses/{id}?purge_bucket=true`, gated on `estate#can_purge_dead_tenant_warehouse`
+  (`warehouses.warehouse_to_delete`), which with no record under the id reaches a dead claim no record names by its
+  bucket in the id's place, and announced `warehouse_deleted` with `dead_tenant: true`. **Bytes are deleted only under a
+  claim the purger holds** (§10 Q1): every purge (a warehouse delete's, the estate owner's by bucket, the tick's) first
+  takes the claim (`warehouses.take_for_purge`, stamped `purging` under the read's ETag where it names the project at the
+  incarnation addressed), deletes through ONE function, `warehouses.purge_bucket`, which reads the claim again before its
+  first delete and between batches, and releases through ONE function, `warehouses.end_purge`; a stamped claim refuses
+  every create on the bucket (409, code 14), and a claim released, absent or another's keeps every byte (`bytes_kept` in
+  the answer). Audited `bucket_purge` (`allow` with `stage: claim_taken` before the first delete, then `success` or
+  `failure` naming its `stage`). A create asks `warehouses.require_claim_held` before each write into its bucket and
+  before its record, and gives up past the tick's bound (§10 Q6b). The tick's listings are tolerant: an unreadable
+  record is named in `failed`, and while a claim cannot be read nothing is ended or released (§10 Q3). A project policy record of a dead incarnation governs no bucket claimed
   by another (`maintenance_policies.governing_policy` compares it with the claim's); the tick reports it and never removes
   it (a removal under the id would be unconditional and could take the live tenant's policy), and the next set replaces it.
 - **Every write on or naming the object is fenced, after its gate** (`fga_deps.door_fence(gate=)`, `fga.fenced`,

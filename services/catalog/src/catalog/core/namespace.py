@@ -115,6 +115,14 @@ class NamespaceConnections:
             self._keys[built] = key
             return built
 
+    def forget(self, root: str) -> None:
+        """Drop every connection rooted at ``root``, so the next use builds one at the index as it stands: a purge or the
+        converge tick removed the root's ``__manifest`` (ADR 0241 §10 Q6a), and a connection holding a version of the index
+        that is gone answers ``InternalError`` until it ages out. Another replica's ages out within
+        ``connection_max_age_seconds``."""
+        with self._building:
+            self._built = {held: entry for held, entry in self._built.items() if held[1] != root}
+
     def _young(self, key: _ConnectionKey, settings: Settings) -> LanceNamespace | None:
         """The connection built under ``key``, while it is younger than the age a connection is served for."""
         if (entry := self._built.get(key)) is None or self._clock() - entry[1] >= settings.connection_max_age_seconds:

@@ -104,7 +104,7 @@ def test_no_ticket_outlives_the_request_that_wrote_it(acme: Any, monkeypatch: py
     index = fga.ticket_index(ticket)
     acme.store.write((str(ticket.user), str(ticket.relation), str(ticket.object)), (str(index.user), str(index.relation), str(index.object)))
     settings = app.state.settings
-    converge = partial(incarnations.converge, settings.registry_root, settings.storage_options(), app.state.fga)
+    converge = partial(incarnations.converge, settings.registry_root, settings.storage_options(), app.state.fga, connections=app.state.connections)
 
     acme.client.portal.call(partial(converge, bound=incarnations.ticket_bound(settings.request_deadline_seconds)))
     kept = len(_tickets(acme))

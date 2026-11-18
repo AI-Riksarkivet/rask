@@ -19,10 +19,12 @@ it sweeps every fence ticket of the estate older than :func:`ticket_bound` (a ti
 read of the open tickets (``fga.sweep_tickets``); and it reports every record a dead tenant left (a warehouse, a role or a
 project policy naming a project incarnation that no longer stands, written by a create or a set that raced its project's
 delete), refuses to bear or write any edge from it, and, once its create cannot still be running, ends an unborn one: a
-warehouse's record is stamped ended and kept for the estate admin, which frees its id, and its bucket's claim is released
-where the bucket holds only what a create writes (``warehouses.written_by_others``): an unborn warehouse held no grant,
-so no door made anything in it, and no byte is deleted or released on a guess. A born orphan is kept, its claim with it,
-until the estate admin purges it (ADR 0241 §9 P3).
+warehouse's record is stamped ended and kept for the estate admin, and its bucket's claim is released where the bucket
+holds only what a create writes (``warehouses.written_by_others``), once the tick, holding the claim, has removed exactly
+that and found the bucket empty: an unborn warehouse held no grant, so no door made anything in it, and no byte is deleted
+or released on a guess. A born orphan is kept, its claim with it, until the estate admin purges it (ADR 0241 §9 P3), and
+so is a dead claim on a bucket holding anything else, reported as ``bucket:<name>`` (§10 Q2). Every listing is tolerant:
+one record that cannot be read is named among the failures and stops nothing but what it could decide (§10 Q3).
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from catalog.services import projects, roles, warehouses
 from catalog.services.control_records import BORN, INCARNATION, PROJECT_INCARNATION
 from lakehouse import maintenance_policies
 from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.ns_errors import SettlingError
 from lakehouse.records import RecordMissingError, mutate_json
 
@@ -50,6 +53,7 @@ from lakehouse.records import RecordMissingError, mutate_json
 if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
 
+    from catalog.core.namespace import NamespaceConnections
     from lakehouse.storage_options import StorageOptions
 
 
@@ -58,7 +62,7 @@ log = logging.getLogger(__name__)
 _orphans = metrics.get_meter("lance.catalog").create_counter(
     "catalog.incarnations.orphans",
     unit="1",
-    description="Records a dead tenant's create left (a warehouse or role naming a project incarnation that no longer stands), each time one is found.",
+    description="Records a dead tenant left (a warehouse, role or project policy naming a project incarnation that no longer stands, or a bucket claim of one no record names), each time one is found.",
 )
 
 #: The actor the convergence's writes are recorded as: no person, the catalog converging an invariant of its own.
@@ -183,15 +187,33 @@ class _Convergence:
     roles, claims, policies), and OpenFGA requests only for what needs work (an unborn incarnation, an orphan, an open
     ticket), never one per record (ADR 0241 §9 P5)."""
 
-    def __init__(self, control_root: str, storage_options: StorageOptions, client: OpenFgaClient | None, *, bound: timedelta, now: datetime) -> None:
-        self._root, self._so, self._client = control_root, storage_options, client
+    def __init__(
+        self,
+        control_root: str,
+        storage_options: StorageOptions,
+        client: OpenFgaClient | None,
+        *,
+        bound: timedelta,
+        now: datetime,
+        connections: NamespaceConnections,
+    ) -> None:
+        self._root, self._so, self._client, self._connections = control_root, storage_options, client, connections
         self._older_than = now - bound
         self._may_end = False
         self._may_release = False
+        self._may_end_warehouses = False
         self.done = IncarnationsConverged()
 
     async def run(self) -> IncarnationsConverged:
-        records, unreadable = await run_in_threadpool(projects.read_projects, self._root, self._so)
+        """Every listing is tolerant (ADR 0241 §10 Q3): a record that cannot be read is named among the failures and judged
+        on nothing, and a listing the store did not answer stops only what needs it. One tenant's corrupt record never
+        stops the tick, the declaration's converge after it, or the boot backfill."""
+        listed = await self._listing("projects", partial(projects.read_projects, self._root, self._so))
+        if listed is None:
+            # No project's incarnation is known, so nothing is judged a dead tenant's; only the tickets are swept.
+            await self._sweep_if_wired()
+            return self._done()
+        records, unreadable = listed
         # A project record that cannot be read may name the incarnation a warehouse or role was made under, so nothing is
         # judged a dead tenant's while one cannot: orphans are reported and kept.
         self._may_end = not unreadable
@@ -207,11 +229,15 @@ class _Convergence:
             project = str(record["id"])
             if project in live and record.get(BORN) != live[project] and not record.get(projects.DELETING_BY):
                 await self._attempt(f"project:{project}", partial(self._bear, f"project:{project}", live[project], projects.record_key(project)))
-        stored, unreadable_warehouses = await run_in_threadpool(partial(warehouses.read_warehouses, self._root, self._so, ended=True))
-        if unreadable_warehouses:
-            log.warning("incarnation_converge_skipped_unreadable", extra={"warehouses": unreadable_warehouses})
+        listed_warehouses = await self._listing("warehouses", partial(warehouses.read_warehouses, self._root, self._so, ended=True))
+        stored, unreadable_warehouses = listed_warehouses or ([], ["the warehouse registry"])
+        # Claims are read before any warehouse record is ended: one that cannot be read may be what keeps a record's bucket
+        # from another tenant, so while any cannot, no record is ended and no claim released.
+        listed_claims = await self._listing("claims", partial(warehouses.read_claims, self._root, self._so))
+        claims, unreadable_claims = listed_claims or ([], ["the bucket claims"])
         # A warehouse record that cannot be read may name a bucket whose claim the tick would release.
-        self._may_release = self._may_end and not unreadable_warehouses
+        self._may_release = self._may_end and not unreadable_warehouses and not unreadable_claims
+        self._may_end_warehouses = self._may_end and not unreadable_claims
         ended: set[str] = set()
         for record in stored:
             obj = f"warehouse:{record['id']}"
@@ -221,19 +247,39 @@ class _Convergence:
                 self.done.orphans.append(obj)
             else:
                 await self._attempt(obj, partial(self._warehouse, record, live, ended))
-        for role in await run_in_threadpool(roles.every_stored_role, self._root, self._so):
-            if role.project_incarnation != live.get(role.project):
-                await self._attempt(roles.role_object(role.id), partial(self._orphan_role, role))
-        claims = await run_in_threadpool(warehouses.every_claim, self._root, self._so)
-        standing = [r for r in stored if not r.get(warehouses.ENDED_AT) and r["id"] not in ended]
-        for claim in claims:
-            await self._attempt(f"bucket:{claim['bucket']}", partial(self._claim, claim, live, standing))
+        if (listed_roles := await self._listing("roles", partial(roles.every_stored_role, self._root, self._so))) is not None:
+            for role in listed_roles[0]:
+                if role.project_incarnation != live.get(role.project):
+                    await self._attempt(roles.role_object(role.id), partial(self._orphan_role, role))
+        if listed_warehouses is not None:
+            for claim in claims:
+                await self._attempt(f"bucket:{claim['bucket']}", partial(self._claim, claim, live, stored, ended))
         await self._attempt("policies", partial(self._policies, live))
-        if self._client is not None:
-            await self._attempt("tickets", self._sweep)
+        await self._sweep_if_wired()
+        return self._done()
+
+    def _done(self) -> IncarnationsConverged:
         if self.done.born or self.done.swept or self.done.orphans or self.done.released or self.done.failed:
             log.info("incarnations_converged", extra=self.done.model_dump())
         return self.done
+
+    async def _sweep_if_wired(self) -> None:
+        if self._client is not None:
+            await self._attempt("tickets", self._sweep)
+
+    async def _listing[T](self, what: str, read: Callable[[], tuple[list[T], list[str]]]) -> tuple[list[T], list[str]] | None:
+        """``read``'s listing, each record it could not read named among the failures; ``None``, named so too, where the
+        store did not answer it."""
+        try:
+            records, unreadable = await run_in_threadpool(read)
+        except Exception as exc:  # noqa: BLE001 — a listing the store did not answer stops only what needs it; the next run retries
+            log.warning("incarnation_listing_failed", extra={"listing": what, "error": str(exc)[:300]})
+            self.done.failed.append(f"{what}: {exc}")
+            return None
+        for path in unreadable:
+            log.error("incarnation_record_unreadable", extra={"listing": what, "record": path})
+            self.done.failed.append(f"{path}: cannot be read as a record of {what}; judged on nothing")
+        return records, unreadable
 
     async def _attempt(self, obj: str, step: Callable[[], Awaitable[None]]) -> None:
         try:
@@ -279,7 +325,7 @@ class _Convergence:
         # data a door made: either way it is reported and kept, with its bucket's claim, until the estate admin purges it.
         if self._client is None or await fga.is_born(self._client, obj, incarnation):
             return
-        if not self._may_end or not self._past_bound(record.get("created_at")):
+        if not self._may_end_warehouses or not self._past_bound(record.get("created_at")):
             return
         stamped = await run_in_threadpool(
             partial(warehouses.end_warehouse_record, self._root, self._so, str(record["id"]), incarnation=incarnation, reason=ENDED_UNBORN)
@@ -293,15 +339,29 @@ class _Convergence:
         ended.add(str(record["id"]))
         self.done.ended.append(obj)
 
-    async def _claim(self, claim: dict[str, str], live: dict[str, str], standing: list[dict[str, str]]) -> None:
-        """Release a claim a dead incarnation took that no record standing names, once it is older than the bound, where
-        what stands in its bucket is only what a create writes (``warehouses.written_by_others``): a create refused after
-        its claim, or one whose record the tick ended unborn. Never on a guess: anything else in the bucket keeps it."""
+    async def _claim(self, claim: dict[str, str], live: dict[str, str], stored: list[dict[str, str]], ended: set[str]) -> None:
+        """Release a claim a dead incarnation took that no record standing names, once it is older than the bound, on a
+        bucket left holding NOTHING (ADR 0241 §10 Q6a): where what stands in it is only what a create writes
+        (``warehouses.written_by_others``), the tick takes the claim for itself (the same ``purging`` stamp a purge
+        takes), removes exactly those objects, lists again, and releases only if the bucket is empty. Anything else in it
+        keeps the claim, and a claim no record names at all is reported among the orphans as ``bucket:<name>``, which the
+        estate owner's purge door reaches by its bucket (§10 Q2).
+
+        A claim a warehouse delete's purge stamped whose record is gone is released: the record goes only after the bytes."""
         bucket, project = claim["bucket"], claim["project"]
         project_incarnation = require_project_incarnation(claim, f"bucket:{bucket}")
-        if made_under(claim, live.get(project), obj=f"bucket:{bucket}") or any(r.get("bucket") == bucket for r in standing):
+        holder = warehouses.purge_holder("catalog", bucket, project_incarnation)
+        # A stamp of the tick's own is a run that died removing what the create wrote, which this run resumes.
+        if (stamp := claim.get(warehouses.PURGING)) and stamp != holder:
+            await self._finish_purge(bucket, stamp, stored)
             return
-        if not self._may_release:
+        if made_under(claim, live.get(project), obj=f"bucket:{bucket}"):
+            return
+        naming = [r for r in stored if r.get("bucket") == bucket]
+        if not naming:
+            report_orphan(f"bucket:{bucket}", project=project, project_incarnation=project_incarnation)
+            self.done.orphans.append(f"bucket:{bucket}")
+        if any(not r.get(warehouses.ENDED_AT) and r["id"] not in ended for r in naming) or not self._may_release:
             return
         if (claimed := _written(claim.get(warehouses.CLAIMED_AT))) is None:
             log.error("claim_without_claimed_at", extra={"bucket": bucket})
@@ -311,12 +371,59 @@ class _Convergence:
         if foreign := await run_in_threadpool(partial(warehouses.written_by_others, bucket, self._so, warehouse_id=claim["warehouse_id"])):
             log.error("bucket_claim_kept", extra={"bucket": bucket, "project": project, "project_incarnation": project_incarnation, "found": foreign})
             return
-        if await run_in_threadpool(
+        hold = await run_in_threadpool(
             partial(
-                warehouses.release_claim, self._root, self._so, bucket=bucket, project=project, project_incarnation=project_incarnation, reason=RELEASED_UNBORN
+                warehouses.take_for_purge,
+                self._root,
+                self._so,
+                bucket=bucket,
+                project=project,
+                project_incarnation=project_incarnation,
+                holder=holder,
             )
-        ):
-            log.warning("bucket_claim_released", extra={"bucket": bucket, "project": project, "project_incarnation": project_incarnation})
+        )
+        if hold is None:
+            return
+        trail = {"subject": ACTOR, "resource": f"bucket:{bucket}", "project": project, "project_incarnation": project_incarnation, "bucket": bucket}
+        audit(AuditAction.BUCKET_PURGE, AuditOutcome.ALLOW, **trail, dead_tenant=True, stage="claim_taken")
+        try:
+            removed = await run_in_threadpool(
+                partial(warehouses.purge_bucket, self._root, self._so, hold, only=warehouses.CREATE_PREFIXES, remove_bucket=False)
+            )
+            self._connections.forget(f"s3://{bucket}")
+            empty = not await run_in_threadpool(warehouses.holds_anything, bucket, self._so)
+            await run_in_threadpool(partial(warehouses.end_purge, self._root, self._so, hold, released=RELEASED_UNBORN if empty else None))
+        except Exception as exc:
+            audit(AuditAction.BUCKET_PURGE, AuditOutcome.FAILURE, **trail, dead_tenant=True, stage="claim_taken", error=type(exc).__name__)
+            raise
+        audit(
+            AuditAction.BUCKET_PURGE,
+            AuditOutcome.SUCCESS,
+            **trail,
+            dead_tenant=True,
+            stage="claim_released" if empty else "bytes_deleted",
+            objects_purged=removed,
+        )
+        if not empty:
+            # Something landed beside what the create wrote while the tick removed it: the claim is kept, given back.
+            log.error(
+                "bucket_claim_kept", extra={"bucket": bucket, "project": project, "project_incarnation": project_incarnation, "found": "objects after removal"}
+            )
+            return
+        log.warning("bucket_claim_released", extra={"bucket": bucket, "project": project, "project_incarnation": project_incarnation, "removed": removed})
+        self.done.released.append(bucket)
+
+    async def _finish_purge(self, bucket: str, stamp: str, stored: list[dict[str, str]]) -> None:
+        """Release a claim a warehouse delete's purge stamped once that warehouse's record is gone: the delete removes its
+        record only after the bytes, so a purge that died between its record and its claim's release left nothing of the
+        warehouse in the bucket. A purge whose record stands is the delete's to resume; any other stamp is left as it is."""
+        kind, _, rest = stamp.partition(":")
+        warehouse_id, _, incarnation = rest.rpartition("@")
+        if kind != "warehouse" or any(r["id"] == warehouse_id and r.get(INCARNATION) == incarnation for r in stored):
+            return
+        hold = warehouses.PurgeHold(bucket=bucket, holder=stamp)
+        if await run_in_threadpool(partial(warehouses.end_purge, self._root, self._so, hold, released="bucket_purged")):
+            log.warning("bucket_purge_finished", extra={"bucket": bucket, "holder": stamp})
             self.done.released.append(bucket)
 
     async def _policies(self, live: dict[str, str]) -> None:
@@ -325,7 +432,8 @@ class _Convergence:
         holding the id set meanwhile. It is harmless as it stands (ADR 0241 §9 P2): it governs only a bucket whose claim
         names the incarnation that set it (``maintenance_policies.governing_policy``), no door reads or merges onto it,
         and the next set under the id replaces it."""
-        for record in await run_in_threadpool(maintenance_policies.list_policies, self._root, self._so):
+        listed = await self._listing("policies", partial(maintenance_policies.read_policies, self._root, self._so))
+        for record in listed[0] if listed is not None else []:
             project = str(record.get("id"))
             if record.get("kind") != "project" or made_under(record, live.get(project), obj=f"policy:project:{project}"):
                 continue
@@ -367,7 +475,13 @@ def _stamp_born(control_root: str, storage_options: StorageOptions, key: str, in
 
 
 async def converge(
-    control_root: str, storage_options: StorageOptions, client: OpenFgaClient | None, *, bound: timedelta, now: datetime | None = None
+    control_root: str,
+    storage_options: StorageOptions,
+    client: OpenFgaClient | None,
+    *,
+    bound: timedelta,
+    connections: NamespaceConnections,
+    now: datetime | None = None,
 ) -> IncarnationsConverged:
     """Bear every unborn incarnation of a live tenant, sweep the tickets older than ``bound``, and report, end and release
     what a dead tenant left; what was done.
@@ -377,6 +491,13 @@ async def converge(
     orphan or a claim is ended only past ``bound``, which a request's run does not reach, and judged by ``now``, the
     catalog's clock (:func:`fga.sweep_tickets` says what skew with the store's does). With authorization off nothing is
     born or swept and no record is ended, an orphan is only reported, and a claim no record names is released only on
-    what its bucket holds.
+    what its bucket holds. ``connections`` are the process's namespace connections, one rooted at a bucket whose index
+    the tick removed being dropped (``NamespaceConnections.forget``).
     """
-    return await _Convergence(control_root, storage_options, client, bound=bound, now=now or datetime.now(UTC)).run()
+    convergence = _Convergence(control_root, storage_options, client, bound=bound, now=now or datetime.now(UTC), connections=connections)
+    try:
+        return await convergence.run()
+    except Exception as exc:  # noqa: BLE001 — the tick's and the boot's later steps run whatever stopped this one (ADR 0241 §10 Q3)
+        log.error("incarnations_not_converged", extra={"error": str(exc)[:300]}, exc_info=True)
+        convergence.done.failed.append(f"incarnations: {exc}")
+        return convergence.done

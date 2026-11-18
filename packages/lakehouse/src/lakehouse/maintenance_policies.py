@@ -137,13 +137,21 @@ def list_policies(control_root: str, storage_options: StorageOptions) -> list[di
     or unreadable record is SKIPPED with a warning, never allowed to void the others — a tick that
     silently dropped every policy would maintain opted-out datasets and ignore protective retention.
     """
+    return read_policies(control_root, storage_options)[0]
+
+
+def read_policies(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, Any]], list[str]]:
+    """``(every well-formed policy record, what was skipped)``: the path of each record that cannot be read, and the
+    kind and id of each that is malformed. What the catalog's converge tick reports its failures by (ADR 0241 §10 Q3)."""
     out: list[dict[str, Any]] = []
-    for record in list_records(control_root, storage_options, PREFIX, event=_EVENT):
+    skipped: list[str] = []
+    for record in list_records(control_root, storage_options, PREFIX, event=_EVENT, skipped=skipped):
         if _record_is_well_formed(record):
             out.append(record)
         else:
             log.warning("maintenance_policy_malformed", extra={"id": record.get("id"), "kind": record.get("kind")})
-    return out
+            skipped.append(f"policy:{record.get('kind')}:{record.get('id')}")
+    return out, skipped
 
 
 def _record_is_well_formed(record: dict[str, Any]) -> bool:

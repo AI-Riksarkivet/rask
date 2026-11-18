@@ -102,13 +102,18 @@ async def converge_at_boot(app: FastAPI) -> None:
     from catalog.services.warehouse_grant_backfill import backfill
 
     settings: Settings = app.state.settings
+    # The convergence never raises (it names what it could not converge among its failures), so no one tenant's corrupt
+    # record costs the backfill after it (ADR 0241 §10 Q3).
+    converged = await incarnations.converge(
+        settings.registry_root,
+        settings.storage_options(),
+        getattr(app.state, "fga", None) if settings.fga_enabled else None,
+        bound=incarnations.ticket_bound(settings.request_deadline_seconds),
+        connections=app.state.connections,
+    )
+    if converged.failed:
+        log.warning("incarnations_converge_failed_at_boot", extra={"failed": converged.failed[:20]})
     try:
-        await incarnations.converge(
-            settings.registry_root,
-            settings.storage_options(),
-            getattr(app.state, "fga", None) if settings.fga_enabled else None,
-            bound=incarnations.ticket_bound(settings.request_deadline_seconds),
-        )
         seen, written, failures = await backfill(settings)
     except asyncio.CancelledError:
         raise

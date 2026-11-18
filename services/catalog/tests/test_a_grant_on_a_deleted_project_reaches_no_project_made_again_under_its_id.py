@@ -177,9 +177,16 @@ def test_a_role_made_across_its_projects_delete_is_made_in_no_project_made_again
     if held == "and-dying-after-its-record":
         settings = catalog.client.app.state.settings
         so, standing = settings.storage_options(), project_records.get_project(settings.registry_root, settings.storage_options(), PROJECT)
-        left = [r for r in role_records.every_stored_role(settings.registry_root, so) if r.project == PROJECT]
+        left = [r for r in role_records.every_stored_role(settings.registry_root, so)[0] if r.project == PROJECT]
         assert standing is not None and [r.project_incarnation for r in left] not in ([], [standing["incarnation"]]), "no record was left"
-        converge = partial(incarnations.converge, settings.registry_root, so, catalog.client.app.state.fga, bound=timedelta(0))
+        converge = partial(
+            incarnations.converge,
+            settings.registry_root,
+            so,
+            catalog.client.app.state.fga,
+            bound=timedelta(0),
+            connections=catalog.client.app.state.connections,
+        )
         ended = catalog.client.portal.call(converge)
         retaken = catalog.client.post(roles, json={"name": "analysts"}, headers=catalog.bearer(ERIN))
         assert (len(ended.ended), retaken.status_code) == (1, 201), retaken.text

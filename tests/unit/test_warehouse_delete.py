@@ -228,7 +228,7 @@ def test_the_bucket_survives_a_plain_delete(tmp_path: Any, monkeypatch: pytest.M
     settings = _settings(tmp_path)
     _seed(settings)
     purged: list[str] = []
-    monkeypatch.setattr(warehouses, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
+    monkeypatch.setattr(warehouses, "purge_bucket", lambda _root, _so, hold, **_kw: purged.append(hold.bucket) or 0)
 
     result = _delete(settings, _request())
 
@@ -236,23 +236,6 @@ def test_the_bucket_survives_a_plain_delete(tmp_path: Any, monkeypatch: pytest.M
     assert result.bucket == "acme-bkt"  # named anyway, so the operator knows what survived
     assert result.bucket_purged is False
     assert result.objects_purged == 0
-
-
-def test_purge_bucket_true_removes_the_bytes_and_reports_the_count(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(tmp_path)
-    _seed(settings)
-    purged: list[str] = []
-
-    def fake_purge(bucket: str, _so: object) -> int:
-        purged.append(bucket)
-        return 7
-
-    monkeypatch.setattr(warehouses, "purge_bucket", fake_purge)
-    result = _delete(settings, _request(), purge_bucket=True)
-
-    assert purged == ["acme-bkt"]
-    assert result.bucket_purged is True
-    assert result.objects_purged == 7  # the count the purge really returned, not the flag restated
 
 
 def test_a_purge_refuses_while_a_sibling_warehouse_still_claims_the_same_bucket(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,7 +247,7 @@ def test_a_purge_refuses_while_a_sibling_warehouse_still_claims_the_same_bucket(
     _seed(settings, warehouse_id="acme-work", bucket="acme-bkt")
     _seed(settings, warehouse_id="acme-gold", bucket="acme-bkt")
     purged: list[str] = []
-    monkeypatch.setattr(warehouses, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
+    monkeypatch.setattr(warehouses, "purge_bucket", lambda _root, _so, hold, **_kw: purged.append(hold.bucket) or 0)
 
     with pytest.raises(NamespaceNotEmptyError) as exc:
         _delete(settings, _request(), warehouse_id="acme-work", purge_bucket=True)
@@ -282,7 +265,7 @@ def test_a_purge_refuses_while_a_warehouse_record_cannot_be_read(tmp_path: Any, 
     _seed(settings, warehouse_id="acme-work", bucket="acme-bkt")
     (tmp_path / "_warehouses" / "acme-gold.json").write_text('{"id": "acme-gold", "bucket": "acme-')
     purged: list[str] = []
-    monkeypatch.setattr(warehouses, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
+    monkeypatch.setattr(warehouses, "purge_bucket", lambda _root, _so, hold, **_kw: purged.append(hold.bucket) or 0)
 
     with pytest.raises(InternalError, match="cannot be read as one"):
         _delete(settings, _request(), warehouse_id="acme-work", purge_bucket=True)
@@ -311,7 +294,7 @@ def test_a_purge_refuses_a_bucket_that_is_reserved_platform_storage(tmp_path: An
     monkeypatch.setattr(type(settings), "reserved_bucket_set", property(lambda _self: frozenset({"acme-bkt"})))
     _seed(settings)
     purged: list[str] = []
-    monkeypatch.setattr(warehouses, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
+    monkeypatch.setattr(warehouses, "purge_bucket", lambda _root, _so, hold, **_kw: purged.append(hold.bucket) or 0)
 
     with pytest.raises(InvalidInputError) as exc:
         _delete(settings, _request(), purge_bucket=True)

@@ -1194,6 +1194,9 @@ class DeleteWarehouseResponse(BaseModel):
     tuples_revoked: int
     bucket_purged: bool
     objects_purged: int
+    #: Why ``?purge_bucket=true`` deleted no byte: the bucket's claim was released, absent or another tenant's, so the
+    #: purge could not take it for itself and kept every byte (ADR 0241 §10 Q1). Absent where nothing was kept back.
+    bytes_kept: str | None = None
 
 
 # --------------------------------------------------------------------------- #

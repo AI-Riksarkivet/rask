@@ -1,4 +1,4 @@
-# 0241. Authorization state is modelled in TLA+ beside the objects it governs; three defects found and fixed, then nine a review found, then five a second review found, then six a third review found (2026-11-18)
+# 0241. Authorization state is modelled in TLA+ beside the objects it governs; three defects found and fixed, then nine a review found, then five a second review found, then six a third review found, then six a fourth review found (2026-11-18)
 
 **Status:** accepted; the catalog's sixth model (ADR 0221, ADR 0227, ADR 0229, ADR 0233). It describes the Python
 catalog as it runs, before it is ported (ADR 0217 §5). Three findings were confirmed against the running catalog and a
@@ -10,7 +10,11 @@ parent's incarnation, and the convergence no longer repairs records stored befor
 review of §8 found six more; each is fixed, model first where the model covers it (§9): a record naming a project and no
 incarnation of it is an error wherever it is read, a project's warehouses and its policy are its standing incarnation's
 alone, a dead tenant's bucket is released or purged rather than blocked for ever, the second ask of both fenced doors has
-a test, and the converge tick's cost is what needs work rather than the estate's size.
+a test, and the converge tick's cost is what needs work rather than the estate's size. A fourth independent review of §9
+found six more; each is fixed, model first where the model covers it (§10): bytes are deleted only under a claim their
+purger holds, an ended record's id is taken only once its claim is released and a claim no record names is reached by
+its bucket, one unreadable record stops no tick, a purge is audited before and after it, and a bucket is released holding
+nothing, to no create that outlived its claim.
 
 ## Context
 
@@ -73,6 +77,10 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
    - `GrantsChild.cfg` (a warehouse's create, its bucket claim and its record, the backfill, the convergence's fenced
      birth, the end of an orphan and the release of its claim, the estate admin's purge, beside the project's delete and
      re-creation, any door dying; with `BornLeftKept`, `DeadTicketsSwept` and `ClaimFreed`): 28,983 states, 9.2 s (§9).
+     Since §10 it adds another tenant's claim on the bucket, the purge in two steps by record or by bucket, the child's id
+     made again on another bucket and bytes no create wrote, with `PurgeTakesNothingLive` and `ClaimNamedByItsRecord`:
+     102,242 states, 40 s. Its §10 guards removed: `GrantsPurgeUnstamped` fails in 6 s, `GrantsEndedKeyTaken` in 7 s,
+     `GrantsClaimUnaddressed` (temporal) in 32 s.
    - `GrantsUnborn.cfg` (a create dying between its record and its birth, a grant and a delete; with `EveryRecordBorn`):
      6,565 states, 1.7 s.
    - `GrantsTable.cfg` (table: purge, recoverable drop, undrop, release, a late grant, a revoke and a reader): 440
@@ -740,6 +748,140 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
    bucket's catalog is read as the directory namespace's `__manifest` table it is), zero trust (no live tenant reads,
    governs or claims what a dead one left, and only the estate owner, audited, purges it).
 
+10. **Six more findings, by a fourth independent review of §9, each FIXED here, model first** (2026-11-18). Q1, Q2, Q3,
+    Q6a and Q6b reproduced against the catalog with a real OpenFGA over moto before the fix (each test below failed on the
+    code before it); Q4 by mutation; Q5 reasoned, then pinned. The model gained a second tenant's claim on the bucket
+    (`OtherClaim`), the estate owner's purge as two steps (`PurgeTake`, `PurgeDelete`) addressing a record or a claim by
+    its bucket, a create of the child's id again on another bucket (`Recreate`), and whether the bucket holds bytes no
+    create wrote (`foreign`, chosen at the start: the tick then keeps the claim, and the estate owner purges what the tick
+    reports, a fairness of the model's).
+
+    - **Q1, the estate owner's purge could delete a live tenant's bucket** (REPRODUCED: the orphan of the held create,
+      `converge(bound=0)` ended `wh-a` and released `wh-a-bucket`, the estate owner's `DELETE …/wh-a?purge_bucket=true&
+      cascade=true` held at entry to `purge_bucket`, beta made `wh-e` and `wh-e$sales` there; released: 200,
+      `objects_purged: 9`, `wh-e`'s catalog gone). A released claim read as no claim, and nothing held it between the
+      check and the delete. Fix, G22 **PurgeStamp** (`GrantsPurgeUnstamped` fails `PurgeTakesNothingLive`, "no purge
+      deletes the bytes of a bucket a live claim names, nor removes a live tenant's record"). **Who may delete a bucket's
+      bytes, and under what:** only a purge holding the bucket's claim, through ONE function, `warehouses.purge_bucket`
+      (`services/catalog/src/catalog/services/warehouses.py`), which takes the hold and reads the claim again before its
+      first delete, between batches and before it deletes the bucket. Three purgers exist: a warehouse's delete with
+      `?purge_bucket=true` (its tenant's admin for a live warehouse, the estate owner for a dead tenant's), the estate
+      owner's purge of a dead claim by its bucket (Q2), and the converge tick's removal of what an unborn create wrote
+      (Q6a). Each first takes the claim for itself, `warehouses.take_for_purge`: stamped `purging` (`<warehouse|bucket|
+      catalog>:<name>@<incarnation>`) and `purging_at` under the read's ETag, only where the claim names the project at
+      the incarnation addressed. `claim_bucket` refuses a stamped claim (a create on the bucket answers 409, code 14,
+      until the purge ends), and the one way a claim is released is `warehouses.end_purge`, which only the stamp's
+      holder does (§9's `release_claim` and `release_bucket_claim` are gone). A claim released, absent or naming anyone
+      else is taken by nobody: the delete removes the record and NO byte, touches nothing in the bucket (a dead tenant's
+      delete opens no connection to it), and answers `bucket_purged: false` with `bytes_kept` naming why. A dead tenant's
+      record is stamped `purging` too (`warehouses.mark_purging`, conditional on its incarnation), so no create takes its
+      key while its purge runs. The delete deletes the bytes, then its record, then releases the claim, so a released claim
+      never names a bucket a record still routes to. **A purge that dies leaves its stamp**: an operator sees the claim
+      with `purging` and `purging_at` naming the purge, and every create on that bucket is refused 409 meanwhile; only the
+      same delete asked again resumes (its holder is derived from the warehouse and its incarnation, so it finds its
+      stamp its own); a stamp whose warehouse record is gone (the delete died between its record and its release, so its
+      bytes were gone) is released by the converge tick (`incarnations._Convergence._finish_purge`). Test:
+      `tests/integration/test_a_dead_tenants_records_reach_no_live_tenant.py::test_a_purge_deletes_no_byte_of_a_bucket_whose_claim_it_does_not_hold`.
+    - **Q2, recreating an ended record's id stranded its kept claim** (REPRODUCED: the bucket held bytes no create wrote,
+      so the tick ended `wh-a` and kept its claim; a create of `wh-a` on another bucket replaced the ended record, after
+      which no record named the claim, no tick reported it and no door reached it). Two fixes. G23 **KeepsEndedKey**
+      (`GrantsEndedKeyTaken` fails `ClaimNamedByItsRecord`): a create takes an ended record's key only once its bucket's
+      claim no longer names it and no purge stamped it (`warehouses.require_key_free`, asked by
+      `create_warehouse_record` at the write and by `endpoints/warehouses._claim_the_bucket` before the create claims a
+      bucket of its own): answered 409 (code 2) naming `DELETE /management/v1/warehouses/<id>?purge_bucket=true`. G24
+      **PurgeByBucket** (`GrantsClaimUnaddressed` fails temporal `ClaimFreed`): a claim of a dead incarnation that no
+      record, ended or not, names (a create that died between its claim and its record leaves one) is reported by the
+      tick among `orphans` as `bucket:<name>` and in `catalog.incarnations.orphans`, and the estate owner's purge door
+      reaches it by its bucket: the SAME route, `DELETE /management/v1/warehouses/{id}?purge_bucket=true`, with the
+      bucket in the warehouse's place, consulted only where no record stands under the id and only once the caller holds
+      the same relation, `estate#can_purge_dead_tenant_warehouse` (`warehouses.warehouse_to_delete`,
+      `_unnamed_dead_claim`, `_purge_a_dead_claim`); anyone else is answered the missing warehouse's 404. Tests:
+      `…::test_an_ended_records_id_is_taken_only_once_its_claim_is_released`,
+      `…::test_a_dead_claim_no_record_names_is_reported_and_the_estate_owner_purges_it_by_its_bucket`.
+    - **Q3, one malformed bucket claim stopped every tick** (REPRODUCED: `_warehouses/bucket-claims/junk.json` =
+      `{"bucket":"junk","project":"x"}` raised `ServiceUnavailableError` out of the convergence, so the declaration's
+      converge after it and the boot backfill never ran). Fix: every listing the tick makes is tolerant
+      (`incarnations._Convergence._listing`): a record that cannot be read (a project, a warehouse, a claim
+      `warehouses.read_claims`, a role `roles.every_stored_role`, a policy `maintenance_policies.read_policies`) is named
+      in `failed` by its key and judged on nothing; a listing the store did not answer stops only what needs it; while any
+      claim cannot be read, no warehouse record is ended and no claim released (`_may_end_warehouses`, `_may_release`).
+      `incarnations.converge` never raises (what stopped it is named in `failed`), and `main.converge_at_boot` runs the
+      backfill whatever the convergence found. Test: `…::test_one_unreadable_claim_stops_no_tick_and_no_claim_is_released_while_it_stands`
+      (the junk claim beside an unborn orphan whose claim stays, and a declared `gamma` that is made).
+    - **Q4, the "neither read nor merged onto" half of the policy's incarnation had no test** (REPRODUCED by mutation:
+      `_set` given the stored record rather than `_of_incarnation(stored, …)` left every test green). The P2 test now
+      plants the leftover with `retain_versions` and `retention_days`, sets a body naming only `compact_enabled`, and reads
+      back no field of the leftover (`…::test_a_project_policy_governs_only_the_buckets_of_the_incarnation_that_set_it`).
+    - **Q5, a purge that died after deleting bytes wrote no audit row** (REASONED). Fix: destruction is audited before it
+      starts and when it ends, for every purge, under ONE action, `bucket_purge` (renamed from §9's `dead_tenant_purge`,
+      which covered the dead tenant's alone; `packages/lakehouse/src/lakehouse/governed/audit.py` and the Rust trail's
+      `rust/crates/lakehouse-core/src/telemetry/audit.rs`, same place in both, `rust/vectors/telemetry.json`
+      regenerated), with a field `dead_tenant` and a field `stage` (`claim_taken`, `bytes_deleted`, `record_deleted`,
+      `claim_released`): outcome `allow` once the purge holds the claim and before its first delete, so the trail holds the
+      intent even if the process dies, then `success`, or `failure` naming the stage it reached whenever it held the claim
+      and did not finish (`endpoints/warehouses._Purge`; the tick's removal writes the same rows as `system:catalog`). No
+      action was added; the outcome vocabulary was enough. Test:
+      `…::test_a_purge_is_audited_before_its_first_delete_and_one_that_fails_after_it_says_how_far_it_got` (a live
+      warehouse's purge whose record removal fails once its bytes are gone, a create on the bucket refused meanwhile, the
+      purge asked again resuming under its stamp).
+    - **Q6a, what an unborn create leaves reached the next tenant** (REPRODUCED: after the release the bucket still held
+      `__manifest/`). **What stands in a bucket after an unborn create** (measured on moto by the tests): `__manifest/`
+      (two manifests and the version hint under `_versions/`, one transaction under `_transactions/`, one data file under
+      `data/` holding one row whose `object_id` is the dead warehouse's id), and under `_validate/<hex>/` only what the
+      probe's own cleanup failed to remove. **What reads `__manifest`**: the directory namespace itself (a warehouse's
+      listing and resolution, every name beneath it beginning with its id, so the next tenant's names never resolve the dead
+      row), `object_names` (a grant's uuid to its current name: the dead row's uuid holds no grant, so it is never asked),
+      `table_bases` (table rows only; the dead create wrote a namespace row) and the reclaim of the index's history; none
+      served the dead row for the new tenant, but it stood in its catalog and counted in its index. **Who removes it:** the
+      converge tick. Once `written_by_others` finds only what the dead create wrote, the tick takes the claim with the same
+      stamp (`catalog:<bucket>@<incarnation>`), deletes exactly the objects under `_validate/` and `__manifest/` through
+      `purge_bucket(only=CREATE_PREFIXES, remove_bucket=False)`, lists again, and releases only if the bucket is empty
+      (`warehouses.holds_anything`); anything else gives the claim back unstamped and keeps it. The process's connections
+      rooted at the bucket are dropped (`NamespaceConnections.forget`), since a connection holding a version of an index
+      that is gone answers `InternalError`. Test: the P3 test now asserts the bucket empty once released.
+    - **Q6b, a create slower than the bound wrote into a bucket it no longer held** (REPRODUCED: alice's create held after
+      its record and before its catalog row while the tick released the bucket and beta made `wh-e` there; released, it
+      wrote `wh-a`'s row into `wh-e`'s catalog). Fix: `claim_bucket` answers when the claim was taken (a claim the
+      project's incarnation already holds has `claimed_at` moved to now under its ETag, so the tick judges a claim's age
+      by its latest create), and the create asks `warehouses.require_claim_held` before provisioning, before its probe,
+      before its record and before its catalog row: the claim stands unreleased, unstamped, naming its project at its
+      incarnation, and the create is younger than `incarnations.ticket_bound`, the bound the tick releases by; otherwise
+      409 (code 14) and nothing more is written. Not the claim's ETag: a sibling create of the same incarnation moving
+      `claimed_at` leaves it this create's own. **Residual:** a process frozen between that check and the write it guards
+      (the probe's own writes count as one, under one check) still writes once, on a bucket the tick released only past the
+      bound. Test: `…::test_a_create_that_outlived_its_claim_writes_nothing_more_into_the_bucket`.
+
+    **Every guard removed, its test run** (2026-11-18, each removal alone, its test red every time): G22 (a released
+    claim taken for the purge, the stamp unread, the dead tenant's bucket opened) — the purge answers `bucket_purged:
+    true` and `wh-e`'s catalog is gone; G23 (`require_key_free` passing) — the create of `wh-a` answers 200; G24 (no
+    claim reached by its bucket) — the estate owner's purge answers 404; the unnamed claim's report removed — the tick's
+    `orphans` names no `bucket:lost-bucket`; Q3's no-release-while-unreadable removed — the orphan's claim is released
+    beside the junk claim; Q3's per-claim tolerance removed alone the listing's own tolerance still names the junk claim
+    and the test stays green, and with both removed the tick stops before the warehouses are judged and the test is red;
+    Q5's intent row removed, and its failure row removed — the trail's rows differ; Q6a's removal skipped — the bucket
+    holds `__manifest/` once released; Q6b's re-read removed — `wh-e`'s catalog holds `wh-a`'s row. And §9's again: G19,
+    G20, G21, `made_under` reading a record naming none as another's, the policy door's buckets by id, the policy merged
+    onto the leftover (Q4), and the policy's incarnation unread by maintenance (red in the dead-tenant policy test;
+    `tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py` stays green with it removed, its
+    project-hold case seeding the policy and the claim under one incarnation).
+
+    **What a client can now observe that differs.** A warehouse delete with `?purge_bucket=true` whose bucket's claim is
+    released, absent or another's answers 200 with `bucket_purged: false` and `bytes_kept`, deleting no byte, where it
+    deleted the bucket or was refused 409; the response carries `bytes_kept` (null otherwise). While a purge runs or after
+    one died, a create on its bucket answers 409 (code 14) and a create of the purged record's id 409 (code 2). A create
+    of an ended record's id answers 409 (code 2) naming the purge while its claim stands. The estate owner's
+    `DELETE /management/v1/warehouses/<bucket>?purge_bucket=true` reaches a dead claim no record names. A create that ran
+    past the bound, or whose claim another took, answers 409 (code 14). The audit action `dead_tenant_purge` is
+    `bucket_purge`, written for a live warehouse's purge too, two rows per purge. The tick's `orphans` names `bucket:<name>`,
+    its `failed` names each record it could not read, and its `released` a bucket it emptied of what an unborn create
+    wrote. A claim carries `purging` and `purging_at` while a purge holds it, and `claimed_at` moves with each create.
+
+    Each fix meets the four facts: GitOps (the tick still frees a declared bucket with no hand-run step, and one corrupt
+    record no longer stops it), cloud native (nothing new runs), Lance-namespace/table-idiomatic (the directory catalog's
+    `__manifest` is removed whole by whoever empties the bucket, and connections holding its versions are rebuilt), zero
+    trust (bytes are deleted only under a claim their purger holds, every destruction is audited before and after it, and
+    no create writes into a bucket it no longer holds).
+
 ## What is not modelled
 
 - The last-admin guard (ADR 0213), which moves the token in its own CAS; only administration removals move it now.
@@ -748,8 +890,12 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
   running past the bound is refused, narrower. The catalog's clock judges the bound against the store's timestamps
   (`fga.sweep_tickets`): a catalog clock up to the five-minute margin ahead of the store's sweeps nothing a request that
   ends by its deadline holds; one further ahead can sweep a live ticket, whose Write is refused 409, narrower.
-- A bucket's bytes: the model judges a dead tenant's claim by whether its record was born; the code also lists the bucket
-  and keeps the claim where anything but what a create writes stands (`warehouses.written_by_others`).
+- A bucket's bytes are one flag (§10): whether the bucket holds anything a create did not write. The tick's removal of
+  what an unborn create wrote and its release are one step in the model: its stamp is taken under the claim's ETag where
+  the claim names the dead incarnation, and no other writer lands on a stamped claim. A create past the bound is modelled
+  as no longer running; the code makes it so by `warehouses.require_claim_held`, but for a process frozen between that
+  check and its write (§10 Q6b).
+- The estate owner acts on what the tick reports and keeps: the model's liveness of a kept claim rests on that fairness.
 - Materialized views created directly in a warehouse (their parent edge names the warehouse) are not fenced as a
   namespace there is: no door creates one directly in a warehouse today.
 - The warehouse's managed-access flag is fenced at its set door; its describe door reads only.
@@ -786,5 +932,9 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
   left is kept from every tenant until the estate owner purges it (G20, G21), and a project's policy governs only the
   buckets of the incarnation that set it (P2).
 - The model change of §9 (`fence#open`, `estate#can_purge_dead_tenant_warehouse`) is recorded in the same CHANGELOG.
+- Zero trust, since §10: a bucket's bytes are deleted only by a purger holding its claim (G22), a create writes nothing
+  into a bucket it no longer holds, and every destruction is audited before it starts; GitOps, since §10: no record a
+  tenant corrupts stops the tick, and every dead claim is reported and reachable (G23, G24). The authorization model is
+  unchanged: the purge by bucket asks the relation §9 added.
 - The model change (`revision` on `warehouse`, `admin_revision` renamed `revision` on `project`) is recorded in
   `packages/lakehouse/src/lakehouse/governed/auth/CHANGELOG.md`; `model.fga.yaml` holds that a revision grants nothing.

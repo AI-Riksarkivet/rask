@@ -482,7 +482,7 @@ def test_a_warehouse_declared_protected_refuses_its_delete(client: TestClient, t
 def test_a_purged_buckets_claim_goes_with_its_last_warehouse(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A warehouse delete that purged its bucket releases the bucket's claim, so another project may register the bucket
     once its bytes are gone; a delete keeping the bytes keeps the claim, so no other project adopts what the bucket holds."""
-    monkeypatch.setattr(wh_svc, "purge_bucket", lambda bucket, so: 0)
+    monkeypatch.setattr(wh_svc, "purge_bucket", lambda *_args, **_kwargs: 0)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme", "globex")
     for warehouse, bucket in (("wh-kept", "kept-bkt"), ("wh-purged", "purged-bkt")):
@@ -501,8 +501,8 @@ def test_a_purge_that_fails_is_finished_by_the_same_call_again(client: TestClien
     warehouse still standing, and the same call issued again purges the bucket and removes the warehouse."""
     purged: list[str] = []
 
-    def _a_store_that_fails_once(bucket: str, _so: object) -> int:
-        purged.append(bucket)
+    def _a_store_that_fails_once(_root: str, _so: object, hold: wh_svc.PurgeHold, **_kwargs: object) -> int:
+        purged.append(hold.bucket)
         if len(purged) == 1:
             raise OSError("the store did not answer the purge")
         return 3

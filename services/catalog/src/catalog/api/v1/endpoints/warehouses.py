@@ -39,6 +39,7 @@ from lance_namespace import (
     DescribeTableRequest,
     DescribeTableResponse,
     DropNamespaceRequest,
+    InternalError,
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
@@ -251,9 +252,23 @@ async def establish_warehouse(
         ServiceUnavailableError: The store or its STS could not be probed.
     """
     warehouse_id, project, bucket = ids
-    existing = await _claim_the_bucket(settings, body, ids, author=author, owner=owner, project_incarnation=project_incarnation)
+    existing, since = await _claim_the_bucket(settings, body, ids, author=author, owner=owner, project_incarnation=project_incarnation)
+    # Every write into the bucket, and the record, only while the claim is still this create's and the create is younger
+    # than the bound the converge tick releases a dead incarnation's claim by (ADR 0241 §10 Q6b).
+    held = partial(
+        warehouses.require_claim_held,
+        settings.registry_root,
+        settings.storage_options(),
+        bucket=bucket,
+        project=project,
+        project_incarnation=project_incarnation,
+        since=since,
+        bound=incarnations.ticket_bound(settings.request_deadline_seconds),
+    )
     root_uri = f"s3://{bucket}"
+    await run_in_threadpool(held)
     await run_in_threadpool(warehouses.provision_bucket, bucket, settings.storage_options())
+    await run_in_threadpool(held)
     sealed = await _require_a_conforming_store(settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
     actor = author.actor if author is not None else None
     protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
@@ -265,12 +280,14 @@ async def establish_warehouse(
     # was provisioned and probed is answered 409 with no record written under its id.
     if fences and client is not None and not await fga.fences_stand(client, fences):
         raise ConcurrentModificationError(f"project {project!r} was deleted while warehouse {warehouse_id!r} was made; nothing was made")
+    await run_in_threadpool(held)
     replaced, record = await _write_record(settings, body, record, existing=existing, protection=protection)
     seal_posture.observe(warehouse_id, record, required=bucket not in settings.seal_detection_only_buckets)
     # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
     # catalog refuses a namespace whose parent has no row (measured on pylance 13.0.0). After the record, which makes
     # the root the warehouse's, and idempotent, so a re-POST converges a create that failed here.
     ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
+    await run_in_threadpool(held)
     await run_in_threadpool(warehouses.ensure_catalog_row, ns_conn, warehouse_id)
     if owner is not None:
         await fga_deps.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project, incarnation=record[INCARNATION], fences=fences)
@@ -300,15 +317,18 @@ async def establish_warehouse(
 
 async def _claim_the_bucket(
     settings: Settings, body: CreateWarehouseRequest, ids: WarehouseIds, *, author: Author | None, owner: Caller | None, project_incarnation: str
-) -> dict[str, str] | None:
+) -> tuple[dict[str, str] | None, datetime]:
     """Refuse a create that would take another project's warehouse id or bucket, or that anyone but the declaration
     makes over a warehouse git declares, then claim the bucket for the project.
 
     Returns:
-        The warehouse's registry record as it stood before the claim, ``None`` for a new warehouse.
+        The warehouse's registry record as it stood before the claim, ``None`` for a new warehouse, and when the claim
+        was taken.
 
     Raises:
-        NamespaceAlreadyExistsError: The id or the bucket belongs to another project.
+        NamespaceAlreadyExistsError: The id or the bucket belongs to another project, or the id is an ended record's
+            whose claim stands (ADR 0241 §10 Q2).
+        ConcurrentModificationError: A purge holds the bucket's claim.
         PermissionDeniedError: Git declares the warehouse and ``author`` is not the declaration.
         InvalidInputError: The bucket is reserved platform storage, or a re-POST naming no endpoint keeps a record that
             names another store.
@@ -331,6 +351,12 @@ async def _claim_the_bucket(
         raise NamespaceAlreadyExistsError(
             f"warehouse {warehouse_id!r} is held by a record an earlier incarnation of project {project!r} left; it is released shortly"
         )
+    # An id the tick ended is taken only once its bucket's claim no longer names it (ADR 0241 §10 Q2), asked before this
+    # create claims a bucket of its own.
+    if existing is None:
+        stored = await run_in_threadpool(warehouses.get_warehouse_record, settings.registry_root, so, warehouse_id)
+        if stored is not None and stored.get(warehouses.ENDED_AT):
+            await _require_key_free(settings, stored)
     # Only the declaration changes a warehouse git declares ([[XC-213]]): a door's create is refused whoever makes it,
     # a stack that authenticates nobody included. Judged on the read the guard above made, so the create reads its
     # record once.
@@ -370,7 +396,7 @@ async def _claim_the_bucket(
     #
     # The scan stays because it answers a different question cheaply and with a listing already in hand;
     # this arbitrates the one case it structurally cannot see.
-    await run_in_threadpool(
+    since = await run_in_threadpool(
         partial(
             warehouses.claim_bucket,
             settings.registry_root,
@@ -381,7 +407,19 @@ async def _claim_the_bucket(
             warehouse_id=warehouse_id,
         )
     )
-    return existing
+    return existing, since
+
+
+async def _require_key_free(settings: Settings, ended: dict[str, str]) -> None:
+    """Refuse 409 (code 2) a create of an ended record's id while its bucket's claim names it (``warehouses.require_key_free``).
+
+    Raises:
+        NamespaceAlreadyExistsError: The key is not free; the message names the purge that frees it.
+    """
+    try:
+        await run_in_threadpool(warehouses.require_key_free, settings.registry_root, settings.storage_options(), ended)
+    except warehouses.EndedRecordHoldsItsClaim as exc:
+        raise NamespaceAlreadyExistsError(str(exc)) from None
 
 
 async def _require_a_conforming_store(
@@ -546,6 +584,8 @@ async def _write_record(
     # guard saw.
     try:
         await run_in_threadpool(warehouses.create_warehouse_record, settings.registry_root, so, record)
+    except warehouses.EndedRecordHoldsItsClaim as exc:
+        raise NamespaceAlreadyExistsError(str(exc)) from None
     except RecordExistsError:
         return await _converge()  # lost the mint race — converge on the WINNER, conditionally
     return {}, record
@@ -766,17 +806,22 @@ AdministeredWarehouseDep = Annotated[dict[str, str], Depends(administered_wareho
 
 
 class WarehouseToDelete(NamedTuple):
-    """A warehouse record a delete is addressed to, and whether it is what a dead tenant left (:func:`_of_a_dead_tenant`)."""
+    """A warehouse record a delete is addressed to, and whether it is what a dead tenant left (:func:`_of_a_dead_tenant`);
+    or, for the estate owner, a dead incarnation's bucket claim that no record names, addressed by its bucket (``claim``,
+    ``record`` then ``None``, ADR 0241 §10 Q2)."""
 
-    record: dict[str, str]
+    record: dict[str, str] | None
     dead_tenant: bool
+    claim: dict[str, str] | None = None
 
 
 async def warehouse_to_delete(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseToDelete:
     """The record a delete of ``warehouse_id`` acts on: a warehouse the caller administers and git does not declare
     (:func:`warehouse_its_doors_manage`), or what a dead tenant left, for the estate admin alone
     (``can_purge_dead_tenant_warehouse`` on the estate, ADR 0241 §9 P3): no tenant administers it, and a delete of it purges
-    its bucket. Anyone else is answered the missing warehouse's 404.
+    its bucket. Where no record stands under the id, the same relation reaches a dead incarnation's claim on the bucket of
+    that name which no record names (ADR 0241 §10 Q2): a crash between a create's claim and its record leaves one, and
+    the tick reports it as ``bucket:<name>``. Anyone else is answered the missing warehouse's 404.
 
     Raises:
         InvalidInputError: The id is not a warehouse id.
@@ -788,15 +833,40 @@ async def warehouse_to_delete(warehouse_id: str, settings: SettingsDep, token: C
     except TableNotFoundError:
         # Absent, refused to its caller, or a dead tenant's: only the estate owner goes on, and only for a dead tenant's,
         # judged once the caller is known to be the estate owner, so no other caller learns which it was.
-        record = await run_in_threadpool(warehouses.get_warehouse_record, settings.registry_root, settings.storage_options(), warehouse_id)
+        so = settings.storage_options()
+        record = await run_in_threadpool(warehouses.get_warehouse_record, settings.registry_root, so, warehouse_id)
         try:
             await fga_deps.require_relation(client, settings, token, relation="can_purge_dead_tenant_warehouse", obj=settings.fga_root_object)
         except PermissionDeniedError as exc:
             raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
-        if record is None or not await _of_a_dead_tenant(settings, record, warehouse_id):
+        if record is not None:
+            if not await _of_a_dead_tenant(settings, record, warehouse_id):
+                raise
+            return WarehouseToDelete(record=record, dead_tenant=True)
+        if (claim := await _unnamed_dead_claim(settings, warehouse_id)) is None:
             raise
-        return WarehouseToDelete(record=record, dead_tenant=True)
+        return WarehouseToDelete(record=None, dead_tenant=True, claim=claim)
     return WarehouseToDelete(record=warehouse_its_doors_manage(warehouse_id, administered, token), dead_tenant=False)
+
+
+async def _unnamed_dead_claim(settings: Settings, bucket: str) -> dict[str, str] | None:
+    """The claim on ``bucket`` where it names an incarnation of its project that no longer stands and no warehouse record,
+    ended or not, names the bucket; ``None`` otherwise.
+
+    Raises:
+        InternalError: A record or the claim names no incarnation of its project, or a record cannot be read.
+    """
+    so = settings.storage_options()
+    claim = await run_in_threadpool(partial(warehouses.bucket_claim, settings.registry_root, so, bucket=bucket))
+    if claim is None:
+        return None
+    standing = await run_in_threadpool(incarnations.project_incarnation, settings.registry_root, so, claim["project"])
+    if incarnations.made_under(claim, standing, obj=f"bucket:{bucket}"):
+        return None
+    stored, unreadable = await run_in_threadpool(partial(warehouses.read_warehouses, settings.registry_root, so, ended=True))
+    if unreadable:
+        raise InternalError(f"{len(unreadable)} warehouse record(s) cannot be read, so whether one names bucket {bucket!r} is unknown")
+    return None if any(r.get("bucket") == bucket for r in stored) else claim
 
 
 WarehouseToDeleteDep = Annotated[WarehouseToDelete, Depends(warehouse_to_delete)]
@@ -1110,7 +1180,9 @@ def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]],
 
     ``NamespaceNotEmptyError`` (409) is the refusal: the container still holds something that is not this
     warehouse's to destroy. The reserved case is ``InvalidInputError`` (400), matching create's own wording
-    for the same bucket. Both run BEFORE any irreversible step, so a refusal costs nothing.
+    for the same bucket. Both run BEFORE any irreversible step, so a refusal costs nothing. Whether the bucket's claim
+    is this warehouse's is not judged here: the purge takes the claim itself before it deletes a byte
+    (``warehouses.take_for_purge``), and a claim it cannot take keeps every byte.
     """
     bucket = record["bucket"]
     if bucket in settings.reserved_bucket_set:
@@ -1118,13 +1190,7 @@ def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]],
             f"bucket {bucket!r} is reserved platform storage (the catalog root or registry, or a platform bucket) "
             f"and must not be purged — delete the warehouse without ?purge_bucket=true"
         )
-    # The claim names who owns the bucket now: one released and taken again by another project or incarnation holds that
-    # tenant's bytes, whatever this record says (ADR 0241 §9 P3).
-    claim = warehouses.bucket_claim(settings.registry_root, settings.storage_options(), bucket=bucket)
-    if claim is not None and not (
-        claim.get("project") == record["project"] and incarnations.made_under(claim, record.get(PROJECT_INCARNATION), obj=f"bucket:{bucket}")
-    ):
-        raise NamespaceNotEmptyError(f"bucket {bucket!r} is claimed by another project's warehouse; delete this warehouse without ?purge_bucket=true")
+    # Whose the bucket is now is the claim's to say, and the purge takes it before its first delete (ADR 0241 §10 Q1).
     rivals = [r for r in records if r.get("bucket") == bucket and r.get("id") != warehouse_id]
     if not rivals:
         return
@@ -1191,29 +1257,39 @@ async def delete_warehouse(
        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
        yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,
        so re-issuing the call finishes it.
-    6. Tuples on ``warehouse:<id>``, then the bucket's purge and claim (step 7), then the registry record last: the
-       record is what this door is addressed by, so a failure before it leaves the warehouse for the re-issue.
-    7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
-       so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
-       purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
-       still claims, or reserved platform storage — refuses BEFORE the cascade
-       (:func:`_require_bucket_purgeable`). A purge then releases the bucket's claim
-       (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping
-       the bytes keeps the claim, so no other project adopts what the bucket still holds.
+    6. Tuples on ``warehouse:<id>``, then the bucket's bytes (step 7), then the registry record, then the bucket's
+       claim: the record is what this door is addressed by, so a failure before it leaves the warehouse for the
+       re-issue, and the claim is released only once no record names the bucket.
+    7. **Bytes only on ``?purge_bucket=true``, and only under a claim the purge itself holds** (ADR 0241 §10 Q1). A
+       catalog entry is recoverable, a customer's bucket is not, so the two never share a default; a record-less bucket
+       is reported by the reconciler, not lost. A purge that would take bytes this warehouse does not solely own — a
+       bucket a same-project sibling still claims, or reserved platform storage — refuses BEFORE the cascade
+       (:func:`_require_bucket_purgeable`). Before its first delete the purge takes the bucket's claim for itself
+       (``warehouses.take_for_purge``: stamped ``purging`` under the read's ETag, where it names this warehouse's
+       project at its incarnation), which refuses every create on the bucket (409) until it ends; the bytes are deleted
+       while the claim read again is still its stamp (``warehouses.purge_bucket``), and the claim is released last
+       (``warehouses.end_purge``). A purge that dies leaves the stamp, and only this delete asked again resumes it. A
+       claim released, absent or naming anyone else keeps every byte: the record goes, and the answer's ``bytes_kept``
+       says why. Audited ``bucket_purge``: ``allow`` once the claim is taken and before the first delete, then
+       ``success``, or ``failure`` naming the ``stage`` it reached.
 
     Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
     reaches its bucket.
 
     **What a dead tenant left is the estate admin's to purge** (ADR 0241 §9 P3): a record made under an incarnation of its
     project that no longer stands, or one the converge tick ended, is administered by no tenant, and only
-    ``can_purge_dead_tenant_warehouse`` on the estate deletes it, with ``?purge_bucket=true``: its bytes are no tenant's to
-    keep, and a delete keeping them would keep the claim that blocks the bucket. The purge releases the claim, is audited
-    (``dead_tenant_purge``) and is announced as ``warehouse_deleted`` with ``dead_tenant: true``.
+    ``can_purge_dead_tenant_warehouse`` on the estate deletes it, with ``?purge_bucket=true``. Its record is stamped
+    ``purging`` first, so no create takes its key meanwhile; a claim no longer its own leaves the bucket untouched, its
+    catalog included. Announced as ``warehouse_deleted`` with ``dead_tenant: true``. The same relation reaches, by its
+    bucket in the warehouse's place, a dead incarnation's claim no record names (ADR 0241 §10 Q2).
     """
     so = settings.storage_options()
-    record = addressed.record
     if addressed.dead_tenant and not purge_bucket:
         raise InvalidInputError(f"warehouse {warehouse_id!r} is what a dead tenant left: it is deleted only with its bucket, ?purge_bucket=true")
+    if addressed.record is None:
+        assert addressed.claim is not None
+        return await _purge_a_dead_claim(request, settings, token, addressed.claim)
+    record = addressed.record
     project = record["project"]
     # Every record names an incarnation once the catalog converged it (`incarnations.converge`); with authorization on, one
     # that does not yet is refused, so no delete runs on an id whose incarnation is still being given (ADR 0241).
@@ -1222,8 +1298,20 @@ async def delete_warehouse(
     # state, so it runs strictly after the gate above.
     fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)
 
-    # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
-    in_estate_store = names_the_estate_store(record.get("endpoint"), estate=settings.s3_endpoint)
+    # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes; nor
+    # can a dead tenant's whose bucket's claim is no longer its own: the bucket, its catalog included, is another
+    # tenant's or nobody's, and this delete touches nothing in it (ADR 0241 §10 Q1).
+    holder = warehouses.purge_holder("warehouse", warehouse_id, incarnation)
+    # A purge of this warehouse that died left its stamp, and may have deleted the bucket: one that is gone holds nothing to
+    # list, and a connection to it cannot be built.
+    claim = await run_in_threadpool(partial(warehouses.bucket_claim, settings.registry_root, so, bucket=record["bucket"])) if purge_bucket else None
+    its_own = _claim_is_its_own(claim, record, holder)
+    resumed = its_own and claim is not None and claim.get(warehouses.PURGING) == holder
+    in_estate_store = (
+        names_the_estate_store(record.get("endpoint"), estate=settings.s3_endpoint)
+        and (not addressed.dead_tenant or its_own)
+        and (not resumed or await run_in_threadpool(warehouses.bucket_exists, record["bucket"], so))
+    )
     ns_conn = (
         fenced(
             await namespace_for_root(request, settings, record["root_uri"], endpoint=record.get("endpoint") or None),
@@ -1308,7 +1396,21 @@ async def delete_warehouse(
             trash_ended: list[str] = []
             revoked = 0
             bucket_purged = False
+            purge = _Purge(
+                subject=f"user:{token.subject}" if token else None,
+                resource=f"warehouse:{warehouse_id}",
+                project=project,
+                project_incarnation=str(record.get(PROJECT_INCARNATION)),
+                bucket=bucket,
+                dead_tenant=addressed.dead_tenant,
+            )
             try:
+                if purge_bucket:
+                    if addressed.dead_tenant and not await run_in_threadpool(
+                        partial(warehouses.mark_purging, settings.registry_root, so, warehouse_id, incarnation=incarnation, holder=holder)
+                    ):
+                        raise ConcurrentModificationError(f"warehouse {warehouse_id!r} was made again while its purge began; nothing was deleted")
+                    await purge.take(settings, holder)
                 for entry in trashed:
                     kind, canonical = str(entry.get("kind") or "table"), str(entry.get("id") or "")
                     # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
@@ -1319,7 +1421,7 @@ async def delete_warehouse(
                         revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)
                     else:
                         log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
-                    await _forget_trashed(settings, entry, purge=purge_bucket)
+                    await _forget_trashed(settings, entry, purge=purge.hold is not None)
                     trash_ended.append(f"{kind}:{canonical}")
                 if ns_conn is not None:
                     for subtree in subtrees:
@@ -1330,7 +1432,7 @@ async def delete_warehouse(
                             if item.kind != "table":
                                 continue
                             # What the announcement names the table by, read while it still stands (ADR 0173 §10).
-                            if await _detach_table(ns_conn, settings, item.segments, purge=purge_bucket, table_uuid=item.uuid):
+                            if await _detach_table(ns_conn, settings, item.segments, purge=purge.hold is not None, table_uuid=item.uuid):
                                 removed.append(item)
                                 tables_removed.append(fga.canonical_object_id(item.segments))
                                 await filing.send(detached[tuple(item.segments)])
@@ -1358,18 +1460,17 @@ async def delete_warehouse(
                 # on it from here, then drained of every tuple on it and every namespace edge naming it, with the tickets of the
                 # doors that were writing, so nothing decided on it outlives the delete onto a warehouse made again under the id.
                 revoked += len(await fga_deps.end_incarnation(client, settings, f"warehouse:{warehouse_id}", incarnation, token=token))
-                # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
-                # fail, it keeps the warehouse for the re-issue that finishes them.
-                purged = 0
-                if purge_bucket:
-                    purged = await run_in_threadpool(warehouses.purge_bucket, bucket, so)
-                    bucket_purged = True
-                    await run_in_threadpool(partial(warehouses.release_bucket_claim, settings.registry_root, so, bucket=bucket, record=record))
+                # The record goes after the bytes: it is what the door is addressed by, so while the purge can still fail, it
+                # keeps the warehouse for the re-issue that finishes it; the claim goes last, once no record names the bucket.
+                purged = await purge.delete_bytes(request, settings)
+                bucket_purged = purge.hold is not None
                 # F2 (ADR 0233, Fence.tla): a hold whose renewals failed twice lapsed while the delete worked, and a trash record
                 # may have been filed under the warehouse since its read. The record goes only while the hold still stands; a
                 # lapsed one refuses here (409), the record kept for the re-issue, which reads the trash again.
                 await run_in_threadpool(fence.confirm)
                 await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, so, warehouse_id)
+                purge.stage = "record_deleted"
+                await purge.release(settings)
             except Exception as exc:
                 # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first
                 # table is detached, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
@@ -1379,7 +1480,10 @@ async def delete_warehouse(
                 if isinstance(exc, fga.RevokeInterrupted):
                     # The object whose revoke the outage stopped lost these before it.
                     revoked += len(exc.removed)
+                purge.failed(exc)
                 if _a_refusal(exc) and not (namespaces_dropped or tables_removed or trash_ended or revoked):
+                    # The claim the purge took and no byte deleted under is given back, so the refusal leaves nothing.
+                    await purge.give_back(settings)
                     # A GUARD'S REFUSAL BEFORE ANY STEP LANDED is the answer, under its own code ([[LH-572]]): a guard refuses before
                     # its step writes, so nothing is partial. A failure of the store or of OpenFGA is reported as partial even with
                     # nothing counted, since the step it stopped may have landed (a clone's row detached, then its tag's delete
@@ -1426,18 +1530,8 @@ async def delete_warehouse(
                 ) from exc
 
             seal_posture.forget(warehouse_id)
-            if addressed.dead_tenant:
-                audit(
-                    AuditAction.DEAD_TENANT_PURGE,
-                    AuditOutcome.SUCCESS,
-                    subject=f"user:{token.subject}" if token else None,
-                    resource=f"warehouse:{warehouse_id}",
-                    project=project,
-                    project_incarnation=str(record.get(PROJECT_INCARNATION)),
-                    bucket=bucket,
-                    objects_purged=purged,
-                    reason=str(record.get(warehouses.ENDED_REASON) or "made_under_a_dead_incarnation"),
-                )
+            if purge_bucket:
+                purge.succeeded()
             log.info(
                 "warehouse_deleted",
                 extra={
@@ -1448,22 +1542,165 @@ async def delete_warehouse(
                     "tables_removed": tables_removed,
                     "trash_ended": trash_ended,
                     "tuples_revoked": revoked,
-                    "bucket_purged": purge_bucket,
+                    "bucket_purged": bucket_purged,
+                    "bytes_kept": purge.bytes_kept,
                     "objects_purged": purged,
                     "forced": force,
                 },
             )
             # Sent with what the delete dropped and purged, under the id the planned event was filed with.
-            actual = planned.model_copy(update={"extra": {**planned.extra, "namespaces_dropped": namespaces_dropped, "objects_purged": purged}})
+            actual = planned.model_copy(
+                update={"extra": {**planned.extra, "namespaces_dropped": namespaces_dropped, "bucket_purged": bucket_purged, "objects_purged": purged}}
+            )
             await filing.send(deleted.model_copy(update={"message": ControlMessage(event=actual)}))
     return DeleteWarehouseResponse(
         id=warehouse_id,
         bucket=bucket,
         namespaces_dropped=namespaces_dropped,
         tuples_revoked=revoked,
-        bucket_purged=purge_bucket,
+        bucket_purged=bucket_purged,
         objects_purged=purged,
+        bytes_kept=purge.bytes_kept,
     )
+
+
+#: How far a bucket's purge got, as its audit rows name it: the claim taken for the purge, the bytes deleted, the record
+#: removed, the claim released.
+type PurgeStage = Literal["claim_taken", "bytes_deleted", "record_deleted", "claim_released"]
+
+
+class _Purge(BaseModel):
+    """One bucket purge by the delete door: the claim it holds, how far it got, and its audit trail (ADR 0241 §10 Q1, Q5).
+
+    Destruction is audited before it starts and when it ends: ``bucket_purge`` ``allow`` once the purge holds the claim
+    and before its first delete, so the trail holds the intent even if the process dies, then ``success``, or ``failure``
+    naming the ``stage`` it reached whenever it held the claim and did not finish."""
+
+    subject: str | None
+    resource: str
+    project: str
+    project_incarnation: str
+    bucket: str
+    dead_tenant: bool
+    hold: warehouses.PurgeHold | None = None
+    stage: PurgeStage | None = None
+    objects: int = 0
+    #: Why ``?purge_bucket=true`` deleted no byte: the claim was not this purge's to take.
+    bytes_kept: str | None = None
+
+    def _audit(self, outcome: AuditOutcome, **fields: object) -> None:
+        audit(
+            AuditAction.BUCKET_PURGE,
+            outcome,
+            subject=self.subject,
+            resource=self.resource,
+            project=self.project,
+            project_incarnation=self.project_incarnation,
+            bucket=self.bucket,
+            dead_tenant=self.dead_tenant,
+            **fields,
+        )
+
+    async def take(self, settings: Settings, holder: str) -> None:
+        """Take the bucket's claim for this purge (``warehouses.take_for_purge``); where it cannot, keep every byte."""
+        self.hold = await run_in_threadpool(
+            partial(
+                warehouses.take_for_purge,
+                settings.registry_root,
+                settings.storage_options(),
+                bucket=self.bucket,
+                project=self.project,
+                project_incarnation=self.project_incarnation,
+                holder=holder,
+            )
+        )
+        if self.hold is None:
+            self.bytes_kept = f"the claim on bucket {self.bucket!r} is released, absent or another tenant's, so no byte of it is this delete's to purge"
+            log.warning("warehouse_purge_kept_bytes", extra={"resource": self.resource, "bucket": self.bucket})
+            return
+        self.stage = "claim_taken"
+        self._audit(AuditOutcome.ALLOW, stage=self.stage)
+
+    async def delete_bytes(self, request: Request, settings: Settings) -> int:
+        """Delete the bucket's bytes under the claim this purge holds; none where it holds none. The process's connections
+        rooted at the bucket hold an index that is gone, and are dropped."""
+        if self.hold is not None:
+            self.objects = await run_in_threadpool(warehouses.purge_bucket, settings.registry_root, settings.storage_options(), self.hold)
+            request.app.state.connections.forget(f"s3://{self.bucket}")
+            self.stage = "bytes_deleted"
+        return self.objects
+
+    async def release(self, settings: Settings) -> None:
+        """Release the claim this purge holds, once no record names the bucket."""
+        if self.hold is not None:
+            await run_in_threadpool(partial(warehouses.end_purge, settings.registry_root, settings.storage_options(), self.hold, released="bucket_purged"))
+            self.stage = "claim_released"
+
+    async def give_back(self, settings: Settings) -> None:
+        """Give back unstamped the claim this purge took, where it deleted nothing under it: a guard's refusal leaves nothing."""
+        if self.hold is not None and self.stage == "claim_taken":
+            await run_in_threadpool(partial(warehouses.end_purge, settings.registry_root, settings.storage_options(), self.hold, released=None))
+
+    def failed(self, exc: BaseException) -> None:
+        if self.hold is not None:
+            self._audit(AuditOutcome.FAILURE, stage=self.stage, objects_purged=self.objects, error=type(exc).__name__)
+
+    def succeeded(self) -> None:
+        self._audit(
+            AuditOutcome.SUCCESS,
+            stage=self.stage or "record_deleted",
+            objects_purged=self.objects,
+            **({"bytes_kept": self.bytes_kept} if self.bytes_kept else {}),
+        )
+
+
+def _claim_is_its_own(claim: dict[str, str] | None, record: dict[str, str], holder: str) -> bool:
+    """Whether ``claim``, the claim on ``record``'s bucket, stands naming its project at its incarnation, unstamped or
+    stamped by this purge's ``holder``: a dead tenant's bucket whose claim is anything else holds nothing this delete may
+    touch."""
+    return (
+        claim is not None
+        and claim.get("project") == record["project"]
+        and incarnations.made_under(claim, record.get(PROJECT_INCARNATION), obj=f"bucket:{record['bucket']}")
+        and claim.get(warehouses.PURGING) in (None, holder)
+    )
+
+
+async def _purge_a_dead_claim(request: Request, settings: Settings, token: Caller | None, claim: dict[str, str]) -> DeleteWarehouseResponse:
+    """The estate owner's purge of a dead incarnation's claim no record names, addressed by its bucket (ADR 0241 §10 Q2):
+    the claim taken for the purge, the bucket's bytes and the bucket deleted under it, the claim released; audited as every
+    purge is.
+
+    Raises:
+        PartiallyApplied: A step failed once the claim was taken; asked again, the purge resumes under its stamp.
+    """
+    bucket = claim["bucket"]
+    pinc = incarnations.require_project_incarnation(claim, f"bucket:{bucket}")
+    purge = _Purge(
+        subject=f"user:{token.subject}" if token else None,
+        resource=f"bucket:{bucket}",
+        project=claim["project"],
+        project_incarnation=pinc,
+        bucket=bucket,
+        dead_tenant=True,
+    )
+    try:
+        await purge.take(settings, warehouses.purge_holder("bucket", bucket, pinc))
+        if purge.hold is None:
+            raise ConcurrentModificationError(f"the claim on bucket {bucket!r} changed before its purge took it; nothing was deleted")
+        await purge.delete_bytes(request, settings)
+        await purge.release(settings)
+    except Exception as exc:
+        purge.failed(exc)
+        if purge.hold is None:
+            raise
+        raise PartiallyApplied(
+            f"bucket {bucket!r} was PARTIALLY purged: {purge.objects} object(s) deleted before the failure; re-issue this call to finish it.",
+            problem_extra={"bucket": bucket, "objects_purged": purge.objects, "partial": True},
+        ) from exc
+    purge.succeeded()
+    log.warning("dead_claim_purged", extra={"bucket": bucket, "project": claim["project"], "project_incarnation": pinc, "objects": purge.objects})
+    return DeleteWarehouseResponse(id=bucket, bucket=bucket, namespaces_dropped=[], tuples_revoked=0, bucket_purged=True, objects_purged=purge.objects)
 
 
 @router.post("/{warehouse_id}/validate", response_model_exclude_none=True)

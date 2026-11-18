@@ -170,7 +170,9 @@ incarnation with `fga.end_incarnation` (mark born, retire, drain until a read fi
 minutes, on any id, from one read of the indexes (`fga.sweep_tickets`), judged against the catalog's clock: a catalog
 clock more than the five minutes ahead of the store's can sweep a live request's ticket, whose Write is then refused 409.
 The tick asks OpenFGA about a record's birth once: it stamps the record `born` (`control_records.BORN`), and a marker is
-never revoked. `estate#can_purge_dead_tenant_warehouse` (the estate owner) is the one door to a dead tenant's warehouse. A test seeding a project or warehouse straight to the store must seed its marker and token
+never revoked. `estate#can_purge_dead_tenant_warehouse` (the estate owner) is the one door to a dead tenant's warehouse,
+and, by its bucket in the warehouse's place, to a dead incarnation's bucket claim no record names (ADR 0241 §10 Q2); the
+gate is asked before the door says whether either exists, so no other caller learns which ids or buckets a dead tenant left. A test seeding a project or warehouse straight to the store must seed its marker and token
 too, or its doors answer 409 with `Retry-After` (being established); `tests/integration/openfga_grants.Grants` answers
 every project and warehouse as born.
 

@@ -107,7 +107,7 @@ class AuditAction(StrEnum):
     CLONE_ENDING_FINISH = "clone_ending_finish"
     TRASH_RELEASE = "trash_release"
     TRASH_END = "trash_end"
-    DEAD_TENANT_PURGE = "dead_tenant_purge"
+    BUCKET_PURGE = "bucket_purge"
     IDEMPOTENCY_KEYS_RECLAIM = "idempotency_keys_reclaim"
     ANNOUNCEMENT_INTENTS_FINISH = "announcement_intents_finish"
 

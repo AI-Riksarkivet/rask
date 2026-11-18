@@ -119,15 +119,17 @@ def _read_roles(control_root: str, storage_options: StorageOptions, project: str
     return sorted(found, key=lambda role: role.name), unreadable
 
 
-def every_stored_role(control_root: str, storage_options: StorageOptions) -> list[StoredRole]:
-    """Every standing role of every project, in one listing of the roles registry: what the converge tick judges a dead
-    tenant's roles by (ADR 0241 §9 P5). A record that cannot be read is skipped and logged.
+def every_stored_role(control_root: str, storage_options: StorageOptions) -> tuple[list[StoredRole], list[str]]:
+    """``(every standing role of every project, the path of each record that cannot be read as one)``, in one listing of
+    the roles registry: what the converge tick judges a dead tenant's roles by and reports its failures by (ADR 0241 §9
+    P5, §10 Q3). A record that cannot be read is skipped and logged.
 
     Raises:
         ServiceUnavailableError: The store did not answer a record's read.
     """
     fs, base = fs_and_base(control_root, storage_options)
     found: list[StoredRole] = []
+    unreadable: list[str] = []
     for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_ROLES_PREFIX}", allow_not_found=True, recursive=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
@@ -140,10 +142,11 @@ def every_stored_role(control_root: str, storage_options: StorageOptions) -> lis
             if reads_as_store_outage(exc):
                 raise store_refusal(exc, reading=f"reading {info.path}", so="the roles cannot be read") from exc
             log.warning("role_record_unreadable", extra={"path": info.path, "error": str(exc)})
+            unreadable.append(info.path)
             continue
         if stored.ended_at is None:
             found.append(stored)
-    return found
+    return found, unreadable
 
 
 def _role(stored: StoredRole) -> RoleRecord:

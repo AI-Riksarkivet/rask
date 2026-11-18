@@ -396,6 +396,7 @@ async def tick(ctx: Tick) -> ConvergeTick:
         settings.storage_options(),
         fga_deps.wired(settings, get_fga_client(request)),
         bound=incarnations.ticket_bound(settings.request_deadline_seconds),
+        connections=request.app.state.connections,
     )
     if not settings.declaration_file:
         return ConvergeTick(skipped=True, failed=incarnated.failed)
