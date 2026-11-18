@@ -38,7 +38,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
-from catalog.core.vending import EncryptionAtRest, make_vendor
+from catalog.core.vending import vendor_for
 from catalog.services import provenance_namespace, seal_posture, warehouses
 from lakehouse.admission import judge_before_the_body
 from lakehouse.bus import Bus, bus_session
@@ -246,23 +246,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # storage_options a client uses to reach object storage DIRECTLY. mode_b (default) vends nothing —
     # clients use the server-mediated Arrow-IPC endpoints; web_identity exchanges the catalog's own token for a
     # session narrowed to the table and tier by an inline session policy. Built once from config (see core/vending.py).
-    app.state.vendor = make_vendor(
-        settings.vending_mode,
-        identity=settings.web_identity,
-        store_endpoint=settings.vended_store_endpoint,
-        ttl_seconds=settings.vending_ttl_seconds,
-        encryption=EncryptionAtRest(
-            algorithm=settings.s3_server_side_encryption,
-            kms_key_id=settings.s3_sse_kms_key_id,
-            bucket_key_enabled=settings.s3_sse_bucket_key_enabled,
-        ),
-        # THE OPERATOR'S allowlist of legitimate foreign DATA bases. A manifest-declared base outside the
-        # table's own vended scope is granted READ only if it is on it; without that, a writer on one table
-        # could declare a base naming another tenant's prefix and read it with their next credential. The
-        # external blob bases are not on it ([[LH-209]]): they are pointer bases the blob door serves, and
-        # granting one would hand every vend every object under it. Empty by default.
-        sanctioned_bases=settings.multibase_data_base_list,
-    )
+    app.state.vendor = vendor_for(settings)
     # [[LH-279]] WHAT EVERY TABLE READ JUDGES A DECLARED BASE AGAINST: the control root the create and
     # register doors write each table's base record to, and the configured external blob bases. Installed
     # as the settings it is built from, so each read signs its record reads with the pair in force, and

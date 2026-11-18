@@ -95,7 +95,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from catalog.services import announcement_intents, erasure_obligations
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld, RefOnARelease
 from catalog.services.dataplane import PlacedRef, recorded_branch
-from catalog.services.erasure import ErasureReport, Pin, SurfaceResult, held_by_a_clone, reclaim_refs
+from catalog.services.erasure import ErasureReport, Pin, Sessions, SurfaceResult, held_by_a_clone, reclaim_refs
 from lakehouse import clone_sources, control_prefixes, history_fences, stored_objects
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.fences import Hold, mark_name
@@ -413,7 +413,13 @@ class Released(BaseModel):
 
 
 def release_due(
-    control_root: str, storage_options: StorageOptions, *, now: datetime, open_location: Callable[[str], _Dataset], table_options: StorageOptions
+    control_root: str,
+    storage_options: StorageOptions,
+    *,
+    now: datetime,
+    open_location: Callable[[str], _Dataset],
+    table_options: StorageOptions,
+    sessions_at: Callable[[str], Sessions],
 ) -> Released:
     """Release every scheduled release that is due and not held by another tick; the refs it changed, and the notices of
     the releases registered clones hold.
@@ -421,7 +427,8 @@ def release_due(
     One release failing records its error, hands its lease back and leaves the others to run. One a reclaim of its table
     holds off ([[LH-308]]) is left unclaimed for a later tick, as is one whose notices are still filed (ADR 0233): its
     people are told first; and one a registered clone holds changes nothing, and is told again. ``table_options`` reach
-    the tables' store, where the reclaim records what it removes.
+    the tables' store, where the reclaim records what it removes; ``sessions_at`` names, for a table's location, what each
+    of its refs' reclaim deletes through (:data:`catalog.services.erasure.Sessions`, ADR 0243 R5).
     """
     done = Released()
     for raw in list_records(control_root, storage_options, RELEASE_PREFIX, event="erasure_release"):
@@ -436,7 +443,16 @@ def release_due(
             if announcement_intents.standing(control_root, storage_options, target=notice_target(record.release_id))[0]:
                 log.info("erasure_release_waits_for_its_notices", extra={"release": record.release_id, "table": record.table})
                 continue
-            if clones := _release(control_root, storage_options, record, now=now, open_location=open_location, table_options=table_options, done=done):
+            if clones := _release(
+                control_root,
+                storage_options,
+                record,
+                now=now,
+                open_location=open_location,
+                table_options=table_options,
+                sessions=sessions_at(record.location),
+                done=done,
+            ):
                 done.notices += [held_notice(record, subject, clones) for subject in record.notified]
         except _Lost:
             log.info("erasure_release_claimed_elsewhere", extra={"release": record.release_id})
@@ -464,6 +480,7 @@ def _release(
     now: datetime,
     open_location: Callable[[str], _Dataset],
     table_options: StorageOptions,
+    sessions: Sessions,
     done: Released,
 ) -> list[str]:
     """Run ``record``'s release, adding the refs it changed to ``done``; the registered clones' tags that hold it, which
@@ -488,7 +505,7 @@ def _release(
         if claimed.phase == "deleting":
             claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
         done.changes += _recreate(dataset, claimed)
-        _reclaim(dataset, claimed, storage_options=table_options, history=history, hold=hold)
+        _reclaim(dataset, claimed, storage_options=table_options, history=history, hold=hold, sessions=sessions)
         if record.held_by_clones:
             _report_held(control_root, storage_options, record.release_id, [])
         # G9: the end inside the hold, which a scheduling shares with nothing: a verification recording the release
@@ -639,7 +656,7 @@ def _recreate(dataset: _Dataset, record: ReleaseRecord) -> list[RefChange]:
     return changes
 
 
-def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: StorageOptions, history: TableHistory, hold: Hold) -> None:
+def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: StorageOptions, history: TableHistory, hold: Hold, sessions: Sessions) -> None:
     """Main's cleanup at the obligation's retention, now that no ref the release could reach pins a residual: what the
     verification's reclaim left for the pins goes, as that reclaim would have taken it.
 
@@ -648,7 +665,15 @@ def _reclaim(dataset: _Dataset, record: ReleaseRecord, *, storage_options: Stora
     """
     report = ErasureReport(table=record.table, predicate="")
     reclaim_refs(
-        report, dataset, [None], clean={None}, retention=timedelta(days=record.retain_days), storage_options=storage_options, history=history, hold=hold
+        report,
+        dataset,
+        [None],
+        clean={None},
+        retention=timedelta(days=record.retain_days),
+        storage_options=storage_options,
+        history=history,
+        hold=hold,
+        sessions=sessions,
     )
     if failed := [surface.detail for surface in report.surfaces if surface.outcome == "failed"]:
         raise RuntimeError(f"the reclaim after the release did not go through: {'; '.join(failed)}")

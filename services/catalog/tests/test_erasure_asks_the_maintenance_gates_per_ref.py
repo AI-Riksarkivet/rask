@@ -28,7 +28,7 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
-from catalog.services.erasure import ErasureReport, ref_heads, verify
+from catalog.services.erasure import ErasureReport, no_sessions, ref_heads, verify
 from lakehouse import base_registry
 from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
@@ -66,6 +66,7 @@ def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path
         history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
         derived=list,
         before_untag=lambda _tags: None,
+        sessions=no_sessions,
     )
 
     history = {s.surface: (s.outcome, s.detail) for s in report.surfaces if s.surface.startswith("history:")}
@@ -102,6 +103,7 @@ def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path
         history=history,
         derived=list,
         before_untag=lambda _tags: None,
+        sessions=no_sessions,
     )
 
     outcomes = {s.surface: s.outcome for s in report.surfaces if s.surface.startswith("history:")}

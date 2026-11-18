@@ -59,6 +59,8 @@ from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REF
 if TYPE_CHECKING:
     import lance
 
+    from catalog.core.config import Settings
+
 log = logging.getLogger(__name__)
 
 #: What a vend refused for want of a reading did not do (:func:`lakehouse.outage.store_refusal`).
@@ -421,6 +423,33 @@ def require_a_maintain_policy_that_fits(*, bucket: str, control_root: str, kms_k
             f"warehouse {warehouse!r} on bucket {bucket!r} would hold tables whose maintain-tier session policy is {counted} characters as a store "
             f"counts it, past the {SESSION_POLICY_LIMIT:,} STS accepts, so maintenance could reclaim none of their history: a shorter bucket "
             f"name ({len(bucket)} characters) fits, or the estate's control root ({len(control_root)}) or KMS key ({len(kms_key or '')}) shortened"
+        )
+
+
+def require_a_table_maintain_policy_that_fits(location: str, *, bases: Sequence[str], records: TableRecords, kms_key: str | None) -> None:
+    """Refuse a table at ``location`` declaring ``bases`` whose maintain-tier session policy STS would refuse (ADR 0243 R6).
+
+    NO SHAPE BOUND MAKES EVERY TABLE FIT. A registered table's location is a relative path of any depth the store keeps
+    (``table_bases.require_registrable_location`` bounds its syntax, not its length), and its manifest may declare any
+    number of bases, each granted as a pair of statements of its own: measured with :func:`counted_length`, one base at two
+    63-character buckets costs about 440 characters, and a location 30 characters deeper than ``<bucket>/<uuid>`` 90, while
+    the catalog-made shape leaves 84 (:func:`require_a_maintain_policy_that_fits`). So the door that makes the shape refuses
+    the one that would not fit, judged at its largest reading (every base granted, and as one the table reclaims in),
+    before anything is attached, and a pass never meets a vend it can never be given.
+
+    Raises:
+        InvalidInputError: The policy would be past :data:`SESSION_POLICY_LIMIT` (400, code 13), naming both.
+    """
+    if not location.startswith("s3://") or not records.control_root.startswith("s3://"):
+        return
+    bucket, prefix = split_s3_location(location)
+    granted = [base for base in bases if base.startswith("s3://") and split_s3_location(base)[1].strip("/")]
+    policy = build_session_policy(bucket, prefix, "maintain", granted, sanctioned_bases=granted, data_directories=granted, kms_key=kms_key, records=records)
+    if (counted := counted_length(policy)) > SESSION_POLICY_LIMIT:
+        raise InvalidInputError(
+            f"a table at {location!r} declaring {len(granted)} base(s) would need a maintain-tier session policy of {counted} characters as a store "
+            f"counts it, past the {SESSION_POLICY_LIMIT:,} STS accepts, so maintenance could never reclaim its history: a location "
+            f"{counted - SESSION_POLICY_LIMIT} characters shorter, or fewer bases, fits"
         )
 
 
@@ -1380,6 +1409,30 @@ class WebIdentityVendor:
             encryption=self._encryption,
             expires_at_millis=int(issued.expiration.timestamp() * 1000),
         )
+
+
+def vendor_for(settings: Settings) -> CredentialVendor:
+    """The :class:`CredentialVendor` ``settings`` configure: the one the app serves its vend doors with, and the one a
+    reclaim outside a request mints each batch's session from (``catalog.services.catalog_reclaims``).
+
+    Raises:
+        ValueError: ``web_identity`` mode without the catalog's identity.
+    """
+    return make_vendor(
+        settings.vending_mode,
+        identity=settings.web_identity,
+        store_endpoint=settings.vended_store_endpoint,
+        ttl_seconds=settings.vending_ttl_seconds,
+        encryption=EncryptionAtRest(
+            algorithm=settings.s3_server_side_encryption, kms_key_id=settings.s3_sse_kms_key_id, bucket_key_enabled=settings.s3_sse_bucket_key_enabled
+        ),
+        # THE OPERATOR'S allowlist of legitimate foreign DATA bases. A manifest-declared base outside the table's own
+        # vended scope is granted READ only if it is on it; without that, a writer on one table could declare a base
+        # naming another tenant's prefix and read it with their next credential. The external blob bases are not on it
+        # ([[LH-209]]): they are pointer bases the blob door serves, and granting one would hand every vend every object
+        # under it. Empty by default.
+        sanctioned_bases=settings.multibase_data_base_list,
+    )
 
 
 def make_vendor(

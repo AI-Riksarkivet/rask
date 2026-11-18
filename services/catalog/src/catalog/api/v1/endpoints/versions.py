@@ -38,6 +38,7 @@ from catalog.api.dependencies import (
     ResolverDep,
     SettingsDep,
     StorageOptionsDep,
+    VendorDep,
     ancestor_uuids,
 )
 from catalog.api.pagination import ListLimit, paginate_versions
@@ -46,6 +47,7 @@ from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
+from catalog.core.vending import CredentialVendor
 from catalog.services import catalog_reclaims, committed_files, dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
 from lakehouse import branch_layout, commit_records, commit_turns, stored_objects
@@ -394,6 +396,7 @@ async def batch_delete_table_versions(
     token: CurrentToken,
     client: FgaClientDep,
     resolver: ResolverDep,
+    vendor: VendorDep,
 ) -> BatchDeleteTableVersionsResponse:
     """Delete old versions of this table — never the current one, and never one a tag or a branch pins.
 
@@ -411,16 +414,18 @@ async def batch_delete_table_versions(
     InvalidTableState (19), since lifting the hold is a separate, audited act at a policy door. It is held as a
     maintenance pass is (``catalog.services.catalog_reclaims``): the table's history and each level's policy fence, its
     targets marked before the first delete, every hold confirmed before each cleanup call; a ref write or a policy write
-    holding a fence answers 409 ConcurrentModification (14).
+    holding a fence answers 409 ConcurrentModification (14). Each cleanup call deletes under a session minted for it
+    before its confirm (ADR 0243 R5), and a delete the store refused answers 503 ServiceUnavailable, naming how many, its
+    versions marked for the next delete (R3).
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     namespace_uuids = await ancestor_uuids(resolver, table.resolved.segments)
-    return await run_in_threadpool(partial(_delete_versions, table, so, body, settings=settings, namespace_uuids=namespace_uuids))
+    return await run_in_threadpool(partial(_delete_versions, table, so, body, settings=settings, namespace_uuids=namespace_uuids, vendor=vendor))
 
 
 def _delete_versions(
-    table: DoorTable, so: StorageOptions, body: BatchDeleteTableVersionsRequest, *, settings: Settings, namespace_uuids: list[str]
+    table: DoorTable, so: StorageOptions, body: BatchDeleteTableVersionsRequest, *, settings: Settings, namespace_uuids: list[str], vendor: CredentialVendor
 ) -> BatchDeleteTableVersionsResponse:
     ds = table.open_unchecked(so, branch=body.branch)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
@@ -431,6 +436,7 @@ def _delete_versions(
         catalog_reclaims.held(table, settings, namespace_uuids=namespace_uuids) as held,
         stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, body.branch), so),
     ):
-        marked = catalog_reclaims.marked(held, table, ref=body.branch)
+        session = catalog_reclaims.sessions(vendor, settings, str(table.location))(body.branch)
+        marked = catalog_reclaims.marked(held, table, ref=body.branch, session=session)
         deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, marked=marked)
     return BatchDeleteTableVersionsResponse(deleted_count=deleted)

@@ -28,7 +28,7 @@ from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import DoorTableDep, FgaClientDep, ResolverDep, SettingsDep, StorageOptionsDep, ancestor_uuids
+from catalog.api.dependencies import DoorTableDep, FgaClientDep, ResolverDep, SettingsDep, StorageOptionsDep, VendorDep, ancestor_uuids
 from catalog.api.security import CurrentToken
 from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import catalog_reclaims, maintenance, maintenance_commits, table_claims
@@ -84,6 +84,7 @@ async def run_maintenance(
     token: CurrentToken,
     client: FgaClientDep,
     resolver: ResolverDep,
+    vendor: VendorDep,
     branch: Annotated[
         str | None, Query(description="The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files.")
     ] = None,
@@ -101,8 +102,10 @@ async def run_maintenance(
 
     HELD AS A MAINTENANCE PASS IS (ADR 0243 §8, ``catalog.services.catalog_reclaims``): the table's history and the policy
     fence of each level above it, the governing policy read under them, the victims marked before the first delete, and
-    every hold confirmed before each cleanup call. A hold at any level that can govern the table answers 409
-    InvalidTableState (19), a ref write or a policy write holding a fence 409 ConcurrentModification (14)."""
+    every hold confirmed before each cleanup call, each call deleting under a session minted for it before that confirm
+    (ADR 0243 R5). A hold at any level that can govern the table answers 409 InvalidTableState (19), a ref write or a
+    policy write holding a fence 409 ConcurrentModification (14), and a run the store refused a delete of 503
+    ServiceUnavailable, naming how many, its versions marked for the next run (R3)."""
     ds = await run_in_threadpool(partial(table.open, so, branch=branch))
     namespace_uuids = await ancestor_uuids(resolver, table.resolved.segments)
 
@@ -114,7 +117,8 @@ async def run_maintenance(
             catalog_reclaims.held(table, settings, namespace_uuids=namespace_uuids) as held,
             stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, branch), so),
         ):
-            marked = catalog_reclaims.marked(held, table, ref=branch)
+            session = catalog_reclaims.sessions(vendor, settings, str(table.location))(branch)
+            marked = catalog_reclaims.marked(held, table, ref=branch, session=session)
             return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch, marked=marked)
 
     return GcRunResult(**await run_in_threadpool(_reclaim))

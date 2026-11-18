@@ -271,6 +271,11 @@ def _on_vend_denied(result: DatasetResult, exc: Exception, table_id: str | None)
     result.park(str(exc), gate="vend_denied", table_id=table_id)
 
 
+def _on_policy_too_long(result: DatasetResult, exc: Exception, table_id: str | None) -> None:
+    result.park(str(exc), gate="vend_denied", table_id=table_id)
+    record_reclaim_held_back("policy_too_long")
+
+
 def _on_table_not_governed(result: DatasetResult, exc: Exception, table_id: str | None) -> None:
     result.park(str(exc), gate="table_not_governed", table_id=table_id)
 
@@ -288,6 +293,7 @@ _VEND_ANSWERS: dict[type[Exception], tuple[str, Callable[[DatasetResult, Excepti
     credentials.MaintenanceUnauthenticated: ("maintenance_unauthenticated", _on_unauthenticated),
     credentials.VendingNotDirect: ("maintenance_vending_not_direct", _on_vending_not_direct),
     credentials.MaintenanceDenied: ("maintenance_vend_denied", _on_vend_denied),
+    credentials.PolicyTooLong: ("maintenance_vend_policy_too_long", _on_policy_too_long),
     credentials.TableNotGoverned: ("maintenance_table_not_governed", _on_table_not_governed),
     credentials.VendUndecided: ("maintenance_vend_undecided", _on_vend_undecided),
 }

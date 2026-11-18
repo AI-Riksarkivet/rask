@@ -21,7 +21,8 @@ from pydantic import BaseModel
 
 from catalog.api.ticks import Tick
 from catalog.core.config import fresh_lance_session
-from catalog.services import erasure_release, table_claims
+from catalog.core.vending import vendor_for
+from catalog.services import catalog_reclaims, erasure_release, table_claims
 from lakehouse.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimStore
@@ -52,6 +53,7 @@ async def tick(ctx: Tick) -> ErasureReleaseTick:
         now=ctx.clock(),
         open_location=partial(_open, storage_options=ctx.storage_options),
         table_options=ctx.storage_options,
+        sessions_at=partial(catalog_reclaims.sessions, vendor_for(settings), settings),
     )
     claims = table_claims.claim_store(settings)
     changes = released.changes

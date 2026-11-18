@@ -871,9 +871,12 @@ groups:
             Passes that would reclaim have kept everything, for the reason this alert names, in every hour of the last
             day, across the estate: one table under constant ref writes, a policy that keeps changing, a policy door,
             its intent or a reclaim holding a fence, or a cleanup's victims left marked; or many tables each held back
-            for a while. A starved table meets neither its retention nor an erasure's deadline. Find the tables in the
-            maintenance_history_fenced, maintenance_policy_fenced, maintenance_policy_changed_mid_pass or
-            maintenance_victims_marked log lines.
+            for a while. Under reason policy_too_long a table's maintain-tier vend can never be minted (its location or its
+            bases name more than STS's 2,048-character session policy holds): it is never reclaimed until it is
+            registered again at a shorter location or with fewer bases. A starved table meets neither its retention nor
+            an erasure's deadline. Find the tables in the maintenance_history_fenced, maintenance_policy_fenced,
+            maintenance_policy_changed_mid_pass, maintenance_victims_marked or maintenance_vend_policy_too_long log
+            lines.
 
       # ONE TABLE'S MARK LEFT STANDING (ADR 0243, F5). A cleanup's mark names versions no ref door may pin or bring back
       # until a later reclaim finishes or judges it; a pass meets it every `retrySeconds`. One standing for a day is a

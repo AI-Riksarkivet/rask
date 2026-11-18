@@ -2251,8 +2251,10 @@ export interface paths {
          *
          *     HELD AS A MAINTENANCE PASS IS (ADR 0243 §8, ``catalog.services.catalog_reclaims``): the table's history and the policy
          *     fence of each level above it, the governing policy read under them, the victims marked before the first delete, and
-         *     every hold confirmed before each cleanup call. A hold at any level that can govern the table answers 409
-         *     InvalidTableState (19), a ref write or a policy write holding a fence 409 ConcurrentModification (14).
+         *     every hold confirmed before each cleanup call, each call deleting under a session minted for it before that confirm
+         *     (ADR 0243 R5). A hold at any level that can govern the table answers 409 InvalidTableState (19), a ref write or a
+         *     policy write holding a fence 409 ConcurrentModification (14), and a run the store refused a delete of 503
+         *     ServiceUnavailable, naming how many, its versions marked for the next run (R3).
          */
         post: operations["run_maintenance_management_v1_table__id__maintenance_run_post"];
         delete?: never;
@@ -4329,7 +4331,9 @@ export interface paths {
          *     InvalidTableState (19), since lifting the hold is a separate, audited act at a policy door. It is held as a
          *     maintenance pass is (``catalog.services.catalog_reclaims``): the table's history and each level's policy fence, its
          *     targets marked before the first delete, every hold confirmed before each cleanup call; a ref write or a policy write
-         *     holding a fence answers 409 ConcurrentModification (14).
+         *     holding a fence answers 409 ConcurrentModification (14). Each cleanup call deletes under a session minted for it
+         *     before its confirm (ADR 0243 R5), and a delete the store refused answers 503 ServiceUnavailable, naming how many, its
+         *     versions marked for the next delete (R3).
          */
         post: operations["batch_delete_table_versions_v1_table__id__version_delete_post"];
         delete?: never;

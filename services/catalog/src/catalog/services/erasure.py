@@ -394,6 +394,7 @@ def verify(
     history: TableHistory,
     derived: Callable[[], Sequence[SurfaceResult]],
     before_untag: Callable[[Sequence[DroppedTag]], None],
+    sessions: Sessions,
 ) -> ErasureReport:
     """Judge every ref's head on bytes, drop the tags pinning the subject, reclaim each clean ref, verify every retained
     version of every ref, and name every table derived from this one.
@@ -411,7 +412,8 @@ def verify(
     is where the table's history fence is kept, which the reclaim holds ([[LH-308]]) and its marks are written in
     (:class:`lakehouse.reclaim_marks.Reclaim`), and it has no default for the same reason. ``derived`` judges the tables derived from this one, a surface each
     (:func:`catalog.services.erasure_derived.judge`); one that raises is a failed ``derived`` surface, and it has no
-    default for the same reason. ``before_untag`` is handed the tags step 2 is about to delete, before it deletes any, so
+    default for the same reason. ``sessions`` names what each ref's reclaim deletes through, a session minted per batch
+    before its confirm where the catalog vends (:data:`Sessions`), and has no default for the same reason. ``before_untag`` is handed the tags step 2 is about to delete, before it deletes any, so
     what announces their deletion is filed first (ADR 0233); one that raises keeps every tag, a failed ``tags`` surface.
 
     EVERY SURFACE IS ATTEMPTED even when one fails, short of what would destroy history for nothing (the module's
@@ -448,7 +450,7 @@ def verify(
     #    the earlier one, and a version newer than it was inside that cleanup's window. A ref absent from `cutoffs` was
     #    not reclaimed, so nothing but that keeps its versions. A ref whose head still holds the subject is not
     #    reclaimed: its history would go while the subject's bytes stay in its live data files ([[LH-210]]).
-    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, retention=retention, history=history, storage_options=storage_options)
+    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, retention=retention, history=history, storage_options=storage_options, sessions=sessions)
 
     # 4. VERIFY EVERY REF, because every step above is an ATTEMPT and only this is evidence. Every head can be clean and
     #    the row still readable at a version a branch or a tag stands on, which is the one outcome an erasure must never
@@ -609,6 +611,7 @@ def _reclaim(
     retention: timedelta,
     history: TableHistory,
     storage_options: StorageOptions,
+    sessions: Sessions,
 ) -> dict[str | None, datetime]:
     """Step 3: clean up every ref whose head is clean, deepest first; each reclaimed ref's cutoff.
 
@@ -618,7 +621,9 @@ def _reclaim(
     """
     try:
         with history.hold_for(HistoryWork.RECLAIM) as hold:
-            return reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options, history=history, hold=hold)
+            return reclaim_refs(
+                report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options, history=history, hold=hold, sessions=sessions
+            )
     except HistoryFencedError as exc:
         log.info("erasure_history_fenced", extra={"table": report.table, "reason": str(exc)})
         report.surfaces += [SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail=f"{exc} Not reclaimed.") for ref in deepest_first]
@@ -635,14 +640,17 @@ def reclaim_refs(
     storage_options: StorageOptions,
     history: TableHistory,
     hold: Hold,
+    sessions: Sessions,
 ) -> dict[str | None, datetime]:
     """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff. Each transaction file a cleanup removes is
     recorded ([[LH-232]]); Lance records the rest itself.
 
     THE ONE MARKED RECLAIM (:class:`lakehouse.reclaim_marks.Reclaim`, ADR 0233 §10, ADR 0243 F7): the caller holds the
     table's history (``hold``, kept at ``history``) as a reclaim or a release, and each ref's cleanup marks each batch of
-    its victims before its first delete and confirms the hold before each, so a cleanup this leaves part-way is one no
-    ref door names, whatever files of it still stand.
+    its victims before its first delete and confirms the hold before each, each batch deleting through ``sessions``' handle
+    minted before that confirm, so a cleanup this leaves part-way is one no ref door names, whatever files of it still
+    stand, and one frozen past its hold deletes nothing more (ADR 0243 R5). Its fork points, whose files it takes, stand
+    under fork marks while a branch keeps their manifests (ADR 0243 R1).
 
     A registered clone of this table needs no refusal here: its tag keeps the version it reads, which every cleanup
     exempts and :func:`_drop_subject_tags` never drops (ADR 0198 §1).
@@ -676,6 +684,7 @@ def reclaim_refs(
                 ref=ref,
                 hold=hold,
                 before_each=hold.confirm,
+                session=sessions(ref),
             )
             with stored_objects.recording_removed_transactions(branch_layout.ref_root(dataset.uri, ref), storage_options):
                 done = reclaim.run(cast("Any", handle), older_than=retention, retain_versions=None, forks=True)
@@ -1289,6 +1298,14 @@ def _depth(name: str, forks: Mapping[str, _Reference | None]) -> int:
 #: `(branch_name, version_number)` tuples as global identifiers", ``lance_docs/lance/guide/tags_and_branches.md`` Branches),
 #: because a bare version number means "on the handle's branch".
 type _Reference = tuple[str | None, int]
+
+#: For each ref, what its reclaim deletes through: a handle of the ref under a session minted for one batch, or ``None``
+#: to delete through the handle the erasure opened (``catalog.services.catalog_reclaims.sessions``, ADR 0243 R5).
+type Sessions = Callable[[str | None], Callable[[], Any] | None]
+
+
+def no_sessions(_ref: str | None) -> None:
+    """:data:`Sessions` for a catalog that mints none: every batch deletes through the handle the erasure opened."""
 
 
 def _label(ref: str | None) -> str:

@@ -87,6 +87,13 @@ class MaintenanceDenied(RuntimeError):
     """
 
 
+class PolicyTooLong(MaintenanceDenied):
+    """The catalog refused the vend as one whose session policy STS would refuse (400, code 13, naming
+    ``session_policy_limit``): the table's location or its bases name more than a direct credential holds, so no pass of it
+    can ever reclaim (ADR 0243 R6). The doors that make such a shape refuse it; a table already on the estate is held back
+    under a reason of its own (``maintenance.reclaims.held_back{reason="policy_too_long"}``), never retried as a grant."""
+
+
 class VendingNotDirect(MaintenanceDenied):
     """No direct credential is vended to this deployment: no vending door is configured, or the door answers ``server_mediated``.
 
@@ -805,6 +812,15 @@ def _answered(settings: MaintenanceSettings, door: Door) -> httpx.Response:
     return response
 
 
+def _names_the_policy_limit(response: httpx.Response) -> bool:
+    """Whether the problem body names a session policy's limit (the catalog's ``SessionPolicyTooLong``)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and "session_policy_limit" in body
+
+
 def _refusal_of(response: httpx.Response, door: Door, *, identity: str) -> MaintenanceDenied | TableNotGoverned | VendUndecided | None:
     """The refusal or failure a non-2xx answer is, and ``None`` for a 2xx, whose body says the rest.
 
@@ -827,6 +843,8 @@ def _refusal_of(response: httpx.Response, door: Door, *, identity: str) -> Maint
         return VendingNotDirect(f"the catalog serves no door for {door.answer} for {door.asked_for} (404, code {code}): {detail}")
     if (invalid := table_in_invalid_state(response, asked_for=door.asked_for)) is not None:
         return invalid
+    if response.status_code == 400 and _names_the_policy_limit(response):
+        return PolicyTooLong(f"the catalog refused {door.answer} for {door.asked_for}: its session policy is too long for STS (400, code {code}): {detail}")
     if response.status_code >= 500 or response.status_code == 429:
         return VendUndecided(f"the catalog could not decide {door.answer} for {door.asked_for} ({response.status_code}): {detail}")
     return MaintenanceDenied(f"the catalog refused {door.answer} for {door.asked_for} ({response.status_code}, code {code}): {detail}")

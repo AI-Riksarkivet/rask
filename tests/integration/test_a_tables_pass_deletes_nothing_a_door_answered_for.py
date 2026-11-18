@@ -421,15 +421,17 @@ def _a_door_stalled_past_its_hold(estate: _Estate, monkeypatch: pytest.MonkeyPat
     return answered
 
 
-def test_a_hold_beside_a_long_reclaim_lands_after_at_most_one_batch(estate: _Estate) -> None:
-    """F4: a namespace's hold asked while a pass reclaims 39 versions beneath it answers 409 and leaves an intent; the
-    pass deletes no more than the batch it is in (16 versions, ``reclaim_marks.BATCH``) and stops, and the hold asked
-    again lands (PolicyIntent). The hold's door had no bound: it answered 409 for as long as passes deleted beneath it,
-    and the deletes it was meant to stop went on."""
+@pytest.mark.parametrize("door", ["namespace-hold", "table-hold"])
+def test_a_hold_beside_a_long_reclaim_lands_after_at_most_one_batch(estate: _Estate, door: str) -> None:
+    """F4, R2: a hold asked while a pass reclaims 39 versions beneath it, at the table's namespace or at the table itself,
+    answers 409 and leaves an intent; the pass deletes no more than the batch it is in (16 versions,
+    ``reclaim_marks.BATCH``) and stops, and the hold asked again lands (PolicyIntent). The intent is what bounds the door:
+    a refused hold that left nothing would be refused for as long as passes delete beneath it, while the deletes it was
+    asked to stop go on."""
     from lakehouse import reclaim_marks
 
     estate.written(37)
-    path, body = _POLICY_DOORS["namespace-hold"]
+    path, body = _POLICY_DOORS[door]
     with estate.proxy.holding(_a_cleanup_delete) as held:
         running = _Running(estate)
         assert held.reached(WAIT), "the pass's cleanup deleted nothing"
@@ -469,6 +471,7 @@ def _clone_registered(estate: _Estate, version: int) -> tuple[httpx.Response, li
         ("restore", 5 * 1024 * 1024, "data-files-and-manifests", "pass"),
         ("clone", 5 * 1024 * 1024, "data-files-and-manifests", "pass"),
         ("tag", 5 * 1024 * 1024, "data-files-and-manifests", "maintenance-run-on-main"),
+        ("tag", 5 * 1024 * 1024, "data-files-and-manifests", "pass-then-the-policy-raised-and-a-pass"),
     ],
 )
 def test_a_ref_answered_200_names_a_version_a_reader_can_read_whole(
@@ -482,16 +485,25 @@ def test_a_ref_answered_200_names_a_version_a_reader_can_read_whole(
     version a standing mark names, whatever files still stand; F1: the catalog's ``maintenance/run?branch=main`` marked
     them as of a ref named ``main``, which no door read as main's. Then (F6, F5) the next pass finishes them below its
     threshold, which a mark makes it do, and the pass that left the mark asked for its table again after
-    ``retrySeconds``."""
+    ``retrySeconds``; R3: the catalog's run whose deletes the store refused answers 503, never ``ok``. R4: a pass that
+    finds a dead cleanup's mark once the policy keeps more (``retain_versions`` 100, cleanup still enabled) reclaims
+    nothing and must leave the mark (``reclaim_marks._untouched``): the versions it names stand over deleted files, and
+    without the mark the door it is followed by names one."""
 
     def _refused(request: StoreRequest) -> bool:
         return request.deletes("/_versions/") or (refused == "data-files-and-manifests" and request.deletes(".lance"))
 
     with estate.proxy.answering_expired(_refused):
-        outcome = estate.passed() if reclaimer == "pass" else None
-        if outcome is None:
-            _ok(estate.catalog.post(f"/management/v1/table/{T}/maintenance/run?branch=main", json={"retain_versions": 1}))
+        if reclaimer == "maintenance-run-on-main":
+            outcome = None
+            failed = estate.catalog.post(f"/management/v1/table/{T}/maintenance/run?branch=main", json={"retain_versions": 1})
+            assert failed.status_code == 503, failed.text
+        else:
+            outcome = estate.passed()
     assert 1 in estate.versions(), "the reclaim removed version 1 whole, so nothing stands half-removed"
+    if reclaimer == "pass-then-the-policy-raised-and-a-pass":
+        _ok(estate.catalog.post(f"/management/v1/table/{T}/policy/set", json={"retain_versions": 100}))
+        estate.passed()
 
     if door == "tag":
         answered = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "kept", "version": 1})
@@ -508,6 +520,8 @@ def test_a_ref_answered_200_names_a_version_a_reader_can_read_whole(
         retry = estate.settings().retry_seconds
         due = outcome.next_due
         assert due is not None and due <= datetime.now(UTC) + timedelta(seconds=retry), f"a pass that left a mark is next due at {due}"
+    if reclaimer == "pass-then-the-policy-raised-and-a-pass":
+        _ok(estate.catalog.post(f"/management/v1/table/{T}/policy/set", json={"retain_versions": 1}))
     monkeypatch.setenv("MAINTENANCE_MIN_VERSIONS_TO_EXPIRE", "100")
     estate.passed()
     assert (1 in estate.versions(), estate.marks()) == (False, []), "the next pass did not finish the versions a reclaim left marked"
@@ -560,8 +574,8 @@ def test_a_mark_makes_a_door_refuse_only_what_it_can_truthfully_say(estate: _Est
     a tag names, or more than a batch's worth, is no cleanup's: a door ignores it whole and the next reclaim removes it.
     One naming versions every file of which still stands names nothing half-removed: a reclaim that finds it while its
     writer holds nothing removes it. A door whose hold lapsed before its first delete wrote no mark (it confirms its holds
-    before it marks a batch). Before, a mark naming a standing version outlived every pass, and refused tags, branches and
-    restores on its versions, the head among them, for good."""
+    before it marks a batch). A mark trusted for more would refuse tags, branches and restores on its versions, the head
+    among them, for as long as it stood, and nothing would end it."""
     if mark == "planted-naming-the-head":
         _planted(estate, list(range(1, 50)))
         on_the_head = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "head", "version": estate.versions()[-1]})
@@ -633,3 +647,184 @@ def test_the_catalogs_own_reclaim_doors_delete_nothing_a_hold_keeps(estate: _Est
 
     assert held.status_code == 200, held.text
     assert (answered.status_code, estate.versions()) == (409, at_the_hold), answered.text
+
+
+def _ref_door(estate: _Estate, door: str, version: int, *, branch: str | None = None) -> tuple[httpx.Response, list[int] | str]:
+    """``door`` (a tag, a restore or a clone's registration) asked of ``version``, and what a reader of what it made reads."""
+    if door == "tag":
+        answered = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "kept", "version": version, "branch": branch})
+        return answered, estate.reads("kept")
+    if door == "restore":
+        answered = estate.catalog.post(f"/v1/table/{T}/restore", json={"version": version})
+        return answered, estate.reads()
+    return _clone_registered(estate, version)
+
+
+@pytest.mark.parametrize("door", ["tag", "restore"])
+def test_an_erasures_fork_point_stands_marked_while_a_branch_keeps_it(estate: _Estate, door: str) -> None:
+    """R1: an erasure's reclaim takes the files of the versions its ref's branches were cut from (``Reclaim.run(forks=True)``),
+    deepest ref first. Here ``b`` is cut from main v4 (ids 3 and 4, each a fragment of its own) and drops 4, so its head
+    stands on main's fragment of 3 alone. Measured on pylance 13.0.0 (ADR 0243 §13): once the branch's own history no longer names the fork's
+    files, the cleanup naming the fork deletes them and keeps the fork's manifest for the branch, and the fork version then
+    fails every read. Its fork mark stands for as long as a branch is cut from it (it is no stuck reclaim, so the run
+    leaves it), and a tag or a restore of it is refused (a shallow clone of it cannot be made: Lance's own clone fails on
+    it, measured, so its registration is never asked); once the branch is deleted the mark is handed on as a
+    victims mark, and the next pass removes the version and the mark."""
+    from catalog.core.config import get_settings
+    from catalog.services.erasure import ErasureReport, no_sessions, reclaim_refs
+    from lakehouse.history_fences import HistoryWork, TableHistory
+
+    _ok(estate.catalog.post(f"/v1/table/{T}/insert?mode=append", content=_rows([4]), headers=ARROW))
+    _ok(estate.catalog.post(f"/v1/table/{T}/branches/create", json={"name": "b", "from_version": 4}))
+    _ok(estate.catalog.post(f"/v1/table/{T}/delete", json={"predicate": "id = 4", "branch": "b"}))
+    estate.written(1)
+    settings = get_settings()
+    so = settings.storage_options()
+    history = TableHistory(control_root=settings.registry_root, storage_options=so, table_uuid=estate.task.uuid)
+    report = ErasureReport(table=T, predicate="id = 4")
+    with history.hold_for(HistoryWork.RECLAIM) as hold:
+        reclaim_refs(
+            report,
+            lance.dataset(estate.task.location, storage_options=so.in_clear()),
+            ["b", None],
+            clean={"b", None},
+            retention=timedelta(0),
+            storage_options=so,
+            history=history,
+            hold=hold,
+            sessions=no_sessions,
+        )
+    assert [surface.outcome for surface in report.surfaces] == ["reclaimed", "reclaimed"], report.surfaces
+    assert 4 in estate.versions() and isinstance(estate.reads(4), str), f"the fork version reads {estate.reads(4)}, so nothing of it was taken"
+
+    answered, read = _ref_door(estate, door, 4)
+    assert answered.status_code in (200, 400, 409), answered.text
+    assert answered.status_code != 200 or read == [3, 4], f"the {door} answered 200 for the fork version, which reads {read}"
+
+    _ok(estate.catalog.post(f"/v1/table/{T}/branches/delete", json={"name": "b"}))
+    again, read = _ref_door(estate, door, 4)
+    assert again.status_code != 200 or read == [3, 4], f"the {door} answered 200 once the branch went, for a version that reads {read}"
+    estate.passed()
+    assert (4 in estate.versions(), estate.marks()) == (False, []), "the pass after the branch went did not remove the half-removed fork version"
+
+
+@pytest.mark.parametrize("ended", ["by-the-delete", "by-the-next-pass"])
+def test_a_deleted_branchs_mark_ends_with_it(estate: _Estate, monkeypatch: pytest.MonkeyPatch, ended: str) -> None:
+    """R3: a reclaim of branch ``b`` whose manifest deletes the store refused leaves its mark, and the catalog's run says
+    so (503, its versions marked for the next run). Deleting ``b`` takes its versions with it, so its mark names nothing a
+    door could name: the delete ends it, and where the delete died before ending it, the next reclaim of the table
+    removes it, whichever ref that reclaims (a mark names its branch's incarnation, and that incarnation no longer
+    stands). A mark that outlived its branch would make every pass vend, age the oldest-mark gauge for ever, and refuse
+    the versions of a branch made again under the name."""
+    from lakehouse import reclaim_marks
+
+    _ok(estate.catalog.post(f"/v1/table/{T}/branches/create", json={"name": "b", "from_version": 3}))
+    for n in range(3):
+        _ok(estate.catalog.post(f"/v1/table/{T}/insert?mode=overwrite&branch=b", content=_rows([200 + n]), headers=ARROW))
+    with estate.proxy.answering_expired(lambda request: request.deletes("/_versions/")):
+        run = estate.catalog.post(f"/management/v1/table/{T}/maintenance/run?branch=b", json={"retain_versions": 1})
+    assert (run.status_code, bool(estate.marks())) == (503, True), run.text
+
+    if ended == "by-the-next-pass":
+        monkeypatch.setattr(reclaim_marks, "ended", lambda *_args, **_kwargs: None)
+    _ok(estate.catalog.post(f"/v1/table/{T}/branches/delete", json={"name": "b"}))
+    if ended == "by-the-next-pass":
+        assert estate.marks(), "the delete that died before ending its branch's marks ended them"
+        estate.passed()
+    assert estate.marks() == [], "a deleted branch's mark outlived its branch"
+
+    _ok(estate.catalog.post(f"/v1/table/{T}/branches/create", json={"name": "b", "from_version": 3}))
+    for n in range(2):
+        _ok(estate.catalog.post(f"/v1/table/{T}/insert?mode=overwrite&branch=b", content=_rows([300 + n]), headers=ARROW))
+    tagged = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "again", "version": 4, "branch": "b"})
+    assert tagged.status_code == 200, tagged.text
+
+
+class _MintingVendor:
+    """A vendor whose every maintain-tier session is the store's own pair under a key id of its own (moto answers any), so a
+    request on the wire names the session that signed it; each mint is written to ``events``."""
+
+    def __init__(self, store: _Store, endpoint: str, events: list[str]) -> None:
+        self._store, self._endpoint, self._events, self.minted = store, endpoint, events, 0
+
+    def vend(self, **kwargs: object) -> object:
+        from catalog.core.vending import VendedSession
+
+        assert kwargs["tier"] == "maintain" and kwargs["records"] is None, kwargs
+        self.minted += 1
+        self._events.append("mint")
+        key = S3KeyPair(access_key_id=f"batch{self.minted}", secret_access_key=SecretStr(self._store.secret_key))
+        return VendedSession(key_pair=key, endpoint=self._endpoint, region="us-east-1", expires_at_millis=int((time.time() + 900) * 1000))
+
+    def vend_reclaim(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+@pytest.mark.parametrize("door", list(_RECLAIM_DOORS))
+def test_a_catalog_reclaim_deletes_only_under_a_session_minted_before_its_holds_are_confirmed(
+    estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: str
+) -> None:
+    """R5: a catalog door's reclaim deletes under a credential that dies no later than its hold, as a pass's does. Each
+    batch first mints a maintain-tier session (STS issues none shorter than the hold), then confirms its holds, renewing
+    each for one hold, then deletes under that session alone: so a door frozen inside a call past its hold wakes to a store
+    that refuses its deletes. Driven through the real door over 19 versions, two batches, its confirms and Lance's
+    cleanup calls written in order beside each mint, and every delete on the wire named by the session that signed it."""
+    if estate.store.endpoint == _RUSTFS:
+        pytest.skip("the session is the store's own pair under another key id, which only moto answers")
+    from catalog.api.dependencies import get_vendor
+    from catalog.main import app
+
+    events: list[str] = []
+    monkeypatch.setitem(app.dependency_overrides, get_vendor, lambda: _MintingVendor(estate.store, estate.proxy.url, events))
+    confirm, cleanup = fences.Hold.confirm, lance.LanceDataset.cleanup_old_versions
+
+    def _confirm(hold: fences.Hold) -> None:
+        if hold._work == "reclaim":  # noqa: SLF001 — which work a hold is for
+            events.append("confirm")
+        confirm(hold)
+
+    def _cleanup(dataset: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — pylance's untyped stats
+        events.append("delete")
+        return cleanup(dataset, *args, **kwargs)
+
+    monkeypatch.setattr(fences.Hold, "confirm", _confirm)
+    monkeypatch.setattr(lance.LanceDataset, "cleanup_old_versions", _cleanup)
+    estate.written(17)
+    estate.proxy.taken()
+    path, body = _RECLAIM_DOORS[door]
+    answered = estate.catalog.post(path, json=body)
+    signed = {request.access_key for request in estate.proxy.taken() if _a_cleanup_delete(request)}
+
+    steps = [event for n, event in enumerate(events) if n == 0 or event != events[n - 1]]
+    assert (answered.status_code, steps, signed) == (200, ["mint", "confirm", "delete"] * 2, {"batch1", "batch2"}), (answered.text, events, signed)
+
+
+def test_a_table_no_maintain_vend_could_reach_is_refused_where_it_is_made_and_visible_where_it_stands(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R6: a pass deletes only under its table's maintain-tier vend, whose session policy names the table's location and
+    its bases, and STS takes 2,048 characters of it. A registration at a location whose policy would not fit is refused
+    at the register door (400, code 13), naming the limit, before anything is attached; and a table already standing
+    whose vend the catalog refuses as too long is held back under a reason of its own
+    (``maintenance.reclaims.held_back{reason="policy_too_long"}``), never counted as a missing grant."""
+    from maintenance.core import metrics
+
+    deep = "/".join(["deep", *(["d" * 60] * 9)])
+    lance.write_dataset(
+        pa.table({"id": pa.array([1], pa.int64())}),
+        f"s3://{estate.bucket}/{deep}",
+        storage_options=estate.store.options().in_clear(),
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+    )
+    refused = estate.catalog.post(f"/v1/table/{NS}$deep/register", json={"location": deep})
+    assert (refused.status_code, refused.json().get("code"), "2,048" in refused.text) == (400, 13, True), refused.text
+    described = estate.catalog.post(f"/v1/table/{NS}$deep/describe", json={})
+    assert described.status_code == 404, described.text
+
+    held_back: list[str] = []
+    monkeypatch.setattr(metrics._reclaims_held_back, "add", lambda amount, attributes, **_: held_back.extend([attributes["reason"]] * amount))
+    too_long = {"type": "about:blank", "title": "InvalidInput", "status": 400, "code": 13, "detail": "too long", "session_policy_limit": 2048}
+    with respx.mock(assert_all_called=False) as router:
+        router.post(url__regex=MAINTAIN_TIER_DOOR, params={"tier": "maintain"}).mock(return_value=httpx.Response(400, json=too_long))
+        router.route(host="testserver").pass_through()
+        outcome = run_table_pass(estate.task, estate.settings())
+    assert (held_back, estate.versions()) == (["policy_too_long"], [1, 2, 3]), (held_back, outcome)

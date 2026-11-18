@@ -5,7 +5,9 @@ confirmed against the real pass and the real catalog on moto and on the pinned R
 (owner's standing ruling: fix now). Amended 2026-11-18: an independent review found nine more problems, each reproduced
 first and FIXED model first (§7 to §11); one of them is a decision taken for the owner to overturn (§8, what a hold
 means across levels). Amended again 2026-11-18: a third review found eight more and three smaller ones, each FIXED model
-first (§12), and with them every reclaim in the estate became one function and the ref doors list no file.
+first (§12), and with them every reclaim in the estate became one function and the ref doors list no file. Amended a
+fourth time 2026-11-18: a fourth review found six more, each reproduced first and FIXED (§13), among them a wholeness
+judge that could never say no (R4) and a catalog reclaim that now deletes under a session minted per batch (R5).
 
 ## Context
 
@@ -50,18 +52,18 @@ unverified age (7 days), the trash read again under the fence, the policy record
      refused, is passed again (WorkQueue). Time passes at any moment: any superseded version may pass its retention, which
      over-approximates every clock.
 
-2. **What it proves** (`make tla-check`; 2026-11-18 after §12, two workers on four cores shared with other agents). Every
+2. **What it proves** (`make tla-check`; 2026-11-18 after §13, two workers on four cores shared with other agents). Every
    gate config checks every invariant; the whole module's gate and expected failures run in about 30 s:
    - `TablePass.cfg` (one pass passed again and again; a tag, a restore, the table's hold and a writer; two faults):
-     338,771 distinct states.
+     550,402 distinct states (passes of up to two batches, §13).
    - `TablePassPolicies.cfg` (every policy door: the table's set and delete, a namespace's and a project's hold, each
-     retried and leaving an intent, a rename into a namespace that holds; one fault, a door's lapse among them): 82,978
+     retried and leaving an intent, a rename into a namespace that holds; one fault, a door's lapse among them): 167,935
      states.
    - `TablePassTwo.cfg` (two passes at once, as a claim that lapsed under a live pass admits, WorkQueue A1, each naming
-     any part of its victims; a tag and a restore; one fault): 36,226 states.
-   - `TablePassLive.cfg` (one fault; a tag, a restore and a writer): 25,632 states, the invariants and the property.
-   - `TablePassIntentLive.cfg` (a namespace's and a project's hold retried beside passes delivered for ever): 178 states,
-     the invariants and `PolicyLands` (§12 F4).
+     any part of its victims; a tag and a restore; one fault): 113,924 states.
+   - `TablePassLive.cfg` (one fault; a tag, a restore and a writer): 43,179 states, the invariants and the property.
+   - `TablePassIntentLive.cfg` (the table's set and delete, a namespace's and a project's hold, each retried beside passes
+     delivered for ever): 4,323 states, the invariants and `PolicyLands` (§12 F4, §13 R2).
    - `TablePassWide.cfg`, ON DEMAND (two passes, a tag, a restore, the table's policy delete, a namespace's hold and a
      writer; one fault): 4,735,434 distinct states after §12, under three minutes on two workers. Every door with two faults was stopped by its time limit after 56,419,774 distinct
      states and no violation, unfinished.
@@ -90,7 +92,9 @@ unverified age (7 days), the trash read again under the fence, the policy record
    on a local root left a head naming deleted data files in 2 of 40 races.
 
 4. **Assumptions, each a config that must fail** (`EXPECT VIOLATION`):
-   - A1, `TablePassCredOutlivesHold.cfg` (`RefsWhole`): a pass's credential dies no later than its hold lapses. Held by
+   - A1, `TablePassCredOutlivesHold.cfg` (`RefsWhole`) and, for the catalog's reclaimers, `TablePassDoorSessionOff.cfg`
+     (`HalfOnlyVictims`, §13 R5): a reclaimer's credential dies no later than its hold lapses; a catalog reclaimer's
+     by the session each batch mints before it confirms its holds. For a pass: Held by
      the order (the vend before the take, `table_pass._expire`), by the catalog vending the maintain tier for at most
      `history_fences.HOLD` (900 s, `api/v1/endpoints/credentials.vend_credentials`, this ADR) whatever
      `vending.ttlSeconds` says, and by both being judged on the store's clock. Without it, a pass paused past its hold
@@ -290,15 +294,12 @@ does not cover them, and `version/delete` deleted under a legal hold ("authoriza
 are held as a pass is (`catalog.services.catalog_reclaims.held`): the history and each level's policy fence as reclaims,
 the governing policy read under them, a held table refused 409 InvalidTableState (19) (lifting the hold is a separate,
 audited act at a policy door), the victims marked before the first delete, and every hold confirmed before each cleanup
-call, one call per 16 versions (`reclaim_marks.BATCH`). Of the two the brief offered, a confirm before each delete
-request is not open (Lance issues a cleanup's deletes with no hook between them) and a capped credential minted for the
-door works only where the catalog vends (`LANCE_VENDING_MODE=web_identity`); the per-batch confirm is the leaner that
-holds everywhere. What it leaves, restated after §12 F2 and F4: a door frozen inside one Lance call past `HOLD` deletes at
-most that call's batch (16 versions), all named by its own mark; but a later reclaim that finds that mark with the door's
-hold gone and every file of its versions still standing removes it (F2 (ii)), so a door frozen before its first delete of
-the call and resuming after a whole pass judged it leaves that batch half removed and unmarked, which a ref door would
-then admit. It needs the catalog's process frozen more than 15 minutes inside one cleanup call, and is bounded to 16
-versions the door was asked to delete; it is the one residual of a credential that never dies.
+call, one call per 16 versions (`reclaim_marks.BATCH`). A confirm before each delete request is not open (Lance issues a
+cleanup's deletes with no hook between them); so each batch also deletes under a maintain-tier session it mints before
+that confirm, wherever the catalog vends (§13 R5), and a door frozen inside one call past `HOLD` wakes to a store that
+refuses its deletes. Where the catalog has no web identity, the batch deletes under the catalog's own credential, and a
+door frozen before its first delete of a call and resuming after a whole pass judged its mark can leave that batch (at
+most 16 versions) half removed and unmarked: the one residual of a credential that never dies.
 `maintenance/run` refuses a held table too, since it reclaims under the same bar. Reproduced first: under a table's hold
 both doors reclaimed (versions [1, 2, 3] became fewer); now each answers 409. Named in "Not modelled".
 
@@ -571,6 +572,182 @@ Each guard removed alone (`git checkout` restoring it after), its tests run on m
 | F7, a ref door's mark | `dataplane.require_whole` | the five tag and restore cases |
 | the truncated superset's tags | `reclaim_marks.pins` | the truncation test (a local root; not a store case) |
 
+## 13. Found by a fourth review (2026-11-18), each FIXED
+
+Each was reproduced first: every new case below failed on its harm assertion against the base of this change on moto
+(the case run against the base's sources), then modelled where the model reaches it, then fixed. Each guard's test is
+in `tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py` unless named.
+
+### R1: an erasure's fork-point marks were removed as soon as they were written
+
+`Reclaim.run(forks=True)` put the fork versions in the batches, whose marks it removed after a call with no failed delete,
+so the `marks_left` exclusions for forked versions were dead code and a ref door admitted a fork version the erasure had
+taken files from. **Measured on pylance 13.0.0 first** (a local root, `explain_cleanup_old_versions` and
+`cleanup_old_versions(versions=...)` naming the fork, then every read path of it): while the branch's own history still
+holds a copy of the fork, the cleanup keeps the fork's manifest and deletes only its transaction file, which the manifest
+carries inline, so a scan, a take, its blobs, an index query, `read_transaction(v)`, a tag's checkout, a restore, a
+shallow and a deep clone and a branch from it all work; but once the branch's own history no longer names the fork's
+files (the branch rewrote them and was reclaimed, deepest first, as an erasure does: `test_erasure_verifies_what_storage_
+holds._alone`), the cleanup deletes the data files and blob sidecars only the fork names and STILL keeps its manifest,
+and every one of those paths but `take` of a surviving row and `read_transaction` fails `Not found` (a branch whose head
+stands on nothing of main lets Lance remove the fork whole, manifest included). So the answer is (b). **Guard
+`ForkMark`** (`lakehouse.reclaim_marks.ForkMark`, `forked.<32 hex>.json`, `history_fences.FORK_MARK`): `Reclaim.run`
+writes one for each fork version a batch names, after the batch's confirm and before its mark, unless one stands; the run
+never removes it; `refused` refuses its version at every ref door; it is no stuck reclaim, so `oldest` (the gauge and the
+pass's probe) counts victims marks alone; only the catalog's credential writes or removes one (no maintain-tier grant
+names it). It ends as R3's rule says: removed when its ref's incarnation or its version is gone, and once no branch is
+cut from the version it is judged as a dead cleanup's mark is, removed when the version is untouched, else handed on as
+a victims mark of the same id that the next reclaim finishes (`settle_forks`, run by every reclaim and by the branch
+delete door). The dead exclusions are deleted. A shallow clone of a half-removed fork cannot be made at all (Lance's own
+clone fails on it, measured), so no registration of one reaches the door. Not modelled: the erasure is
+`Erasure.tla`'s, which does not model a cleanup's files. Test
+`test_an_erasures_fork_point_stands_marked_while_a_branch_keeps_it` (tag, restore): the erasure's own `reclaim_refs`
+over `[b, main]`, the fork read failing, the door refused, the branch deleted, the door still refused, and the next pass
+removing the version and every mark.
+
+### R2: a table-level hold had no progress bound beside a long reclaim
+
+The table's policy doors took the table's history as REFS with no intent, so the model's `PolicyLands` covered the
+level doors alone. **Guard:** the table door leaves its intent too (`policies._fenced`, `write_held(HistoryWork.REFS,
+..., intent=True)`), and its 409 names the bound. `Hold.confirm_unchallenged` already treats any holder its own kind
+excludes as a challenger, a REFS holder beside a RECLAIM among them (confirmed: the pass's and the catalog doors'
+history hold meet it). No other REFS door leaves one: a tag, branch or restore takes through `Fence.write_held` without
+`intent`, and a refused take without it removes its object (`HolderFence.taking`), so a refused tag stops no reclaim.
+Model: `RetriedDoors` (the table's `policy` and `pdelete` beside `nspolicy` and `projpolicy`) each leave an intent,
+`IntentOn` is any holder of a retried door that a reclaim's kind excludes on a fence the pass holds, a pass makes up to
+`Batches` (2) batches and meets an intent before each, and `PolicyLands` covers every retried door:
+`TablePassIntentLive.cfg` holds it with all four doors, `TablePassNoTableIntent.cfg` (`EXPECT VIOLATION temporal`)
+fails without the intent. Test: the table door as a case of `test_a_hold_beside_a_long_reclaim_lands_after_at_most_one_batch`,
+the same measured bound (at most 16 versions after the first 409); red on the base (39).
+
+### R3: a deleted branch's mark outlived every reclaim
+
+A mark is now of an incarnation of its ref: `VictimsMark.ref_id` is the uuid Lance lists last in the branch's
+`branch_identifier` (`version_retention.branch_identity`; measured on pylance 13.0.0: a branch deleted and made again
+under its name at the same version lists another uuid), `None` for main. **Guards:** `trusted` ignores, and every
+reclaim of the table removes, a mark naming an incarnation that no longer stands, whatever ref it reclaims (its pins now
+carry every ref's incarnation from one listing of the branches); the branch delete door ends the deleted branches' marks
+(`dataplane.delete_branch` → `reclaim_marks.ended`, after the delete, never raising). The door holds no history fence
+(the brief assumed it held REFS): it needs none, since a mark a reclaim writes beside the delete names an incarnation
+that no longer stands. A branch made again under the name inherits nothing, because the identity differs, so no judge
+rule has to run first. **And the door says so:** `maintenance/run` and `version/delete` answer 503 ServiceUnavailable
+(retryable) naming how many deletes the store refused and that the versions stay marked for the next run
+(`maintenance._refuse_a_refused_delete`), where `run_gc` answered `ok: true`; the erasure's cleanups already report a
+refused delete as a failed `history:` surface. Test `test_a_deleted_branchs_mark_ends_with_it` (by the delete, and by the
+next pass where the delete died before ending them), with the recreated branch's version tagged 200; and the
+`maintenance-run-on-main` case of `test_a_ref_answered_200_names_a_version_a_reader_can_read_whole` asserts the 503.
+
+### R4: the wholeness judge could never say no
+
+Reproduced with the case the review named (a dead cleanup's mark, the policy raised to keep 100 versions, a pass, then a
+tag on the half-removed version): the tag answered 200 and the blobs failed to read WITH `_untouched` in place.
+**Measured on pylance 13.0.0:** Lance's dry run restricted to versions names only files that still stand (a data file or
+a transaction file removed by hand drops out of its candidates), so asking whether the files it names stand answered yes
+for every version whose manifest stands, a half-removed one included: F2 (ii) removed every dead cleanup's mark at the
+next reclaim, and only a pass that also re-deleted the versions hid it. **Guard (rewritten):** `_untouched` judges by the
+witness a cleanup cannot skip: one call deletes every transaction file of its versions before any data file, sidecar or
+manifest (§3), so a version whose transaction file the restricted dry run still names lost nothing, and one whose
+transaction file is gone may have lost anything (`reclaim_marks._untouched`). Test: the
+`pass-then-the-policy-raised-and-a-pass` case of `test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`.
+
+### R5: a catalog reclaim frozen past its hold deleted after a later pass removed its mark
+
+**Guard `DoorSession`:** every reclaim in the estate deletes under a credential that dies no later than its hold. Where
+the catalog vends, each batch of a catalog reclaim (`maintenance/run`, `version/delete`, the erasure's verification and
+release cleanups) FIRST opens its handle under a maintain-tier session minted for that batch
+(`Reclaim.session`, built by `catalog_reclaims.sessions` from the same vendor, bases and branch the maintain vend door
+uses, with no control-root grant, at most `HOLD`), THEN confirms its holds (renewing each for one hold, on the catalog's
+own credential), THEN writes its mark and deletes through that handle alone. STS issues no session shorter than 900 s
+(RustFS 1.0.3, §7.5), so the order is what makes the session die no later than the hold confirmed after its mint. The
+erasure paths take the minter through `verify(..., sessions=)`, `reclaim_refs(..., sessions=)` and
+`release_due(..., sessions_at=)` (`vending.vendor_for`, the one construction the app's vendor uses too). **Residual:**
+where the catalog has no web identity (a development fixture on static keys) the vendor mints nothing and a batch
+deletes under the catalog's own credential, so a door frozen inside one call past its hold can still leave that call's
+batch (at most 16 versions) half removed and unmarked; `docs/architecture/deployment.md` says so. Model: `Passes` stand
+for every reclaimer, and A1 is `CredBeforeHold /\ DoorSession`; `TablePassDoorSessionOff.cfg` (`EXPECT VIOLATION
+HalfOnlyVictims`, two reclaimers) fails without it. Tests: offline,
+`test_a_catalog_reclaim_deletes_only_under_a_session_minted_before_its_holds_are_confirmed` (both doors over 19 versions,
+two batches: the order on record is mint, confirm, delete twice, and every cleanup delete on the wire is signed by the
+batch's own session key; red on the base: confirm, delete, all signed by the catalog's key); on the lane,
+`test_a_maintain_vend_dies_within_the_history_hold_whatever_the_ttl_configured` hands its expired vend to `version/delete`
+as the batch's session once it has waited it out: the store refuses the cleanup, the door answers 503 and every object
+of the table stands (no second wait). Found on the lane's first run: the store answers an expired session 400
+`ExpiredToken` and Lance raises it as an IO `ValueError`, which the doors answered 500; a store's refusal of a catalog
+reclaim's reads or deletes is now the retryable 503 (`maintenance._a_store_refusal_retried`), its batch's mark standing.
+
+### R6: a table whose maintain vend does not fit STS was discoverable only at pass time
+
+NO SHAPE BOUND MAKES EVERY TABLE FIT, so the bound is enforced where the shape is made. A catalog-made table lives at
+`<bucket>/<uuid>`, whose policy at two 63-character buckets is 1,964 characters (pinned in
+`test_a_warehouse_whose_tables_maintain_policy_sts_would_refuse_is_refused_at_registration`: 1,964, and 2,194 with a
+75-character KMS key ARN, which the warehouse registration refuses). A registered table's location is a relative path of
+any depth (`require_registrable_location` bounds its syntax, not its length), and its manifest may declare any number
+of bases, each granted by a pair of statements of its own (about 440 characters at 63-character buckets; a location 30
+characters deeper costs about 90), so no restructuring of the grants without widening what the vend touches fits every
+legal shape: merging the per-base statements would grant one base's delete across another's prefix. **Guard:** the
+register door refuses a dataset whose table's maintain policy, judged at its largest reading (every declared base
+granted, as one the table reclaims in, a project's fence included), would be past 2,048 characters, 400 InvalidInput
+(13) naming the limit and the measured size, before anything is attached
+(`vending.require_a_table_maintain_policy_that_fits`, `tables._require_a_maintain_policy_that_fits`); and a table already
+on the estate whose vend the catalog refuses as too long is VISIBLE: maintenance reads the problem's
+`session_policy_limit` as `credentials.PolicyTooLong`, parks the table and counts
+`maintenance.reclaims.held_back{reason="policy_too_long"}`, which `MaintenanceReclaimStarved`'s text now names. Not
+covered: a base a later commit declares (`version/create`'s base judgement is the commit path's file, under another
+review); such a table is held back visibly. Test
+`test_a_table_no_maintain_vend_could_reach_is_refused_where_it_is_made_and_visible_where_it_stands` (a location nine
+60-character segments deep: 400 with the fix, 200 on the base).
+
+### The smaller ones
+
+- The history prose in the two docstrings is rewritten as rationale.
+- **Traced: the reconciler beside a reclaim** (`commit_reconcile.finish_landed`). It reads a landed version's
+  transaction and the files it adds, seals and records those its commit's record lacks, and deletes nothing. A seal
+  refuses a put, never a delete (ADR 0242), so a cleanup removing that version's files beside it is not stopped and
+  loses nothing a door answered for; a file the cleanup removed first fails its seal (`FilesNotHeldError`), counted
+  unrecorded, and the reconciler retries a version that is then gone. What it can leave is a committed-file record of a
+  file the cleanup removed after the pass forgot that version's records, which the next pass's forgetting of records no
+  retained version needs removes. No guard needed.
+- **Traced, and left open: an erasure release recreating a branch at a recorded version a crashed pass left half
+  removed and marked** (`erasure_release._recreate`). The release holds RELEASE, which excludes every other kind, but a
+  release tick that died between its deletes and its recreates leaves the recorded version unpinned until the next tick,
+  and a pass may reclaim it then; if that pass died part-way, the next tick's `create_branch(reference=(parent,
+  version))` reads no mark and makes a branch over deleted files. It needs two crashes in one grace window. The guard is
+  the ref doors' (`reclaim_marks.refused` under the release's hold, refusing the recreate), and what the release does
+  then (it can never recreate that branch) is the release's decision, so it is named here and not decided.
+- The project-hold case stays green on moto (the lane: below).
+
+### The removal table (fourth review)
+
+Each guard removed alone (the source restored after each run), the pass's test file and the truncation test run on moto,
+two workers (each run about 4.5 min, 35 cases; with every guard in place all pass). `MarkLive` stays model-only
+(`TablePassJudgeLiveMark.cfg`). No guard stayed green, so none was deleted.
+
+| Guard removed | Where | Cases that failed without it (moto) |
+| --- | --- | --- |
+| F1 ref normalised in the mark | `reclaim_marks._OfARef.ref`, `Reclaim.ref` | 1: `tag-5242880-data-files-and-manifests-maintenance-run-on-main` (`test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`) |
+| F2(i) trusted | `reclaim_marks.trusted` | 1: `planted-naming-the-head` (`test_a_mark_makes_a_door_refuse_only_what_it_can_truthfully_say`) |
+| F2(ii) a whole mark removed | `reclaim_marks.Reclaim._judged` | 1: `planted-naming-whole-versions` (`test_a_mark_makes_a_door_refuse_only_what_it_can_truthfully_say`) |
+| R4 _untouched | `reclaim_marks._untouched` (returning yes) | 3: `tag-5242880-data-files-and-manifests-pass-then-the-policy-raised-and-a-pass`, `restore`, `tag` (`test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`, `test_an_erasures_fork_point_stands_marked_while_a_branch_keeps_it`) |
+| F2(iii) confirm before the mark | `reclaim_marks.Reclaim.run` (the confirm moved after the mark) | 1: `a-door-whose-hold-lapsed-before-its-first-delete` (`test_a_mark_makes_a_door_refuse_only_what_it_can_truthfully_say`) |
+| F3 RenameFence | `dataplane.rename_table` | 1: `rename-into-a-held-namespace-at-its-cleanups-first-delete` (`test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version`) |
+| F3 chain read again | `expiry.PolicyRead.changed` | 1: `rename-into-a-held-namespace-before-its-hold` (`test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version`) |
+| F4 level door's intent | `policies._fenced` (a level's) | 1: `namespace-hold` (`test_a_hold_beside_a_long_reclaim_lands_after_at_most_one_batch`) |
+| R2 table door's intent | `policies._fenced` (the table's) | 1: `table-hold` (`test_a_hold_beside_a_long_reclaim_lands_after_at_most_one_batch`) |
+| F4 a pass meeting the intent | `expiry._reclaim_versions` (`confirm_unchallenged`) | 2: `namespace-hold`, `table-hold` (`test_a_hold_beside_a_long_reclaim_lands_after_at_most_one_batch`) |
+| F5 a marked table retried | `table_pass._dataset_due_at` | 6: `clone-5242880-data-files-and-manifests-pass`, `restore-0-manifests-pass`, `restore-5242880-data-files-and-manifests-pass`, `tag-0-manifests-pass`, `tag-5242880-data-files-and-manifests-pass-then-the-policy-raised-and-a-pass`, `tag-5242880-data-files-and-manifests-pass` (`test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`) |
+| F6(a) per-batch confirm | `catalog_reclaims.marked` | 5: `maintenance-run`, `version-delete`, `a-door-whose-hold-lapsed-before-its-first-delete`, `held-between-its-batches-maintenance-run`, `held-between-its-batches-version-delete` (`test_a_catalog_reclaim_deletes_only_under_a_session_minted_before_its_holds_are_confirmed`, `test_a_mark_makes_a_door_refuse_only_what_it_can_truthfully_say`, `test_the_catalogs_own_reclaim_doors_delete_nothing_a_hold_keeps`) |
+| F6(b) finishing a mark below the threshold | `expiry._versions_due` | 8: `planted-naming-whole-versions`, `clone-5242880-data-files-and-manifests-pass`, `restore-0-manifests-pass`, `restore-5242880-data-files-and-manifests-pass`, `tag-0-manifests-pass`, `tag-5242880-data-files-and-manifests-maintenance-run-on-main`, `tag-5242880-data-files-and-manifests-pass-then-the-policy-raised-and-a-pass`, `tag-5242880-data-files-and-manifests-pass` (`test_a_mark_makes_a_door_refuse_only_what_it_can_truthfully_say`, `test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`) |
+| F6(c) clone source's mark | `clone_sources.take` | 1: `clone-5242880-data-files-and-manifests-pass` (`test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`) |
+| F7 a ref door's mark | `dataplane.require_whole` | 8: `restore-0-manifests-pass`, `restore-5242880-data-files-and-manifests-pass`, `tag-0-manifests-pass`, `tag-5242880-data-files-and-manifests-maintenance-run-on-main`, `tag-5242880-data-files-and-manifests-pass-then-the-policy-raised-and-a-pass`, `tag-5242880-data-files-and-manifests-pass`, `restore`, `tag` (`test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`, `test_an_erasures_fork_point_stands_marked_while_a_branch_keeps_it`) |
+| pins: a tag pins its own branch | `reclaim_marks.pins` | 1: `test_a_tag_on_another_branchs_version_of_the_same_number_leaves_mains_marked` (`test_a_tag_on_another_branchs_version_of_the_same_number_leaves_mains_marked`) |
+| R1 fork marks written | `reclaim_marks.Reclaim.run` (`ForkMark`) | 2: `restore`, `tag` (`test_an_erasures_fork_point_stands_marked_while_a_branch_keeps_it`) |
+| R3 a mark of no standing ref removed | `reclaim_marks.trusted` | 1: `by-the-next-pass` (`test_a_deleted_branchs_mark_ends_with_it`) |
+| R3 branch delete ends its marks | `dataplane.delete_branch` (`reclaim_marks.ended`) | 3: `by-the-delete`, `restore`, `tag` (`test_a_deleted_branchs_mark_ends_with_it`, `test_an_erasures_fork_point_stands_marked_while_a_branch_keeps_it`) |
+| R3 a refused delete answers 503 | `maintenance._refuse_a_refused_delete` | 3: `by-the-delete`, `by-the-next-pass`, `tag-5242880-data-files-and-manifests-maintenance-run-on-main` (`test_a_deleted_branchs_mark_ends_with_it`, `test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`) |
+| R5 a session per batch | `catalog_reclaims.marked` (`Reclaim.session`) | 2: `maintenance-run`, `version-delete` (`test_a_catalog_reclaim_deletes_only_under_a_session_minted_before_its_holds_are_confirmed`) |
+| R6 the register door's fit | `tables._require_a_maintain_policy_that_fits` | 1: `test_a_table_no_maintain_vend_could_reach_is_refused_where_it_is_made_and_visible_where_it_stands` (`test_a_table_no_maintain_vend_could_reach_is_refused_where_it_is_made_and_visible_where_it_stands`) |
+| R6 a refusal of its own | `credentials._refusal_of` (`PolicyTooLong`) | 1: `test_a_table_no_maintain_vend_could_reach_is_refused_where_it_is_made_and_visible_where_it_stands` (`test_a_table_no_maintain_vend_could_reach_is_refused_where_it_is_made_and_visible_where_it_stands`) |
+
 ## What the model assumes beyond §4
 
 - Lance's cleanup reads its refs, head and manifests once and deletes against that reading (`cleanup.rs` at v13.0.0);
@@ -587,10 +764,11 @@ raise, a catalog commit like any writer's; the orphan check, which deletes nothi
 a ref of its own with the same steps, its mark naming the branch); two tables sharing a data directory, which the
 directory's claim excludes (`data_directories.claimed_by`); a version expiring by its writer's clock (ages change at any
 time here, which over-approximates every clock; `version/create` stamps the catalog's own, §10); the catalog's own reclaim
-doors, `maintenance/run` and `version/delete` (§9), passes of the modelled shape signed by a credential that never dies,
-held by a confirm of every hold before each batch of 16 versions (§9 states what a door frozen inside one batch leaves);
-the batches themselves (the model's pass is one batch; each of the code's repeats its step); a mark a maintain-tier vend
-plants, which F2 (i) ignores. The project level's door is modelled as the namespace's (`projpolicy`), the same code path
+doors, `maintenance/run` and `version/delete` (§9), passes of the modelled shape, each batch under a session minted
+before its confirm (§13 R5, guard `DoorSession`);
+a pass of more than two batches (`Batches`; each of the code's repeats the step, meeting an intent first, §13 R2); a
+mark a maintain-tier vend plants, which F2 (i) ignores; a mark's ref incarnation (§13 R3) and an erasure's fork marks
+(§13 R1), which the erasure's cleanup writes and `Erasure.tla` does not model. The project level's door is modelled as the namespace's (`projpolicy`), the same code path
 at its own fence, and an integration case drives it through the real door and a real pass (§12, the smaller items).
 
 ## What an operator observes
@@ -624,6 +802,14 @@ at its own fence, and an integration case drives it through the real door and a 
   maintain policy would not fit is refused at registration (400, 13).
 - A version a stock client commits through `version/create` carries the catalog's commit time, whatever its writer's clock
   said (§10).
+- §13's: a table's own `policy/set` and `policy/delete` refused beside a reclaim leave an intent and their 409 names the
+  bound; `maintenance/run` and `version/delete` answer 503 ServiceUnavailable when the store refused a delete (they
+  answered `ok: true`), naming the count; a deleted branch's marks go with it, and a branch made again under its name is
+  not refused for them; a dead cleanup's mark stands until its versions are finished whatever the policy now keeps (it
+  was removed by the next reclaim); an erasure's fork point is refused at every ref door while a branch is cut from it;
+  where the catalog vends, its own reclaims delete under a maintain-tier session per batch, which the store's trail
+  records as `catalog-reclaim-…`; a registration whose table's maintain policy would not fit STS is refused 400 (13),
+  and a standing one is counted `held_back{reason="policy_too_long"}`.
 
 ## The four facts
 
@@ -650,7 +836,8 @@ at its own fence, and an integration case drives it through the real door and a 
   pins or brings back a version holding the history and judging the version whole. A change to that order changes this
   model first.
 - `make lifecycle-rustfs-check` runs the finding tests on RustFS; the offline suite runs them on moto.
-- `make tla-check` runs this model's gate and expected failures in about 35 s.
+- `make tla-check` runs this model's gate and expected failures in about a minute (the whole gate, every module, 12 min
+  43 s on two workers on four shared cores, 2026-11-18).
 - A port of the policy doors keeps their fences, `write_held` and a level's intent; a port of a ref door keeps
   `require_whole`'s one line, the trusted mark; a port of any reclaim calls the one marked reclaim
   (`reclaim_marks.Reclaim`), never Lance's cleanup directly.

@@ -213,7 +213,7 @@ def record_dataset_swept() -> None:
 #: level's policy fence (``policy_fenced``), its maintenance policy changed since the pass read it (``policy_changed``),
 #: or a cleanup's victims stay marked, a delete the store refused or a policy that now keeps them (``marked``). A closed
 #: set: it is a metric label, and the alert ``MaintenanceReclaimStarved`` reads it.
-type HeldBack = Literal["history_fenced", "policy_fenced", "policy_changed", "marked"]
+type HeldBack = Literal["history_fenced", "policy_fenced", "policy_changed", "marked", "policy_too_long"]
 
 _reclaims_held_back = _meter.create_counter(
     "maintenance.reclaims.held_back",

@@ -71,6 +71,17 @@ def recorded_branch(branch: object) -> str | None:
     return branch
 
 
+def branch_identity(entry: object) -> str | None:
+    """The last uuid of a listed branch's ``branch_identifier`` chain: the one that names this incarnation of the branch.
+    Measured on pylance 13.0.0: a branch deleted and created again under its name, at the same version, lists another
+    uuid there, while its name, parent and version read the same."""
+    chain = entry.get("branch_identifier") if isinstance(entry, dict) else None
+    if not isinstance(chain, list) or not chain:
+        return None
+    last = chain[-1]
+    return str(last[1]) if isinstance(last, tuple | list) and len(last) == 2 else None
+
+
 def tag_versions(ds: VersionedDataset, branch: str | None) -> dict[str, int]:
     """``{tag: version}`` for the tags pinning a version OF ``branch`` — the only tags its cleanup honours.
 

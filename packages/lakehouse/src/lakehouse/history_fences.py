@@ -68,6 +68,7 @@ from lakehouse.storage_options import StorageOptions
 PREFIX: Final = control_prefixes.HISTORY_FENCES
 
 __all__ = [
+    "FORK_MARK",
     "HOLD",
     "PREFIX",
     "RELEASE_MARK",
@@ -132,6 +133,11 @@ RELEASE_MARK: Final = "erasure-release"
 #: hex>.json``), so one session-policy grant reaches both and nothing longer (F8).
 VICTIMS_MARK: Final = "reclaim"
 
+#: The kind of an erasure's fork mark (:mod:`lakehouse.reclaim_marks`): a version a branch was cut from whose files an
+#: erasure's cleanup took, which stands over them for as long as a branch keeps its manifest. Only the catalog's own
+#: credential writes or removes one (no maintain-tier grant names it), and no take sweeps it.
+FORK_MARK: Final = "forked"
+
 #: The kinds that keep refs off the table's history while they hold it: they delete versions, or write what a ref write
 #: must see before it lands. They share it with their own kind and with each other.
 _REF_FREE: Final = frozenset({HistoryWork.RECLAIM, HistoryWork.SCHEDULE})
@@ -173,7 +179,7 @@ class TableHistory(HolderFence):
     stored_field: ClassVar[str] = "uuid"
     holder_model: ClassVar[type[HolderRecord]] = HistoryHolder
     kinds: ClassVar[frozenset[str]] = frozenset(HistoryWork)
-    mark_kinds: ClassVar[frozenset[str]] = frozenset({RELEASE_MARK, VICTIMS_MARK})
+    mark_kinds: ClassVar[frozenset[str]] = frozenset({RELEASE_MARK, VICTIMS_MARK, FORK_MARK})
 
     table_uuid: str
 

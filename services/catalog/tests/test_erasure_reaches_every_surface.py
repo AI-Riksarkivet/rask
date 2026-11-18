@@ -25,7 +25,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from catalog.services.erasure import ErasureReport, Pin, ref_heads, verify
+from catalog.services.erasure import ErasureReport, Pin, no_sessions, ref_heads, verify
 from lakehouse.history_fences import TableHistory
 from lakehouse.storage_options import StorageOptions
 
@@ -80,6 +80,7 @@ def _verify(uri: str, retention: timedelta = _NOW, trusted: dict[str, int] | Non
         history=TableHistory(control_root=f"{uri}-control", storage_options=StorageOptions(), table_uuid=f"erased-{uri.rsplit('/', 1)[-1]}"),
         derived=list,
         before_untag=lambda _tags: None,
+        sessions=no_sessions,
     )
 
 

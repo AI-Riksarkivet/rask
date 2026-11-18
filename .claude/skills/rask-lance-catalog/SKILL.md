@@ -1008,22 +1008,32 @@ governing their data. The project-scoped surface is the console's project page, 
   erasure's verification and release cleanups; nothing else calls Lance's cleanup on a table): Lance's own dry run
   `explain_cleanup_old_versions` names the victims, cleaned up in batches of `reclaim_marks.BATCH` (16), each batch
   after its caller's `before_each` (a confirm of every hold, `Hold.confirm_unchallenged`, which also stops it for a
-  policy door's intent), then its mark at `<history fence>/reclaim.<32 hex>.json` naming `{uuid, ref, versions,
-  holder}`, then `cleanup_old_versions` restricted to it by `versions`, the mark removed once that call had no failed
-  delete; the ref is normalised in the mark itself (`main` and `None` are one ref); and **every ref door, the restore and
+  policy door's intent), then its mark at `<history fence>/reclaim.<32 hex>.json` naming `{uuid, ref, ref_id,
+  versions, holder}` (`ref_id` the uuid Lance gives the branch's incarnation, `version_retention.branch_identity`), then
+  `cleanup_old_versions` restricted to it by `versions`, the mark removed once that call had no failed delete; where the
+  catalog vends, a catalog reclaim's batch first mints a maintain-tier session (`catalog_reclaims.sessions`), then
+  confirms, then deletes under that session alone, so it dies with the hold it confirmed (R5); the ref is normalised in
+  the mark itself (`main` and `None` are one ref); and **every ref door, the restore and
   a clone's source refuse a version a TRUSTED mark names** (`reclaim_marks.refused`, from `dataplane.require_whole`, 409
   code 19; `CloneSourceGoneError`) whatever files still stand, listing NO file of the version (constant cost: a read per
-  mark and the ref's head and tags). A mark is trusted only for what a cleanup could write: this table, at most 16
-  versions, each below its ref's head and untagged; anything else is ignored whole, logged and counted
-  (`lance.reclaim_marks.ignored`) and removed by the next reclaim. A reclaim that finds a mark whose writer's hold is gone
-  removes it when every file Lance's restricted dry run names for its standing versions still stands, finishes it when
-  its policy still reclaims them, and otherwise leaves it visible (`held_back{reason="marked"}`, retried every
-  `retrySeconds`, the gauge `maintenance.reclaims.mark_oldest`, `MaintenanceReclaimMarkStale` past a day). An erasure's
-  reclaim also names the versions a branch was cut from (`forks=True`): Lance deletes such a version's own files and
-  keeps its manifest for the branch (measured), so it stands marked for as long as the branch keeps it. (6) **A level's
-  policy door refused by reclaims leaves an INTENT** (its `set-` holder, unrenewed, `HolderFence.taking(intent=True)`):
-  no reclaim beneath the level starts, each one deleting stops before its next batch, and the retry lands; the 409 names
-  the bound. (7) **A rename into another namespace holds the table's history as REFS** (`dataplane.rename_table`, 409
+  mark and the ref's head, tags and branches). A mark is trusted only for what a cleanup could write: this table, an
+  incarnation of a ref that still stands, at most 16 versions, each below its ref's head and untagged; anything else is
+  ignored whole, logged and counted (`lance.reclaim_marks.ignored`) and removed by the next reclaim of the table, whatever
+  ref it reclaims (a deleted branch's mark among them; the branch delete door also ends them, `reclaim_marks.ended`). A
+  reclaim that finds a mark whose writer's hold is gone removes it when Lance's restricted dry run still names each of
+  its standing versions' transaction file (`_untouched`: the dry run names only files that still stand, measured, and a
+  cleanup deletes a call's transaction files before any other), finishes it when its policy still reclaims them, and
+  otherwise leaves it visible (`held_back{reason="marked"}`, retried every `retrySeconds`, the gauge
+  `maintenance.reclaims.mark_oldest`, `MaintenanceReclaimMarkStale` past a day). An erasure's reclaim also names the
+  versions a branch was cut from (`forks=True`): once the branch's own history no longer names the fork's files, Lance
+  deletes them and keeps the manifest (measured), so each is marked with a FORK MARK (`forked.<32 hex>.json`, written by
+  the catalog alone, apart from the batch's mark and never removed by the run, not counted by the gauge) that every ref
+  door refuses while a branch is cut from the version; then it is handed on as a victims mark the next reclaim finishes
+  (`settle_forks`). The catalog's `maintenance/run` and `version/delete` answer 503 when the store refused a delete (the
+  versions stay marked). (6) **A policy door refused by reclaims leaves an INTENT** (a level's `set-` holder, the
+  table's own `refs-` holder of its history, unrenewed, `HolderFence.taking(intent=True)`): no reclaim beneath it starts,
+  each one deleting stops before its next batch, and the retry lands; the 409 names the bound. No other ref door leaves
+  one. (7) **A rename into another namespace holds the table's history as REFS** (`dataplane.rename_table`, 409
   code 14 beside a reclaim) and the pass reads its chain again under its holds (`table_pass.chain_now`,
   `skipped=policy_changed`). A maintain-tier credential is vended for at most `HOLD` (900 s) whatever
   `vending.ttlSeconds` says, so a pass whose holds lapsed signs no delete (A1); it reaches the cleanup's mark and its own
@@ -1031,7 +1041,10 @@ governing their data. The project-scoped surface is the console's project page, 
   warehouse's namespaces and its own project (not each level exactly: one grant per level does not fit STS's 2,048
   characters). Its policy is 1,964 characters at two 63-character buckets (measured), and a warehouse whose tables'
   maintain policy would not fit (a KMS key, a long control root) is refused at registration
-  (`vending.require_a_maintain_policy_that_fits`, 400 code 13). The catalog's own reclaim doors are held as a pass is and
+  (`vending.require_a_maintain_policy_that_fits`, 400 code 13); a registration at a location, or with bases, whose
+  maintain policy would not fit is refused at the register door (`vending.require_a_table_maintain_policy_that_fits`,
+  400 code 13), and a standing table whose vend the catalog refuses as too long is held back
+  (`held_back{reason="policy_too_long"}`). The catalog's own reclaim doors are held as a pass is and
   refuse a held table 409 code 19. `version/create` finalizes the bytes with the catalog's own commit time
   (`managed_versions.stage`, `manifest_bytes.with_commit_time`), since Lance ages a version by its manifest's stamp.
   `MaintenanceReclaimStarved` warns of a day of held-back passes across the estate.

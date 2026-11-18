@@ -36,10 +36,12 @@ from botocore.awsrequest import AWSRequest
 from botocore.config import Config
 from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
+from pydantic import SecretStr
 
-from catalog.core.vending import TableRecords, build_session_policy
+from catalog.core.vending import TableRecords, VendedSession, build_session_policy
 from lakehouse import history_fences, policy_fences, stored_objects
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
 from tests.integration.conftest import RaceCatalog, _vending_session
@@ -49,6 +51,19 @@ _STORE = os.environ.get("RASK_LIFECYCLE_STORE_ENDPOINT", "")
 _PATH_STYLE = Config(s3={"addressing_style": "path"}, retries={"max_attempts": 1})
 
 pytestmark = pytest.mark.skipif(not _STORE, reason="needs the lane's S3 store (scripts/lifecycle_on_rustfs_check.sh)")
+
+
+class _Handing:
+    """A vendor that hands every maintain-tier vend the one session it holds, however long ago it expired."""
+
+    def __init__(self, session: VendedSession) -> None:
+        self._session = session
+
+    def vend(self, **_kwargs: object) -> VendedSession:
+        return self._session
+
+    def vend_reclaim(self, *_args: object, **_kwargs: object) -> None:
+        return None
 
 
 def _client(access: str, secret: str, token: str | None = None) -> Any:  # noqa: ANN401 — a boto3 S3 client
@@ -164,7 +179,12 @@ def test_a_maintain_vend_dies_within_the_history_hold_whatever_the_ttl_configure
     """A1 of ``specs/maintenance/TablePass.tla``: a pass's credential dies no later than its hold lapses. With the vendor's
     TTL configured at an hour, the maintain tier vended through the real door expires within the history fence's hold, on
     the store's own clock, and the store refuses a delete the credential signs once it has expired. RustFS 1.0.3 issues no
-    session shorter than 900 s whatever is asked (measured), so this waits out one hold."""
+    session shorter than 900 s whatever is asked (measured), so this waits out one hold.
+
+    R5: a catalog door's reclaim deletes only under the session it minted for its batch, so a door whose batch's session
+    has expired (a door frozen inside a call past its hold) deletes nothing: the expired vend handed to ``version/delete``
+    as its batch's session, the store refuses the cleanup, the door answers 503 and every version stands. It shares this
+    case's wait."""
     from catalog.api.dependencies import get_vendor
     from catalog.core.vending import WebIdentityVendor
     from catalog.main import app
@@ -181,6 +201,14 @@ def test_a_maintain_vend_dies_within_the_history_hold_whatever_the_ttl_configure
         timeout=60,
     )
     assert created.status_code == 200, created.text
+    for n in (2, 3):
+        appended = requests.post(
+            f"{race_catalog.url}/v1/table/lance_catalog$capped$t/insert?mode=overwrite",
+            data=encode_arrow_stream(pa.table({"id": pa.array([n], pa.int64())})),
+            headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE},
+            timeout=60,
+        )
+        assert appended.status_code == 200, appended.text
     asked_at = time.time()
     answered = requests.post(f"{race_catalog.url}/management/v1/table/lance_catalog$capped$t/credentials", params={"tier": "maintain"}, timeout=60)
     assert answered.status_code == 200, answered.text
@@ -200,3 +228,21 @@ def test_a_maintain_vend_dies_within_the_history_hold_whatever_the_ttl_configure
     assert (signed in ("ExpiredToken", "AccessDenied", "InvalidAccessKeyId", "InvalidToken"), still) == (True, "200"), (
         f"a delete signed after the vend's expiry answered {signed}, and the file then answers {still}"
     )
+
+    expired = VendedSession(
+        key_pair=S3KeyPair(
+            access_key_id=options["aws_access_key_id"],
+            secret_access_key=SecretStr(options["aws_secret_access_key"]),
+            session_token=SecretStr(options["aws_session_token"]),
+        ),
+        endpoint=_STORE,
+        region="us-east-1",
+        expires_at_millis=vended["credentials"]["expires_at_millis"],
+    )
+    app.dependency_overrides[get_vendor] = lambda: _Handing(expired)
+    before = sorted(entry["Key"] for entry in store.list_objects_v2(Bucket=bucket, Prefix=f"{root}/")["Contents"])
+    deleted = requests.post(
+        f"{race_catalog.url}/v1/table/lance_catalog$capped$t/version/delete", json={"ranges": [{"start_version": 1, "end_version": 3}]}, timeout=120
+    )
+    after = sorted(entry["Key"] for entry in store.list_objects_v2(Bucket=bucket, Prefix=f"{root}/")["Contents"])
+    assert (deleted.status_code, after == before) == (503, True), (deleted.text, sorted(set(before) - set(after)))

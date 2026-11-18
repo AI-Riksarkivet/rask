@@ -16,11 +16,12 @@ it lists a table as due for compaction.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
 
-from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
+from lance_namespace import InvalidInputError, InvalidTableStateError, ServiceUnavailableError, UnsupportedOperationError
 
 from lakehouse import branch_layout
 from lakehouse.compaction_gate import compaction_refusal
@@ -213,12 +214,50 @@ def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_version
     """
     require_reclaimable(ds)
     refuse_a_reclaim_over_nested_branches(ds, branch)
-    stats = marked.run(cast("Any", ds), older_than=_age_bound(retention_days), retain_versions=retain_versions)
+    with _a_store_refusal_retried():
+        stats = marked.run(cast("Any", ds), older_than=_age_bound(retention_days), retain_versions=retain_versions)
+    _refuse_a_refused_delete(stats.failed_deletes, removed=stats.old_versions)
     return {
         "ok": True,
         "old_versions_removed": stats.old_versions,
         "bytes_removed": stats.bytes_removed,
     }
+
+
+@contextmanager
+def _a_store_refusal_retried() -> Generator[None]:
+    """A reclaim the store refused a read or a delete of, as the retryable refusal it is: a batch's session that expired
+    (its door frozen past its hold, ADR 0243 R5) is refused by the store, and Lance raises its refusal as an IO
+    ``ValueError`` or ``OSError`` (measured on RustFS 1.0.3: ``ExpiredToken`` on the batch's first listing). Nothing more
+    was deleted, and the batch's mark, once written, stands.
+
+    Raises:
+        ServiceUnavailableError: Lance's cleanup failed on the store (503, retryable).
+    """
+    try:
+        yield
+    except (OSError, ValueError) as exc:
+        if "LanceError(IO)" not in str(exc):
+            raise
+        raise ServiceUnavailableError(
+            "the store refused this reclaim's reads or deletes, so nothing more was deleted and the versions it was removing stay marked, which "
+            "no tag, branch, restore or clone names: retry"
+        ) from exc
+
+
+def _refuse_a_refused_delete(failed: int, *, removed: int) -> None:
+    """A reclaim the store refused a delete of is no success: Lance counts a refused delete and returns
+    (``CleanupStats.failed_deletes``, measured on pylance 13.0.0), and its versions stay marked, so no door names them until
+    a later reclaim finishes them (ADR 0243 R3).
+
+    Raises:
+        ServiceUnavailableError: ``failed`` is not 0 (503, retryable).
+    """
+    if failed:
+        raise ServiceUnavailableError(
+            f"the store refused {failed} of this reclaim's deletes after {removed} versions were removed; the versions it was removing stay "
+            "marked, so no tag, branch, restore or clone names them, and the next run finishes them: retry"
+        )
 
 
 #: ``VersionRange.end_version`` for "through the latest version" (``lance_docs/ns_catalog/spec.yaml``).
@@ -274,8 +313,10 @@ def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, 
     refuse_a_reclaim_over_nested_branches(ds, branch)
     _refuse_pinned_versions(ds, branch, targets)
     try:
-        stats = marked.run(cast("Any", ds), older_than=None, retain_versions=None, versions=targets, error_if_tagged=True)
-    except OSError:
+        with _a_store_refusal_retried():
+            stats = marked.run(cast("Any", ds), older_than=None, retain_versions=None, versions=targets, error_if_tagged=True)
+    except (OSError, ServiceUnavailableError):
         _refuse_pinned_versions(ds, branch, targets)
         raise
+    _refuse_a_refused_delete(stats.failed_deletes, removed=stats.old_versions)
     return stats.old_versions

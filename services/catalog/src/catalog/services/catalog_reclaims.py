@@ -1,20 +1,21 @@
 """The catalog's own reclaim doors, ``maintenance/run`` and ``version/delete``, held as a maintenance pass is (ADR 0243 §8).
 
-THEIR CREDENTIAL NEVER DIES. A maintenance pass deletes under a maintain-tier vend that lasts no longer than its holds
-(A1 of ``specs/maintenance/TablePass.tla``), so a pass frozen past its hold deletes nothing more once a door has been
-admitted beside it. These two doors delete with the catalog's own credential, which no hold bounds. So each holds what a
-pass holds (the table's history and the policy fence of each level above it, as reclaims), reads the policy that governs
-the table under those holds and refuses a table a hold at any level keeps, and reclaims through the one marked reclaim
-(:class:`lakehouse.reclaim_marks.Reclaim`), which CONFIRMS EVERY HOLD BEFORE EACH CLEANUP CALL it makes, one call per
-:data:`lakehouse.reclaim_marks.BATCH` versions, and only then marks that call's victims; an intent a policy door left
-beside one of its holds stops it there too (F4). Confirming before each delete request is not open to it: Lance issues a
-cleanup's deletes with no hook between them. What stays open is a door frozen inside one call past its hold: that call's
-deletes, of at most one batch of versions its own mark names, which no ref door may name while the mark stands; once a
-later reclaim finds the mark with its writer's hold gone and every file of its versions still standing, it removes it, so
-a door frozen before its first delete of that call and resuming after can leave that batch half removed and unmarked
-(stated in ADR 0243 §9). A capped credential minted for the door would close that too, but only where the catalog vends
-(``LANCE_VENDING_MODE=web_identity``), and these doors must work where it vends nothing; so the confirm is the leaner of
-the two that holds everywhere.
+EACH BATCH DELETES UNDER A CREDENTIAL THAT DIES WITH ITS HOLD (A1 of ``specs/maintenance/TablePass.tla``, ADR 0243 R5).
+A maintenance pass deletes under a maintain-tier vend that lasts no longer than its holds, so a pass frozen past its hold
+deletes nothing more once a door has been admitted beside it. These doors hold what a pass holds (the table's history and
+the policy fence of each level above it, as reclaims), read the policy that governs the table under those holds and
+refuse a table a hold at any level keeps, and reclaim through the one marked reclaim
+(:class:`lakehouse.reclaim_marks.Reclaim`), a batch of :data:`lakehouse.reclaim_marks.BATCH` versions a call. Where the
+catalog vends (``LANCE_VENDING_MODE=web_identity``), each batch FIRST mints a maintain-tier session for the table (the
+maintain policy's grants on the table's own objects, none on the control root), THEN confirms every hold, which renews
+each for one more hold, THEN deletes under that session and nothing else (:func:`sessions`): STS issues no session
+shorter than the hold (900 s; RustFS 1.0.3 issues none shorter, measured), so the order is what makes the session die no
+later than the hold it confirmed after minting, and a door frozen inside one call past its hold wakes to a store that
+refuses every delete it signs. Its marks and renewals stay on the catalog's own credential. The erasure's verification
+and release cleanups mint theirs the same way. Where the catalog has no web identity (a development fixture on static
+keys) the vendor mints nothing, the batch deletes under the catalog's own credential, and a door frozen inside one call
+past its hold can still delete that call's batch after a later reclaim judged its mark whole and removed it: at most 16
+versions half removed and unmarked (ADR 0243 R5, ``docs/architecture/deployment.md``).
 
 ``version/delete`` is an explicit act by an authorized principal and is not judged by retention, but a hold
 (``cleanup_enabled`` false at any level that can govern the table) is: lifting the hold is a separate, audited act at a
@@ -28,20 +29,28 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Generator, Sequence
 from contextlib import ExitStack, contextmanager
+from typing import Final
 
+import lance
 from lance_namespace import ConcurrentModificationError, InvalidTableStateError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
+from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
+from catalog.core.vending import CredentialVendor, dataset_facts, require_vendable_bases, role_session_name, vend_or_refuse
 from catalog.services import table_claims
-from lakehouse import maintenance_policies, policy_fences, reclaim_marks
+from lakehouse import history_fences, maintenance_policies, policy_fences, reclaim_marks
 from lakehouse.fences import Hold
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError, HistoryWork
 from lakehouse.policy_fences import PolicyWork
+from lakehouse.version_retention import recorded_branch
 
 
 log = logging.getLogger(__name__)
+
+#: The name a reclaim's session carries at the store, whose trail records it (:func:`role_session_name`).
+_SESSION_NAME: Final = role_session_name("catalog-reclaim")
 
 
 class Held(BaseModel):
@@ -114,8 +123,53 @@ def _refuse_a_held_table(table: table_claims.DoorTable, settings: Settings, *, n
         )
 
 
-def marked(held: Held, table: table_claims.DoorTable, *, ref: str | None) -> reclaim_marks.Reclaim:
-    """Where the door reclaims ``ref``, under the catalog's own credential, each cleanup call after a confirm of its holds.
+def sessions(vendor: CredentialVendor, settings: Settings, location: str) -> Callable[[str | None], Callable[[], lance.LanceDataset] | None]:
+    """For each ref of the table at ``location``, what a reclaim of it deletes through (:attr:`Reclaim.session`): a handle
+    of the ref opened under a maintain-tier session minted for one batch, lasting at most a hold, with the grants the
+    maintain vend door gives a pass of that ref less any on the control root; ``None`` where the vendor mints nothing (no
+    web identity). Asking for a ref mints its first batch's session at once, which is how its absence is known; each later
+    batch mints its own.
+
+    Raises:
+        ServiceUnavailableError: The store refused, or could not answer, the exchange or a read of the ref (503).
+        InvalidTableStateError: A base the catalog did not sanction (409).
+    """
+
+    def of(ref: str | None) -> Callable[[], lance.LanceDataset] | None:
+        branch = recorded_branch(ref) or ""
+        facts = dataset_facts(location, settings.storage_options(), branch=branch)
+        bases = require_vendable_bases(location, facts, BaseJudge.from_settings(settings))
+
+        def mint() -> dict[str, str] | None:
+            vended = vend_or_refuse(
+                vendor,
+                table_location=location,
+                tier="maintain",
+                session_name=_SESSION_NAME,
+                bases=bases.bases,
+                data_directories=bases.data_directories,
+                branch=branch,
+                at_most_seconds=int(history_fences.HOLD.total_seconds()),
+            )
+            return None if vended is None else vended.as_storage_options().in_clear()
+
+        first = mint()
+        if first is None:
+            return None
+        minted = [first]
+
+        def session() -> lance.LanceDataset:
+            opened = lance.dataset(location, storage_options=minted.pop() if minted else mint())
+            return opened if branch == "" else opened.checkout_version((branch, None))
+
+        return session
+
+    return of
+
+
+def marked(held: Held, table: table_claims.DoorTable, *, ref: str | None, session: Callable[[], lance.LanceDataset] | None) -> reclaim_marks.Reclaim:
+    """Where the door reclaims ``ref``: each cleanup call through ``session`` (:func:`sessions`), minted before a confirm
+    of its holds, its marks under the catalog's own credential.
 
     Raises:
         UnidentifiedObjectError: The table's location carries no claim recording a uuid.
@@ -128,4 +182,5 @@ def marked(held: Held, table: table_claims.DoorTable, *, ref: str | None) -> rec
         ref=ref,
         hold=held.history,
         before_each=held.confirm,
+        session=session,
     )

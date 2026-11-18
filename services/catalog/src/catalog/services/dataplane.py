@@ -157,7 +157,7 @@ from lakehouse.records import RecordChangedError
 from lakehouse.schema import SchemaFields, facet_fields
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
-from lakehouse.version_retention import MAIN_BRANCH, manifest_version, recorded_branch
+from lakehouse.version_retention import MAIN_BRANCH, branch_identity, manifest_version, recorded_branch
 
 
 log = logging.getLogger(__name__)
@@ -332,13 +332,8 @@ def tag_event_ref(location: str, so: StorageOptions, table_id: list[str], branch
     return {"branch": ref, **({BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})}
 
 
-def identifier_of(entry: object) -> str | None:
-    """The last uuid of a listed branch's ``branch_identifier`` chain: the one that names this incarnation."""
-    chain = entry.get("branch_identifier") if isinstance(entry, dict) else None
-    if not isinstance(chain, list) or not chain:
-        return None
-    last = chain[-1]
-    return str(last[1]) if isinstance(last, tuple | list) and len(last) == 2 else None
+#: The uuid that names a listed branch's incarnation, one rule with the cleanup marks that name it (ADR 0243 R3).
+identifier_of = branch_identity
 
 
 def payload_schema_fields(schema: pa.Schema, table_id: list[str]) -> SchemaFields:
@@ -4869,19 +4864,42 @@ def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: Delete
             "tag pins its branch. Delete or move the tag first. Nothing was deleted"
         )
     removed: list[RemovedBranch] = []
-    for name in doomed:
-        try:
-            with _ref_errors("branch", name):
-                dataset.branches.delete(name)
-        except TableBranchAlreadyExistsError as exc:
-            # The ref-conflict marker here is a pin made after the read above, not a name collision.
-            raise BranchDeleteStoppedError(
-                f"deleting branch {req.name!r} stopped at {name!r}: a branch forked from it or a tag naming it since the check pins it. "
-                f"Deleted before stopping: {[branch.name for branch in removed]}",
-                removed,
-            ) from exc
-        removed.append(RemovedBranch(name=name, identifier=identifier_of(listed[name])))
+    try:
+        for name in doomed:
+            try:
+                with _ref_errors("branch", name):
+                    dataset.branches.delete(name)
+            except TableBranchAlreadyExistsError as exc:
+                # The ref-conflict marker here is a pin made after the read above, not a name collision.
+                raise BranchDeleteStoppedError(
+                    f"deleting branch {req.name!r} stopped at {name!r}: a branch forked from it or a tag naming it since the check pins it. "
+                    f"Deleted before stopping: {[branch.name for branch in removed]}",
+                    removed,
+                ) from exc
+            removed.append(RemovedBranch(name=name, identifier=identifier_of(listed[name])))
+    finally:
+        _end_reclaim_marks(table, dataset, removed)
     return removed
+
+
+def _end_reclaim_marks(table: table_claims.DoorTable, dataset: lance.LanceDataset, removed: Sequence[RemovedBranch]) -> None:
+    """End the cleanup marks of each branch ``removed`` deleted, and settle the fork marks no branch needs any more
+    (:func:`lakehouse.reclaim_marks.ended`, ADR 0243 R3): a deleted branch's versions went with it, so a mark naming them
+    only made every pass vend and aged the oldest-mark gauge for ever. A mark this misses names an incarnation that no
+    longer stands, which no door trusts (a branch made again under the name has another) and the next reclaim removes."""
+    if not removed:
+        return
+    try:
+        fence = table.history_fence()
+    except UnidentifiedObjectError:
+        return
+    reclaim_marks.ended(
+        fence.control_root,
+        fence.storage_options,
+        table_uuid=fence.table_uuid,
+        dataset=dataset,
+        removed={branch.name: branch.identifier for branch in removed},
+    )
 
 
 def _forked_from(name: str, forks: Sequence[str]) -> InvalidTableStateError:

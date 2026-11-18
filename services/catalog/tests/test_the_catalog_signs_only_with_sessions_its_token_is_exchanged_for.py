@@ -277,7 +277,9 @@ def test_a_warehouse_whose_tables_maintain_policy_sts_would_refuse_is_refused_at
     control root's and the table's uuid. At the longest legal names (both buckets 63 characters, a catalog-made table at
     ``<bucket>/<uuid>``) it fits, with a margin (1,964 of 2,048 characters, measured); a KMS key's grant carries it past,
     and such a warehouse is refused at registration (400, code 13) naming the limit, before any table its passes could not
-    reclaim is made."""
+    reclaim is made. R6: that worst catalog-made shape is the worst legal one, pinned at its size: a registered table
+    deeper than it, or declaring a base, is judged at the register door
+    (``vending.require_a_table_maintain_policy_that_fits``)."""
     from lance_namespace import InvalidInputError
 
     from catalog.core import vending
@@ -285,6 +287,10 @@ def test_a_warehouse_whose_tables_maintain_policy_sts_would_refuse_is_refused_at
     def _register() -> None:
         vending.require_a_maintain_policy_that_fits(bucket="b" * 63, control_root=f"s3://{'c' * 63}", kms_key=kms_key, warehouse="w" * 63, project="p" * 63)
 
+    made = "00000000-0000-0000-0000-000000000000"
+    records = vending.TableRecords(control_root=f"s3://{'c' * 63}", table_uuid=made, warehouse="w" * 63, project="p" * 63)
+    worst = vending.counted_length(vending.build_session_policy("b" * 63, made, "maintain", records=records, kms_key=kms_key))
+    assert worst == (2194 if refused else 1964), worst
     if refused:
         with pytest.raises(InvalidInputError, match="2,048"):
             _register()

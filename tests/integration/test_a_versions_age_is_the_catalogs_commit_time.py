@@ -24,7 +24,7 @@ import pyarrow.fs as pafs
 import pytest
 
 from catalog.core import manifest_bytes
-from catalog.services.erasure import ErasureReport, reclaim_refs
+from catalog.services.erasure import ErasureReport, no_sessions, reclaim_refs
 from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
 from tests.integration.conftest import RaceCatalog
@@ -83,6 +83,7 @@ def test_a_version_a_writer_stamps_on_a_wrong_clock_ages_by_the_catalogs(race_ca
                 storage_options=StorageOptions(),
                 history=history,
                 hold=hold,
+                sessions=no_sessions,
             )
     else:
         lance.dataset(location).cleanup_old_versions(older_than=timedelta(days=1), error_if_tagged_old_versions=False)

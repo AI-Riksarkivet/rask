@@ -86,9 +86,11 @@ from catalog.core.namespace import open_resolved_dataset_unchecked, registered_d
 from catalog.core.vending import (
     CredentialVendor,
     ModeBVendor,
+    TableRecords,
     Tier,
     VendableBases,
     dataset_facts,
+    require_a_table_maintain_policy_that_fits,
     require_vendable_bases,
     role_session_name,
     unsanctioned_bases,
@@ -1199,6 +1201,27 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
     return getattr(described, "location", None) or registered
 
 
+def _require_a_maintain_policy_that_fits(settings: Settings, *, location: str, warehouse: str) -> None:
+    """Refuse registering a dataset whose table's maintain-tier vend could never be minted (ADR 0243 R6): its location and
+    the bases its manifest declares, judged as :func:`catalog.core.vending.require_a_table_maintain_policy_that_fits` does,
+    the table's records named as a pass's vend names them (a project's fence included, its longest case).
+
+    Asked after the caller's authorization (a clone's sources), and only of a dataset on S3, where a vend is an STS
+    session: a dataset it cannot read is left to the door's own refusal of it, which names what is wrong.
+
+    Raises:
+        InvalidInputError: The policy would be past what STS takes (400, code 13).
+    """
+    if not location.startswith("s3://"):
+        return
+    try:
+        facts = dataset_facts(location, settings.storage_options())
+    except (LanceNamespaceError, OSError, ValueError):
+        return
+    records = TableRecords(control_root=settings.registry_root, table_uuid=str(uuid4()), warehouse=warehouse, project="registering")
+    require_a_table_maintain_policy_that_fits(location, bases=facts.base_uris, records=records, kms_key=settings.s3_sse_kms_key_id)
+
+
 @router.post("/{id}/register", response_model_exclude_none=True)
 async def register_table(
     id: str,
@@ -1308,6 +1331,7 @@ async def register_table(
     asked: set[str] = set()
     if not registered_already:
         asked = await _require_clone_sources(client, settings, token, location=f"{root.rstrip('/')}/{body.location}", so=so, context=context)
+        await run_in_threadpool(_require_a_maintain_policy_that_fits, settings, location=f"{root.rstrip('/')}/{body.location}", warehouse=segments[0])
     # A new uuid for this table ([[LH-519]]), even where an earlier table's claim was released, and its grants under it,
     # written before the backend records the table so it never stands without them ([[LH-588]]). A request that
     # registers nothing takes them back: a refused registration changes nobody's access ([[LH-586]]).

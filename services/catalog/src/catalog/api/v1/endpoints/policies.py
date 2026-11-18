@@ -49,8 +49,8 @@ from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, Pol
 from catalog.services import incarnations, table_claims, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.control_records import PROJECT_INCARNATION
+from lakehouse import history_fences, policy_fences, reclaim_marks, records
 from lakehouse import maintenance_policies as policies
-from lakehouse import policy_fences, reclaim_marks, records
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
@@ -131,8 +131,11 @@ def _fenced[T](settings: Settings, kind: str, key: str, write: Callable[[], T], 
     reclaim holds is refused, so no policy that keeps more history (a hold among them), and no delete that hands the
     table to a level keeping more, is answered 200 while a cleanup planned under the earlier one still deletes.
 
-    THE DOOR HAS PREFERENCE (ADR 0243 F4). A level's write refused by reclaims beneath it leaves its own holder standing,
-    unrenewed, as an intent (``lakehouse.fences.HolderFence.taking``): no reclaim beneath the level is admitted beside it,
+    THE DOOR HAS PREFERENCE (ADR 0243 F4, R2). A write refused by reclaims beneath its level, the table's own included,
+    leaves its own holder standing, unrenewed, as an intent (``lakehouse.fences.HolderFence.taking``): the table's is a
+    REFS holder of the table's history, which a reclaim's confirm meets as it meets a level's SET
+    (``Hold.confirm_unchallenged`` names any holder its own kind excludes); no other ref door leaves one, so a refused tag
+    or restore stops no reclaim. No reclaim beneath the level is admitted beside it,
     and each one deleting meets it before its next batch of :data:`lakehouse.reclaim_marks.BATCH` versions and stops, so a
     retry lands once the batch in flight of each reclaim beneath it ends. Only the catalog's own identity can write a
     ``set-`` holder (a maintain-tier vend is denied it, ``catalog.core.vending.TableRecords``). An intent never retried
@@ -146,12 +149,16 @@ def _fenced[T](settings: Settings, kind: str, key: str, write: Callable[[], T], 
     try:
         if kind == "table":
             history = TableHistory(control_root=settings.registry_root, storage_options=so, table_uuid=key)
-            return history.write_held(HistoryWork.REFS, write, renewed=False)
+            return history.write_held(HistoryWork.REFS, write, renewed=False, intent=True)
         level: PolicyLevel = "namespace" if kind == "namespace" else "project"
         fence = PolicyFence(control_root=settings.registry_root, storage_options=so, level=level, key=key, warehouse=warehouse)
         return fence.write_held(PolicyWork.SET, write, renewed=False, intent=True)
     except HistoryFencedError as exc:
-        raise ConcurrentModificationError(f"a reclaim holds the table's history, which it reads its policy under; write it again once it ends: {exc}") from exc
+        raise ConcurrentModificationError(
+            "a reclaim holds the table's history, which it reads its policy under, so nothing was written; this request left its intent there, so "
+            f"no reclaim of the table starts and each one running stops before its next batch of at most {reclaim_marks.BATCH} versions: write the "
+            f"policy again in a few seconds (the intent lapses {int(history_fences.HOLD.total_seconds())} s after this answer): {exc}"
+        ) from exc
     except PolicyFencedError as exc:
         raise ConcurrentModificationError(
             f"a reclaim beneath the {kind} holds its policy fence, so nothing was written; this request left its intent there, so no reclaim "

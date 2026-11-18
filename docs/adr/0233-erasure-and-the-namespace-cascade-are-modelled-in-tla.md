@@ -596,8 +596,17 @@ namespace Restrict whatever `behavior` says. Each loop is documented as finished
      fragment), which is how a subject's bytes leave a version the branch keeps (the `dangling:<ref>@<n>` surface). A
      cleanup restricted to its dry run's victims keeps those files; one that names the fork version deletes them as the
      unrestricted one did. So the erasure's reclaim names its ref's fork versions no tag pins beside its victims
-     (`Reclaim.run(forks=True)`), and they stay marked for as long as the branch keeps their manifests: no tag, branch or
-     restore names a version standing over the subject's deleted files.
+     (`Reclaim.run(forks=True)`). Found by a fourth review of ADR 0243 (§13 R1) and FIXED: their marks were the batches'
+     own, removed once the call returned, so a ref door admitted a fork whose subject files were gone. Each is now marked
+     with a fork mark (`reclaim_marks.ForkMark`, `forked.<32 hex>.json`) written before its batch's mark and never
+     removed by the run, which every ref door refuses while a branch is cut from the version, and which is then judged
+     and, where the version lost files, handed on as a cleanup's mark the next reclaim finishes. Measured on pylance
+     13.0.0: a fork whose branch still holds its own copy loses only its transaction file (read inline from the
+     manifest) and stays readable; one whose branch no longer names its files loses them and keeps its manifest.
+   - **Each cleanup batch deletes under a session minted for it** (ADR 0243 §13 R5): where the catalog vends, the
+     verification's and the release's cleanups open each batch under a maintain-tier session minted before the batch
+     confirms the hold (`verify`'s and `reclaim_refs`' `sessions`, `release_due`'s `sessions_at`), so a cleanup frozen past
+     its hold deletes nothing more.
    - **A refused delete fails the surface.** A cleanup whose delete the store refused reported `reclaimed`; it is now a
      failed `history:<ref>` surface, so the obligation stays open and the next verification reclaims again.
    - The window the report judges is the dry run's: the reclaim removes what Lance's dry run named when it was asked, so

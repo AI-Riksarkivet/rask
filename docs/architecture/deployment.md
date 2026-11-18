@@ -62,7 +62,11 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   `<release>-object-store-identities` declares under `<release>-sa-<component>.json`. A platform store's owner provisions
   that trust and those policies; on AWS it is an IAM OIDC provider and one role per account
   (`objectStore.identity.roleArns.<component>`), its trust policy naming the subject and its permission policy the
-  ConfigMap's document.
+  ConfigMap's document. Every reclaim of a table's versions deletes under a session that dies with its hold: a pass under
+  its maintain-tier vend, and the catalog's own `maintenance/run`, `version/delete` and erasure cleanups under a
+  maintain-tier session each batch mints before it confirms its holds (ADR 0243 R5). A catalog with no web identity
+  (a development fixture on static keys) deletes under its own credential, so one frozen inside a cleanup call past its
+  15-minute hold can still leave that call's batch (at most 16 versions) half removed and unmarked.
 - `postgres` (field `password`), read by ESO for the AGE server and OpenFGA.
 - `commit-id-key` (field `key`, 32 random bytes as hex), read by the catalog alone: the key it derives every
   announcement's run id under (LH-497). It is never rotated, and the catalog is not Ready until it reads one.
