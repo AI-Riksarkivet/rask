@@ -314,15 +314,15 @@ def _dropped(estate: _Estate, monkeypatch: pytest.MonkeyPatch, *, grace_days: st
     return str(described.json()["properties"]["rask.uuid"]), location
 
 
-def _record(estate: _Estate, uuid: str) -> dict[str, Any]:
-    return json.loads(estate.s3.get_object(Bucket=estate.bucket, Key=trash.key(uuid))["Body"].read())
+def _record(estate: _Estate, uuid: str) -> trash.TrashRecord:
+    return trash.read(json.loads(estate.s3.get_object(Bucket=estate.bucket, Key=trash.key(uuid))["Body"].read()), at=trash.key(uuid))
 
 
 def _due(estate: _Estate, monkeypatch: pytest.MonkeyPatch, *, name: str = "gone") -> tuple[str, str]:
     """A table dropped into the trash and past its deadline, by its uuid and location."""
     uuid, location = _dropped(estate, monkeypatch, grace_days="0.00001", name=name)
     deadline = time.monotonic() + 10
-    while not trash.past_deadline(_record(estate, uuid)):
+    while not _record(estate, uuid).past_deadline():
         assert time.monotonic() < deadline, "the drop's deadline never passed"
         time.sleep(0.05)
     return uuid, location
@@ -355,7 +355,7 @@ def _emptied_before_its_release(estate: _Estate, monkeypatch: pytest.MonkeyPatch
 
 def _filed_at(estate: _Estate, uuid: str, location: str) -> None:
     """Rewrite the record ``uuid`` keeps to name ``location``, as any writer of the record could."""
-    estate.s3.put_object(Bucket=estate.bucket, Key=trash.key(uuid), Body=json.dumps({**_record(estate, uuid), "location": location}).encode())
+    estate.s3.put_object(Bucket=estate.bucket, Key=trash.key(uuid), Body=json.dumps({**_record(estate, uuid).stored(), "location": location}).encode())
 
 
 def _short_of_its_deadline(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> str:
@@ -401,7 +401,7 @@ def test_a_trash_door_refuses_what_is_not_the_trashs_to_end(
 
     refused = estate.client.request(method, f"/management/v1/trash/table/{uuid}{act}")
 
-    assert (refused.status_code, refused.headers["content-type"], refused.json()["code"], _record(estate, uuid)["attempts"]) == (
+    assert (refused.status_code, refused.headers["content-type"], refused.json()["code"], _record(estate, uuid).attempts) == (
         409,
         "application/problem+json",
         ErrorCode.INVALID_TABLE_STATE,

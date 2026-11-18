@@ -46,6 +46,7 @@ from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.record_store import delete_record
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
+from lakehouse.trash import TrashRecord
 
 
 log = logging.getLogger(__name__)
@@ -490,7 +491,7 @@ def delete_warehouse_record(control_root: str, storage_options: StorageOptions, 
         return
 
 
-def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[dict[str, Any]]:
+def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[TrashRecord]:
     """The trash records a delete of ``warehouse_id`` ends, each child's before its parent's.
 
     THE TRASH GOES WITH THE WAREHOUSE. A recoverable drop keeps a record, the object's grants, its policy and its
@@ -512,8 +513,8 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse
         # A record that cannot be read may be this warehouse's own, which the delete would leave holding its grants and
         # claim for a warehouse that no longer exists ([[LH-572]]).
         raise store_refusal(exc, reading="reading the trash", so="this warehouse's own trash cannot be determined") from exc
-    owned = [r for r in records if warehouse_of(str(r.get("id") or "")) == warehouse_id]
-    return sorted(owned, key=lambda r: (r.get("kind") == "namespace", -len(str(r.get("id") or "").split(CATALOG_DELIMITER))))
+    owned = [r for r in records if warehouse_of(r.id) == warehouse_id]
+    return sorted(owned, key=lambda r: (r.kind == "namespace", -len(r.id.split(CATALOG_DELIMITER))))
 
 
 def purge_bucket(bucket: str, storage_options: StorageOptions) -> int:

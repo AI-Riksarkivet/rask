@@ -320,8 +320,23 @@ def test_expired_selects_only_past_deadlines_and_never_deletes(tmp_path: Any) ->
     fresh = trash.make_record("ns$fresh", uuid=_uuid("ns$fresh"), location="s3://b/fresh", dropped_by="u", grace_days=7, now=now)
     old = trash.make_record("ns$old", uuid=_uuid("ns$old"), location="s3://b/old", dropped_by="u", grace_days=7, now=now - timedelta(days=30))
     due = trash.expired([fresh, old], now=now)
-    assert [r["id"] for r in due] == ["ns$old"]
-    assert trash.past_deadline({"expires_at": "2000-01-01T00:00:00"}), "a stamp written without an offset is read as UTC"
+    assert [r.id for r in due] == ["ns$old"]
+    assert trash.read({"expires_at": "2000-01-01T00:00:00"}, at="a record of this test's").past_deadline(), "a stamp written without an offset is read as UTC"
+
+
+def test_a_record_that_is_no_trash_record_still_keeps_its_object_and_is_refused_by_name(tmp_path: Any) -> None:
+    """A record whose name is not text cannot be acted on. The tolerant read answers that none is readable, the presence
+    check that one is filed (so its object is not taken for gone), and the read a door decides from refuses it."""
+    from lakehouse import trash
+    from lakehouse.storage_options import StorageOptions
+    from tests import seeding
+
+    root, options, uuid = str(tmp_path), StorageOptions(), "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a55"
+    seeding.put_trash(root, options, {"id": ["not", "text"], "uuid": uuid, "location": "s3://bucket/t"})
+
+    assert (trash.get(root, options, uuid), trash.keeps(root, options, uuid), trash.list_all(root, options)) == (None, True, [])
+    with pytest.raises(trash.UnreadableTrashRecordError, match="cannot be read"):
+        trash.every_record(root, options)
 
 
 def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:
@@ -329,7 +344,7 @@ def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:
     stance the sweep takes when the policy registry is unreadable."""
     from lakehouse import trash
 
-    assert trash.expired([{"id": "a"}, {"id": "b", "expires_at": "not-a-date"}]) == []
+    assert trash.expired([trash.read(held, at="a record of this test's") for held in ({"id": "a"}, {"id": "b", "expires_at": "not-a-date"})]) == []
 
 
 class _TrashableNamespace(_RecordingNamespace):
@@ -554,11 +569,11 @@ def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child
     assert drops == ["drop_namespace:bronze$inner:restrict", "drop_namespace:bronze:restrict"]
     assert ns.calls.index("deregister_table:bronze$inner$t2") < ns.calls.index(drops[0])
 
-    filed = {(record["kind"], record["id"]): record for record in trash.list_all(settings.registry_root, settings.storage_options())}
+    filed = {(record.kind, record.id): record for record in trash.list_all(settings.registry_root, settings.storage_options())}
     assert sorted(filed) == [("namespace", "bronze"), ("namespace", "bronze$inner"), ("table", "bronze$inner$t2"), ("table", "bronze$pages")]
-    assert filed[("table", "bronze$pages")]["location"] == _location(["bronze", "pages"])
+    assert filed[("table", "bronze$pages")].location == _location(["bronze", "pages"])
     # Each record is its object's, and names the cascade that filed it by the dropped namespace's uuid.
-    assert {key: (record["uuid"], record["cascade"]) for key, record in filed.items()} == {(kind, name): (_uuid(name), _uuid("bronze")) for kind, name in filed}
+    assert {key: (record.uuid, record.cascade) for key, record in filed.items()} == {(kind, name): (_uuid(name), _uuid("bronze")) for kind, name in filed}
 
 
 def test_cascade_purge_true_destroys_and_files_nothing(tmp_path: Any) -> None:

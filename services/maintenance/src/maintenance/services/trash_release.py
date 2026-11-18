@@ -34,7 +34,6 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
@@ -42,6 +41,7 @@ from pydantic import BaseModel, Field
 from lakehouse import trash, warehouse_records
 from lakehouse.base_refs import location_within
 from lakehouse.storage_options import StorageOptions, on_s3
+from lakehouse.trash import TrashRecord
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, release_trash
 from maintenance.services.purge import Liveness, liveness_across, still_registered
@@ -96,39 +96,39 @@ def roots_read(settings: MaintenanceStore, storage_options: StorageOptions, cont
     return {f"s3://{bucket}" for bucket in buckets if bucket}
 
 
-def _why_held(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> str | None:
-    if trash.object_uuid(record) is None:
+def _why_held(record: TrashRecord, *, roots: set[str], live: Liveness | None) -> str | None:
+    if record.uuid is None:
         return "the record keeps no uuid, so the object whose grants it names cannot be told from another"
     if live is None:
         return _MANIFEST_UNREADABLE
     if still_registered(record, live):
         return _STILL_REGISTERED
-    location = trash.location_of(record)
-    if trash.kind_of(record) == "table" and location and not any(location_within(root, location) for root in roots):
+    location = record.location
+    if record.kind == "table" and location and not any(location_within(root, location) for root in roots):
         return f"location {location!r} is under no root this tick read, so whether its table stands again cannot be told"
     return None
 
 
-async def _release_or_hold(record: dict[str, Any], *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> ReleasedRecord | HeldRecord:
+async def _release_or_hold(record: TrashRecord, *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> ReleasedRecord | HeldRecord:
     """Release ONE record, and hold it naming the cause of any failure it raises: the step holds "never raises" by
     construction, each record's failure reported beside the others' releases, so a record whose release fails leaves
     the records after it released ([[LH-572]])."""
     try:
         return await _release_one(record, roots=roots, live=live, settings=settings)
     except Exception as exc:  # noqa: BLE001 — one record's failure, whatever it is, holds that record
-        log.exception("trash_release_failed", extra={"kind": trash.kind_of(record), "id": trash.name_of(record)})
+        log.exception("trash_release_failed", extra={"kind": record.kind, "id": record.id})
         reason = f"the release failed ({type(exc).__name__}: {exc}); the record is held and the next tick asks again"
-        return HeldRecord(kind=trash.kind_of(record), id=trash.name_of(record), uuid=trash.object_uuid(record), reason=reason)
+        return HeldRecord(kind=record.kind, id=record.id, uuid=record.uuid, reason=reason)
 
 
-async def _release_one(record: dict[str, Any], *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> ReleasedRecord | HeldRecord:
+async def _release_one(record: TrashRecord, *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> ReleasedRecord | HeldRecord:
     """Ask the catalog to release one record; a record the catalog refuses, or could not decide, is held. A failure it does
     not expect raises, and :func:`_release_or_hold` holds the record."""
-    kind, obj_id = trash.kind_of(record), trash.name_of(record)
+    kind, obj_id = record.kind, record.id
     if (reason := _why_held(record, roots=roots, live=live)) is not None:
         log.info("trash_release_held", extra={"kind": kind, "id": obj_id, "reason": reason})
-        return HeldRecord(kind=kind, id=obj_id, uuid=trash.object_uuid(record), reason=reason)
-    uuid = str(trash.object_uuid(record))
+        return HeldRecord(kind=kind, id=obj_id, uuid=record.uuid, reason=reason)
+    uuid = str(record.uuid)
     try:
         released = await run_in_threadpool(partial(release_trash, kind, uuid, settings))
     except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
@@ -136,7 +136,7 @@ async def _release_one(record: dict[str, Any], *, roots: set[str], live: Livenes
         return HeldRecord(kind=kind, id=obj_id, uuid=uuid, reason=str(exc))
     log.warning("trash_released", extra={"kind": kind, "id": obj_id, "uuid": uuid, "tuples_revoked": released.tuples_revoked, "marked": released.stamped})
     return ReleasedRecord(
-        kind=kind, id=obj_id, uuid=uuid, expires_at=str(record.get("expires_at") or ""), tuples_revoked=released.tuples_revoked, marked=released.stamped
+        kind=kind, id=obj_id, uuid=uuid, expires_at=(record.expires_at or ""), tuples_revoked=released.tuples_revoked, marked=released.stamped
     )
 
 
@@ -151,7 +151,7 @@ async def release_expired_trash(settings: MaintenanceSettings, *, control_root: 
         storage_options = settings.storage_options()
         records = await run_in_threadpool(trash.list_all, resolved_control_root, storage_options)
         roots = await run_in_threadpool(roots_read, settings, storage_options, resolved_control_root)
-        due = [record for record in records if trash.releasable(record, now=at) and not trash.is_released(record)]
+        due = [record for record in records if record.releasable(now=at) and not record.is_released]
         live = await run_in_threadpool(liveness_across, roots, storage_options) if due else None
     except Exception as exc:  # noqa: BLE001 — an unreadable session, registry or estate stops the step, it does not fail the tick
         out.reason = f"the trash, the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
@@ -163,7 +163,7 @@ async def release_expired_trash(settings: MaintenanceSettings, *, control_root: 
     return out
 
 
-async def release_record(record: dict[str, Any], settings: MaintenanceSettings, *, now: datetime | None = None) -> TrashReleaseReport:
+async def release_record(record: TrashRecord, settings: MaintenanceSettings, *, now: datetime | None = None) -> TrashReleaseReport:
     """Release the one drop ``record`` keeps, read by its key, once it is :data:`lakehouse.trash.RELEASE_SETTLE` past its
     deadline: a trash task's release at its own deadline. Never raises.
 
@@ -174,7 +174,7 @@ async def release_record(record: dict[str, Any], settings: MaintenanceSettings, 
     audit's backstop judges it. The catalog judges the record again on its own reads before it revokes anything.
     """
     out = TrashReleaseReport()
-    if not trash.releasable(record, now=now or datetime.now(UTC)) or trash.is_released(record):
+    if not record.releasable(now=now or datetime.now(UTC)) or record.is_released:
         out.ran = True
         return out
     try:
@@ -184,18 +184,18 @@ async def release_record(record: dict[str, Any], settings: MaintenanceSettings, 
         live = await run_in_threadpool(liveness_across, roots, storage_options)
     except Exception as exc:  # noqa: BLE001 — an unreadable session, registry or estate stops the step, it does not fail the task
         out.reason = f"the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
-        log.error("trash_release_blocked", extra={"reason": out.reason, "uuid": trash.object_uuid(record)})
+        log.error("trash_release_blocked", extra={"reason": out.reason, "uuid": record.uuid})
         return out
     out.ran = True
     _reported(out, await _release_or_hold(record, roots=roots, live=live, settings=settings))
     return out
 
 
-def root_of(record: dict[str, Any]) -> str | None:
+def root_of(record: TrashRecord) -> str | None:
     """The root whose ``__manifest`` records every table at ``record``'s location: the bucket a table record's ``s3://``
     location is in; ``None`` for a record naming no such place (a namespace's, or a table recorded with no location)."""
-    location = trash.location_of(record)
-    if trash.kind_of(record) != "table" or not on_s3(location):
+    location = record.location
+    if record.kind != "table" or not on_s3(location):
         return None
     bucket = location.removeprefix("s3://").split("/", 1)[0]
     return f"s3://{bucket}" if bucket else None

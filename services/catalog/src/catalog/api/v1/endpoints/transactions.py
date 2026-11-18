@@ -14,7 +14,6 @@ from lance_namespace import (
 
 from catalog.api.dependencies import ResolverDep, TransactionTableDep
 from catalog.core.identifiers import parse_identifier, reconcile_body_id, transaction_table
-from lakehouse import trash
 
 
 spec_router = APIRouter(prefix="/v1/transaction", tags=["transaction"])
@@ -33,11 +32,11 @@ async def describe_transaction(
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
     if await resolver.trashed_as_transaction(segments):
         admitted = await resolver.admitted_trash("table", transaction_table(segments))
-        record = next(r for r in admitted if trash.object_uuid(r) == segments[-1])
-        final = trash.past_deadline(record) or trash.is_released(record)
+        record = next(r for r in admitted if r.uuid == segments[-1])
+        final = record.past_deadline() or record.is_released
         return DescribeTransactionResponse(
             status="Running" if final else "Queued",
-            properties={"operation": "drop_table", "dropped_at": str(record.get("dropped_at", "")), "expires_at": str(record.get("expires_at", ""))},
+            properties={"operation": "drop_table", "dropped_at": record.dropped_at, "expires_at": record.expires_at or ""},
         )
     return await run_in_threadpool(door.read_natively, "describe_transaction", DescribeTransactionRequest(id=segments))
 

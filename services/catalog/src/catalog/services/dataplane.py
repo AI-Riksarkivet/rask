@@ -152,6 +152,7 @@ from lakehouse.schema import SchemaFields, facet_fields
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
 from lakehouse.transactions import read_transaction
+from lakehouse.trash import TrashRecord
 from lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 
 
@@ -2111,7 +2112,7 @@ def _data_directories_of(control: location_claims.ClaimStore, location: str, tab
         raise ServiceUnavailableError(f"the data directories of {table} could not be read, so nothing was dropped") from exc
 
 
-def _clear_residue(control: location_claims.ClaimStore, residue: dict[str, Any] | None) -> None:
+def _clear_residue(control: location_claims.ClaimStore, residue: TrashRecord | None) -> None:
     """Clear the residue record a drop filed, once it no longer stands for bytes left. Never raises.
 
     A record that outlives its drop holds nothing up: it names a location that is empty or that a live table still
@@ -2121,9 +2122,9 @@ def _clear_residue(control: location_claims.ClaimStore, residue: dict[str, Any] 
     if residue is None:
         return
     try:
-        trash.clear(control.control_root, control.storage_options, str(residue["uuid"]))
+        trash.clear(control.control_root, control.storage_options, str(residue.uuid))
     except Exception as exc:  # noqa: BLE001 — the drop's outcome is decided; a stale record is logged, not raised
-        log.error("drop_residue_record_not_cleared", extra={"table": residue.get("id"), "location": residue.get("location"), "error": str(exc)[:300]})
+        log.error("drop_residue_record_not_cleared", extra={"table": residue.id, "location": residue.location, "error": str(exc)[:300]})
 
 
 def _still_described(ns: LanceNamespace, segments: list[str]) -> bool:

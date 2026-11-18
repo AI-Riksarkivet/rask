@@ -31,7 +31,7 @@ Every function is BLOCKING IO; callers threadpool it.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 from lance_namespace import NamespaceNotFoundError, TableNotFoundError
 
@@ -46,7 +46,7 @@ from lakehouse.data_directories import directories_to_end, directory_uri
 from lakehouse.location_claims import LocationClaim
 from lakehouse.stored_objects import list_under
 from lakehouse.table_paths import objects_at
-from lakehouse.trash import TrashKind
+from lakehouse.trash import TrashKind, TrashRecord
 
 
 #: Why a record past its deadline is neither purged nor ended before its release.
@@ -56,7 +56,7 @@ _UNRELEASED: Final = (
 )
 
 
-def read_record(settings: CatalogStore, kind: TrashKind, uuid: str) -> dict[str, Any]:
+def read_record(settings: CatalogStore, kind: TrashKind, uuid: str) -> TrashRecord:
     """The trash record of the ``kind`` object ``uuid`` names.
 
     Raises:
@@ -71,35 +71,35 @@ def read_record(settings: CatalogStore, kind: TrashKind, uuid: str) -> dict[str,
     raise TableNotFoundError(f"no trashed table holds the uuid {uuid}")
 
 
-def location_claim(settings: CatalogStore, record: dict[str, Any]) -> LocationClaim | None:
+def location_claim(settings: CatalogStore, record: TrashRecord) -> LocationClaim | None:
     """The claim on the record's location, held or released; ``None`` for a record naming no location, or no claim.
 
     Raises:
         ValueError: The stored claim is not a claim.
         botocore.exceptions.ClientError: The store refused the read.
     """
-    location = trash.location_of(record)
+    location = record.location
     if not location:
         return None
     found = location_claims.read(table_claims.claim_store(settings), location)
     return found.claim if found is not None else None
 
 
-def vend_refusal(record: dict[str, Any], claim: LocationClaim | None, *, kind: TrashKind, uuid: str, now: datetime) -> str | None:
+def vend_refusal(record: TrashRecord, claim: LocationClaim | None, *, kind: TrashKind, uuid: str, now: datetime) -> str | None:
     """Why no session deleting the record's bytes is vended, or ``None``: a released table's, at its own place."""
-    location = trash.location_of(record)
+    location = record.location
     if kind != "table" or not location:
         return "the record names no bytes, so no session deletes anything of it; end it once it is released"
     if (misplaced := _place_refusal(location, claim, uuid=uuid)) is not None:
         return misplaced
-    if not trash.past_deadline(record, now=now):
+    if not record.past_deadline(now=now):
         return "the record is short of its deadline, so its bytes are still an undrop's to restore"
-    if not trash.is_released(record):
+    if not record.is_released:
         return _UNRELEASED
     return None
 
 
-def clone_refusal(settings: CatalogStore, record: dict[str, Any]) -> str | None:
+def clone_refusal(settings: CatalogStore, record: TrashRecord) -> str | None:
     """Why a released table's bytes are kept, or ``None``: a registered clone reads its files (ADR 0198 §1).
 
     The clone's tag is what says so (:mod:`lakehouse.clone_sources`), and the clone's own end releases it, so the purge
@@ -108,12 +108,12 @@ def clone_refusal(settings: CatalogStore, record: dict[str, Any]) -> str | None:
     Raises:
         OSError: The store refused, or could not be reached for, the listing of the table's tags.
     """
-    if readers := clone_sources.clones_reading(trash.location_of(record), settings.storage_options()):
+    if readers := clone_sources.clones_reading(record.location, settings.storage_options()):
         return f"{len(readers)} registered clone(s) read the table's files; its bytes go once those clones are dropped or deregistered"
     return None
 
 
-def end_refusal(settings: CatalogStore, record: dict[str, Any], claim: LocationClaim | None, *, kind: TrashKind, uuid: str, now: datetime) -> str | None:
+def end_refusal(settings: CatalogStore, record: TrashRecord, claim: LocationClaim | None, *, kind: TrashKind, uuid: str, now: datetime) -> str | None:
     """Why the record is not ended yet, or ``None``: released, and naming no byte or at its own place holding none.
 
     A released table record whose bytes are gone is ended at any time, as the purge leaves one after its deletes and a
@@ -123,12 +123,12 @@ def end_refusal(settings: CatalogStore, record: dict[str, Any], claim: LocationC
         UnreadableBaseRecordError: The table's base record exists and cannot be read.
         OSError: The store refused, or could not be reached for, a listing.
     """
-    location = trash.location_of(record)
+    location = record.location
     if location and kind == "namespace":
         return f"a namespace's record names no bytes, and this one names the location {location!r}"
-    if not trash.past_deadline(record, now=now):
+    if not record.past_deadline(now=now):
         return "the record is short of its deadline, so it is still an undrop's"
-    if not trash.is_released(record):
+    if not record.is_released:
         return _UNRELEASED
     if not location:
         return None
@@ -139,14 +139,14 @@ def end_refusal(settings: CatalogStore, record: dict[str, Any], claim: LocationC
     return None
 
 
-def release_refusal(record: dict[str, Any], *, now: datetime) -> str | None:
+def release_refusal(record: TrashRecord, *, now: datetime) -> str | None:
     """Why the record's grants are not released yet, or ``None`` once its deadline has settled."""
-    if trash.releasable(record, now=now):
+    if record.releasable(now=now):
         return None
     return f"the record is not {trash.RELEASE_SETTLE} past its deadline, so an undrop admitted at it may still be finishing"
 
 
-def scope_of(settings: CatalogStore, record: dict[str, Any], *, uuid: str) -> ReclaimScope:
+def scope_of(settings: CatalogStore, record: TrashRecord, *, uuid: str) -> ReclaimScope:
     """What the purge of ``record`` deletes: its table's bytes at its location, and in the data directories its claim
     names ([[LH-286]], :func:`lakehouse.data_directories.directories_to_end`).
 
@@ -154,7 +154,7 @@ def scope_of(settings: CatalogStore, record: dict[str, Any], *, uuid: str) -> Re
         UnreadableBaseRecordError: The table's base record exists and cannot be read.
         botocore.exceptions.ClientError: The store refused a read of the record or a claim.
     """
-    location = trash.location_of(record)
+    location = record.location
     directories = directories_to_end(_registry(settings), location, uuid=uuid)
     return ReclaimScope(location=location, data_directories=tuple(directory_uri(directory) for directory in directories))
 
@@ -193,9 +193,9 @@ def _place_refusal(location: str, claim: LocationClaim | None, *, uuid: str) -> 
     return None
 
 
-def _objects_held(settings: CatalogStore, record: dict[str, Any], *, uuid: str) -> int:
+def _objects_held(settings: CatalogStore, record: TrashRecord, *, uuid: str) -> int:
     """How many objects the record's location, in both spellings, and the data directories its claim names still hold."""
     so = settings.storage_options()
-    location = trash.location_of(record)
+    location = record.location
     directories = directories_to_end(_registry(settings), location, uuid=uuid)
     return len(objects_at(location, so)) + sum(len(list_under(directory_uri(directory), so)) for directory in directories)

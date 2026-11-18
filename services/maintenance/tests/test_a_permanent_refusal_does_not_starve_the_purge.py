@@ -10,33 +10,35 @@ from __future__ import annotations
 
 from typing import Any
 
+from lakehouse import trash
+from lakehouse.trash import TrashRecord
 from maintenance.services.purge import due_from
 
 
-def _rec(rid: str, *, expires: str = "2026-01-01T00:00:00+00:00", attempts: Any = None) -> dict[str, Any]:
+def _rec(rid: str, *, expires: str = "2026-01-01T00:00:00+00:00", attempts: Any = None) -> TrashRecord:
     """An expired record, released as the catalog's release door leaves one the purge may act on."""
     record: dict[str, Any] = {"id": rid, "kind": "table", "expires_at": expires, "released_at": expires}
     if attempts is not None:
         record["attempts"] = attempts
-    return record
+    return trash.read(record, at="a record of this test's")
 
 
 def test_due_from_refused_record_sorts_after_never_tried() -> None:
     refused = _rec("stuck", expires="2026-01-01T00:00:00+00:00", attempts=57)
     fresh = _rec("fresh", expires="2026-06-01T00:00:00+00:00")
 
-    assert [r["id"] for r in due_from([refused, fresh])] == ["fresh", "stuck"]
+    assert [r.id for r in due_from([refused, fresh])] == ["fresh", "stuck"]
 
 
 def test_due_from_equal_attempts_sorts_oldest_first() -> None:
     newer = _rec("newer", expires="2026-06-01T00:00:00+00:00")
     older = _rec("older", expires="2026-01-01T00:00:00+00:00")
 
-    assert [r["id"] for r in due_from([newer, older])] == ["older", "newer"]
+    assert [r.id for r in due_from([newer, older])] == ["older", "newer"]
 
 
 def test_due_from_unreadable_attempts_sorts_as_never_tried() -> None:
     # Fail toward attempting: one more refusal costs a tick, sorting it last costs the record.
     tried = _rec("tried", expires="2026-02-01T00:00:00+00:00", attempts=5)
 
-    assert [r["id"] for r in due_from([_rec("bad", attempts="seven"), tried])] == ["bad", "tried"]
+    assert [r.id for r in due_from([_rec("bad", attempts="seven"), tried])] == ["bad", "tried"]

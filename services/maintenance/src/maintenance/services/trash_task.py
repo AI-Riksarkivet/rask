@@ -42,12 +42,12 @@ async def run_trash_task(task: Task, *, settings: MaintenanceSettings, queue: Ta
     if record is None:
         await _pass_a_restored_table(task, settings=settings, queue=queue)
         return
-    if trash.is_released(record):
+    if record.is_released:
         return
     # Held with the record's location, which a drop's announcement does not name: when it fires on a record an undrop
     # cleared, the location is how the restored table's claim is found.
-    task = task if task.location else task.model_copy(update={"location": trash.location_of(record)})
-    if (due := trash.release_at(record)) is None:
+    task = task if task.location else task.model_copy(update={"location": record.location})
+    if (due := record.release_at) is None:
         return
     if due > now:
         await queue.schedule_at(task, due)

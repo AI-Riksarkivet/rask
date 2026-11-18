@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import Any, override
+from typing import override
 
 from lance_namespace import LanceNamespace
 
 from catalog.api.dependencies import Resolver
 from catalog.services.table_claims import ResolvedTable
+from lakehouse.trash import TrashRecord
 
 
 def uuid_of(kind: str, segments: list[str]) -> str:
@@ -39,7 +40,7 @@ class NamedResolver(Resolver):
         self._absent = absent
         self._in_trash = in_trash
         self._table_answer = tables
-        self._admitted_trash: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
+        self._admitted_trash: dict[tuple[str, tuple[str, ...]], list[TrashRecord]] = {}
 
     @override
     async def require_active_warehouse(self, warehouse_id: str) -> None:
@@ -66,15 +67,15 @@ class NamedResolver(Resolver):
         return f"{kind}:{uuid_of(kind, segments)}"
 
     @override
-    async def trashed(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+    async def trashed(self, kind: str, segments: list[str]) -> list[TrashRecord]:
         if tuple(segments) not in self._in_trash:
             return []
-        return [{"kind": kind, "id": "$".join(segments), "uuid": uuid_of(kind, segments)}]
+        return [TrashRecord(kind="namespace" if kind == "namespace" else "table", id="$".join(segments), uuid=uuid_of(kind, segments))]
 
     @override
-    def admit_trashed(self, kind: str, segments: list[str], records: list[dict[str, Any]]) -> None:
+    def admit_trashed(self, kind: str, segments: list[str], records: list[TrashRecord]) -> None:
         self._admitted_trash[(kind, tuple(segments))] = records
 
     @override
-    async def admitted_trash(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+    async def admitted_trash(self, kind: str, segments: list[str]) -> list[TrashRecord]:
         return self._admitted_trash.get((kind, tuple(segments)), await self.trashed(kind, segments))

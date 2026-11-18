@@ -44,6 +44,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.trash import TrashRecord
 
 
 _ID = "acme$events"
@@ -140,11 +141,11 @@ class _EveryNameHolds(Resolver):
     async def object(self, kind: str, segments: list[str]) -> str | None:
         return f"{kind}:{self._uuid(kind, segments)}"
 
-    async def trashed(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+    async def trashed(self, kind: str, segments: list[str]) -> list[TrashRecord]:
         del kind, segments
         return []
 
-    def admit_trashed(self, kind: str, segments: list[str], records: list[dict[str, Any]]) -> None:
+    def admit_trashed(self, kind: str, segments: list[str], records: list[TrashRecord]) -> None:
         del kind, segments, records
 
 

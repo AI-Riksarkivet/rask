@@ -43,7 +43,7 @@ def test_the_trash_a_warehouse_ends_is_its_own_and_each_child_comes_before_its_p
 
     owned = warehouses.trash_owned_by(control, StorageOptions(), "acme-work")
 
-    ended = [(str(record["kind"]), str(record["id"])) for record in owned]
+    ended = [(record.kind, record.id) for record in owned]
     assert sorted(ended) == [
         ("namespace", "acme-work$silver"),
         ("namespace", "acme-work$silver$inner"),

@@ -658,7 +658,7 @@ def holder_stands(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -
 def kept_in_trash(store: ClaimStore, claim: LocationClaim) -> bool:
     """Whether ``claim`` is kept for the trashed table its uuid names, which a recoverable drop left at this location."""
     record = trash.get(store.control_root, store.storage_options, claim.uuid) if claim.uuid is not None else None
-    return record is not None and decoded_path(str(record.get("location") or "")) == claim.location
+    return record is not None and decoded_path(record.location) == claim.location
 
 
 def take(

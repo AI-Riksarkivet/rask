@@ -227,7 +227,7 @@ def _expired(estate: _Estate, table: str) -> None:
     trash.put(
         estate.root,
         estate.key,
-        {**dropped, "expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(), trash.RELEASED_AT: datetime.now(UTC).isoformat()},
+        dropped.model_copy(update={"expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(), trash.RELEASED_AT: datetime.now(UTC).isoformat()}),
     )
 
 
@@ -253,7 +253,7 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
     _expired(estate, table)
     if claim == "released":
         (dropped,) = trash.named(estate.root, estate.key, table)
-        location_claims.release_directory(claims, directory, uuid=trash.object_uuid(dropped))
+        location_claims.release_directory(claims, directory, uuid=dropped.uuid)
     markers = {key for key in estate.keys(estate.bucket, "") if key.endswith("/")}
     removed = sorted(
         [*(f"{estate.bucket}/{key}" for key in estate.keys(estate.bucket, root_prefix)), *(f"{directory}/{name}" for name in estate.files(directory))]

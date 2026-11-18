@@ -85,6 +85,7 @@ from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.stored_objects import StoredObject, delete_objects, list_under
 from lakehouse.table_paths import objects_at, spellings
+from lakehouse.trash import TrashRecord
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, end_trash, note_trash_refusal, reclaim_options_for
@@ -194,7 +195,7 @@ class TrashPurgeReport(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-def due_records(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
+def due_records(control_root: str, storage_options: StorageOptions) -> list[TrashRecord]:
     """Every trash record past its deadline and released, OLDEST FIRST.
 
     Released, since the catalog vends a record's bytes session and ends it only then (``catalog.services.trash_reclaim``):
@@ -212,7 +213,7 @@ def due_records(control_root: str, storage_options: StorageOptions) -> list[dict
     return due_from(trash.list_all(control_root, storage_options))
 
 
-def due_from(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def due_from(records: list[TrashRecord]) -> list[TrashRecord]:
     """:func:`due_records` without the read — the expiry rule applied to records already in hand.
 
     Split out for F6(d): maintenance now reads the trash index ONCE and derives two sets from it (the
@@ -222,13 +223,12 @@ def due_from(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     The rule itself stays in ONE place on purpose: the set that gets reported and the set that gets deleted can never be
     two different answers.
     """
-    return sorted((record for record in trash.expired(records) if trash.is_released(record)), key=_drain_order)
+    return sorted((record for record in trash.expired(records) if record.is_released), key=_drain_order)
 
 
-def _drain_order(record: dict[str, Any]) -> tuple[int, str]:
-    """Sort key: refusal count, then expiry. An unreadable count sorts as never-tried."""
-    attempts = record.get("attempts")
-    return (attempts if isinstance(attempts, int) and attempts > 0 else 0, str(record.get("expires_at") or ""))
+def _drain_order(record: TrashRecord) -> tuple[int, str]:
+    """Sort key: refusal count, then expiry. A record never refused sorts as never-tried."""
+    return (max(record.attempts or 0, 0), record.expires_at or "")
 
 
 def report_is_clean(report: ReconcileReport) -> str | None:
@@ -432,22 +432,22 @@ def _root_of(location: str, roots: set[str]) -> str | None:
     return None
 
 
-def still_registered(record: dict[str, Any], live: Liveness) -> bool:
+def still_registered(record: TrashRecord, live: Liveness) -> bool:
     """Whether the object ``record`` keeps stands again: an undrop or a register re-attached it since its drop.
 
     A table stands when a live table resolves to its location; a namespace when a live namespace of its name keeps its
     uuid, or keeps none; a table recorded with no location when a live object holds its name, since nothing else tells
     it from another.
     """
-    obj_id, location = trash.name_of(record), trash.location_of(record)
-    if trash.kind_of(record) == "namespace":
-        return obj_id in live.ids and live.namespace_uuids.get(obj_id) in (trash.object_uuid(record), None)
+    obj_id, location = record.id, record.location
+    if record.kind == "namespace":
+        return obj_id in live.ids and live.namespace_uuids.get(obj_id) in (record.uuid, None)
     if not location:
         return obj_id in live.ids
     return any(decoded_path(held) == decoded_path(location) for held in live.locations)
 
 
-def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> str | None:
+def check(record: TrashRecord, *, roots: set[str], live: Liveness | None) -> str | None:
     """The refusal ladder — ``None`` to purge this record, else the reason not to. Order matters.
 
     Liveness is checked FIRST because it is the only refusal that protects data someone still has: the
@@ -463,17 +463,17 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
     registered when a live table resolves to its location, a namespace when a live namespace of its name keeps its uuid.
     Only a table recorded with no location is judged by its name, since nothing else tells it from another.
     """
-    if not trash.name_of(record):
+    if not record.id:
         return "the record names no object id"
-    uuid = trash.object_uuid(record)
+    uuid = record.uuid
     if uuid is None:
         return "the record keeps no uuid, so the object it names cannot be told from another of its name"
     if live is None:
         return _MANIFEST_UNREADABLE
     if still_registered(record, live):
         return _STILL_REGISTERED
-    location = trash.location_of(record)
-    if trash.kind_of(record) == "namespace" or not location:
+    location = record.location
+    if record.kind == "namespace" or not location:
         # A namespace is a manifest ROW and a declared-only table never had bytes: nothing to path-check.
         return None
     if not names_a_location(location):
@@ -654,7 +654,7 @@ def _remove_emptied_directories(location: str, storage_options: StorageOptions, 
 _PURGE_ACTION: dict[str, ControlAction] = {"table": "table_purged", "namespace": "namespace_purged"}
 
 
-async def _refuse(out: TrashPurgeReport, record: dict[str, Any], *, reason: str, settings: MaintenanceCatalogDoor) -> None:
+async def _refuse(out: TrashPurgeReport, record: TrashRecord, *, reason: str, settings: MaintenanceCatalogDoor) -> None:
     """Report a refusal AND have the catalog remember it on the record — the one place both halves happen.
 
     ONE HELPER RATHER THAN FIVE CALL SITES, because reporting the tick and remembering the history are
@@ -668,7 +668,7 @@ async def _refuse(out: TrashPurgeReport, record: dict[str, Any], *, reason: str,
     rather than the note's failure standing in for it as :func:`_purge_or_refuse` would report it. A record that keeps no
     ``uuid`` is not one any door files, and its refusal is reported, not remembered: there is no key to remember it under.
     """
-    kind, obj_id, uuid = trash.kind_of(record), trash.name_of(record), trash.object_uuid(record)
+    kind, obj_id, uuid = record.kind, record.id, record.uuid
     attempts: int | None = None
     if uuid is not None:
         try:
@@ -701,7 +701,7 @@ class _Reclaim(BaseModel):
 
 
 async def _delete_bytes_or_refuse(
-    out: TrashPurgeReport, record: dict[str, Any], reclaim: _Reclaim, *, settings: MaintenanceCatalogDoor, control_root: str
+    out: TrashPurgeReport, record: TrashRecord, reclaim: _Reclaim, *, settings: MaintenanceCatalogDoor, control_root: str
 ) -> tuple[int, int] | None:
     """Delete the bytes this record names, its root and its data directories, under its reclaim session, or record a
     refusal and answer ``None``.
@@ -714,22 +714,22 @@ async def _delete_bytes_or_refuse(
     session (``reclaim.own``, read once for the run), which reads the control records and no table's bytes; only the deletes are the reclaim
     session's (``reclaim.session``), which reaches the bytes and nothing else. Any other failure is the record's refusal too, made by :func:`_purge_or_refuse`.
     """
-    location, obj_id = trash.location_of(record), trash.name_of(record)
+    location, obj_id = record.location, record.id
     registry = BaseRegistry(control_root=control_root, storage_options=reclaim.own)
     try:
         return await run_in_threadpool(partial(_delete_guarded, location, reclaim.session, registry=registry, uuid=reclaim.uuid))
     except NotADatasetRootError as exc:
         await _refuse(out, record, reason=str(exc), settings=settings)
-        log.warning("trash_purge_refused_not_a_dataset", extra={"kind": trash.kind_of(record), "id": obj_id, "location": location})
+        log.warning("trash_purge_refused_not_a_dataset", extra={"kind": record.kind, "id": obj_id, "location": location})
     except (OSError, UnreadableBaseRecordError, ClientError, BotoCoreError) as exc:
         reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
         await _refuse(out, record, reason=reason, settings=settings)
-        log.error("trash_purge_delete_failed", extra={"kind": trash.kind_of(record), "id": obj_id, "location": location, "error": str(exc)})
+        log.error("trash_purge_delete_failed", extra={"kind": record.kind, "id": obj_id, "location": location, "error": str(exc)})
     return None
 
 
 async def _recovered_since_the_snapshot(
-    record: dict[str, Any], out: TrashPurgeReport, *, roots: set[str], recheck_live: Callable[[], Liveness | None], settings: MaintenanceCatalogDoor
+    record: TrashRecord, out: TrashPurgeReport, *, roots: set[str], recheck_live: Callable[[], Liveness | None], settings: MaintenanceCatalogDoor
 ) -> bool:
     """Re-read liveness at the last instant before the first mutation. ``True`` when the record was refused.
 
@@ -753,21 +753,21 @@ async def _recovered_since_the_snapshot(
     if reason is None:
         return False
     await _refuse(out, record, reason=reason, settings=settings)
-    log.warning("trash_purge_refused_on_recheck", extra={"kind": trash.kind_of(record), "id": trash.name_of(record), "reason": reason})
+    log.warning("trash_purge_refused_on_recheck", extra={"kind": record.kind, "id": record.id, "reason": reason})
     return True
 
 
-def _purged_uuids(record: dict[str, Any]) -> ControlUuids:
+def _purged_uuids(record: TrashRecord) -> ControlUuids:
     """The uuids of a trashed object and of its namespace, for the control event its purge announces (ADR 0173 §10).
 
     Both are on the record, which keeps the uuid it is filed under and its namespace's at the drop: the name that
     namespace held then may be another namespace's now.
     """
-    namespace_uuid = record.get("namespace_uuid")
-    return ControlUuids(object_uuid=trash.object_uuid(record), namespace_uuid=namespace_uuid if isinstance(namespace_uuid, str) else None)
+    namespace_uuid = record.namespace_uuid
+    return ControlUuids(object_uuid=record.uuid, namespace_uuid=namespace_uuid if isinstance(namespace_uuid, str) else None)
 
 
-async def _asked_of_the_catalog[T](record: dict[str, Any], out: TrashPurgeReport, ask: Callable[[], T], *, asked: str) -> T | None:
+async def _asked_of_the_catalog[T](record: TrashRecord, out: TrashPurgeReport, ask: Callable[[], T], *, asked: str) -> T | None:
     """What the catalog answers ``ask`` for this record, or ``None`` with its refusal reported ([[XC-084]]).
 
     A refusal the catalog judged (409) it has noted on the record itself, so a record refused tick after tick sorts
@@ -777,14 +777,12 @@ async def _asked_of_the_catalog[T](record: dict[str, Any], out: TrashPurgeReport
     try:
         return await run_in_threadpool(ask)
     except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
-        out.refused.append(RefusedRecord(kind=trash.kind_of(record), id=trash.name_of(record), reason=str(exc)))
-        log.warning(
-            "trash_purge_refused_by_the_catalog", extra={"kind": trash.kind_of(record), "id": trash.name_of(record), "asked": asked, "reason": str(exc)}
-        )
+        out.refused.append(RefusedRecord(kind=record.kind, id=record.id, reason=str(exc)))
+        log.warning("trash_purge_refused_by_the_catalog", extra={"kind": record.kind, "id": record.id, "asked": asked, "reason": str(exc)})
         return None
 
 
-async def _preview_one(record: dict[str, Any], out: TrashPurgeReport, *, roots: set[str], live: Liveness | None) -> None:
+async def _preview_one(record: TrashRecord, out: TrashPurgeReport, *, roots: set[str], live: Liveness | None) -> None:
     """Plan ONE record, or report why the purge would refuse it; writes nothing and asks for no session.
 
     The cut is placed after the REFUSAL CHECK deliberately: everything above it is a read, everything after it mutates,
@@ -792,7 +790,7 @@ async def _preview_one(record: dict[str, Any], out: TrashPurgeReport, *, roots: 
     reclamation the real pass declines to perform. Its refusals are reported and never noted on the record: noting is a
     write onto the very records an operator is inspecting.
     """
-    kind, obj_id, location = trash.kind_of(record), trash.name_of(record), trash.location_of(record)
+    kind, obj_id, location = record.kind, record.id, record.location
     if (reason := check(record, roots=roots, live=live)) is not None:
         out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
@@ -800,7 +798,7 @@ async def _preview_one(record: dict[str, Any], out: TrashPurgeReport, *, roots: 
     # PAST EVERY REFUSAL THIS PASS CAN EVALUATE WITHOUT MUTATING. `would_purge` remains an UPPER BOUND: the catalog's own
     # judgement, a non-dataset location and a failing delete can each still refuse a planned record, and none of them
     # can be evaluated without asking for or performing the act it guards.
-    out.would_purge.append(PlannedRecord(kind=kind, id=obj_id, location=location, expires_at=str(record.get("expires_at") or "")))
+    out.would_purge.append(PlannedRecord(kind=kind, id=obj_id, location=location, expires_at=(record.expires_at or "")))
     log.info("trash_purge_planned", extra={"kind": kind, "id": obj_id, "location": location})
 
 
@@ -820,7 +818,7 @@ class _PurgeRun(BaseModel):
     control: ControlEmitter
 
 
-async def _purge_or_refuse(record: dict[str, Any], out: TrashPurgeReport, *, run: _PurgeRun) -> None:
+async def _purge_or_refuse(record: TrashRecord, out: TrashPurgeReport, *, run: _PurgeRun) -> None:
     """Purge ONE record, and make any failure it raises that record's refusal naming its cause: the batch holds "never
     raises" by construction, each record's failure reported beside the others' successes, so a record whose purge fails
     after an earlier record's bytes went leaves the later records purged and the run's counters and result line written.
@@ -833,12 +831,12 @@ async def _purge_or_refuse(record: dict[str, Any], out: TrashPurgeReport, *, run
         await _purge_one(record, out, run=run)
     except Exception as exc:  # noqa: BLE001 — one record's failure, whatever it is, is that record's refusal
         reason = f"the purge failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
-        out.refused.append(RefusedRecord(kind=trash.kind_of(record), id=trash.name_of(record), reason=reason))
-        log.exception("trash_purge_failed", extra={"kind": trash.kind_of(record), "id": trash.name_of(record)})
+        out.refused.append(RefusedRecord(kind=record.kind, id=record.id, reason=reason))
+        log.exception("trash_purge_failed", extra={"kind": record.kind, "id": record.id})
 
 
 async def _purge_one(
-    record: dict[str, Any],
+    record: TrashRecord,
     out: TrashPurgeReport,
     *,
     run: _PurgeRun,
@@ -851,8 +849,8 @@ async def _purge_one(
     finds the place empty.
     """
     settings = run.settings
-    kind, obj_id, location = trash.kind_of(record), trash.name_of(record), trash.location_of(record)
-    if (uuid := trash.object_uuid(record)) is None:
+    kind, obj_id, location = record.kind, record.id, record.location
+    if (uuid := record.uuid) is None:
         out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason="the record keeps no uuid, so the catalog reclaims nothing of it"))
         return
     if (reason := check(record, roots=run.roots, live=run.live)) is not None:
@@ -878,7 +876,7 @@ async def _purge_one(
             kind=kind,
             id=obj_id,
             location=location,
-            expires_at=str(record.get("expires_at") or ""),
+            expires_at=(record.expires_at or ""),
             bytes_deleted=deleted_bytes,
             files_deleted=deleted_files,
             tuples_revoked=revoked,
@@ -901,7 +899,7 @@ async def _purge_one(
         actor=ACTOR,
         extra={
             "reason": "trash_expired",
-            "expires_at": str(record.get("expires_at") or ""),
+            "expires_at": (record.expires_at or ""),
             "bytes_deleted": deleted_bytes,
             "tuples_revoked": revoked,
         },

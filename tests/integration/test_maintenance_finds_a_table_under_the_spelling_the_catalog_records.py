@@ -116,7 +116,7 @@ class _Estate:
         assert all(key.startswith(f"spelled/{name}/") for key in held), f"precondition: pylance keeps the table under the decoded key: {sorted(held)}"
         return held
 
-    def recorded(self, table: str) -> dict[str, object]:
+    def recorded(self, table: str) -> trash.TrashRecord:
         """The trash record the drop of ``table`` wrote."""
         dropped = trash.named(self.root, self.key, table)
         assert len(dropped) == 1, f"precondition: the drop of {table!r} kept one trash record: {dropped}"
@@ -124,7 +124,7 @@ class _Estate:
 
     def recorded_location(self, table: str) -> str:
         """The location the drop's trash record holds, as the catalog recorded it."""
-        return str(self.recorded(table)["location"])
+        return self.recorded(table).location
 
 
 @pytest.fixture
@@ -176,7 +176,7 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     table = f"lance_catalog$db${name}"
     held = estate.dropped_with_a_branch(table, name)
     dropped = estate.recorded(table)
-    location = str(dropped["location"])
+    location = dropped.location
     policy_uuid = estate.policy_uuids[table]
     policy = maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid)
     assert policy is not None, "precondition: the drop kept the policy for an undrop"
@@ -185,11 +185,9 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     trash.put(
         estate.root,
         estate.key,
-        {
-            **dropped,
-            "expires_at": (datetime.now(UTC) - timedelta(days=29)).isoformat(),
-            trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=28)).isoformat(),
-        },
+        dropped.model_copy(
+            update={"expires_at": (datetime.now(UTC) - timedelta(days=29)).isoformat(), trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=28)).isoformat()}
+        ),
     )
     # A table created since under the dropped table's name, which the purge of the dropped one must leave as it is.
     estate.made(table)

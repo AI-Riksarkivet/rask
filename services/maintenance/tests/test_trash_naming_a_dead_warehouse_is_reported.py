@@ -26,11 +26,12 @@ from uuid import uuid4
 
 import pytest
 
+from lakehouse.trash import TrashRecord
 from maintenance.services.reconcile import _orphaned_trash
 
 
-def _record(canonical_id: str, location: str) -> dict[str, str]:
-    return {"id": canonical_id, "uuid": str(uuid4()), "kind": "table", "location": location}
+def _record(canonical_id: str, location: str) -> TrashRecord:
+    return TrashRecord(id=canonical_id, uuid=str(uuid4()), kind="table", location=location)
 
 
 @pytest.mark.parametrize(

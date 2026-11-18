@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import Depends, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -36,6 +36,7 @@ from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.outage import store_refusal
 from lakehouse.storage_options import StorageOptions
+from lakehouse.trash import TrashRecord
 
 
 log = logging.getLogger(__name__)
@@ -264,8 +265,8 @@ class Resolver:
         self._settings = settings
         self._tables: dict[tuple[str, ...], ResolvedTable] = {}
         self._namespaces: dict[tuple[str, ...], str | None] = {}
-        self._trashed: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
-        self._admitted: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
+        self._trashed: dict[tuple[str, tuple[str, ...]], list[TrashRecord]] = {}
+        self._admitted: dict[tuple[str, tuple[str, ...]], list[TrashRecord]] = {}
 
     async def _connection(self, segments: list[str]) -> LanceNamespace:
         # A deactivated warehouse's names still resolve here: the router asks OpenFGA about the object a name
@@ -322,7 +323,7 @@ class Resolver:
         uuid = await self.namespace_uuid(segments)
         return None if uuid is None else fga.namespace_object(uuid)
 
-    async def trashed(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+    async def trashed(self, kind: str, segments: list[str]) -> list[TrashRecord]:
         """The trash records of every ``kind`` object dropped under the name ``segments``, oldest drop first (ADR 0173 §9).
 
         A trash door stays addressed by name, and several dropped objects may have held it: the request's ``?uuid=``
@@ -333,10 +334,10 @@ class Resolver:
             canonical = fga.canonical_object_id(segments)
             records = await run_in_threadpool(trash.named, self._settings.registry_root, self._settings.storage_options(), canonical, kind=kind)
             wanted = self._request.query_params.get("uuid")
-            self._trashed[key] = [r for r in records if (uuid := trash.object_uuid(r)) is not None and wanted in (None, uuid)]
+            self._trashed[key] = [r for r in records if (uuid := r.uuid) is not None and wanted in (None, uuid)]
         return self._trashed[key]
 
-    async def trashed_as_transaction(self, segments: list[str]) -> list[dict[str, Any]]:
+    async def trashed_as_transaction(self, segments: list[str]) -> list[TrashRecord]:
         """The trash record a transaction id ``<table id>$<uuid>`` names: a recoverable drop's (ADR 0146), or none.
 
         A drop that keeps its bytes for the purge answers its record's uuid as the spec's transaction id, so its deletion
@@ -344,13 +345,13 @@ class Resolver:
         """
         if len(segments) < 2:
             return []
-        return [record for record in await self.trashed("table", segments[:-1]) if trash.object_uuid(record) == segments[-1]]
+        return [record for record in await self.trashed("table", segments[:-1]) if record.uuid == segments[-1]]
 
-    def admit_trashed(self, kind: str, segments: list[str], records: list[dict[str, Any]]) -> None:
+    def admit_trashed(self, kind: str, segments: list[str], records: list[TrashRecord]) -> None:
         """Record which of :meth:`trashed` the request's authorization let its caller act on."""
         self._admitted[(kind, tuple(segments))] = records
 
-    async def admitted_trash(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+    async def admitted_trash(self, kind: str, segments: list[str]) -> list[TrashRecord]:
         """The trashed objects under the name ``segments`` that this request's caller may act on.
 
         Those the router's authorization admitted, or every one where authorization is off. A request authorization

@@ -30,15 +30,17 @@ the trash vocabulary over it.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal
 
 import pyarrow.fs as pafs
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from lakehouse import control_prefixes, location_claims, object_records
 from lakehouse.base_registry import BaseRegistry, forget_base_record
 from lakehouse.objectfs import fs_and_base
-from lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
+from lakehouse.record_store import delete_record, list_records, put_record, read_record, record_key
 from lakehouse.records import RecordChangedError, RecordMissingError, mutate_json
 from lakehouse.storage_options import StorageOptions
 
@@ -50,9 +52,6 @@ _TRASH_PREFIX = control_prefixes.TRASH
 #: What a trash record keeps: a dropped table, or a namespace a recoverable cascade dropped.
 type TrashKind = Literal["table", "namespace"]
 
-#: The field marking a record a destructive drop filed for bytes it was deleting (:func:`make_record`'s ``residue``).
-RESIDUE = "residue"
-
 #: The field stamping when a record's grants were released past its deadline (:func:`mark_released`).
 RELEASED_AT = "released_at"
 
@@ -63,6 +62,154 @@ _EVENT = "trash_record"
 def key(uuid: str, *, kind: TrashKind = "table") -> str:
     """The control-root key of the trash record of the ``kind`` object ``uuid`` names."""
     return record_key(_TRASH_PREFIX, kind, uuid)
+
+
+class UnreadableTrashRecordError(ValueError):
+    """A trash record is there and cannot be read as one: it still keeps its object, and names the key it sits under."""
+
+
+class Refusal(BaseModel):
+    """Why the purge last declined a record, and when (:func:`note_refusal`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    at: str
+    reason: str
+
+
+class TrashRecord(BaseModel):
+    """What a drop kept of an object for an undrop: one JSON object per dropped table or namespace.
+
+    READ TOLERANTLY WHERE A WRONG VALUE HAS A SAFE READING, and refused where it has none. A record reaches the store
+    through the drop door, and maintenance must still judge one that did not: a deadline that is missing or does not
+    parse is "not yet" (:attr:`deadline`), a kind that is not ``namespace`` is a table, a residue mark that is not
+    ``true`` is no mark. A record that is no JSON object, or whose name, uuid or location is not text, cannot be acted
+    on at all and is unreadable (:class:`UnreadableTrashRecordError`).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    kind: TrashKind = "table"
+    #: The canonical id the object was dropped under; empty for a record that names none.
+    id: str = ""
+    #: The uuid of the object the record keeps; ``None`` for a record that names none.
+    uuid: str | None = None
+    #: Where a table has its bytes, with no trailing slash; empty for a namespace and a declared-only table.
+    location: str = ""
+    dropped_by: str = "anonymous"
+    dropped_at: str = ""
+    #: The deadline as the drop stamped it, so a later change to the estate's grace period cannot shorten a window
+    #: someone is still inside. Read through :attr:`deadline`.
+    expires_at: str | None = None
+    #: A namespace's properties: their only copy, since its ``__manifest`` row went with the drop. Among them is
+    #: ``rask.requires_run``, which only an admin may set, so an undrop that lost them would let the namespace's owner
+    #: shed the run rule.
+    properties: dict[str, str] | None = None
+    #: The uuid of the namespace the object was dropped from, which its announcements name it under when no live
+    #: namespace holds that name any more.
+    namespace_uuid: str | None = None
+    #: The uuid of the namespace a recoverable cascade dropped, on every record that cascade filed, its root's own
+    #: included: the namespace undrop restores exactly the records one cascade filed.
+    cascade: str | None = None
+    #: Set on the record a destructive drop files before it removes a table's row ([[LH-532]]): the bytes were to be
+    #: deleted, not kept for an undrop. It stands while the drop deletes them and is cleared once they are gone.
+    residue: Literal[True] | None = None
+    #: When maintenance released the record's grants past its deadline (ADR 0146).
+    released_at: str | None = None
+    #: How many times the purge declined the record, and why it last did (:func:`note_refusal`).
+    attempts: int | None = None
+    last_refusal: Refusal | None = None
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _a_namespace_or_a_table(cls, value: object) -> str:
+        return "namespace" if value == "namespace" else "table"
+
+    @field_validator("uuid", "namespace_uuid", "cascade", mode="before")
+    @classmethod
+    def _a_name_or_nothing(cls, value: object) -> object:
+        return value if isinstance(value, str) and value else None
+
+    @field_validator("location", mode="after")
+    @classmethod
+    def _without_a_trailing_slash(cls, value: str) -> str:
+        return value.rstrip("/")
+
+    @field_validator("expires_at", "dropped_at", "released_at", mode="before")
+    @classmethod
+    def _text_or_nothing(cls, value: object, info: Any) -> object:  # noqa: ANN401 — pydantic's ValidationInfo
+        if isinstance(value, str):
+            return value
+        return "" if info.field_name == "dropped_at" else None
+
+    @field_validator("residue", mode="before")
+    @classmethod
+    def _marked_only_by_true(cls, value: object) -> object:
+        return True if value is True else None
+
+    @field_validator("attempts", mode="before")
+    @classmethod
+    def _a_count_or_nothing(cls, value: object) -> object:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    @property
+    def is_residue(self) -> bool:
+        """Whether the record keeps the bytes a failed destructive drop left, which no undrop restores ([[LH-532]])."""
+        return self.residue is True
+
+    @property
+    def is_released(self) -> bool:
+        """Whether maintenance has released the record's grants past its deadline (ADR 0146)."""
+        return self.released_at is not None
+
+    @property
+    def deadline(self) -> datetime | None:
+        """The record's deadline, or ``None`` when its ``expires_at`` is missing or does not parse, which is logged: an
+        undated record is a bug in whatever wrote it, and "we do not know when this expires" reads as "not yet"."""
+        if self.expires_at is None:
+            log.warning("trash_record_undated", extra={"id": self.id})
+            return None
+        try:
+            deadline = datetime.fromisoformat(self.expires_at)
+        except ValueError:
+            log.warning("trash_record_bad_deadline", extra={"id": self.id, "expires_at": self.expires_at})
+            return None
+        return deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=UTC)
+
+    @property
+    def release_at(self) -> datetime | None:
+        """When the record's grants may go (:meth:`releasable`): :data:`RELEASE_SETTLE` past its deadline."""
+        deadline = self.deadline
+        return deadline + RELEASE_SETTLE if deadline is not None else None
+
+    def past_deadline(self, *, now: datetime | None = None) -> bool:
+        """Whether the record's grace period has ended: no undrop restores it from then on (ADR 0146). An undated record
+        is never past it: failing toward not-deleting is the stance the sweep takes when the policy registry is unreadable.
+
+        The one rule the door that refuses an undrop, the tick that releases the grants and :func:`expired` read.
+        """
+        deadline = self.deadline
+        return deadline is not None and deadline <= (now or datetime.now(UTC))
+
+    def releasable(self, *, now: datetime | None = None) -> bool:
+        """Whether the record is :data:`RELEASE_SETTLE` past its deadline, so its grants may go (ADR 0146)."""
+        return self.past_deadline(now=(now or datetime.now(UTC)) - RELEASE_SETTLE)
+
+    def stored(self) -> dict[str, Any]:
+        """The record as its JSON object holds it: only what it states."""
+        return self.model_dump(mode="json", exclude_none=True)
+
+
+def read(raw: Mapping[str, Any], *, at: str) -> TrashRecord:
+    """The record the JSON object ``raw`` holds at the key ``at``.
+
+    Raises:
+        UnreadableTrashRecordError: It is no trash record.
+    """
+    try:
+        return TrashRecord.model_validate(raw)
+    except ValidationError as exc:
+        raise UnreadableTrashRecordError(f"the trash record at {at} cannot be read: {exc.error_count()} field(s) are not what a record holds") from exc
 
 
 def make_record(
@@ -78,95 +225,35 @@ def make_record(
     namespace_uuid: str | None = None,
     cascade: str | None = None,
     residue: bool = False,
-) -> dict[str, Any]:
-    """The trash record of the object ``uuid`` names, dropped while ``canonical_id`` named it.
+) -> TrashRecord:
+    """The trash record of the object ``uuid`` names, dropped while ``canonical_id`` named it (:class:`TrashRecord`
+    says what each field keeps).
 
-    ``expires_at`` is stamped HERE — at drop time — so a later change to the
-    estate's grace period cannot retroactively shorten a window someone is still inside.
-
-    ``kind`` distinguishes tables from namespaces (#96 — a recoverable CASCADE trashes both). A
-    namespace is a ``__manifest`` row with no bytes of its own, so its ``location`` is ``""``; the
-    record's job is to let undrop know the row (and which subtree) to rebuild.
-
-    ``properties`` is a namespace's properties map, set on a namespace record that had any. A namespace's
-    properties live only in its ``__manifest`` row, which the drop removes, so this is their only copy;
-    undrop recreates the namespace with them. Among them is ``rask.requires_run``, which only an admin may
-    set, so an undrop that lost them would let the namespace's owner shed the run rule.
-
-    ``namespace_uuid`` is the uuid of the namespace the object was dropped from, which its announcements name it under
-    when no live namespace holds that name any more. ``cascade`` is the uuid of the namespace a recoverable cascade
-    dropped, on every record that cascade files, its root's own included: the namespace undrop restores exactly the
-    records one cascade filed, never another object that held one of their names.
-
-    ``residue`` marks the record a destructive drop files before it removes a table's row ([[LH-532]]): the bytes
-    were to be deleted, not kept for an undrop. It stands while the drop deletes them and is cleared once they are
-    gone; a drop whose delete failed leaves it, so the location's claim stays held for the bytes and the purge
-    reclaims them. Its grace is 0, so the purge may take it on its first tick, and undrop refuses it.
+    ``expires_at`` is stamped HERE, at drop time. ``kind`` distinguishes tables from namespaces (#96: a recoverable
+    CASCADE trashes both). A namespace is a ``__manifest`` row with no bytes of its own, so its ``location`` is ``""``;
+    the record's job is to let undrop know the row (and which subtree) to rebuild. A ``residue`` record's grace is 0, so
+    the purge may take it on its first tick, and undrop refuses it.
     """
     at = now or datetime.now(UTC)
-    record: dict[str, Any] = {
-        "kind": kind,
-        "id": canonical_id,
-        "uuid": uuid,
-        "location": location,
-        "dropped_by": dropped_by or "anonymous",
-        "dropped_at": at.isoformat(),
-        "expires_at": (at + timedelta(days=grace_days)).isoformat(),
-    }
-    if properties:
-        record["properties"] = dict(properties)
-    if namespace_uuid:
-        record["namespace_uuid"] = namespace_uuid
-    if cascade:
-        record["cascade"] = cascade
-    if residue:
-        record[RESIDUE] = True
-    return record
-
-
-def kind_of(record: dict[str, Any]) -> TrashKind:
-    """The kind of object ``record`` keeps: a ``namespace`` a recoverable cascade dropped, else a ``table``."""
-    return "namespace" if record.get("kind") == "namespace" else "table"
-
-
-def name_of(record: dict[str, Any]) -> str:
-    """The canonical id the object ``record`` keeps was dropped under; empty for a record that names none."""
-    return str(record.get("id") or "")
-
-
-def location_of(record: dict[str, Any]) -> str:
-    """Where the table ``record`` keeps has its bytes; empty for a namespace and a declared-only table."""
-    return str(record.get("location") or "").rstrip("/")
-
-
-def is_residue(record: dict[str, Any]) -> bool:
-    """Whether ``record`` keeps the bytes a failed destructive drop left, which no undrop restores ([[LH-532]])."""
-    return record.get(RESIDUE) is True
-
-
-def is_released(record: dict[str, Any]) -> bool:
-    """Whether maintenance has released ``record``'s grants past its deadline (ADR 0146)."""
-    return isinstance(record.get(RELEASED_AT), str)
-
-
-def past_deadline(record: dict[str, Any], *, now: datetime | None = None) -> bool:
-    """Whether ``record``'s grace period has ended: no undrop restores it from then on (ADR 0146).
-
-    The rule :func:`expired` selects by, so the door that refuses an undrop and the tick that releases the grants read
-    one deadline.
-    """
-    return bool(expired([record], now=now))
+    return TrashRecord(
+        kind=kind,
+        id=canonical_id,
+        uuid=uuid,
+        location=location,
+        dropped_by=dropped_by or "anonymous",
+        dropped_at=at.isoformat(),
+        expires_at=(at + timedelta(days=grace_days)).isoformat(),
+        properties=dict(properties) if properties else None,
+        namespace_uuid=namespace_uuid or None,
+        cascade=cascade or None,
+        residue=True if residue else None,
+    )
 
 
 #: How long past its deadline a record waits before its grants go: well over any one undrop request, which is the
 #: window an undrop admitted at the deadline needs to finish (it registers before it clears the record, and a revoke
 #: landing between the two would leave the restored object ownerless). The location claim's lease is the same order.
 RELEASE_SETTLE: Final = timedelta(minutes=15)
-
-
-def releasable(record: dict[str, Any], *, now: datetime | None = None) -> bool:
-    """Whether ``record`` is :data:`RELEASE_SETTLE` past its deadline, so its grants may go (ADR 0146)."""
-    return past_deadline(record, now=(now or datetime.now(UTC)) - RELEASE_SETTLE)
 
 
 def mark_released(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table", now: datetime | None = None) -> bool:
@@ -183,8 +270,15 @@ def mark_released(control_root: str, storage_options: StorageOptions, uuid: str,
     return True
 
 
-def put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
-    put_record(control_root, storage_options, key(str(record["uuid"]), kind=kind_of(record)), record)
+def put(control_root: str, storage_options: StorageOptions, record: TrashRecord) -> None:
+    """File ``record`` under its object's uuid.
+
+    Raises:
+        ValueError: The record names no uuid, so there is no key to file it under.
+    """
+    if record.uuid is None:
+        raise ValueError(f"a trash record is filed under its object's uuid, and the record of {record.id!r} names none")
+    put_record(control_root, storage_options, key(record.uuid, kind=record.kind), record.stored())
 
 
 def keeps(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> bool:
@@ -197,12 +291,19 @@ def keeps(control_root: str, storage_options: StorageOptions, uuid: str, *, kind
     return fs.get_file_info(f"{base}/{key(uuid, kind=kind)}").type == pafs.FileType.File
 
 
-def get(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> dict[str, Any] | None:
-    """The trash record of the ``kind`` object ``uuid`` names, or ``None``."""
-    return get_record(control_root, storage_options, key(uuid, kind=kind), event=_EVENT)
+def get(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> TrashRecord | None:
+    """The trash record of the ``kind`` object ``uuid`` names, or ``None`` when none is filed or the one there cannot be
+    read, which is logged with its key (:func:`keeps` says whether one is there at all)."""
+    at = key(uuid, kind=kind)
+    try:
+        raw = read_record(control_root, storage_options, at)
+        return read(raw, at=at) if raw is not None else None
+    except ValueError:
+        log.warning(f"{_EVENT}_malformed", extra={"key": at})
+        return None
 
 
-def named(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> list[dict[str, Any]]:
+def named(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> list[TrashRecord]:
     """Every trashed ``kind`` object that was dropped while ``canonical_id`` named it, oldest drop first.
 
     A door is addressed by name (ADR 0173 §9), and a name is free again once its object is dropped, so a name can lead
@@ -211,17 +312,17 @@ def named(control_root: str, storage_options: StorageOptions, canonical_id: str,
 
     Raises:
         OSError: The store could not be listed, or a record read.
-        ValueError: A trash record is not a JSON object.
+        ValueError: A trash record is not a JSON object, or not a record (:class:`UnreadableTrashRecordError`).
     """
-    held = [record for record in every_record(control_root, storage_options) if record.get("kind", "table") == kind and record.get("id") == canonical_id]
-    return sorted(held, key=lambda record: str(record.get("dropped_at") or ""))
+    held = [record for record in every_record(control_root, storage_options) if record.kind == kind and record.id == canonical_id]
+    return sorted(held, key=lambda record: record.dropped_at)
 
 
 def clear(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> bool:
     return delete_record(control_root, storage_options, key(uuid, kind=kind))
 
 
-def end(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, kind: TrashKind, uuid: str) -> None:
+def end(control_root: str, storage_options: StorageOptions, record: TrashRecord, *, kind: TrashKind, uuid: str) -> None:
     """End what the trashed object ``uuid`` names kept for an undrop besides its grants: the records it holds under its
     uuid (:func:`lakehouse.object_records.end_object_records`), a table's base record and claim, then ``record`` itself.
 
@@ -235,19 +336,13 @@ def end(control_root: str, storage_options: StorageOptions, record: dict[str, An
         botocore.exceptions.ClientError: The store refused a read or a write.
     """
     object_records.end_object_records(control_root, storage_options, kind, uuid)
-    if location := location_of(record):
+    if record.location:
         # The base record first: forgetting it deletes the tag a clone holds on each source, and one the store will not
         # delete must leave the location held, or a clone registered there next would hold a tag of the same name.
-        forget_base_record(BaseRegistry(control_root=control_root, storage_options=storage_options), location, uuid=uuid)
+        forget_base_record(BaseRegistry(control_root=control_root, storage_options=storage_options), record.location, uuid=uuid)
         claims = location_claims.ClaimStore(control_root=control_root, storage_options=storage_options)
-        location_claims.release(claims, location, name_of(record), uuid=uuid)
+        location_claims.release(claims, record.location, record.id, uuid=uuid)
     clear(control_root, storage_options, uuid, kind=kind)
-
-
-def object_uuid(record: dict[str, Any]) -> str | None:
-    """The uuid of the object a trash record keeps, or ``None`` for a record that names none."""
-    value = record.get("uuid")
-    return value if isinstance(value, str) and value else None
 
 
 def note_refusal(
@@ -302,14 +397,20 @@ def note_refusal(
     return count if isinstance(count, int) else None
 
 
-def list_all(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
+def list_all(control_root: str, storage_options: StorageOptions) -> list[TrashRecord]:
     """Every readable trash record. An absent prefix yields ``[]``; one unreadable record is skipped
     with a warning rather than blinding the whole listing. A caller deciding from the listing what a drop left asks
     :func:`every_record`."""
-    return list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT)
+    found: list[TrashRecord] = []
+    for raw in list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT):
+        try:
+            found.append(read(raw, at=_TRASH_PREFIX))
+        except UnreadableTrashRecordError:
+            log.warning(f"{_EVENT}_malformed", extra={"id": raw.get("id"), "uuid": raw.get("uuid")})
+    return found
 
 
-def every_record(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
+def every_record(control_root: str, storage_options: StorageOptions) -> list[TrashRecord]:
     """Every trash record, read whole. An absent prefix yields ``[]``.
 
     For a caller deciding from the listing what the drops left (an undrop restoring its cascade, a warehouse ending its
@@ -318,46 +419,13 @@ def every_record(control_root: str, storage_options: StorageOptions) -> list[dic
 
     Raises:
         OSError: The store could not be listed, or a record read.
-        ValueError: A record is not a JSON object.
+        ValueError: A record is not a JSON object, or not a record (:class:`UnreadableTrashRecordError`).
     """
-    return list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT, strict=True)
+    return [read(raw, at=_TRASH_PREFIX) for raw in list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT, strict=True)]
 
 
-def deadline_of(record: dict[str, Any]) -> datetime | None:
-    """``record``'s deadline, or ``None`` when its ``expires_at`` is missing or does not parse, which is logged: an undated
-    record is a bug in whatever wrote it, and "we do not know when this expires" reads as "not yet"."""
-    raw = record.get("expires_at")
-    if not isinstance(raw, str):
-        log.warning("trash_record_undated", extra={"id": record.get("id")})
-        return None
-    try:
-        deadline = datetime.fromisoformat(raw)
-    except ValueError:
-        log.warning("trash_record_bad_deadline", extra={"id": record.get("id"), "expires_at": raw})
-        return None
-    return deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=UTC)
-
-
-def release_at(record: dict[str, Any]) -> datetime | None:
-    """When ``record``'s grants may go (:func:`releasable`): :data:`RELEASE_SETTLE` past its deadline."""
-    deadline = deadline_of(record)
-    return deadline + RELEASE_SETTLE if deadline is not None else None
-
-
-def expired(records: list[dict[str, Any]], *, now: datetime | None = None) -> list[dict[str, Any]]:
-    """Which records are past their deadline — a SELECTION, never a deletion (#75 report-only).
-
-    A record whose ``expires_at`` is missing or unparseable is NOT selected: an undated record is a
-    bug in whatever wrote it, and the safe reading of "we do not know when this expires" is "not
-    yet". Failing toward not-deleting is the same stance the sweep takes when the policy registry is
-    unreadable.
-    """
+def expired(records: list[TrashRecord], *, now: datetime | None = None) -> list[TrashRecord]:
+    """Which records are past their deadline: a SELECTION, never a deletion (#75 report-only). An undated record is not
+    selected (:meth:`TrashRecord.past_deadline`)."""
     at = now or datetime.now(UTC)
-    due: list[dict[str, Any]] = []
-    for record in records:
-        deadline = deadline_of(record)
-        if deadline is None:
-            continue
-        if deadline <= at:
-            due.append(record)
-    return due
+    return [record for record in records if record.past_deadline(now=at)]

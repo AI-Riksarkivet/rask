@@ -685,7 +685,7 @@ governing their data. The project-scoped surface is the console's project page, 
   the drop on `GET /management/v1/warehouses/{id}/trash` ([[LH-556]]): the route asks `can_get_metadata` on the
   warehouse, its candidates are `warehouses.trash_owned_by`'s, each is judged on its own uuid
   (`fga_deps.judged_page`), `?namespace=` keeps what was dropped beneath a name, and it pages on name then uuid
-  (`trash_doors.listing_key`); every trash door answers `trash_doors.entry`, `expired` read by `trash.past_deadline`.
+  (`trash_doors.listing_key`); every trash door answers `trash_doors.entry`, `expired` read by `TrashRecord.past_deadline`. A trash record is a `lakehouse.trash.TrashRecord`: writers build one, `trash.get` and `trash.list_all` answer a record they cannot read as absent and log its key, and `trash.every_record` and `trash.named` raise `UnreadableTrashRecordError`.
   Pinned by `services/catalog/tests/test_a_warehouses_trash_lists_what_its_caller_may_see.py`. A record keeps `uuid`,
   `namespace_uuid` (its namespace's at the drop) and, when a cascade filed it, `cascade` (the dropped namespace's
   uuid). A new table's claim never takes a location the trash keeps for its name's dropped table

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from lakehouse import control_prefixes, maintenance_due, maintenance_policies
+from lakehouse import control_prefixes, maintenance_due, maintenance_policies, trash
 from lakehouse.maintenance_due import DueRecord
 from lakehouse.record_store import put_record, record_key
 from lakehouse.storage_options import StorageOptions
@@ -36,6 +36,13 @@ def put_cadence_stamp(control_root: str, storage_options: StorageOptions, record
     stamp maintenance's own writer would refuse to write."""
     stamp = maintenance_policies.CadenceStamp.under(record, datetime.now(UTC)).model_dump(mode="json")
     put_record(control_root, storage_options, maintenance_policies.cadence_key(table_uuid, uri), {**stamp, "last_maintained_at": at})
+
+
+def put_trash(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
+    """Hold ``record`` as a trash record under the uuid it names, whatever it holds: one no drop would file, such as a
+    record naming no uuid, is filed under the empty one."""
+    key = trash.key(str(record.get("uuid") or ""), kind="namespace" if record.get("kind") == "namespace" else "table")
+    put_record(control_root, storage_options, key, record)
 
 
 def read_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> DueRecord | None:

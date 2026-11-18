@@ -143,7 +143,7 @@ class _Tenant:
     def trash_locations(self, tables: list[str]) -> list[str]:
         """Where each of ``tables``' trash records says its bytes are."""
         settings = get_settings()
-        return [str(record["location"]) for table in tables for record in trash.named(settings.registry_root, settings.storage_options(), table, kind="table")]
+        return [record.location for table in tables for record in trash.named(settings.registry_root, settings.storage_options(), table, kind="table")]
 
     def base_recorded(self, locations: list[str]) -> list[str]:
         """Those of ``locations`` the base registry still holds a record for."""

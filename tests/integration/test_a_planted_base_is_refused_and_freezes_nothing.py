@@ -543,13 +543,13 @@ def test_a_trashed_source_a_clone_reads_is_vended_no_session_to_delete_its_bytes
     assert estate.client.post("/v1/table/lance_catalog$db$bronze%20tier/drop", json={}).status_code == 200
     (record,) = trash.named(estate.root, estate.key, "lance_catalog$db$bronze tier", kind="table")
     past = datetime.now(UTC) - timedelta(days=1)
-    trash.put(estate.root, estate.key, {**record, "expires_at": past.isoformat(), trash.RELEASED_AT: past.isoformat()})
+    trash.put(estate.root, estate.key, record.model_copy(update={"expires_at": past.isoformat(), trash.RELEASED_AT: past.isoformat()}))
 
-    refused = estate.client.post(f"/management/v1/trash/table/{trash.object_uuid(record)}/credentials", json={})
+    refused = estate.client.post(f"/management/v1/trash/table/{record.uuid}/credentials", json={})
 
     _refused(refused, _INVALID_TABLE_STATE)
     (noted,) = trash.named(estate.root, estate.key, "lance_catalog$db$bronze tier", kind="table")
-    assert (noted["attempts"], noted["last_refusal"]["reason"]) == (
+    assert (noted.attempts, noted.last_refusal.reason if noted.last_refusal else None) == (
         1,
         "1 registered clone(s) read the table's files; its bytes go once those clones are dropped or deregistered",
     )
@@ -1042,7 +1042,7 @@ def test_a_trashed_clone_whose_end_cannot_delete_its_tag_keeps_its_location(esta
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
 
     with pytest.raises(OSError, match="did not answer the delete"):
-        trash.end(estate.root, estate.key, record, kind="table", uuid=str(trash.object_uuid(record)))
+        trash.end(estate.root, estate.key, record, kind="table", uuid=str(record.uuid))
 
     held = location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), clone)
     assert held is not None and held.table == "lance_catalog$db$silver", "the clone's location was freed with its tag still standing"
@@ -1210,10 +1210,10 @@ def _purge_expired(estate: _Estate, table: str, location: str) -> None:
 
     (filed,) = trash.named(estate.root, estate.key, table)
     record = trash.make_record(
-        table, uuid=str(filed["uuid"]), location=location, dropped_by="user:alice", grace_days=1, now=datetime.now(UTC) - timedelta(days=30)
+        table, uuid=str(filed.uuid), location=location, dropped_by="user:alice", grace_days=1, now=datetime.now(UTC) - timedelta(days=30)
     )
     # Released, as the catalog's release door leaves a record the purge may act on.
-    trash.put(estate.root, estate.key, {**record, trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=1)).isoformat()})
+    trash.put(estate.root, estate.key, record.model_copy(update={trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=1)).isoformat()}))
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
         counts=dict.fromkeys(CATEGORIES, 0),

@@ -560,7 +560,7 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     assert all(key.startswith(f"{stored}/_versions/") for key in left), f"an object was left beside _versions/: {left}"
     settings = get_settings()
     record = trash.get(settings.registry_root, settings.storage_options(), table_uuid)
-    assert record is not None and trash.is_residue(record) and decoded_path(str(record["location"])) == decoded_path(location), record
+    assert record is not None and record.is_residue and decoded_path(record.location) == decoded_path(location), record
     held = "equals, contains or sits under another table's location"
     fenced = moto_client.post(f"/v1/table/{namespace}$adopter/register", json={"location": relative})
     assert fenced.status_code == 400 and held in fenced.json()["detail"], f"a register adopted the bytes under the fence: {fenced.text}"

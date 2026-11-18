@@ -87,11 +87,11 @@ class _Estate:
     def location(self, table: str) -> str:
         return str(self.post(f"/v1/table/{table}/describe")["location"])
 
-    def record(self, object_uuid: str, *, kind: trash.TrashKind = "table") -> dict[str, Any] | None:
+    def record(self, object_uuid: str, *, kind: trash.TrashKind = "table") -> trash.TrashRecord | None:
         settings = catalog_settings()
         return trash.get(settings.registry_root, settings.storage_options(), object_uuid, kind=kind)
 
-    def put_record(self, record: dict[str, Any]) -> None:
+    def put_record(self, record: trash.TrashRecord) -> None:
         settings = catalog_settings()
         trash.put(settings.registry_root, settings.storage_options(), record)
 
@@ -99,7 +99,7 @@ class _Estate:
         """Move the deadline of the record ``object_uuid`` keeps a day into the past: a drop whose window has ended."""
         record = self.record(object_uuid, kind=kind)
         assert record is not None, f"no {kind} record for {object_uuid}"
-        self.put_record({**record, "expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()})
+        self.put_record(record.model_copy(update={"expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()}))
 
     def objects_at(self, location: str) -> list[str]:
         bucket, _, prefix = location.removeprefix("s3://").partition("/")
@@ -135,7 +135,7 @@ def test_a_drop_under_a_warehouse_is_kept_as_its_delete_profile_says(estate: _Es
     assert estate.record(destroyed) is None and estate.objects_at(destroyed_at) == [], "a hard warehouse's drop kept the table"
     record = estate.record(kept)
     assert record is not None and trashed.get("transaction_id") == f"{warm}$t${kept}", trashed
-    grace = datetime.fromisoformat(str(record["expires_at"])) - datetime.fromisoformat(str(record["dropped_at"]))
+    grace = datetime.fromisoformat(str(record.expires_at)) - datetime.fromisoformat(record.dropped_at)
     assert grace == timedelta(days=2), f"the soft warehouse's drop kept the estate's grace, not its own: {grace}"
     assert reposted["delete_profile"] == {"mode": "soft", "grace_days": 2}, "a re-POST naming no profile reset the warehouse's"
     assert "delete_profile" not in cleared, f"a re-POST naming the estate's profile kept the warehouse's own: {cleared}"
@@ -176,7 +176,7 @@ def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_
     for obj in released:
         prefix, object_uuid = obj.split(":")
         record = estate.record(object_uuid, kind="namespace" if prefix == "namespace" else "table")
-        assert record is not None and trash.is_released(record), f"the record of {obj} was not stamped released: {record}"
+        assert record is not None and record.is_released, f"the record of {obj} was not stamped released: {record}"
     assert estate.objects_at(location), "the tick deleted the bytes the purge owns"
     refused = estate.catalog.post(f"/management/v1/table/{bronze}$expired/undrop", json={})
     assert (refused.status_code, "grace period ended" in refused.text) == (409, True), f"an expired drop undropped: {refused.text}"
@@ -236,7 +236,7 @@ def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_rec
     asyncio.run(run_trash_task(task, settings=maintenance_settings(), queue=cast(TaskQueue, queue)))
 
     filed = estate.record(dropped)
-    assert filed is not None and queue.held == [(task.model_copy(update={"location": location}), trash.release_at(filed))], queue.held
+    assert filed is not None and queue.held == [(task.model_copy(update={"location": location}), filed.release_at)], queue.held
     estate.age(dropped)
     estate.age(other)
 
@@ -248,6 +248,6 @@ def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_rec
     listed = {(request.path.strip("/").split("/", 1)[0], request.query["prefix"][0].split("/", 1)[0]) for request in asked if "list-type" in request.query}
     assert listed == {(table_bucket, "__manifest")}, sorted(listed)
     released, waiting = estate.record(dropped), estate.record(other)
-    assert released is not None and trash.is_released(released), f"the task did not release its record: {released}"
-    assert waiting is not None and not trash.is_released(waiting), "the task released a record it does not name"
+    assert released is not None and released.is_released, f"the task did not release its record: {released}"
+    assert waiting is not None and not waiting.is_released, "the task released a record it does not name"
     assert (len(queue.held), queue.queued) == (1, []), "a released record held or queued anything more"

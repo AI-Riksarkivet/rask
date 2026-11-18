@@ -366,7 +366,7 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
     records = sources.trash if sources is not None and sources.trash is not None and not sources.trash_error else None
     if records is None:
         records = await run_in_threadpool(trash.list_all, settings.resolved_control_root, options)
-    trashed = {str(uuid): record for record in records if (uuid := trash.object_uuid(record))}
+    trashed = {str(uuid): record for record in records if (uuid := record.uuid)}
     covered_tables = await queue.held("schedule", "table") | await queue.held("task", "table")
     covered_trash = await queue.held("schedule", "trash") | await queue.held("task", "trash")
     covered_checks = (await queue.held("schedule", "orphans") | await queue.held("task", "orphans")) if settings.orphan_check_enabled else set(tables)
@@ -388,10 +388,10 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
     for uuid, record in trashed.items():
         # A released or undated record's task ends holding nothing (:mod:`maintenance.services.trash_task`), so queueing
         # one would queue it again every hour. The daily scan's purge reaches a released record without a task, and an
-        # undated one is never released (:func:`lakehouse.trash.release_at`).
-        if trash.is_released(record) or trash.release_at(record) is None or uuid in unnamed:
+        # undated one is never released (:attr:`lakehouse.trash.TrashRecord.release_at`).
+        if record.is_released or record.release_at is None or uuid in unnamed:
             continue
-        task = Task(kind="trash", uuid=uuid, location=trash.location_of(record), trashed=trash.kind_of(record))
+        task = Task(kind="trash", uuid=uuid, location=record.location, trashed=record.kind)
         if uuid not in covered_trash and await queue.enqueue(task):
             queued["trash"] += 1
     if any(queued.values()):

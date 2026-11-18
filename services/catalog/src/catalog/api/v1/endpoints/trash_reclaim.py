@@ -15,7 +15,6 @@ router's own dependency, as the decision door's is.
 from __future__ import annotations
 
 from functools import partial
-from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
@@ -36,7 +35,7 @@ from lakehouse.base_refs import decoded_path
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.location_claims import LocationClaim
-from lakehouse.trash import TrashKind
+from lakehouse.trash import TrashKind, TrashRecord
 
 
 async def require_can_reclaim_trash(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
@@ -172,7 +171,7 @@ async def _noted(settings: CatalogStore, *, kind: TrashKind, uuid: str, reason: 
     return InvalidTableStateError(reason)
 
 
-async def _standing_refusal(resolver: Resolver, record: dict[str, Any], claim: LocationClaim | None, *, kind: TrashKind, uuid: str) -> str | None:
+async def _standing_refusal(resolver: Resolver, record: TrashRecord, claim: LocationClaim | None, *, kind: TrashKind, uuid: str) -> str | None:
     """Why the trashed object stands again, or ``None``.
 
     A table with a place stands where its claim is held by a name that still resolves to the place: a crashed undrop
@@ -182,7 +181,7 @@ async def _standing_refusal(resolver: Resolver, record: dict[str, Any], claim: L
     """
     if claim is not None:
         return await _place_held(resolver, claim)
-    segments = parse_identifier(trash.name_of(record))
+    segments = parse_identifier(record.id)
     if not segments:
         return None
     try:
@@ -207,14 +206,14 @@ async def _place_held(resolver: Resolver, claim: LocationClaim) -> str | None:
     return f"the live table {fga.canonical_object_id(claim.segments)!r} holds the record's place, so its bytes are not the trash's"
 
 
-def _revoked(t: fga.ClientTuple, record: dict[str, Any], *, uuid: str, actor: str) -> Announcement:
+def _revoked(t: fga.ClientTuple, record: TrashRecord, *, uuid: str, actor: str) -> Announcement:
     """The ``grant_revoked`` a release announces for ``t``, naming the released object by its name and uuids."""
-    namespace_uuid = record.get("namespace_uuid")
+    namespace_uuid = record.namespace_uuid
     return announcing.grant_announcement(
         t,
         action="grant_revoked",
         actor=actor,
-        object_name=trash.name_of(record),
+        object_name=record.id,
         object_uuid=uuid,
         namespace_uuid=namespace_uuid if isinstance(namespace_uuid, str) else None,
         extra={"reason": "trash_expired"},

@@ -107,6 +107,7 @@ from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.ns_errors import PartiallyApplied, status_for
 from lakehouse.records import RecordExistsError, RecordMissingError
 from lakehouse.storage import s3_client, split_s3_uri
+from lakehouse.trash import TrashRecord
 
 
 log = logging.getLogger(__name__)
@@ -521,12 +522,10 @@ async def list_warehouse_trash(
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     owned = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
     beneath = f"{namespace}{CATALOG_DELIMITER}" if namespace else ""
-    candidates = sorted(
-        ((trash_doors.listing_key(r), r) for r in owned if trash.object_uuid(r) and str(r.get("id") or "").startswith(beneath)), key=lambda c: c[0]
-    )
+    candidates = sorted(((trash_doors.listing_key(r), r) for r in owned if r.uuid and r.id.startswith(beneath)), key=lambda c: c[0])
 
-    async def judged_on(records: Sequence[dict[str, Any]]) -> list[str | None]:
-        return [fga.object_of(trash.kind_of(r), str(trash.object_uuid(r))) for r in records]
+    async def judged_on(records: Sequence[TrashRecord]) -> list[str | None]:
+        return [fga.object_of(r.kind, str(r.uuid)) for r in records]
 
     page, next_token = await fga_deps.judged_page(
         fga_deps.authorization(settings, client, token),
@@ -907,7 +906,7 @@ async def _detach_table(ns: LanceNamespace, settings: CatalogStore, segments: li
 
 
 async def _require_no_outside_clones(
-    ns: LanceNamespace | None, settings: CatalogStore, *, subtrees: list[_NamespaceSubtree], trashed: list[dict[str, Any]]
+    ns: LanceNamespace | None, settings: CatalogStore, *, subtrees: list[_NamespaceSubtree], trashed: list[TrashRecord]
 ) -> None:
     """Refuse a ``?purge_bucket=true`` that would destroy a table a registered clone outside the warehouse reads, before
     anything changes (ADR 0198 §1): the purge empties the bucket, so a source's bytes go whatever its clones' tags say.
@@ -925,8 +924,8 @@ async def _require_no_outside_clones(
                 if described.location:
                     located[fga.canonical_object_id(table)] = described.location
     for entry in trashed:
-        if location := trash.location_of(entry):
-            located[f"{trash.name_of(entry)}@{trash.object_uuid(entry)}"] = location
+        if location := entry.location:
+            located[f"{entry.id}@{entry.uuid}"] = location
     carried = {name: await run_in_threadpool(partial(dataplane.clone_readers, location, so, table=name)) for name, location in located.items()}
     try:
         clone_sources.destroy_order({name: clone_sources.tag_of(location) for name, location in located.items()}, carried)
@@ -938,7 +937,7 @@ async def _require_no_outside_clones(
         ) from exc
 
 
-async def _forget_trashed(settings: CatalogStore, entry: dict[str, Any], *, purge: bool) -> None:
+async def _forget_trashed(settings: CatalogStore, entry: TrashRecord, *, purge: bool) -> None:
     """End what one trashed object kept for an undrop besides its grants, as the trash's own ending does
     (:func:`lakehouse.trash.end`): its records, a table's claim and base record, then its record.
 
@@ -947,13 +946,13 @@ async def _forget_trashed(settings: CatalogStore, entry: dict[str, Any], *, purg
     as the bucket does, where a later register can attach them again. A record that keeps no uuid is filed under none,
     so nothing of it can be ended.
     """
-    if (uuid := trash.object_uuid(entry)) is None:
+    if (uuid := entry.uuid) is None:
         return
     so = settings.storage_options()
-    if purge and (location := trash.location_of(entry)):
+    if purge and (location := entry.location):
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
         await run_in_threadpool(partial(data_directories.delete_table_directories, registry, location, uuid=uuid, storage_options=so))
-    await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=trash.kind_of(entry), uuid=uuid))
+    await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=entry.kind, uuid=uuid))
 
 
 def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]], record: dict[str, str], warehouse_id: str) -> None:
@@ -1143,10 +1142,10 @@ async def delete_warehouse(
         bucket_purged = False
         try:
             for entry in trashed:
-                kind, canonical = str(entry.get("kind") or "table"), str(entry.get("id") or "")
+                kind, canonical = str(entry.kind or "table"), entry.id
                 # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
                 # so a failure in the records after it still reports these tuples.
-                trashed_uuid = trash.object_uuid(entry)
+                trashed_uuid = entry.uuid
                 if trashed_uuid is not None:
                     obj = fga.object_of(kind, trashed_uuid)
                     revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)

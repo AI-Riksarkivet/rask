@@ -1062,7 +1062,7 @@ async def undrop_namespace(
         raise NamespaceNotFoundError(f"no recoverable drop for namespace: {canonical}. The grace period may have expired, or the drop purged its subtree.")
     record = trash_doors.the_one_to_restore(trashed, kind="namespace", name=canonical)
     trash_doors.require_restorable(record, name=canonical)
-    root_uuid = trash.object_uuid(record)
+    root_uuid = record.uuid
     if root_uuid is None:
         raise InternalError(f"the trash record of namespace {canonical!r} keeps no uuid, so its grants cannot be found")
     standing = await resolver.namespace_uuid(segments)
@@ -1075,17 +1075,17 @@ async def undrop_namespace(
     everything = await run_in_threadpool(trash.every_record, settings.registry_root, so)
     # The records the cascade that dropped this namespace filed, at its name and under it: undropping a namespace that
     # cascade dropped below its own root restores that branch of it, once its parent stands again.
-    cascade, prefix = record.get("cascade"), canonical + CATALOG_DELIMITER
-    subtree = [r for r in everything if r.get("cascade") == cascade and (r.get("id") == canonical or str(r.get("id") or "").startswith(prefix))]
+    cascade, prefix = record.cascade, canonical + CATALOG_DELIMITER
+    subtree = [r for r in everything if r.cascade == cascade and (r.id == canonical or r.id.startswith(prefix))]
     # Shallowest first — a parent manifest row must exist before its children's create/register.
-    namespace_records = sorted((r for r in subtree if r.get("kind") == "namespace"), key=lambda r: str(r["id"]).count(CATALOG_DELIMITER))
-    table_records = [r for r in subtree if r.get("kind") == "table"]
+    namespace_records = sorted((r for r in subtree if r.kind == "namespace"), key=lambda r: r.id.count(CATALOG_DELIMITER))
+    table_records = [r for r in subtree if r.kind == "table"]
     # Before anything is rebuilt: a residue record's table was destroyed, not trashed ([[LH-532]]).
     for t_rec in table_records:
-        trash_doors.require_restorable(t_rec, name=str(t_rec.get("id") or ""))
+        trash_doors.require_restorable(t_rec, name=t_rec.id)
     response = CreateNamespaceResponse()
     for n_rec in namespace_records:
-        n_id = str(n_rec["id"])
+        n_id = n_rec.id
         # THROUGH THE SHARED SEAM, because the `mode="exist_ok"` below is not honoured by the backend
         # and this loop's whole resumability rests on it: a rerun after a mid-recovery failure would
         # raise on the first namespace the previous attempt already rebuilt, abandoning the rest of the
@@ -1096,16 +1096,16 @@ async def undrop_namespace(
         # tables and false of namespaces. And the false half gated the true one: namespaces are rebuilt
         # shallowest-FIRST, so a rerun aborted before it ever reached the tolerant loop.
         n_segments = parse_identifier(n_id)
-        rebuilt = CreateNamespaceRequest(id=n_segments, mode="exist_ok", properties=n_rec.get("properties"))
+        rebuilt = CreateNamespaceRequest(id=n_segments, mode="exist_ok", properties=n_rec.properties)
         created, _kept = await create_or_keep_namespace(ns, n_segments, rebuilt)
         if n_id == canonical:
             response = created
         # Clear only AFTER the create commits — a failed rebuild must leave the subtree recoverable.
-        await run_in_threadpool(trash.clear, settings.registry_root, so, str(n_rec["uuid"]), kind="namespace")
+        await run_in_threadpool(trash.clear, settings.registry_root, so, str(n_rec.uuid), kind="namespace")
     skipped = 0
     for t_rec in table_records:
-        t_id = str(t_rec["id"])
-        location = str(t_rec.get("location") or "")
+        t_id = t_rec.id
+        location = t_rec.location
         if location:
             # The RELATIVE key register_table accepts, the one the record's URL decodes to under the root, as at the
             # table undrop ([[LH-517]]).
@@ -1118,7 +1118,7 @@ async def undrop_namespace(
             except location_claims.LocationHeldError as held:
                 log.warning("undrop_refused_held_location", extra={"table": t_id, "location": held.claim.location, "holder": held.claim.table})
                 raise InvalidTableStateError(f"cannot undrop table {t_id}: its location is now held by another table") from None
-            if kept.uuid != t_rec.get("uuid"):
+            if kept.uuid != t_rec.uuid:
                 raise InternalError(f"the claim on {t_id}'s location records another uuid than its trash record, so its grants cannot be found")
             try:
                 await run_in_threadpool(native.call, ns, "register_table", body)
@@ -1143,7 +1143,7 @@ async def undrop_namespace(
         else:
             skipped += 1
             log.warning("undrop_skipped_declared_only_table", extra={"table": t_id})
-        await run_in_threadpool(trash.clear, settings.registry_root, so, str(t_rec["uuid"]))
+        await run_in_threadpool(trash.clear, settings.registry_root, so, str(t_rec.uuid))
     # NO SEED — undrop is a PURE RESTORE (owner ruling, diff2 F10 item 4b), on this door for the same
     # reason as the table door.
     #

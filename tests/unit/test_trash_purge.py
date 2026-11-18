@@ -165,7 +165,7 @@ class _Estate:
         properties: dict[str, str] | None = None,
         namespace_uuid: str | None = None,
         released: bool = True,
-    ) -> dict[str, Any]:
+    ) -> trash.TrashRecord:
         """A trash record, stamped released as the catalog's release door leaves one, unless ``released`` is false."""
         record = trash.make_record(
             canonical,
@@ -179,11 +179,14 @@ class _Estate:
             namespace_uuid=namespace_uuid,
         )
         if released:
-            record[trash.RELEASED_AT] = (_NOW - timedelta(days=1)).isoformat()
-        trash.put(self.control_root, StorageOptions(), record)
+            record = record.model_copy(update={trash.RELEASED_AT: (_NOW - timedelta(days=1)).isoformat()})
+        if record.uuid is None:
+            seeding.put_trash(self.control_root, StorageOptions(), record.stored())
+        else:
+            trash.put(self.control_root, StorageOptions(), record)
         return record
 
-    def record(self, canonical: str, *, kind: trash.TrashKind = "table") -> dict[str, Any] | None:
+    def record(self, canonical: str, *, kind: trash.TrashKind = "table") -> trash.TrashRecord | None:
         """The one trash record dropped under ``canonical``, or ``None``: each test drops a name once."""
         held = trash.named(self.control_root, StorageOptions(), canonical, kind=kind)
         assert len(held) <= 1, held
@@ -681,7 +684,7 @@ def test_a_SECOND_refusal_counts_up_rather_than_looking_like_the_first(tmp_path:
 
     record = estate.record(canonical)
     assert record is not None
-    assert record.get("attempts") == 2, f"the second refusal did not count up: {record}"
+    assert record.attempts == 2, f"the second refusal did not count up: {record}"
     assert [r.attempts for r in out.refused] == [2], "the report does not carry the accumulated count"
 
 

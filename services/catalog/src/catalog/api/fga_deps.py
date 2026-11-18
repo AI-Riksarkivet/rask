@@ -73,6 +73,7 @@ from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import store_refusal
 from lakehouse.route_path import route_path
 from lakehouse.storage_options import StorageOptions
+from lakehouse.trash import TrashRecord
 
 
 log = logging.getLogger(__name__)
@@ -465,7 +466,7 @@ async def _resolve(resolver: Resolver, rung: write_judge.Rung) -> str | None:
     obj = await resolver.object(rung.on.kind, list(rung.on.segments))
     if obj is None and rung.on.in_trash:
         trashed = await resolver.trashed(rung.on.kind, list(rung.on.segments))
-        if len(trashed) == 1 and (uuid := trash.object_uuid(trashed[0])) is not None:
+        if len(trashed) == 1 and (uuid := trashed[0].uuid) is not None:
             return fga.object_of(rung.on.kind, uuid)
     return obj
 
@@ -623,7 +624,7 @@ async def _require_trashed(
     relation: str,
     named: write_judge.Named,
     label: str,
-    trashed: list[dict[str, Any]],
+    trashed: list[TrashRecord],
 ) -> str:
     """Ask ``relation`` on every trashed object ``named`` leads to, admit those the caller may act on, and refuse if none.
 
@@ -631,7 +632,7 @@ async def _require_trashed(
     its own object with its own grants. The door then acts only on what was admitted, so its answer, the list of
     uuids it offers when several remain, names nothing its caller holds no grant on. Each decision is audited.
     """
-    objects = {fga.object_of(named.kind, uuid): record for record in trashed if (uuid := trash.object_uuid(record)) is not None}
+    objects = {fga.object_of(named.kind, uuid): record for record in trashed if (uuid := record.uuid) is not None}
     allowed = await fga.batch_check(client, user=user, relation=relation, objects=sorted(objects))
     for obj in sorted(objects):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW if allowed.get(obj, False) else AuditOutcome.DENY, relation=relation, subject=user, resource=obj)
@@ -1680,7 +1681,7 @@ async def _trashed_at_or_above(resolver: Resolver, fga_type: str, segments: list
     objects: list[str] = []
     for depth in range(1, len(segments) + 1):
         kind = fga_type if depth == len(segments) else "namespace"
-        trashed = {uuid for record in await resolver.trashed(kind, segments[:depth]) if (uuid := trash.object_uuid(record)) is not None}
+        trashed = {uuid for record in await resolver.trashed(kind, segments[:depth]) if (uuid := record.uuid) is not None}
         objects += [fga.object_of(kind, uuid) for uuid in sorted(trashed)]
     return objects
 
@@ -2834,8 +2835,8 @@ def _trashed_objects(settings: CatalogStore) -> set[str]:
         raise store_refusal(exc, reading="reading the trash", so="no object found only by its container's edge was ended") from exc
     objects: set[str] = set()
     for record in records:
-        if (uuid := trash.object_uuid(record)) is not None:
-            objects.add(fga.object_of(str(record.get("kind") or "table"), uuid))
+        if (uuid := record.uuid) is not None:
+            objects.add(fga.object_of(str(record.kind or "table"), uuid))
     return objects
 
 

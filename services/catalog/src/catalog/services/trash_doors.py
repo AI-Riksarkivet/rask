@@ -10,7 +10,6 @@ restores exactly the one its caller names, and asks which when the name leads to
 from __future__ import annotations
 
 from functools import partial
-from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidTableStateError
@@ -18,29 +17,34 @@ from lance_namespace import InvalidTableStateError
 from catalog.core.config import Settings
 from catalog.schemas import TrashEntry
 from catalog.services import warehouses
-from lakehouse import trash
+from lakehouse.trash import TrashRecord
 
 
-def entry(record: dict[str, Any]) -> TrashEntry:
+def entry(record: TrashRecord) -> TrashEntry:
     """What a trash door answers about ``record``: the object, the name it held, its deadline and which side of it.
 
-    ``expired`` reads the deadline by :func:`trash.past_deadline`, the rule the undrop refuses by and maintenance releases
+    ``expired`` reads the deadline by :meth:`lakehouse.trash.TrashRecord.past_deadline`, the rule the undrop refuses by and maintenance releases
     the grants by (ADR 0146), so a listing never calls a drop recoverable that the undrop refuses.
     """
     return TrashEntry(
-        kind=trash.kind_of(record),
-        **{field: str(record.get(field) or "") for field in ("id", "uuid", "location", "dropped_by", "dropped_at", "expires_at")},
-        expired=trash.past_deadline(record),
+        kind=record.kind,
+        id=record.id,
+        uuid=record.uuid or "",
+        location=record.location,
+        dropped_by=record.dropped_by,
+        dropped_at=record.dropped_at,
+        expires_at=record.expires_at or "",
+        expired=record.past_deadline(),
     )
 
 
-def listing_key(record: dict[str, Any]) -> str:
+def listing_key(record: TrashRecord) -> str:
     """Where ``record`` sorts in a trash listing, and the page token that resumes after it: its name, then its uuid.
 
     A name can lead to several trashed objects, so the name alone is no cursor; the uuid makes each key one object's. No
     name holds a control character or an edge space (``identifiers.require_names``), so the space parts the two.
     """
-    return f"{record.get('id') or ''} {trash.object_uuid(record) or ''}"
+    return f"{record.id or ''} {record.uuid or ''}"
 
 
 async def drop_grace_days(settings: Settings, segments: list[str]) -> float:
@@ -60,7 +64,7 @@ async def drop_grace_days(settings: Settings, segments: list[str]) -> float:
     )
 
 
-def the_one_to_restore(records: list[dict[str, Any]], *, kind: str, name: str) -> dict[str, Any]:
+def the_one_to_restore(records: list[TrashRecord], *, kind: str, name: str) -> TrashRecord:
     """The one trash record among ``records`` an undrop of ``name`` restores.
 
     Raises:
@@ -69,11 +73,11 @@ def the_one_to_restore(records: list[dict[str, Any]], *, kind: str, name: str) -
     """
     if len(records) == 1:
         return records[0]
-    listed = "; ".join(f"{trash.object_uuid(record)} (dropped {record.get('dropped_at')}, recoverable until {record.get('expires_at')})" for record in records)
+    listed = "; ".join(f"{record.uuid} (dropped {record.dropped_at}, recoverable until {record.expires_at})" for record in records)
     raise InvalidTableStateError(f"{len(records)} dropped {kind}s held the name {name!r}: {listed}. Name the one to undrop with ?uuid=<uuid>.")
 
 
-def require_its_own_parent(record: dict[str, Any], *, standing: str | None, name: str) -> None:
+def require_its_own_parent(record: TrashRecord, *, standing: str | None, name: str) -> None:
     """Refuse restoring ``record`` into a namespace other than the one it was dropped from.
 
     A record keeps its namespace's uuid at the drop. Once that namespace is dropped too, its name is free, and another
@@ -83,12 +87,12 @@ def require_its_own_parent(record: dict[str, Any], *, standing: str | None, name
     Raises:
         InvalidTableStateError: The live namespace at the parent's name is not the one the object was dropped from.
     """
-    dropped_from = record.get("namespace_uuid")
+    dropped_from = record.namespace_uuid
     if isinstance(dropped_from, str) and standing is not None and standing != dropped_from:
         raise InvalidTableStateError(f"cannot undrop {name!r}: the namespace it was dropped from is gone, and another namespace holds its name now")
 
 
-def require_restorable(record: dict[str, Any], *, name: str) -> None:
+def require_restorable(record: TrashRecord, *, name: str) -> None:
     """Refuse restoring a record whose drop is final: a residue record, or one past its deadline.
 
     A residue record names bytes a destructive drop that failed part-way left: its table was destroyed, not trashed,
@@ -99,11 +103,11 @@ def require_restorable(record: dict[str, Any], *, name: str) -> None:
     Raises:
         InvalidTableStateError: ``record`` is a residue record, or its grace period has ended.
     """
-    if trash.is_residue(record):
+    if record.is_residue:
         raise InvalidTableStateError(
             f"cannot undrop {name!r}: its bytes were left by a destructive drop that failed part-way, not kept for an undrop; the trash purge reclaims them"
         )
-    if trash.past_deadline(record) or trash.is_released(record):
+    if record.past_deadline() or record.is_released:
         raise InvalidTableStateError(
-            f"cannot undrop {name!r}: its grace period ended at {record.get('expires_at')}, so the drop is final and the trash purge reclaims its bytes"
+            f"cannot undrop {name!r}: its grace period ended at {record.expires_at}, so the drop is final and the trash purge reclaims its bytes"
         )

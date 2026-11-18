@@ -53,7 +53,7 @@ from lakehouse.lance_session import open_dataset
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
-from lakehouse.trash import TrashKind
+from lakehouse.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.services.discovery import discover_datasets
@@ -645,7 +645,7 @@ def served_by_root(warehouse_records: Iterable[Mapping[str, str]], *, namespace_
     return served
 
 
-def _orphaned_trash(records: list[dict[str, Any]], *, claimed: set[str]) -> list[OrphanedTrash]:
+def _orphaned_trash(records: list[TrashRecord], *, claimed: set[str]) -> list[OrphanedTrash]:
     """Trash whose location sits in a bucket no live warehouse claims, so no purge tick can reclaim it.
 
     Keyed on the BUCKET rather than the warehouse id: the two are separate fields on a warehouse record
@@ -658,12 +658,12 @@ def _orphaned_trash(records: list[dict[str, Any]], *, claimed: set[str]) -> list
     """
     out: list[OrphanedTrash] = []
     for record in records:
-        location = str(record.get("location") or "")
+        location = record.location
         if not on_s3(location):
             continue
         bucket = location[len("s3://") :].split("/", 1)[0]
-        if bucket and bucket not in claimed and (uuid := trash.object_uuid(record)) is not None:
-            out.append(OrphanedTrash(id=trash.name_of(record), uuid=uuid, kind=trash.kind_of(record), location=location))
+        if bucket and bucket not in claimed and (uuid := record.uuid) is not None:
+            out.append(OrphanedTrash(id=record.id, uuid=uuid, kind=record.kind, location=location))
     return sorted(out, key=lambda o: (o.location, o.id))
 
 
@@ -697,7 +697,7 @@ class Sources(BaseModel):
     project_records_error: str | None = None
     warehouse_records: list[dict[str, str]] | None = None
     warehouse_records_error: str | None = None
-    trash: list[dict[str, str]] | None = None
+    trash: list[TrashRecord] | None = None
     trash_error: str | None = None
     namespaces: list[tuple[str, str]] | None = None
     namespaces_error: str | None = None
@@ -791,6 +791,32 @@ async def _registry_source(
     return records, None
 
 
+async def _trash_source(sources: Sources, *, control_root: str, storage_options: StorageOptions) -> tuple[list[TrashRecord] | None, str | None]:
+    """The trash listing as records, a record that is none of them folded into ``sources.incomplete`` beside the skips
+    the listing itself reports."""
+    listed, error = await _registry_source(
+        sources,
+        source_name="registry:trash",
+        control_root=control_root,
+        storage_options=storage_options,
+        prefix=_TRASH_PREFIX,
+        # `location` must EXIST; only `id` must carry a value. A namespace trash record's
+        # location is deliberately "" (see `namespaces.py`'s cascade write) and ten of them were
+        # reported as malformed on every tick, which blocked the trash purge outright.
+        required=("id", "location"),
+        non_empty=("id",),
+    )
+    if listed is None:
+        return None, error
+    records: list[TrashRecord] = []
+    for raw in listed:
+        try:
+            records.append(trash.read(raw, at=f"{_TRASH_PREFIX} ({raw.get('id')})"))
+        except UnreadableTrashRecordError as exc:
+            sources.incomplete.append(IncompleteScan(source="registry:trash", reason=str(exc)))
+    return records, None
+
+
 async def _bucket_source(sources: Sources, bucket_client: Any) -> tuple[list[str] | None, str | None]:
     """The bucket listing, folding its pagination note into ``sources.incomplete``."""
     if bucket_client is None:
@@ -840,18 +866,7 @@ async def load_sources(
             required=("id", "bucket", "project"),
         ),
         _bucket_source(sources, bucket_client),
-        _registry_source(
-            sources,
-            source_name="registry:trash",
-            control_root=control_root,
-            storage_options=storage_options,
-            prefix=_TRASH_PREFIX,
-            # `location` must EXIST; only `id` must carry a value. A namespace trash record's
-            # location is deliberately "" (see `namespaces.py`'s cascade write) and ten of them were
-            # reported as malformed on every tick, which blocked the trash purge outright.
-            required=("id", "location"),
-            non_empty=("id",),
-        ),
+        _trash_source(sources, control_root=control_root, storage_options=storage_options),
     )
     # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry loaded above rather
     # than reading it again — two reads would be two answers, and the second could disagree with the one
@@ -878,7 +893,7 @@ async def load_sources(
 
 
 def _uuids_of(
-    registered: dict[str, tuple[str, str | None]], trash_records: list[dict[str, str]], claims: location_claims.ClaimStore
+    registered: dict[str, tuple[str, str | None]], trash_records: list[TrashRecord], claims: location_claims.ClaimStore
 ) -> tuple[dict[str, str], set[str]]:
     """Each live table's uuid, read off its location's claim, and every trashed object's uuid ([[LH-524]]).
 
@@ -892,7 +907,7 @@ def _uuids_of(
         found = location_claims.read(claims, _resolved(root, location)) if location else None
         if found is not None and found.claim.uuid is not None and found.claim.released_at is None:
             live[table] = found.claim.uuid
-    trashed = {uuid for record in trash_records if (uuid := trash.object_uuid(record)) is not None}
+    trashed = {uuid for record in trash_records if (uuid := record.uuid) is not None}
     return live, trashed
 
 
@@ -1096,7 +1111,7 @@ def _registration_drift(report: ReconcileReport, sources: Sources, datasets: lis
         # The same comparison read from both sides: an unread input makes both answers unknown, not one.
         report.unavailable.extend(CategoryUnavailable(category=category, reason=unread) for category in ("unregistered_datasets", "absent_datasets"))
         return
-    trashed = {str(record["location"]) for record in (sources.trash or []) if record.get("location")}
+    trashed = {record.location for record in (sources.trash or []) if record.location}
     report.unregistered_datasets = _unregistered_datasets(
         discovered=[uri for uri, _key in datasets],
         names=_manifest_names(sources.table_locations or {}),

@@ -1587,7 +1587,7 @@ async def undrop_table(
         )
     record = trash_doors.the_one_to_restore(trashed, kind="table", name=canonical)
     trash_doors.require_restorable(record, name=canonical)
-    record_uuid = trash.object_uuid(record)
+    record_uuid = record.uuid
     if record_uuid is None:
         raise InternalError(f"the trash record of {canonical} keeps no uuid, so its grants cannot be found")
     standing = await resolver.table(segments, ns=ns)
@@ -1598,7 +1598,7 @@ async def undrop_table(
     # a relative one as the literal key it is given. The record keeps the URL `describe_table` answered, which
     # percent-encodes a registered table's name, so the table re-attaches at the key that URL decodes to, under the
     # connection's root, where its bytes are ([[LH-517]]). The absolute URL stays on the record for an operator.
-    location = str(record["location"])
+    location = record.location
     body = RegisterTableRequest(id=segments, location=dataplane.relative_location(location, root=root))
     named = NameResolves(segments=segments, uuid=record_uuid, held=True)
     restored = _marker(
