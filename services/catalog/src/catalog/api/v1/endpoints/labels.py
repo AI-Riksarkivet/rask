@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
+from functools import partial
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Query
@@ -41,7 +42,6 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import LabelDefinitionRequest, LabelledObjectsResponse, ObjectLabelsResponse, RemoveLabelRequest, SetLabelRequest
 from catalog.services import object_labels, table_claims, tenancy, warehouses
-from catalog.services import projects as project_registry
 from catalog.services.object_labels import Attachment, LabelDefinition, LabelScope
 from lakehouse import records, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
@@ -74,23 +74,23 @@ _LABELLED: Final[dict[LabelScope, tuple[ControlAction, ControlAction]]] = {
 }
 
 
-async def _project_of(settings: Settings, segments: Sequence[str]) -> str:
-    """The project the object ``segments`` names lies in: its warehouse's.
+async def _project_of(settings: Settings, segments: Sequence[str]) -> tenancy.Tenant:
+    """The live creation of the project the object ``segments`` names lies in: its warehouse's.
 
     Raises:
-        InvalidInputError: The object lies in the estate's own warehouse, which no project owns, so no project's labels
-            can reach it.
+        InvalidInputError: The object lies in the estate's own warehouse, which no project owns, or in a warehouse whose
+            project no live creation holds, so no project's labels can reach it.
     """
     project = await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), segments[0])
-    if project is None:
+    live = await tenancy.resolved(settings, PROJECT, project) if project is not None else None
+    if live is None:
         raise InvalidInputError(f"{fga.canonical_object_id(list(segments))} lies in no project's warehouse, so no project's labels apply to it")
-    return project
+    return live
 
 
-async def _defined(settings: Settings, project: str) -> dict[str, LabelDefinition]:
-    return {
-        defined.name: defined for defined in await run_in_threadpool(object_labels.definitions, settings.registry_root, settings.storage_options(), project)
-    }
+async def _defined(settings: Settings, project: tenancy.Tenant) -> dict[str, LabelDefinition]:
+    listed = partial(object_labels.definitions, settings.registry_root, settings.storage_options(), project.id, project_uuid=str(project.uuid))
+    return {defined.name: defined for defined in await run_in_threadpool(listed)}
 
 
 async def _describe(settings: Settings, *, kind: LabelScope, segments: Sequence[str], uuid: str) -> ObjectLabelsResponse:
@@ -134,12 +134,13 @@ async def _set(
     """
     project = await _project_of(settings, segments)
     so = settings.storage_options()
-    defined = await run_in_threadpool(object_labels.definition, settings.registry_root, so, project, object_labels.require_name(body.name))
+    name = object_labels.require_name(body.name)
+    defined = await run_in_threadpool(partial(object_labels.definition, settings.registry_root, so, project.id, name, project_uuid=str(project.uuid)))
     if defined is None:
-        raise InvalidInputError(f"project {project!r} defines no label {body.name!r}; its admin defines it first")
+        raise InvalidInputError(f"project {project.id!r} defines no label {body.name!r}; its admin defines it first")
     value = object_labels.judged_value(defined, kind=kind, value=body.value)
     canonical = fga.canonical_object_id(list(segments))
-    base = Attachment(kind=kind, uuid=uuid, id=canonical, project=project, location=location, labels={}, set_by=_actor(token))
+    base = Attachment(kind=kind, uuid=uuid, id=canonical, project=project.id, location=location, labels={}, set_by=_actor(token))
     try:
         await run_in_threadpool(object_labels.attach, settings.registry_root, so, base, defined=defined, value=value)
     except records.RecordChangedError as exc:
@@ -244,35 +245,24 @@ def _project(id: str) -> str:
     return id
 
 
-async def _registered(settings: Settings, project: str) -> str:
-    """``project``, once its gate passed, if the registry holds it.
+async def _readable_project(id: str, settings: Settings, token: Caller | None, client: FgaClientDep) -> tenancy.Tenant:
+    """The live creation ``id`` names, for a caller its project list shows the project to: a member, or the estate
+    admin. Anyone else, and a project no live creation holds, is answered the missing project's 404 ([[LH-587]]),
+    decided by the one gate every door on a project's id asks (``fga_deps.on_tenant``)."""
 
-    Raises:
-        TableNotFoundError: It does not.
-    """
-    if await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project) is None:
-        raise TableNotFoundError(f"project not found: {project}")
-    return project
+    async def gate(obj: str) -> None:
+        try:
+            await fga_deps.require_any_relation(client, settings, token, doors=[("can_list_all_projects", settings.fga_root_object), ("member", obj)])
+        except PermissionDeniedError as exc:
+            raise TableNotFoundError(f"project not found: {id}") from exc
 
-
-async def _readable_project(id: str, settings: Settings, token: Caller | None, client: FgaClientDep) -> str:
-    """``id``, for a caller its project list shows the project to: a member, or the estate admin. Anyone else, and a
-    project the registry does not hold, is answered the missing project's 404 ([[LH-587]])."""
-    project = _project(id)
-    live = await tenancy.resolved(settings, PROJECT, project)
-    doors = [("can_list_all_projects", settings.fga_root_object), ("member", live.obj if live is not None else tenancy.nowhere(PROJECT))]
-    try:
-        await fga_deps.require_any_relation(client, settings, token, doors=doors)
-    except PermissionDeniedError as exc:
-        raise TableNotFoundError(f"project not found: {project}") from exc
-    return await _registered(settings, project)
+    return await fga_deps.on_tenant(settings, PROJECT, _project(id), gate=gate)
 
 
-async def _administered_project(id: str, settings: Settings, token: Caller | None, client: FgaClientDep) -> str:
-    """``id``, for its project's admin; a project the registry does not hold is not found, after the gate."""
-    project = _project(id)
-    await fga_deps.require_on_tenant(client, settings, token, relation="can_administer", kind=PROJECT, object_id=project)
-    return project
+async def _administered_project(id: str, settings: Settings, token: Caller | None, client: FgaClientDep) -> tenancy.Tenant:
+    """The live creation ``id`` names, for its project's admin; a project no live creation holds is not found, after the
+    gate."""
+    return await fga_deps.require_on_tenant(client, settings, token, relation="can_administer", kind=PROJECT, object_id=_project(id))
 
 
 async def _standing(settings: Settings, found: Sequence[Attachment]) -> list[tuple[Attachment, str]]:
@@ -299,7 +289,7 @@ async def _standing(settings: Settings, found: Sequence[Attachment]) -> list[tup
 async def list_label_definitions(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[LabelDefinition]:
     """Every label the project defines, by name, for a member of it or the estate admin."""
     project = await _readable_project(id, settings, token, client)
-    return await run_in_threadpool(object_labels.definitions, settings.registry_root, settings.storage_options(), project)
+    return list((await _defined(settings, project)).values())
 
 
 @projects_router.post("/{id}/labels/define", response_model_exclude_none=True)
@@ -311,7 +301,8 @@ async def define_label(
     nothing. The project's admin's act."""
     project = await _administered_project(id, settings, token, client)
     asked = object_labels.proposed(
-        project=project,
+        project=project.id,
+        project_uuid=str(project.uuid),
         name=body.name,
         description=body.description,
         scope=body.scope,
@@ -331,7 +322,7 @@ async def define_label(
         object_type="label",
         object_id=object_labels.label_object(defined.uuid),
         actor=_actor(token),
-        extra={"project": project, "name": defined.name},
+        extra={"project": project.id, "name": defined.name},
     )
     return defined
 
@@ -345,7 +336,7 @@ async def delete_label_definition(
     no such label. The project's admin's act."""
     project = await _administered_project(id, settings, token, client)
     root, so = settings.registry_root, settings.storage_options()
-    deleted = await run_in_threadpool(object_labels.definition, root, so, project, object_labels.require_name(name))
+    deleted = await run_in_threadpool(partial(object_labels.definition, root, so, project.id, object_labels.require_name(name), project_uuid=str(project.uuid)))
     if deleted is None:
         raise TableNotFoundError(f"label not found: {name}")
     carried = sorted(named for _, named in await _standing(settings, await run_in_threadpool(object_labels.carriers, root, so, deleted)))
@@ -358,7 +349,7 @@ async def delete_label_definition(
         object_type="label",
         object_id=object_labels.label_object(deleted.uuid),
         actor=_actor(token),
-        extra={"project": project, "name": deleted.name},
+        extra={"project": project.id, "name": deleted.name},
     )
     return deleted
 
@@ -379,7 +370,7 @@ async def list_labelled_objects(
     project = await _readable_project(id, settings, token, client)
     so = settings.storage_options()
     defined = await _defined(settings, project)
-    found = await run_in_threadpool(object_labels.attachments, settings.registry_root, so, project=project)
+    found = await run_in_threadpool(partial(object_labels.attachments, settings.registry_root, so, project=project.id))
     candidates: list[tuple[str, ObjectLabelsResponse]] = []
     for attachment, name in await _standing(settings, found):
         shown = object_labels.labels_shown(attachment, defined)
@@ -399,7 +390,7 @@ async def list_labelled_objects(
         page_token=page_token,
         limit=limit,
     )
-    return LabelledObjectsResponse(project=project, objects=list(page), page_token=next_token)
+    return LabelledObjectsResponse(project=project.id, objects=list(page), page_token=next_token)
 
 
 # One exported router, as `router.py` mounts `_module.router` for every endpoint module.

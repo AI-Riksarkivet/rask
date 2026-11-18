@@ -66,7 +66,7 @@ from catalog.api.dependencies import (
     namespace_for_root,
 )
 from catalog.api.pagination import ListLimit
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import Caller, CurrentToken, current_subject
 from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core.config import Settings
 from catalog.core.fenced_namespace import fenced, holding_to_confirm
@@ -150,9 +150,10 @@ async def create_warehouse(
 ) -> WarehouseResponse:
     """Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
 
-    Order (fail-closed): the request's shape (400), then the project must EXIST (``require_project_exists`` — 404 naming
-    ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
-    it runs before authz), THEN authorize ``can_create_warehouse`` on the project's live creation, then
+    Order (fail-closed): the request's shape (400), then ``can_create_warehouse`` asked on the project's live creation
+    through the one gate of every door on a tenant's id (``fga_deps.on_tenant``): an id no live project holds is asked
+    on the object nobody holds, so a caller refused there is answered as for one that stands, and only a caller the gate
+    admits is told the project is missing (404 naming ``POST /management/v1/projects`` as the fix). Then
     :func:`establish_warehouse` makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is,
     and the catalog converges it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
 
@@ -161,8 +162,11 @@ async def create_warehouse(
     """
     ids = validated_ids(settings, body)
     _warehouse_id, project_id, _bucket = ids
-    project = await fga_deps.require_project_exists(settings, project_id)
-    await fga_deps.require_can_create_warehouse(client, settings, token, project=project)
+
+    async def gate(obj: str) -> None:
+        await fga_deps.require_relation(client, settings, token, relation="can_create_warehouse", obj=obj)
+
+    project = await fga_deps.on_tenant(settings, PROJECT, project_id, gate=gate, absent=fga_deps.project_missing(project_id))
     # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
     if body.protected is not None:
         await _require_project_admin(client, settings, token, project=project)
@@ -282,7 +286,7 @@ async def establish_warehouse(
     replaced, record = await _write_record(settings, body, record, existing=existing, protection=protection)
     if not await tenancy.still(settings, project):
         if record.get(STATE) == CREATING:
-            await run_in_threadpool(warehouses.end_warehouse, settings.registry_root, so, record)
+            await run_in_threadpool(warehouses.end_creating, settings.registry_root, so, record)
         raise TableNotFoundError(f"project not found: {project_id} (it was deleted while warehouse {warehouse_id!r} was made)")
     seal_posture.observe(warehouse_id, record, required=bucket not in settings.seal_detection_only_buckets)
     # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
@@ -513,11 +517,15 @@ def _record_for(
 async def _write_record(
     settings: Settings, body: CreateWarehouseRequest, record: dict[str, str], *, existing: dict[str, str] | None, protection: ProtectionChange | None
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Mint ``record``, or merge it into the record that stands; the record the write replaced (empty for a mint) and
-    the record it wrote, so the protection this write changed is announced and no other.
+    """Mint ``record``, or merge it into the record that stands, the creation the re-create read; the record the write
+    replaced (empty for a mint) and the record it wrote, so the protection this write changed is announced and no other.
+
+    A mint is conditional on absence (F1), and one that lost the race wrote nothing: the id exists, which the spec
+    answers 409, and the loser seeds and announces nothing, since the uuid it minted names no record (review T9).
 
     Raises:
-        NamespaceAlreadyExistsError: The record moved to another project mid-request.
+        NamespaceAlreadyExistsError: A concurrent create made the warehouse first, or the record moved to another project
+            mid-request.
         ConcurrentModificationError: The write raced a concurrent delete; retry.
     """
     so = settings.storage_options()
@@ -555,11 +563,11 @@ async def _write_record(
         return await _converge()
     # The id-MINT is conditional (F1): the takeover guard read the registry BEFORE deciding, and a rival create landing
     # between that read and this write must not win silently, so the store refuses the second create, whatever the
-    # guard saw.
+    # guard saw, and the loser answers the id that exists.
     try:
         await run_in_threadpool(warehouses.create_warehouse_record, settings.registry_root, so, record)
     except RecordExistsError:
-        return await _converge()  # lost the mint race — converge on the WINNER, conditionally
+        raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} was made by a concurrent create; nothing was made by this one") from None
     return {}, record
 
 
@@ -610,9 +618,9 @@ async def list_warehouse_trash(
     warehouse's drops on a shared bucket are never listed. They sort by name and then uuid, the key the opaque page token
     resumes after (``trash_doors.listing_key``, `lance_docs/ns_catalog/spec.yaml` PageToken).
     """
-    await fga_deps.require_on_tenant(client, settings, token, relation="can_get_metadata", kind=WAREHOUSE, object_id=warehouse_id)
+    warehouse = await fga_deps.require_on_tenant(client, settings, token, relation="can_get_metadata", kind=WAREHOUSE, object_id=warehouse_id)
     so = settings.storage_options()
-    owned = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
+    owned = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse.record)
     beneath = f"{namespace}{CATALOG_DELIMITER}" if namespace else ""
     candidates = sorted(
         ((trash_doors.listing_key(r), r) for r in owned if trash.object_uuid(r) and str(r.get("id") or "").startswith(beneath)), key=lambda c: c[0]
@@ -660,22 +668,24 @@ async def _set_warehouse_status(
         # admin of the warehouse's own project still passes; anyone else sees exactly a missing-warehouse 404.
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
     refuse_what_git_declares(record, obj=f"warehouse:{warehouse_id}", token=token)
-    updated = await change_warehouse_status(settings, control, warehouse_id, status=status, actor=f"user:{token.subject}" if token else None)
+    updated = await change_warehouse_status(settings, control, warehouse_id, uuid=record[UUID], status=status, actor=f"user:{token.subject}" if token else None)
     return WarehouseResponse.model_validate(updated)
 
 
 async def change_warehouse_status(
-    settings: Settings, control: ControlEmitter, warehouse_id: str, *, status: WarehouseStatus, actor: str | None
+    settings: Settings, control: ControlEmitter, warehouse_id: str, *, uuid: str, status: WarehouseStatus, actor: str | None
 ) -> dict[str, str]:
-    """Deactivate or activate warehouse ``warehouse_id`` and announce it; the record as written.
+    """Deactivate or activate the creation ``uuid`` of warehouse ``warehouse_id`` and announce it; the record as written.
 
-    What both status doors do once their caller is authorized, and what the catalog does for a warehouse whose status
-    drifted from what git declares ([[XC-213]]).
+    What both status doors do once their caller is authorized on that creation, and what the catalog does for a warehouse
+    whose status drifted from what git declares ([[XC-213]]). Conditional on a read that finds that creation live (ADR
+    0245), so a change held across the warehouse's delete lands on no warehouse made again under its id.
 
     Raises:
-        TableNotFoundError: The warehouse's record is gone.
+        TableNotFoundError: The id no longer names that creation live.
     """
-    updated = await run_in_threadpool(warehouses.set_warehouse_status, settings.registry_root, settings.storage_options(), warehouse_id, status)
+    flip = partial(warehouses.set_warehouse_status, settings.registry_root, settings.storage_options(), warehouse_id, status, uuid=uuid)
+    updated = await run_in_threadpool(flip)
     if updated is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     log.info("warehouse_status_changed", extra={"warehouse": warehouse_id, "status": status})
@@ -863,8 +873,8 @@ async def set_warehouse_protection(
     Gated on ``project#can_administer`` of the warehouse's own project, read from its record: arming or clearing the
     lock on a warehouse's destruction is the authority that destruction needs, as the delete door asks it. A caller
     without it is answered the missing warehouse's 404, as the delete and lifecycle doors answer one, so the door tells
-    nobody which ids exist. The write is conditional on the record as it stands and refuses a record that moved to
-    another project since the decision. Re-arming an armed warehouse keeps who armed it. Announced as
+    nobody which ids exist. The write is conditional on a read that finds the creation the caller was authorized on
+    (ADR 0245): one deleted, or made again under the id, since the decision is answered 404. Re-arming an armed warehouse keeps who armed it. Announced as
     ``warehouse_protected`` or ``warehouse_unprotected`` on every call, as the table and namespace doors announce theirs.
     \f
 
@@ -880,27 +890,26 @@ async def set_warehouse_protection(
         The warehouse's id and the protection now set.
 
     Raises:
-        TableNotFoundError: The warehouse is absent, its caller does not administer its project, or it moved to
-            another project before the write.
+        TableNotFoundError: The warehouse is absent, its caller does not administer its project, or the id no longer
+            names the creation the caller was authorized on.
     """
     actor = f"user:{token.subject}" if token is not None else None
     change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
-    await protect_warehouse(settings, control, warehouse_id, project=record["project"], change=change, actor=actor)
+    await protect_warehouse(settings, control, warehouse_id, uuid=record[UUID], change=change, actor=actor)
     return ProtectionResponse(id=warehouse_id, protected=body.protected)
 
 
-async def protect_warehouse(
-    settings: Settings, control: ControlEmitter, warehouse_id: str, *, project: str, change: ProtectionChange, actor: str | None
-) -> None:
-    """Arm or clear ``project``'s warehouse ``warehouse_id``'s deletion protection and announce it.
+async def protect_warehouse(settings: Settings, control: ControlEmitter, warehouse_id: str, *, uuid: str, change: ProtectionChange, actor: str | None) -> None:
+    """Arm or clear the deletion protection of the creation ``uuid`` of warehouse ``warehouse_id`` and announce it.
 
-    What the protection door does once its caller is authorized, and what the catalog does for a warehouse whose
-    protection drifted from what git declares ([[XC-213]]).
+    What the protection door does once its caller is authorized on that creation's project, and what the catalog does for
+    a warehouse whose protection drifted from what git declares ([[XC-213]]). Conditional on a read that finds that
+    creation live (ADR 0245), so a change held across the warehouse's delete lands on no warehouse made again under its id.
 
     Raises:
-        TableNotFoundError: No such warehouse of ``project``.
+        TableNotFoundError: The id no longer names that creation live.
     """
-    protect = partial(warehouses.set_warehouse_protection, settings.registry_root, settings.storage_options(), warehouse_id, project=project, change=change)
+    protect = partial(warehouses.set_warehouse_protection, settings.registry_root, settings.storage_options(), warehouse_id, uuid=uuid, change=change)
     if await run_in_threadpool(protect) is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     log.info("warehouse_protection_set", extra={"warehouse": warehouse_id, "protected": change.protected})
@@ -1207,8 +1216,8 @@ async def delete_warehouse(
        its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless
        ``force=true``, and that refusal changes nothing.
     5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,
-       policy, claim and base record, its trash record last. A record is the warehouse's when its name begins with the
-       warehouse's id, so a re-issue after a failure here selects the same records. Then the cascade removes each
+       policy, claim and base record, its trash record last. A record is the warehouse's when the drop that filed it was
+       under this creation of it, so a re-issue after a failure here selects the same records. Then the cascade removes each
        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
        the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
@@ -1241,9 +1250,20 @@ async def delete_warehouse(
     ``can_purge_dead_tenant_warehouse`` on the estate reaches it with ``?purge_bucket=true``, the bucket in the
     warehouse's place.
 
-    **The record is marked ``deleting`` before the namespaces are read for the cascade** (ADR 0245): from then on no door
-    resolves the warehouse, so a namespace created in it either was made before that read, which finds it, or finds the
-    warehouse gone when its create resolves it again, and takes itself back.
+    **The point of no return** (ADR 0245, review T2 and T3). Every check that can refuse with nothing changed runs
+    before the mark, judged on one read of the record that the mark is then written under (its ETag; a record changed
+    since is refused 409, nothing changed): the protection (step 3), the emptiness (step 4), the purge's guards (step 7),
+    the warehouse's namespace fence taken for the drop (409 while another holds it), the subtree's protection and the
+    clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is written beneath it (a
+    declare or a commit is refused 409). The namespaces are read again after the mark (`ChildrenBeforeMark`): one made in
+    between refuses 409 without ``cascade``, or is held to the subtree's checks with it, and such a refusal PUTS THE
+    RECORD BACK live. Then the POINT OF NO RETURN is stamped on the record, before the first irreversible step (the
+    trash's end, a table's detach, a grant's revoke): past it the delete finishes, or its answer is ``partial`` (503)
+    and the same delete asked again finishes it. Each step past the mark that can take long is followed by a read of the
+    record (``tenancy.require_own``): a delete asked again took the delete over (409), or the creation ended and the id
+    names another (404), and the delete stops there, ending nothing of the warehouse that holds the id now. Its trash is
+    the records filed under its own creation (``warehouses.trash_owned_by``), and its end is the record's one removal
+    (``tenancy.end``).
     """
     so = settings.storage_options()
     if addressed.record is None:
@@ -1251,12 +1271,15 @@ async def delete_warehouse(
             raise InvalidInputError(f"bucket {warehouse_id!r} is claimed by a creation that ended: it is purged only with ?purge_bucket=true")
         assert addressed.claim is not None
         return await _purge_a_dead_claim(request, settings, token, addressed.claim)
-    record = addressed.record
+    delete = tenancy.DeleteRun.of(WAREHOUSE, addressed.record)
+    judged = await tenancy.judged(settings, delete)
+    record = judged.record
     project = record["project"]
     obj = _object_of(record)
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
-    # state, so it runs strictly after the gate above.
-    fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)
+    # state, so it runs strictly after the gate above. A delete asked again over a mark judged these when it marked.
+    if record.get(STATE) != DELETING:
+        fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)
 
     # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
     holder = warehouses.purge_holder("warehouse", warehouse_id, record[UUID])
@@ -1301,30 +1324,38 @@ async def delete_warehouse(
     if cascade or purge_bucket:
         require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
-    # Marked `deleting` before the namespaces are read again for the cascade (ADR 0245, `MarksFirst`): a namespace made
-    # after the mark is refused by its door, and one made before it is in the second read. A delete refused after the
-    # mark leaves the warehouse marked, answered as absent, and finished by the same call asked again.
-    if record.get(STATE) != DELETING and await run_in_threadpool(warehouses.mark_deleting, settings.registry_root, so, warehouse_id, record[UUID]) is None:
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    if ns_conn is not None and (late := sorted(set(await _namespaces_in(ns_conn, warehouse_id)) - set(held))):
-        if not cascade:
-            raise NamespaceNotEmptyError(
-                f"warehouse '{warehouse_id}' acquired namespace(s) {', '.join(late)} while its delete began; drop them, or pass ?cascade=true"
-            )
-        held = sorted({*held, *late})
-
     # G4 (ADR 0233): the warehouse's namespace fence held for a drop from before its trash is read until its record is gone.
     # A trash record is filed under the warehouse only while that fence is held for an add (`trash.put`), so a recoverable
     # drop landing beside this delete files before the read below, which finds it, or is refused 409: none outlives the
-    # warehouse. Its adds directly beneath the warehouse are held off the same way.
+    # warehouse. Its adds directly beneath the warehouse are held off the same way. Taken before the mark: another holder
+    # refuses it with nothing changed.
     async with holding_to_confirm(settings.registry_root, so, [warehouse_id], NamespaceWork.DROP) as fence:
         # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
         # this warehouse's namespaces and report a clean delete having removed nothing.
         subtrees = await _cascade_subtrees(ns_conn, settings, held, force=force) if ns_conn is not None else []
-        # The warehouse's own trash: the records whose names begin with its id.
-        trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
+        # The warehouse's own trash: the records its own creation filed.
+        trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, record)
         if purge_bucket:
             await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
+        await tenancy.mark(settings, delete, judged, by=current_subject(token))
+        # Marked `deleting` (`MarksFirst`): a namespace made after the mark is refused by its door, and one made before it
+        # is in this second read. Nothing irreversible is done yet, so a refusal here puts the warehouse back live.
+        try:
+            if ns_conn is not None and (late := sorted(set(await _namespaces_in(ns_conn, warehouse_id)) - set(held))):
+                if not cascade:
+                    raise NamespaceNotEmptyError(
+                        f"warehouse '{warehouse_id}' acquired namespace(s) {', '.join(late)} while its delete began; drop them, or pass ?cascade=true"
+                    )
+                acquired = await _cascade_subtrees(ns_conn, settings, late, force=force)
+                if purge_bucket:
+                    await _require_no_outside_clones(ns_conn, settings, subtrees=acquired, trashed=[])
+                subtrees = [*subtrees, *acquired]
+            # The point of no return: past it the delete finishes, or the same delete asked again does.
+            await tenancy.pass_no_return(settings, delete)
+        except Exception as exc:
+            if _a_refusal(exc) and not isinstance(exc, (tenancy.DeleteGone, tenancy.DeleteTakenOver)):
+                await tenancy.put_back(settings, delete)
+            raise
         # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
         # What the delete announces is filed before it changes anything, so a delete that fails part-way still announces what
         # it did once the store shows it ([[LH-576]]): a deregister marker per table it means to detach, landed once the
@@ -1386,8 +1417,12 @@ async def delete_warehouse(
                         log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
                     await _forget_trashed(settings, entry, purge=purge.hold is not None)
                     trash_ended.append(f"{kind}:{canonical}")
+                await tenancy.require_own(settings, delete)
                 if ns_conn is not None:
                     for subtree in subtrees:
+                        # The record read again before each subtree: a delete held across its warehouse's end, and the id made
+                        # again, drops no namespace of the warehouse that holds the id now.
+                        await tenancy.require_own(settings, delete)
                         # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
                         # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
                         removed = [item for item in subtree.descendants if item.kind == "namespace"]
@@ -1409,6 +1444,7 @@ async def delete_warehouse(
                             namespaces_dropped.append(fga.canonical_object_id(namespace))
                         async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
                             revoked += count
+                    await tenancy.require_own(settings, delete)
                     # The warehouse's own row last, once every namespace beneath it is gone.
                     with suppress(NamespaceNotFoundError):
                         await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=[warehouse_id]))
@@ -1423,6 +1459,7 @@ async def delete_warehouse(
                 # wrote on it after this read wrote on a dead object nothing resolves to, which the converge tick sweeps once
                 # the creation is ended.
                 revoked += len(await fga_deps.end_object(client, settings, obj, token=token))
+                await tenancy.require_own(settings, delete)
                 # The record goes after the bytes: it is what the door is addressed by, so while the purge can still fail, it
                 # keeps the warehouse for the re-issue that finishes it; the claim goes last, once no record names the bucket.
                 purged = await purge.delete_bytes(request, settings)
@@ -1431,26 +1468,32 @@ async def delete_warehouse(
                 # may have been filed under the warehouse since its read. The record goes only while the hold still stands; a
                 # lapsed one refuses here (409), the record kept for the re-issue, which reads the trash again.
                 await run_in_threadpool(fence.confirm)
-                await run_in_threadpool(warehouses.end_warehouse, settings.registry_root, so, record)
+                await tenancy.end(settings, delete)
                 purge.stage = "record_deleted"
                 await purge.release(settings)
+            except (tenancy.DeleteGone, tenancy.DeleteTakenOver) as exc:
+                # The id names another creation now, or another delete of this one took it over: this delete stops, having
+                # ended nothing that is not its own creation's, and says so.
+                purge.failed(exc)
+                raise
             except Exception as exc:
-                # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first
-                # table is detached, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
-                # blip) — and the caller then gets a problem body that says nothing about what is already
-                # gone. The error is deliberately NOT swallowed (fail-closed; every primitive is idempotent, so the
-                # recovery path is to re-issue the same call), but what DID land is recorded here or it is lost.
+                # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: past the point of no
+                # return a step CAN still fail (an OpenFGA outage on the revoke, a registry blip, a lapsed fence) — and the
+                # caller then gets a problem body that says nothing about what is already gone. The error is deliberately
+                # NOT swallowed (fail-closed; every primitive is idempotent, so the recovery path is to re-issue the same
+                # call), but what DID land is recorded here or it is lost.
                 if isinstance(exc, fga.RevokeInterrupted):
                     # The object whose revoke the outage stopped lost these before it.
                     revoked += len(exc.removed)
                 purge.failed(exc)
                 if _a_refusal(exc) and not (namespaces_dropped or tables_removed or trash_ended or revoked):
-                    # The claim the purge took and no byte deleted under is given back, so the refusal leaves nothing.
+                    # A GUARD'S REFUSAL BEFORE ANY STEP LANDED is the answer, under its own code ([[LH-572]]): a guard refuses
+                    # before its step writes, so nothing is partial, and the warehouse is put back live with the claim the
+                    # purge took (ADR 0245, review T3). A failure of the store or of OpenFGA is reported as partial even
+                    # with nothing counted, since the step it stopped may have landed (a clone's row detached, then its
+                    # tag's delete failed), and a re-issue is what finishes it.
                     await purge.give_back(settings)
-                    # A GUARD'S REFUSAL BEFORE ANY STEP LANDED is the answer, under its own code ([[LH-572]]): a guard refuses before
-                    # its step writes, so nothing is partial. A failure of the store or of OpenFGA is reported as partial even with
-                    # nothing counted, since the step it stopped may have landed (a clone's row detached, then its tag's delete
-                    # failed), and a re-issue is what finishes it.
+                    await tenancy.put_back(settings, delete)
                     raise
                 log.error(
                     "warehouse_delete_partial",
@@ -1466,21 +1509,14 @@ async def delete_warehouse(
                     },
                     exc_info=True,
                 )
-                # AND TELL THE CALLER, not only the log. The log records what landed for an operator; the
-                # caller got a problem body that said nothing, so it could not tell a delete that did nothing
-                # from one that destroyed three namespaces and then failed — and those need different next
-                # actions. The outcome rides as RFC 9457 extension members, which is what lets a 5xx say
-                # something true about the caller's own objects while `detail` stays redacted.
-                #
-                # ServiceUnavailable rather than the original error, and that is the honest code: every
-                # primitive here is idempotent, so the recovery is to re-issue the SAME call — which is
-                # precisely what a 503 asks a client to do. The cause is chained, so the real failure is still
-                # in the traceback and the log.
+                # AND TELL THE CALLER, not only the log: the warehouse stays marked, past its point of no return, and the
+                # same call asked again finishes it, which is what a 503 asks a client to do. The outcome rides as RFC 9457
+                # extension members, which is what lets a 5xx say something true about the caller's own objects while
+                # `detail` stays redacted. The cause is chained, so the real failure is still in the traceback and the log.
                 raise PartiallyApplied(
-                    f"warehouse {warehouse_id!r} was PARTIALLY deleted: {len(namespaces_dropped)} namespace(s) dropped, "
-                    f"{len(tables_removed)} table(s) removed, {len(trash_ended)} trashed object(s) ended and {revoked} tuple(s) "
-                    "revoked before the failure. Every step is "
-                    "idempotent — re-issue this call to finish it.",
+                    f"warehouse {warehouse_id!r} is past its point of no return and was PARTIALLY deleted: {len(namespaces_dropped)} namespace(s) "
+                    f"dropped, {len(tables_removed)} table(s) removed, {len(trash_ended)} trashed object(s) ended and {revoked} tuple(s) "
+                    "revoked before the failure. Every step is idempotent — re-issue this call to finish it.",
                     problem_extra={
                         "warehouse": warehouse_id,
                         "namespaces_dropped": namespaces_dropped,
@@ -1712,7 +1748,7 @@ async def validate_warehouse_credentials(
         # Recorded and served, so a store that stopped enforcing the seal since registration shows on the warehouse and
         # pages (`WarehouseSealUnenforced`) from this validate on, whatever the declaration (ADR 0242 B4). A probe that was
         # inconclusive measured nothing, and the record keeps the seal last measured.
-        measured = await run_in_threadpool(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed)
+        measured = await run_in_threadpool(partial(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed, uuid=record[UUID]))
         seal_posture.observe(warehouse_id, measured, required=str(record["bucket"]) not in settings.seal_detection_only_buckets)
     return report
 

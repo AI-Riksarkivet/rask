@@ -222,6 +222,13 @@ def type_restrictions(fga_type: str, relation: str) -> frozenset[str]:
     return _type_restrictions(fga_type).get(relation, frozenset())
 
 
+@functools.cache
+def types_naming(user_type: str) -> tuple[str, ...]:
+    """The types with a relation whose tuples may name an object of ``user_type`` as their user (a direct type
+    restriction, ``[project]``), sorted, as the bundled model declares them."""
+    return tuple(sorted(t for t in model_types() if any(user_type in restrictions for restrictions in _type_restrictions(t).values())))
+
+
 def admits(fga_type: str, relation: str, user: str) -> bool:
     """Whether a tuple of ``relation`` on ``fga_type`` carrying no condition may name ``user``, as the store judges it:
     ``user:<id>`` meets ``user``, ``user:*`` meets ``user:*`` and ``role:<id>#assignee`` meets ``role#assignee``."""

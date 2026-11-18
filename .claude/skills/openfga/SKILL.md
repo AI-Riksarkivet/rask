@@ -154,9 +154,16 @@ and every OpenFGA Write refuses a tuple naming a project or warehouse by anythin
 refuses an id shaped like a uuid. A door resolves the id to its LIVE record (`tenancy.resolved`, one registry read;
 a record `creating` or `deleting` resolves to nothing), asks its gate on that object, writes there in ONE Write, and
 resolves again (`tenancy.require_still`): a project deleted meanwhile is answered 404 and what was written stands on a
-dead object, which the converge tick sweeps (`control_records.read_ended`, `fga.revoke_object_tuples(naming=)`). An
-absent id is gated as an object nobody holds (`fga_deps.require_on_tenant`, `tenancy.nowhere`) so a 403 discloses
-nothing. A listing that asks OpenFGA maps objects back to ids through the registry (`tenancy.ids_by_object`). `revision`
+dead object, which the converge tick sweeps (`control_records.read_ended`, `fga.revoke_object_tuples(naming=)`, the
+naming types read from the model's type restrictions, `fga.types_naming`). EVERY door on a tenant's id gates through
+ONE function, `fga_deps.on_tenant` (`require_on_tenant` for a relation): an absent id is gated as an object nobody
+holds (`tenancy.nowhere`), so a caller refused is answered alike for an id that stands and one that does not, and
+only a caller the gate admits learns that an id is missing; EVERY door writing a tuple on a creation resolves again
+after its Write through ONE helper, `tenancy.require_still` (review T4, T6; both rosters are tests that walk the router).
+The estate admin's tools take `project:<id>` / `warehouse:<id>` and resolve them to the creation (a write: live; a
+question: any standing record), take a standing creation's uuid, answer 400 for anything else shaped like a tenancy
+object, and name the id beside the uuid (`name`, `user_name`, `names`). A listing that asks OpenFGA maps objects back
+to ids through the registry (`tenancy.ids_by_object`). `revision`
 on `project`, `warehouse` and `estate` is bookkeeping: a project's administration token `revision:<n>` (ADR 0213,
 `fga.next_token`, moved by every admin removal) and a declared grant's evidence `revision:git-<hex>`
 (`fga.write_evidenced`); the trail leaves it out. **Read what you need and no more:** one tuple through `fga.holds`

@@ -348,7 +348,8 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
 
 def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # Fail-closed at BOTH doors, before ANY side effect: the project door 403s a non-estate-admin, and
-    # the warehouse door 404s the unknown tenant (there is no side door left that would mint it). No
+    # the warehouse door refuses the unknown tenant to a caller who holds nothing there exactly as it
+    # would refuse one that stands, 403 (review T4; there is no side door left that would mint it). No
     # bucket, no registry record, no tuple either way.
     from catalog.schemas import CreateWarehouseRequest
 
@@ -360,7 +361,7 @@ def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, m
 
     with pytest.raises(PermissionDeniedError):
         _create_project_as(settings, "dex~mallory", "evil")
-    with pytest.raises(TableNotFoundError):
+    with pytest.raises(PermissionDeniedError):
         _create_as(settings, "dex~mallory", CreateWarehouseRequest(id="evil-wh", project="evil"))
     assert provisioned == []
     assert proj_svc.list_projects(settings.registry_root, StorageOptions()) == []

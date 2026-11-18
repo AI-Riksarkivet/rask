@@ -58,12 +58,13 @@ from catalog.schemas import (
     PrincipalRecord,
     TupleCondition,
 )
-from catalog.services import object_names, principals, subject_tuples
+from catalog.services import object_names, principals, subject_tuples, tenancy
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.principal import is_principal
+from lakehouse.governed.tenancy import Kind, is_uuid, kind_of
 
 
 log = logging.getLogger(__name__)
@@ -164,21 +165,26 @@ def _validated_object(obj: str) -> str:
 _NOT_FOUND: dict[str, type[TableNotFoundError | NamespaceNotFoundError]] = {"table": TableNotFoundError, "namespace": NamespaceNotFoundError}
 
 
-async def _held_object(resolver: Resolver, obj: str) -> str:
-    """The object a caller named, as OpenFGA holds it ([[LH-591]]).
+async def _held_object(resolver: Resolver, settings: Settings, obj: str, *, writing: bool = False) -> str:
+    """The object a caller named, as OpenFGA holds it ([[LH-591]], ADR 0245).
 
     A table or namespace is held by its uuid (``table:<uuid>``, [[LH-524]]), so an id spelled as a uuid is that object,
     and any other id is a name, resolved through the request's :class:`Resolver` as every door resolves one. A
     uuid-spelled id is never read as a name first: a namespace named after another object's uuid would then stand in
-    for that object in the estate admin's question. Every other type's object is held as written.
+    for that object in the estate admin's question. A project or a warehouse is held by its creation's uuid
+    (:func:`_creation_of`): a live one for a tuple ``writing`` (a write, a delete, a hypothesis), and any standing one for a
+    question. Every other type's object is held as written.
 
     Raises:
-        InvalidInputError: The object is not ``<type>:<id>`` of a type the model defines, or names a warehouse as a namespace.
+        InvalidInputError: The object is not ``<type>:<id>`` of a type the model defines, names a warehouse as a namespace,
+            or names a project or a warehouse no live creation holds.
         TableNotFoundError: No table has the name.
         NamespaceNotFoundError: No namespace has the name.
         UnidentifiedObjectError: The object the name resolves to records no uuid.
     """
     obj_type, _, obj_id = _validated_object(obj).partition(":")
+    if (kind := kind_of(obj_type)) is not None:
+        return await _creation_of(settings, kind, obj, states=tenancy.DOORS if writing else tenancy.STANDING)
     if obj_type not in _NOT_FOUND:
         return obj
     if is_spelled_as_a_uuid(obj_id):
@@ -194,15 +200,39 @@ async def _held_object(resolver: Resolver, obj: str) -> str:
     return held
 
 
+async def _creation_of(settings: Settings, kind: Kind, obj: str, *, states: frozenset[str]) -> str:
+    """``obj``, ``project:<id>`` or ``warehouse:<id>`` as every door names one, as OpenFGA holds it: the object of the
+    creation the id names in one of ``states`` (``tenancy.resolved``, the one resolver), or ``obj`` itself where it already
+    names such a creation by its uuid, or is the estate's own warehouse, which no record names (ADR 0245).
+
+    Raises:
+        InvalidInputError: No such creation holds the id, or the uuid: a tuple written there, or a question asked there,
+            would be about an object nothing names (the spec's invalid input, 400).
+    """
+    if obj == settings.fga_default_warehouse_object:
+        return obj
+    object_id = obj.partition(":")[2]
+    if is_uuid(object_id):
+        standing = await run_in_threadpool(object_names.tenancy_ids, settings, [obj])
+        if obj in standing and (tenant := await tenancy.resolved(settings, kind, standing[obj], states=states)) is not None and tenant.obj == obj:
+            return obj
+        raise InvalidInputError(f"{obj} names no {kind}'s creation in {', '.join(sorted(states))}; name the {kind} by its id")
+    if (tenant := await tenancy.resolved(settings, kind, object_id, states=states)) is None:
+        raise InvalidInputError(f"{obj} names no {kind} that stands: a {kind} is named here by the id of one that does")
+    return tenant.obj
+
+
 async def _named(resolver: Resolver, settings: Settings, obj: str) -> tuple[str, str | None]:
-    """The object a caller named as OpenFGA holds it (:func:`_held_object`), and the name it holds now, so an answer reads
-    the same whichever form the caller asked in.
+    """The object a caller named as OpenFGA holds it (:func:`_held_object`), and the name it holds now (a project's or
+    a warehouse's id), so an answer reads the same whichever form the caller asked in.
 
     A name the request's :class:`Resolver` just resolved is the name the object holds; only an object named by its uuid
     is looked up (:func:`object_names.current_names`), which reads every root's index.
     """
-    held = await _held_object(resolver, obj)
+    held = await _held_object(resolver, settings, obj)
     obj_type, _, obj_id = obj.partition(":")
+    if kind_of(obj_type) is not None:
+        return held, (await run_in_threadpool(object_names.tenancy_ids, settings, [held])).get(held)
     if obj_type not in _NOT_FOUND:
         return held, None
     if not is_spelled_as_a_uuid(obj_id):
@@ -305,7 +335,7 @@ async def read_access_tuples(
     (``name``, [[LH-591]]), and an ``object`` filter may name a table or namespace by its name or its uuid.
     """
     if object is not None:
-        obj_filter: str | None = await _held_object(resolver, object)
+        obj_filter: str | None = await _held_object(resolver, settings, object)
     elif object_type is not None:
         if object_type not in _model_types():
             raise InvalidInputError(f"{object_type!r} is not a type the authorization model defines")
@@ -338,14 +368,14 @@ async def read_access_tuples(
     # #41: the raw-tuple listing is an estate-wide ACL disclosure — audit it distinctly from the gate's
     # allow, exactly like access_review on the per-object surface.
     audit(AuditAction.ACCESS_TUPLES_READ, AuditOutcome.SUCCESS, subject=subject, resource=resource, delivered=len(tuples))
-    names = await run_in_threadpool(object_names.current_names, settings, [t.object for t in tuples])
+    names = await run_in_threadpool(object_names.current_names, settings, [*(t.object for t in tuples), *(t.user for t in tuples)])
     return AccessTuplesPage(
-        tuples=[_as_access_tuple(t, name=names.get(t.object)) for t in tuples],
+        tuples=[_as_access_tuple(t, name=names.get(t.object), user_name=names.get(t.user)) for t in tuples],
         continuation=next_token,
     )
 
 
-def _as_access_tuple(t: fga.ClientTuple, *, name: str | None = None) -> NamedAccessTuple:
+def _as_access_tuple(t: fga.ClientTuple, *, name: str | None = None, user_name: str | None = None) -> NamedAccessTuple:
     """Map a stored tuple out to the wire, CONDITION INCLUDED.
 
     Dropping the condition here would make every time-boxed grant read back as permanent — the UI
@@ -354,7 +384,7 @@ def _as_access_tuple(t: fga.ClientTuple, *, name: str | None = None) -> NamedAcc
     condition = None
     if (c := getattr(t, "condition", None)) is not None and getattr(c, "name", None):
         condition = TupleCondition(name=c.name, context=dict(getattr(c, "context", None) or {}))
-    return NamedAccessTuple(user=t.user, relation=t.relation, object=t.object, condition=condition, name=name)
+    return NamedAccessTuple(user=t.user, relation=t.relation, object=t.object, condition=condition, name=name, user_name=user_name)
 
 
 def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientTuple:
@@ -429,21 +459,37 @@ async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Call
 
 
 @router.post("/tuples")
-async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+async def write_access_tuple(
+    client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessTuple
+) -> AccessTuple:
     """Write ONE raw tuple (idempotent — a duplicate write is success), echoing the tuple as stored.
 
     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
     derived ``can_*`` action or an unknown type/relation is a 400) — the raw-tuple analog of the
     per-object grant surface's grantable-rung guard, without its table/namespace restriction. A table or namespace
-    named by its name is written on its uuid object (:func:`_held_object`), the one every decision reads.
+    named by its name is written on its uuid object, and a project or a warehouse named by its id on its live creation
+    (:func:`_held_object`), the object every decision reads; one no live creation holds is a 400.
     """
-    held = body.model_copy(update={"object": await _held_object(resolver, body.object)})
+    held = body.model_copy(update={"object": await _held_object(resolver, settings, body.object, writing=True), "user": await _held_user(settings, body.user)})
     return await _mutate_tuple(client, announcer, token, held, write=True)
+
+
+async def _held_user(settings: Settings, user: str) -> str:
+    """A tuple's user as OpenFGA holds it: a project or a warehouse named by its id (``project:<id>``, or a userset of one)
+    is its live creation (:func:`_creation_of`); any other user as written.
+
+    Raises:
+        InvalidInputError: It names a project or a warehouse no live creation holds.
+    """
+    head, hash_, relation = user.partition("#")
+    if (kind := kind_of(head.partition(":")[0])) is None or not head.partition(":")[2]:
+        return user
+    return f"{await _creation_of(settings, kind, head, states=tenancy.DOORS)}{hash_}{relation}"
 
 
 @router.delete("/tuples")
 async def delete_access_tuple(
-    client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: NamedAccessTuple
+    client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: NamedAccessTuple
 ) -> AccessTuple:
     """Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
 
@@ -452,7 +498,12 @@ async def delete_access_tuple(
     tuple browser answered it: its ``name`` is the browser's display of the object and is never read, since the object
     decides what is revoked.
     """
-    held = AccessTuple(user=body.user, relation=body.relation, object=await _held_object(resolver, body.object), condition=body.condition)
+    held = AccessTuple(
+        user=await _held_user(settings, body.user),
+        relation=body.relation,
+        object=await _held_object(resolver, settings, body.object, writing=True),
+        condition=body.condition,
+    )
     return await _mutate_tuple(client, announcer, token, held, write=False)
 
 
@@ -580,6 +631,7 @@ async def list_access_users(
         audit(AuditAction.ACCESS_LIST_USERS, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
     audit(AuditAction.ACCESS_LIST_USERS, AuditOutcome.SUCCESS, subject=subject, resource=obj, relation=relation, delivered=len(users))
+    names = await run_in_threadpool(object_names.tenancy_ids, settings, users)
     # ListUsers has no pagination and the server truncates silently at listUsersMaxResults — an
     # under-reported access review must never render as a complete one, so the ceiling rides the wire.
     return AccessListUsersResponse(
@@ -590,6 +642,7 @@ async def list_access_users(
         user_type=body.user_type,
         user_relation=body.user_relation,
         truncated=len(users) >= fga.LIST_USERS_SERVER_CAP,
+        names=names,
     )
 
 
@@ -658,7 +711,13 @@ async def simulate_access(
     obj, name = await _named(resolver, settings, body.object)
     user = _qualified_subject(body.user)
     # Validated, not merely parsed — same gate a real write clears.
-    hypothetical = [_validated_write_tuple(t.model_copy(update={"object": await _held_object(resolver, t.object)}), evaluated=True) for t in body.hypothetical]
+    hypothetical = [
+        _validated_write_tuple(
+            t.model_copy(update={"object": await _held_object(resolver, settings, t.object, writing=True), "user": await _held_user(settings, t.user)}),
+            evaluated=True,
+        )
+        for t in body.hypothetical
+    ]
     subject = token.subject if token else "anonymous"
     try:
         # Two checks, one round trip each. The baseline cannot be skipped when `hypothetical` is empty

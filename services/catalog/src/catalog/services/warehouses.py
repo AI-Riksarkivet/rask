@@ -39,8 +39,10 @@ from catalog.services.control_records import (
     DeleteMode,
     ProtectionChange,
     WarehouseRecord,
-    end_creation,
+    change_creation,
+    end_record,
     read_json,
+    replace_judged,
     validated,
     validated_or_refuse,
     with_manager,
@@ -53,7 +55,7 @@ from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.record_store import get_record, put_record
-from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json, replace_json
+from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, Stored, create_json, exchange_json, replace_json
 from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
 
 
@@ -220,43 +222,25 @@ class WarehouseOfADeadTenant(Exception):
 
 
 def set_warehouse_protection(
-    control_root: str, storage_options: StorageOptions, warehouse_id: str, *, project: str, change: ProtectionChange
+    control_root: str, storage_options: StorageOptions, warehouse_id: str, *, uuid: str, change: ProtectionChange
 ) -> dict[str, str] | None:
-    """Apply ``change`` to ``project``'s warehouse ``warehouse_id``, conditional on the record's ETag.
-
-    Every other field is the record's as it stands at the write (``mutate_json``).
-
-    Args:
-        control_root: The registry's root.
-        storage_options: How to reach it.
-        warehouse_id: The warehouse to change.
-        project: The project the caller was authorized on.
-        change: What to apply.
+    """Apply ``change`` to live warehouse ``warehouse_id``'s record where it names the creation ``uuid`` the caller was
+    authorized on, under the ETag of the read that found it (ADR 0245): every other field is the record's as it stands.
 
     Returns:
-        The updated record, or ``None`` when no such warehouse of ``project`` exists: a record that went to another
-        project between the caller's authorization and this write is not the warehouse the caller may protect.
+        The updated record, or ``None`` where the id no longer names that creation live: one deleted between the
+        caller's authorization and this write, or made again under its id.
     """
-
-    def protect(record: dict[str, str]) -> dict[str, str]:
-        if record.get("project") != project:
-            raise WarehouseProjectConflict(f"warehouse {warehouse_id!r} is registered to another project")
-        return with_protection(record, change)
-
-    try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), protect)
-    except (RecordMissingError, WarehouseProjectConflict):
-        return None
+    return change_creation(
+        control_root, storage_options, _warehouse_key(warehouse_id), uuid, lambda record: with_protection(record, change), states=frozenset({tenancy.LIVE})
+    )
 
 
-def set_warehouse_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str, sealed: str) -> dict[str, str] | None:
+def set_warehouse_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str, sealed: str, *, uuid: str) -> dict[str, str] | None:
     """Record what a validate's seal check measured of warehouse ``warehouse_id``'s store (ADR 0242): ``enforced``,
-    ``unenforced`` or ``untaggable``, and when. Conditional on the record's ETag, every other field as it stands at the
-    write; ``None`` when the record is gone."""
-    try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), lambda record: {**record, **sealed_fields(sealed)})
-    except RecordMissingError:
-        return None
+    ``unenforced`` or ``untaggable``, and when. Conditional on a read that finds the creation ``uuid`` the probe ran
+    for, every other field as it stands at the write; ``None`` where the id no longer names it."""
+    return change_creation(control_root, storage_options, _warehouse_key(warehouse_id), uuid, lambda record: {**record, **sealed_fields(sealed)})
 
 
 #: Where the seal the catalog's probe last measured of the estate's own warehouse is kept: it has no registry record, and
@@ -279,16 +263,15 @@ def estate_seal(control_root: str, storage_options: StorageOptions, warehouse_id
     return record if record is not None and isinstance(record.get(SEALED), str) else None
 
 
-def set_warehouse_manager(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, manager: str | None) -> dict[str, str] | None:
-    """Record who owns warehouse ``warehouse_id``'s declaration ([[XC-213]]): ``git``, or its own doors for ``None``.
+def set_warehouse_manager(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, uuid: str, manager: str | None) -> dict[str, str] | None:
+    """Record who owns live warehouse ``warehouse_id``'s declaration ([[XC-213]]): ``git``, or its own doors for ``None``.
 
-    Conditional on the record's ETag, every other field as it stands at the write. ``None`` is answered when the
-    record is gone.
+    Conditional on a read that finds the creation ``uuid`` live, every other field as it stands at the write. ``None`` is
+    answered where the id no longer names it.
     """
-    try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), lambda record: with_manager(record, manager))
-    except RecordMissingError:
-        return None
+    return change_creation(
+        control_root, storage_options, _warehouse_key(warehouse_id), uuid, lambda record: with_manager(record, manager), states=frozenset({tenancy.LIVE})
+    )
 
 
 def upsert_warehouse(
@@ -335,11 +318,14 @@ def upsert_warehouse(
 
     Raises:
         WarehouseProjectConflict: The live record moved to another project.
-        RecordMissingError: The record vanished (a concurrent delete, retryable, never a blind create).
+        RecordMissingError: The record vanished, or is no longer the creation ``record`` names (a concurrent delete,
+            retryable, never a blind create).
     """
     project = record["project"]
 
     def merge(live: dict[str, str]) -> dict[str, str]:
+        if live.get(UUID) != record[UUID] or live.get(STATE) == tenancy.ENDED:
+            raise RecordMissingError(f"warehouse {record['id']!r} is no longer the creation {record[UUID]}")
         if live.get("project") != project:
             raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
         if not tenancy.made_under(live, record[PROJECT_UUID]):
@@ -379,34 +365,19 @@ def create_warehouse_record(control_root: str, storage_options: StorageOptions, 
 
 def set_live(control_root: str, storage_options: StorageOptions, warehouse_id: str, uuid: str) -> dict[str, str] | None:
     """Flip warehouse ``warehouse_id``'s record from ``creating`` to ``live`` where it still names the creation ``uuid``,
-    conditional on its ETag: its seed stands by then (ADR 0245). The record as it stands, ``None`` where it is gone or
-    another creation's."""
+    conditional on its ETag: its seed stands by then (ADR 0245). The record as it stands, ``None`` where it is gone,
+    another creation's, or no longer creating or live."""
 
     def flip(record: dict[str, str]) -> dict[str, str]:
-        if record.get(UUID) != uuid:
-            raise RecordMissingError(f"warehouse {warehouse_id!r} is not the creation {uuid}")
         return {**record, STATE: tenancy.LIVE} if record.get(STATE) == tenancy.CREATING else record
 
-    try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), flip)
-    except RecordMissingError:
-        return None
+    return change_creation(control_root, storage_options, _warehouse_key(warehouse_id), uuid, flip, states=frozenset({tenancy.CREATING, tenancy.LIVE}))
 
 
-def mark_deleting(control_root: str, storage_options: StorageOptions, warehouse_id: str, uuid: str) -> dict[str, str] | None:
-    """Mark warehouse ``warehouse_id``'s record ``deleting`` where it still names the creation ``uuid``, conditional on
-    its ETag: from here no door resolves it (ADR 0245). The record as written, ``None`` where it is gone or another
-    creation's."""
-
-    def mark(record: dict[str, str]) -> dict[str, str]:
-        if record.get(UUID) != uuid:
-            raise RecordMissingError(f"warehouse {warehouse_id!r} is not the creation {uuid}")
-        return {**record, STATE: tenancy.DELETING}
-
-    try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), mark)
-    except RecordMissingError:
-        return None
+def mark_deleting(control_root: str, storage_options: StorageOptions, warehouse_id: str, judged: Stored, marked: dict[str, str]) -> bool:
+    """Write ``marked``, the warehouse's record as its delete marks it (``tenancy.mark``), only while the record is still
+    the one ``judged`` read (ADR 0245): whether it landed."""
+    return replace_judged(control_root, storage_options, _warehouse_key(warehouse_id), judged, marked)
 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
@@ -419,20 +390,22 @@ def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_
 
 
 def get_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
-    """The warehouse record in whatever state it is, or ``None`` if unregistered: what its delete and the converge tick
-    read.
+    """The warehouse record in whatever state it is, or ``None`` if unregistered or stamped ``ended`` (its delete removes
+    it next): what its delete and the converge tick read.
 
     Raises:
         ServiceUnavailableError: The record is there and cannot be read as one.
     """
     key = _warehouse_key(warehouse_id)
     record = read_json(control_root, storage_options, key)
-    return validated_or_refuse(record, WarehouseRecord, event="warehouse_record_malformed", path=key) if record is not None else None
+    valid = validated_or_refuse(record, WarehouseRecord, event="warehouse_record_malformed", path=key) if record is not None else None
+    return None if valid is None or valid.get(STATE) == tenancy.ENDED else valid
 
 
-def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
-    """``(readable warehouse records in every state, paths that are there and could NOT be read as one)``, unordered. An
-    absent prefix yields ``([], [])``.
+def read_warehouses(control_root: str, storage_options: StorageOptions, *, ended: bool = False) -> tuple[list[dict[str, str]], list[str]]:
+    """``(readable warehouse records in every state but ``ended`` (that too with ``ended``: the converge tick, removing one
+    whose stamper died), paths that are there and could NOT be read as one)``, unordered. An absent prefix yields
+    ``([], [])``.
 
     The skipped paths are returned because the callers need opposite things from one tolerance: a listing survives one
     bad object, while a decision that no record names something (the last warehouse of a project, another claim on a
@@ -466,7 +439,7 @@ def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple
             continue
         if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is None:
             skipped.append(info.path)
-        else:
+        elif ended or valid.get(STATE) != tenancy.ENDED:
             out.append(valid)
     return out, skipped
 
@@ -813,31 +786,21 @@ def warehouse_status(control_root: str, storage_options: StorageOptions, warehou
     return record.get("status") or "active"
 
 
-def set_warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str, status: str) -> dict[str, str] | None:
-    """Flip a warehouse's ``status`` (deactivate/activate) and persist it. Returns the updated record, or
-    ``None`` if the warehouse does not exist.
+def set_warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str, status: str, *, uuid: str) -> dict[str, str] | None:
+    """Flip live warehouse ``warehouse_id``'s ``status`` (deactivate/activate) where it names the creation ``uuid`` the
+    caller was authorized on, and persist it. Returns the updated record, or ``None`` where the id no longer names that
+    creation live.
 
-    CONDITIONAL on the record's ETag (diff2 F4), not the plain ``get → mutate → put`` this was. That
-    shape let a QUARANTINE BE SILENTLY LIFTED by interleaving rather than by anyone asking: a GitOps
-    re-POST reads the record (status=active), an operator deactivates, and the re-POST's put lands
-    afterwards carrying the status it read before. Nothing in that sequence is a wrong decision by
-    either writer — the re-POST is stale in a field it only carried forward — which is exactly why a
-    guard on the DECISION cannot catch it and a guard on the WRITE can.
-
-    ``mutate_json`` re-reads and re-applies on a lost race, so a concurrent write to any OTHER field
-    is preserved rather than clobbered, and this flip still wins. That is the right convergence for a
-    field-level toggle: last writer wins on the field they actually touched, nobody wins on a field
-    they merely read.
+    CONDITIONAL on the ETag of a read that finds that creation (diff2 F4, ADR 0245), not the plain ``get → mutate → put``
+    this was. That shape let a QUARANTINE BE SILENTLY LIFTED by interleaving rather than by anyone asking: a GitOps
+    re-POST reads the record (status=active), an operator deactivates, and the re-POST's put lands afterwards carrying the
+    status it read before. Nothing in that sequence is a wrong decision by either writer — the re-POST is stale in a
+    field it only carried forward — which is exactly why a guard on the DECISION cannot catch it and a guard on the WRITE
+    can. A concurrent write to any OTHER field is re-read and kept, and this flip still wins on the field it touched.
     """
-    try:
-        return mutate_json(
-            control_root,
-            storage_options,
-            _warehouse_key(warehouse_id),
-            lambda record: {**record, "status": status},
-        )
-    except RecordMissingError:
-        return None
+    return change_creation(
+        control_root, storage_options, _warehouse_key(warehouse_id), uuid, lambda record: {**record, "status": status}, states=frozenset({tenancy.LIVE})
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -851,24 +814,27 @@ def record_key(warehouse_id: str) -> str:
     return _warehouse_key(warehouse_id)
 
 
-def end_warehouse(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """End the creation ``record`` names: kept as ended (``control_records.end_creation``, so the converge tick sweeps
-    its object) and its registry record removed, which frees its id. Idempotent: an absent record is a no-op, so a
-    retried delete converges.
+def end_creating(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> bool:
+    """End the creation a record still ``creating`` names (a create abandoning its own record, the converge tick ending
+    one a dead create left): stamped ``ended`` where it is still that creation and creating, kept under ``_ended/`` for
+    the tick's sweep, and removed (``control_records.end_record``). Whether this call ended it.
 
-    Deleting the RECORD is not deleting the BUCKET: the bytes survive unless the caller explicitly
-    asked to purge them (Decision 3 — a catalog entry is recoverable, a customer's bucket is not, and
-    the two never share a default). A record-less bucket is reported by the reconciler, not silently
-    forgotten. The warehouse's trash is ended by the delete door before this runs (:func:`trash_owned_by`).
+    Deleting the RECORD is not deleting the BUCKET: the bytes survive unless a delete explicitly asked to purge them
+    (Decision 3), and a record-less bucket is reported by the reconciler, not silently forgotten.
     """
-    end_creation(control_root, storage_options, tenancy.WAREHOUSE, record, now=datetime.now(UTC))
-    fs, base = fs_and_base(control_root, storage_options)
-    with suppress(FileNotFoundError):
-        fs.delete_file(f"{base}/{_warehouse_key(record['id'])}")
+    return end_record(
+        control_root,
+        storage_options,
+        tenancy.WAREHOUSE,
+        _warehouse_key(record["id"]),
+        str(record[UUID]),
+        now=datetime.now(UTC),
+        states=frozenset({tenancy.CREATING}),
+    )
 
 
-def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[dict[str, Any]]:
-    """The trash records a delete of ``warehouse_id`` ends, each child's before its parent's.
+def trash_owned_by(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> list[dict[str, Any]]:
+    """The trash records a delete of the warehouse creation ``record`` names ends, each child's before its parent's.
 
     THE TRASH GOES WITH THE WAREHOUSE. A recoverable drop keeps a record, the object's grants, its policy and its
     location's claim for an undrop; deleting the warehouse removes what made those locations maintainable and, on
@@ -876,8 +842,10 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse
     `outside the maintained estate`, across 45 warehouses deleted with their trash left behind, and on 2026-10-15 the
     grants such records kept were the reconciler's 17 `ghost_tables`.
 
-    A record is this warehouse's when the name it was dropped under begins with the warehouse's id ([[LH-593]]): a
-    sibling warehouse on the same bucket holds its own names, so its records are never among them.
+    A record is this warehouse's when the drop that filed it was under this creation of it: its name begins with the
+    warehouse's id ([[LH-593]]) and it names the creation's uuid, which ``lakehouse.trash.put`` stamps from the
+    warehouse's record (``warehouse_uuid``). A sibling warehouse on the same bucket holds its own names, and a warehouse
+    made again under the id holds its own creation, so neither's records are among them (ADR 0245, review T2).
 
     Raises:
         ServiceUnavailableError: The store did not answer a read of the trash.
@@ -889,7 +857,8 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse
         # A record that cannot be read may be this warehouse's own, which the delete would leave holding its grants and
         # claim for a warehouse that no longer exists ([[LH-572]]).
         raise store_refusal(exc, reading="reading the trash", so="this warehouse's own trash cannot be determined") from exc
-    owned = [r for r in records if warehouse_of(str(r.get("id") or "")) == warehouse_id]
+    warehouse_id, uuid = str(record["id"]), record.get(UUID)
+    owned = [r for r in records if warehouse_of(str(r.get("id") or "")) == warehouse_id and r.get(trash.WAREHOUSE_UUID) == uuid]
     return sorted(owned, key=lambda r: (r.get("kind") == "namespace", -len(str(r.get("id") or "").split(CATALOG_DELIMITER))))
 
 

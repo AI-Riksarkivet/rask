@@ -1,10 +1,9 @@
 <script lang="ts">
 	// Project creation — an estate-admin flow that COMPOSES existing APIs: it registers the project,
-	// then provisions its first warehouse under it; the
-	// initial admin grant is one raw FGA tuple written through the shared `writeTuple` remote command
-	// (estate-admin gated at the catalog, like /management/v1/events). Every step toasts success/failure honestly —
-	// a partial outcome (the warehouse up, the grant failed) is NAMED, never rolled into a fake
-	// success.
+	// then provisions its first warehouse under it; the extra admin is granted through the project's
+	// members door (`grantProjectAdmin`), which names the project by its id: the console builds no
+	// object string (ADR 0245). Every step toasts success/failure honestly — a partial outcome (the
+	// warehouse up, the grant failed) is NAMED, never rolled into a fake success.
 	//
 	// Registering the project is what MINTS the tenant, and the catalog seeds the caller as its `admin`
 	// on that call (a brand-new project has no tuples, so the estate-admin door opens once and then
@@ -19,10 +18,7 @@
 	import { Dialog } from '@rask/ui/dialog';
 	import { toast } from 'svelte-sonner';
 	import { createWarehouse } from '#lib/data/remote/warehouses.api.ts';
-	import { createProject } from '#lib/remote/warehouses.api.ts';
-	// The grant goes through the SAME remote command the FGA workbench writes with — one write door,
-	// so every raw tuple write is validated, audited, control-event-emitting and single-flight alike.
-	import { writeTuple } from '#lib/remote/access.api.ts';
+	import { createProject, grantProjectAdmin } from '#lib/remote/warehouses.api.ts';
 	import { missingFieldsHint } from '#lib/form-hint.ts';
 
 	let {
@@ -110,16 +106,12 @@
 				return;
 			}
 			const partials: string[] = [];
-			// 3. Optional extra admin — a raw admin tuple on the new project object, ON TOP of the one the
-			// catalog already seeded for the caller when it registered the project. Left empty, the project is still
+			// 3. Optional extra admin, granted at the project's members door ON TOP of the admin the catalog
+			// already seeded for the caller when it registered the project. Left empty, the project is still
 			// governable (by its creator); filled, it hands a co-admin (or a successor) the same rung.
 			const adminUser = admin.trim();
 			if (adminUser) {
-				const res = await writeTuple({
-					user: adminUser,
-					relation: 'admin',
-					object: `project:${project}`,
-				});
+				const res = await grantProjectAdmin({ project, user: adminUser });
 				if (!res.ok) {
 					partials.push(
 						`admin grant for ${adminUser} failed: ${failText('the admin grant', res.status, res.detail)}`,

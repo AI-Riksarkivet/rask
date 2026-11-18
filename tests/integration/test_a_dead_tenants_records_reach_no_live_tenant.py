@@ -382,14 +382,14 @@ def test_a_purge_is_audited_before_its_first_delete_and_one_that_fails_after_it_
     (alice,) = _admins(estate, "alice")
     assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=alice).status_code == 200
     assert estate.client.post("/management/v1/warehouses", json={"id": "wh-a", "project": PROJECT, "bucket": "wh-a-bucket"}, headers=alice).status_code == 200
-    real_end = warehouses.end_warehouse
+    real_end = tenancy.end_record
 
-    def _refused(*_args: Any, **_kwargs: Any) -> None:  # noqa: ANN401 — end_warehouse's own arguments
+    def _refused(*_args: Any, **_kwargs: Any) -> None:  # noqa: ANN401 — end_record's own arguments
         raise OSError("the store refused the delete")
 
-    monkeypatch.setattr(warehouses, "end_warehouse", _refused)
+    monkeypatch.setattr(tenancy, "end_record", _refused)
     failed = _purge(estate, "wh-a", alice)
-    monkeypatch.setattr(warehouses, "end_warehouse", real_end)
+    monkeypatch.setattr(tenancy, "end_record", real_end)
     taken = estate.client.post("/management/v1/warehouses", json={"id": "wh-b", "project": PROJECT, "bucket": "wh-a-bucket"}, headers=alice)
     resumed = _purge(estate, "wh-a", alice)
 

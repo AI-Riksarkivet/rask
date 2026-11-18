@@ -409,7 +409,8 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
 
 def test_a_cascade_refused_before_anything_landed_answers_its_refusal(tenant: _Tenant) -> None:
     """A cascade refused at its first table, whose claim a drop in flight holds fenced, has removed nothing: the refusal is
-    its answer, never a partial delete that counts nothing and asks for a re-issue ([[LH-572]])."""
+    its answer, never a partial delete that counts nothing and asks for a re-issue ([[LH-572]]), and the warehouse is left
+    live."""
     tenant.create_namespace("acme-wh$bronze")
     tenant.create_table("acme-wh$bronze$a")
     settings = get_settings()
@@ -424,6 +425,8 @@ def test_a_cascade_refused_before_anything_landed_answers_its_refusal(tenant: _T
 
     assert (refused.status_code, refused.headers["content-type"], refused.json().get("code")) == (409, "application/problem+json", 14), refused.text
     assert tenant.present(["namespace:acme-wh$bronze", "table:acme-wh$bronze$a"]) == ["namespace:acme-wh$bronze", "table:acme-wh$bronze$a"]
+    # Refused before any step landed, so the warehouse is put back live (ADR 0245, review T3).
+    assert warehouses.get_warehouse(settings.registry_root, settings.storage_options(), tenant.warehouse) is not None
 
 
 def _a_store_that_will_not_delete_a_tag(source_location: str, tag: str, *, storage_options: StorageOptions) -> bool:
@@ -569,18 +572,15 @@ def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_n
     assert held is not None and (held.table, held.fence) == ("acme-wh$bronze$silver", None), f"the clone's location is left as {held}"
 
 
-def test_a_cascade_holds_the_table_it_is_detaching_and_ends_none_renamed_out_before_its_turn(tenant: _Tenant) -> None:
-    """A warehouse cascade holds each table's claim fenced while it detaches it, as the deregister door does ([[LH-586]]).
-    As the first row is about to go, both tables of a namespace are renamed into another namespace of the
-    warehouse: the one being detached refuses, and the other, whose turn has not come, moves. The cascade ends only
-    what it detached, so the moved table keeps every grant under its new name. It now stands in a namespace the cascade
-    listed as empty, so the call answers what landed, for a re-issue to finish."""
+def test_a_cascade_moves_no_table_out_of_the_warehouse_it_is_emptying(tenant: _Tenant) -> None:
+    """A warehouse its delete has marked takes no change beneath it (ADR 0245, review T3): as the first row is about to go,
+    both tables of a namespace are asked to be renamed into another namespace of the warehouse, and both are refused
+    409, the one being detached and the one whose turn has not come alike. The cascade ends both, and finishes."""
     for namespace in ("acme-wh$bronze", "acme-wh$silver"):
         tenant.create_namespace(namespace)
     for table in ("acme-wh$bronze$a", "acme-wh$bronze$t"):
         tenant.create_table(table)
     tables = {name: tenant.objects[f"table:acme-wh$bronze${name}"] for name in ("a", "t")}
-    held = {name: tenant.store.naming([obj])[obj] for name, obj in tables.items()}
     real_call = native.call
     renamed: dict[str, tuple[int, int | None]] = {}
     pending = [True]
@@ -600,17 +600,12 @@ def test_a_cascade_holds_the_table_it_is_detaching_and_ends_none_renamed_out_bef
 
     ended = tenant.client.delete(f"/management/v1/warehouses/{tenant.warehouse}", params={"cascade": "true"})
 
-    assert sorted(renamed.values(), key=str) == [(200, None), (409, ConcurrentModificationError.code)], renamed
-    (moved,) = [name for name, answer in renamed.items() if answer[0] == 200]
-    (taken,) = [name for name in tables if name != moved]
-    bronze, silver = tenant.objects["namespace:acme-wh$bronze"], tenant.objects["namespace:acme-wh$silver"]
-    whole_in_silver = {tuple(silver if part == bronze else part for part in triple) for triple in held[moved]}
+    assert renamed == dict.fromkeys(tables, (409, ConcurrentModificationError.code)), renamed
     assert (
-        (ended.status_code, ended.json().get("code")),
+        ended.status_code,
         tenant.present([f"table:{namespace}${name}" for namespace in ("acme-wh$bronze", "acme-wh$silver") for name in tables]),
-        tenant.store.naming([tables[moved]]),
-        tenant.store.naming([tables[taken]]),
-    ) == ((503, 17), [f"table:acme-wh$silver${moved}"], {tables[moved]: whole_in_silver}, {}), ended.text
+        tenant.store.naming(list(tables.values())),
+    ) == (200, [], {}), ended.text
 
 
 def test_a_cascade_releases_only_the_claim_of_the_table_it_identified(tenant: _Tenant) -> None:
@@ -655,10 +650,10 @@ def test_a_warehouse_deleted_beside_a_recoverable_drop_leaves_none_of_its_trash(
     dropped: list[int] = []
     settings = get_settings()
 
-    def _read_then_a_recoverable_drop_lands(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[dict[str, Any]]:
-        read = real_read(control_root, storage_options, warehouse_id)
+    def _read_then_a_recoverable_drop_lands(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> list[dict[str, Any]]:
+        read = real_read(control_root, storage_options, record)
         if lapsed:
-            fence = f"{settings.registry_root.rstrip('/')}/{namespace_fences.fence_directory(warehouse_id)}"
+            fence = f"{settings.registry_root.rstrip('/')}/{namespace_fences.fence_directory(record['id'])}"
             for holder in stored_objects.list_under(fence, settings.storage_options()):
                 stored_objects.remove_object(settings.registry_root, settings.storage_options(), holder.path.split("/", 1)[1])
         dropped.append(tenant.client.post("/v1/namespace/acme-wh$bronze/drop", json={"behavior": "Cascade"}).status_code)

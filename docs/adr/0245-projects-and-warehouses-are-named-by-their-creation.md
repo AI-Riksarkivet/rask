@@ -17,8 +17,8 @@ reproduced blocking defects in that machinery: 12 of the 29 findings landed in i
 
 §5 F1 rejected naming the objects by a uuid: it "would move every client, declaration and the Rust port's
 `warehouse:<id>`". Measured on this tree (2026-11-18): no client names these objects (the repository hosts no client;
-the console builds no object string, `grep -rn '"project:\|"warehouse:' frontend/console/src` finds only display text and
-API paths); the Rust port reads lineage alone and names no project or warehouse object (`grep -rn 'project:\|warehouse:'
+the console's one object string, the create dialog's extra admin `project:${project}` through the raw tuple door, is
+replaced by the project's members door, review T5, so the console builds none); the Rust port reads lineage alone and names no project or warehouse object (`grep -rn 'project:\|warehouse:'
 rust/` finds none); `catalog.declared` names ids, which the converge resolves. The estate is pre-production, so no
 backward compatibility is owed. The rejection does not hold.
 
@@ -55,12 +55,17 @@ backward compatibility is owed. The rejection does not hold.
 5. **Delete.** Mark `deleting` (doors stop resolving it), read the children after the mark (a project's warehouses in
    every state: one still `creating` counts, and the delete refuses 409 while one stands; a warehouse's namespaces,
    cascaded), revoke every tuple on the uuid and every tuple naming it (`fga.revoke_object_tuples(naming=)`, the ONE way
-   an object is revoked), end the record (`projects.end_project`, `warehouses.end_warehouse`): the record is removed,
-   which frees the id, and the creation is kept under `_ended/<kind>/<uuid>.json`. The converge tick revokes what stands
+   an object is revoked), end the record (`tenancy.end`): the record is stamped `ended` under the ETag of a read that
+   found the delete's own mark and removed by that writer alone, which frees the id, and the creation is kept under
+   `_ended/<kind>/<uuid>.json`. The checks, the mark, the point of no return and what each refusal leaves are set by the
+   review's T3 (§ Found by review). The converge tick revokes what stands
    on each ended creation, and forgets it once a sweep past the bound found nothing: a write that raced the delete left
    tuples on a dead object, which authorize nothing; the sweep is hygiene.
 6. **Registry layout.** Records stay keyed by id (`_projects/<id>.json`, `_warehouses/<id>.json`): "which uuid is live
-   for this id" is one read of that key, and a create is one conditional write (iff absent). An ended record is not
+   for this id" is one read of that key, and a create is one conditional write (iff absent). Every other change of a
+   record is a write under the ETag of a read that found its creation (`control_records.change_creation`), and its
+   removal the stamp `ended` written so, then the file removed by the writer whose stamp landed; a stamp whose writer
+   died is removed by the converge tick past its bound (`remove_stale_ended`), restamped first so two ticks remove it once. An ended record is not
    kept under the id (it is removed, and its creation kept by uuid under `_ended/`), so it never blocks its id: G23
    (KeepsEndedKey) is unnecessary and deleted. The records-by-uuid-with-a-pointer layout the analysis proposed costs two
    reads for the same answer. G24 (PurgeByBucket) stays: a claim a dead creation took and no record names is reached by
@@ -72,7 +77,8 @@ backward compatibility is owed. The rejection does not hold.
    which a concurrent writer of the same tuple refuses). `GitRevokesOnlyItsOwn` (the declaration's ledger and evidence;
    the ledger names the uuid of the creation a grant was written on). Table and namespace authorization.
 8. **One crossing by design.** A declared grant names an id. The converge writes it on the creation the id names now, so a
-   project made again under a declared id is granted it again: git declared it. This is the one place a tuple crosses
+   project made again under a declared id is granted it again: git declared it. The ledger's record of it is about one
+   creation: one naming a creation the grant is not held on is forgotten and the grant declared afresh (review T1). This is the one place a tuple crosses
    creations, and the model's `GrantsDeclared` checks it: the declarer writes on the creation it resolved, decided for
    that creation, so `NoLeakAcrossIncarnations` holds.
 
@@ -92,6 +98,41 @@ creation of its project that ended, so there is none). Tests of deleted mechanis
 `test_a_fence_reads_nothing_that_grows_with_its_object.py`, `test_a_fenced_door_asks_again_on_the_incarnation_its_fence_read.py`,
 the ticket cases of the refused-caller test, the drain and retire cases of the deleted-project test, the born-orphan and
 ended-key cases of the dead-tenant test, the unborn-incarnation case of the converge test.
+
+## Found by review, and fixed (2026-11-18)
+
+An independent review of this decision as first shipped found five blocking defects (T1 to T5, four reproduced against
+the catalog with a real OpenFGA, loopback Dex and moto S3) and four smaller ones (T6 to T9), each in this decision's own
+code. All are fixed in one change, the model first where it can see the defect; each guard was removed in the code with
+its test run and the file restored (measured 2026-11-18), and each
+must-fail config fails without it.
+
+| Problem | Guard | Where (file, function) | Must-fail config | Test | Guard removed |
+| --- | --- | --- | --- | --- | --- |
+| T1: a grant git declares was never written on a project or warehouse made again under its id: the ledger's settled record of creation A blocked the intent on B, and the tick reported `failed=[]` | U11 LedgerPerCreation: a settled record whose grant is not held on the live creation is forgotten (marked, then removed by the one forgetting whose mark landed) and the grant declared afresh in the same tick; a grant the tick neither holds nor writes raises and is named in `failed` as `<object>: <why>` | `services/catalog/src/catalog/api/declaration_converge.py` `_Converger._grant`; `services/catalog/src/catalog/services/declaration.py` `forget_settled`; `_attempt` | `GrantsDeclaredStale`, `GrantsConvergeStale` (temporal `DeclaredOnLive`, `DeclaredHeld`) | `tests/integration/test_a_delete_ends_only_the_creation_it_marked.py::test_a_declared_grant_is_held_on_the_object_made_again_under_its_id` (warehouse, project) | 2 failed |
+| T2: a retried delete of creation A, held past A's end, destroyed B made again under the id (its record, its roles), and a held protection change landed on B | U12 EndsOwnCreation, ONE conditional way to change a tenancy record: `control_records.change_creation` (a write under the ETag of a read that found the uuid; the end is the stamp `ended` written that way, then the file removed by the one writer whose stamp landed, `end_record`); the delete's mark carries its run (`delete_run`) and every step past it reads the record again (`tenancy.require_own`); companions are selected by the creation (roles by `project_uuid`, label definitions by `project_uuid`, the trash by `warehouse_uuid`, which `trash.put` stamps) | `services/catalog/src/catalog/services/control_records.py` `change_creation`, `end_record`, `remove_stale_ended`; `services/catalog/src/catalog/services/tenancy.py` `DeleteRun`, `mark`, `require_own`, `end`; `roles.every_role`; `object_labels.end_definitions`; `warehouses.trash_owned_by`; `projects.set_project_protection`, `warehouses.set_warehouse_protection` | `GrantsDeleteTwiceById` (`DeleteEndsOnlyItsOwn`) | `test_a_projects_delete_held_across_its_end_ends_nothing_of_the_project_made_again`; `test_a_protection_change_held_across_its_objects_end_lands_on_no_object_made_again` (project, warehouse); `services/catalog/tests/test_a_warehouse_delete_ends_only_its_own_trash.py` | roles by id and no re-read: 1 failed; end unconditional and no re-read: 1 failed; protection by id: 2 failed; the re-read alone: none failed (masked by the selection by creation and the conditional end, which each hold it) |
+| T3: a cascade refused by a protected namespace left the warehouse `deleting` for ever, answered absent at its doors while its names still took writes | U13 RevertsRefusal, the delete's point of no return: every check that can refuse with nothing changed runs before the mark (protection, emptiness, the purge's guards, the namespace fence, the subtree's protection, the clones outside); the mark is written under the ETag of the read those checks judged; a refusal after it, before the stamp `no_return`, puts the record back live (`tenancy.put_back`), and so does a guard of the same run refusing before any step landed; past the stamp the answer is `partial` (503) and the same delete asked again finishes it; a warehouse marked `deleting` refuses every door changing what lies beneath it (409, code 14) | `warehouses.delete_warehouse`, `projects.delete_project`; `tenancy.pass_no_return`, `put_back`; `services/catalog/src/catalog/api/dependencies.py` `require_active_warehouse`; `fga_deps._changes` | `GrantsRefusalStuck` (`RefusedDeleteLeavesLive`) | `test_a_cascade_refused_by_a_protected_namespace_leaves_its_warehouse_live`; `test_a_projects_delete_reads_its_warehouses_again_after_its_mark` (a refusal after the mark that puts back); `test_nothing_is_written_beneath_a_warehouse_its_delete_has_marked`; `test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py::test_a_cascade_refused_before_anything_landed_answers_its_refusal` | checks after the mark: 1 failed; no revert: 2 failed; writes admitted: 1 failed |
+| T4: the members door and the warehouse access doors resolved before their gate, so a caller holding nothing was told 403 for an id that stands and 404 for one that does not | ONE gate for every door on a tenant's id: `fga_deps.on_tenant` resolves, asks the door's gate on the creation or on the object nobody holds, and only a caller the gate admits learns the id is missing; every such door goes through it (`require_on_tenant`, the members, access, roles, labels, project and warehouse create doors) | `services/catalog/src/catalog/api/fga_deps.py` `on_tenant`, `require_on_tenant`; `access._grant_gate`; `members.grant_member`, `revoke_member` | (U3 and G14 hold the gate's order; the oracle is a disclosure, not a state the model holds) | `services/catalog/tests/test_a_door_the_router_leaves_open_decides_for_itself.py::test_a_tenancy_door_answers_a_caller_it_grants_nothing_alike_for_an_id_no_object_holds` (every tenancy door the router serves) | the members door resolving first: 1 failed |
+| T5: the estate admin's tuple doors answered 500 (code 18) for `project:acme`, and its read tools gave false answers on it; the console's create dialog wrote `project:<id>` through the raw tuple door | The tools speak ids: `project:<id>` / `warehouse:<id>` resolve to the creation (live for a write or a hypothesis, standing for a question), a creation's uuid is taken where one stands, anything else shaped like a tenancy object is 400 (code 13); answers name the id beside the uuid (`name`, `user_name`, `names`); the console grants the extra admin at the project's members door (`grantProjectAdmin`) | `services/catalog/src/catalog/api/v1/endpoints/access_admin.py` `_held_object`, `_creation_of`, `_held_user`; `object_names.tenancy_ids`; `frontend/console/src/lib/ProjectCreateDialog.svelte`, `remote/warehouses.api.ts` | — | `services/catalog/tests/test_the_estate_admins_access_doors_take_an_object_by_name.py` (project by id, tuples by id); `frontend/console/src/lib/remote/warehouses.api.test.ts` | ids taken as written: 5 errored (the fixture's own write refused 500) |
+| T6: the role doors (assign, unassign, delete) answered 200 for a change on a project deleted while they ran | Every door writing a tuple on a tenancy creation resolves the id again after its Write through one helper, `tenancy.require_still` (the role doors, a role's create after its edge, the members, access and managed-access doors) | `roles._assign`, `_unassign`, `delete_role`, `_mint_role` | `GrantsAnswersUnread` | `test_a_door_the_router_leaves_open_decides_for_itself.py::test_a_tenancy_door_whose_creation_ends_under_its_write_answers_the_deleted_object` (every writing door; a roster test fails a door in neither roster) | the role assignment's: 1 failed; managed access's: 1 failed |
+| T7: U7's after-mark child read was held by the model alone | — (the guard stands; a test now reaches it) | `projects.delete_project` | `GrantsCreatingUncounted` | `test_a_projects_delete_reads_its_warehouses_again_after_its_mark` | 1 failed (the delete answered 200) |
+| T8: the sweep's coverage was a hand-kept list | Derived from the model's type restrictions | `packages/lakehouse/src/lakehouse/governed/fga.py` `types_naming`; `fga_deps.naming` | — | `test_a_grant_on_a_deleted_project_reaches_no_project_made_again_under_its_id.py::test_a_projects_end_revokes_a_tuple_of_every_type_the_model_lets_name_it` (compares with the DSL) | a hand list without `role`: 1 failed |
+| T9: a create that lost the race for its id seeded and announced on the uuid it minted, which named no record | A mint refused by the store answers 409 (code 2), seeding and announcing nothing; the announcement is filed once the record is written | `projects._write_project_record`, `establish_project`; `warehouses._write_record` | — | `test_a_project_create_that_lost_the_race_for_its_id_made_nothing`; `tests/integration/test_warehouses.py::test_a_create_that_lost_the_race_for_its_id_made_nothing` | converging on the winner: 1 failed |
+
+**The delete's order** (decision 5 as it now stands). Project: authorization (404 for a caller who may not delete it) →
+one read of the record → protection and emptiness judged on it (refusing with nothing changed) → the mark under that
+read's ETag (`deleting`, `deleting_by`, `delete_run`; 409 where the record changed since) → the warehouses read again
+(one found: put back live, 409) → the point of no return (`no_return`) → revoke its creation's tuples and those naming
+it → its roles, its policy, its label definitions, each of this creation and each followed by `require_own` → the end
+(`ended`, `_ended/`, the record removed). Warehouse: authorization → one read → protection, the namespaces listed, the
+purge's guards, the estate store → the namespace fence (409 while held) → the subtree's protection, the trash of its
+creation, the clones outside → the mark → the namespaces read again (a late one: put back and 409 without `cascade`, or
+held to the same checks with it) → the point of no return → the purge's claim (given back where a guard refuses before
+any step landed) → the trash, the cascade, the orphans, the revoke, each followed by `require_own` → the bytes → the
+fence confirmed → the end → the claim released. "Nothing irreversible yet" ends at `no_return`; from there the delete
+finishes, or answers `partial` (503) and the same delete asked again finishes it. A delete asked again over a mark takes
+it over (`delete_run`), and the earlier run, reading its mark gone, stops (409), or, where the id names another
+creation, answers 404.
 
 ## The guarantees, the guard holding each, and the configs
 
@@ -134,11 +175,14 @@ for it and writes on it, and `NoLeakAcrossIncarnations` holds there.
 | `GrantsIntruder` | holds, 130,550 |
 | `GrantsChild` (a warehouse under a project) | holds, 41,112 |
 | `GrantsChildCascade` (a namespace under a warehouse) | holds, 22,804 |
-| `GrantsDeclared` (MaxInc 2) | holds, 352,432 |
+| `GrantsDeclared` (MaxInc 2) | holds, 352,432 (1,397,283 once the delete is modelled as runs with their own marks, review T2) |
+| `GrantsDeclaredLedger` (the declarer's ledger, the id made again, liveness `DeclaredOnLive`) | holds, 3,681 |
+| `GrantsConvergeRecreate` (the converge part, its object made again between ticks, liveness `DeclaredHeld`) | holds, 58 |
+| `GrantsDeleteTwice` (two deletes of one creation, either refusable, a cascaded child, the id made again) | holds, 653,120 |
 | `GrantsTable` | holds, 440 |
 | `GrantsConverge` | holds, 33 |
 | `GrantsChildTwice` (two edges; on demand, `make tla-check-full`) | holds, 715,524, 694 s |
-| 21 must-fail configs | each fails on the property it names |
+| 25 must-fail configs | each fails on the property it names (`GrantsDeclaredStale`, `GrantsConvergeStale`, `GrantsDeleteTwiceById` and `GrantsRefusalStuck` added by review) |
 
 The gate dropped `DrainBounded`, `DeadTicketsSwept` and `ClaimNamedByItsRecord` (G23's), and their configs, with the
 mechanisms. `GrantsDeclared` runs at MaxInc 2 in the gate (MaxInc 3: 8,935,664 states, 235 s, holds).
@@ -190,10 +234,30 @@ once; before, the gate was asked twice, and the fence took two Writes beside the
 - A create of a project or warehouse whose id has the shape of a uuid (32 hex digits) is refused 400.
 - A client that asks the catalog's decision door about a project (`/management/v1/decisions/*`, a notifier expanding
   `project:<…>#member`) names it by its creation, `project:<uuid>`, which the project's events carry in `extra.uuid`.
-- A warehouse delete refused after its mark (a namespace made meanwhile and `cascade` not asked, a cascade that failed
-  part-way) leaves the warehouse marked `deleting`: its names are still served, `GET /management/v1/warehouses/<id>`
-  still answers it, its grant doors answer 404, and the same delete asked again finishes it. A purge refused because a
-  sibling warehouse shares the bucket is refused before the mark, as before.
+- A delete refused before its point of no return (a protected namespace or table in its cascade, a late namespace or
+  warehouse, the namespace fence held, a clone outside, a guard of its cascade refusing before any step landed) leaves
+  its object live and answers the refusal (409); one that failed past it answers `partial` (503, code 17) and leaves the
+  object marked `deleting`: its names are still read, `GET /management/v1/warehouses/<id>` still answers it, its grant
+  doors answer as for an absent object, every door changing what lies beneath a warehouse so marked answers 409 (code
+  14), and the same delete asked again finishes it. A project's delete failing past its revoke answers 503 `partial`
+  where it answered 500.
+- Two deletes of one object: the later takes the mark over, the earlier stops (409); a delete held across its object's
+  end and the id made again answers 404 and ends nothing of the object made again. A protection, status, manager or seal
+  change decided on one creation answers 404 where the id names another by its write.
+- A door on a project's or a warehouse's id answers a caller who holds nothing on it the same for an id that stands and
+  one that does not (403 where it gates on a relation, 404 where it answers refusals as absent); only a caller its gate
+  admits learns an id is missing. The warehouse create door answers 403 for a project nobody holds a grant on, where it
+  answered 404; a project being deleted is refused 403 at its members and access doors, where it answered 404.
+- A create that lost the race for its id answers 409 (code 2) and seeds nothing, where it converged on the winner.
+- A role's assignment, unassignment, deletion and create answer 404 where the project was deleted while they ran.
+- The estate admin's tools take `project:<id>` and `warehouse:<id>` (a 400, code 13, for one no creation holds), answer
+  `name` (the id) beside a creation's uuid, `user_name` on a tuple whose user is a creation, and `names` on list-users.
+- The declaration converge's `failed` entries read `<object>: <why>`; a grant git declares on an id made again is written
+  on the new creation in the same tick.
+- A label definition names the creation of its project that defined it (`project_uuid`); one another creation left is
+  replaced by a define and is none of the project's.
+- A trash record names the creation of the warehouse it was filed under (`warehouse_uuid`); a warehouse's delete ends
+  only its own creation's.
 - A name whose first segment names no warehouse (one deleted) is refused 403 at a gate, as any name holding no object
   is; it was asked on `warehouse:<id>` and answered by whatever that object held.
 - A project policy set on a project with no live record answers 404, where it answered 400 ("no active warehouse").

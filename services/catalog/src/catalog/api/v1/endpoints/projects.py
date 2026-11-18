@@ -49,8 +49,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 from datetime import UTC, datetime
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -58,6 +59,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
     InvalidInputError,
+    NamespaceAlreadyExistsError,
     NamespaceNotEmptyError,
     PermissionDeniedError,
     ServiceUnavailableError,
@@ -83,7 +85,7 @@ from catalog.schemas import (
 from catalog.services import object_labels, role_grants, roles, tenancy, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
-from catalog.services.control_records import GIT, MANAGED_BY, STATE, UUID, ProtectionChange
+from catalog.services.control_records import DELETING_BY, GIT, MANAGED_BY, STATE, UUID, ProtectionChange
 from lakehouse import maintenance_policies, protection
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
@@ -92,7 +94,8 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.governed.tenancy import CREATING, LIVE, PROJECT, made_under, new_uuid, require_an_id, warehouses_of
 from lakehouse.naming import CONTROL_ID_RE
-from lakehouse.records import RecordExistsError, RecordMissingError
+from lakehouse.ns_errors import PartiallyApplied
+from lakehouse.records import RecordExistsError
 from lakehouse.storage_options import StorageOptions
 
 
@@ -212,39 +215,35 @@ async def _registries(settings: Settings) -> Registries:
     return Registries(projects=projects, warehouses=await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so))
 
 
-async def _converge_project(settings: Settings, so: StorageOptions, record: dict[str, str]) -> dict[str, str]:
-    """The conditional re-POST write (diff2 F1 leg c) — shared by the sequential and lost-race paths.
+async def _write_project_record(settings: Settings, so: StorageOptions, record: dict[str, str], *, existing: dict[str, str] | None) -> dict[str, str]:
+    """Mint ``record``, or converge the ``existing`` record that stands onto it; the record as written.
 
-    Both used to end in an unconditional `put_project` of a record assembled from a read taken earlier
-    in the handler, so a `/protection` call landing in that window was silently reverted. The merge now
-    happens inside the write, against the record as it actually stands.
+    A re-POST converges onto the creation it read, under the ETag of a read that finds it (diff2 F1 leg c, ADR 0245). A
+    mint is conditional on absence (F1), and one that lost the race wrote nothing: the id exists, which the spec answers
+    409 (``NamespaceAlreadyExistsError``), and the loser seeds and announces nothing, since the uuid it minted names no
+    record (review T9).
+
+    Raises:
+        NamespaceAlreadyExistsError: A concurrent create made the project first.
+        ConcurrentModificationError: The project is being deleted, or the creation the re-POST read ended meanwhile.
     """
+    if existing is None:
+        try:
+            await run_in_threadpool(project_registry.create_project_record, settings.registry_root, so, record)
+        except RecordExistsError:
+            raise NamespaceAlreadyExistsError(f"project {record['id']!r} was made by a concurrent create; nothing was made by this one") from None
+        return record
     try:
-        return await run_in_threadpool(project_registry.upsert_project, settings.registry_root, so, record)
-    except RecordMissingError:
-        # Raced a concurrent tenant delete: retryable, never a blind re-create — code 14 -> 409, so
-        # the caller retries into a clean mint rather than resurrecting a project just deleted.
-        raise ConcurrentModificationError(f"project {record['id']!r} write raced a concurrent delete; retry") from None
+        written = await run_in_threadpool(partial(project_registry.upsert_project, settings.registry_root, so, record, uuid=existing[UUID]))
     except project_registry.ProjectBeingDeletedError:
         # Its id is free once the delete has revoked and ended what it held ([[LH-576]]): a tenant made over a delete
         # still running would hold whatever that delete has yet to take away.
         raise ConcurrentModificationError(f"project {record['id']!r} is being deleted; create it once its delete has finished") from None
-
-
-async def _write_project_record(settings: Settings, so: StorageOptions, record: dict[str, str], *, existing: dict[str, str] | None) -> dict[str, str]:
-    """Mint ``record``, or converge the ``existing`` record that stands onto it; the record as written."""
-    if existing is not None:
-        return await _converge_project(settings, so, record)
-    # The tenant MINT is conditional (F1): two concurrent creates of one id both read "absent"; the store refuses the
-    # second, which then converges on the winner's identity fields exactly like the sequential idempotent re-POST.
-    try:
-        await run_in_threadpool(project_registry.create_project_record, settings.registry_root, so, record)
-    except RecordExistsError:
-        # Lost the mint race — converge on the WINNER, conditionally (diff2 F1 leg c). The merge
-        # happens inside the write, against the record as it actually stands, so a protection
-        # change landing in this window is preserved instead of clobbered.
-        return await _converge_project(settings, so, record)
-    return record
+    if written is None:
+        # Raced a concurrent tenant delete: retryable, never a blind re-create — code 14 -> 409, so the caller retries
+        # into a clean mint rather than resurrecting a project just deleted.
+        raise ConcurrentModificationError(f"project {record['id']!r} write raced a concurrent delete; retry")
+    return written
 
 
 @router.post("", response_model_exclude_none=True)
@@ -281,7 +280,8 @@ async def establish_project(
     ([[XC-213]]): the registry record and, where ``admin`` names one, that person's ``admin`` tuple, in one operation.
     Idempotent: an existing id keeps ``created_at``/``created_by`` and its deletion protection and has the admin tuple
     re-asserted. The grant is audited and published like any other ACL change, only when it was actually written; what
-    the create announces is filed before the record, so a create that fails after it still announces it ([[LH-576]]).
+    the create announces is filed once its record is written, before its seed, so a create that fails after it still
+    announces it ([[LH-576]]).
 
     In the order ADR 0245 sets: the record first, ``creating``, naming the uuid this creation mints and the admin it
     seeds; then the admin's grant on that uuid; then the record flips ``live``, and only then does any door resolve it.
@@ -290,6 +290,7 @@ async def establish_project(
 
     Raises:
         InvalidInputError: ``project_id`` has the shape of a uuid (ADR 0245).
+        NamespaceAlreadyExistsError: A concurrent create made the project first; this one made nothing.
         ConcurrentModificationError: The project is being deleted, or its write raced a delete.
     """
     try:
@@ -321,7 +322,6 @@ async def establish_project(
         if seeds and admin is not None
         else None
     )
-    filed = announcer.announcing(door="create_project", target=target, announcements=[created, *([admin_granted] if admin_granted is not None else [])])
     record = {
         "id": project_id,
         UUID: uuid,
@@ -330,8 +330,11 @@ async def establish_project(
         "created_by": (existing.get("created_by") if existing else None) or (author.subject if author is not None else ""),
         **({"admin": admin} if admin is not None else {}),
     }
+    # The record first, and only then the announcement is filed: a create that lost the race to the record has nothing
+    # to announce, and its uuid names no record (review T9).
+    record = await _write_project_record(settings, so, record, existing=existing)
+    filed = announcer.announcing(door="create_project", target=target, announcements=[created, *([admin_granted] if admin_granted is not None else [])])
     async with filed as filing:
-        record = await _write_project_record(settings, so, record, existing=existing)
         granted = await fga_deps.seed_project_admin(client, settings, author.subject if author is not None else None, project=record, admin=admin)
         record = await run_in_threadpool(project_registry.set_live, settings.registry_root, so, project_id, record[UUID]) or record
         if record.get(STATE) != LIVE:
@@ -411,16 +414,32 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    live = await tenancy.require(settings, PROJECT, project_id)
-    doors = [("can_list_all_projects", settings.fga_root_object), ("member", live.obj)]
-    try:
-        await fga_deps.require_any_relation(client, settings, token, doors=doors)
-    except PermissionDeniedError as exc:
-        raise TableNotFoundError(f"project not found: {project_id}") from exc
+    await fga_deps.on_tenant(
+        settings,
+        PROJECT,
+        project_id,
+        gate=_as_absent(
+            project_id,
+            lambda obj: fga_deps.require_any_relation(client, settings, token, doors=[("can_list_all_projects", settings.fga_root_object), ("member", obj)]),
+        ),
+    )
     tenant = (await _registries(settings)).tenants({project_id}).get(project_id)
     if tenant is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     return tenant.response(await _admins_for(client, settings, tenant.record))
+
+
+def _as_absent(project_id: str, require: Callable[[str], Awaitable[None]]) -> Callable[[str], Awaitable[None]]:
+    """``require`` as a gate of the one gate function (``fga_deps.on_tenant``) that answers a refused caller the missing
+    project's 404, so a door that discloses a tenant's record tells nobody which project ids exist."""
+
+    async def gate(obj: str) -> None:
+        try:
+            await require(obj)
+        except PermissionDeniedError as exc:
+            raise TableNotFoundError(f"project not found: {project_id}") from exc
+
+    return gate
 
 
 async def administered_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
@@ -449,12 +468,8 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    live = await tenancy.require(settings, PROJECT, project_id)
-    try:
-        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=live.obj)
-    except PermissionDeniedError as exc:
-        raise TableNotFoundError(f"project not found: {project_id}") from exc
-    return live.record
+    gate = _as_absent(project_id, lambda obj: fga_deps.require_relation(client, settings, token, relation="can_administer", obj=obj))
+    return (await fga_deps.on_tenant(settings, PROJECT, project_id, gate=gate)).record
 
 
 async def project_to_delete(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
@@ -484,9 +499,9 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, settings.storage_options(), project_id)
     if record is None or record.get(STATE) == CREATING:
         raise TableNotFoundError(f"project not found: {project_id}")
-    starter = record.get(project_registry.DELETING_BY)
+    starter = record.get(DELETING_BY)
     if starter is not None and starter == current_subject(token):
-        audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=f"project:{project_id}")
+        audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=DELETING_BY, subject=starter, resource=f"project:{project_id}")
         return record
     doors = [("can_administer", tenancy.object_of_record(PROJECT, record))]
     if starter is not None:
@@ -498,13 +513,15 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     return record
 
 
-def project_its_doors_protect(project_id: str, record: Annotated[dict[str, str], Depends(administered_project)], token: CurrentToken) -> None:
-    """Admit a change to the deletion protection of a project the caller administers and git does not declare ([[XC-213]]).
+def project_its_doors_protect(project_id: str, record: Annotated[dict[str, str], Depends(administered_project)], token: CurrentToken) -> dict[str, str]:
+    """The record of a project the caller administers and git does not declare, for a change to its deletion protection
+    ([[XC-213]]).
 
     Raises:
         PermissionDeniedError: Git declares the project, so its declaration owns the protection.
     """
     refuse_what_git_declares(record, obj=f"project:{project_id}", token=token)
+    return record
 
 
 def project_its_doors_delete(project_id: str, record: Annotated[dict[str, str], Depends(project_to_delete)], token: CurrentToken) -> dict[str, str]:
@@ -520,10 +537,11 @@ def project_its_doors_delete(project_id: str, record: Annotated[dict[str, str], 
 ProjectToDeleteDep = Annotated[dict[str, str], Depends(project_its_doors_delete)]
 
 
-@router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(project_its_doors_protect)])
+@router.post("/{project_id}/protection", response_model_exclude_none=True)
 async def set_project_protection(
     project_id: str,
     body: SetProtectionRequest,
+    record: Annotated[dict[str, str], Depends(project_its_doors_protect)],
     settings: SettingsDep,
     token: CurrentToken,
     control: ControlEmitterDep,
@@ -538,8 +556,9 @@ async def set_project_protection(
     \f
 
     Args:
-        project_id: The project to protect or clear, its caller authorized on it (:func:`administered_project`).
+        project_id: The project to protect or clear.
         body: The protection to set.
+        record: Its live record, its caller authorized on its creation (:func:`administered_project`).
         settings: The catalog's settings.
         token: The verified caller.
         control: Where control events go.
@@ -552,20 +571,22 @@ async def set_project_protection(
     """
     actor = f"user:{token.subject}" if token is not None else None
     change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
-    await protect_project(settings, control, project_id, change=change, actor=actor)
+    await protect_project(settings, control, project_id, uuid=record[UUID], change=change, actor=actor)
     return ProtectionResponse(id=project_id, protected=body.protected)
 
 
-async def protect_project(settings: Settings, control: ControlEmitter, project_id: str, *, change: ProtectionChange, actor: str | None) -> None:
-    """Arm or clear project ``project_id``'s deletion protection and announce it.
+async def protect_project(settings: Settings, control: ControlEmitter, project_id: str, *, uuid: str, change: ProtectionChange, actor: str | None) -> None:
+    """Arm or clear the deletion protection of project ``project_id``'s creation ``uuid`` and announce it.
 
-    What the protection door does once its caller is authorized, and what the catalog does for a project whose
-    protection drifted from what git declares ([[XC-213]]).
+    What the protection door does once its caller is authorized on that creation, and what the catalog does for a project
+    whose protection drifted from what git declares ([[XC-213]]). The write is conditional on a read that finds that
+    creation live (ADR 0245), so a change held across the project's delete lands on no project made again under its id.
 
     Raises:
-        TableNotFoundError: The project's record is gone.
+        TableNotFoundError: The id no longer names that creation live.
     """
-    if await run_in_threadpool(project_registry.set_project_protection, settings.registry_root, settings.storage_options(), project_id, change) is None:
+    protect = partial(project_registry.set_project_protection, settings.registry_root, settings.storage_options(), project_id, change, uuid=uuid)
+    if await run_in_threadpool(protect) is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     log.info("project_protection_set", extra={"project": project_id, "protected": change.protected})
     await emit_control(
@@ -583,22 +604,19 @@ def _warehouses_of(records: list[dict[str, str]], project: dict[str, str]) -> li
     return sorted(str(r["id"]) for r in warehouses_of(records, project[UUID]))
 
 
-async def _start_delete(project_id: str, record: dict[str, str], settings: Settings, token: CurrentToken, *, force: bool) -> None:
-    """Judge a delete's start, its protection and the project's emptiness, and record it on the project's record.
+async def _require_deletable(project_id: str, record: dict[str, str], settings: Settings, *, force: bool) -> None:
+    """The checks a delete runs before its mark, each refusing with nothing changed: its protection and its emptiness.
 
     Raises:
         NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses.
-        TableNotFoundError: Its record went meanwhile.
     """
-    so = settings.storage_options()
     # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
     # `project_to_delete` has proven the caller administers this tenant.
     fga_deps.require_not_protected(record, kind="project", obj_id=project_id, force=force)
-
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
     # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
     # read may be one of this project's own ([[LH-572]]).
-    held = _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), record)
+    held = _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, settings.storage_options()), record)
     if held:
         raise NamespaceNotEmptyError(
             f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "
@@ -606,9 +624,6 @@ async def _start_delete(project_id: str, record: dict[str, str], settings: Setti
             f"opt-in) — then delete the project. There is deliberately no cascade here: retiring a tenant "
             f"must never be able to destroy its buckets transitively in one request."
         )
-    # Recorded before the first destructive step, so whichever step fails, the retry finds the delete and who started it.
-    if await run_in_threadpool(project_registry.mark_deleting, settings.registry_root, so, project_id, by=current_subject(token)) is None:
-        raise TableNotFoundError(f"project not found: {project_id}")
 
 
 @router.delete("/{project_id}")
@@ -621,20 +636,32 @@ async def delete_project(
     announcer: AnnouncerDep,
     force: bool = False,
 ) -> DeleteProjectResponse:
-    """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance
-    policy, and drop its record.
+    """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles, its maintenance
+    policy and its label definitions, and end its record.
 
     Gated on ``project:<id>#can_administer``, the tenant's OWN admin bar: the rungs that open its reads, the estate
-    observer's and membership, retire nothing (module docstring). Order, fail-closed and each step earning the next:
-    id shape (400) → existence and authz (both 404, :func:`project_to_delete`) → deletion protection (409) →
-    emptiness (409) → the delete recorded on the project's record → revoke tuples → end its roles → end its maintenance
-    policy → delete record → audit + event.
+    observer's and membership, retire nothing (module docstring).
+
+    **The order, and the point of no return** (ADR 0245, review T2 and T3). id shape (400) → existence and authz (both
+    404, :func:`project_to_delete`) → the record read, the checks judged on that read, each refusing with nothing
+    changed: deletion protection (409) and emptiness (409) → the MARK, written under that read's ETag (409 where the
+    record changed since, nothing changed) → the warehouses read again (a warehouse whose record its create wrote before
+    the mark, `ChildrenBeforeMark`); one found refuses 409 and PUTS THE RECORD BACK live → the POINT OF NO RETURN stamped
+    on the record → revoke its tuples → end its roles → end its maintenance policy → end its label definitions → END its
+    record → audit + event. Every check that can refuse runs before the point of no return, so a refused delete leaves
+    the project live; past it, the delete either finishes or leaves the project marked, and the same delete asked again
+    finishes it (503 ``partial``).
+
+    **A delete acts only on the creation it marked.** Each step after the mark that can take long is followed by a read
+    of the record (``tenancy.require_own``): a delete asked again took the mark over (409, it finishes the delete), or the
+    creation ended and the id names another (404): a delete held across its project's end and the id made again ends
+    nothing of the tenant that holds the id now. Its roles, policy and label definitions are those made under the
+    creation it deletes, never every one the id keys.
 
     **A delete that failed part-way is finished by asking again** ([[LH-576]]): the record names the caller who started
     it, whose own admin grant the revoke takes, and :func:`project_to_delete` lets that caller, an admin the revoke has
-    not reached, or the estate's owner finish it. Every later step is idempotent, and the protection and emptiness
-    were judged when the delete was recorded: from then on the project is absent to every other door
-    (``project_registry.get_project``), so no warehouse, role or grant is made for it meanwhile.
+    not reached, or the estate's owner finish it. From the mark on the project is absent to every other door, so no
+    warehouse, role or grant is made for it meanwhile.
 
     **Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to
     empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
@@ -664,28 +691,32 @@ async def delete_project(
         The retired project and how many tuples went with it.
 
     Raises:
-        NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses.
-        InternalError: A warehouse record is there and cannot be read as one, and nothing was deleted; or a role record,
-            and the delete stands recorded for a retry to finish once it is written again.
-        ServiceUnavailableError: The store did not answer a read, or OpenFGA could not revoke its tuples; a delete
-            recorded by then is finished by a retry.
+        NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses; it is left live.
+        ConcurrentModificationError: Its record changed while the delete was judged, nothing changed; or another delete
+            of it took the delete over.
+        TableNotFoundError: The id no longer names the creation the delete was asked of.
+        InternalError: A warehouse record is there and cannot be read as one, and nothing was deleted.
+        PartiallyApplied: A step past the point of no return failed; the same delete asked again finishes it.
     """
     so = settings.storage_options()
     target = f"project:{project_id}"
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = fga_deps.wired(settings, client)
     obj = tenancy.object_of_record(PROJECT, record)
-    if record.get(project_registry.DELETING_BY) is None:
-        await _start_delete(project_id, record, settings, token, force=force)
+    delete = tenancy.DeleteRun.of(PROJECT, record)
+    judged = await tenancy.judged(settings, delete)
+    if judged.record.get(STATE) == LIVE:
+        await _require_deletable(project_id, judged.record, settings, force=force)
+    await tenancy.mark(settings, delete, judged, by=current_subject(token))
     # Marked `deleting` from here (ADR 0245): no door resolves it, so nothing more is granted or made in it. A warehouse
     # whose create wrote its record before the mark is found by this read, which comes after it; one whose record came
     # after the mark finds the project gone when its create resolves it again, and ends itself. Either way none stands
-    # under a project creation that ended (`ChildUnderLiveParent`). The project is not deleted under one: the warehouse is
-    # deleted first, then this asked again, the project kept marked meanwhile.
+    # under a project creation that ended (`ChildUnderLiveParent`). Nothing irreversible has been done, so the refusal
+    # puts the project back live.
     if late := _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), record):
-        raise NamespaceNotEmptyError(
-            f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete ran; delete each, then delete the project again"
-        )
+        await tenancy.put_back(settings, delete)
+        raise NamespaceNotEmptyError(f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete began; delete each, then the project")
+    await tenancy.pass_no_return(settings, delete)
     actor = f"user:{token.subject}" if token is not None else None
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(
@@ -694,36 +725,17 @@ async def delete_project(
     deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=target, actor=actor, extra={UUID: record[UUID]})
     deleted = Announcement(evidence=RecordGone(key=project_registry.record_key(project_id)), message=ControlMessage(event=deleted_event))
     async with announcer.announcing(door="delete_project", target=target, announcements=[deleted, *grants.values()]) as filing:
-        removed: list[fga.ClientTuple] = []
-        # Tuples FIRST, record second. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully
-        # described and re-deletable; the opposite order would strand grants on a project no API can name any
-        # more — privilege that nothing in the product can see, let alone clear.
-        # Every tuple on its creation and every tuple naming it (a role's `project` edge, a warehouse's tenancy edge).
-        # A door that wrote on it after this read wrote on a dead object nothing resolves to, which the converge tick
-        # sweeps once the creation is ended (ADR 0245).
-        removed = await fga_deps.end_object(authz, settings, obj, token=token)
-        # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
-        for role in await run_in_threadpool(roles.every_role, settings.registry_root, so, project_id):
-            ending = await announcing.role_ending(authz, role, actor=actor, reason="project_deleted")
-            async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
-                ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
-                await ending.send(ending_filed, ended, actor=actor, reason="project_deleted")
-        # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
-        # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
-        # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse
-        # record claims this project, and a warehouse's delete revokes its own tuples (that edge among them) before its
-        # record goes.
-        # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant.
-        # The record names the creation that set it (ADR 0241 §9 P2, ADR 0245), so one an earlier creation left is not this
-        # delete's to end, and governs no bucket the next tenant claims whether or not it stands.
-        policy = await run_in_threadpool(maintenance_policies.get_policy, settings.registry_root, so, "project", project_id)
-        if policy is not None and made_under(policy, record[UUID]):
-            await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
-        # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object
-        # lay in a warehouse of it, and each ended its labels as it went.
-        await run_in_threadpool(object_labels.end_definitions, settings.registry_root, so, project_id)
-        await run_in_threadpool(project_registry.end_project, settings.registry_root, so, record)
-
+        try:
+            removed = await _end_the_creation(delete, record, settings, token, authz, announcer)
+        except (tenancy.DeleteGone, tenancy.DeleteTakenOver):
+            raise
+        except Exception as exc:
+            # Past the point of no return the project stays marked, absent to every door, and the same delete asked
+            # again finishes it: every step is idempotent and acts on this creation alone.
+            raise PartiallyApplied(
+                f"project {project_id!r} is past its point of no return and was PARTIALLY deleted; re-issue this call to finish it.",
+                problem_extra={"project": project_id, "partial": True},
+            ) from exc
         log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})
         if authz is not None:
             # Mirrors create_project's grant audit, and only when the revoke really ran: an FGA-off stack must
@@ -748,3 +760,44 @@ async def delete_project(
         # (`role:x#assignee`, which the lane expands), never a `project`/`parent`/`child` edge whose user is an object.
         await filing.send_grant_changes(grants, removed, action="grant_revoked", actor=actor, reason="project_deleted")
     return DeleteProjectResponse(project=project_id, tuples_revoked=len(removed))
+
+
+async def _end_the_creation(
+    delete: tenancy.DeleteRun, record: dict[str, str], settings: Settings, token: CurrentToken, authz: OpenFgaClient | None, announcer: Announcer
+) -> list[fga.ClientTuple]:
+    """A delete's irreversible steps, past its point of no return, each acting on the creation it marked and followed by
+    a read that it still holds that mark (``tenancy.require_own``); the tuples revoked.
+
+    Raises:
+        tenancy.DeleteGone: The id no longer names the creation.
+        tenancy.DeleteTakenOver: Another delete of it took the delete over.
+    """
+    so = settings.storage_options()
+    actor = f"user:{token.subject}" if token is not None else None
+    project_id, project_uuid = delete.id, delete.uuid
+    # Tuples FIRST, record last. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully described and
+    # re-deletable; the opposite order would strand grants on a project no API can name any more — privilege that nothing
+    # in the product can see, let alone clear. Every tuple on its creation and every tuple naming it (a role's `project`
+    # edge, a warehouse's tenancy edge). A door that wrote on it after this read wrote on a dead object nothing resolves
+    # to, which the converge tick sweeps once the creation is ended (ADR 0245).
+    removed = await fga_deps.end_object(authz, settings, tenancy.object_of_record(PROJECT, record), token=token)
+    await tenancy.require_own(settings, delete)
+    # Each role made under this creation is ended as its own delete door ends it, with authorization off too, so no record
+    # outlives its project; a role of a creation made again under the id is that tenant's.
+    for role in await run_in_threadpool(partial(roles.every_role, settings.registry_root, so, project_id, project_uuid=project_uuid)):
+        ending = await announcing.role_ending(authz, role, actor=actor, reason="project_deleted")
+        async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
+            ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
+            await ending.send(ending_filed, ended, actor=actor, reason="project_deleted")
+        await tenancy.require_own(settings, delete)
+    # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant.
+    # The record names the creation that set it (ADR 0241 §9 P2, ADR 0245), so one another creation set is not this
+    # delete's to end, and governs no bucket the next tenant claims whether or not it stands.
+    policy = await run_in_threadpool(maintenance_policies.get_policy, settings.registry_root, so, "project", project_id)
+    if policy is not None and made_under(policy, project_uuid):
+        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
+    # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object lay in a
+    # warehouse of it, and each ended its labels as it went.
+    await run_in_threadpool(partial(object_labels.end_definitions, settings.registry_root, so, project_id, project_uuid=project_uuid))
+    await tenancy.end(settings, delete)
+    return removed

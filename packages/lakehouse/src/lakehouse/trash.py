@@ -36,8 +36,9 @@ from typing import Any, Final, Literal
 
 import pyarrow.fs as pafs
 
-from lakehouse import control_prefixes, location_claims, object_records
+from lakehouse import control_prefixes, location_claims, object_records, warehouse_records
 from lakehouse.base_registry import BaseRegistry, forget_base_record
+from lakehouse.governed.tenancy import UUID
 from lakehouse.namespace_fences import NamespaceFence, NamespaceWork
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
@@ -58,6 +59,10 @@ RESIDUE = "residue"
 
 #: The field stamping when a record's grants were released past its deadline (:func:`mark_released`).
 RELEASED_AT = "released_at"
+
+#: The field naming the uuid of the creation of the warehouse the drop was under, stamped by :func:`put`: the warehouse's
+#: delete ends the records of its own creation only (ADR 0245).
+WAREHOUSE_UUID: Final = "warehouse_uuid"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "trash_record"
@@ -202,7 +207,11 @@ def put(control_root: str, storage_options: StorageOptions, record: dict[str, An
         put_record(control_root, storage_options, target, record)
         return
     with NamespaceFence(control_root=control_root, storage_options=storage_options, name=warehouse).held(NamespaceWork.ADD, renewed=False):
-        put_record(control_root, storage_options, target, record)
+        # The creation of the warehouse the drop was under, read under the fence its delete holds: that delete ends the
+        # records naming its own creation, and none a warehouse made again under the id files (ADR 0245, review T2).
+        held = warehouse_records.warehouse_record(control_root, storage_options, warehouse)
+        stamped = {**record, WAREHOUSE_UUID: held[UUID]} if held is not None and held.get(UUID) else record
+        put_record(control_root, storage_options, target, stamped)
 
 
 def keeps(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> bool:

@@ -48,7 +48,7 @@ class _Harness:
 
         acme = members.tenancy.Tenant(kind="project", id="acme", obj=ACME, record={"id": "acme", "uuid": "a" * 32, "state": "live"})
 
-        async def fake_resolve(_s: object, _kind: str, _id: str) -> members.tenancy.Tenant:
+        async def fake_resolve(_s: object, _kind: str, _id: str, **_kw: object) -> members.tenancy.Tenant:
             return acme
 
         async def fake_still(_s: object, _tenant: object) -> None:
@@ -69,7 +69,7 @@ class _Harness:
             self.existing.append(_tuple(t.user, t.relation, t.object))
             return True
 
-        monkeypatch.setattr(members.tenancy, "require", fake_resolve)
+        monkeypatch.setattr(members.tenancy, "resolved", fake_resolve)
         monkeypatch.setattr(members.tenancy, "require_still", fake_still)
         monkeypatch.setattr(fga_deps, "require_relation", fake_require)
         monkeypatch.setattr(members.fga, "read_object_tuples", fake_read)

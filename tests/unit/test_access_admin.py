@@ -152,7 +152,7 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
         written.extend(tuples)
 
     monkeypatch.setattr(ep.fga, "write_tuples" if write else "delete_tuples", _fake_mutation)
-    handler = partial(ep.write_access_tuple if write else ep.delete_access_tuple, resolver=_RESOLVER)
+    handler = partial(ep.write_access_tuple if write else ep.delete_access_tuple, resolver=_RESOLVER, settings=_settings())
     response = asyncio.run(
         handler(
             client=_fga_client(),
@@ -216,7 +216,7 @@ def _mutate_recording_emission(
 
     monkeypatch.setattr(ep.fga, "write_tuples" if write else "delete_tuples", _fake_mutation)
     # The control emitter is INJECTED now (catalog-api-09) rather than dug out of `request.app.state`.
-    handler = partial(ep.write_access_tuple if write else ep.delete_access_tuple, resolver=_RESOLVER)
+    handler = partial(ep.write_access_tuple if write else ep.delete_access_tuple, resolver=_RESOLVER, settings=_settings())
     asyncio.run(handler(client=_fga_client(), announcer=unfiled(emitter), token=_token("root_admin"), body=NamedAccessTuple.model_validate(body.model_dump())))
     return emitter
 
@@ -238,7 +238,11 @@ def test_write_rejects_a_derived_can_relation(gate_seen: dict[str, Any], rec: _A
     # error class the idempotent-duplicate handling swallows, so it must never leave this process.
     body = AccessTuple(user="dex~alice", relation="can_read_data", object=TABLE)
     with pytest.raises(InvalidInputError, match="can_read_data"):
-        asyncio.run(ep.write_access_tuple(resolver=_RESOLVER, client=_fga_client(), announcer=unfiled(NoopControlEmitter()), token=None, body=body))
+        asyncio.run(
+            ep.write_access_tuple(
+                resolver=_RESOLVER, settings=_settings(), client=_fga_client(), announcer=unfiled(NoopControlEmitter()), token=None, body=body
+            )
+        )
 
 
 def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
@@ -247,6 +251,7 @@ def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], r
             asyncio.run(
                 ep.write_access_tuple(
                     resolver=_RESOLVER,
+                    settings=_settings(),
                     client=_fga_client(),
                     announcer=unfiled(NoopControlEmitter()),
                     token=None,
@@ -652,6 +657,7 @@ def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> li
     asyncio.run(
         ep.write_access_tuple(
             resolver=_RESOLVER,
+            settings=_settings(),
             client=_fga_client(),
             announcer=unfiled(NoopControlEmitter()),
             token=_token("root_admin"),
@@ -684,6 +690,7 @@ def test_a_condition_the_rung_does_not_accept_is_a_clean_400(gate_seen: dict[str
         asyncio.run(
             ep.write_access_tuple(
                 resolver=_RESOLVER,
+                settings=_settings(),
                 client=_fga_client(),
                 announcer=unfiled(NoopControlEmitter()),
                 token=None,
@@ -702,6 +709,7 @@ def test_an_unknown_condition_is_a_clean_400(gate_seen: dict[str, Any], rec: _Au
         asyncio.run(
             ep.write_access_tuple(
                 resolver=_RESOLVER,
+                settings=_settings(),
                 client=_fga_client(),
                 announcer=unfiled(NoopControlEmitter()),
                 token=None,
@@ -717,6 +725,7 @@ def test_a_condition_missing_a_parameter_is_a_clean_400(gate_seen: dict[str, Any
         asyncio.run(
             ep.write_access_tuple(
                 resolver=_RESOLVER,
+                settings=_settings(),
                 client=_fga_client(),
                 announcer=unfiled(NoopControlEmitter()),
                 token=None,
@@ -756,7 +765,12 @@ def test_a_caller_supplied_clock_is_refused_on_a_write(gate_seen: dict[str, Any]
     with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
         asyncio.run(
             ep.write_access_tuple(
-                resolver=_RESOLVER, client=_fga_client(), announcer=unfiled(NoopControlEmitter()), token=_token("root_admin"), body=_clock_pinned_grant()
+                resolver=_RESOLVER,
+                settings=_settings(),
+                client=_fga_client(),
+                announcer=unfiled(NoopControlEmitter()),
+                token=_token("root_admin"),
+                body=_clock_pinned_grant(),
             )
         )
     assert written == []

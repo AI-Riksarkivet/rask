@@ -34,6 +34,8 @@ export const KIND_NAMES: Record<LabelKind, string> = {
 export const LabelDefinitionSchema = v.object({
 	uuid: v.string(),
 	project: v.string(),
+	/** The creation of the project that defined it (ADR 0245). */
+	project_uuid: v.string(),
 	name: v.string(),
 	description: v.optional(v.nullable(v.string())),
 	scope: v.array(v.picklist(LABEL_SCOPES)),

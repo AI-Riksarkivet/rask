@@ -11,6 +11,7 @@ from typing import Annotated, Any
 from fastapi import Depends, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    ConcurrentModificationError,
     InternalError,
     LanceNamespace,
     PermissionDeniedError,
@@ -32,7 +33,7 @@ from lakehouse import trash
 from lakehouse.control_emit import ControlEmitter, NoopControlEmitter
 from lakehouse.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.governed import fga
-from lakehouse.governed.tenancy import WAREHOUSE
+from lakehouse.governed.tenancy import STATE, WAREHOUSE
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.outage import store_refusal
@@ -56,6 +57,9 @@ class ServedWarehouse(BaseModel):
     #: The object store the root is reached at; ``None`` is the estate's ([[LH-067]]).
     endpoint: str | None = None
     deactivated: bool = False
+    #: Its delete has marked it: its names are still served to readers until the delete has dropped them, and nothing is
+    #: written beneath it (ADR 0245, review T3).
+    deleting: bool = False
 
 
 async def _resolve_warehouse_root(request: Request, settings: Settings, warehouse_id: str) -> ServedWarehouse | None:
@@ -110,7 +114,11 @@ async def _read_warehouse_root(settings: Settings, warehouse_id: str) -> ServedW
         return None
     record = tenant.record
     return ServedWarehouse(
-        root_uri=record["root_uri"], obj=tenant.obj, endpoint=record.get("endpoint") or None, deactivated=record.get("status", "active") != "active"
+        root_uri=record["root_uri"],
+        obj=tenant.obj,
+        endpoint=record.get("endpoint") or None,
+        deactivated=record.get("status", "active") != "active",
+        deleting=record.get(STATE) == tenancy.DELETING,
     )
 
 
@@ -119,16 +127,21 @@ def names_a_registered_warehouse(warehouse_id: str) -> bool:
     return CONTROL_ID_RE.fullmatch(warehouse_id) is not None
 
 
-async def require_active_warehouse(request: Request, settings: Settings, warehouse_id: str) -> ServedWarehouse | None:
-    """Where warehouse ``warehouse_id`` is served from, refusing one that is deactivated; ``None`` for no warehouse.
+async def require_active_warehouse(request: Request, settings: Settings, warehouse_id: str, *, changing: bool = False) -> ServedWarehouse | None:
+    """Where warehouse ``warehouse_id`` is served from, refusing one that is deactivated, and, for a door ``changing``
+    what lies beneath it, one being deleted; ``None`` for no warehouse.
 
     Raises:
         PermissionDeniedError: The warehouse is deactivated, which suspends every operation beneath it. The status
             is read on every request, so a deactivation is in force from the next one.
+        ConcurrentModificationError: The door changes what lies beneath the warehouse, and its delete has marked it: a
+            declare or a commit landing there would be left behind, or taken by, the delete emptying it.
     """
     served = await _resolve_warehouse_root(request, settings, warehouse_id)
     if served is not None and served.deactivated:
         raise PermissionDeniedError(f"warehouse {warehouse_id!r} is deactivated (quarantined); operations beneath it are suspended until it is reactivated")
+    if served is not None and served.deleting and changing:
+        raise ConcurrentModificationError(f"warehouse {warehouse_id!r} is being deleted; nothing is written beneath it")
     return served
 
 
@@ -280,13 +293,15 @@ class Resolver:
         # nothing on it is answered as for any other name.
         return await _catalog_at(self._request, self._settings, await _resolve_warehouse_root(self._request, self._settings, segments[0]))
 
-    async def require_active_warehouse(self, warehouse_id: str) -> None:
-        """Refuse a name in a deactivated warehouse, asked once the caller is known to be admitted at the door.
+    async def require_active_warehouse(self, warehouse_id: str, *, changing: bool = False) -> None:
+        """Refuse a name in a deactivated warehouse, and a change beneath one being deleted, asked once the caller is
+        known to be admitted at the door.
 
         Raises:
             PermissionDeniedError: The warehouse is deactivated.
+            ConcurrentModificationError: ``changing``, and the warehouse is being deleted.
         """
-        await require_active_warehouse(self._request, self._settings, warehouse_id)
+        await require_active_warehouse(self._request, self._settings, warehouse_id, changing=changing)
 
     async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:
         """The table ``segments`` names, resolved to its location and that location's claim (``ns``: the connection to read it through)."""

@@ -134,7 +134,11 @@ def test_a_warehouse_whose_establish_failed_is_completed_by_the_next_tick_and_th
     ticks = [estate.tick() for _ in range(3)]
 
     made = estate.client.post("/v1/namespace/acme$sales/create", json={}, headers=estate.bearer("alice"))
-    assert [(tick.converged, tick.failed) for tick in ticks] == [(["project:acme"], ["warehouse:acme"]), (["warehouse:acme"], []), ([], [])]
+    assert [(tick.converged, [failure.partition(":")[0] + ":" + failure.split(":")[1] for failure in tick.failed]) for tick in ticks] == [
+        (["project:acme"], ["warehouse:acme"]),
+        (["warehouse:acme"], []),
+        ([], []),
+    ]
     assert (made.status_code, (estate.record("acme") or {}).get("managed_by")) == (200, "git"), made.text
 
 
@@ -149,7 +153,7 @@ def test_a_warehouse_git_declares_in_another_project_than_it_stands_in_is_left_a
 
     answer = estate.tick()
 
-    assert (answer.converged, answer.failed, declared()) == ([], ["warehouse:shared"], before)
+    assert (answer.converged, [failure.split(": ", 1)[0] for failure in answer.failed], declared()) == ([], ["warehouse:shared"], before)
 
 
 def test_a_paged_root_listing_shows_every_warehouse_the_caller_sees(estate: Any) -> None:
@@ -303,7 +307,7 @@ def test_a_tick_corrects_a_declared_warehouse_that_drifted(estate: Any) -> None:
     """The drift is planted on the record itself, as nothing but a write past the doors can make it."""
     _declared_acme(estate)
     settings = estate.client.app.state.settings
-    warehouses.set_warehouse_status(settings.registry_root, settings.storage_options(), "acme", "deactivated")
+    warehouses.set_warehouse_status(settings.registry_root, settings.storage_options(), "acme", "deactivated", uuid=(estate.record("acme") or {})["uuid"])
 
     answer = estate.tick()
 

@@ -19,7 +19,7 @@ import json
 import logging
 from contextlib import suppress
 from pathlib import Path
-from typing import Annotated, Final, Literal, Self
+from typing import Annotated, Any, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
@@ -196,6 +196,14 @@ def _grant_key(grant: GrantTuple) -> str:
     return f"{control_prefixes.DECLARED_GRANTS}/{digest}.json"
 
 
+#: The mark a record carries between its forgetting's conditional write and its removal: no read takes it for a record.
+_FORGOTTEN: Final = "forgotten"
+
+
+class _Moved(Exception):
+    """The record changed since it was judged."""
+
+
 class GrantRecord(BaseModel):
     """The ledger's record of a tuple the declaration writes (ADR 0241): an intent while it names an evidence, the
     declaration's once settled."""
@@ -228,7 +236,7 @@ def ledger(control_root: str, storage_options: StorageOptions) -> list[GrantReco
         ValueError: A record is there and cannot be read as one.
     """
     records = list_records(control_root, storage_options, control_prefixes.DECLARED_GRANTS, event="declared_grant", strict=True)
-    return [GrantRecord.model_validate(record) for record in records]
+    return [GrantRecord.model_validate(record) for record in records if not record.get(_FORGOTTEN)]
 
 
 def recorded_grants(control_root: str, storage_options: StorageOptions) -> set[GrantTuple]:
@@ -257,3 +265,22 @@ def settle_grant(control_root: str, storage_options: StorageOptions, record: Gra
 def forget_grant(control_root: str, storage_options: StorageOptions, grant: GrantTuple) -> None:
     """Remove the record of ``grant``, once its tuple is revoked."""
     delete_record(control_root, storage_options, _grant_key(grant))
+
+
+def forget_settled(control_root: str, storage_options: StorageOptions, settled: GrantRecord) -> None:
+    """Forget the settled record ``settled`` of a grant the store no longer holds on the creation the id names, so the
+    grant is declared afresh (ADR 0245, review T1): a record is about the one creation it names. Conditional on the
+    record as it stands still being ``settled``, so an intent another tick recorded since stays."""
+
+    def forget(current: dict[str, Any]) -> dict[str, Any]:
+        # Marked once, by the one forgetting whose write lands, which alone removes it: a second would remove the intent
+        # the first records next.
+        if current.get(_FORGOTTEN) or GrantRecord.model_validate(current) != settled:
+            raise _Moved(_grant_key(settled.grant))
+        return {**current, _FORGOTTEN: True}
+
+    try:
+        mutate_json(control_root, storage_options, _grant_key(settled.grant), forget)
+    except (RecordMissingError, _Moved):
+        return
+    delete_record(control_root, storage_options, _grant_key(settled.grant))

@@ -22,7 +22,7 @@ from functools import partial
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import InvalidInputError
+from lance_namespace import ConcurrentModificationError, InvalidInputError
 from openfga_sdk import OpenFgaClient
 from opentelemetry import metrics
 from pydantic import BaseModel, Field
@@ -68,7 +68,7 @@ class ConvergeTick(BaseModel):
     released: list[str] = Field(default_factory=list)
     grants_written: int = 0
     grants_revoked: int = 0
-    #: What could not be converged this tick.
+    #: What could not be converged this tick, each as ``<object>: <why>``.
     failed: list[str] = Field(default_factory=list)
 
 
@@ -99,13 +99,13 @@ class _Converger:
         return self.tick
 
     async def _attempt(self, what: str, step: Callable[[], Awaitable[None]]) -> bool:
-        """Run ``step``; whether it ran to its end."""
+        """Run ``step``; whether it ran to its end. A step that did not is named among the tick's failures, with why."""
         try:
             await step()
-        except Exception:  # noqa: BLE001 — one object's failure leaves every other object to this tick
+        except Exception as exc:  # noqa: BLE001 — one object's failure leaves every other object to this tick
             log.warning("declaration_converge_failed", extra={"object": what}, exc_info=True)
             _failed.add(1, {"lance.catalog.object": what})
-            self.tick.failed.append(what)
+            self.tick.failed.append(f"{what}: {exc}")
             return False
         return True
 
@@ -119,10 +119,10 @@ class _Converger:
             changed = True
         if protection.is_protected(record) != declared.protected:
             change = _PROTECTED_BY if declared.protected else _UNPROTECTED_BY
-            await project_doors.protect_project(self._settings, self._control, declared.id, change=change, actor=DECLARATION.actor)
+            await project_doors.protect_project(self._settings, self._control, declared.id, uuid=record[UUID], change=change, actor=DECLARATION.actor)
             changed = True
         if record.get(MANAGED_BY) != GIT:
-            await run_in_threadpool(project_registry.set_project_manager, self._root, self._so, declared.id, manager=GIT)
+            await run_in_threadpool(partial(project_registry.set_project_manager, self._root, self._so, declared.id, uuid=record[UUID], manager=GIT))
             changed = True
         if changed:
             self.tick.converged.append(f"project:{declared.id}")
@@ -161,17 +161,15 @@ class _Converger:
                 project=project,
             )
             if record.get(MANAGED_BY) != GIT:
-                await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, declared.id, manager=GIT)
+                await run_in_threadpool(partial(warehouses.set_warehouse_manager, self._root, self._so, declared.id, uuid=record[UUID], manager=GIT))
             changed = True
         status: warehouse_doors.WarehouseStatus = "active" if declared.active else "deactivated"
         if (record.get("status") or "active") != status:
-            await warehouse_doors.change_warehouse_status(self._settings, self._control, declared.id, status=status, actor=DECLARATION.actor)
+            await warehouse_doors.change_warehouse_status(self._settings, self._control, declared.id, uuid=record[UUID], status=status, actor=DECLARATION.actor)
             changed = True
         if protection.is_protected(record) != declared.protected:
             change = _PROTECTED_BY if declared.protected else _UNPROTECTED_BY
-            await warehouse_doors.protect_warehouse(
-                self._settings, self._control, declared.id, project=declared.project, change=change, actor=DECLARATION.actor
-            )
+            await warehouse_doors.protect_warehouse(self._settings, self._control, declared.id, uuid=record[UUID], change=change, actor=DECLARATION.actor)
             changed = True
         if changed:
             self.tick.converged.append(f"warehouse:{declared.id}")
@@ -181,12 +179,12 @@ class _Converger:
         projects = {project.id for project in declared.projects}
         for record in await run_in_threadpool(project_registry.list_projects, self._root, self._so):
             if record.get(MANAGED_BY) == GIT and record["id"] not in projects:
-                await run_in_threadpool(project_registry.set_project_manager, self._root, self._so, record["id"], manager=None)
+                await run_in_threadpool(partial(project_registry.set_project_manager, self._root, self._so, record["id"], uuid=record[UUID], manager=None))
                 self.tick.released.append(f"project:{record['id']}")
         declared_warehouses = {warehouse.id for warehouse in declared.warehouses}
         for record in await run_in_threadpool(warehouses.list_warehouses, self._root, self._so):
             if record.get(MANAGED_BY) == GIT and record["id"] not in declared_warehouses:
-                await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, record["id"], manager=None)
+                await run_in_threadpool(partial(warehouses.set_warehouse_manager, self._root, self._so, record["id"], uuid=record[UUID], manager=None))
                 self.tick.released.append(f"warehouse:{record['id']}")
 
     async def _grants(self, declared: Declaration) -> None:
@@ -214,7 +212,7 @@ class _Converger:
         for grant in sorted(wanted, key=_order):
             if (on := await self._on_creation(grant)) is not None and await fga.holds(self._client, on.client_tuple):
                 continue
-            if not await self._attempt(f"grant:{grant.object}#{grant.relation}", partial(self._grant, self._client, grant)):
+            if not await self._attempt(f"grant:{grant.object}#{grant.relation}", partial(self._grant, self._client, grant, recorded.get(grant))):
                 ungranted.add(grant.object)
         released = {f"project:{record['id']}" for record in await run_in_threadpool(project_registry.list_projects, self._root, self._so)} - {
             f"project:{project.id}" for project in declared.projects
@@ -272,24 +270,40 @@ class _Converger:
                 await run_in_threadpool(declaration.forget_grant, self._root, self._so, GrantTuple(user=gone.user, relation=gone.relation, object=gone.object))
             self.tick.grants_revoked += len(revoked)
 
-    async def _grant(self, client: OpenFgaClient, grant: GrantTuple) -> None:
+    async def _grant(self, client: OpenFgaClient, grant: GrantTuple, settled: declaration.GrantRecord | None) -> None:
         """Write ``grant`` on the creation its object's id names now (ADR 0245): git declares the id, so a project or a
-        warehouse made again under it is the new creation's, and it is granted there by the next tick."""
+        warehouse made again under it is the new creation's, and it is granted there in the same tick.
+
+        The ledger's record of a declared grant is about ONE creation (review T1). ``settled``, the record this tick read,
+        names the creation a grant was written on; the grant is not held on the live creation, so a record of another
+        creation (one that ended) is forgotten, and one of this creation (its tuple revoked at a door since) is too, and
+        the grant is declared afresh. Nothing is skipped silently: a grant this tick neither holds nor writes raises,
+        and the tick names it among its failures with why.
+
+        Raises:
+            LookupError: No live creation holds the id.
+            ConcurrentModificationError: Another tick's intent on the grant stands unsettled.
+        """
         if (on := await self._on_creation(grant)) is None:
             raise LookupError(f"{grant.object} has no live registry record, so no grant on it is written")
         # Read again right before the intent: a tuple somebody made at a door since the tick's first read is theirs.
         if await fga.holds(client, on.client_tuple):
             return
+        if settled is not None:
+            await run_in_threadpool(partial(declaration.forget_settled, self._root, self._so, settled))
         proof = fga.evidence(on.object)
         if not await run_in_threadpool(partial(declaration.record_intent, self._root, self._so, grant, evidence=str(proof.user), uuid=on.uuid)):
-            return
+            raise ConcurrentModificationError(
+                f"an intent to write {grant.object}#{grant.relation} another tick recorded stands unsettled; the next tick settles it"
+            )
         told = announcing.grant_announcement(
             on.client_tuple, action="grant_added", actor=DECLARATION.actor, object_name=on.name, object_uuid=on.uuid, extra={"reason": "declared"}
         )
         async with self._announcer.announcing(door="declaration_converge", target=grant.object, announcements=[told]) as filing:
             record = declaration.GrantRecord(**grant.model_dump(), evidence=str(proof.user), uuid=on.uuid)
             if not await fga.write_evidenced(client, on.client_tuple, proof, actor=DECLARATION.subject, origin="declaration"):
-                # A door made the tuple between the read above and this Write: it is the door's, and the intent goes.
+                # A door made the tuple between the read above and this Write: it is the door's and it is held, and the
+                # intent goes.
                 await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
                 return
             await self._settle(client, record)

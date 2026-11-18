@@ -216,12 +216,14 @@ async def _grant_gate(
     kind: Kind, *, revoking: bool, id: str, request: Request, client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver
 ) -> tenancy.Tenant:
     """The live creation the door's id names, once the door's gate (:func:`fga_deps.require_grant_authority`) admitted its
-    caller there, with no write (ADR 0245)."""
-    tenant = await tenancy.require(settings, kind, fga.canonical_object_id(parse_identifier(id)))
-    await fga_deps.require_grant_authority(
-        request, client, settings, token, resolver, fga_type=kind, segments=parse_identifier(id), revoking=revoking, obj=tenant.obj
-    )
-    return tenant
+    caller there, with no write, through the one gate of every door on a tenant's id (``fga_deps.on_tenant``, ADR 0245):
+    an id no live creation holds is refused alike to a caller who holds nothing."""
+    segments = parse_identifier(id)
+
+    async def gate(obj: str) -> None:
+        await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type=kind, segments=segments, revoking=revoking, obj=obj)
+
+    return await fga_deps.on_tenant(settings, kind, fga.canonical_object_id(segments), gate=gate)
 
 
 async def warehouse_grant_gate(

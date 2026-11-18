@@ -67,7 +67,7 @@ from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.subjects import is_person_subject
-from lakehouse.governed.tenancy import PROJECT, WAREHOUSE, made_under
+from lakehouse.governed.tenancy import PROJECT, WAREHOUSE, kind_of, made_under
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.outage import store_refusal
@@ -1466,6 +1466,8 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
 
     Raises:
         PermissionDeniedError: The caller may not act here, or may and the warehouse is deactivated.
+        ConcurrentModificationError: The caller may, the door changes what lies beneath the name, and the warehouse is
+            being deleted.
     """
     await _decide(request, settings, token, injected, resolver)
     object_id = request.path_params.get("id")
@@ -1473,7 +1475,28 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     if object_id is None or _resource_for(request.scope["path"]) in (None, "classification"):
         return
     if segments := parse_identifier(object_id):
-        await resolver.require_active_warehouse(segments[0])
+        await resolver.require_active_warehouse(segments[0], changing=_changes(request))
+
+
+def _changes(request: Request) -> bool:
+    """Whether this route changes what lies beneath its name: every door whose rung is no read, a vend at a writing tier
+    among them. What a warehouse being deleted refuses (``dependencies.require_active_warehouse``), so nothing lands in
+    one its delete is emptying (ADR 0245, review T3)."""
+    path: str = request.scope["path"]
+    object_id = request.path_params.get("id")
+    resource = _resource_for(path)
+    if object_id is None or resource not in _FGA_TYPE:
+        return False
+    suffix = _suffix(path, resource, object_id)
+    if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
+        return True
+    if suffix == "credentials":
+        tier = vending.requested_tier(request.query_params)
+        return tier is not None and tier in VEND_TIER_RUNGS
+    try:
+        return _action_relation(_FGA_TYPE[resource], suffix, method=request.method) not in _READ_RELATIONS
+    except InternalError:
+        return False
 
 
 async def _decide(request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> None:
@@ -2063,12 +2086,17 @@ async def require_project_exists(settings: Settings, project: str) -> tenancy.Te
     route already answers for an unknown tenant, so one client error path covers both.
     """
     if (live := await tenancy.resolved(settings, PROJECT, project)) is None:
-        raise TableNotFoundError(
-            f"project not found: {project}. A warehouse must belong to an existing project "
-            f"(project > warehouse > namespace > table) — create it first: POST /management/v1/projects "
-            f'with {{"id": "{project}"}}.'
-        )
+        raise project_missing(project)
     return live
+
+
+def project_missing(project: str) -> TableNotFoundError:
+    """What a warehouse's create tells a caller who may learn that ``project`` stands nowhere: the fix, by name."""
+    return TableNotFoundError(
+        f"project not found: {project}. A warehouse must belong to an existing project "
+        f"(project > warehouse > namespace > table) — create it first: POST /management/v1/projects "
+        f'with {{"id": "{project}"}}.'
+    )
 
 
 def project_admin_for(token: Caller | None, named: str | None) -> str | None:
@@ -2564,20 +2592,25 @@ async def revoke_removed_object(client: OpenFgaClient | None, settings: Settings
     return len(removed)
 
 
-#: What names a project or a warehouse as SUBJECT, by type, which its delete's drain reads besides what stands on it: a
-#: role's ``project`` edge and a warehouse's tenancy edge name a project; a namespace's ``parent`` edge names its warehouse.
-NAMING: Final[dict[str, tuple[str, ...]]] = {"project": ("role", "warehouse"), "warehouse": ("namespace",)}
+def naming(kind: tenancy.Kind) -> tuple[str, ...]:
+    """The types whose tuples may name a ``kind`` object as their USER, read from the authorization model's type
+    restrictions (``fga.types_naming``: a role's ``project`` edge and a warehouse's tenancy edge name a project; a
+    namespace's ``parent`` edge names its warehouse): what a delete and the converge tick's sweep read besides what stands
+    on the object, so a type the model admits a project or a warehouse under later is swept with no list to keep
+    (review T8)."""
+    return fga.types_naming(kind)
 
 
 async def end_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> list[fga.ClientTuple]:
-    """Revoke every tuple on ``obj``, a project's or a warehouse's creation, and every tuple naming it (:data:`NAMING`):
+    """Revoke every tuple on ``obj``, a project's or a warehouse's creation, and every tuple naming it (:func:`naming`):
     what its delete revokes once it is marked ``deleting``, and what the converge tick sweeps from an ended creation
     (``fga.revoke_object_tuples``, ADR 0245). The tuples revoked; empty when FGA is off, and a 503 when it is on with no
     client wired."""
     if (client := wired(settings, client)) is None:
         return []
     actor = token.subject if token is not None else "system:catalog"
-    removed = await fga.revoke_object_tuples(client, obj, naming=NAMING[obj.partition(":")[0]], actor=actor, origin="lifecycle_delete")  # noqa: TID251
+    kind = kind_of(obj.partition(":")[0])
+    removed = await fga.revoke_object_tuples(client, obj, naming=naming(kind) if kind is not None else (), actor=actor, origin="lifecycle_delete")  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
     return removed
@@ -3045,7 +3078,9 @@ async def require_run_rule_authority(client: OpenFgaClient | None, settings: Set
     if (authz := authorization(settings, client, token)) is None:
         return
     if project is not None:
-        await authz.require("can_administer", (await tenancy.require(settings, PROJECT, project)).obj)
+        # Asked on the project's live creation, or on the object nobody holds where none stands: refused alike.
+        live = await tenancy.resolved(settings, PROJECT, project)
+        await authz.require("can_administer", live.obj if live is not None else tenancy.nowhere(PROJECT))
     else:
         await authz.require("can_declare_unowned_run_rule", settings.fga_root_object)
 
@@ -3185,6 +3220,33 @@ async def converge_warehouse_grants(
     return len(tuples) + len(revoked)
 
 
+async def on_tenant(
+    settings: Settings,
+    kind: tenancy.Kind,
+    object_id: str,
+    *,
+    gate: Callable[[str], Awaitable[None]],
+    states: frozenset[str] = tenancy.DOORS,
+    absent: TableNotFoundError | None = None,
+) -> tenancy.Tenant:
+    """THE ONE GATE of every door on a project's or a warehouse's id (ADR 0245 decision 4, review T4): the creation
+    ``object_id`` of ``kind`` names in one of ``states`` (live, for a door that writes), once ``gate`` admitted the caller
+    on its object; ``absent`` is what a caller the gate admits is told for an id no such creation holds.
+
+    An id no such creation holds is gated as an object nobody holds anything on (``tenancy.nowhere``), so a caller the
+    gate refuses is refused exactly as for one that stands, and only a caller the gate admits learns that it is missing.
+
+    Raises:
+        PermissionDeniedError: ``gate`` refused the caller (or whatever ``gate`` raises in its place).
+        TableNotFoundError: No such creation holds the id, told to a caller the gate admitted.
+    """
+    tenant = await tenancy.resolved(settings, kind, object_id, states=states)
+    await gate(tenant.obj if tenant is not None else tenancy.nowhere(kind))
+    if tenant is None:
+        raise absent or TableNotFoundError(f"{kind} not found: {object_id}")
+    return tenant
+
+
 async def require_on_tenant(
     client: OpenFgaClient | None,
     settings: Settings,
@@ -3195,19 +3257,15 @@ async def require_on_tenant(
     object_id: str,
     states: frozenset[str] = tenancy.DOORS,
 ) -> tenancy.Tenant:
-    """The creation ``object_id`` of ``kind`` names in one of ``states`` (live, for a door that writes), once the caller
-    holds ``relation`` on it (ADR 0245). A read passes ``tenancy.SERVED``: a warehouse being deleted is still there.
-
-    An id no live creation holds is gated as an object nobody holds anything on (``tenancy.nowhere``), so a caller who
-    may not see it is refused exactly as for one that stands, and the 404 is told only to a caller the gate admits (FGA
-    off).
+    """:func:`on_tenant` gated on ``relation``: the creation ``object_id`` of ``kind`` names in one of ``states``, once
+    the caller holds ``relation`` on it. A read passes ``tenancy.SERVED``: a warehouse being deleted is still there.
 
     Raises:
         PermissionDeniedError: The caller does not hold ``relation`` there.
         TableNotFoundError: No live creation holds the id.
     """
-    tenant = await tenancy.resolved(settings, kind, object_id, states=states)
-    await require_relation(client, settings, token, relation=relation, obj=tenant.obj if tenant is not None else tenancy.nowhere(kind))
-    if tenant is None:
-        raise TableNotFoundError(f"{kind} not found: {object_id}")
-    return tenant
+
+    async def gate(obj: str) -> None:
+        await require_relation(client, settings, token, relation=relation, obj=obj)
+
+    return await on_tenant(settings, kind, object_id, gate=gate, states=states)

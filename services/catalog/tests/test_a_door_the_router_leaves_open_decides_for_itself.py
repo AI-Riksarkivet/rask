@@ -25,6 +25,7 @@ way. With that rung removed, every door refuses as the router would: 503 code 17
 from __future__ import annotations
 
 import logging
+import re
 from abc import abstractmethod
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -366,3 +367,136 @@ def test_a_door_the_router_leaves_to_its_handler_refuses_on_its_own_when_authori
     answers = {door.request_id: _refusal(door.send(client, estate.bearer(door.caller))) for door in _DOORS}
 
     assert {request_id: answer for request_id, answer in answers.items() if answer != refused} == {}, "doors that did not refuse on their own"
+
+
+#: A door on a project's or a warehouse's id: every one of them is gated through the one gate (``fga_deps.on_tenant``).
+_TENANCY_DOOR = re.compile(r"^/management/v1/(projects?|warehouses?)/\{")
+#: An id no project or warehouse holds, in place of the estate's own.
+_ABSENT = {PROJECT: "nope", WAREHOUSE: "wh-nope"}
+
+
+def _for_an_absent_id(door: _Door) -> _Door:
+    """``door`` asked about an id no project or warehouse holds, in its path or, for a warehouse's create, its body."""
+    params = {name: _ABSENT.get(value, value) for name, value in door.params.items()}
+    body = {key: _ABSENT.get(value, value) if key == "project" else value for key, value in door.body.items()} if door.body is not None else None
+    return door.model_copy(update={"params": params, "body": body})
+
+
+def test_a_tenancy_door_answers_a_caller_it_grants_nothing_alike_for_an_id_no_object_holds(estate: Any) -> None:
+    """ADR 0245 decision 4, review T4: a door on a project's or a warehouse's id is asked its gate on the creation the id
+    names, or on the object nobody holds where none stands, so a caller holding nothing is answered the same for an id that
+    stands and one that does not, and learns nothing about which ids exist. Every such door the router serves is asked."""
+    client = _as_a_caller_sees_it(estate.client)
+    tenancy_doors = {(method, route) for method, route in _left_to_handlers() if _TENANCY_DOOR.match(route)} | {("POST", "/management/v1/warehouses")}
+    asked = [door for door in _DOORS if door.key in tenancy_doors]
+
+    def answered(door: _Door) -> tuple[int, int | None]:
+        return _refusal(door.send(client, estate.bearer(door.caller)))
+
+    answers = {door.request_id: (answered(door), answered(_for_an_absent_id(door))) for door in asked}
+
+    assert {door.key for door in asked} == tenancy_doors, "a tenancy door the router serves with no entry in the corpus"
+    assert {request_id: pair for request_id, pair in answers.items() if pair[0] != pair[1] or pair[0][0] < 400} == {}, (
+        "doors answering a caller who holds nothing differently for an id that stands and one that does not (standing, absent)"
+    )
+
+
+#: Every tenancy door that writes a tuple naming a project's or a warehouse's creation, as its admin sends it, and what it
+#: needs standing first: each resolves the id again once its Write has landed (``tenancy.require_still``, review T6).
+_ROLE_PARAMS = {"project_id": PROJECT, "role_id": "{role}"}
+_WRITING: dict[tuple[str, str], tuple[dict[str, str], dict[str, Any] | None, str | None]] = {
+    ("PUT", "/management/v1/projects/{project_id}/members"): ({"project_id": PROJECT}, {"user": f"dex~{READER}", "relation": "member"}, None),
+    ("DELETE", "/management/v1/projects/{project_id}/members"): ({"project_id": PROJECT}, {"user": f"dex~{READER}", "relation": "member"}, "member"),
+    ("POST", "/management/v1/projects/{id}/access/grant"): ({"id": PROJECT}, {"user": "dex~erin", "relation": "decider"}, None),
+    ("POST", "/management/v1/projects/{id}/access/revoke"): ({"id": PROJECT}, {"user": "dex~erin", "relation": "decider"}, "decider"),
+    ("POST", "/management/v1/projects/{project_id}/roles"): ({"project_id": PROJECT}, {"name": "analysts"}, None),
+    ("DELETE", "/management/v1/projects/{project_id}/roles/{role_id}"): (_ROLE_PARAMS, None, "role"),
+    ("PUT", "/management/v1/projects/{project_id}/roles/{role_id}/assignees"): (_ROLE_PARAMS, {"user": f"dex~{READER}"}, "role"),
+    ("DELETE", "/management/v1/projects/{project_id}/roles/{role_id}/assignees"): (_ROLE_PARAMS, {"user": f"dex~{READER}"}, "assignee"),
+    ("POST", "/management/v1/warehouse/{id}/access/grant"): ({"id": WAREHOUSE}, {"user": "dex~erin", "relation": "reader"}, None),
+    ("POST", "/management/v1/warehouse/{id}/access/revoke"): ({"id": WAREHOUSE}, {"user": "dex~erin", "relation": "reader"}, "reader"),
+    ("POST", "/management/v1/warehouse/{id}/managed-access/set"): ({"id": WAREHOUSE}, {"enabled": True}, None),
+}
+#: The tenancy doors that write no tuple on a creation once their gate admitted the caller, and why.
+_WRITING_NO_TUPLE = {
+    ("POST", "/management/v1/warehouses"),  # makes a creation, ordered by its own protocol (ADR 0245 decision 3)
+    ("DELETE", "/management/v1/projects/{project_id}"),  # ends a creation, by its own mark (review T2, T3)
+    ("DELETE", "/management/v1/warehouses/{warehouse_id}"),
+    ("POST", "/management/v1/projects/{project_id}/protection"),  # registry writes, each conditional on the creation
+    ("POST", "/management/v1/warehouses/{warehouse_id}/protection"),
+    ("POST", "/management/v1/warehouses/{warehouse_id}/activate"),
+    ("POST", "/management/v1/warehouses/{warehouse_id}/deactivate"),
+    ("POST", "/management/v1/warehouses/{warehouse_id}/validate"),
+    ("POST", "/management/v1/project/{id}/policy/set"),
+    ("POST", "/management/v1/project/{id}/policy/delete"),
+    ("POST", "/management/v1/projects/{id}/labels/define"),
+    ("POST", "/management/v1/projects/{id}/labels/{name}/delete"),
+    ("POST", "/management/v1/projects/{id}/access/list"),  # reads, sent as POST
+    ("POST", "/management/v1/projects/{id}/access/my-permissions"),
+    ("POST", "/management/v1/project/{id}/policy/describe"),
+    ("POST", "/management/v1/warehouse/{id}/access/list"),
+    ("POST", "/management/v1/warehouse/{id}/access/my-permissions"),
+    ("POST", "/management/v1/warehouse/{id}/managed-access/describe"),
+}
+
+
+def test_every_tenancy_door_that_writes_a_tuple_is_in_the_after_write_roster() -> None:
+    changing = {(method, route) for method, route in _left_to_handlers() if _TENANCY_DOOR.match(route) and method != "GET"}
+    assert (changing - set(_WRITING) - _WRITING_NO_TUPLE, set(_WRITING) - changing) == (set(), set()), (
+        "tenancy doors in neither roster, and roster entries naming no such route"
+    )
+
+
+def _made_again(estate: Any, kind: str, object_id: str) -> None:
+    """The record of ``kind`` ``object_id`` replaced by another creation, as a delete and a create landing between a door's
+    Write and its answer leave it."""
+    from catalog.services import projects as project_registry
+    from catalog.services.control_records import write_json
+    from lakehouse.governed import tenancy as named
+
+    settings = get_settings()
+    read = project_registry.get_project_record if kind == "project" else warehouses.get_warehouse_record
+    record = read(settings.registry_root, settings.storage_options(), object_id) or {}
+    key = project_registry.record_key(object_id) if kind == "project" else warehouses.record_key(object_id)
+    write_json(settings.registry_root, settings.storage_options(), key, {**record, "uuid": named.new_uuid()})
+
+
+@pytest.mark.parametrize("door", sorted(_WRITING), ids=lambda key: f"{key[0]} {key[1]}")
+def test_a_tenancy_door_whose_creation_ends_under_its_write_answers_the_deleted_object(
+    estate: Any, monkeypatch: pytest.MonkeyPatch, door: tuple[str, str]
+) -> None:
+    """Review T6: a door that wrote a tuple on a project's or a warehouse's creation resolves the id again once the Write
+    landed, so where the id names another creation by then (the object deleted and made again meanwhile) the door answers
+    the deleted object's 404, never success for a change on an object that is gone."""
+    from lakehouse.governed import fga
+
+    method, route = door
+    params, body, needs = _WRITING[door]
+    client, alice = _as_a_caller_sees_it(estate.client), estate.bearer("alice")
+    if needs is not None:
+        made = client.post(f"/management/v1/projects/{PROJECT}/roles", json={"name": "curators"}, headers=alice)
+        assert made.status_code == 201, made.text
+        role = made.json()["id"]
+        params = {name: value.replace("{role}", role) for name, value in params.items()}
+        grant = {
+            "member": ("PUT", f"/management/v1/projects/{PROJECT}/members"),
+            "decider": ("POST", f"/management/v1/projects/{PROJECT}/access/grant"),
+            "reader": ("POST", f"/management/v1/warehouse/{WAREHOUSE}/access/grant"),
+            "assignee": ("PUT", f"/management/v1/projects/{PROJECT}/roles/{role}/assignees"),
+        }.get(needs)
+        if grant is not None:
+            _ok(client.request(grant[0], grant[1], json=body, headers=alice))
+    kind, object_id = ("warehouse", WAREHOUSE) if WAREHOUSE in params.values() else ("project", PROJECT)
+    real, armed = fga.require_named_by_creation, [True]
+
+    def _write_then_made_again(tuples: Any) -> None:  # noqa: ANN401 — the Write's own tuples
+        real(tuples)
+        if armed:
+            armed.clear()
+            _made_again(estate, kind, object_id)
+
+    monkeypatch.setattr(fga, "require_named_by_creation", _write_then_made_again)
+
+    answered = _Refusing(method=method, route=route, params=params, body=body, caller="alice").send(client, alice)
+
+    assert (armed, _refusal(answered)) == ([], _NOT_FOUND), answered.text

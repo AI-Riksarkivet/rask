@@ -561,23 +561,34 @@ written for a dead creation can never apply to a live one, because no create min
 
 - **Record states** (`state`): `creating` (written first, naming its uuid, its creator and the admin or owner it seeds,
   before anything in OpenFGA), `live` (once its seed stands; the only state a door resolves), `deleting` (marked before
-  its delete reads or revokes anything). An ended record is gone (`projects.end_project`, `warehouses.end_warehouse`)
-  and its creation kept under `_ended/<kind>/<uuid>.json` until the converge tick has swept its object
-  (`control_records.EndedCreation`).
+  its delete reads or revokes anything), `ended` (stamped by the delete that ends it, which then removes the record; a
+  stamp whose writer died is removed by the tick past its bound, `remove_stale_ended`), its creation kept under
+  `_ended/<kind>/<uuid>.json` until the converge tick has swept its object (`control_records.EndedCreation`).
+- **ONE conditional way to change a record** (review T2): `control_records.change_creation`, a write under the ETag of a
+  read that found the creation's uuid (protection, status, manager, seal, a re-POST's merge, the flip live, the end);
+  never a write keyed by the id alone. A create is iff-absent and a lost race answers 409, seeding nothing (review T9).
 - **Create.** Record `creating` → (a warehouse: its project resolved again; one deleted meanwhile ends the record, 404)
   → seed on the uuid (`fga_deps.seed_project_admin` / `seed_warehouse`) → `live` (`set_live`, conditional on the record
   still `creating` with its uuid). A re-POST of a record still `creating` resumes it.
-- **Doors.** Resolve the id to its live creation, ask the gate there, write there in ONE Write, resolve again
-  (`tenancy.require_still`: a project or warehouse deleted meanwhile answers 404, and what was written stands on a dead
-  object). No ticket, no second ask; grants never refuse each other. An id no live creation holds is gated as an object
-  nobody holds (`fga_deps.require_on_tenant`, `tenancy.nowhere`), so a 403 tells nothing. A namespace created in a
+- **Doors.** Resolve the id to its live creation and ask the gate there through THE ONE GATE, `fga_deps.on_tenant`
+  (an id no live creation holds is gated as an object nobody holds, `tenancy.nowhere`, so a refusal tells nothing),
+  write there in ONE Write, resolve again through THE ONE HELPER, `tenancy.require_still` (a project or warehouse deleted
+  meanwhile answers 404, and what was written stands on a dead object). No ticket, no second ask; grants never refuse
+  each other. A namespace created in a
   warehouse resolves the warehouse again once seeded (`fga_deps.seed_ownership`), and one deleted meanwhile has the
   namespace taken back (`seed_ownership_or_compensate`) and answers 404.
-- **Delete.** Mark `deleting` (`projects.mark_deleting`, `warehouses.mark_deleting`) → read the children AFTER the mark
-  (a project's warehouses in every state, `warehouses.every_warehouse`, refusing 409 while one stands; a warehouse's
-  namespaces, cascaded) → revoke what stands on the creation and names it (`fga_deps.end_object`,
-  `fga.revoke_object_tuples(naming=NAMING)`, THE ONE WAY an object is revoked) → end. Asked again, a marked delete
-  finishes.
+- **Delete, and its point of no return** (`catalog.services.tenancy.DeleteRun`, review T2, T3). Every check that can
+  refuse with nothing changed (protection, emptiness, the purge's guards, the namespace fence, the subtree's protection,
+  the clones outside) runs on ONE read of the record → the mark (`tenancy.mark`: `deleting`, `deleting_by`, `delete_run`,
+  under that read's ETag; 409 where it changed) → the children read AFTER the mark (a project's warehouses in every
+  state; a warehouse's late namespaces) and a refusal there PUTS THE RECORD BACK live (`tenancy.put_back`) → the point of
+  no return (`tenancy.pass_no_return`, `no_return`) → revoke what stands on the creation and names it
+  (`fga_deps.end_object`, the naming types from the model, THE ONE WAY an object is revoked) and its companions OF THIS
+  CREATION (roles by `project_uuid`, label definitions by `project_uuid`, the trash by `warehouse_uuid`), each step
+  followed by `tenancy.require_own` (another run took the mark over: 409; the id names another creation: 404) → end
+  (`tenancy.end`). Past `no_return` a failure answers `partial` (503) and the same delete asked again finishes it; a
+  later delete takes the mark over. A warehouse marked `deleting` refuses every door changing what lies beneath it (409,
+  `dependencies.require_active_warehouse(changing=)`).
 - **The converge tick** (`catalog.services.tenancy_converge.converge`, at boot and on every tick): finishes a project
   record still `creating` from what it names; finishes a warehouse record `creating` whose create no longer runs (past
   `tenancy.create_bound`) under its project's live creation and holding its claim, and ends one whose project creation is
@@ -652,8 +663,11 @@ tables are never declared.
   (`_Converger._settle`, by this tick or the next if it died): git's where it does, forgotten where it does not. So a
   tuple never outlives its declaration unrecorded, and a grant made at a door is never taken (ADR 0241 G13). A declared
   grant names an id; the tick writes it on the creation the id names live (ADR 0245), so a project made again under a
-  declared id is granted it again: git declared it. A record carries the uuid of the creation it was written on; a
-  revoke finding another creation forgets it (that creation's delete revoked the tuple). A recorded tuple git no longer
+  declared id is granted it again, in the same tick: git declared it. A record carries the uuid of the creation it was
+  written on and is about that creation alone: a settled record whose grant is not held on the live creation is
+  forgotten (`declaration.forget_settled`) and the grant declared afresh, and a grant the tick neither holds nor writes is
+  named in `failed` as `<object>: <why>` (review T1); a revoke finding another creation forgets it (that creation's
+  delete revoked the tuple). A recorded tuple git no longer
   asks for is revoked on its creation, then its record forgotten. A project
   `admin` goes through `project_admins.withdraw`, which keeps a project its last administrator: that revoke fails,
   and is counted on every tick, until another admin is granted. A grant on an object with no registry record is not

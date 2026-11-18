@@ -27,9 +27,11 @@ from pydantic import BaseModel
 
 from catalog.core.config import Settings, shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
-from catalog.services import manifest_reclaim, table_claims
+from catalog.services import manifest_reclaim, projects, table_claims, tenancy, warehouses
 from lakehouse import location_claims
 from lakehouse.governed import fga
+from lakehouse.governed.tenancy import PROJECT, WAREHOUSE
+from lakehouse.governed.tenancy import kind_of as tenancy_kind_of
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import uuid_of
 from lakehouse.objectfs import fs_and_base
@@ -67,19 +69,34 @@ class _Row(BaseModel):
 
 
 def current_names(settings: Settings, objects: Iterable[str]) -> dict[str, str]:
-    """The name each ``table:<uuid>`` and ``namespace:<uuid>`` in ``objects`` holds now, keyed by the object.
+    """The name each ``table:<uuid>`` and ``namespace:<uuid>`` in ``objects`` holds now, and the id each live creation of a
+    project or a warehouse among them is held under (``project:<uuid>``, ADR 0245), keyed by the object as asked (a
+    userset of a creation, ``project:<uuid>#member``, by the creation's id too).
 
-    An object of any other type, one whose id is not a uuid, and one no root names now (gone, trashed, or unread) is
-    absent from the answer.
+    An object of any other type, one whose id is not a uuid, and one no root or record names now (gone, trashed, ended,
+    or unread) is absent from the answer.
     """
     asked = list(objects)
+    named = tenancy_ids(settings, asked)
     tables = {ident for obj in asked if (ident := _uuid_of("table", obj)) is not None}
     namespaces = {ident for obj in asked if (ident := _uuid_of("namespace", obj)) is not None}
     if not tables and not namespaces:
-        return {}
+        return named
     rows = [(root, row) for root in _roots(settings) for row in _rows(root, settings.storage_options())]
     locations = [location for root, row in rows if (location := row.table_location(root)) is not None]
-    return _namespace_names([row for _, row in rows], namespaces) | _table_names(table_claims.claim_store(settings), locations, tables)
+    return named | _namespace_names([row for _, row in rows], namespaces) | _table_names(table_claims.claim_store(settings), locations, tables)
+
+
+def tenancy_ids(settings: Settings, objects: Iterable[str]) -> dict[str, str]:
+    """The id each standing creation of a project or a warehouse in ``objects`` is held under (one being created or
+    deleted included, one ended not), keyed by the object as asked (a userset of one by the creation's id too): one
+    registry listing per kind asked about."""
+    asked = [obj for obj in objects if tenancy_kind_of(obj.partition(":")[0]) is not None]
+    held: dict[str, str] = {}
+    for kind, read in ((PROJECT, projects.read_projects), (WAREHOUSE, warehouses.read_warehouses)):
+        if any(obj.startswith(f"{kind}:") for obj in asked):
+            held |= tenancy.ids_by_object(kind, read(settings.registry_root, settings.storage_options())[0], states=tenancy.STANDING)
+    return {obj: held[base] for obj in asked if (base := obj.partition("#")[0]) in held}
 
 
 def _namespace_names(rows: list[_Row], namespaces: set[str]) -> dict[str, str]:

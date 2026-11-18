@@ -21,6 +21,7 @@ by review, third round, B2).
 from __future__ import annotations
 
 import logging
+from functools import partial
 
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
@@ -33,6 +34,7 @@ from catalog.api.v1.endpoints.warehouses import probe
 from catalog.core.config import Settings
 from catalog.core.vending import role_session_name
 from catalog.services import seal_posture, warehouses
+from lakehouse.governed.tenancy import UUID
 
 
 log = logging.getLogger(__name__)
@@ -93,7 +95,12 @@ async def probe_all(app: FastAPI, settings: Settings) -> SealProbeTick:
         if record is None:
             measured = await run_in_threadpool(warehouses.set_estate_sealed, settings.registry_root, so, warehouse_id, report.sealed)
         else:
-            measured = await run_in_threadpool(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed)
+            measured = await run_in_threadpool(
+                partial(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed, uuid=record[UUID])
+            )
+            if measured is None:
+                # Deleted, or made again under its id, while it was probed: what was measured is no record's.
+                continue
         seal_posture.observe(warehouse_id, measured, required=bucket not in settings.seal_detection_only_buckets)
         done.measured += 1
     log.info("warehouse_seal_probed", extra={"measured": done.measured, "unprobed": done.unprobed})

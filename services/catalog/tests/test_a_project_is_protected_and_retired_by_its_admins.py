@@ -179,7 +179,8 @@ def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(
     with fs.open_output_stream(unreadable) as stream:
         stream.write(b"{not json")
     failed = estate.client.delete(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(CO_ADMIN))
-    assert (failed.status_code, failed.json().get("code")) == (500, 18), failed.text
+    # Past its point of no return, so its answer is partial: the same delete asked again finishes it (ADR 0245, review T3).
+    assert (failed.status_code, failed.json().get("code"), failed.json().get("partial")) == (503, 17, True), failed.text
     fs.delete_file(unreadable)
     announced = _Announced()
     estate.client.app.dependency_overrides[get_control_emitter] = lambda: announced

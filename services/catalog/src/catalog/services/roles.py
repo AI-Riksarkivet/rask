@@ -161,9 +161,10 @@ def list_roles(control_root: str, storage_options: StorageOptions, project: str,
     return [_role(stored) for stored in _read_roles(control_root, storage_options, project)[0] if stored.project_uuid == project_uuid]
 
 
-def every_role(control_root: str, storage_options: StorageOptions, project: str) -> list[RoleRecord]:
-    """Every standing role of ``project``, of any creation of it, read whole, for a caller ending them all: a record
-    that cannot be read may be one of the roles it must end, so it is refused rather than left standing with its grants
+def every_role(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> list[RoleRecord]:
+    """Every standing role of the creation ``project_uuid`` of ``project``, read whole, for its delete ending them all: a
+    role another creation's create made is that creation's, never this delete's (ADR 0245, review T2), and a record that
+    cannot be read may be one of the roles it must end, so it is refused rather than left standing with its grants
     ([[LH-572]]).
 
     Raises:
@@ -176,7 +177,7 @@ def every_role(control_root: str, storage_options: StorageOptions, project: str)
             f"{len(unreadable)} role record(s) of project {project!r} cannot be read as one ({', '.join(sorted(unreadable))}), so its "
             "roles cannot all be ended. Refusing rather than leaving a role standing with its grants."
         )
-    return [_role(stored) for stored in roles]
+    return [_role(stored) for stored in roles if stored.project_uuid == project_uuid]
 
 
 def find_role(control_root: str, storage_options: StorageOptions, project: str, role_id: uuid.UUID | str, *, project_uuid: str | None) -> RoleRecord | None:

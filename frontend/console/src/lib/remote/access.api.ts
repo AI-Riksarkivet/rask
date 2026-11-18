@@ -34,9 +34,9 @@ import { timeBoxLabel } from '../access/time-box.ts';
 // status (401/403 → "estate-admin only", else the detail), and a discriminated union keeps that an
 // exhaustive branch instead of exception control flow.
 //
-// ONE write door, not two: `writeTuple` is what both the workbench's Grant dialog and the
-// project-creation flow's initial-admin grant go through, so a tuple minted by either is validated,
-// audited and control-event-emitting identically.
+// ONE raw write door: `writeTuple` is what the workbench's Grant dialog goes through, so a tuple it
+// mints is validated, audited and control-event-emitting identically. A project's extra admin is
+// granted at the project's own members door instead (`grantProjectAdmin`).
 //
 // The wire contracts live in `../access`, beside the other access types the components import.
 

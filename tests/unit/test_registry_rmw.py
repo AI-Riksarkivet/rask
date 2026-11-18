@@ -177,7 +177,8 @@ def test_s3_read_surfaces_a_non_404_error_instead_of_reporting_absent(monkeypatc
 
 def test_set_warehouse_status_flips_and_preserves_other_fields(tmp_path: Path) -> None:
     _seed(tmp_path)
-    out = warehouses.set_warehouse_status(_root(tmp_path), StorageOptions(), "acme-wh", "deactivated")
+    uuid = (warehouses.get_warehouse(_root(tmp_path), StorageOptions(), "acme-wh") or {})["uuid"]
+    out = warehouses.set_warehouse_status(_root(tmp_path), StorageOptions(), "acme-wh", "deactivated", uuid=uuid)
     assert out is not None
     assert out["status"] == "deactivated"
     assert out["bucket"] == "b-acme"
@@ -187,4 +188,4 @@ def test_set_warehouse_status_flips_and_preserves_other_fields(tmp_path: Path) -
 def test_set_warehouse_status_returns_none_for_an_unknown_warehouse(tmp_path: Path) -> None:
     """RecordMissingError is translated at the door, so the endpoint's existing 404 path is unchanged
     — the seam swap must not become an API change."""
-    assert warehouses.set_warehouse_status(_root(tmp_path), StorageOptions(), "ghost", "deactivated") is None
+    assert warehouses.set_warehouse_status(_root(tmp_path), StorageOptions(), "ghost", "deactivated", uuid="0" * 32) is None

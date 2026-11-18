@@ -36,11 +36,11 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps
-from catalog.services import control_records, projects, roles, warehouses
+from catalog.services import control_records, projects, roles, tenancy, warehouses
 from catalog.services.tenancy import ACTOR, object_of_record
 from lakehouse import maintenance_policies
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.tenancy import CREATING, LIVE, PROJECT, PROJECT_UUID, STATE, UUID, WAREHOUSE, made_under
+from lakehouse.governed.tenancy import CREATING, ENDED, LIVE, PROJECT, PROJECT_UUID, STATE, UUID, WAREHOUSE, Kind, made_under
 
 
 if TYPE_CHECKING:
@@ -108,9 +108,9 @@ class _Convergence:
         self.done = TenancyConverged()
 
     async def run(self) -> TenancyConverged:
-        listed = await self._listing("projects", partial(projects.read_projects, self._root, self._so))
+        listed = await self._listing("projects", partial(projects.read_projects, self._root, self._so, ended=True))
         if listed is not None:
-            records, unreadable = listed
+            records, unreadable = await self._removing_ended(PROJECT, listed)
             # A project record that cannot be read may name the creation a record was made under, so nothing is judged a
             # dead creation's while one cannot: orphans are reported and kept.
             self._may_end = not unreadable
@@ -124,8 +124,10 @@ class _Convergence:
         return self._done()
 
     async def _children(self, live: dict[str, str]) -> None:
-        listed_warehouses = await self._listing("warehouses", partial(warehouses.read_warehouses, self._root, self._so))
-        stored, unreadable_warehouses = listed_warehouses or ([], ["the warehouse registry"])
+        listed_warehouses = await self._listing("warehouses", partial(warehouses.read_warehouses, self._root, self._so, ended=True))
+        stored, unreadable_warehouses = (
+            await self._removing_ended(WAREHOUSE, listed_warehouses) if listed_warehouses is not None else ([], ["the warehouse registry"])
+        )
         listed_claims = await self._listing("claims", partial(warehouses.read_claims, self._root, self._so))
         claims, unreadable_claims = listed_claims or ([], ["the bucket claims"])
         # A warehouse record or a claim that cannot be read may be what keeps a bucket from another tenant, so while any
@@ -144,6 +146,19 @@ class _Convergence:
             for claim in claims:
                 await self._attempt(f"bucket:{claim['bucket']}", partial(self._claim, claim, live, standing))
         await self._attempt("policies", partial(self._policies, live))
+
+    async def _removing_ended(self, kind: Kind, listed: tuple[list[dict[str, Any]], list[str]]) -> tuple[list[dict[str, Any]], list[str]]:
+        """``listed`` without the records stamped ``ended``, each removed where its stamp is older than the bound: the delete
+        that stamped it died before removing it, and no longer runs (``control_records.remove_stale_ended``)."""
+        records, unreadable = listed
+        for record in records:
+            if record.get(STATE) == ENDED:
+                key = tenancy.key_of(kind, str(record["id"]))
+                remove = partial(
+                    control_records.remove_stale_ended, self._root, self._so, kind, key, str(record[UUID]), older_than=self._older_than, now=self._now
+                )
+                await self._attempt(f"{kind}:{record['id']}", partial(run_in_threadpool, remove))
+        return [r for r in records if r.get(STATE) != ENDED], unreadable
 
     def _done(self) -> TenancyConverged:
         if self.done.finished or self.done.ended or self.done.swept or self.done.orphans or self.done.released or self.done.failed:
@@ -164,7 +179,7 @@ class _Convergence:
             self.done.failed.append(f"{path}: cannot be read as a record of {what}; judged on nothing")
         return records, unreadable
 
-    async def _attempt(self, obj: str, step: Callable[[], Awaitable[None]]) -> None:
+    async def _attempt(self, obj: str, step: Callable[[], Awaitable[object]]) -> None:
         try:
             await step()
         except Exception as exc:  # noqa: BLE001 — one object that cannot be converged must not stop the rest; the next run retries it
@@ -195,7 +210,7 @@ class _Convergence:
                 self.done.orphans.append(f"warehouse:{warehouse_id}")
                 return
             await fga_deps.end_object(self._client, self._settings, object_of_record(WAREHOUSE, record), token=None)
-            await run_in_threadpool(warehouses.end_warehouse, self._root, self._so, record)
+            await run_in_threadpool(warehouses.end_creating, self._root, self._so, record)
             log.warning("warehouse_of_a_dead_creation_ended", extra={"warehouse": warehouse_id, "project": project, "bucket": record.get("bucket")})
             self.done.ended.append(f"warehouse:{warehouse_id}")
             return

@@ -113,8 +113,9 @@ async def grant_member(
     on the second call. An ``admin`` is granted through :func:`project_admins.confer`, which asks nothing of the
     caller beyond the gate here.
 
-    The id is resolved to its live creation, the gate asked on it, and the grant written on it in one Write (ADR 0245):
-    a caller refused has written nothing, and a grant decided on a project deleted meanwhile lands on that dead
+    The id is resolved to its live creation, the gate asked on it (``fga_deps.on_tenant``, so a caller refused is
+    answered alike for an id no project holds), and the grant written on it in one Write (ADR 0245): a caller refused has
+    written nothing, and a grant decided on a project deleted meanwhile lands on that dead
     creation, never on one made again under its id. The id is resolved again once the grant is written, and a project
     deleted meanwhile is answered as the deleted project it is. Grants never refuse each other.
     \f
@@ -124,9 +125,8 @@ async def grant_member(
         InvalidInputError: The subject is a role another project owns.
         TableNotFoundError: No live project holds the id, or it was deleted while the grant ran.
     """
-    project = await tenancy.require(settings, PROJECT, project_id)
+    project = await fga_deps.require_on_tenant(client, settings, token, relation=f"can_grant_{payload.relation}", kind=PROJECT, object_id=project_id)
     wired = _client_or_conflict(client, settings)
-    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=project.obj)
     return await _grant(wired, announcer, settings, token, project, payload)
 
 
@@ -187,9 +187,8 @@ async def revoke_member(
         TableNotFoundError: No live project holds the id, or it was deleted while the revoke ran.
         ConcurrentModificationError: The removal would leave the project nobody administers.
     """
-    project = await tenancy.require(settings, PROJECT, project_id)
+    project = await fga_deps.require_on_tenant(client, settings, token, relation=f"can_grant_{payload.relation}", kind=PROJECT, object_id=project_id)
     wired = _client_or_conflict(client, settings)
-    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=project.obj)
     return await _revoke(wired, announcer, settings, token, project, payload)
 
 

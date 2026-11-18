@@ -14,7 +14,7 @@ object from an id fails closed instead of writing a tuple the next tenant would 
 
 A record moves through :data:`STATE`: ``creating`` (written first, naming its uuid and who made it, before anything is
 written in OpenFGA), ``live`` (once its seed stands; the only state a door resolves), ``deleting`` (marked before its
-delete revokes anything). An ended record is gone, so its id is free.
+delete revokes anything), ``ended`` (stamped by the delete that ends it, which then removes it, so its id is free).
 """
 
 from __future__ import annotations
@@ -49,8 +49,11 @@ STATE: Final = "state"
 CREATING: Final = "creating"
 LIVE: Final = "live"
 DELETING: Final = "deleting"
-type State = Literal["creating", "live", "deleting"]
-STATES: Final = (CREATING, LIVE, DELETING)
+#: Stamped by the delete that ended the creation, under the ETag of a read that found its own mark, right before that
+#: delete removes the record: a record is removed only by the one writer whose stamp landed (ADR 0245, review T2).
+ENDED: Final = "ended"
+type State = Literal["creating", "live", "deleting", "ended"]
+STATES: Final = (CREATING, LIVE, DELETING, ENDED)
 #: The shape of a uuid as :func:`new_uuid` mints it: 32 lowercase hex digits. A create refuses an id of this shape
 #: (:func:`require_an_id`), so no id is ever read as a creation's uuid.
 UUID_PATTERN: Final = r"[0-9a-f]{32}"

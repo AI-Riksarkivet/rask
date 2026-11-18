@@ -30,7 +30,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from fastapi import APIRouter, status
 from lance_namespace import InvalidInputError, NamespaceAlreadyExistsError, PermissionDeniedError, TableNotFoundError
@@ -69,20 +69,30 @@ async def _project_gate(
 ) -> tuple[OpenFgaClient, Tenant]:
     """The client and the live creation of ``project_id`` (ADR 0245), once the caller holds ``relation`` on it; else the
     missing project's 404."""
-    project = await tenancy.require(settings, PROJECT, project_id)
-    try:
-        await fga_deps.require_relation(client, settings, token, relation=relation, obj=project.obj)
-    except PermissionDeniedError as exc:
-        raise TableNotFoundError(f"project not found: {project_id}") from exc
+
+    async def gate(obj: str) -> None:
+        try:
+            await fga_deps.require_relation(client, settings, token, relation=relation, obj=obj)
+        except PermissionDeniedError as exc:
+            raise TableNotFoundError(f"project not found: {project_id}") from exc
+
+    project = await fga_deps.on_tenant(settings, PROJECT, project_id, gate=gate)
     return fga_deps.require_fga(settings, client, feature="roles"), project
 
 
-async def _role_gate(
-    *, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, role_id: uuid.UUID, relation: str
-) -> tuple[OpenFgaClient, RoleRecord]:
-    """The client and the role, once the caller holds ``relation`` on standing role ``role_id`` of the live creation of
-    ``project_id``; else the missing role's 404. A role a create left across an earlier creation's delete is no role of
-    this one (ADR 0245)."""
+class _Gated(NamedTuple):
+    """What a role door acts with once its gate admitted the caller: the client, the role, and the live creation of its
+    project the role belongs to, which the door resolves again once it has written (``tenancy.require_still``)."""
+
+    client: OpenFgaClient
+    role: RoleRecord
+    project: Tenant
+
+
+async def _role_gate(*, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, role_id: uuid.UUID, relation: str) -> _Gated:
+    """The client, the role and its project's live creation, once the caller holds ``relation`` on standing role
+    ``role_id`` of the live creation of ``project_id``; else the missing role's 404. A role a create left across an
+    earlier creation's delete is no role of this one (ADR 0245)."""
     missing = TableNotFoundError(f"role not found: {role_id}")
     try:
         await fga_deps.require_relation(client, settings, token, relation=relation, obj=roles.role_object(role_id))
@@ -93,7 +103,7 @@ async def _role_gate(
     so = settings.storage_options()
     if (role := await run_in_threadpool(partial(roles.find_role, settings.registry_root, so, project_id, role_id, project_uuid=project.uuid))) is None:
         raise missing
-    return fga_deps.require_fga(settings, client, feature="roles"), role
+    return _Gated(fga_deps.require_fga(settings, client, feature="roles"), role, project)
 
 
 def _announced_actor(token: Caller | None) -> str | None:
@@ -148,7 +158,7 @@ async def _mint_role(wired: OpenFgaClient, settings: Settings, project: Tenant, 
     """The role's record naming ``project``'s creation, the project resolved again, then its ``project`` edge; the record.
 
     Raises:
-        TableNotFoundError: The project was deleted while the role was made; its record is ended.
+        TableNotFoundError: The project was deleted while the role was made, before or after its edge; its record is ended.
     """
     record = RoleRecord(id=uuid.uuid4(), project=project.id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
     so = settings.storage_options()
@@ -161,6 +171,13 @@ async def _mint_role(wired: OpenFgaClient, settings: Settings, project: Tenant, 
         raise TableNotFoundError(f"project not found: {project.id} (it was deleted while this role was made)")
     edge = fga.ClientTuple(user=project.obj, relation="project", object=roles.role_object(record.id))
     await fga.write_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
+    # Resolved again once the edge is written, as every door writing a tenancy tuple is: a project deleted meanwhile ended
+    # the roles its registry listed, and this one's edge stands on the dead creation, which the converge tick sweeps.
+    try:
+        await tenancy.require_still(settings, project)
+    except TableNotFoundError:
+        await run_in_threadpool(roles.end_role_record, settings.registry_root, so, record)
+        raise
     return record
 
 
@@ -176,8 +193,8 @@ async def list_roles(project_id: ProjectId, client: FgaClientDep, settings: Sett
 @router.get("/{project_id}/roles/{role_id}")
 async def get_role(project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> Role:
     """One role and its direct assignees, gated on the role's ``can_read``."""
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_read")
-    return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
+    gated = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_read")
+    return Role(**gated.role.model_dump(), assignees=await _assignees(gated.client, gated.role.id))
 
 
 @router.delete("/{project_id}/roles/{role_id}")
@@ -193,10 +210,11 @@ async def delete_role(
     \f
 
     Raises:
-        TableNotFoundError: The role is absent, or its caller may not delete it.
+        TableNotFoundError: The role is absent, or its caller may not delete it, or its project was deleted while it ran
+            (resolved again once the role is ended, ADR 0245).
         ConcurrentModificationError: Ending it would strand a project.
     """
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_delete")
+    wired, role, project = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_delete")
     actor, announced = current_subject(token), _announced_actor(token)
     ending = await announcing.role_ending(wired, role, actor=announced, reason="role_deleted")
     async with announcer.announcing(door="delete_role", target=roles.role_object(role.id), announcements=ending.announcements()) as filing:
@@ -208,6 +226,7 @@ async def delete_role(
             actor=actor,
             permit=_admin_grant(client=wired, settings=settings, token=token, role=role),
         )
+        await tenancy.require_still(settings, project)
         audit(AuditAction.ROLE_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=roles.role_object(role.id), project=project_id, removed=len(removed))
         await ending.send(filing, removed, actor=announced, reason="role_deleted")
     return RoleDeleted(role=role, tuples_revoked=len(removed))
@@ -273,14 +292,13 @@ async def assign_role(
         InvalidInputError: The assignee is the role itself, neither a principal nor a role, or no standing role of the project.
         PermissionDeniedError: The assignment would raise the caller's own access.
     """
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
-    return await _assign(wired, announcer, settings, token, project_id, role, body)
+    gated = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    return await _assign(gated, announcer, settings, token, body)
 
 
-async def _assign(
-    wired: OpenFgaClient, announcer: Announcer, settings: Settings, token: Caller | None, project_id: str, role: RoleRecord, body: AssigneeRequest
-) -> Role:
-    """The assignment once its caller is authorized."""
+async def _assign(gated: _Gated, announcer: Announcer, settings: Settings, token: Caller | None, body: AssigneeRequest) -> Role:
+    """The assignment once its caller is authorized; the project resolved again once it is written (ADR 0245)."""
+    wired, role, project = gated
     user = await _assignee(settings=settings, role=role, raw=body.user)
     obj = roles.role_object(role.id)
     if token is not None:
@@ -290,8 +308,10 @@ async def _assign(
     told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(token))
     permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
     async with announcer.announcing(door="role_assign", target=obj, announcements=[told]) as filing:
-        if await project_admins.confer(wired, tup, actor=actor, origin="grant_api", permit=permit):
-            audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
+        written = await project_admins.confer(wired, tup, actor=actor, origin="grant_api", permit=permit)
+        await tenancy.require_still(settings, project)
+        if written:
+            audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project.id, grantee=user)
             await filing.send(told)
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
 
@@ -316,14 +336,13 @@ async def unassign_role(
         TableNotFoundError: The role is absent, or its caller may not manage its assignees.
         ConcurrentModificationError: The removal would leave the project nobody administers.
     """
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
-    return await _unassign(wired, announcer, settings, token, project_id, role, body)
+    gated = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    return await _unassign(gated, announcer, settings, token, body)
 
 
-async def _unassign(
-    wired: OpenFgaClient, announcer: Announcer, settings: Settings, token: Caller | None, project_id: str, role: RoleRecord, body: AssigneeRequest
-) -> Role:
-    """The removal of an assignee once its caller is authorized."""
+async def _unassign(gated: _Gated, announcer: Announcer, settings: Settings, token: Caller | None, body: AssigneeRequest) -> Role:
+    """The removal of an assignee once its caller is authorized; the project resolved again once it is written (ADR 0245)."""
+    wired, role, project = gated
     user = fga.grantee_object(body.user)
     obj = roles.role_object(role.id)
     actor = current_subject(token)
@@ -331,7 +350,9 @@ async def _unassign(
     told = announcing.grant_announcement(tup, action="grant_revoked", actor=_announced_actor(token))
     permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
     async with announcer.announcing(door="role_unassign", target=obj, announcements=[told]) as filing:
-        if await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api", permit=permit):
-            audit(AuditAction.ROLE_UNASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
+        removed = bool(await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api", permit=permit))
+        await tenancy.require_still(settings, project)
+        if removed:
+            audit(AuditAction.ROLE_UNASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project.id, grantee=user)
             await filing.send(told)
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))

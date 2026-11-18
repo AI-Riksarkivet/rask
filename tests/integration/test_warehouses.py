@@ -9,6 +9,7 @@ non-project-admin with 403.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -24,8 +25,8 @@ from catalog.api.dependencies import get_vendor
 from catalog.api.v1.endpoints import warehouses as wh_ep
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import EncryptionAtRest, VendedSession
+from catalog.services import control_records, seal_posture
 from catalog.services import projects as proj_svc
-from catalog.services import seal_posture
 from catalog.services import warehouses as wh_svc
 from lakehouse import stored_objects
 from lakehouse.governed import fga as fga_module
@@ -629,16 +630,16 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     assert wh_svc.get_warehouse(f"file://{tmp_path}", StorageOptions(), "wh-race")["project"] == "acme"
 
 
-def test_create_warehouse_lost_race_same_project_converges(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Same race, same project (a GitOps controller re-POSTing concurrently): must converge like the
-    # sequential idempotent path — 200, and the winner's mutable lifecycle fields carried forward.
-    # The quarantine rule is the load-bearing half: the loser's rebuilt record must NOT resurrect a
-    # deactivated warehouse (the F4 interleaving, closed on the racing-create path by the re-read).
+def test_a_create_that_lost_the_race_for_its_id_made_nothing(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Same race, same project (a GitOps controller re-POSTing concurrently): the create that lost the mint wrote no
+    # record, so it answers the id that exists, 409, seeding and announcing nothing under the uuid it minted, which names
+    # no record (ADR 0245, review T9); the winner's record stands as it is, its quarantine with it, and asked again the
+    # create converges onto it.
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme")
     assert client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"}).status_code == 200
     root = f"file://{tmp_path}"
-    wh_svc.set_warehouse_status(root, StorageOptions(), "wh-conv", "deactivated")
+    wh_svc.set_warehouse_status(root, StorageOptions(), "wh-conv", "deactivated", uuid=(wh_svc.get_warehouse(root, StorageOptions(), "wh-conv") or {})["uuid"])
 
     real_get = wh_svc.get_warehouse_record
     reads = {"n": 0}
@@ -649,13 +650,15 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
             return None
         return real_get(rt, so, wid)
 
+    before = wh_svc.get_warehouse(root, StorageOptions(), "wh-conv")
     monkeypatch.setattr(wh_svc, "get_warehouse_record", racy_get)
     r = client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"})
-    assert r.status_code == 200, r.text
+    assert (r.status_code, r.json()["code"]) == (409, 2), r.text
     monkeypatch.setattr(wh_svc, "get_warehouse_record", real_get)
-    surviving = wh_svc.get_warehouse(root, StorageOptions(), "wh-conv")
-    assert surviving is not None, "the loser's rebuild must not have DELETED the record it lost the race for"
-    assert surviving["status"] == "deactivated"
+    assert wh_svc.get_warehouse(root, StorageOptions(), "wh-conv") == before, "the create that lost changed the winner's record"
+    again = client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"})
+    surviving = wh_svc.get_warehouse(root, StorageOptions(), "wh-conv") or {}
+    assert (again.status_code, surviving.get("uuid"), surviving.get("status")) == (200, (before or {}).get("uuid"), "deactivated"), again.text
 
 
 def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_measured(
@@ -753,7 +756,10 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
         key: value for key, value in (wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {}).items() if key not in {"sealed", "sealed_at", "uuid"}
     }
     wh_svc.put_warehouse(control, StorageOptions(), {**elsewhere, "id": "wh-elsewhere", "endpoint": "http://another-store:9000"})
-    wh_svc.end_warehouse(control, StorageOptions(), wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {})
+    ended = wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {}
+    control_records.end_record(
+        control, StorageOptions(), "warehouse", wh_svc.record_key("wh-p"), ended["uuid"], now=datetime.now(UTC), states=frozenset({"live"})
+    )
 
     def unanswered_registry(*_args: Any) -> list[dict[str, str]]:
         raise ServiceUnavailableError("the object store did not answer reading the registry")

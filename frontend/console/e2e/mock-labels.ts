@@ -19,6 +19,7 @@ type Scope = 'namespace' | 'table';
 type Definition = {
 	uuid: string;
 	project: string;
+	project_uuid: string;
 	name: string;
 	description?: string | null;
 	scope: Scope[];
@@ -117,6 +118,7 @@ function define(world: World, project: string, b: Record<string, unknown>): Resp
 	const definition: Definition = {
 		uuid: held?.uuid ?? `uuid-label-${project}-${name}`,
 		project,
+		project_uuid: `uuid-project-${project}`,
 		name,
 		description: typeof b.description === 'string' ? b.description : null,
 		scope,

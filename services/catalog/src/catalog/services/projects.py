@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-from contextlib import suppress
-from datetime import UTC, datetime
 
 import pyarrow.fs as pafs
 
@@ -28,8 +26,9 @@ from catalog.services.control_records import (
     UUID,
     ProjectRecord,
     ProtectionChange,
-    end_creation,
+    change_creation,
     read_json,
+    replace_judged,
     validated,
     validated_or_refuse,
     with_manager,
@@ -39,18 +38,13 @@ from catalog.services.control_records import (
 from lakehouse import control_prefixes
 from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
-from lakehouse.records import RecordMissingError, create_json, mutate_json
+from lakehouse.records import Stored, create_json
 from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
 
 _PROJECTS_PREFIX = control_prefixes.PROJECTS
-
-#: The field a project's delete writes on its record before its first destructive step, beside its state ``deleting``:
-#: the principal key of the caller who started it. From then on the project is absent to every door but its delete, which
-#: that caller can finish though the delete's revoke took their own admin grant ([[LH-576]]).
-DELETING_BY = "deleting_by"
 
 
 class ProjectBeingDeletedError(Exception):
@@ -78,8 +72,10 @@ def put_project(control_root: str, storage_options: StorageOptions, record: dict
 _CALLER_OWNED = frozenset({"id"})
 
 
-def upsert_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> dict[str, str]:
-    """Idempotent re-create of an EXISTING project, CONDITIONAL on the record's ETag (diff2 F1 leg c).
+def upsert_project(control_root: str, storage_options: StorageOptions, record: dict[str, str], *, uuid: str) -> dict[str, str] | None:
+    """Idempotent re-create of an EXISTING project, the creation ``uuid`` its re-POST read: conditional on the ETag of a
+    read that finds that creation (diff2 F1 leg c, ADR 0245), so neither a protection change landing meanwhile nor a
+    project made again under the id is written over.
 
     The same defect F4 closed on the warehouse rung, one rung up. The re-POST built a whole record
     from a read taken earlier in the handler and then `put_project`'d it unconditionally, so anything
@@ -95,10 +91,12 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
     re-POST is stale in a field it only carried forward, which is exactly why a guard on the DECISION
     cannot catch it and a guard on the WRITE can.
 
-    `mutate_json` re-reads and re-applies on a lost race, so a concurrent protection change survives.
-    Raises ``RecordMissingError`` if the record vanished (a concurrent delete — retryable, never a
-    blind re-create), and :class:`ProjectBeingDeletedError` while a delete of the project stands unfinished. The uuid
-    and the state are the record's own, which no re-POST changes (ADR 0245).
+    Returns:
+        The record written, ``None`` where the id no longer names the creation ``uuid`` (a concurrent delete, retryable,
+        never a blind re-create).
+
+    Raises:
+        ProjectBeingDeletedError: A delete of the project stands unfinished.
     """
 
     def merge(live: dict[str, str]) -> dict[str, str]:
@@ -110,40 +108,34 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
         merged["created_by"] = live.get("created_by") or record.get("created_by", "")
         return merged
 
-    return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", merge)
+    return change_creation(control_root, storage_options, record_key(record["id"]), uuid, merge)
 
 
-def set_project_protection(control_root: str, storage_options: StorageOptions, project_id: str, change: ProtectionChange) -> dict[str, str] | None:
-    """Apply ``change`` to project ``project_id``'s record, conditional on its ETag ([[LH-549]]).
-
-    Every other field is the record's as it stands at the write (``mutate_json``).
-
-    Args:
-        control_root: The registry's root.
-        storage_options: How to reach it.
-        project_id: The project to change.
-        change: What to apply.
+def set_project_protection(
+    control_root: str, storage_options: StorageOptions, project_id: str, change: ProtectionChange, *, uuid: str
+) -> dict[str, str] | None:
+    """Apply ``change`` to live project ``project_id``'s record where it names the creation ``uuid`` the caller was
+    authorized on, under the ETag of the read that found it ([[LH-549]], ADR 0245): every other field is the record's as
+    it stands at the write.
 
     Returns:
-        The updated record, or ``None`` when the project's record is gone: a project deleted between the caller's
-        authorization and this write.
+        The updated record, or ``None`` where the id no longer names that creation live: one deleted between the
+        caller's authorization and this write, or made again under its id.
     """
-    try:
-        return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", lambda record: with_protection(record, change))
-    except RecordMissingError:
-        return None
+    return change_creation(
+        control_root, storage_options, record_key(project_id), uuid, lambda record: with_protection(record, change), states=frozenset({tenancy.LIVE})
+    )
 
 
-def set_project_manager(control_root: str, storage_options: StorageOptions, project_id: str, *, manager: str | None) -> dict[str, str] | None:
-    """Record who owns project ``project_id``'s declaration ([[XC-213]]): ``git``, or its own doors for ``None``.
+def set_project_manager(control_root: str, storage_options: StorageOptions, project_id: str, *, uuid: str, manager: str | None) -> dict[str, str] | None:
+    """Record who owns live project ``project_id``'s declaration ([[XC-213]]): ``git``, or its own doors for ``None``.
 
-    Conditional on the record's ETag, every other field as it stands at the write. ``None`` is answered when the
-    record is gone.
+    Conditional on a read that finds the creation ``uuid`` live, every other field as it stands at the write. ``None`` is
+    answered where the id no longer names it.
     """
-    try:
-        return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", lambda record: with_manager(record, manager))
-    except RecordMissingError:
-        return None
+    return change_creation(
+        control_root, storage_options, record_key(project_id), uuid, lambda record: with_manager(record, manager), states=frozenset({tenancy.LIVE})
+    )
 
 
 def create_project_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
@@ -154,7 +146,7 @@ def create_project_record(control_root: str, storage_options: StorageOptions, re
     re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
     like the sequential idempotent re-POST path.
     """
-    create_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
+    create_json(control_root, storage_options, record_key(record["id"]), record)
 
 
 def record_key(project_id: str) -> str:
@@ -176,60 +168,35 @@ def get_project(control_root: str, storage_options: StorageOptions, project_id: 
 
 
 def get_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
-    """The project's record as it stands, a delete it names included, or ``None`` when there is none: what the delete door
-    reads to start or finish a delete. A malformed record refuses, as :func:`get_project` refuses it."""
-    key = f"{_PROJECTS_PREFIX}/{project_id}.json"
+    """The project's record as it stands, a delete it names included, or ``None`` when there is none or it is stamped
+    ``ended`` (its delete removes it next): what the delete door reads to start or finish a delete. A malformed record
+    refuses, as :func:`get_project` refuses it."""
+    key = record_key(project_id)
     record = read_json(control_root, storage_options, key)
-    return validated_or_refuse(record, ProjectRecord, event="project_record_malformed", path=key) if record is not None else None
+    valid = validated_or_refuse(record, ProjectRecord, event="project_record_malformed", path=key) if record is not None else None
+    return None if valid is None or valid.get(STATE) == tenancy.ENDED else valid
 
 
-def mark_deleting(control_root: str, storage_options: StorageOptions, project_id: str, *, by: str) -> dict[str, str] | None:
-    """Mark the project's record ``deleting`` and record that ``by`` started its delete, conditional on the record's
-    ETag ([[LH-576]]): from here no door resolves it (ADR 0245).
-
-    A delete another caller started first keeps its starter, so the record names one delete whoever asks again.
-
-    Returns:
-        The record as written, or ``None`` when it is gone: a delete finished meanwhile.
-    """
-    try:
-        return mutate_json(
-            control_root,
-            storage_options,
-            f"{_PROJECTS_PREFIX}/{project_id}.json",
-            lambda record: record if record.get(DELETING_BY) else {**record, STATE: tenancy.DELETING, DELETING_BY: by},
-        )
-    except RecordMissingError:
-        return None
+def mark_deleting(control_root: str, storage_options: StorageOptions, project_id: str, judged: Stored, marked: dict[str, str]) -> bool:
+    """Write ``marked``, the project's record as its delete marks it (``tenancy.mark``), only while the record is still
+    the one ``judged`` read ([[LH-576]], ADR 0245): whether it landed."""
+    return replace_judged(control_root, storage_options, record_key(project_id), judged, marked)
 
 
 def set_live(control_root: str, storage_options: StorageOptions, project_id: str, uuid: str) -> dict[str, str] | None:
     """Flip project ``project_id``'s record from ``creating`` to ``live`` where it still names the creation ``uuid``,
-    conditional on its ETag: its seed stands by then (ADR 0245). The record as it stands, ``None`` where it is gone or
-    another creation's."""
+    conditional on its ETag: its seed stands by then (ADR 0245). The record as it stands, ``None`` where it is gone,
+    another creation's, or no longer creating or live."""
 
     def flip(record: dict[str, str]) -> dict[str, str]:
-        if record.get(UUID) != uuid:
-            raise RecordMissingError(f"project {project_id!r} is not the creation {uuid}")
         return {**record, STATE: tenancy.LIVE} if record.get(STATE) == tenancy.CREATING else record
 
-    try:
-        return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", flip)
-    except RecordMissingError:
-        return None
+    return change_creation(control_root, storage_options, record_key(project_id), uuid, flip, states=frozenset({tenancy.CREATING, tenancy.LIVE}))
 
 
-def end_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """End the creation ``record`` names, its delete's last step: kept as ended (``control_records.end_creation``) and
-    its registry record removed, which frees its id. Idempotent, so a delete asked again after this step finishes."""
-    end_creation(control_root, storage_options, tenancy.PROJECT, record, now=datetime.now(UTC))
-    fs, base = fs_and_base(control_root, storage_options)
-    with suppress(FileNotFoundError):
-        fs.delete_file(f"{base}/{_PROJECTS_PREFIX}/{record['id']}.json")
-
-
-def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
-    """Every readable project record (unordered), those being deleted included, and the path of each that is there and
+def read_projects(control_root: str, storage_options: StorageOptions, *, ended: bool = False) -> tuple[list[dict[str, str]], list[str]]:
+    """Every readable project record (unordered), those being created and deleted included and those stamped ``ended``
+    left out unless ``ended`` (the converge tick, removing one whose stamper died), and the path of each that is there and
     cannot be read as one. An absent registry prefix yields nothing."""
     fs, base = fs_and_base(control_root, storage_options)
     out: list[dict[str, str]] = []
@@ -244,10 +211,10 @@ def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[l
             log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
             unreadable.append(info.path)
             continue
-        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None:
-            out.append(valid)
-        else:
+        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is None:
             unreadable.append(info.path)
+        elif ended or valid.get(STATE) != tenancy.ENDED:
+            out.append(valid)
     return out, unreadable
 
 

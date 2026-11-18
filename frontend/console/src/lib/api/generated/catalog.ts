@@ -258,7 +258,8 @@ export interface paths {
          *     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
          *     derived ``can_*`` action or an unknown type/relation is a 400) — the raw-tuple analog of the
          *     per-object grant surface's grantable-rung guard, without its table/namespace restriction. A table or namespace
-         *     named by its name is written on its uuid object (:func:`_held_object`), the one every decision reads.
+         *     named by its name is written on its uuid object, and a project or a warehouse named by its id on its live creation
+         *     (:func:`_held_object`), the object every decision reads; one no live creation holds is a 400.
          */
         post: operations["write_access_tuple_management_v1_access_tuples_post"];
         /**
@@ -1437,20 +1438,32 @@ export interface paths {
         post?: never;
         /**
          * Delete Project
-         * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance
-         *     policy, and drop its record.
+         * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles, its maintenance
+         *     policy and its label definitions, and end its record.
          *
          *     Gated on ``project:<id>#can_administer``, the tenant's OWN admin bar: the rungs that open its reads, the estate
-         *     observer's and membership, retire nothing (module docstring). Order, fail-closed and each step earning the next:
-         *     id shape (400) → existence and authz (both 404, :func:`project_to_delete`) → deletion protection (409) →
-         *     emptiness (409) → the delete recorded on the project's record → revoke tuples → end its roles → end its maintenance
-         *     policy → delete record → audit + event.
+         *     observer's and membership, retire nothing (module docstring).
+         *
+         *     **The order, and the point of no return** (ADR 0245, review T2 and T3). id shape (400) → existence and authz (both
+         *     404, :func:`project_to_delete`) → the record read, the checks judged on that read, each refusing with nothing
+         *     changed: deletion protection (409) and emptiness (409) → the MARK, written under that read's ETag (409 where the
+         *     record changed since, nothing changed) → the warehouses read again (a warehouse whose record its create wrote before
+         *     the mark, `ChildrenBeforeMark`); one found refuses 409 and PUTS THE RECORD BACK live → the POINT OF NO RETURN stamped
+         *     on the record → revoke its tuples → end its roles → end its maintenance policy → end its label definitions → END its
+         *     record → audit + event. Every check that can refuse runs before the point of no return, so a refused delete leaves
+         *     the project live; past it, the delete either finishes or leaves the project marked, and the same delete asked again
+         *     finishes it (503 ``partial``).
+         *
+         *     **A delete acts only on the creation it marked.** Each step after the mark that can take long is followed by a read
+         *     of the record (``tenancy.require_own``): a delete asked again took the mark over (409, it finishes the delete), or the
+         *     creation ended and the id names another (404): a delete held across its project's end and the id made again ends
+         *     nothing of the tenant that holds the id now. Its roles, policy and label definitions are those made under the
+         *     creation it deletes, never every one the id keys.
          *
          *     **A delete that failed part-way is finished by asking again** ([[LH-576]]): the record names the caller who started
          *     it, whose own admin grant the revoke takes, and :func:`project_to_delete` lets that caller, an admin the revoke has
-         *     not reached, or the estate's owner finish it. Every later step is idempotent, and the protection and emptiness
-         *     were judged when the delete was recorded: from then on the project is absent to every other door
-         *     (``project_registry.get_project``), so no warehouse, role or grant is made for it meanwhile.
+         *     not reached, or the estate's owner finish it. From the mark on the project is absent to every other door, so no
+         *     warehouse, role or grant is made for it meanwhile.
          *
          *     **Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to
          *     empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
@@ -1500,8 +1513,9 @@ export interface paths {
          *     on the second call. An ``admin`` is granted through :func:`project_admins.confer`, which asks nothing of the
          *     caller beyond the gate here.
          *
-         *     The id is resolved to its live creation, the gate asked on it, and the grant written on it in one Write (ADR 0245):
-         *     a caller refused has written nothing, and a grant decided on a project deleted meanwhile lands on that dead
+         *     The id is resolved to its live creation, the gate asked on it (``fga_deps.on_tenant``, so a caller refused is
+         *     answered alike for an id no project holds), and the grant written on it in one Write (ADR 0245): a caller refused has
+         *     written nothing, and a grant decided on a project deleted meanwhile lands on that dead
          *     creation, never on one made again under its id. The id is resolved again once the grant is written, and a project
          *     deleted meanwhile is answered as the deleted project it is. Grants never refuse each other.
          */
@@ -2716,9 +2730,10 @@ export interface paths {
          * Create Warehouse
          * @description Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
          *
-         *     Order (fail-closed): the request's shape (400), then the project must EXIST (``require_project_exists`` — 404 naming
-         *     ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
-         *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project's live creation, then
+         *     Order (fail-closed): the request's shape (400), then ``can_create_warehouse`` asked on the project's live creation
+         *     through the one gate of every door on a tenant's id (``fga_deps.on_tenant``): an id no live project holds is asked
+         *     on the object nobody holds, so a caller refused there is answered as for one that stands, and only a caller the gate
+         *     admits is told the project is missing (404 naming ``POST /management/v1/projects`` as the fix). Then
          *     :func:`establish_warehouse` makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is,
          *     and the catalog converges it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
          *
@@ -2770,8 +2785,8 @@ export interface paths {
          *        its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless
          *        ``force=true``, and that refusal changes nothing.
          *     5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,
-         *        policy, claim and base record, its trash record last. A record is the warehouse's when its name begins with the
-         *        warehouse's id, so a re-issue after a failure here selects the same records. Then the cascade removes each
+         *        policy, claim and base record, its trash record last. A record is the warehouse's when the drop that filed it was
+         *        under this creation of it, so a re-issue after a failure here selects the same records. Then the cascade removes each
          *        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
          *        the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
          *        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
@@ -2804,9 +2819,20 @@ export interface paths {
          *     ``can_purge_dead_tenant_warehouse`` on the estate reaches it with ``?purge_bucket=true``, the bucket in the
          *     warehouse's place.
          *
-         *     **The record is marked ``deleting`` before the namespaces are read for the cascade** (ADR 0245): from then on no door
-         *     resolves the warehouse, so a namespace created in it either was made before that read, which finds it, or finds the
-         *     warehouse gone when its create resolves it again, and takes itself back.
+         *     **The point of no return** (ADR 0245, review T2 and T3). Every check that can refuse with nothing changed runs
+         *     before the mark, judged on one read of the record that the mark is then written under (its ETag; a record changed
+         *     since is refused 409, nothing changed): the protection (step 3), the emptiness (step 4), the purge's guards (step 7),
+         *     the warehouse's namespace fence taken for the drop (409 while another holds it), the subtree's protection and the
+         *     clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is written beneath it (a
+         *     declare or a commit is refused 409). The namespaces are read again after the mark (`ChildrenBeforeMark`): one made in
+         *     between refuses 409 without ``cascade``, or is held to the subtree's checks with it, and such a refusal PUTS THE
+         *     RECORD BACK live. Then the POINT OF NO RETURN is stamped on the record, before the first irreversible step (the
+         *     trash's end, a table's detach, a grant's revoke): past it the delete finishes, or its answer is ``partial`` (503)
+         *     and the same delete asked again finishes it. Each step past the mark that can take long is followed by a read of the
+         *     record (``tenancy.require_own``): a delete asked again took the delete over (409), or the creation ended and the id
+         *     names another (404), and the delete stops there, ending nothing of the warehouse that holds the id now. Its trash is
+         *     the records filed under its own creation (``warehouses.trash_owned_by``), and its end is the record's one removal
+         *     (``tenancy.end``).
          */
         delete: operations["delete_warehouse_management_v1_warehouses__warehouse_id__delete"];
         options?: never;
@@ -2873,8 +2899,8 @@ export interface paths {
          *     Gated on ``project#can_administer`` of the warehouse's own project, read from its record: arming or clearing the
          *     lock on a warehouse's destruction is the authority that destruction needs, as the delete door asks it. A caller
          *     without it is answered the missing warehouse's 404, as the delete and lifecycle doors answer one, so the door tells
-         *     nobody which ids exist. The write is conditional on the record as it stands and refuses a record that moved to
-         *     another project since the decision. Re-arming an armed warehouse keeps who armed it. Announced as
+         *     nobody which ids exist. The write is conditional on a read that finds the creation the caller was authorized on
+         *     (ADR 0245): one deleted, or made again under the id, since the decision is answered 404. Re-arming an armed warehouse keeps who armed it. Announced as
          *     ``warehouse_protected`` or ``warehouse_unprotected`` on every call, as the table and namespace doors announce theirs.
          */
         post: operations["set_warehouse_protection_management_v1_warehouses__warehouse_id__protection_post"];
@@ -4746,6 +4772,10 @@ export interface components {
         AccessListUsersResponse: {
             /** Name */
             name?: string | null;
+            /** Names */
+            names?: {
+                [key: string]: string;
+            };
             /** Object */
             object: string;
             /** Relation */
@@ -8129,6 +8159,8 @@ export interface components {
             name: string;
             /** Project */
             project: string;
+            /** Project Uuid */
+            project_uuid: string;
             /** Scope */
             scope: components["schemas"]["LabelScope"][];
             /** Uuid */
@@ -8621,8 +8653,10 @@ export interface components {
         };
         /**
          * NamedAccessTuple
-         * @description A tuple as the estate admin's doors answer it: ``name`` is the name its table or namespace object holds now,
-         *     beside ``object``, which names its uuid ([[LH-591]]); ``None`` for any other object and for one no name holds.
+         * @description A tuple as the estate admin's doors answer it: ``name`` is the name its table or namespace object holds now, or the
+         *     id its project's or warehouse's creation is held under, beside ``object``, which names its uuid ([[LH-591]], ADR
+         *     0245); ``user_name`` the same for a user naming a project's or a warehouse's creation; ``None`` for any other and for
+         *     one no name holds.
          */
         NamedAccessTuple: {
             condition?: components["schemas"]["TupleCondition"] | null;
@@ -8634,6 +8668,8 @@ export interface components {
             relation: string;
             /** User */
             user: string;
+            /** User Name */
+            user_name?: string | null;
         };
         /**
          * NamespaceExistsRequest

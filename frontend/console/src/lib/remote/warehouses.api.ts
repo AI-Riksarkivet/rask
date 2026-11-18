@@ -96,6 +96,19 @@ export const createProject = command(
 		catalogJSON('/management/v1/projects', { method: 'POST', body: JSON.stringify({ id }) }),
 );
 
+/** Make `user` a co-admin of project `project` — `PUT /management/v1/projects/{id}/members`, the members door, which
+ *  grants `admin` on the project's live creation and refuses a caller who may not grant it. The project is named by its
+ *  id, as every door names it: OpenFGA names it by its creation's uuid, which the console never builds (ADR 0245). */
+export const grantProjectAdmin = command(
+	({ project, user }) => `Make ${user} an admin of project ${project}`,
+	v.object({ project: v.string(), user: v.string() }),
+	async ({ project, user }): Promise<ApiResult<unknown>> =>
+		catalogJSON(`/management/v1/projects/${enc(project)}/members`, {
+			method: 'PUT',
+			body: JSON.stringify({ user, relation: 'admin' }),
+		}),
+);
+
 /** Retire a tenant — `DELETE /management/v1/projects/{id}`. Gated at the catalog on the project's OWN
  *  `can_administer` bar, and every refusal is a state the dialog renders rather than an exception:
  *

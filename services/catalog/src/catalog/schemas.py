@@ -166,10 +166,13 @@ class AccessTuple(RequestBody):
 
 
 class NamedAccessTuple(AccessTuple):
-    """A tuple as the estate admin's doors answer it: ``name`` is the name its table or namespace object holds now,
-    beside ``object``, which names its uuid ([[LH-591]]); ``None`` for any other object and for one no name holds."""
+    """A tuple as the estate admin's doors answer it: ``name`` is the name its table or namespace object holds now, or the
+    id its project's or warehouse's creation is held under, beside ``object``, which names its uuid ([[LH-591]], ADR
+    0245); ``user_name`` the same for a user naming a project's or a warehouse's creation; ``None`` for any other and for
+    one no name holds."""
 
     name: str | None = None
+    user_name: str | None = None
 
 
 class AccessTuplesPage(BaseModel):
@@ -280,12 +283,15 @@ class AccessListUsersResponse(BaseModel):
 
     users: list[str]
     object: str
-    #: The name ``object`` holds now, when it is a table or a namespace ([[LH-591]]).
+    #: The name ``object`` holds now, when it is a table or a namespace, or its id, when it is a project's or a
+    #: warehouse's creation ([[LH-591]], ADR 0245).
     name: str | None = None
     relation: str
     user_type: str
     user_relation: str | None = None
     truncated: bool
+    #: The id each user naming a project's or a warehouse's creation is held under (ADR 0245); others are absent.
+    names: dict[str, str] = Field(default_factory=dict)
 
 
 class AccessExpandTupleToUserset(BaseModel):

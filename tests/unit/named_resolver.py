@@ -42,8 +42,8 @@ class NamedResolver(Resolver):
         self._admitted_trash: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
 
     @override
-    async def require_active_warehouse(self, warehouse_id: str) -> None:
-        del warehouse_id
+    async def require_active_warehouse(self, warehouse_id: str, *, changing: bool = False) -> None:
+        del warehouse_id, changing
 
     @override
     async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:

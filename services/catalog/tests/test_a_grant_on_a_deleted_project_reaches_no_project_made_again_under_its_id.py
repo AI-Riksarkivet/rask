@@ -21,7 +21,9 @@ catalog as deployed, a loopback Dex signing callers in and a real OpenFGA decidi
 
 from __future__ import annotations
 
+import re
 import threading
+import uuid
 from collections.abc import Callable
 from datetime import timedelta
 from functools import partial
@@ -30,8 +32,10 @@ from typing import Any
 import pytest
 from lance_namespace import ServiceUnavailableError
 
+from catalog.api import fga_deps
 from catalog.services import announcement_intents, projects, tenancy, tenancy_converge
 from catalog.services import roles as role_records
+from lakehouse.governed import fga
 from lakehouse.governed.tenancy import UUID
 
 
@@ -138,17 +142,21 @@ def test_a_change_held_across_its_projects_delete_reaches_no_project_made_again_
 @pytest.mark.parametrize("door", [door for door, (*_, granting) in DOORS.items() if granting])
 def test_a_project_being_deleted_is_changed_at_none_of_its_doors(acme: Any, door: str) -> None:  # noqa: ANN401 — the fixture's GovernedCatalog
     """A project marked ``deleting`` resolves at no door (`GrantsResolvesDeleting`, `GrantAnswersTruthfully`): its admin, whose
-    tuples its delete has yet to revoke, is answered the missing project's 404 and writes nothing on it."""
+    tuples its delete has yet to revoke, is asked the door's gate on the object nobody holds, as for an id no project
+    holds (review T4), so is refused 403 and writes nothing on it."""
     catalog, (_, _, _, opens, _) = acme, DOORS[door]
     settings, dying = catalog.client.app.state.settings, f"project:{_project(acme)[UUID]}"
-    assert projects.mark_deleting(settings.registry_root, settings.storage_options(), PROJECT, by=catalog.person(ALICE)) is not None
+    record = projects.get_project_record(settings.registry_root, settings.storage_options(), PROJECT) or {}
+    delete = tenancy.DeleteRun.of("project", record)
+    judged = catalog.client.portal.call(tenancy.judged, settings, delete)
+    catalog.client.portal.call(partial(tenancy.mark, settings, delete, judged, by=catalog.person(ALICE)))
 
     answered = _change(catalog, door)
 
     held = catalog.client.post(
         "/management/v1/access/check", json={"user": catalog.person(BOB), "relation": opens, "object": dying}, headers=catalog.bearer(ERIN)
     )
-    assert (answered, held.status_code, held.json().get("allowed")) == (404, 200, False), held.text
+    assert (answered, held.status_code, held.json().get("allowed")) == (403, 200, False), held.text
 
 
 @pytest.mark.parametrize("held", ["before-its-record", "and-dying-after-its-record"])
@@ -196,3 +204,31 @@ def test_a_role_made_across_its_projects_delete_is_made_in_no_project_made_again
         ended = catalog.client.portal.call(converge)
         retaken = catalog.client.post(roles, json={"name": "analysts"}, headers=catalog.bearer(ERIN))
         assert (len(ended.ended), retaken.status_code) == (1, 201), retaken.text
+
+
+def _types_the_dsl_lets_name(kind: str) -> set[str]:
+    """Every type whose relation the model's DSL lets name a ``kind`` object directly as its user, read from the text."""
+    named: set[str] = set()
+    current = ""
+    for line in fga.load_model_dsl().splitlines():
+        if match := re.match(r"^type (\w+)", line):
+            current = match.group(1)
+        elif (match := re.match(r"^\s+define \w+: \[([^\]]*)\]", line)) and kind in {entry.strip().split(" ")[0] for entry in match.group(1).split(",")}:
+            named.add(current)
+    return named
+
+
+def test_a_projects_end_revokes_a_tuple_of_every_type_the_model_lets_name_it(acme: Any) -> None:  # noqa: ANN401 — the fixture's GovernedCatalog
+    """Review T8: what names a project as its user is read from the authorization model, not kept by hand, so a type the
+    model admits a project under later is revoked with the project too. A tuple of each such type, naming acme's creation,
+    goes with acme's delete."""
+    catalog = acme
+    creation = f"project:{_project(catalog)[UUID]}"
+    naming = fga_deps.naming("project")
+    planted = [(creation, "project", f"{kind}:{uuid.uuid4().hex}") for kind in naming]
+    catalog.store.write(*planted)
+
+    deleted = catalog.client.delete(f"/management/v1/projects/{PROJECT}", headers=catalog.bearer(ALICE))
+
+    assert (set(naming), deleted.status_code) == (_types_the_dsl_lets_name("project"), 200), deleted.text
+    assert [t for t in planted if t in catalog.store.tuples()] == []

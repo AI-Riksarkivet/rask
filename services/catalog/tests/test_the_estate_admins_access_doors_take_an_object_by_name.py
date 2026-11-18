@@ -1,4 +1,5 @@
-"""The estate admin's raw access doors take a table or namespace by name as they take it by uuid ([[LH-591]]).
+"""The estate admin's raw access doors take a table or namespace by name as they take it by uuid ([[LH-591]]), and a project
+or a warehouse by its id as every door names it (ADR 0245, review T5).
 
 Every grant is held by the object's uuid (``table:<uuid>``, ``namespace:<uuid>``, [[LH-524]]), and every catalog door is
 addressed by name and resolves it through the request's ``Resolver``. A door handing OpenFGA ``table:lance_catalog$db$t`` as written
@@ -91,3 +92,45 @@ def test_a_door_refuses_a_warehouse_named_as_a_namespace(estate: Any) -> None:
     refused = estate.client.post(f"{ACCESS}/check", json=_asking("check", "namespace:lance_catalog", estate), headers=estate.bearer("root"))
 
     assert (refused.status_code, refused.headers["content-type"], refused.json()["code"]) == (400, "application/problem+json", 13), refused.text
+
+
+@pytest.fixture
+def acme(estate: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """root, the estate's admin too, makes project ``acme`` and makes bob a member of it through the raw tuple door, naming
+    the project by its id."""
+    estate.store.write((fga.user_object("dex~root"), "admin", "estate:rask"))
+    _ok(estate, "/management/v1/projects", "root", json={"id": "acme"})
+    _ok(estate, f"{ACCESS}/tuples", "root", json={"user": estate.person("bob"), "relation": "member", "object": "project:acme"})
+    return estate
+
+
+@pytest.mark.parametrize("door", ["check", "list-users", "expand", "simulate"])
+def test_a_door_answers_a_project_by_its_id_as_it_answers_its_creation(acme: Any, door: str) -> None:  # noqa: ANN401
+    """The tools speak ids: ``project:acme`` is asked about on the creation the id names, and answered with the id beside
+    it; an id no project holds is the caller's input, 400, never a 500 and never a question about an object nothing names."""
+    creation = acme.creation("project", "acme")
+    asking = {**_asking(door, "project:acme", acme), "relation": "member"}
+    if door == "simulate":
+        asking["hypothetical"] = [{"user": acme.person("carol"), "relation": "member", "object": "project:acme"}]
+
+    by_id = _ok(acme, f"{ACCESS}/{door}", "root", json=asking)
+
+    named = by_id["checked"] if door in ("check", "simulate") else by_id
+    assert (named["object"], named["name"]) == (creation, "acme")
+    assert by_id.get("allowed", by_id.get("tree") or by_id.get("users")), f"{door} answered nothing on a project bob is a member of"
+    nowhere = {**asking, "object": "project:nope"}
+    refused = acme.client.post(f"{ACCESS}/{door}", json=nowhere, headers=acme.bearer("root"))
+    assert (refused.status_code, refused.json()["code"]) == (400, 13), refused.text
+
+
+def test_the_tuple_doors_write_read_and_delete_a_projects_tuple_by_its_id(acme: Any) -> None:  # noqa: ANN401
+    creation, bob = acme.creation("project", "acme"), acme.person("bob")
+
+    read = acme.client.get(f"{ACCESS}/tuples", params={"object": "project:acme"}, headers=acme.bearer("root"))
+    nowhere = acme.client.post(f"{ACCESS}/tuples", json={"user": bob, "relation": "member", "object": "project:nope"}, headers=acme.bearer("root"))
+    deleted = acme.client.request("DELETE", f"{ACCESS}/tuples", json={"user": bob, "relation": "member", "object": "project:acme"}, headers=acme.bearer("root"))
+
+    assert read.status_code == 200, read.text
+    assert {(t["user"], t["object"], t["name"]) for t in read.json()["tuples"] if t["relation"] == "member"} == {(bob, creation, "acme")}
+    assert (nowhere.status_code, nowhere.json()["code"]) == (400, 13), nowhere.text
+    assert (deleted.status_code, (bob, "member", creation) in acme.store.tuples()) == (200, False), deleted.text

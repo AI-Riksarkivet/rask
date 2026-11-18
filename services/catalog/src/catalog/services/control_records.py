@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
 from enum import StrEnum
-from typing import Final, Self
+from typing import Any, Final, Self
 
 import pyarrow.fs as pafs
 from lance_namespace import ServiceUnavailableError
@@ -30,6 +31,7 @@ from lakehouse import control_prefixes
 from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
 from lakehouse.protection import is_protected
+from lakehouse.records import RecordChangedError, RecordMissingError, Stored, mutate_json, read_json_at, replace_json
 from lakehouse.storage_options import StorageOptions
 
 
@@ -311,3 +313,118 @@ def forget_ended(root_uri: str, storage_options: StorageOptions, ended: EndedCre
     fs, base = fs_and_base(root_uri, storage_options)
     with suppress(FileNotFoundError):
         fs.delete_file(f"{base}/{ended_key(ended.kind, ended.uuid)}")
+
+
+# --------------------------------------------------------------------------- #
+# THE ONE CONDITIONAL WAY a project's or a warehouse's record is changed or removed (ADR 0245, review T2).
+#
+# A record is keyed by its id, and a delete frees the id for another tenant's creation. A change decided on one creation
+# must therefore never land on the next: every change is a write under the ETag of a read that found the creation's
+# uuid, and a removal is the stamp `ended` written that way, then the file removed by the one writer whose stamp landed
+# (the store has no conditional delete; a create is iff-absent, so nothing replaces a stamped record before it goes).
+# --------------------------------------------------------------------------- #
+
+#: The fields a delete writes on its record: the principal who started it (``deleting_by``), the token of the request
+#: whose mark stands (``delete_run``: each later step acts only while it is its own), and its point of no return
+#: (``no_return``: stamped before its first irreversible step; a refusal before it puts the record back live).
+DELETING_BY: Final = "deleting_by"
+DELETE_RUN: Final = "delete_run"
+NO_RETURN: Final = "no_return"
+#: When the record was stamped ``ended``.
+ENDED_AT: Final = "ended_at"
+
+
+class NotTheCreation(Exception):
+    """The record a change was asked of is not the creation the caller holds: gone, ended, another creation's, or in a
+    state the change does not act on."""
+
+
+def read_creation(root_uri: str, storage_options: StorageOptions, key: str) -> Stored | None:
+    """The record at ``key`` with the ETag a change judged on this read is conditional on; ``None`` when absent. Blocking."""
+    return read_json_at(root_uri, storage_options, key).stored
+
+
+def change_creation(
+    root_uri: str,
+    storage_options: StorageOptions,
+    key: str,
+    uuid: str,
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
+    *,
+    states: frozenset[str] = frozenset({tenancy.CREATING, tenancy.LIVE, tenancy.DELETING}),
+) -> dict[str, Any] | None:
+    """Apply ``mutate`` to the record at ``key`` where it names the creation ``uuid`` in one of ``states``, under the ETag
+    of the read that found it (``mutate_json``); the record written, ``None`` where it is not that creation. ``mutate``
+    may raise :class:`NotTheCreation` to refuse, and is pure: it runs once per read. Blocking."""
+
+    def guarded(record: dict[str, Any]) -> dict[str, Any]:
+        if record.get(UUID) != uuid or record.get(STATE) not in states:
+            raise NotTheCreation(f"{key} does not hold creation {uuid} in {sorted(states)}")
+        return mutate(record)
+
+    try:
+        return mutate_json(root_uri, storage_options, key, guarded)
+    except (RecordMissingError, NotTheCreation):
+        return None
+
+
+def replace_judged(root_uri: str, storage_options: StorageOptions, key: str, judged: Stored, record: dict[str, Any]) -> bool:
+    """Write ``record`` over the record ``judged`` was read as, only while it is still that record (its ETag); whether it
+    landed. For a write decided on a judgement of the whole record, such as a delete's mark after its checks. Blocking."""
+    try:
+        replace_json(root_uri, storage_options, key, record, etag=judged.etag)
+    except RecordChangedError:
+        return False
+    return True
+
+
+def end_record(
+    root_uri: str,
+    storage_options: StorageOptions,
+    kind: tenancy.Kind,
+    key: str,
+    uuid: str,
+    *,
+    now: datetime,
+    run: str | None = None,
+    states: frozenset[str] = frozenset({tenancy.DELETING}),
+) -> bool:
+    """End creation ``uuid``'s record at ``key``: stamp it ``ended`` where it is in one of ``states`` (marked ``deleting``,
+    by the delete ``run`` where one is named; ``creating``, for a create that abandons its own record or the converge tick
+    ending one a dead create left), keep the creation under ``_ended/`` for the tick's sweep, and remove the record, which
+    frees its id. Only the writer whose stamp landed removes it; whether this call did. Blocking."""
+
+    def stamp(record: dict[str, Any]) -> dict[str, Any]:
+        if run is not None and record.get(DELETE_RUN) != run:
+            raise NotTheCreation(f"{key} is marked by another delete")
+        return {**record, STATE: tenancy.ENDED, ENDED_AT: now.isoformat()}
+
+    stamped = change_creation(root_uri, storage_options, key, uuid, stamp, states=states)
+    if stamped is None:
+        return False
+    end_creation(root_uri, storage_options, kind, stamped, now=now)
+    fs, base = fs_and_base(root_uri, storage_options)
+    with suppress(FileNotFoundError):
+        fs.delete_file(f"{base}/{key}")
+    return True
+
+
+def remove_stale_ended(root_uri: str, storage_options: StorageOptions, kind: tenancy.Kind, key: str, uuid: str, *, older_than: datetime, now: datetime) -> bool:
+    """Remove a record stamped ``ended`` whose stamper died before removing it: restamped by this call under the ETag of a
+    read that found it stamped before ``older_than`` (the converge tick's bound, past which its stamper no longer runs),
+    so of two ticks only one removes it. Whether this call removed it. Blocking."""
+
+    def restamp(record: dict[str, Any]) -> dict[str, Any]:
+        stamped = record.get(ENDED_AT)
+        if not isinstance(stamped, str) or datetime.fromisoformat(stamped) >= older_than:
+            raise NotTheCreation(f"{key} was ended at {stamped}, within the bound")
+        return {**record, ENDED_AT: now.isoformat()}
+
+    restamped = change_creation(root_uri, storage_options, key, uuid, restamp, states=frozenset({tenancy.ENDED}))
+    if restamped is None:
+        return False
+    end_creation(root_uri, storage_options, kind, restamped, now=now)
+    fs, base = fs_and_base(root_uri, storage_options)
+    with suppress(FileNotFoundError):
+        fs.delete_file(f"{base}/{key}")
+    return True
