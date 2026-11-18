@@ -1,6 +1,6 @@
 # 0212. Publication goes, and a table's data contract is checked on every commit (2026-11-16)
 
-**Status:** accepted. Source: owner, 2026-11-16, through the question tool: "Pure: remove publication". It replaces the
+**Status:** accepted, amended by [ADR 0244](0244-write-governance-is-modelled-in-tla.md) (a set commits on every ref instead of reading it a second time, and a table's Overwrite is a stamped commit). Source: owner, 2026-11-16, through the question tool: "Pure: remove publication". It replaces the
 owner's 2026-11-15 choice "Keep publish, contract replaces gate". Row LH-594 (#832). Supersedes
 [ADR 0161](0161-the-tag-gate-runs-at-publish.md) and amends [ADR 0156](0156-the-audit-grilling-amends-0155.md) C1 and
 C9.

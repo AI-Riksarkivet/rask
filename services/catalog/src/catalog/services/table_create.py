@@ -58,7 +58,7 @@ from pydantic import BaseModel
 from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
-from catalog.core import encoding, provenance_guard, run_context
+from catalog.core import encoding, provenance_guard, run_context, write_judge
 from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -275,9 +275,12 @@ async def create_governed_table(
         # A declaration under the name is written into by its own declarer only (ADR 0227 §9).
         declarer=created_by if created_by is not None else ANONYMOUS_SUBJECT,
     )
+    # The rule the write judge read is read again under the namespace's add fence, held until the write ends (ADR 0244 R1).
+    placed = write_judge.Write(op="create", obj=f"table:{table_id}", rung=None, table=tuple(segments), run=run)
     try:
         try:
-            response: CreateTableResponse = await run_in_threadpool(create)
+            async with write_judge.placing(placed, ns, control_root=settings.registry_root, storage_options=settings.storage_options()):
+                response: CreateTableResponse = await run_in_threadpool(create)
         except (TableAlreadyExistsError, ConcurrentModificationError):
             # AN ExistOk THAT LOST THE RACE KEEPS THE WINNER'S TABLE. Two ExistOk creates in one pod both find no table
             # at the probe, and the backend's put-if-not-exists answers the loser's add as a conflict; ExistOk asks for

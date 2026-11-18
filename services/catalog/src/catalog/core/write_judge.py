@@ -13,22 +13,30 @@ name no run. Every named input, under the rule or not, names a table the committ
 a table one cannot read as an input would launder it into the derived table's lineage, and an erasure names a derived
 table by what its commits declared (ADR 0183). The judge answers allow or refuse before a write. A staged manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run
 here.
+
+A DOOR THAT PLACES A TABLE IN A NAMESPACE (a create, a register, a rename in) reads the rule again under that
+namespace's add fence, held until the table stands there (:func:`placing`, ADR 0244 R1): the judge's read comes before
+the add, and an Overwrite can make the namespace afresh under the rule in between.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager, nullcontext
 from typing import Final, Literal
 
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import DescribeNamespaceRequest, InternalError, InvalidInputError, LanceNamespace, NamespaceNotFoundError, UnsupportedOperationError
 from pydantic import BaseModel, ConfigDict
 
+from catalog.core import fenced_namespace
 from catalog.core.provenance_guard import RESERVED_METADATA_PREFIXES, is_reserved_key
 from catalog.core.run_context import INPUTS_HEADER, INPUTS_PROPERTY, RUN_ID_HEADER, RUN_ID_PROPERTY, RunContext
 from catalog.services import native
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.namespace_fences import NamespaceWork
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -173,7 +181,26 @@ async def judge(
     if check is not None and op.rung is not None:
         await check(op.rung)
     required = await _requires_run_for(namespace, op.table)
-    if op.moved_from and required and not await _requires_run_for(namespace, op.moved_from):
+    await _refuse_under_the_rule(op, required, ns=await namespace(op.moved_from[0]) if op.moved_from and required else None)
+    if op.op in STAMPING_DOORS:
+        await judge_run(required, op.run, inputs=inputs, names=_CONTEXT_HEADERS)
+    audit(AuditAction.WRITE_JUDGE, AuditOutcome.ALLOW, subject=caller, resource=op.obj, op=op.op, requires_run=str(required).lower())
+    return Judgement(requires_run=required)
+
+
+_CONTEXT_HEADERS: Final = f"the request's Context headers {RUN_ID_HEADER} and {INPUTS_HEADER}"
+
+
+async def _refuse_under_the_rule(op: Write, required: bool, *, ns: LanceNamespace | None) -> None:
+    """Refuse what ``op`` places under a namespace whose path ``required`` a run: a rename in from one that requires
+    none (its source's rule read through ``ns``, the connection of the source's warehouse), and a door that commits no
+    run.
+
+    Raises:
+        InvalidInputError: A rename moves the table in from a namespace that requires no run.
+        UnsupportedOperationError: The door lands data and commits no run.
+    """
+    if op.moved_from and required and ns is not None and not await requires_run(ns, op.moved_from[:-1]):
         raise InvalidInputError(
             f"rename refused: moving a table into a namespace that requires a run ({REQUIRES_RUN_PROPERTY}) from one that does not "
             "places data there no run produced; write it there with the run that derives it"
@@ -183,10 +210,34 @@ async def judge(
             f"{op.op} is refused under a namespace that requires a run ({REQUIRES_RUN_PROPERTY}): it cannot carry the run and inputs into "
             "a commit; write the rows with create, insert or merge_insert and the run in the request's Context"
         )
-    if op.op in STAMPING_DOORS:
-        await judge_run(required, op.run, inputs=inputs, names=f"the request's Context headers {RUN_ID_HEADER} and {INPUTS_HEADER}")
-    audit(AuditAction.WRITE_JUDGE, AuditOutcome.ALLOW, subject=caller, resource=op.obj, op=op.op, requires_run=str(required).lower())
-    return Judgement(requires_run=required)
+
+
+@asynccontextmanager
+async def placing(op: Write, ns: LanceNamespace, *, control_root: str, storage_options: StorageOptions) -> AsyncGenerator[None]:
+    """Judge again the run rule of the namespace ``op`` places its table in, holding that namespace's add fence until the
+    block, the add, ends (ADR 0244 R1).
+
+    The write judge read the rule when the request arrived, and a namespace's rule changes only when an Overwrite drops
+    it, empty, and makes it afresh (ADR 0211 §2). That drop takes the namespace's DROP fence, which no add shares, and
+    the backend refuses it once a table stands in the namespace; so read under the add fence and kept there through
+    the add, the rule is the one the table lands under. ``ns`` is the connection of the table's warehouse, a rename's
+    source included (the rename door keeps a rename within its warehouse). A door that places no new table (an
+    Overwrite or ExistOk of a standing one) holds the fence of a namespace that cannot be dropped anyway.
+
+    Raises:
+        NamespaceFencedError: The namespace is being dropped (409, code 14).
+        InvalidInputError: A rename in from a namespace requiring no run, or a create naming no run, under the rule.
+        UnsupportedOperationError: A register under the rule.
+    """
+    namespace = list(op.table[:-1])
+    # A warehouse's own row declares no rule and is no namespace door's to drop, so a table placed in it holds no fence.
+    held = fenced_namespace.holding(control_root, storage_options, namespace, NamespaceWork.ADD) if len(namespace) > 1 else nullcontext()
+    async with held:
+        required = await requires_run(ns, namespace)
+        await _refuse_under_the_rule(op, required, ns=ns)
+        if op.op in STAMPING_DOORS:
+            require_named_run(required, op.run, names=_CONTEXT_HEADERS)
+        yield
 
 
 async def _requires_run_for(namespace: Callable[[str], Awaitable[LanceNamespace]], table: Sequence[str]) -> bool:
@@ -204,9 +255,18 @@ async def judge_run(required: bool, run: RunContext | None, *, inputs: InputsChe
         InvalidInputError: ``required`` and the write names no run, or no input; or a named input is not a table the
             committer may read (raised by ``inputs``).
     """
+    require_named_run(required, run, names=names)
+    if run is not None and run.inputs:
+        await inputs(run)
+
+
+def require_named_run(required: bool, run: RunContext | None, *, names: str) -> None:
+    """Refuse a data write under the run rule that names no run and inputs; ``names`` says where the caller puts them.
+
+    Raises:
+        InvalidInputError: ``required`` and the write names no run, or no input.
+    """
     if required and (run is None or not run.inputs):
         raise InvalidInputError(
             f"commit refused: a write under a namespace that requires a run names its run ({RUN_ID_PROPERTY}) and its inputs ({INPUTS_PROPERTY}) in {names}"
         )
-    if run is not None and run.inputs:
-        await inputs(run)

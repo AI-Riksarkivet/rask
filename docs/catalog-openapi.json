@@ -18875,7 +18875,7 @@
     },
     "/management/v1/table/{id}/contract/set": {
       "post": {
-        "description": "Set the table's data contract: an ODCS v3 document naming the columns its consumers rely on. Asked at\n``can_set_contract``, the table owner's.\n\nThe document is read strictly: a quality or service-level rule is refused 406, since the catalog checks a\ncontract's schema on every commit and nothing else. The table must meet the contract now, and a contract that takes\nback what the standing one promises carries a higher major version. From then on a commit that drops, renames,\nretypes or loosens a contracted column is refused 409 (code 19), through every door and from a stock client alike.",
+        "description": "Set the table's data contract: an ODCS v3 document naming the columns its consumers rely on. Asked at\n``can_set_contract``, the table owner's.\n\nThe document is read strictly: a quality or service-level rule is refused 406, since the catalog checks a\ncontract's schema on every commit and nothing else. The table must meet the contract now, and a contract that takes\nback what the standing one promises carries a higher major version. Once the record stands the door commits on main\nand on every branch a version stamped ``rask.contract`` with the contract it judged that ref against, each announced\nas a schema metadata update; a ref a commit made stop meeting the contract meanwhile refuses the set 409 (code 19),\nand the door then puts back the contract it replaced. From the answer on, a commit that drops, renames, retypes or\nloosens a contracted column is refused 409 (code 19), through every door and from a stock client alike.",
         "operationId": "set_table_contract_management_v1_table__id__contract_set_post",
         "parameters": [
           {
@@ -18903,6 +18903,38 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],

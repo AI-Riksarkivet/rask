@@ -10,6 +10,7 @@ file names another and provenance splits. The real ``create_table`` handler deri
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -94,6 +95,8 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     monkeypatch.setattr(table_create.table_claims, "uuid_at", lambda *_a: "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
     monkeypatch.setattr(table_create, "build_lineage_metadata", _build_meta)
     monkeypatch.setattr(table_create.dataplane, "create_table", _facade_create)
+    # The namespace is faked, so the run rule read again under its add fence, no axis compared here, reads nothing.
+    monkeypatch.setattr(table_create.write_judge, "placing", lambda *_a, **_kw: contextlib.nullcontext())
 
     emitter = _RecordingEmitter()
     asyncio.run(

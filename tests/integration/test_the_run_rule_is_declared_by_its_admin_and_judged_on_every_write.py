@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
+import lance
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
@@ -227,3 +228,54 @@ def test_a_recoverable_drop_and_its_undrop_keep_the_run_rule_and_the_uuid(real_n
     assert client.post(f"/management/v1/namespace/{WAREHOUSE}$ledger/undrop", json={}, headers=AUTH).status_code == 200
 
     assert _properties(client, LEDGER) == {"rask.requires_run": "true", "rask.uuid": minted}
+
+
+#: The doors that place a table holding data no run produced into namespace `plain`: each request, and the backend call
+#: it makes after the write judge and before its add, where it is held. A create is held twice: inside the add fence it
+#: holds (its write's look for the name), which the Overwrite's drop must wait out, and, as an ExistOk, before it (the
+#: door's probe for a standing table), so the namespace is made afresh before the door reads the rule again.
+_PLACEMENTS: dict[str, tuple[Callable[[TestClient], httpx.Response], tuple[str, str]]] = {
+    "create": (lambda client: client.post("/v1/table/lance_catalog$plain$t/create?mode=create", content=_rows()), ("describe_table", "t")),
+    "create-before-its-fence": (
+        lambda client: client.post("/v1/table/lance_catalog$plain$t/create?mode=ExistOk", content=_rows()),
+        ("describe_table", "t"),
+    ),
+    "register": (
+        lambda client: client.post("/v1/table/lance_catalog$plain$t/register", json={"location": "outside/registered"}),
+        ("namespace_exists", "plain"),
+    ),
+    "rename": (
+        lambda client: client.post("/v1/table/lance_catalog$src$s/rename", json={"new_namespace_id": ["lance_catalog", "plain"], "new_table_name": "t"}),
+        ("namespace_exists", "plain"),
+    ),
+}
+
+
+@pytest.mark.parametrize("door", list(_PLACEMENTS))
+def test_a_table_placed_beside_the_overwrite_that_declares_the_rule_does_not_stand_under_it(real_ns_client: TestClient, tmp_path: Path, door: str) -> None:
+    """ADR 0244 R1: a door placing a table into a namespace judges the namespace's rule while it holds the namespace's add
+    fence, so the namespace is not made afresh under the rule between that judgement and the add. The door is held after
+    the write judge and before its add while an Overwrite makes the namespace afresh declaring the rule: one of the two
+    lands, and no table holding data no run produced stands under the rule."""
+    from tests.integration.test_a_lifecycle_door_keeps_what_it_answered_beside_a_concurrent_door import _Gate, _holding, _Request
+
+    client = real_ns_client
+    for namespace in ("lance_catalog$plain", "lance_catalog$src"):
+        assert client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+    assert client.post("/v1/table/lance_catalog$src$s/create?mode=create", content=_rows()).status_code == 200
+    outside = tmp_path / "outside" / "registered"
+    lance.write_dataset(pa.table({"id": pa.array([0], pa.int64())}), str(outside), data_storage_version="2.2", enable_stable_row_ids=True)
+    send, (method, named) = _PLACEMENTS[door]
+    gate = _holding().at(method, named, _Gate())
+    placing = _Request(lambda: send(client))
+    placing.reaches(gate)
+    assert gate.arrived.is_set(), "the door was not held after its judgement"
+
+    overwrite = client.post("/v1/namespace/lance_catalog$plain/create", json={"mode": "Overwrite", "properties": RULE})
+    gate.release.set()
+    placed = placing.answer()
+
+    rule = client.post("/v1/namespace/lance_catalog$plain/describe", json={}).json()["properties"].get("rask.requires_run")
+    stands = client.post("/v1/table/lance_catalog$plain$t/describe", json={}).status_code == 200
+    assert not (rule == "true" and stands), f"{door} answered {placed} and the Overwrite {overwrite.status_code}: a table no run produced stands under the rule"
+    assert (overwrite.status_code == 200) != (placed == 200), f"one of the two lands: {door} {placed}, the Overwrite {overwrite.status_code}"

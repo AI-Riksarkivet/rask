@@ -21,9 +21,14 @@ A column is named by its path, so a rename of a contracted column reads as its r
 is made by setting a contract that no longer forbids it, under a higher major version, and then committing the change.
 
 A COMMIT IS REFUSED FOR WHAT IT BREAKS. :func:`require_kept` compares the version a commit makes with the one it
-follows and refuses a violation the commit introduces. A violation the table already had (a contract set as a commit
-landed, a branch cut from a version older than the contract) is not the next writer's: its commits land, and the
-owner mends the table or the contract.
+follows and refuses a violation the commit introduces. A violation the table already had (a branch cut from a version
+older than the contract) is not the next writer's: its commits land, and the owner mends the table or the contract.
+
+A SET COMMITS ON EVERY REF (ADR 0244). A commit reads the contract after its plan and lands exactly at the slot after
+the version it planned on, so the contract door, once its record stands, commits on every ref a version stamped with
+the contract (:data:`CONTRACT_KEY`) whose plan judges the ref's head against it: a commit that read the contract before
+the record stood either landed before that version, and the set judged it, or loses its slot to it, plans again, and
+reads the contract (`specs/catalog/WriteGovernance.tla`, ContractKept).
 
 One record per table, at ``record_key("_contracts", "table", uuid)``: keyed by the table's uuid as every record kept
 for an object is (ADR 0173 §8), so a rename keeps it and the table's ending ends it (`lakehouse.object_records`).
@@ -45,13 +50,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from catalog.services import primary_keys
 from lakehouse import control_prefixes
 from lakehouse.outage import store_refusal
-from lakehouse.record_store import delete_record, put_record, read_record, record_key
-from lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
+from lakehouse.record_store import delete_record, read_record, record_key
+from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, mutate_json, read_json, replace_json
 from lakehouse.storage_options import StorageOptions
 
 
 #: The ODCS keys that state a check on data or on time. The catalog runs neither, so a document carrying one is refused.
 UNENFORCED_KEYS: Final = frozenset({"quality", "slaProperties", "slaDefaultElement"})
+
+#: The schema metadata key a set's commit on a ref stamps with the contract it judged that ref against, ``<id>@<version>``:
+#: under the platform's prefix, so no door's caller writes it (``provenance_guard``).
+CONTRACT_KEY: Final = "rask.contract"
 
 _SEMVER: Final = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
@@ -238,6 +247,20 @@ def violations(contract: Contract, schema: pa.Schema) -> list[str]:
     return found
 
 
+def require_met(contract: Contract, schema: pa.Schema, *, ref: str) -> None:
+    """Refuse a contract the ref ``ref`` does not meet now: every later commit would be refused for a state its writer did
+    not make.
+
+    Raises:
+        InvalidTableStateError: The ref's schema lacks a column the contract names, or holds it at another type or looser.
+    """
+    if broken := violations(contract, schema):
+        raise InvalidTableStateError(
+            f"the table does not meet the contract on {ref}: {'; '.join(broken)}. A contract states what the table already is; "
+            "change the table first (a column made non-nullable, a key declared at create), then set the contract"
+        )
+
+
 def require_kept(contract: Contract | None, before: pa.Schema | None, after: pa.Schema, *, door: str) -> None:
     """Refuse a commit that breaks the table's ``contract``: one whose schema ``after`` drops, renames, retypes or
     loosens a contracted column that the schema it follows, ``before``, kept. A violation ``before`` already had is not
@@ -257,17 +280,18 @@ def require_kept(contract: Contract | None, before: pa.Schema | None, after: pa.
 
 
 class ContractRecord(BaseModel):
-    """The contract a table holds, and who set it."""
+    """The contract a table holds, and who set it; ``document`` is ``None`` in the record a refused set leaves where it
+    took its own back over none (:func:`take_back`), which holds no contract."""
 
     model_config = ConfigDict(frozen=True)
 
     table_uuid: str
-    document: dict[str, Any]
+    document: dict[str, Any] | None
     set_by: str | None = None
     set_at: datetime
 
-    def contract(self) -> Contract:
-        return Contract.model_validate(self.document)
+    def contract(self) -> Contract | None:
+        return None if self.document is None else Contract.model_validate(self.document)
 
 
 def _key(table_uuid: str) -> str:
@@ -284,14 +308,10 @@ def held(control_root: str, storage_options: StorageOptions, table_uuid: str) ->
     """
     try:
         record = read_record(control_root, storage_options, _key(table_uuid))
-        return None if record is None else _checked(ContractRecord.model_validate(record))
+        kept = None if record is None else ContractRecord.model_validate(record)
+        return kept if kept is not None and kept.contract() is not None else None
     except (OSError, ValueError) as exc:
         raise store_refusal(exc, reading="reading the table's data contract", so="nothing was committed or answered") from exc
-
-
-def _checked(record: ContractRecord) -> ContractRecord:
-    record.contract()
-    return record
 
 
 def _breaks(standing: Contract, asked: Contract) -> list[str]:
@@ -387,12 +407,21 @@ def standing(control_root: str, storage_options: StorageOptions, table_uuid: str
         return None
 
 
-def restore(control_root: str, storage_options: StorageOptions, table_uuid: str, record: ContractRecord | None) -> None:
-    """Put the table's contract back to ``record``, the one a refused set replaced; none removes it."""
-    if record is None:
-        forget(control_root, storage_options, table_uuid)
-    else:
-        put_record(control_root, storage_options, _key(table_uuid), record.model_dump(mode="json"))
+def take_back(control_root: str, storage_options: StorageOptions, table_uuid: str, own: ContractRecord, replaced: ContractRecord | None) -> bool:
+    """Put back ``replaced``, the contract a refused set's record ``own`` replaced, while ``own`` is still the record;
+    whether it was. A record another set or the delete door wrote since is theirs, answered or about to be, and stays
+    (ADR 0244 C3). The write is a replace under the ETag of the read that found ``own``, and none is put back as a record
+    holding no contract, since the store deletes unconditionally."""
+    key = _key(table_uuid)
+    found = read_json(control_root, storage_options, key)
+    if found is None or found[0] != own.model_dump(mode="json"):
+        return False
+    back = replaced or ContractRecord(table_uuid=table_uuid, document=None, set_by=own.set_by, set_at=datetime.now(UTC))
+    try:
+        replace_json(control_root, storage_options, key, back.model_dump(mode="json"), etag=found[1])
+    except RecordChangedError:
+        return False
+    return True
 
 
 def forget(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:

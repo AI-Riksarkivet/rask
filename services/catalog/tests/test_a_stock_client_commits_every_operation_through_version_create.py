@@ -1863,11 +1863,13 @@ def test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_make
     assert _answered(served, f"{_CONTRACT_DOOR}/set", contract) == (200, None)
     described = httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()
     assert (described["contract"], described["set_by"]) == (contract, "user:dex~alice")
+    # The set committed on main a version that changes no column, stamped with the contract it judged main against.
+    assert (_opened(stock).version, _opened(stock).schema.metadata[b"rask.contract"]) == (3, b"orders@1.0.0")
 
     # A stock client's retype of a contracted column: refused at `version/create`, the table left at its version.
     with contextlib.suppress(OSError):
         _opened(stock).alter_columns(cast("Iterable[AlterColumn]", {"path": "v", "data_type": pa.large_string()}))
-    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 3)
+    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 4)
     assert (status, code) == (409, 19), detail
     assert "column 'v' is large_string, and the contract states string" in detail and "version 1.0.0" in detail, detail
     # The catalog's own doors commit through the same judge: a loosening, a rename, a drop, and an Overwrite that leaves
@@ -1877,12 +1879,12 @@ def test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_make
     assert _answered(served, f"{table}/drop_columns", {"columns": ["v"]}) == (409, 19)
     overwrite = encode_arrow_stream(_keyed([9], ["z"]).drop_columns(["v"]))
     assert _answered(served, f"{table}/create?mode=overwrite", arrow=overwrite) == (409, 19)
-    assert (_opened(stock).version, _opened(stock).schema.names) == (2, ["id", "v"])
+    assert (_opened(stock).version, _opened(stock).schema.names) == (3, ["id", "v"])
 
     # An additive change lands, from a stock client and from a door.
     _opened(stock).add_columns({"n": "id * 2"})
     assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "m", "expression": "id + 1"}]}) == (200, None)
-    assert (_opened(stock).version, _opened(stock).schema.names) == (4, ["id", "v", "n", "m"])
+    assert (_opened(stock).version, _opened(stock).schema.names) == (5, ["id", "v", "n", "m"])
 
     # A changed contract carries a higher version, and taking `v` out of it is a breaking change to it: refused under
     # the same major, set under the next.
@@ -1963,6 +1965,88 @@ def test_a_contract_the_catalog_cannot_hold_the_table_to_is_refused_and_none_is_
     assert _answered(served, f"{_CONTRACT_DOOR}/set", {**_CONTRACT, **change}) == (status, code)
 
     assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] is None
+
+
+class _HeldOnce:
+    """``real`` held once its first call returns, until ``release`` is set: a request stopped right after that step."""
+
+    def __init__(self, real: Callable[..., Any]) -> None:
+        self.real, self.arrived, self.release, self._first = real, threading.Event(), threading.Event(), True
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the held function's own types
+        answered = self.real(*args, **kwargs)
+        if self._first:
+            self._first = False
+            self.arrived.set()
+            assert self.release.wait(30), "the held step was never released"
+        return answered
+
+
+def _in_thread(send: Callable[[], object]) -> threading.Thread:
+    """``send`` on a thread of its own; what it raises is the refusal its client reports, left to the table's state to judge."""
+
+    def _run() -> None:
+        with contextlib.suppress(Exception):
+            send()
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+    return thread
+
+
+#: A commit dropping the contracted column ``v``, by each way a version lands: a door's stamped commit, a stock client's
+#: ``version/create``, and an Overwrite of the table.
+_DROPS_V: dict[str, Callable[[Served, lance_namespace.LanceNamespace], object]] = {
+    "door": lambda served, _stock: httpx.post(f"{served.url}/v1/table/lance_catalog$db$t/drop_columns", headers=_TOKEN, json={"columns": ["v"]}),
+    "stock": lambda _served, stock: _opened(stock).drop_columns(["v"]),
+    "overwrite": lambda served, _stock: _answered(
+        served, "/v1/table/lance_catalog$db$t/create?mode=overwrite", arrow=encode_arrow_stream(_keyed([9], ["z"]).drop_columns(["v"]))
+    ),
+}
+
+
+@pytest.mark.parametrize("way", list(_DROPS_V))
+def test_a_commit_judged_before_its_contract_was_set_does_not_land_after_the_set_answered(served: Served, monkeypatch: pytest.MonkeyPatch, way: str) -> None:
+    """ADR 0244 C1, C2: a set commits on every ref of the table, judging each against the contract under the version's
+    put-if-not-exists, so a commit that read no contract cannot land after the set answered. The commit is held right
+    after it read the table's contract (none), the set runs and answers 200, and the commit is released: it loses its
+    slot to the set's commit, plans again under the contract, and is refused; the table keeps ``v``."""
+    from catalog.services import table_claims as claims
+
+    stock = _created(served)
+    held = _HeldOnce(claims.DoorTable.contract)
+    monkeypatch.setattr(claims.DoorTable, "contract", lambda table: held(table))
+    dropping = _in_thread(lambda: _DROPS_V[way](served, stock))
+    assert held.arrived.wait(30), "the commit never read the contract"
+
+    contract = _with_v({"name": "v", "logicalType": "string", "physicalType": "string"}, "1.0.0")
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", contract) == (200, None)
+    held.release.set()
+    dropping.join(60)
+
+    assert "v" in _opened(stock).schema.names, f"a {way} commit dropped a column of the contract answered 200 before it landed"
+    assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] == contract
+
+
+def test_a_refused_set_takes_back_only_the_contract_it_wrote(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR 0244 C3: a set refused once its record stood puts back what it replaced only over its own record. The first
+    set is held right after it wrote its record; a second, which no longer names ``v``, is set and answered 200; ``v`` is
+    dropped under it; the first is released and refused, since the table no longer meets it. The second stands."""
+    from catalog.services import contracts
+
+    _created(served)
+    held = _HeldOnce(contracts.keep)
+    monkeypatch.setattr(contracts, "keep", held)
+    first = _with_v({"name": "v", "logicalType": "string", "physicalType": "string"}, "1.0.0")
+    setting = _in_thread(lambda: _answered(served, f"{_CONTRACT_DOOR}/set", first))
+    assert held.arrived.wait(30), "the first set never wrote its record"
+
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", _without_v("2.0.0")) == (200, None)
+    assert _answered(served, "/v1/table/lance_catalog$db$t/drop_columns", {"columns": ["v"]}) == (200, None)
+    held.release.set()
+    setting.join(60)
+
+    assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] == _without_v("2.0.0")
 
 
 def test_a_stock_client_marks_a_version_ready_with_a_tag_of_its_own_and_no_publication_door_is_served(served: Served) -> None:

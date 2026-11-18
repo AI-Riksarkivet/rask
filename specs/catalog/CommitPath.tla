@@ -19,8 +19,9 @@
 (*              fragments written first, which rebases onto whatever      *)
 (*              landed since and renews before each put                    *)
 (*              (dataplane.land_keyed: mix "lane");                        *)
-(*              /create mode=Overwrite of a table, the same Lance commit    *)
-(*              of an Overwrite (dataplane._write_blob: mix "overwrite");  *)
+(*              /create mode=Overwrite of a table, a stamped commit of an  *)
+(*              Overwrite whose rows each attempt writes again             *)
+(*              (dataplane._overwrite_stamped, ADR 0244: mix "overwrite"); *)
 (*              /restore, a stamped commit of Lance's Restore              *)
 (*              (dataplane.restore: mix "restore").                        *)
 (*            Each attempt is one actor; an attempt starts once the one    *)
@@ -218,7 +219,7 @@ Replaces(a) == Keyed(a) /\ Mix \in {"overwrite", "restore"}
 \* rebases onto whatever landed since (an append across an Overwrite or a Restore is refused).
 Path(a) ==
   CASE Kind(a) = "nested" -> (IF On("AppendJudged") THEN "stamped" ELSE "lance")
-    [] Kind(a) = "keyed" -> (IF Mix \in {"lane", "overwrite", "gap"} THEN "lance" ELSE "stamped")
+    [] Kind(a) = "keyed" -> (IF Mix \in {"lane", "gap"} THEN "lance" ELSE "stamped")
     [] Kind(a) = "insert" -> (IF PKTable THEN "stamped" ELSE "lance")
     [] OTHER -> "stamped"
 \* The table holds key 1 before any writer starts, where a writer's harm needs it held.

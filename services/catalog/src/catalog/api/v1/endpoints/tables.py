@@ -68,7 +68,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken, current_subject
-from catalog.core import json_arrow, provenance_guard
+from catalog.core import json_arrow, provenance_guard, write_judge
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import refuse_properties_kept_nowhere, reject_unsupported_properties
@@ -1317,7 +1317,10 @@ async def register_table(
         # The registration lands only while the request's key is still this attempt's: one a resend took over while this
         # attempt ran would attach the dataset again after whatever the key's registration met since (ADR 0240).
         await run_in_threadpool(dataplane.renew_held, converge.held)
-        response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
+        # The run rule the write judge read is read again under the namespace's add fence, held through the add (ADR 0244 R1).
+        placed = write_judge.Write(op="register", obj=f"table:{fga.canonical_object_id(segments)}", rung=None, table=tuple(segments))
+        async with write_judge.placing(placed, ns, control_root=settings.registry_root, storage_options=settings.storage_options()):
+            response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
         await fga_deps.take_back_seed(client, settings, token, segments=segments, uuid=table_uuid, reason="not_registered")
         # A REFUSED REGISTRATION WRITES NO TUPLE ([[LH-586]], owner 2026-11-11). The spec gives this door two
@@ -1796,7 +1799,12 @@ async def rename_table(
         extra={"from": fga.canonical_object_id(segments), "to": fga.canonical_object_id(new_segments)},
         named_by=destination_ids,
     )
-    async with announcer.announcing(door="rename_table", target=renamed, announcements=[moved, moved_event]) as filing:
+    # The run rule the write judge read is read again under the destination's add fence, held through the move (ADR 0244 R1).
+    placed = write_judge.Write(op="rename", obj=f"table:{fga.canonical_object_id(segments)}", rung=None, table=tuple(new_segments), moved_from=tuple(segments))
+    async with (
+        write_judge.placing(placed, ns, control_root=settings.registry_root, storage_options=settings.storage_options()),
+        announcer.announcing(door="rename_table", target=renamed, announcements=[moved, moved_event]) as filing,
+    ):
         await run_in_threadpool(
             partial(
                 dataplane.rename_table,

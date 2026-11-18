@@ -519,15 +519,9 @@ def _write_blob(
                 enable_stable_row_ids=CREATE_FORMAT.stable_row_ids if is_create else None,
             )
     except OSError as exc:
-        # An external-pointer blob outside every registered base (and the blanket flag off) is a client
-        # error, not a 500 — surface a clear 400. Match lance's specific phrase (NOT a bare "external"), so a
-        # genuine infra OSError on a path that merely contains the word "external" still surfaces as a 500.
-        if not allow_external and "outside registered external bases" in str(exc).lower():
-            raise InvalidInputError(
-                "blob column references an external object outside the dataset root and any registered "
-                "external base; configure LANCE_EXTERNAL_BLOB_BASES with the approved base(s), or "
-                "LANCE_ALLOW_EXTERNAL_BLOBS for the blanket bypass, to accept Blob.from_uri columns"
-            ) from exc
+        # An external-pointer blob outside every registered base is the caller's error, a 400, not a 500.
+        if (refused := _external_blob_refusal(exc, allow_external=allow_external)) is not None:
+            raise refused from exc
         # A CREATE THAT LANDS ON OCCUPIED BYTES IS A CONFLICT, NOT AN INTERNAL FAILURE
         # ([[LH-164]]). `spec.yaml:1461` declares `ConflictErrorResponse` on `CreateTable`, so a
         # collision is a modelled outcome of this operation. Measured on the live catalog 2026-09-21:
@@ -554,6 +548,19 @@ def _write_blob(
             record, files, table_location=uri, branch=None, so=so, read_version=int(transaction.read_version), version=int(landed.version)
         )
     return landed
+
+
+def _external_blob_refusal(exc: OSError, *, allow_external: bool) -> InvalidInputError | None:
+    """The 400 a write's ``exc`` is when it is Lance refusing an external-pointer blob outside every registered base, the
+    blanket flag off; ``None`` for any other failure. Lance's specific phrase is matched, not a bare "external", so an
+    infra failure on a path that merely contains the word still surfaces as itself."""
+    if allow_external or "outside registered external bases" not in str(exc).lower():
+        return None
+    return InvalidInputError(
+        "blob column references an external object outside the dataset root and any registered "
+        "external base; configure LANCE_EXTERNAL_BLOB_BASES with the approved base(s), or "
+        "LANCE_ALLOW_EXTERNAL_BLOBS for the blanket bypass, to accept Blob.from_uri columns"
+    )
 
 
 def read_arrow_body(data: bytes, *, max_bytes: int) -> pa.Table:
@@ -921,8 +928,20 @@ def create_table(
             primary_keys.refuse_repeats_within(table, primary_keys.key_columns(current.lance_schema), door="create")
             kept = provenance_guard.keep_provenance(current.schema, table)
             if overwriting is not None:
-                # An Overwrite is a new version of the same table, so it keeps what the table's contract names (ADR 0212).
+                # An Overwrite is a new version of the same table, so it keeps what the table's contract names (ADR 0212):
+                # judged here before its rows are written, and again by its stamped commit against the version it lands on.
                 contracts.require_kept(overwriting.contract(), current.schema, kept.schema, door="create")
+                _before_commit(before_commit, existing, registry)
+                version = _overwrite_stamped(
+                    overwriting,
+                    kept,
+                    so,
+                    properties=properties,
+                    transaction_properties=transaction_properties or {},
+                    data_bases=registered_data_bases(data_bases, current) if data_bases else None,
+                    allow_external=allow_external,
+                )
+                return CreateTableResponse(location=existing, version=version)
             _before_commit(before_commit, existing, registry)
             dataset = _write_blob(
                 kept,
@@ -934,7 +953,6 @@ def create_table(
                 data_bases=registered_data_bases(data_bases, current) if data_bases else None,
                 properties=properties,
                 transaction_properties=transaction_properties,
-                before_commit=None if overwriting is None else partial(overwriting.wait_for_turn, None),
                 key=key,
                 record=None if registry is None else _recorder(registry, _claimed_uuid(registry, existing)),
             )
@@ -997,6 +1015,53 @@ def create_table(
     finally:
         if registry is not None and fence is not None and fenced_at is not None:
             table_claims.lift_fence(_claim_store(registry), table_claims.DoorFence(location=fenced_at, token=fence))
+
+
+def _overwrite_stamped(
+    table: table_claims.DoorTable,
+    rows: pa.Table,
+    so: StorageOptions,
+    *,
+    properties: dict[str, str] | None,
+    transaction_properties: dict[str, str],
+    data_bases: list[DataBase] | None,
+    allow_external: bool,
+) -> int:
+    """Overwrite ``table`` with ``rows`` as a stamped commit (:func:`commit_stamped`), and answer its version.
+
+    A table's Overwrite is the one write of a governed table that Lance's own commit would land over whatever committed
+    since its read (`lance_docs/lance/format/table/transaction.md` § Overwrite Compatibility; measured on pylance 13.0.0
+    over an UpdateConfig of the table's config, table metadata and schema metadata alike). Finalized instead exactly at
+    the slot after the version it planned on, it is judged against that version and the contract read after the plan, as
+    every door's commit is, and a contract set meanwhile orders it (ADR 0244 C2). Each attempt writes its rows again: a
+    lost race deletes what the attempt wrote. The fragments are written as :func:`_write_blob` writes an overwrite's.
+    """
+    stamped = encoding.stamp_encoding(rows, properties)
+    target_bases = [base.name for base in data_bases or []] or None
+
+    def plan(dataset: lance.LanceDataset) -> tuple[Transaction, None]:
+        try:
+            transaction = lance.fragment.write_fragments(  # noqa: TID251
+                stamped,
+                table.location,
+                return_transaction=True,
+                mode="overwrite",
+                storage_options=so.in_clear(),
+                data_storage_version=CREATE_FILE_VERSION,
+                enable_stable_row_ids=CREATE_FORMAT.stable_row_ids,
+                target_bases=target_bases,
+                allow_external_blob_outside_bases=allow_external,
+            )
+        except OSError as exc:
+            if (refused := _external_blob_refusal(exc, allow_external=allow_external)) is not None:
+                raise refused from exc
+            raise
+        if not isinstance(transaction, Transaction):
+            raise InternalError("Lance answered a table's overwrite with no transaction to commit")
+        return transaction, None
+
+    version, _ = commit_stamped(table, so, transaction_properties, plan)
+    return version
 
 
 def _fence_the_declaration(

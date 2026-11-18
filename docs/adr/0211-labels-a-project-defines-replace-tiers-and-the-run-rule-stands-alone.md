@@ -1,6 +1,6 @@
 # 0211. Labels a project defines replace tiers, and the run rule stands alone (2026-11-15)
 
-**Status:** accepted. Source: owner, 2026-11-15, through the question tool: "Labels you define + a run rule". Row LH-596
+**Status:** accepted, amended by [ADR 0244](0244-write-governance-is-modelled-in-tla.md) (a door placing a table reads the run rule again under the namespace's add fence). Source: owner, 2026-11-15, through the question tool: "Labels you define + a run rule". Row LH-596
 (#833). Supersedes [ADR 0160](0160-the-tier-judge-owns-the-write-rung-and-a-tier-is-declared-once.md) and amends
 [ADR 0156](0156-the-audit-grilling-amends-0155.md) C8.
 

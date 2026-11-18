@@ -451,13 +451,18 @@ the rule:
   `primaryKey` a field of Lance's unenforced primary key, `physicalType` the column's Arrow type as pyarrow spells it.
   The record is `record_key("_contracts", "table", uuid)` on the control root (in `OBJECT_RECORD_PREFIXES`, so a rename
   keeps it and the table's ending ends it), the first set a put-if-absent and a replacement a write over the record it
-  judged; the set reads the table before and after it writes the record and takes the record back when the second
-  read fails; a record that is no contract refuses every commit, and a set replaces it and a delete removes it; set
+  judged; the set reads every ref before it writes the record, then commits on main and on every branch a version
+  stamped `rask.contract` = `<id>@<version>` whose plan judges that ref's head (a stamped commit, so every commit that
+  read the contract before the record stood is ordered with it, ADR 0244), and a refusal there puts back the contract
+  it replaced only over its own record (`contracts.take_back`; none is put back as a record holding no contract); a
+  record that is no contract refuses every commit, and a set replaces it and a delete removes it; set
   and delete announce `table_contract_set` / `table_contract_deleted`. A commit that drops, renames, retypes or
   loosens a contracted column is refused 409 code 19 (`contracts.require_kept`, which refuses only a violation the
   commit introduces over the version it follows, so a table already breaking its contract is not frozen) where every
   commit passes: `managed_versions.judge` (a stock client), `dataplane.commit_stamped` (every catalog door, a restore
-  included) and the create door's Overwrite; each reads the contract off the control root through `DoorTable.contract`.
+  and the create door's Overwrite included, `dataplane._overwrite_stamped`); each reads the contract off the control
+  root through `DoorTable.contract`. Modelled in `specs/catalog/WriteGovernance.tla` with the run rule, whose
+  placements (create, register, rename in) read the rule again under the namespace's add fence (`write_judge.placing`).
   Pinned by `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py`.
 - **Every version names its author, and every door commits stamped** ([[LH-497]]). Each catalog door stamps
   `rask.author` (the verified caller) and `rask.operation` (the lineage operation it announces) on its commit, on main

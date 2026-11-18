@@ -1915,8 +1915,11 @@ export interface paths {
          *
          *     The document is read strictly: a quality or service-level rule is refused 406, since the catalog checks a
          *     contract's schema on every commit and nothing else. The table must meet the contract now, and a contract that takes
-         *     back what the standing one promises carries a higher major version. From then on a commit that drops, renames,
-         *     retypes or loosens a contracted column is refused 409 (code 19), through every door and from a stock client alike.
+         *     back what the standing one promises carries a higher major version. Once the record stands the door commits on main
+         *     and on every branch a version stamped ``rask.contract`` with the contract it judged that ref against, each announced
+         *     as a schema metadata update; a ref a commit made stop meeting the contract meanwhile refuses the set 409 (code 19),
+         *     and the door then puts back the contract it replaced. From the answer on, a commit that drops, renames, retypes or
+         *     loosens a contracted column is refused 409 (code 19), through every door and from a stock client alike.
          */
         post: operations["set_table_contract_management_v1_table__id__contract_set_post"];
         delete?: never;
@@ -13052,7 +13055,10 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+                "x-lance-originator"?: string | null;
+            };
             path: {
                 id: string;
             };

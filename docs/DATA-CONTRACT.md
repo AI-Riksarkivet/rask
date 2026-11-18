@@ -89,10 +89,18 @@ and the owner mends the table or the contract. It is checked where every commit 
 |---|---|---|
 | A stock Lance client | `POST /v1/table/{id}/version/create`, which judges the staged manifest before it is finalized | `catalog/services/managed_versions.py::judge` |
 | A catalog door (`alter_columns`, `drop_columns`, `restore`, …) | The stamped commit every door makes | `catalog/services/dataplane.py::commit_stamped` |
-| `create?mode=Overwrite` over an existing table | Before the overwrite is written | `catalog/services/dataplane.py::create_table` |
+| `create?mode=Overwrite` over an existing table | Before its rows are written, and again by its stamped commit | `catalog/services/dataplane.py::create_table`, `_overwrite_stamped` |
 
 A column is named by its path, so a rename reads as a removal. Adding a column passes. Nothing else is checked, and
 nothing is checked at any other time: the catalog holds no version back, scans no row and runs no freshness timer.
+
+**A set is ordered with every commit.** Once the contract's record stands, the set commits on main and on each branch
+a version that changes no column, stamped `rask.contract` = `<id>@<version>` in the schema metadata, whose plan judges
+that ref against the contract. Every commit lands exactly at the slot after the version it planned on, so a commit that
+read the contract before the record stood either landed first, and the set judged it (a ref it made stop meeting the
+contract refuses the set 409, code 19, and the contract it replaced is put back), or loses its slot and is judged again
+under the contract. A set answers 200 only once every ref meets the contract, and from then on every commit keeps it
+([ADR 0244](adr/0244-write-governance-is-modelled-in-tla.md)).
 
 **Making a breaking change.** Set a contract that no longer forbids it, under a higher major version, then commit the
 change, then (if the column returns in a new shape) set the contract that names it again.
