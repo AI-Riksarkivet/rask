@@ -88,9 +88,10 @@ def get_record(control_root: str, storage_options: StorageOptions, key: str, *, 
     pyarrow and is deliberately left to propagate. A caller making a DESTRUCTIVE decision reads through
     :func:`read_record` instead, which raises on a record it cannot read.
     """
-    loaded = _loaded(control_root, storage_options, key)
-    if loaded is None:
+    stored = _stored(control_root, storage_options, key)
+    if stored is None:
         return None
+    loaded = json.loads(stored)
     if not isinstance(loaded, dict):
         log.warning(f"{event}_malformed", extra={"key": key})
         return None
@@ -104,25 +105,27 @@ def read_record(control_root: str, storage_options: StorageOptions, key: str) ->
         ValueError: The stored record is not JSON, or not a JSON object.
         OSError: The store failed the read.
     """
-    loaded = _loaded(control_root, storage_options, key)
-    if loaded is None:
+    stored = _stored(control_root, storage_options, key)
+    if stored is None:
         return None
+    loaded = json.loads(stored)
     if not isinstance(loaded, dict):
         raise ValueError(f"the record at {key} is not a JSON object")
     return loaded
 
 
-def _loaded(control_root: str, storage_options: StorageOptions, key: str) -> object:
-    """The JSON stored at ``key``, or ``None`` when nothing is.
+def _stored(control_root: str, storage_options: StorageOptions, key: str) -> str | None:
+    """The text stored at ``key``, or ``None`` when nothing is: a body of ``null`` is a record that is filed, and only
+    the text tells it from a key nothing is filed under.
 
     Raises:
-        ValueError: What is stored is not JSON.
+        ValueError: What is stored is not text.
         OSError: The store failed the read.
     """
     fs, base = fs_and_base(control_root, storage_options)
     try:
         with fs.open_input_stream(f"{base}/{key}") as stream:
-            return json.loads(stream.readall().decode())
+            return stream.readall().decode()
     except FileNotFoundError:
         return None
 

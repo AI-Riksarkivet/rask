@@ -344,6 +344,23 @@ def test_a_record_that_is_no_trash_record_is_refused_by_its_key_and_never_read_a
     assert (trash.keeps(root, options, uuid), trash.list_all(root, options)) == (True, [])
 
 
+def test_a_record_whose_body_is_json_null_is_refused_and_never_read_as_absent(tmp_path: Any) -> None:
+    """A body of ``null`` is a record that is filed and holds nothing, not a key nothing is filed under: the read a caller
+    decides from refuses it, as it does any body that is no object, and agrees with the presence check."""
+    from pathlib import Path
+
+    from lakehouse import trash
+
+    root, options, uuid = str(tmp_path), StorageOptions(), "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a57"
+    filed = Path(root) / trash.key(uuid)
+    filed.parent.mkdir(parents=True)
+    filed.write_text("null")
+
+    with pytest.raises(trash.UnreadableTrashRecordError, match="not a JSON object"):
+        trash.get(root, options, uuid)
+    assert trash.keeps(root, options, uuid)
+
+
 def test_a_record_is_read_whatever_its_bookkeeping_holds(tmp_path: Any) -> None:
     """Who dropped it and why the purge last declined it decide nothing, so a record that holds neither as written is
     still the record of its object: read as dropped by nobody known and never refused."""
