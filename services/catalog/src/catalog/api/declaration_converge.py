@@ -40,11 +40,12 @@ from catalog.core.vending import CredentialVendor
 from catalog.schemas import CreateWarehouseRequest, DeleteProfile
 from catalog.services import declaration, project_admins, warehouses
 from catalog.services import projects as project_registry
-from catalog.services.control_records import GIT, MANAGED_BY, DeleteMode, ProtectionChange
+from catalog.services.control_records import GIT, MANAGED_BY, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
 from lakehouse import protection
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.governed import fga
+from lakehouse.warehouse_records import DeleteMode, WarehouseRecord
 
 
 log = logging.getLogger(__name__)
@@ -129,17 +130,17 @@ class _Converger:
 
     async def _warehouse(self, declared: DeclaredWarehouse) -> None:
         record = await run_in_threadpool(warehouses.get_warehouse, self._root, self._so, declared.id)
-        if record is not None and record.get("project") != declared.project:
+        if record is not None and record.project != declared.project:
             # Refused before its status, protection or mark is touched: converging it would quarantine or lock one
             # project's warehouse on the word of a declaration that places it in another.
             raise InvalidInputError(
-                f"warehouse {declared.id!r} stands in project {record.get('project')!r} and git declares it in {declared.project!r}: "
+                f"warehouse {declared.id!r} stands in project {record.project!r} and git declares it in {declared.project!r}: "
                 "a warehouse does not move between projects"
             )
         changed = False
         # The mark is written only once an establish has run to its end, so a warehouse whose establish failed after
         # its record (its catalog row, its grants) is established again by the next tick and is not locked meanwhile.
-        if record is None or record.get(MANAGED_BY) != GIT or _spec_drifted(record, declared):
+        if record is None or record.managed_by != GIT or _spec_drifted(record, declared):
             body = CreateWarehouseRequest(
                 id=declared.id,
                 project=declared.project,
@@ -151,14 +152,14 @@ class _Converger:
             record = await warehouse_doors.establish_warehouse(
                 self._request, self._settings, body, ids, client=self._client, control=self._control, vendor=self._vendor, author=DECLARATION, owner=None
             )
-            if record.get(MANAGED_BY) != GIT:
+            if record.managed_by != GIT:
                 await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, declared.id, manager=GIT)
             changed = True
         status: warehouse_doors.WarehouseStatus = "active" if declared.active else "deactivated"
-        if (record.get("status") or "active") != status:
+        if record.is_deactivated != (status == "deactivated"):
             await warehouse_doors.change_warehouse_status(self._settings, self._control, declared.id, status=status, actor=DECLARATION.actor)
             changed = True
-        if protection.is_protected(record) != declared.protected:
+        if record.is_protected != declared.protected:
             change = _PROTECTED_BY if declared.protected else _UNPROTECTED_BY
             await warehouse_doors.protect_warehouse(
                 self._settings, self._control, declared.id, project=declared.project, change=change, actor=DECLARATION.actor
@@ -176,9 +177,9 @@ class _Converger:
                 self.tick.released.append(f"project:{record['id']}")
         declared_warehouses = {warehouse.id for warehouse in declared.warehouses}
         for record in await run_in_threadpool(warehouses.list_warehouses, self._root, self._so):
-            if record.get(MANAGED_BY) == GIT and record["id"] not in declared_warehouses:
-                await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, record["id"], manager=None)
-                self.tick.released.append(f"warehouse:{record['id']}")
+            if record.managed_by == GIT and record.id not in declared_warehouses:
+                await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, record.id, manager=None)
+                self.tick.released.append(f"warehouse:{record.id}")
 
     async def _grants(self, declared: Declaration) -> None:
         """Write each declared tuple the store lacks, and revoke each one written from a declaration git no longer makes.
@@ -310,7 +311,7 @@ def _order(grant: GrantTuple) -> tuple[str, str, str]:
     return grant.object, grant.relation, grant.user
 
 
-def _spec_drifted(record: dict[str, str], declared: DeclaredWarehouse) -> bool:
+def _spec_drifted(record: WarehouseRecord, declared: DeclaredWarehouse) -> bool:
     """Whether a standing warehouse's bucket or delete profile differs from what git declares of it.
 
     A record naming no delete mode and one naming the estate's are the same profile: a new record is written with the
@@ -319,10 +320,8 @@ def _spec_drifted(record: dict[str, str], declared: DeclaredWarehouse) -> bool:
     profile = declared.delete_profile
     mode = None if profile is None or profile.mode is DeleteMode.ESTATE else str(profile.mode)
     grace = None if profile is None or profile.grace_days is None else str(profile.grace_days)
-    held_mode = record.get(warehouses.DELETE_MODE)
-    if held_mode == DeleteMode.ESTATE.value:
-        held_mode = None
-    return (record.get("bucket"), held_mode, record.get(warehouses.TRASH_GRACE_DAYS)) != (declared.bucket or declared.id, mode, grace)
+    held_mode = None if record.delete_mode in (None, DeleteMode.ESTATE) else str(record.delete_mode)
+    return (record.bucket, held_mode, record.trash_grace_days) != (declared.bucket or declared.id, mode, grace)
 
 
 async def tick(ctx: Tick) -> ConvergeTick:

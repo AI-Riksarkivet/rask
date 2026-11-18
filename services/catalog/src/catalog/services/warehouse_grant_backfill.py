@@ -85,14 +85,8 @@ async def _reconcile(client: OpenFgaClient, settings: Settings) -> tuple[int, in
     seen = written = 0
     failures: list[str] = []
     for record in records:
-        warehouse_id, project = record.get("id"), record.get("project")
-        if not warehouse_id:
-            continue
+        warehouse_id, project = record.id, record.project
         seen += 1
-        if not project:
-            failures.append(f"{warehouse_id}: record has no project")
-            log.warning("warehouse_grant_backfill_no_project", extra={"warehouse": warehouse_id})
-            continue
         try:
             written += await fga_deps.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=ACTOR)
         except Exception as exc:

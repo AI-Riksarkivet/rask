@@ -45,7 +45,7 @@ def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_pat
     # Present and truthy on every identity field, and structurally useless: `bucket` can never equal
     # the string a claim guard compares it to, and `project` reaches `str(...)` as a dict repr.
     _write(tmp_path, "_warehouses", "zz-typed", {"id": 5, "bucket": ["bkt-a"], "project": {"name": "acme"}})
-    assert wh_svc.list_warehouses(_root(tmp_path), StorageOptions()) == [good]
+    assert [record.stored() for record in wh_svc.list_warehouses(_root(tmp_path), StorageOptions())] == [good]
 
 
 def test_a_project_record_with_a_WRONG_TYPED_id_is_skipped(tmp_path: Path) -> None:

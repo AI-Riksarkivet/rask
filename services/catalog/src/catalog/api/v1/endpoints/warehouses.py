@@ -97,7 +97,7 @@ from catalog.services.vend_probe import (
     ProbeReport,
     summarize_probe,
 )
-from lakehouse import base_registry, clone_sources, data_directories, location_claims, protection, trash
+from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
@@ -108,6 +108,7 @@ from lakehouse.ns_errors import PartiallyApplied, status_for
 from lakehouse.records import RecordExistsError, RecordMissingError
 from lakehouse.storage import s3_client, split_s3_uri
 from lakehouse.trash import TrashRecord
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 log = logging.getLogger(__name__)
@@ -174,7 +175,7 @@ async def create_warehouse(
     if body.protected is not None:
         await _require_project_admin(client, settings, token, project=project)
     record = await establish_warehouse(request, settings, body, ids, client=client, control=control, vendor=vendor, author=author_of(token), owner=token)
-    return WarehouseResponse.model_validate(record)
+    return WarehouseResponse.model_validate(record.stored())
 
 
 #: A create's warehouse id, project and bucket, each judged a control id (:func:`validated_ids`).
@@ -214,7 +215,7 @@ async def establish_warehouse(
     vendor: CredentialVendor,
     author: Author | None,
     owner: Caller | None,
-) -> dict[str, str]:
+) -> WarehouseRecord:
     """Make the warehouse ``body`` names, or converge the one that stands onto it; the record as written.
 
     What the create door does once its caller is authorized, and what the catalog does for a warehouse git declares
@@ -243,7 +244,7 @@ async def establish_warehouse(
     # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
     # catalog refuses a namespace whose parent has no row (measured on pylance 13.0.0). After the record, which makes
     # the root the warehouse's, and idempotent, so a re-POST converges a create that failed here.
-    ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
+    ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.endpoint or None)
     await run_in_threadpool(warehouses.ensure_catalog_row, ns_conn, warehouse_id)
     if owner is not None:
         await fga_deps.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project)
@@ -258,14 +259,14 @@ async def establish_warehouse(
         actor=actor,
         extra={"bucket": bucket, "project": project},
     )
-    if replaced.get("protected") != record.get("protected"):
-        await _announce_protection(control, warehouse_id, actor, protected=record.get("protected") == "true")
+    if (replaced.is_protected if replaced is not None else False) != record.is_protected:
+        await _announce_protection(control, warehouse_id, actor, protected=record.is_protected)
     return record
 
 
 async def _claim_the_bucket(
     settings: Settings, body: CreateWarehouseRequest, ids: WarehouseIds, *, author: Author | None, owner: Caller | None
-) -> dict[str, str] | None:
+) -> WarehouseRecord | None:
     """Refuse a create that would take another project's warehouse id or bucket, or that anyone but the declaration
     makes over a warehouse git declares, then claim the bucket for the project.
 
@@ -288,19 +289,19 @@ async def _claim_the_bucket(
     # bucket → full cross-tenant disclosure). Reject a collision with a warehouse owned by another project.
     # A same-project re-create stays idempotent (the partial-failure retry path relies on it).
     existing = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
-    if existing is not None and existing.get("project") != project:
+    if existing is not None and existing.project != project:
         raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project")
     # Only the declaration changes a warehouse git declares ([[XC-213]]): a door's create is refused whoever makes it,
     # a stack that authenticates nobody included. Judged on the read the guard above made, so the create reads its
     # record once.
     if author is not DECLARATION:
-        refuse_what_git_declares(existing, obj=f"warehouse:{warehouse_id}", token=owner)
+        refuse_what_git_declares(existing.managed_by if existing is not None else None, obj=f"warehouse:{warehouse_id}", token=owner)
     # [[LH-205]] A re-POST that names no endpoint carries the live one forward, and `provision_bucket`
     # always reaches the ESTATE's store. For a record naming another store that would create its
     # bucket in the wrong store and keep the record pointing at the foreign one, so the re-POST is
     # refused unless it re-points the warehouse itself (an explicit endpoint, judged by `validated_ids`).
     if existing is not None and body.endpoint is None:
-        require_estate_store(existing.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
+        require_estate_store(existing.endpoint, estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     # Reserved-bucket guard (audit 2026-07-23, the Mallory scenario's first door): the shared catalog
     # root/registry bucket and the platform's own buckets are PLATFORM storage — a warehouse claiming one
@@ -374,13 +375,13 @@ async def _require_a_conforming_store(
 
 def _record_for(
     body: CreateWarehouseRequest,
-    existing: dict[str, str] | None,
+    existing: WarehouseRecord | None,
     *,
     warehouse_id: str,
     project: str,
     bucket: str,
     protection: ProtectionChange | None,
-) -> dict[str, str]:
+) -> WarehouseRecord:
     """The registry record ``body`` asks for, carrying forward from ``existing`` what a re-create does not own."""
     record = {
         "id": warehouse_id,
@@ -391,8 +392,8 @@ def _record_for(
         # GitOps reconcile / partial-failure retry re-POSTing an existing id would otherwise silently lift a
         # quarantine with no /activate call and no audit signal. Carry the MUTABLE lifecycle fields forward
         # from the existing record; reactivation goes ONLY through the explicit /activate endpoint.
-        "status": existing.get("status", "active") if existing is not None else "active",
-        "created_at": (existing.get("created_at") if existing is not None else None) or datetime.now(UTC).isoformat(),
+        "status": str(existing.status or "active") if existing is not None else "active",
+        "created_at": (existing.stored().get("created_at") if existing is not None else None) or datetime.now(UTC).isoformat(),
         # [[LH-067]] Which object store this bucket is reached at, and only the estate's passes the
         # judgement in `validated_ids` ([[LH-205]]). CALLER-OWNED, so unlike the arm-never-disarm fields a re-POST
         # may correct it: a record naming another store is re-pointed at the estate with an explicit
@@ -414,13 +415,13 @@ def _record_for(
     # marker forward.
     if body.primary:
         record["primary"] = "true"
-    return record
+    return WarehouseRecord.model_validate(record)
 
 
 async def _write_record(
-    settings: CatalogStore, body: CreateWarehouseRequest, record: dict[str, str], *, existing: dict[str, str] | None, protection: ProtectionChange | None
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Mint ``record``, or merge it into the record that stands; the record the write replaced (empty for a mint) and
+    settings: CatalogStore, body: CreateWarehouseRequest, record: WarehouseRecord, *, existing: WarehouseRecord | None, protection: ProtectionChange | None
+) -> tuple[WarehouseRecord | None, WarehouseRecord]:
+    """Mint ``record``, or merge it into the record that stands; the record the write replaced (``None`` for a mint) and
     the record it wrote, so the protection this write changed is announced and no other.
 
     Raises:
@@ -428,14 +429,14 @@ async def _write_record(
         ConcurrentModificationError: The write raced a concurrent delete; retry.
     """
     so = settings.storage_options()
-    warehouse_id = record["id"]
+    warehouse_id = record.id
 
     # BOTH re-create paths go through the CONDITIONAL upsert (diff2 F4), never an unconditional put of a record
     # assembled from a read taken before the guards and before `provision_bucket`, a network round trip: a deactivate
     # landing anywhere in that window would be overwritten by the status this request carried forward, lifting a
     # quarantine with no `/activate` and no audit signal. The merge happens inside the write, against the record as it
     # actually stands, so a concurrent lifecycle change survives.
-    async def _converge() -> tuple[dict[str, str], dict[str, str]]:
+    async def _converge() -> tuple[WarehouseRecord, WarehouseRecord]:
         try:
             return await run_in_threadpool(
                 partial(
@@ -465,7 +466,7 @@ async def _write_record(
         await run_in_threadpool(warehouses.create_warehouse_record, settings.registry_root, so, record)
     except RecordExistsError:
         return await _converge()  # lost the mint race — converge on the WINNER, conditionally
-    return {}, record
+    return None, record
 
 
 @management_router.get("", response_model_exclude_none=True)
@@ -476,9 +477,9 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
     if (authz := fga_deps.authorization(settings, client, token)) is not None:
         # The listing's own candidates, batch-checked ([[LH-223]]): never what the caller reaches across the estate,
         # which OpenFGA stops counting at its ceiling.
-        allowed = await authz.batch_check("can_get_metadata", [f"warehouse:{r['id']}" for r in records])
-        records = [r for r in records if allowed.get(f"warehouse:{r['id']}")]
-    return [WarehouseResponse.model_validate(r) for r in records]
+        allowed = await authz.batch_check("can_get_metadata", [f"warehouse:{r.id}" for r in records])
+        records = [r for r in records if allowed.get(f"warehouse:{r.id}")]
+    return [WarehouseResponse.model_validate(r.stored()) for r in records]
 
 
 @management_router.get("/{warehouse_id}", response_model_exclude_none=True)
@@ -488,7 +489,7 @@ async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: Current
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    return WarehouseResponse.model_validate(record)
+    return WarehouseResponse.model_validate(record.stored())
 
 
 @management_router.get("/{warehouse_id}/trash", response_model_exclude_none=True)
@@ -560,19 +561,19 @@ async def _set_warehouse_status(
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     try:
-        await fga_deps.require_can_create_warehouse(client, settings, token, project=record["project"])
+        await fga_deps.require_can_create_warehouse(client, settings, token, project=record.project)
     except PermissionDeniedError as exc:
         # Collapse denied → not-found so existence is not disclosed to a non-admin (audit #4). A legitimate
         # admin of the warehouse's own project still passes; anyone else sees exactly a missing-warehouse 404.
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
-    refuse_what_git_declares(record, obj=f"warehouse:{warehouse_id}", token=token)
+    refuse_what_git_declares(record.managed_by, obj=f"warehouse:{warehouse_id}", token=token)
     updated = await change_warehouse_status(settings, control, warehouse_id, status=status, actor=f"user:{token.subject}" if token else None)
-    return WarehouseResponse.model_validate(updated)
+    return WarehouseResponse.model_validate(updated.stored())
 
 
 async def change_warehouse_status(
     settings: CatalogStore, control: ControlEmitter, warehouse_id: str, *, status: WarehouseStatus, actor: str | None
-) -> dict[str, str]:
+) -> WarehouseRecord:
     """Deactivate or activate warehouse ``warehouse_id`` and announce it; the record as written.
 
     What both status doors do once their caller is authorized, and what the catalog does for a warehouse whose status
@@ -629,7 +630,7 @@ async def _require_project_admin(client: OpenFgaClient | None, settings: FgaSett
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
 
 
-async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
+async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseRecord:
     """The record of ``warehouse_id``, for a caller who administers its project (:func:`_require_project_admin`).
 
     The record is read first, since the gate is on the warehouse's own project and never on one the caller names. NO
@@ -654,16 +655,16 @@ async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     try:
-        await _require_project_admin(client, settings, token, project=record["project"])
+        await _require_project_admin(client, settings, token, project=record.project)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
     return record
 
 
-AdministeredWarehouseDep = Annotated[dict[str, str], Depends(administered_warehouse)]
+AdministeredWarehouseDep = Annotated[WarehouseRecord, Depends(administered_warehouse)]
 
 
-def warehouse_its_doors_manage(warehouse_id: str, record: AdministeredWarehouseDep, token: CurrentToken) -> dict[str, str]:
+def warehouse_its_doors_manage(warehouse_id: str, record: AdministeredWarehouseDep, token: CurrentToken) -> WarehouseRecord:
     """The record of a warehouse the caller administers and git does not declare ([[XC-213]]).
 
     The gate of a door that changes what a declaration owns, asked after the caller's own authorization so only a
@@ -672,11 +673,11 @@ def warehouse_its_doors_manage(warehouse_id: str, record: AdministeredWarehouseD
     Raises:
         PermissionDeniedError: Git declares the warehouse.
     """
-    refuse_what_git_declares(record, obj=f"warehouse:{warehouse_id}", token=token)
+    refuse_what_git_declares(record.managed_by, obj=f"warehouse:{warehouse_id}", token=token)
     return record
 
 
-DoorManagedWarehouseDep = Annotated[dict[str, str], Depends(warehouse_its_doors_manage)]
+DoorManagedWarehouseDep = Annotated[WarehouseRecord, Depends(warehouse_its_doors_manage)]
 
 
 @management_router.post("/{warehouse_id}/protection", response_model_exclude_none=True)
@@ -715,7 +716,7 @@ async def set_warehouse_protection(
     """
     actor = f"user:{token.subject}" if token is not None else None
     change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
-    await protect_warehouse(settings, control, warehouse_id, project=record["project"], change=change, actor=actor)
+    await protect_warehouse(settings, control, warehouse_id, project=record.project, change=change, actor=actor)
     return ProtectionResponse(id=warehouse_id, protected=body.protected)
 
 
@@ -955,7 +956,7 @@ async def _forget_trashed(settings: CatalogStore, entry: TrashRecord, *, purge: 
     await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=entry.kind, uuid=uuid))
 
 
-def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]], record: dict[str, str], warehouse_id: str) -> None:
+def _require_bucket_purgeable(settings: Settings, records: list[WarehouseRecord], record: WarehouseRecord, warehouse_id: str) -> None:
     """Refuse a ``?purge_bucket=true`` that would destroy bytes this warehouse does not solely own.
 
     ``create_warehouse`` carries two bucket-claim guards, and NEITHER of them survives into the destroy
@@ -973,19 +974,19 @@ def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]],
     warehouse's to destroy. The reserved case is ``InvalidInputError`` (400), matching create's own wording
     for the same bucket. Both run BEFORE any irreversible step, so a refusal costs nothing.
     """
-    bucket = record["bucket"]
+    bucket = record.bucket
     if bucket in settings.reserved_bucket_set:
         raise InvalidInputError(
             f"bucket {bucket!r} is reserved platform storage (the catalog root or registry, or a platform bucket) "
             f"and must not be purged — delete the warehouse without ?purge_bucket=true"
         )
-    rivals = [r for r in records if r.get("bucket") == bucket and r.get("id") != warehouse_id]
+    rivals = [r for r in records if r.bucket == bucket and r.id != warehouse_id]
     if not rivals:
         return
     # Name only SAME-project siblings. A cross-project claim is drift, and this caller cleared the bar for
     # THIS warehouse's project only — enumerating another tenant's warehouse ids is the disclosure the
     # create-side guard already declines to make.
-    named = sorted(str(r["id"]) for r in rivals if r.get("project") == record["project"])
+    named = sorted(r.id for r in rivals if r.project == record.project)
     holder = f"warehouse(s) {', '.join(named)}" if len(named) == len(rivals) else "another project's warehouse"
     raise NamespaceNotEmptyError(
         f"bucket {bucket!r} still backs {holder}, whose data the purge would destroy. "
@@ -1064,14 +1065,14 @@ async def delete_warehouse(
         return DeleteWarehouseResponse.model_validate(converge.replay.body)
     record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, settings, token, client), token)
     so = settings.storage_options()
-    project = record["project"]
+    project = record.project
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
     # state, so it runs strictly after the gate above.
-    fga_deps.require_not_protected(protection.is_protected(record), kind="warehouse", obj_id=warehouse_id, force=force)
+    fga_deps.require_not_protected(record.is_protected, kind="warehouse", obj_id=warehouse_id, force=force)
 
     # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
-    in_estate_store = names_the_estate_store(record.get("endpoint"), estate=settings.s3_endpoint)
-    ns_conn = await namespace_for_root(request, settings, record["root_uri"], endpoint=record.get("endpoint") or None) if in_estate_store else None
+    in_estate_store = names_the_estate_store(record.endpoint, estate=settings.s3_endpoint)
+    ns_conn = await namespace_for_root(request, settings, record.root_uri, endpoint=record.endpoint or None) if in_estate_store else None
     held = await _namespaces_in(ns_conn, warehouse_id) if ns_conn is not None else []
     if held and not cascade:
         raise NamespaceNotEmptyError(
@@ -1079,7 +1080,7 @@ async def delete_warehouse(
             f"Drop them first, or pass ?cascade=true to drop exactly those with the warehouse."
         )
 
-    bucket = record["bucket"]
+    bucket = record.bucket
     if purge_bucket:
         # The registry-wide read happens ONLY on the destructive path: the guard needs every claim on this
         # bucket, and a plain (recoverable) delete has no reason to pay for it. It runs here, before the
@@ -1094,7 +1095,7 @@ async def delete_warehouse(
     # before the first step lands, so the caller gets the refusal and not a report of a cascade that listed
     # nothing. A plain delete touches no store and stays open: it is how such a record is retired.
     if cascade or purge_bucket:
-        require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
+        require_estate_store(record.endpoint, estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
     # this warehouse's namespaces and report a clean delete having removed nothing.
@@ -1316,15 +1317,15 @@ async def validate_warehouse_credentials(
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     try:
-        await fga_deps.require_can_create_warehouse(client, settings, token, project=record["project"])
+        await fga_deps.require_can_create_warehouse(client, settings, token, project=record.project)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
     # [[LH-205]] The probe vends through the estate's STS and writes through the estate's client, so for
     # a record naming another store it would vend and write against the wrong store entirely.
-    require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
+    require_estate_store(record.endpoint, estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     subject = token.subject if token is not None else ANONYMOUS_SUBJECT
-    probe = partial(_run_scope_probe, str(record["root_uri"]), vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=role_session_name(subject))
+    probe = partial(_run_scope_probe, record.root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=role_session_name(subject))
     checks = await run_in_threadpool(probe)
     return summarize_probe(checks)
 

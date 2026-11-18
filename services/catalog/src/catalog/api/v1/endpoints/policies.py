@@ -283,7 +283,7 @@ async def set_project_policy(
     # Read whole ([[LH-572]]): a record that cannot be read is a bucket of this project the policy would leave on the
     # defaults, or another project's claim on one it would govern.
     registered = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
-    buckets = sorted({str(r["bucket"]) for r in registered if r.get("bucket") and r.get("project") == project and (r.get("status") or "active") == "active"})
+    buckets = sorted({r.bucket for r in registered if r.project == project and not r.is_deactivated})
     if not buckets:
         raise InvalidInputError(
             f"project {project!r} has no active warehouse — provision one first "
@@ -383,9 +383,9 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     so = settings.storage_options()
     registered = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
-    mine = [r for r in registered if r.get("project") == project]
-    buckets = sorted({str(r["bucket"]) for r in mine if r.get("bucket")})
-    warehouse_ids = sorted({str(r["id"]) for r in mine if r.get("id")})
+    mine = [r for r in registered if r.project == project]
+    buckets = sorted({r.bucket for r in mine})
+    warehouse_ids = sorted({r.id for r in mine})
     records = await run_in_threadpool(policies.list_policies, settings.registry_root, so)
     named = await run_in_threadpool(_named_now, settings, records)
     scoped = [r for r in named if _scoped_to_project(r, warehouse_ids=frozenset(warehouse_ids), project=project)]

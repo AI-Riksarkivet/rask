@@ -50,7 +50,7 @@ def roots(settings: CatalogStore) -> list[str]:
     the ids an offboarding drops are what the history would otherwise keep readable.
     """
     records = warehouses.list_warehouses(settings.registry_root, settings.storage_options())
-    found = [settings.root, *(str(record["root_uri"]) for record in records if record.get("root_uri"))]
+    found = [settings.root, *(record.root_uri for record in records)]
     return list(dict.fromkeys(root.rstrip("/") for root in found))
 
 

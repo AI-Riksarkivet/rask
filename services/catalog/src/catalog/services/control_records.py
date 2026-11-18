@@ -11,11 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
-from enum import StrEnum
-from typing import Self
 
 from lance_namespace import ServiceUnavailableError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse.objectfs import fs_and_base
 from lakehouse.protection import is_protected
@@ -52,43 +50,10 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict[
 # --------------------------------------------------------------------------- #
 
 
-class DeleteMode(StrEnum):
-    """What a drop under a warehouse does (ADR 0146), as its record's ``delete_mode`` keeps it."""
-
-    #: The table and its data are deleted at once.
-    HARD = "hard"
-    #: The table is deregistered and kept recoverable for the record's ``trash_grace_days``.
-    SOFT = "soft"
-    #: The warehouse names no profile of its own and takes the estate's grace period; a request naming it clears one,
-    #: so a declaration dropping its profile converges back to the estate's.
-    ESTATE = "estate"
-
-
 class _Record(BaseModel):
     """Base for the registry record shapes: identity is validated, everything else rides along."""
 
     model_config = ConfigDict(extra="allow")
-
-
-class WarehouseRecord(_Record):
-    """A warehouse: one physical S3 bucket owned by one project."""
-
-    id: str = Field(min_length=1)
-    bucket: str = Field(min_length=1)
-    project: str = Field(min_length=1)
-    #: The warehouse's delete profile (ADR 0146); absent where it takes the estate's grace period. Declared because a
-    #: drop under the warehouse acts on it, so a record whose profile cannot be read is refused at the read rather than
-    #: read as some other profile.
-    delete_mode: DeleteMode | None = None
-    trash_grace_days: str | None = None
-
-    @model_validator(mode="after")
-    def _profile_is_whole(self) -> Self:
-        if (self.delete_mode is DeleteMode.SOFT) != (self.trash_grace_days is not None):
-            raise ValueError("a soft delete profile keeps its trash_grace_days, and no other profile keeps any")
-        if self.trash_grace_days is not None and not 0 < float(self.trash_grace_days) <= 365:
-            raise ValueError(f"trash_grace_days {self.trash_grace_days!r} is not between 0 and 365 days")
-        return self
 
 
 class BucketClaimRecord(_Record):

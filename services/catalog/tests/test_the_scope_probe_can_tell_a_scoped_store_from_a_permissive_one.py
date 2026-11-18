@@ -24,6 +24,7 @@ from catalog.api.v1.endpoints import warehouses as endpoint
 from catalog.core.vending import ReclaimScope, TableRecords, VendedSession
 from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, ProbeCheck
 from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 if TYPE_CHECKING:
@@ -330,7 +331,7 @@ class TestTheDoorGatesBeforeItWrites:
     async def test_a_DENIED_caller_gets_the_same_answer_as_a_missing_warehouse(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from lance_namespace import PermissionDeniedError, TableNotFoundError
 
-        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: {"project": "acme", "root_uri": ROOT})
+        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: WarehouseRecord(id="wh", bucket="tenant", project="acme", root_uri=ROOT))
 
         async def _deny(*a: Any, **k: Any) -> None:
             raise PermissionDeniedError("nope")
@@ -354,7 +355,7 @@ class TestTheDoorGatesBeforeItWrites:
         """The happy path, and the one assertion that matters in it: the root the probe writes under
         comes off the REGISTRY RECORD, not off the request. A door that took a caller-supplied root
         would write into any bucket the catalog can reach, under an admin gate for a different one."""
-        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: {"project": "acme", "root_uri": ROOT})
+        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: WarehouseRecord(id="wh", bucket="tenant", project="acme", root_uri=ROOT))
 
         async def _allow(*a: Any, **k: Any) -> None:
             return None

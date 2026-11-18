@@ -747,7 +747,7 @@ def governs(location: str, *, warehouse: str, settings: MaintenanceStore, option
     except (OSError, ValueError) as exc:
         log.warning("maintenance_warehouse_unreadable", extra={"location": location, "warehouse": warehouse, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return None
-    return record is not None and not warehouse_records.is_deactivated(record)
+    return record is not None and not record.is_deactivated
 
 
 def read_for(location: str, held: location_claims.LocationClaim, settings: MaintenanceSettings, *, now: datetime) -> PassReadings | None:

@@ -13,6 +13,7 @@ import pytest
 from catalog.core.config import Settings
 from catalog.services import warehouse_grant_backfill
 from lakehouse.governed import fga
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 def _settings(**overrides: object) -> Settings:
@@ -72,32 +73,6 @@ async def test_an_estate_that_declares_only_its_own_accounts_still_runs_the_back
 
 
 @pytest.mark.asyncio
-async def test_a_record_without_a_project_is_REPORTED_not_guessed(monkeypatch) -> None:
-    """The project edge is what makes the concentric cascade resolve.
-
-    Guessing it — from the warehouse id, say — would grant one tenant's warehouse to another tenant.
-    Leaving it unreachable is strictly better, and saying so is what makes it fixable.
-    """
-    _stub_client(monkeypatch)
-
-    async def _grant(_c, _s, *, warehouse_id: str, project: str, actor: str) -> int:
-        return 2
-
-    monkeypatch.setattr(warehouse_grant_backfill.fga_deps, "converge_warehouse_grants", _grant)
-    monkeypatch.setattr(
-        warehouse_grant_backfill.warehouses,
-        "list_warehouses",
-        lambda *a, **k: [{"id": "orphan"}, {"id": "wh1", "project": "acme"}],
-    )
-    seen, written, failures = await warehouse_grant_backfill.backfill(
-        _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
-    )
-    assert seen == 2
-    assert written == 2, "the healthy warehouse must still be repaired"
-    assert len(failures) == 1 and "orphan" in failures[0] and "no project" in failures[0]
-
-
-@pytest.mark.asyncio
 async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
     """A single unreachable warehouse must not strand every warehouse after it in the walk."""
     _stub_client(monkeypatch)
@@ -113,7 +88,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
     monkeypatch.setattr(
         warehouse_grant_backfill.warehouses,
         "list_warehouses",
-        lambda *a, **k: [{"id": "a", "project": "p"}, {"id": "boom", "project": "p"}, {"id": "z", "project": "p"}],
+        lambda *a, **k: [WarehouseRecord(id=name, bucket=f"b-{name}", project="p", root_uri=f"s3://b-{name}") for name in ("a", "boom", "z")],
     )
     seen, written, failures = await warehouse_grant_backfill.backfill(
         _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])

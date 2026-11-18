@@ -87,9 +87,9 @@ def test_the_audit_counts_each_governed_bucket_by_what_the_store_says_of_its_eve
     )
     registry = tmp_path / "_warehouses"
     registry.mkdir()
-    (registry / "w1.json").write_text(json.dumps({"id": "w1", "bucket": f"{deletes_only}/data"}))
-    (registry / "w2.json").write_text(json.dumps({"id": "w2", "bucket": missing}))
-    (registry / "w3.json").write_text(json.dumps({"id": "w3", "bucket": deletes_only}))
+    (registry / "w1.json").write_text(json.dumps({"id": "w1", "bucket": f"{deletes_only}/data", "project": "acme", "root_uri": "s3://governed"}))
+    (registry / "w2.json").write_text(json.dumps({"id": "w2", "bucket": missing, "project": "acme", "root_uri": "s3://governed"}))
+    (registry / "w3.json").write_text(json.dumps({"id": "w3", "bucket": deletes_only, "project": "acme", "root_uri": "s3://governed"}))
     settings = MaintenanceSettings.model_validate(
         {
             "MAINTENANCE_S3_BUCKET": configured,

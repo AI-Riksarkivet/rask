@@ -70,7 +70,7 @@ def report_bucket_events(settings: MaintenanceStore) -> BucketEventsReport | Non
     """
     try:
         options = settings.storage_options()
-        records = warehouse_records.list_warehouse_records(settings.resolved_control_root, options)
+        records = warehouse_records.read_warehouse_records(settings.resolved_control_root, options)
     except (OSError, ValueError, ClientError, BotoCoreError, StoreCredentialUnavailableError) as exc:
         log.warning("maintenance_bucket_store_events_unchecked", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
         return None

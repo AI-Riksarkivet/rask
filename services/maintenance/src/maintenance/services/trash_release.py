@@ -92,7 +92,7 @@ def roots_read(settings: MaintenanceStore, storage_options: StorageOptions, cont
     .read_warehouse_records`): a root left out would read every live table under it as gone.
     """
     records = warehouse_records.read_warehouse_records(control_root, storage_options)
-    buckets = {*settings.sweep_buckets, *(str(record["bucket"]) for record in records if record.get("bucket"))}
+    buckets = {*settings.sweep_buckets, *(record.bucket for record in records)}
     return {f"s3://{bucket}" for bucket in buckets if bucket}
 
 

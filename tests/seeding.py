@@ -13,11 +13,21 @@ from lakehouse import control_prefixes, maintenance_due, maintenance_policies, t
 from lakehouse.maintenance_due import DueRecord
 from lakehouse.record_store import put_record, record_key
 from lakehouse.storage_options import StorageOptions
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 def put_warehouse(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Hold ``record`` as the warehouse ``record["id"]``'s registry record."""
-    put_record(control_root, storage_options, f"{control_prefixes.WAREHOUSES}/{record['id']}.json", record)
+    """Hold ``record`` as the warehouse ``record["id"]``'s registry record, at the root of its bucket where it names no
+    root, as the door that registers a warehouse writes one."""
+    rooted = {"root_uri": f"s3://{record['bucket']}", **record} if "bucket" in record else record
+    put_record(control_root, storage_options, f"{control_prefixes.WAREHOUSES}/{record['id']}.json", rooted)
+
+
+def warehouse(record: dict[str, str]) -> WarehouseRecord:
+    """``record`` as the warehouse record the registry would read it as, with what a test did not name filled in: a
+    bucket named as the warehouse, the root of that bucket, and the project ``acme``."""
+    bucket = record.get("bucket", record["id"])
+    return WarehouseRecord.model_validate({"bucket": bucket, "root_uri": f"s3://{bucket}", "project": "acme", **record})
 
 
 def put_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:

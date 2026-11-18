@@ -24,17 +24,15 @@ from lance_namespace import (
     LanceNamespace,
     NamespaceAlreadyExistsError,
     NamespaceNotFoundError,
+    ServiceUnavailableError,
 )
 
 from catalog.core.identifiers import warehouse_of, with_minted_uuid
 from catalog.services import native
 from catalog.services.control_records import (
     BucketClaimRecord,
-    DeleteMode,
     ProtectionChange,
-    WarehouseRecord,
     read_json,
-    validated,
     validated_or_refuse,
     with_manager,
     with_protection,
@@ -47,6 +45,8 @@ from lakehouse.record_store import delete_record
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
 from lakehouse.trash import TrashRecord
+from lakehouse.warehouse_records import DeleteMode, UnreadableWarehouseRecordError, WarehouseRecord
+from lakehouse.warehouse_records import read as read_warehouse_record
 
 
 log = logging.getLogger(__name__)
@@ -61,17 +61,30 @@ DELETE_MODE = "delete_mode"
 TRASH_GRACE_DAYS = "trash_grace_days"
 
 
-def grace_days(record: dict[str, str] | None, *, estate: float) -> float:
+def grace_days(record: WarehouseRecord | None, *, estate: float) -> float:
     """The days a drop under the warehouse ``record`` stays recoverable, 0 for a destroying drop.
 
     A warehouse that names no profile, and the estate's own warehouse, which has no record, take the estate's grace period.
     """
-    mode = (record or {}).get(DELETE_MODE)
-    if mode is None or mode == DeleteMode.ESTATE:
-        return estate
-    if mode == DeleteMode.HARD:
-        return 0.0
-    return float((record or {})[TRASH_GRACE_DAYS])
+    return estate if record is None else record.grace_days(estate=estate)
+
+
+def _record(raw: object, *, path: str) -> WarehouseRecord:
+    """``raw`` as a warehouse record, for a reader whose only other answer is "absent".
+
+    A singular read has no skip list to hand back, so a record nobody can parse refuses rather than reading as
+    unregistered: for a warehouse's own doors an absent record is a 404, and for the router it is "no such warehouse"
+    ([[LH-593]]), which would answer every one of a tenant's names as not there. `ServiceUnavailableError`, so one
+    unreadable record answers the same way whichever door reached it.
+
+    Raises:
+        ServiceUnavailableError: The record cannot be read as a warehouse's.
+    """
+    try:
+        return read_warehouse_record(raw, at=path)
+    except UnreadableWarehouseRecordError as exc:
+        log.warning("warehouse_record_malformed", extra={"path": path, "error": str(exc)})
+        raise ServiceUnavailableError(f"control record {path!r} could not be read as a warehouse's — refusing rather than treating it as absent") from exc
 
 
 def grace_days_under(control_root: str, storage_options: StorageOptions, segments: list[str], *, estate: float) -> float:
@@ -145,7 +158,7 @@ class WarehouseProjectConflict(Exception):
 
 def set_warehouse_protection(
     control_root: str, storage_options: StorageOptions, warehouse_id: str, *, project: str, change: ProtectionChange
-) -> dict[str, str] | None:
+) -> WarehouseRecord | None:
     """Apply ``change`` to ``project``'s warehouse ``warehouse_id``, conditional on the record's ETag.
 
     Every other field is the record's as it stands at the write (``mutate_json``).
@@ -167,20 +180,22 @@ def set_warehouse_protection(
             raise WarehouseProjectConflict(f"warehouse {warehouse_id!r} is registered to another project")
         return with_protection(record, change)
 
+    key = _warehouse_key(warehouse_id)
     try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), protect)
+        return _record(mutate_json(control_root, storage_options, key, protect), path=key)
     except (RecordMissingError, WarehouseProjectConflict):
         return None
 
 
-def set_warehouse_manager(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, manager: str | None) -> dict[str, str] | None:
+def set_warehouse_manager(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, manager: str | None) -> WarehouseRecord | None:
     """Record who owns warehouse ``warehouse_id``'s declaration ([[XC-213]]): ``git``, or its own doors for ``None``.
 
     Conditional on the record's ETag, every other field as it stands at the write. ``None`` is answered when the
     record is gone.
     """
+    key = _warehouse_key(warehouse_id)
     try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), lambda record: with_manager(record, manager))
+        return _record(mutate_json(control_root, storage_options, key, lambda record: with_manager(record, manager)), path=key)
     except RecordMissingError:
         return None
 
@@ -188,11 +203,11 @@ def set_warehouse_manager(control_root: str, storage_options: StorageOptions, wa
 def upsert_warehouse(
     control_root: str,
     storage_options: StorageOptions,
-    record: dict[str, str],
+    wanted: WarehouseRecord,
     *,
     protection: ProtectionChange | None = None,
     primary: bool = False,
-) -> tuple[dict[str, str], dict[str, str]]:
+) -> tuple[WarehouseRecord, WarehouseRecord]:
     """Idempotent re-create of an EXISTING warehouse, CONDITIONAL on the record's ETag (diff2 F4).
 
     THE BUG THIS CLOSES. The re-create used to build a whole record from a read taken at the top of
@@ -219,7 +234,7 @@ def upsert_warehouse(
     Args:
         control_root: The registry's root.
         storage_options: How to reach it.
-        record: The record the request builds; only its `_CALLER_OWNED` fields are taken.
+        wanted: The record the request builds; only its `_CALLER_OWNED` fields are taken.
         protection: Deletion protection to apply, or None to carry the live one.
         primary: Mark the warehouse its project's primary; false carries the live marker.
 
@@ -231,7 +246,7 @@ def upsert_warehouse(
         WarehouseProjectConflict: The live record moved to another project.
         RecordMissingError: The record vanished (a concurrent delete, retryable, never a blind create).
     """
-    project = record["project"]
+    record, project = wanted.stored(), wanted.project
 
     def merge(live: dict[str, str]) -> dict[str, str]:
         if live.get("project") != project:
@@ -255,30 +270,32 @@ def upsert_warehouse(
             merged["primary"] = "true"
         return merged
 
-    return exchange_json(control_root, storage_options, _warehouse_key(record["id"]), merge)
+    key = _warehouse_key(wanted.id)
+    replaced, written = exchange_json(control_root, storage_options, key, merge)
+    return _record(replaced, path=key), _record(written, path=key)
 
 
-def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
+def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: WarehouseRecord) -> None:
     """Mint ``_warehouses/<id>.json`` iff absent — the STORE arbitrates (F1).
 
     Raises :class:`lakehouse.records.RecordExistsError` on a lost race. The caller
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
     guard's read may predate the rival's write; this refusal is what closes that window).
     """
-    create_json(control_root, storage_options, _warehouse_key(record["id"]), record)
+    create_json(control_root, storage_options, _warehouse_key(record.id), record.stored())
 
 
-def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
+def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> WarehouseRecord | None:
     """The warehouse record, or ``None`` if unregistered.
 
     A malformed record REFUSES rather than reading as unregistered: every destructive door starts here,
     and "not found" is an answer they act on."""
     key = _warehouse_key(warehouse_id)
     record = read_json(control_root, storage_options, key)
-    return validated_or_refuse(record, WarehouseRecord, event="warehouse_record_malformed", path=key) if record is not None else None
+    return _record(record, path=key) if record is not None else None
 
 
-def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple[list[WarehouseRecord], list[str]]:
     """``(readable warehouse records, paths that are there and could NOT be read as one)``, unordered. An absent prefix
     yields ``([], [])``.
 
@@ -296,7 +313,7 @@ def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple
         ServiceUnavailableError: The store did not answer a record's read.
     """
     fs, base = fs_and_base(control_root, storage_options)
-    out: list[dict[str, str]] = []
+    out: list[WarehouseRecord] = []
     skipped: list[str] = []
     for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_REGISTRY_PREFIX}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
@@ -312,14 +329,15 @@ def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple
             log.warning("warehouse_record_unreadable", extra={"path": info.path, "error": str(exc)})
             skipped.append(info.path)
             continue
-        if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is not None:
-            out.append(valid)
-        else:
+        try:
+            out.append(read_warehouse_record(record, at=info.path))
+        except UnreadableWarehouseRecordError as exc:
+            log.warning("warehouse_record_malformed", extra={"path": info.path, "error": str(exc)})
             skipped.append(info.path)
     return out, skipped
 
 
-def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[WarehouseRecord]:
     """Every readable warehouse record (unordered), the tolerant half of :func:`read_warehouses`, for a caller that only
     enumerates. An absent registry prefix yields ``[]``.
 
@@ -331,7 +349,7 @@ def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[
     return read_warehouses(control_root, storage_options)[0]
 
 
-def every_warehouse(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+def every_warehouse(control_root: str, storage_options: StorageOptions) -> list[WarehouseRecord]:
     """Every warehouse record, read whole, for a caller deciding from the registry that no record names something.
 
     Raises:
@@ -347,10 +365,10 @@ def every_warehouse(control_root: str, storage_options: StorageOptions) -> list[
     return records
 
 
-def projects_claiming_bucket(records: list[dict[str, str]], bucket: str) -> set[str]:
+def projects_claiming_bucket(records: list[WarehouseRecord], bucket: str) -> set[str]:
     """Every project with a warehouse record claiming ``bucket`` (any lifecycle status — a deactivated
     warehouse still owns its bucket's data, so its claim still blocks a rival registration)."""
-    return {str(r["project"]) for r in records if r.get("bucket") == bucket and r.get("project")}
+    return {record.project for record in records if record.bucket == bucket}
 
 
 def bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: str) -> dict[str, str] | None:
@@ -414,7 +432,7 @@ def release_bucket_claim(control_root: str, storage_options: StorageOptions, *, 
         InternalError: A warehouse record cannot be read, so whether another warehouse still names the bucket is unknown.
         OSError: The store refused the claim's delete.
     """
-    if any(r.get("bucket") == bucket and r.get("id") != warehouse_id for r in every_warehouse(control_root, storage_options)):
+    if any(r.bucket == bucket and r.id != warehouse_id for r in every_warehouse(control_root, storage_options)):
         return False
     return delete_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
 
@@ -434,11 +452,10 @@ def project_of(control_root: str, storage_options: StorageOptions, warehouse_id:
     if not CONTROL_ID_RE.fullmatch(warehouse_id):
         return None
     record = get_warehouse(control_root, storage_options, warehouse_id)
-    project = record.get("project") if record else None
-    return str(project) if project else None
+    return record.project if record is not None else None
 
 
-def set_warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str, status: str) -> dict[str, str] | None:
+def set_warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str, status: str) -> WarehouseRecord | None:
     """Flip a warehouse's ``status`` (deactivate/activate) and persist it. Returns the updated record, or
     ``None`` if the warehouse does not exist.
 
@@ -454,13 +471,9 @@ def set_warehouse_status(control_root: str, storage_options: StorageOptions, war
     field-level toggle: last writer wins on the field they actually touched, nobody wins on a field
     they merely read.
     """
+    key = _warehouse_key(warehouse_id)
     try:
-        return mutate_json(
-            control_root,
-            storage_options,
-            _warehouse_key(warehouse_id),
-            lambda record: {**record, "status": status},
-        )
+        return _record(mutate_json(control_root, storage_options, key, lambda record: {**record, "status": status}), path=key)
     except RecordMissingError:
         return None
 
@@ -554,7 +567,7 @@ def served_ids(control_root: str, storage_options: StorageOptions, *, estate: st
 
     Tolerant, for a listing: a record that cannot be read as one is left out (:func:`list_warehouses`).
     """
-    return sorted({estate, *(str(record["id"]) for record in list_warehouses(control_root, storage_options))})
+    return sorted({estate, *(record.id for record in list_warehouses(control_root, storage_options))})
 
 
 def ensure_catalog_row(ns: LanceNamespace, warehouse_id: str) -> None:

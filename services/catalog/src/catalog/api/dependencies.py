@@ -105,7 +105,7 @@ async def _read_warehouse_root(settings: Settings, warehouse_id: str) -> ServedW
         raise store_refusal(exc, reading=f"reading warehouse {warehouse_id!r}", so="its names cannot be routed") from exc
     if record is None:
         return None
-    return ServedWarehouse(root_uri=record["root_uri"], endpoint=record.get("endpoint") or None, deactivated=record.get("status", "active") != "active")
+    return ServedWarehouse(root_uri=record.root_uri, endpoint=record.endpoint or None, deactivated=record.is_deactivated)
 
 
 def names_a_registered_warehouse(warehouse_id: str) -> bool:

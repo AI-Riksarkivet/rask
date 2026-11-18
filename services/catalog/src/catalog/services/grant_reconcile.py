@@ -15,13 +15,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
 
 from catalog.core.config import CatalogStore, Settings
 from catalog.services import projects, table_claims, warehouses
 from lakehouse import location_claims, trash
 from lakehouse.governed import fga
 from lakehouse.governed.settings import FgaSettings
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 def platform_objects(settings: FgaSettings) -> frozenset[str]:
@@ -81,7 +81,7 @@ def ghost_refusal(settings: Settings, obj: str) -> str | None:
             return f"no drift report finds a ghost {kind!r}, so none is judged here"
 
 
-def tenancy_edge(record: dict[str, Any] | None, warehouse_id: str) -> fga.ClientTuple | str:
+def tenancy_edge(record: WarehouseRecord | None, warehouse_id: str) -> fga.ClientTuple | str:
     """The warehouse's tenancy pointer as its record names it, or why the record justifies none.
 
     Relation ``project``, as the catalog seeds it at the warehouse's creation: the model's warehouse type declares
@@ -89,6 +89,4 @@ def tenancy_edge(record: dict[str, Any] | None, warehouse_id: str) -> fga.Client
     """
     if record is None:
         return f"no warehouse record names {warehouse_id!r}"
-    if not (project := record.get("project")):
-        return f"the warehouse record {warehouse_id!r} names no project, so its tenancy is unknown"
-    return fga.ClientTuple(user=f"project:{project}", relation="project", object=f"warehouse:{warehouse_id}")
+    return fga.ClientTuple(user=f"project:{record.project}", relation="project", object=f"warehouse:{warehouse_id}")

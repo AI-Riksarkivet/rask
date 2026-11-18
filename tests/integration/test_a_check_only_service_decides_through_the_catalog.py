@@ -40,6 +40,7 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.decider import CatalogDecider, TableDecision
 from lakehouse.governed.fga import user_object
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 #: The two tenants, each mapped to its warehouse and the namespace in it; each namespace holds one table, `<ns>$t`.
@@ -122,7 +123,7 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
                 "status": "active",
                 "created_at": datetime.now(UTC).isoformat(),
             }
-            warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), made)
+            warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), WarehouseRecord.model_validate(made))
             store.write((f"project:{project}", "project", f"warehouse:{warehouse}"))
             warehouses.ensure_catalog_row(connect("dir", {"root": settings.root}), warehouse)
             _ok(client.post(f"/v1/namespace/{namespace}/create", json={}))

@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from lakehouse.warehouse_records import WarehouseRecord
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, rebuild_tenancy
 
 
@@ -100,7 +101,7 @@ def _needs_an_admin(record: dict[str, str]) -> str:
     )
 
 
-def _warehouse_tenancy(record: dict[str, str]) -> RebuiltTuple | None:
+def _warehouse_tenancy(record: WarehouseRecord) -> RebuiltTuple:
     """The warehouse's tenancy pointer — relation ``project``, NOT ``parent``.
 
     `model.fga` defines `project: [project]` on the warehouse type, and `parent` is a relation that
@@ -110,10 +111,7 @@ def _warehouse_tenancy(record: dict[str, str]) -> RebuiltTuple | None:
     `lakehouse.governed.fga.hierarchy_edge_tuples`, whose closed set of callers is about
     `parent`/`child` pairs.
     """
-    warehouse, project = record.get("id"), record.get("project")
-    if not warehouse or not project:
-        return None
-    return RebuiltTuple(user=f"project:{project}", relation="project", object=f"warehouse:{warehouse}", justified_by=f"_warehouses/{warehouse}.json")
+    return RebuiltTuple(user=f"project:{record.project}", relation="project", object=f"warehouse:{record.id}", justified_by=f"_warehouses/{record.id}.json")
 
 
 def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[RebuiltTuple], dict[str, str]]:
@@ -138,12 +136,8 @@ def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[Rebuil
     # re-assertion would write an authorization row per warehouse per tick forever and bury the one
     # that mattered.
     for record in sources.warehouse_records or []:
-        if record.get("project") not in stranded:
-            continue
-        if (pointer := _warehouse_tenancy(record)) is None:
-            unjustified[f"warehouse:{record.get('id')}"] = "the record names no project, so its tenancy is unknown"
-            continue
-        planned.append(pointer)
+        if record.project in stranded:
+            planned.append(_warehouse_tenancy(record))
     return planned, unjustified
 
 

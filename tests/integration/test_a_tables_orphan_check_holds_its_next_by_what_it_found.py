@@ -303,7 +303,12 @@ def _in_a_bucket_nothing_configures(*, moto_url: str, bucket: str, store: Storag
 def _in_a_deactivated_warehouse_in_a_configured_bucket(*, bucket: str, store: StorageOptions, **_: Any) -> Task:
     """The table is in a warehouse offboarding has deactivated, whose bucket is also the one this deployment configures
     (`MAINTENANCE_S3_BUCKET`): the warehouse's status is what decides, not the configured list."""
-    record_store.put_record(f"s3://{bucket}", store, "_warehouses/wh-gone.json", {"id": "wh-gone", "bucket": bucket, "status": "deactivated"})
+    record_store.put_record(
+        f"s3://{bucket}",
+        store,
+        "_warehouses/wh-gone.json",
+        {"id": "wh-gone", "bucket": bucket, "root_uri": f"s3://{bucket}", "project": "acme", "status": "deactivated"},
+    )
     return _table(bucket=bucket, options=store, warehouse="wh-gone")
 
 

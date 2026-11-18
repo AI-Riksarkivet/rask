@@ -65,8 +65,10 @@ class Estate:
         return {"Authorization": f"Bearer {self._dex.mint(user_id, connector=CONNECTOR, audience='lance-catalog')}"}
 
     def record(self, warehouse_id: str) -> dict[str, str] | None:
+        """The warehouse's record as the registry stores it."""
         settings = self.client.app.state.settings
-        return warehouses.get_warehouse(settings.registry_root, settings.storage_options(), warehouse_id)
+        held = warehouses.get_warehouse(settings.registry_root, settings.storage_options(), warehouse_id)
+        return held.stored() if held is not None else None
 
 
 @pytest.fixture(scope="module")

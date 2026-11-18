@@ -31,6 +31,7 @@ from lakehouse.governed.principal import Principal
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
+from lakehouse.warehouse_records import WarehouseRecord
 from tests import seeding
 
 
@@ -579,7 +580,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     real_get = wh_svc.get_warehouse
     reads = {"n": 0}
 
-    def racy_get(root: str, so: StorageOptions, wid: str) -> dict[str, str] | None:
+    def racy_get(root: str, so: StorageOptions, wid: str) -> WarehouseRecord | None:
         reads["n"] += 1
         if reads["n"] == 1:  # the guard's read: the rival's write is "not yet visible"
             return None
@@ -607,7 +608,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     assert conditional_reads["n"] >= 1, "the conditional write never re-read — the guard refused, not the store"
     assert reads["n"] == 1, "the guard read more than once; the blinding no longer models the race"
     monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
-    assert wh_svc.get_warehouse(f"file://{tmp_path}", StorageOptions(), "wh-race")["project"] == "acme"
+    assert wh_svc.get_warehouse(f"file://{tmp_path}", StorageOptions(), "wh-race").project == "acme"
 
 
 def test_create_warehouse_lost_race_same_project_converges(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -624,7 +625,7 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     real_get = wh_svc.get_warehouse
     reads = {"n": 0}
 
-    def racy_get(rt: str, so: StorageOptions, wid: str) -> dict[str, str] | None:
+    def racy_get(rt: str, so: StorageOptions, wid: str) -> WarehouseRecord | None:
         reads["n"] += 1
         if reads["n"] == 1:
             return None
@@ -636,4 +637,4 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
     surviving = wh_svc.get_warehouse(root, StorageOptions(), "wh-conv")
     assert surviving is not None, "the loser's rebuild must not have DELETED the record it lost the race for"
-    assert surviving["status"] == "deactivated"
+    assert surviving.status == "deactivated"

@@ -20,6 +20,7 @@ from fastapi import Request
 
 from catalog.core import namespace as namespace_module
 from catalog.core.config import Settings
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 _STORAGE = "storage."
@@ -84,9 +85,10 @@ async def test_the_resolver_carries_the_RECORDS_endpoint(
     """
     from catalog.api import dependencies
 
-    record: dict[str, str] = {"id": "wh-1", "status": "active", "root_uri": "s3://tenant-bucket"}
+    stored: dict[str, str] = {"id": "wh-1", "bucket": "tenant-bucket", "project": "acme", "status": "active", "root_uri": "s3://tenant-bucket"}
     if record_endpoint is not None:
-        record["endpoint"] = record_endpoint
+        stored["endpoint"] = record_endpoint
+    record = WarehouseRecord.model_validate(stored)
     monkeypatch.setattr(dependencies.warehouses, "get_warehouse", lambda *a, **k: record)
 
     resolved = await dependencies._resolve_warehouse_root(cast(Request, _Req()), settings, "wh-1")

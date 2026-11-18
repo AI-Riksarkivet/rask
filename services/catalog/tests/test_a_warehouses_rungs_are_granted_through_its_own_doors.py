@@ -19,6 +19,7 @@ import pytest
 
 from catalog.core.config import get_settings
 from catalog.services import warehouses
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 PROJECT, WAREHOUSE = "acme", "wh-acme"
@@ -47,7 +48,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
         "status": "active",
         "created_at": datetime.now(UTC).isoformat(),
     }
-    warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), record)
+    warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), WarehouseRecord.model_validate(record))
     catalog.store.write(
         (f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"),
         (catalog.person(MEMBER), "member", f"project:{PROJECT}"),

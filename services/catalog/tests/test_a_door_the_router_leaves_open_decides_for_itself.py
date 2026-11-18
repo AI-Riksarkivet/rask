@@ -47,6 +47,7 @@ from lakehouse import maintenance_due
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.maintenance_due import CompactionDue, DueRecord
+from lakehouse.warehouse_records import WarehouseRecord
 from tests.traces import trace_named, traceparent_named
 
 
@@ -300,7 +301,7 @@ def estate(request: pytest.FixtureRequest) -> Any:
     settings = get_settings()
     root, so, now = settings.registry_root, settings.storage_options(), datetime.now(UTC)
     record = {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": settings.root, "project": PROJECT, "status": "active", "created_at": now.isoformat()}
-    warehouses.create_warehouse_record(root, so, record)
+    warehouses.create_warehouse_record(root, so, WarehouseRecord.model_validate(record))
     warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": settings.root}), WAREHOUSE)
     catalog.store.write((f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"))
     for namespace in (NAMESPACE, SIDE):

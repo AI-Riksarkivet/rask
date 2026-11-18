@@ -31,6 +31,7 @@ from catalog.services import warehouses
 from catalog.services.control_records import ProtectionChange
 from lakehouse.records import RecordChangedError, RecordMissingError
 from lakehouse.storage_options import StorageOptions
+from lakehouse.warehouse_records import WarehouseRecord
 from tests import seeding
 
 
@@ -82,16 +83,16 @@ def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(cont
     _, written = warehouses.upsert_warehouse(
         control_root,
         StorageOptions(),
-        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "created_at": "t2"},
+        WarehouseRecord.model_validate({"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "created_at": "t2"}),
     )
 
     assert fired["n"] == 1, "the conditional write seam was never reached — the race was not exercised"
-    assert written["status"] == "deactivated", "the re-create lifted a quarantine nobody asked to lift"
+    assert written.status == "deactivated", "the re-create lifted a quarantine nobody asked to lift"
     live = warehouses.get_warehouse(control_root, StorageOptions(), "acme-wh")
     assert live is not None
-    assert live["status"] == "deactivated"
+    assert live.status == "deactivated"
     # created_at is the RECORD's, never the re-POST's: a re-create must not reset the age either.
-    assert live["created_at"] == "t0"
+    assert live.stored()["created_at"] == "t0"
 
 
 def test_a_re_create_naming_nothing_keeps_deletion_protection(control_root: str) -> None:
@@ -105,16 +106,16 @@ def test_a_re_create_naming_nothing_keeps_deletion_protection(control_root: str)
     _, armed = warehouses.upsert_warehouse(
         control_root,
         StorageOptions(),
-        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"},
+        WarehouseRecord.model_validate({"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}),
         protection=ProtectionChange(protected=True, by="user:dex~anna"),
     )
-    assert armed["protected"] == "true"
+    assert armed.protected == "true"
 
     # A later re-POST that does not name it must not disarm it: a field it does not name stands as it is.
     _, plain = warehouses.upsert_warehouse(
-        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}
+        control_root, StorageOptions(), WarehouseRecord.model_validate({"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
     )
-    assert plain["protected"] == "true", "a re-create disarmed deletion protection"
+    assert plain.protected == "true", "a re-create disarmed deletion protection"
 
 
 def test_a_record_that_vanished_is_a_conflict_not_a_resurrection(control_root: str) -> None:
@@ -125,7 +126,9 @@ def test_a_record_that_vanished_is_a_conflict_not_a_resurrection(control_root: s
     had just deleted.
     """
     with pytest.raises(RecordMissingError):
-        warehouses.upsert_warehouse(control_root, StorageOptions(), {"id": "gone", "bucket": "b", "root_uri": "s3://b", "project": "acme"})
+        warehouses.upsert_warehouse(
+            control_root, StorageOptions(), WarehouseRecord.model_validate({"id": "gone", "bucket": "b", "root_uri": "s3://b", "project": "acme"})
+        )
 
 
 def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_write(control_root: str) -> None:
@@ -218,13 +221,16 @@ def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_roo
     _seed(control_root)
 
     _, armed = warehouses.upsert_warehouse(
-        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, primary=True
+        control_root,
+        StorageOptions(),
+        WarehouseRecord.model_validate({"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}),
+        primary=True,
     )
-    assert armed.get("primary") == "true", f"the primary marker did not survive the conditional write: {armed}"
+    assert armed.stored().get("primary") == "true", f"the primary marker did not survive the conditional write: {armed}"
 
     # A later re-POST naming nothing must carry it forward — the same rule as `protected`. A GitOps
     # re-apply that silently demoted the primary would stop the tenant's cascade, not misroute it.
     _, plain = warehouses.upsert_warehouse(
-        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}
+        control_root, StorageOptions(), WarehouseRecord.model_validate({"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
     )
-    assert plain.get("primary") == "true", f"a plain re-POST demoted the primary warehouse: {plain}"
+    assert plain.stored().get("primary") == "true", f"a plain re-POST demoted the primary warehouse: {plain}"

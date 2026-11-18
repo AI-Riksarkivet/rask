@@ -46,7 +46,7 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse import control_prefixes, location_claims, trash
+from lakehouse import control_prefixes, location_claims, trash, warehouse_records
 from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
 from lakehouse.lance_session import open_dataset
@@ -54,6 +54,7 @@ from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 from lakehouse.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
+from lakehouse.warehouse_records import UnreadableWarehouseRecordError, WarehouseRecord
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.services.discovery import discover_datasets
@@ -633,15 +634,14 @@ def _unreachable_namespaces(namespaces: Iterable[tuple[str, str]], served: Mappi
     return [UnreachableNamespace(namespace=name, root=root) for name, root in sorted(namespaces) if name not in served.get(root, set())]
 
 
-def served_by_root(warehouse_records: Iterable[Mapping[str, str]], *, namespace_root: str, estate_warehouse: str) -> dict[str, set[str]]:
+def served_by_root(warehouse_records: Iterable[WarehouseRecord], *, namespace_root: str, estate_warehouse: str) -> dict[str, set[str]]:
     """The warehouses each root serves: the estate's own on the estate's root, and each registered one on its ``root_uri``.
 
     Several warehouses may share a root, so each root maps to a set.
     """
     served: dict[str, set[str]] = {namespace_root: {estate_warehouse}}
     for record in warehouse_records:
-        if root := str(record.get("root_uri") or ""):
-            served.setdefault(root, set()).add(str(record["id"]))
+        served.setdefault(record.root_uri, set()).add(record.id)
     return served
 
 
@@ -695,7 +695,7 @@ class Sources(BaseModel):
     tuples_error: str | None = None
     project_records: list[dict[str, str]] | None = None
     project_records_error: str | None = None
-    warehouse_records: list[dict[str, str]] | None = None
+    warehouse_records: list[WarehouseRecord] | None = None
     warehouse_records_error: str | None = None
     trash: list[TrashRecord] | None = None
     trash_error: str | None = None
@@ -791,6 +791,28 @@ async def _registry_source(
     return records, None
 
 
+async def _warehouse_source(sources: Sources, *, control_root: str, storage_options: StorageOptions) -> tuple[list[WarehouseRecord] | None, str | None]:
+    """The warehouse registry as records, one that is no warehouse record folded into ``sources.incomplete`` beside the
+    skips the listing itself reports."""
+    listed, error = await _registry_source(
+        sources,
+        source_name="registry:warehouses",
+        control_root=control_root,
+        storage_options=storage_options,
+        prefix=_WAREHOUSES_PREFIX,
+        required=("id", "bucket", "project"),
+    )
+    if listed is None:
+        return None, error
+    records: list[WarehouseRecord] = []
+    for raw in listed:
+        try:
+            records.append(warehouse_records.read(raw, at=f"{_WAREHOUSES_PREFIX} ({raw.get('id')})"))
+        except UnreadableWarehouseRecordError as exc:
+            sources.incomplete.append(IncompleteScan(source="registry:warehouses", reason=str(exc)))
+    return records, None
+
+
 async def _trash_source(sources: Sources, *, control_root: str, storage_options: StorageOptions) -> tuple[list[TrashRecord] | None, str | None]:
     """The trash listing as records, a record that is none of them folded into ``sources.incomplete`` beside the skips
     the listing itself reports."""
@@ -857,21 +879,14 @@ async def load_sources(
         _registry_source(
             sources, source_name="registry:projects", control_root=control_root, storage_options=storage_options, prefix=_PROJECTS_PREFIX, required=("id",)
         ),
-        _registry_source(
-            sources,
-            source_name="registry:warehouses",
-            control_root=control_root,
-            storage_options=storage_options,
-            prefix=_WAREHOUSES_PREFIX,
-            required=("id", "bucket", "project"),
-        ),
+        _warehouse_source(sources, control_root=control_root, storage_options=storage_options),
         _bucket_source(sources, bucket_client),
         _trash_source(sources, control_root=control_root, storage_options=storage_options),
     )
     # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry loaded above rather
     # than reading it again — two reads would be two answers, and the second could disagree with the one
     # `orphan_buckets` is computed from.
-    warehouse_roots = sorted({str(r["root_uri"]) for r in (sources.warehouse_records or []) if r.get("root_uri")})
+    warehouse_roots = sorted({record.root_uri for record in sources.warehouse_records or []})
     namespace_roots = [namespace_root, *(r for r in warehouse_roots if r != namespace_root)]
     scanned, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces_across, namespace_roots, storage_options)
     if scanned is not None:
@@ -968,7 +983,7 @@ def build_report(
     """
     report = ReconcileReport(checked_at=datetime.now(UTC).isoformat(), incomplete=list(sources.incomplete))
     project_ids = {str(r["id"]) for r in sources.project_records or []}
-    warehouse_ids = {str(r["id"]) for r in sources.warehouse_records or []}
+    warehouse_ids = {record.id for record in sources.warehouse_records or []}
     # The shared input orders, named once. Three categories read the tuple scan and the project
     # registry; three read the warehouse registry. Naming them is what stops a fourth category from
     # quietly introducing a fourth opinion about which outage to report.
@@ -1034,13 +1049,13 @@ def build_report(
         report,
         "orphan_buckets",
         inputs=(sources.buckets_error, sources.warehouse_records_error),
-        detect=lambda: _orphan_buckets(sources.buckets or [], claimed={str(r["bucket"]) for r in sources.warehouse_records or []}, platform=platform_buckets),
+        detect=lambda: _orphan_buckets(sources.buckets or [], claimed={record.bucket for record in sources.warehouse_records or []}, platform=platform_buckets),
     )
     report.orphaned_trash = _run_category(
         report,
         "orphaned_trash",
         inputs=(sources.trash_error, sources.warehouse_records_error),
-        detect=lambda: _orphaned_trash(sources.trash or [], claimed={str(r["bucket"]) for r in sources.warehouse_records or []} | platform_buckets),
+        detect=lambda: _orphaned_trash(sources.trash or [], claimed={record.bucket for record in sources.warehouse_records or []} | platform_buckets),
     )
 
     # `total` is the PURGE GATE, not the drift count — every category stays in `counts` and is still
@@ -1083,12 +1098,11 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceStore, sour
         )
         return buckets
     for record in sources.warehouse_records or []:
-        bucket = str(record.get("bucket") or "")
         # Deactivated warehouses are still WALKED, unlike a table's pass, which skips them. Reporting is
         # not rewriting: a quarantined tenant's unregistered datasets are exactly what an operator wants
         # named before deciding whether to offboard it, and naming them changes nothing on disk.
-        if bucket and bucket not in buckets:
-            buckets.append(bucket)
+        if record.bucket not in buckets:
+            buckets.append(record.bucket)
     return buckets
 
 

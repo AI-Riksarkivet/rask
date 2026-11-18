@@ -25,6 +25,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.storage_options import StorageOptions
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:
@@ -47,7 +48,7 @@ _RECORDS: list[dict[str, str]] = [
 
 
 def _patch_records(monkeypatch: pytest.MonkeyPatch, records: list[dict[str, str]]) -> None:
-    monkeypatch.setattr(ep.warehouses, "list_warehouses", lambda _root, _so: records)
+    monkeypatch.setattr(ep.warehouses, "list_warehouses", lambda _root, _so: [WarehouseRecord.model_validate(record) for record in records])
 
 
 _BOB = PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="i", sub="bob", aud="lance", exp=1, iat=1))
@@ -81,20 +82,6 @@ def test_grouping_from_registry_records(monkeypatch: pytest.MonkeyPatch) -> None
     ]
     assert [(w.id, w.bucket, w.status) for w in globex.warehouses] == [("wh-g", "bkt-g", "active")]
     assert acme.admins == [] and globex.admins == []  # FGA off → degraded, never fabricated
-
-
-def test_corrupt_record_is_skipped_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A record missing its project (or id) is one tenant's corruption — it must be skipped with a warning,
-    # never allowed to void the whole estate listing (the list_warehouses posture, extended here).
-    corrupt: list[dict[str, str]] = [
-        {"id": "wh-orphan", "bucket": "bkt-o", "root_uri": "s3://bkt-o"},  # no project
-        {"bucket": "bkt-n", "project": "acme"},  # no id
-        {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme"},
-    ]
-    _patch_records(monkeypatch, corrupt)
-    result = _list(_settings())
-    assert [p.project for p in result] == ["acme"]
-    assert [w.id for w in result[0].warehouses] == ["wh-a"]
 
 
 def test_malformed_project_id_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

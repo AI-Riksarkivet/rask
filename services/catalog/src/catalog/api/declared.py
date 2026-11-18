@@ -8,14 +8,13 @@ declares of it refuses: the declaration is the only writer of those fields, so t
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Final
 
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api.security import Caller
-from catalog.services.control_records import GIT, MANAGED_BY
+from catalog.services.control_records import GIT
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 
@@ -40,16 +39,16 @@ def author_of(token: Caller | None) -> Author | None:
     return None if token is None else Author(subject=token.subject, actor=f"user:{token.subject}")
 
 
-def refuse_what_git_declares(record: Mapping[str, str] | None, *, obj: str, token: Caller | None) -> None:
+def refuse_what_git_declares(manager: str | None, *, obj: str, token: Caller | None) -> None:
     """Refuse a door's change to ``obj`` while git declares it, audited as a denial.
 
     Asked after the door's own authorization, so only a caller who could otherwise make the change learns that git
     owns it. Grants, namespaces and tables beneath the object stay with their doors.
 
     Raises:
-        PermissionDeniedError: ``record`` is managed by git.
+        PermissionDeniedError: ``manager``, who the object's record says owns its declaration, is git.
     """
-    if record is None or record.get(MANAGED_BY) != GIT:
+    if manager != GIT:
         return
     subject = token.subject if token is not None else ANONYMOUS_SUBJECT
     audit(AuditAction.AUTHZ, AuditOutcome.DENY, subject=subject, resource=obj, reason="managed_by_git")

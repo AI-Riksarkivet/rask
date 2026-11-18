@@ -94,6 +94,7 @@ from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import RecordExistsError, RecordMissingError
 from lakehouse.storage_options import StorageOptions
+from lakehouse.warehouse_records import WarehouseRecord, WarehouseStatus
 
 
 log = logging.getLogger(__name__)
@@ -106,29 +107,16 @@ management_router = APIRouter(prefix="/management/v1/projects", tags=["projects"
 _ID_RE = CONTROL_ID_RE
 
 
-def _group_by_project(records: list[dict[str, str]]) -> dict[str, list[ProjectWarehouse]]:
+def _group_by_project(records: list[WarehouseRecord]) -> dict[str, list[ProjectWarehouse]]:
     """Group warehouse records by their ``project``, sorted for a deterministic response.
 
-    Per-record corruption tolerance, same posture as ``warehouses.list_warehouses``: a record missing its
-    ``project`` or ``id`` is SKIPPED with a warning — one tenant's registry corruption must not void the
-    whole estate listing. ``status`` defaults to ``"active"`` for a record that carries none.
+    A record that names no ``project`` or ``id`` is no warehouse record and never reaches here: the listing left it out
+    with a warning (``warehouses.list_warehouses``), so one tenant's registry corruption does not void the whole estate
+    listing. ``status`` is ``"active"`` for a record that carries none.
     """
     grouped: dict[str, list[ProjectWarehouse]] = {}
     for record in records:
-        project, warehouse_id = record.get("project"), record.get("id")
-        if not project or not warehouse_id:
-            log.warning(
-                "project_record_skipped",
-                extra={"warehouse": warehouse_id, "fields": sorted(record)},
-            )
-            continue
-        grouped.setdefault(str(project), []).append(
-            ProjectWarehouse(
-                id=str(warehouse_id),
-                bucket=str(record.get("bucket") or ""),
-                status=str(record.get("status") or "active"),
-            )
-        )
+        grouped.setdefault(record.project, []).append(ProjectWarehouse(id=record.id, bucket=record.bucket, status=str(record.status or WarehouseStatus.ACTIVE)))
     for entries in grouped.values():
         entries.sort(key=lambda w: w.id)
     return grouped
@@ -472,7 +460,7 @@ def project_its_doors_protect(project_id: str, record: Annotated[dict[str, str],
     Raises:
         PermissionDeniedError: Git declares the project, so its declaration owns the protection.
     """
-    refuse_what_git_declares(record, obj=f"project:{project_id}", token=token)
+    refuse_what_git_declares(record.get(MANAGED_BY) if record is not None else None, obj=f"project:{project_id}", token=token)
 
 
 def project_its_doors_delete(project_id: str, record: Annotated[dict[str, str], Depends(project_to_delete)], token: CurrentToken) -> dict[str, str]:
@@ -481,7 +469,7 @@ def project_its_doors_delete(project_id: str, record: Annotated[dict[str, str], 
     Raises:
         PermissionDeniedError: Git declares the project, so removing it from the declaration comes first.
     """
-    refuse_what_git_declares(record, obj=f"project:{project_id}", token=token)
+    refuse_what_git_declares(record.get(MANAGED_BY) if record is not None else None, obj=f"project:{project_id}", token=token)
     return record
 
 
@@ -557,7 +545,7 @@ async def _start_delete(project_id: str, record: dict[str, str], settings: Catal
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
     # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
     # read may be one of this project's own ([[LH-572]]).
-    held = sorted(str(r["id"]) for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.get("project") == project_id)
+    held = sorted(r.id for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.project == project_id)
     if held:
         raise NamespaceNotEmptyError(
             f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "

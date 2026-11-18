@@ -22,6 +22,7 @@ import pytest
 from catalog.core.config import get_settings
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.warehouse_records import WarehouseRecord
 
 
 PROJECT, HERE, ELSEWHERE = "acme", "wh-here", "wh-elsewhere"
@@ -64,7 +65,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> t
             "status": "active",
             "created_at": datetime.now(UTC).isoformat(),
         }
-        warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), record)
+        warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), WarehouseRecord.model_validate(record))
         warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": settings.root}), warehouse)
         catalog.store.write((f"project:{PROJECT}", "project", f"warehouse:{warehouse}"))
     for name in (f"{HERE}$sales", f"{HERE}$gone", f"{ELSEWHERE}$far"):

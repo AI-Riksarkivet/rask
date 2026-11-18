@@ -248,9 +248,9 @@ def test_served_by_root_maps_each_root_to_every_warehouse_it_serves() -> None:
     """The estate's own warehouse on the estate's root, and each registered warehouse on its root: two sharing a bucket
     (a work and a gold warehouse of one project) both serve it, so neither one's row reads as unreachable."""
     records = [
-        {"id": "acme-work", "root_uri": "s3://acme-bkt"},
-        {"id": "acme-gold", "root_uri": "s3://acme-bkt"},
-        {"id": "beta-wh", "root_uri": "s3://beta-bkt"},
+        seeding.warehouse({"id": "acme-work", "root_uri": "s3://acme-bkt"}),
+        seeding.warehouse({"id": "acme-gold", "root_uri": "s3://acme-bkt"}),
+        seeding.warehouse({"id": "beta-wh", "root_uri": "s3://beta-bkt"}),
     ]
 
     served = mod.served_by_root(records, namespace_root="s3://lance-catalog", estate_warehouse=ESTATE)
@@ -460,10 +460,10 @@ def test_a_registry_only_bucket_is_scanned(tmp_path: Path) -> None:
     report = mod.ReconcileReport(checked_at=datetime.now(UTC).isoformat())
     sources = mod.Sources()
     sources.warehouse_records = [
-        {"id": "acme-wh", "bucket": "acme-bucket", "project": "acme"},
-        {"id": "beta-wh", "bucket": "beta-bucket", "project": "beta"},
+        seeding.warehouse({"id": "acme-wh", "bucket": "acme-bucket", "project": "acme"}),
+        seeding.warehouse({"id": "beta-wh", "bucket": "beta-bucket", "project": "beta"}),
         # A quarantined tenant's bucket is still listed: reporting what lies in it rewrites nothing.
-        {"id": "gone-wh", "bucket": "gone-bucket", "project": "gone", "status": "deactivated"},
+        seeding.warehouse({"id": "gone-wh", "bucket": "gone-bucket", "project": "gone", "status": "deactivated"}),
     ]
 
     buckets = mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources)
@@ -496,7 +496,7 @@ def test_a_registry_bucket_that_duplicates_the_configured_one_is_not_scanned_twi
     """The common case on a single-bucket estate — a doubled scan would double every finding."""
     report = mod.ReconcileReport(checked_at=datetime.now(UTC).isoformat())
     sources = mod.Sources()
-    sources.warehouse_records = [{"id": "w", "bucket": "configured-bucket", "project": "p"}]
+    sources.warehouse_records = [seeding.warehouse({"id": "w", "bucket": "configured-bucket", "project": "p"})]
 
     assert mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources) == ["configured-bucket"]
 

@@ -72,7 +72,7 @@ def _client_error(code: str, status: int) -> ClientError:
 
 
 def _seed(tmp_path: Path, warehouse_id: str = "acme-wh", **fields: str) -> dict[str, str]:
-    record = {"id": warehouse_id, "bucket": "b-acme", "project": "acme", "status": "active", **fields}
+    record = {"id": warehouse_id, "bucket": "b-acme", "root_uri": "s3://b-acme", "project": "acme", "status": "active", **fields}
     records.create_json(_root(tmp_path), StorageOptions(), f"_warehouses/{warehouse_id}.json", record)
     return record
 
@@ -176,9 +176,10 @@ def test_set_warehouse_status_flips_and_preserves_other_fields(tmp_path: Path) -
     _seed(tmp_path)
     out = warehouses.set_warehouse_status(_root(tmp_path), StorageOptions(), "acme-wh", "deactivated")
     assert out is not None
-    assert out["status"] == "deactivated"
-    assert out["bucket"] == "b-acme"
-    assert (warehouses.get_warehouse(_root(tmp_path), StorageOptions(), "acme-wh") or {})["status"] == "deactivated"
+    assert out.status == "deactivated"
+    assert out.bucket == "b-acme"
+    stands = warehouses.get_warehouse(_root(tmp_path), StorageOptions(), "acme-wh")
+    assert stands is not None and stands.status == "deactivated"
 
 
 def test_set_warehouse_status_returns_none_for_an_unknown_warehouse(tmp_path: Path) -> None:
