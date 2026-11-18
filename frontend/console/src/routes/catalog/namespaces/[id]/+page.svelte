@@ -458,7 +458,9 @@
 				<h2>Maintenance policy</h2>
 				<p class="mut">
 					A namespace policy governs every dataset under <span class="mono">{ns}</span> unless a table
-					policy overrides it; tag-pinned versions (e.g. blessed) are never cleaned up.
+					policy sets its own retention; a hold here (cleanup off) keeps the whole history of every table
+					beneath it, whatever their own policies say. Tag-pinned versions (e.g. blessed) are never cleaned
+					up.
 				</p>
 				{#if editingPolicy}
 					<div class="policy-edit">

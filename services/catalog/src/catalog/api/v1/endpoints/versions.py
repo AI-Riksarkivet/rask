@@ -38,18 +38,19 @@ from catalog.api.dependencies import (
     ResolverDep,
     SettingsDep,
     StorageOptionsDep,
+    ancestor_uuids,
 )
 from catalog.api.pagination import ListLimit, paginate_versions
 from catalog.api.security import CurrentToken, current_subject
 from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
+from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import committed_files, dataplane, maintenance, managed_versions, table_inputs
+from catalog.services import catalog_reclaims, committed_files, dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
 from lakehouse import branch_layout, commit_records, commit_turns, stored_objects
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.history_fences import HistoryWork
 from lakehouse.storage_options import StorageOptions
 
 
@@ -392,6 +393,7 @@ async def batch_delete_table_versions(
     so: StorageOptionsDep,
     token: CurrentToken,
     client: FgaClientDep,
+    resolver: ResolverDep,
 ) -> BatchDeleteTableVersionsResponse:
     """Delete old versions of this table — never the current one, and never one a tag or a branch pins.
 
@@ -402,21 +404,33 @@ async def batch_delete_table_versions(
     child branch pins is refused (409), naming the pin. Every range is judged before anything is
     deleted, and ``branch`` scopes the delete to that ref's own history.
 
-    Owner tier (``can_drop``, the rung ``maintenance/run`` clears), and authorization alone governs it: this
-    reclaims history, as ``maintenance/run`` does, and deletion protection guards dropping the table, not its
-    history (ADR 0150). A version that must survive is tagged.
+    Owner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which
+    no retention judges and deletion protection does not guard (protection guards dropping the table, not its history,
+    ADR 0150). A version that must survive is tagged. A HOLD IS JUDGED (ADR 0243 §8): while ``cleanup_enabled`` is false at
+    any level that can govern the table (its own policy, a namespace's above it, its project's) the delete answers 409
+    InvalidTableState (19), since lifting the hold is a separate, audited act at a policy door. It is held as a
+    maintenance pass is (``catalog.services.catalog_reclaims``): the table's history and each level's policy fence, its
+    targets marked before the first delete, every hold confirmed before each cleanup call; a ref write or a policy write
+    holding a fence answers 409 ConcurrentModification (14).
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    return await run_in_threadpool(_delete_versions, table, so, body)
+    namespace_uuids = await ancestor_uuids(resolver, table.resolved.segments)
+    return await run_in_threadpool(partial(_delete_versions, table, so, body, settings=settings, namespace_uuids=namespace_uuids))
 
 
-def _delete_versions(table: DoorTable, so: StorageOptions, body: BatchDeleteTableVersionsRequest) -> BatchDeleteTableVersionsResponse:
+def _delete_versions(
+    table: DoorTable, so: StorageOptions, body: BatchDeleteTableVersionsRequest, *, settings: Settings, namespace_uuids: list[str]
+) -> BatchDeleteTableVersionsResponse:
     ds = table.open_unchecked(so, branch=body.branch)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
     # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
     # version this deletes. A ref write holding it answers this request 409.
     # [[LH-232]] Each transaction file the cleanup removes is recorded; Lance records the rest itself.
-    with table.history_held(HistoryWork.RECLAIM), stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, body.branch), so):
-        deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch)
+    with (
+        catalog_reclaims.held(table, settings, namespace_uuids=namespace_uuids) as held,
+        stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, body.branch), so),
+    ):
+        marked = catalog_reclaims.marked(held, table, ref=dataplane.recorded_branch(body.branch))
+        deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, marked=marked)
     return BatchDeleteTableVersionsResponse(deleted_count=deleted)

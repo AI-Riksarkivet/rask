@@ -159,6 +159,43 @@ def commit_time(message: bytes) -> datetime | None:
     return datetime.fromtimestamp(parts.get(1, 0), tz=UTC) + timedelta(microseconds=parts.get(2, 0) // 1000)
 
 
+def with_commit_time(manifest: bytes, at: datetime) -> bytes:
+    """``manifest`` with its ``timestamp`` set to ``at``, every other field kept byte for byte, as
+    :func:`with_manifest_version` keeps them: the sections before the Manifest message are addressed by absolute offsets
+    and stay where they are, and only the message and the footer's offset to it are written again.
+
+    Raises:
+        InvalidInputError: ``manifest`` does not end in a Lance manifest footer, or its message does not parse.
+    """
+    if len(manifest) < _FOOTER.size or manifest[-4:] != _MAGIC:
+        raise InvalidInputError("the staged manifest is not a Lance manifest (no LANC footer)")
+    offset, major, minor, _ = _FOOTER.unpack(manifest[-_FOOTER.size :])
+    message = _length_prefixed(manifest, offset, section="Manifest message")
+    seconds, micros = divmod(round(at.timestamp() * 1_000_000), 1_000_000)
+    stamp = (
+        manifest_wire.encode_varint(1 << 3)
+        + manifest_wire.encode_varint(seconds)
+        + manifest_wire.encode_varint(2 << 3)
+        + manifest_wire.encode_varint(micros * 1000)
+    )
+    field = manifest_wire.encode_varint(TIMESTAMP_FIELD << 3 | 2) + manifest_wire.encode_varint(len(stamp)) + stamp
+    out, at_byte, written = bytearray(), 0, False
+    while at_byte < len(message):
+        start = at_byte
+        with _parsed():
+            number, value, at_byte = manifest_wire.next_field(message, at_byte)
+        if number == TIMESTAMP_FIELD and isinstance(value, bytes):
+            if not written:
+                out += field
+                written = True
+        else:
+            out += message[start:at_byte]
+    if not written:
+        out += field
+    body = bytes(out)
+    return manifest[:offset] + _LENGTH.pack(len(body)) + body + _FOOTER.pack(offset, major, minor, _MAGIC)
+
+
 def transaction_section(manifest: bytes) -> bytes | None:
     """The ``Transaction`` message ``manifest`` carries inline, or ``None`` when it carries none.
 

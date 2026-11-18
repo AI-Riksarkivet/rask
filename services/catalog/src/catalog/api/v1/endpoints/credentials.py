@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidTableStateError, ServiceUnavailableError, TableBranchNotFoundError
 
-from catalog.api.dependencies import DoorTableDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
+from catalog.api.dependencies import DoorTableDep, FgaClientDep, ResolverDep, SettingsDep, VendorDep, ancestor_uuids
 from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.vending import (
@@ -55,16 +55,6 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
 
 
-async def _ancestor_uuids(resolver: Resolver, segments: list[str]) -> list[str]:
-    """The uuids of the namespaces the table ``segments`` names lies in, outermost first; a name no namespace holds keeps
-    no policy, and a namespace whose uuid cannot be read is refused by the resolver (``UnidentifiedObjectError``)."""
-    uuids: list[str] = []
-    for depth in range(1, len(segments)):
-        if (namespace_uuid := await resolver.namespace_uuid(segments[:depth])) is not None:
-            uuids.append(namespace_uuid)
-    return uuids
-
-
 async def require_reclaimable_history(request: Request, table: DoorTableDep, resolver: ResolverDep, settings: SettingsDep) -> None:
     """Refuse the maintain tier for a table whose maintenance policy keeps its whole history ([[XC-084]]).
 
@@ -72,8 +62,8 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
     so its holder could delete or rewrite the history the policy keeps. The pass has nothing to write there: it reclaims
     nothing on a held table, and the commit-path cleanup a held table may be armed with fires only inside a commit, which
     every catalog door disarms before it makes (``lakehouse.auto_cleanup``). The policy is resolved as maintenance
-    resolves it, each record read by its key: the table's own record, else its nearest namespace's, else its project's
-    (``maintenance_policies.governing_policy``), its settings read strictly (``maintenance_policies.PolicySettings``), so
+    resolves it, each record read by its key: the table's own record, else its nearest namespace's, else its project's, and a hold at
+    any of those levels a hold (``maintenance_policies.governing_policy``), its settings read strictly (``PolicySettings``), so
     a hold written ``cleanup_enabled: "false"`` past the policy door is a hold. A record that cannot be read may be the
     hold, so it refuses: one that is there and cannot be read as a policy with the hold's own code, since no retry reads
     it otherwise until someone writes it again, and a read the store did not answer as the outage it is.
@@ -85,7 +75,7 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
     """
     if requested_tier(request.query_params) != "maintain":
         return
-    namespace_uuids = await _ancestor_uuids(resolver, table.resolved.segments)
+    namespace_uuids = await ancestor_uuids(resolver, table.resolved.segments)
     resolve = partial(
         maintenance_policies.governing_policy,
         settings.registry_root,
@@ -209,6 +199,15 @@ async def vend_credentials(
     # A write credential for the caller's own declaration is vended only after renewing it, and lasts no longer than its
     # fence (ADR 0227 §9, RedeclareRenews); a declaration another request acted on since answers 409 (14).
     at_most_seconds = None
+    project: str | None = None
+    if tier == "maintain":
+        # The project whose policy may govern the table, as maintenance reads it (`governing_policy`): a pass holds its
+        # policy fence, and those of its namespaces beneath the warehouse's directory, as a reclaim while it deletes (ADR
+        # 0243 §6), under this vend.
+        try:
+            project = await run_in_threadpool(maintenance_policies.governing_project, settings.registry_root, settings.storage_options(), location)
+        except (OSError, ValueError) as exc:
+            raise ServiceUnavailableError("the bucket's claim could not be read, so the policy fences a pass holds are unknown") from exc
     if tier == "write":
         at_most_seconds = await run_in_threadpool(
             partial(table_claims.renewed_for_its_declarer, table_claims.claim_store(settings), table.resolved, declarer=subject)
@@ -230,7 +229,7 @@ async def vend_credentials(
             bases=bases.bases,
             data_directories=bases.data_directories,
             branch=branch,
-            records=TableRecords(control_root=settings.registry_root, table_uuid=table_uuid),
+            records=TableRecords(control_root=settings.registry_root, table_uuid=table_uuid, warehouse=table.resolved.segments[0], project=project),
             at_most_seconds=at_most_seconds,
         )
     )

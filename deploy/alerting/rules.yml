@@ -850,6 +850,28 @@ groups:
             indefinitely. Break down by error.type; the per-dataset URI is on the trace span and in the
             maintenance_dataset_outcome log line, deliberately not on the metric (unbounded cardinality).
 
+      # STARVATION (ADR 0243). A pass that would reclaim keeps everything when a ref write holds the table's history, a
+      # policy write holds a fence above it, its policy changed since it read it, or a cleanup's victims stay marked, and
+      # is passed again every `maintenance.queue.retrySeconds` (15 minutes), so one table held back pass after pass adds
+      # four an hour, every hour, and never meets its retention or an erasure's deadline. 24h of held-back passes in
+      # every hour is a day of the seven an erasure release's grace gives (`catalog.erasure.releaseGraceDays`, 7 in the
+      # chart's values), leaving six to find the writer or the mark. The counter names a reason and no table (an open
+      # set would be unbounded cardinality): the table is in the reason's log line.
+      - alert: MaintenanceReclaimStarved
+        expr: sum by (reason) (increase(maintenance_reclaims_held_back_total[1h])) > 0
+        for: 24h
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Maintenance reclaims have been held back in every hour for a day"
+          description: >-
+            Passes that would reclaim have kept everything, for the reason this alert names, in every hour of the last
+            day: a table under constant ref writes, a policy that keeps changing, a policy door or a reclaim holding a
+            fence, or a cleanup's victims left marked. Such a table meets neither its retention nor an erasure's
+            deadline. Find it in the maintenance_history_fenced, maintenance_policy_fenced,
+            maintenance_policy_changed_mid_pass or maintenance_victims_marked log lines.
+
       # The worker's heartbeat is the hourly audit (`maintenance.queue.auditSchedule`): a NATS message schedule puts it
       # on the work queue once an hour whatever the replica count, and one worker runs it. Its stopping is silent by
       # construction: nothing raises, the schedule simply never reaches a worker that completes it. A 2h window over

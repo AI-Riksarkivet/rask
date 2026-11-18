@@ -936,7 +936,8 @@ export interface paths {
         put?: never;
         /**
          * Delete Namespace Policy
-         * @description Remove the namespace's maintenance policy (idempotent) — owner-gated by the router.
+         * @description Remove the namespace's maintenance policy (idempotent) — owner-gated by the router. Answers 409 (code 14,
+         *     retryable) while a reclaim of a table beneath it runs.
          */
         post: operations["delete_namespace_policy_management_v1_namespace__id__policy_delete_post"];
         delete?: never;
@@ -976,8 +977,10 @@ export interface paths {
         put?: never;
         /**
          * Set Namespace Policy
-         * @description Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
-         *     a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``).
+         * @description Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth: its
+         *     retention and cadence unless a table policy or a nearer namespace's sets them, and a hold (``cleanup_enabled`` false)
+         *     over every table beneath it whatever their own policies say. Answers 409 (ConcurrentModification, code 14, retryable)
+         *     while a reclaim of a table beneath it runs. Owner-gated by the router (``can_delete``).
          */
         post: operations["set_namespace_policy_management_v1_namespace__id__policy_set_post"];
         delete?: never;
@@ -1088,7 +1091,8 @@ export interface paths {
         put?: never;
         /**
          * Delete Project Policy
-         * @description Remove the project's maintenance policy (idempotent) — admin-gated.
+         * @description Remove the project's maintenance policy (idempotent) — admin-gated. Answers 409 (code 14, retryable) while a
+         *     reclaim of a table it governs runs.
          */
         post: operations["delete_project_policy_management_v1_project__id__policy_delete_post"];
         delete?: never;
@@ -1130,7 +1134,9 @@ export interface paths {
         /**
          * Set Project Policy
          * @description Set (or replace) the project-level maintenance policy (#84) — the tenant-wide default the sweep
-         *     falls back to when no table or namespace policy matches. Admin-gated (``can_administer`` on
+         *     falls back to when no table or namespace policy matches, and, when it holds (``cleanup_enabled`` false), a hold over
+         *     every table in the project's buckets whatever their own policies say. Answers 409 (ConcurrentModification, code 14,
+         *     retryable) while a reclaim of a table it governs runs. Admin-gated (``can_administer`` on
          *     ``project:<id>``, checked explicitly — see the module docstring).
          *
          *     The record's ``buckets`` are the project's ACTIVE warehouse buckets, resolved from the warehouse
@@ -2239,6 +2245,11 @@ export interface paths {
          *     Reclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is
          *     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
          *     parent's data files, counted before and after — rather than which ref the door opened.
+         *
+         *     HELD AS A MAINTENANCE PASS IS (ADR 0243 §8, ``catalog.services.catalog_reclaims``): the table's history and the policy
+         *     fence of each level above it, the governing policy read under them, the victims marked before the first delete, and
+         *     every hold confirmed before each cleanup call. A hold at any level that can govern the table answers 409
+         *     InvalidTableState (19), a ref write or a policy write holding a fence 409 ConcurrentModification (14).
          */
         post: operations["run_maintenance_management_v1_table__id__maintenance_run_post"];
         delete?: never;
@@ -2258,7 +2269,8 @@ export interface paths {
         put?: never;
         /**
          * Delete Table Policy
-         * @description Remove the table's maintenance policy (idempotent) — owner-gated by the router.
+         * @description Remove the table's maintenance policy (idempotent) — owner-gated by the router. The table is then governed by its
+         *     nearest namespace's, else its project's, policy; answers 409 (code 14, retryable) while a reclaim of the table runs.
          */
         post: operations["delete_table_policy_management_v1_table__id__policy_delete_post"];
         delete?: never;
@@ -2299,6 +2311,10 @@ export interface paths {
         /**
          * Set Table Policy
          * @description Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``).
+         *
+         *     Its settings govern the table over any namespace's or project's, but for a hold: ``cleanup_enabled`` false at any level
+         *     that can govern the table keeps its whole history, and this record cannot lift a farther level's. Answers 409
+         *     (ConcurrentModification, code 14, retryable) while a reclaim of the table runs.
          */
         post: operations["set_table_policy_management_v1_table__id__policy_set_post"];
         delete?: never;
@@ -4288,9 +4304,14 @@ export interface paths {
          *     child branch pins is refused (409), naming the pin. Every range is judged before anything is
          *     deleted, and ``branch`` scopes the delete to that ref's own history.
          *
-         *     Owner tier (``can_drop``, the rung ``maintenance/run`` clears), and authorization alone governs it: this
-         *     reclaims history, as ``maintenance/run`` does, and deletion protection guards dropping the table, not its
-         *     history (ADR 0150). A version that must survive is tagged.
+         *     Owner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which
+         *     no retention judges and deletion protection does not guard (protection guards dropping the table, not its history,
+         *     ADR 0150). A version that must survive is tagged. A HOLD IS JUDGED (ADR 0243 §8): while ``cleanup_enabled`` is false at
+         *     any level that can govern the table (its own policy, a namespace's above it, its project's) the delete answers 409
+         *     InvalidTableState (19), since lifting the hold is a separate, audited act at a policy door. It is held as a
+         *     maintenance pass is (``catalog.services.catalog_reclaims``): the table's history and each level's policy fence, its
+         *     targets marked before the first delete, every hold confirmed before each cleanup call; a ref write or a policy write
+         *     holding a fence answers 409 ConcurrentModification (14).
          */
         post: operations["batch_delete_table_versions_v1_table__id__version_delete_post"];
         delete?: never;
@@ -8653,10 +8674,16 @@ export interface components {
          *     winner leaves unset falls to the sweep's global default rather than to the record it shadowed.
          *     Any surface that displays an effective policy has to say so: an inherited value rendered
          *     identically to a set one is how nobody can tell what is actually governing their data.
+         *
+         *     **A HOLD BINDS AT EVERY LEVEL (ADR 0243 §7).** ``cleanup_enabled`` false on the table's record, on any namespace above
+         *     it or on its project keeps the table's whole history, whatever a nearer record says: a narrower level cannot lift a
+         *     hold. A write of a namespace's or a project's policy answers 409 (ConcurrentModification, retryable) while a reclaim of
+         *     a table it governs runs, and a table's while a reclaim of the table runs.
          */
         PolicyRequest: {
             /**
              * Cleanup Enabled
+             * @description False keeps the whole version history (a legal hold): at a namespace or the project it holds every table beneath it, whatever their own policies say; no narrower level lifts it.
              * @default true
              */
             cleanup_enabled?: boolean;

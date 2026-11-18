@@ -416,23 +416,28 @@ class DoorTable:
         # since a table destroyed since its resolution fails the open first, and the change is what the caller needs.
         return _checked(lambda: opener(self.location, so, self.segments, version=version, branch=branch), self.require_held)
 
-    @contextmanager
-    def history_held(self, work: history_fences.HistoryWork) -> Generator[Hold]:
-        """The table's history held for ``work`` while the block runs, its :class:`lakehouse.fences.Hold` handed to the block
-        (the marks its take saw): no reclaim deletes a version while a tag or branch is written, and no ref is written while
-        a reclaim runs ([[LH-308]], :mod:`lakehouse.history_fences`).
+    def history_fence(self) -> history_fences.TableHistory:
+        """The table's history fence, written under the catalog's own credential.
 
         Raises:
-            ConcurrentModificationError: Work that excludes ``work`` holds the history (another kind, or another branch
-                create); the block did not run.
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
-        history = history_fences.TableHistory(
+        return history_fences.TableHistory(
             control_root=self._claims.control_root, storage_options=self._claims.storage_options, table_uuid=self._resolved.require_uuid()
         )
+
+    def history_write[T](self, work: history_fences.HistoryWork, write: Callable[[], T], *, judge: Callable[[Hold], None] | None = None) -> T:
+        """``write`` while the table's history is held for ``work``, once ``judge`` passed under the hold and the hold is
+        confirmed (:meth:`lakehouse.fences.Fence.write_held`): how every door that writes a ref, a restore or a table's
+        policy under the history writes, so none answers for a write landed after its hold lapsed (ADR 0243, B4).
+
+        Raises:
+            ConcurrentModificationError: Work that excludes ``work`` holds the history, or this door's hold lapsed before
+                its write (code 14); nothing was written.
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
         try:
-            with history.hold_for(work) as hold:
-                yield hold
+            return self.history_fence().write_held(work, write, judge=judge)
         except history_fences.HistoryFencedError as exc:
             log.info("table_history_fenced", extra={"table": self.segments, "work": work, "reason": str(exc)})
             raise ConcurrentModificationError(f"table {fga.canonical_object_id(self.segments)}: {exc}") from exc

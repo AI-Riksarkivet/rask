@@ -55,6 +55,7 @@ from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.policy_fences import PolicyFence, PolicyFencedError, PolicyLevel, PolicyWork
 
 
 log = logging.getLogger(__name__)
@@ -100,40 +101,51 @@ def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[st
     return {**merged, "kind": kind, "id": canonical_id, **({"uuid": uuid} if uuid is not None else {})}
 
 
-async def _set(settings: Settings, kind: PolicyKind, key: str, compose: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
+async def _set(
+    settings: Settings, kind: PolicyKind, key: str, compose: Callable[[dict[str, Any] | None], dict[str, Any]], *, warehouse: str | None = None
+) -> dict[str, Any]:
     """Write the record ``compose`` merges onto the one stored, conditional on that record (`policies.set_policy`), once
-    for all three rungs; the record written.
-
-    A table's record is written while the door holds the table's history as a ref write does (:func:`_set_holding_history`).
+    for all three rungs, under the fence that level's reclaims hold (:func:`_fenced`); the record written.
 
     Raises:
-        ConcurrentModificationError: The record kept changing under the set, or a reclaim holds the table's history (409,
-            code 14).
+        ConcurrentModificationError: The record kept changing under the set, or a reclaim beneath the level holds its fence
+            (409, code 14).
     """
     write = partial(policies.set_policy, settings.registry_root, settings.storage_options(), kind, key, compose)
     try:
-        return await run_in_threadpool(partial(_set_holding_history, settings, key, write) if kind == "table" else write)
+        return await run_in_threadpool(partial(_fenced, settings, kind, key, write, warehouse=warehouse))
     except records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the {kind} policy kept changing while it was set; set it again") from exc
-    except HistoryFencedError as exc:
-        raise ConcurrentModificationError(f"a reclaim holds the table's history, which it reads its policy under; set it again once it ends: {exc}") from exc
 
 
-def _set_holding_history(settings: Settings, table_uuid: str, write: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    """``write`` a table's policy while holding the table's history as a ref write does (ADR 0243).
+def _fenced[T](settings: Settings, kind: str, key: str, write: Callable[[], T], *, warehouse: str | None = None) -> T:
+    """``write`` the ``kind`` policy kept under ``key`` while holding what every reclaim it governs holds, its hold confirmed
+    just before the write (:meth:`lakehouse.fences.Fence.write_held`, ADR 0243 B1, B4 and §6).
 
-    A maintenance pass reads the policy it plans its cleanup under before it holds the table's history, and reads it again
-    once it holds it. Holding the history here, which a reclaim excludes, makes the two exclusive, as a tag write and a
-    reclaim are: a policy written before the pass's hold is read under it, and one asked for while a reclaim holds is
-    refused, so a policy that keeps more history (a legal hold among them) is never answered 200 while a cleanup planned
-    under the earlier one still deletes.
+    A maintenance pass reads the policy that governs its table before it holds anything and again once it holds the
+    table's history and the policy fence of each namespace and project above it, and it holds them for as long as it
+    deletes. A table's policy is written holding the table's history as ref work, which a reclaim excludes; a namespace's
+    or a project's holding that level's policy fence as a SET, which every reclaim beneath it excludes. So of a reclaim and
+    a policy write one sees the other: a write before the pass's holds is read under them, and one asked for while a
+    reclaim holds is refused, so no policy that keeps more history (a hold among them), and no delete that hands the
+    table to a level keeping more, is answered 200 while a cleanup planned under the earlier one still deletes.
 
     Raises:
-        HistoryFencedError: A reclaim holds the table's history; nothing was written.
+        ConcurrentModificationError: A reclaim holds the fence, or this door's hold lapsed before the write; nothing was
+            written (409, code 14).
     """
-    history = TableHistory(control_root=settings.registry_root, storage_options=settings.storage_options(), table_uuid=table_uuid)
-    with history.held(HistoryWork.REFS):
-        return write()
+    so = settings.storage_options()
+    try:
+        if kind == "table":
+            history = TableHistory(control_root=settings.registry_root, storage_options=so, table_uuid=key)
+            return history.write_held(HistoryWork.REFS, write, renewed=False)
+        level: PolicyLevel = "namespace" if kind == "namespace" else "project"
+        fence = PolicyFence(control_root=settings.registry_root, storage_options=so, level=level, key=key, warehouse=warehouse)
+        return fence.write_held(PolicyWork.SET, write, renewed=False)
+    except HistoryFencedError as exc:
+        raise ConcurrentModificationError(f"a reclaim holds the table's history, which it reads its policy under; write it again once it ends: {exc}") from exc
+    except PolicyFencedError as exc:
+        raise ConcurrentModificationError(f"a reclaim beneath the {kind} holds its policy fence; write the policy again once it ends: {exc}") from exc
 
 
 def _response(record: dict[str, object]) -> PolicyResponse:
@@ -154,9 +166,17 @@ async def _describe(settings: Settings, *, kind: PolicyKind, key: str, canonical
     return _response({**record, "id": canonical})
 
 
-async def _delete(settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str) -> PolicyDeleteResponse:
-    """Remove one policy (idempotent), log it and announce it — once for all three rungs."""
-    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key)
+async def _delete(
+    settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str, warehouse: str | None = None
+) -> PolicyDeleteResponse:
+    """Remove one policy (idempotent), log it and announce it — once for all three rungs, under the fence the set holds
+    (:func:`_fenced`): removing a record hands what it governed to the next level, which may keep more.
+
+    Raises:
+        ConcurrentModificationError: A reclaim beneath the level holds its fence (409, code 14); nothing was removed.
+    """
+    remove = partial(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key)
+    await run_in_threadpool(partial(_fenced, settings, kind, key, remove, warehouse=warehouse))
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
     await emit_control(
         control,
@@ -180,7 +200,11 @@ async def set_table_policy(
     token: CurrentToken,
     control: ControlEmitterDep,
 ) -> PolicyResponse:
-    """Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``)."""
+    """Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``).
+
+    Its settings govern the table over any namespace's or project's, but for a hold: ``cleanup_enabled`` false at any level
+    that can govern the table keeps its whole history, and this record cannot lift a farther level's. Answers 409
+    (ConcurrentModification, code 14, retryable) while a reclaim of the table runs."""
     canonical = fga.canonical_object_id(table.segments)
     table_uuid = table.require_uuid()
     # The location beside the uuid, so a listing names the table as it is named now (`table_claims.names_now`).
@@ -209,7 +233,8 @@ async def describe_table_policy(id: str, table: ResolvedTableDep, settings: Sett
 
 @table_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
-    """Remove the table's maintenance policy (idempotent) — owner-gated by the router."""
+    """Remove the table's maintenance policy (idempotent) — owner-gated by the router. The table is then governed by its
+    nearest namespace's, else its project's, policy; answers 409 (code 14, retryable) while a reclaim of the table runs."""
     return await _delete(settings, control, token, "table", key=table.require_uuid(), canonical=fga.canonical_object_id(table.segments))
 
 
@@ -217,11 +242,19 @@ async def delete_table_policy(id: str, table: ResolvedTableDep, settings: Settin
 async def set_namespace_policy(
     id: str, body: PolicyRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
 ) -> PolicyResponse:
-    """Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
-    a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``)."""
+    """Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth: its
+    retention and cadence unless a table policy or a nearer namespace's sets them, and a hold (``cleanup_enabled`` false)
+    over every table beneath it whatever their own policies say. Answers 409 (ConcurrentModification, code 14, retryable)
+    while a reclaim of a table beneath it runs. Owner-gated by the router (``can_delete``)."""
     namespace = await _namespace(id, ns, settings)
     canonical = fga.canonical_object_id(namespace.segments)
-    record = await _set(settings, "namespace", namespace.uuid, lambda stored: _record("namespace", canonical, body, stored, uuid=namespace.uuid))
+    record = await _set(
+        settings,
+        "namespace",
+        namespace.uuid,
+        lambda stored: _record("namespace", canonical, body, stored, uuid=namespace.uuid),
+        warehouse=namespace.segments[0],
+    )
     log.info("maintenance_policy_set", extra={"kind": "namespace", "id": canonical})
     await emit_control(
         control,
@@ -244,9 +277,12 @@ async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: Setting
 
 @namespace_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
-    """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router."""
+    """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router. Answers 409 (code 14,
+    retryable) while a reclaim of a table beneath it runs."""
     namespace = await _namespace(id, ns, settings)
-    return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=fga.canonical_object_id(namespace.segments))
+    return await _delete(
+        settings, control, token, "namespace", key=namespace.uuid, canonical=fga.canonical_object_id(namespace.segments), warehouse=namespace.segments[0]
+    )
 
 
 async def _namespace(id: str, ns: LanceNamespace, settings: Settings) -> fga_deps.GovernedObject:
@@ -273,7 +309,9 @@ async def set_project_policy(
     control: ControlEmitterDep,
 ) -> PolicyResponse:
     """Set (or replace) the project-level maintenance policy (#84) — the tenant-wide default the sweep
-    falls back to when no table or namespace policy matches. Admin-gated (``can_administer`` on
+    falls back to when no table or namespace policy matches, and, when it holds (``cleanup_enabled`` false), a hold over
+    every table in the project's buckets whatever their own policies say. Answers 409 (ConcurrentModification, code 14,
+    retryable) while a reclaim of a table it governs runs. Admin-gated (``can_administer`` on
     ``project:<id>``, checked explicitly — see the module docstring).
 
     The record's ``buckets`` are the project's ACTIVE warehouse buckets, resolved from the warehouse
@@ -334,7 +372,8 @@ async def describe_project_policy(id: str, settings: SettingsDep, token: Current
 
 @project_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep) -> PolicyDeleteResponse:
-    """Remove the project's maintenance policy (idempotent) — admin-gated."""
+    """Remove the project's maintenance policy (idempotent) — admin-gated. Answers 409 (code 14, retryable) while a
+    reclaim of a table it governs runs."""
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     return await _delete(settings, control, token, "project", key=project, canonical=project)

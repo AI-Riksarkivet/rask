@@ -23,13 +23,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import branch_layout, location_claims, objectfs, stored_objects, whole_versions
+from lakehouse import branch_layout, location_claims, objectfs, reclaim_marks, stored_objects, whole_versions
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse.fences import Hold
 from lakehouse.history_fences import HistoryWork, TableHistory
 
 
@@ -157,7 +158,8 @@ def take(source: CloneSource, *, clone_location: str, control_root: str, storage
     """Tag the source version the clone reads through, under the source's history fence.
 
     The fence keeps a reclaim from deleting the version between the check that the source still keeps it and the tag
-    landing ([[LH-308]]). A tag already naming that version is a retry's, and kept. One naming another version was left
+    landing ([[LH-308]]), and the tag is written only once the hold is confirmed (``Fence.write_held``), so no tag lands after
+    the hold lapsed. A tag already naming that version is a retry's, and kept. One naming another version was left
     by an earlier clone at the same location whose end could not delete it: the register door holds the location's
     claim, so nothing reads through that tag any more, and it is moved to this clone's version.
 
@@ -168,23 +170,35 @@ def take(source: CloneSource, *, clone_location: str, control_root: str, storage
     tag = tag_of(clone_location)
     dataset = _open(source.location, storage_options)
     history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=source.table_uuid)
-    with history.held(HistoryWork.REFS):
-        held = dataset.tags.list().get(tag)
+    standing: dict[str, Any] = {}
+
+    def judge(hold: Hold) -> None:
+        standing["tag"] = held = dataset.tags.list().get(tag)
         if held is not None and (int(held["version"]), held.get("branch") or None) == (source.version, source.branch):
             return
         if not _holds(dataset, source):
             raise CloneSourceGoneError(f"version {source.version} of {source.table} is not retained")
-        # A version a cleanup that stopped part-way was removing still stands over deleted files (ADR 0243): the clone
-        # would read through a tag on data no reader can read.
+        # A version a cleanup marked, or one missing a file it names, is one a cleanup that stopped part-way was removing
+        # (ADR 0243): the clone would read through a tag on data no reader can read.
+        marks = reclaim_marks.read(control_root, storage_options, table_uuid=source.table_uuid, marks=hold.marks)
+        if source.version in reclaim_marks.marked_versions(marks, source.branch):
+            raise CloneSourceGoneError(f"version {source.version} of {source.table} is being reclaimed: a cleanup marked it")
         version = dataset.checkout_version((source.branch, source.version) if source.branch is not None else source.version)
         if gone := whole_versions.missing_files(version, branch_layout.ref_root(_dataset_key(source.location), source.branch), storage_options):
             raise CloneSourceGoneError(f"version {source.version} of {source.table} is being reclaimed: {len(gone)} file(s) it names are gone")
+
+    def write() -> None:
+        held = standing["tag"]
+        if held is not None and (int(held["version"]), held.get("branch") or None) == (source.version, source.branch):
+            return
         if held is None:
             dataset.tags.create(tag, _reference(source))
             log.info("clone_source_tagged", extra={"source": source.table, "clone": clone_location, "version": source.version, "branch": source.branch})
         else:
             dataset.tags.update(tag, _reference(source))
             log.warning("clone_source_retagged", extra={"source": source.table, "clone": clone_location, "from": held["version"], "to": source.version})
+
+    history.write_held(HistoryWork.REFS, write, judge=judge)
 
 
 def release(source_location: str, *, clone_location: str, storage_options: StorageOptions) -> bool:

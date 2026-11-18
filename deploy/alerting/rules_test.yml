@@ -504,6 +504,29 @@ tests:
         alertname: MaintenanceAuditNotCompleting
         exp_alerts: []
 
+  # M24 h2. One table held back by ref writes on every retry, 15 minutes apart, for 26h → MaintenanceReclaimStarved fires
+  #         once a day of it has held, naming the reason; a reason seen in one hour only, then never again, does not.
+  - interval: 15m
+    input_series:
+      - series: 'maintenance_reclaims_held_back_total{reason="history_fenced"}'
+        values: "0+1x104"
+      - series: 'maintenance_reclaims_held_back_total{reason="policy_changed"}'
+        values: "0 1 2 3 4+0x100"
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: MaintenanceReclaimStarved
+        exp_alerts: []
+      - eval_time: 26h
+        alertname: MaintenanceReclaimStarved
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+              reason: "history_fenced"
+            exp_annotations:
+              summary: "Maintenance reclaims have been held back in every hour for a day"
+              description: "Passes that would reclaim have kept everything, for the reason this alert names, in every hour of the last day: a table under constant ref writes, a policy that keeps changing, a policy door or a reclaim holding a fence, or a cleanup's victims left marked. Such a table meets neither its retention nor an erasure's deadline. Find it in the maintenance_history_fenced, maintenance_policy_fenced, maintenance_policy_changed_mid_pass or maintenance_victims_marked log lines."
+
   # M24 i. Refusals outrunning half the swept datasets over an hour → MaintenanceRefusalsRising fires.
   - interval: 1m
     input_series:

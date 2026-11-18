@@ -16,7 +16,11 @@ the bucket by the maintenance sweep on every tick (it has no catalog client by d
 
 A table or namespace record also keeps the object's name under ``id``, as it was when the policy was set, for
 display. Resolution order (:func:`resolve_policy`): a table policy wins over the nearest namespace policy wins
-over a project policy wins over the sweep's global defaults.
+over a project policy wins over the sweep's global defaults, for every setting but one: a HOLD (``cleanup_enabled``
+false) at ANY level that can govern the table keeps its whole history, whatever a nearer record says (ADR 0243 §7,
+decided 2026-11-18). A hold is how an operator freezes many tables at once, and a narrower level must not undo it; when
+in doubt a pass keeps the file. The record returned is the nearest one with ``cleanup_enabled`` false and ``held_by``
+naming the level whose hold it carries (:func:`_held`).
 
 Trust boundary: like the warehouse registry, who wrote a record is trusted — the write path is the catalog's
 owner-gated API, and a principal with direct write access to the control bucket is already inside the storage trust
@@ -161,8 +165,8 @@ def resolve_policy(records: list[dict[str, Any]], uri: str, *, table_uuid: str, 
 
     The table's own record wins, else the record of the nearest namespace in ``namespace_uuids`` (the table's
     ancestors, outermost first), else a project record (#84) whose ``buckets`` contain the dataset's bucket,
-    else ``None`` (the sweep's global defaults apply). A branch is its table's dataset too, so its table's
-    record governs it.
+    else ``None`` (the sweep's global defaults apply); a hold at any of those levels holds it (:func:`_held`). A
+    branch is its table's dataset too, so its table's record governs it.
 
     The project record is strictly the LAST fallback. A bucket belongs to one project, so DISTINCT project
     records both claiming the dataset's bucket are a registry misconfiguration (a possible cross-tenant
@@ -170,13 +174,9 @@ def resolve_policy(records: list[dict[str, Any]], uri: str, *, table_uuid: str, 
     record ordering decide whose retention policy destroys whose version history (audit 2026-07-23).
     """
     tables = _by_uuid(records, "table")
-    if table_uuid in tables:
-        return tables[table_uuid]
     namespaces = _by_uuid(records, "namespace")
-    for namespace_uuid in reversed(namespace_uuids):
-        if namespace_uuid in namespaces:
-            return namespaces[namespace_uuid]
-    return _project_policy(records, uri)
+    levels = [tables.get(table_uuid), *(namespaces.get(namespace_uuid) for namespace_uuid in reversed(namespace_uuids)), _project_policy(records, uri)]
+    return _held([record for record in levels if record is not None])
 
 
 class UnreadablePolicyError(RuntimeError):
@@ -234,14 +234,15 @@ def governing_policy(
 ) -> dict[str, Any] | None:
     """The policy governing the table ``table_uuid`` names at ``location``, read by key: the table's own record, else the
     nearest namespace's in ``namespace_uuids`` (outermost first), else the record of the project the bucket's claim names
-    as its owner, where that record names the bucket; ``None`` for the global defaults. The precedence is
-    :func:`resolve_policy`'s, which a caller may hand the one record this returns; the project level differs only where
-    several project records name one bucket, which :func:`resolve_policy` refuses to choose between and the store's
-    claim, written once by the warehouse that took the bucket, settles. The policy records are read under
-    ``control_root`` and the bucket's claim under ``claims_root``, the catalog's registry, which a deployment may keep
-    apart from its policies.
+    as its owner, where that record names the bucket; ``None`` for the global defaults; and the whole history kept where
+    any of those levels holds it (:func:`_held`). The precedence is :func:`resolve_policy`'s, which a caller may hand the
+    one record this returns; the project level differs only where several project records name one bucket, which
+    :func:`resolve_policy` refuses to choose between and the store's claim, written once by the warehouse that took the
+    bucket, settles. The policy records are read under ``control_root`` and the bucket's claim under ``claims_root``, the
+    catalog's registry, which a deployment may keep apart from its policies.
 
-    Each record is read by its key, so what this costs is the table's depth, never the estate's policies. STRICT: a record
+    Every level is read by its key, since a farther level's hold binds the table: what this costs is the table's depth
+    plus two reads (its own record, the bucket's claim and the project's record), never the estate's policies. STRICT: a record
     that is there and cannot be read as a policy, and a read the store fails, raise, since the record may be a legal hold,
     and a caller that went on without it would reclaim history its owner kept. A record that is returned holds settings
     :func:`policy_settings` reads.
@@ -251,19 +252,46 @@ def governing_policy(
         UnreadablePolicyError: The store failed a read.
     """
     try:
-        if (own := _keyed(control_root, storage_options, "table", table_uuid)) is not None:
-            return own
-        for namespace_uuid in reversed(namespace_uuids):
-            if (nearest := _keyed(control_root, storage_options, "namespace", namespace_uuid)) is not None:
-                return nearest
+        own = _keyed(control_root, storage_options, "table", table_uuid)
+        nearest = [_keyed(control_root, storage_options, "namespace", namespace_uuid) for namespace_uuid in reversed(namespace_uuids)]
         bucket = split_s3_uri(location)[0] if on_s3(location) else ""
-        project = warehouse_records.bucket_project(claims_root, storage_options, bucket) if bucket else None
+        project = governing_project(claims_root, storage_options, location)
         tenant = _keyed(control_root, storage_options, "project", project) if project is not None else None
     except OSError as exc:
         raise UnreadablePolicyError(f"a maintenance policy that may govern the table {table_uuid} could not be read: {exc}") from exc
     except ValueError as exc:
         raise MalformedPolicyError(f"a maintenance policy that may govern the table {table_uuid} cannot be read as one: {exc}") from exc
-    return tenant if tenant is not None and bucket in (tenant.get("buckets") or []) else None
+    tenant = tenant if tenant is not None and bucket in (tenant.get("buckets") or []) else None
+    return _held([record for record in (own, *nearest, tenant) if record is not None])
+
+
+def governing_project(claims_root: str, storage_options: StorageOptions, location: str) -> str | None:
+    """The project whose policy may govern the table at ``location``: the one its bucket's claim names, written once by the
+    warehouse that took the bucket; ``None`` off S3 or where no claim names one.
+
+    Raises:
+        OSError: The store failed the read.
+        ValueError: The claim is there and cannot be read as one.
+    """
+    bucket = split_s3_uri(location)[0] if on_s3(location) else ""
+    return warehouse_records.bucket_project(claims_root, storage_options, bucket) if bucket else None
+
+
+def _held(levels: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The policy ``levels`` (nearest first) make: the nearest record's settings, and the whole history kept where any
+    level holds it (``cleanup_enabled`` false), named under ``held_by`` as ``<kind>:<key>`` when a farther level's hold
+    is what keeps it. ``None`` for no record at all.
+
+    Raises:
+        MalformedPolicyError: A level's settings cannot be read, so whether it is a hold is unknown.
+    """
+    if not levels:
+        return None
+    nearest = levels[0]
+    holding = next((record for record in levels if not policy_settings(record).cleanup_enabled), None)
+    if holding is None or holding is nearest:
+        return nearest
+    return {**nearest, "cleanup_enabled": False, "held_by": _policy_of(holding)}
 
 
 def _keyed(control_root: str, storage_options: StorageOptions, kind: str, key: str) -> dict[str, Any] | None:

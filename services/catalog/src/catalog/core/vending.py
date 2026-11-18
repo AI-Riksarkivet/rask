@@ -42,7 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
-from lakehouse import file_identities, history_fences, store_session
+from lakehouse import file_identities, history_fences, policy_fences, store_session
 from lakehouse.base_refs import decoded_path, location_within, normalise
 from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
@@ -199,9 +199,28 @@ class TableRecords(BaseModel):
     control_root: str
     #: The uuid the catalog minted for the table, which keys every record kept for it (ADR 0173 §8).
     table_uuid: str
+    #: The table's warehouse, its name's first segment, beneath whose directory the policy fence of every namespace of its
+    #: chain lies (``lakehouse.policy_fences.warehouse_directory``); ``None`` grants no namespace's.
+    warehouse: str | None = None
+    #: The project whose policy may govern the table, whose policy fence a pass holds too; ``None`` grants none.
+    project: str | None = None
 
     def maintain_statements(self) -> list[dict[str, object]]:
         """The policy statements granting what a maintain-tier vend writes of these records.
+
+        THE CLEANUP'S MARK (:mod:`lakehouse.reclaim_marks`) is put and deleted at ``<fence>/reclaim-victims.<32>.json``
+        alone, directly in the fence's directory as a take reads one; a ``?`` that matches a ``/`` reaches a name below a
+        subdirectory, which no reader judges.
+
+        THE POLICY FENCES (ADR 0243 §6): every policy fence is listed and read (who holds one, never a policy or a secret),
+        and written only beneath the directory of the namespace fences of the table's own warehouse and its own project's
+        fence, under a name ending ``/reclaim-*.json``: a reclaim's holder, or a name below a subdirectory of a fence, which
+        no take judges and the catalog's next take sweeps once lapsed. A policy door's hold (``set-``), a policy, and every
+        other warehouse's and project's fence are the catalog's alone. Not each of the table's own levels exactly: an STS
+        session policy holds 2,048 characters (:data:`SESSION_POLICY_LIMIT`), and a grant of about 200 per level does not
+        fit a chain of three under a long bucket name, where these scopes cost the same at any depth (measured with
+        :func:`counted_length`: 249 characters under a 17-character control bucket, 387 under a 63-character one). The
+        statements carry no ``Sid``, which a store needs for nothing and which the limit counts.
 
         Raises:
             ValueError: The control root is no S3 location, or it or the uuid holds IAM policy syntax.
@@ -209,24 +228,31 @@ class TableRecords(BaseModel):
         _reject_iam_policy_syntax("table uuid", self.table_uuid)
         root = _policy_path(self.control_root, "control root")
         bucket, _, root_key = root.partition("/")
-        fence = "/".join(part for part in (root_key, history_fences.fence_directory(self.table_uuid)) if part)
+
+        def under(directory: str) -> str:
+            return "/".join(part for part in (root_key, directory) if part)
+
+        fence = under(history_fences.fence_directory(self.table_uuid))
+        listed, read, held = (
+            [f"{fence}/"],
+            [f"{fence}/*"],
+            [f"{fence}/{history_fences.HistoryWork.RECLAIM}-{_HOLDER_TOKEN}.json", f"{fence}/{history_fences.VICTIMS_MARK}.{_HOLDER_TOKEN}.json"],
+        )
+        reclaim = policy_fences.PolicyWork.RECLAIM
+        if self.warehouse is not None or self.project is not None:
+            # Listing and reading a policy fence tells its reader who holds it, never a policy or a secret, so every one is
+            # granted in one string; holding one is what is scoped.
+            listed.append(f"{under(policy_fences.PREFIX)}/*")
+            read.append(f"{under(policy_fences.PREFIX)}/*")
+        if self.warehouse is not None:
+            held.append(f"{under(policy_fences.warehouse_directory(self.warehouse))}/*/{reclaim}-*.json")
+        if self.project is not None:
+            held.append(f"{under(policy_fences.fence_directory('project', self.project))}/{reclaim}-*.json")
         return [
+            {"Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": f"arn:aws:s3:::{bucket}", "Condition": {"StringLike": {"s3:prefix": listed}}},
+            {"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"arn:aws:s3:::{bucket}/{key}" for key in read]},
+            {"Effect": "Allow", "Action": ["s3:PutObject", "s3:DeleteObject"], "Resource": [f"arn:aws:s3:::{bucket}/{key}" for key in held]},
             {
-                "Sid": "ListFence",
-                "Effect": "Allow",
-                "Action": ["s3:ListBucket"],
-                "Resource": f"arn:aws:s3:::{bucket}",
-                "Condition": {"StringLike": {"s3:prefix": f"{fence}/"}},
-            },
-            {"Sid": "ReadFence", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": f"arn:aws:s3:::{bucket}/{fence}/*"},
-            {
-                "Sid": "HoldFence",
-                "Effect": "Allow",
-                "Action": ["s3:PutObject", "s3:DeleteObject"],
-                "Resource": f"arn:aws:s3:::{bucket}/{fence}/{history_fences.HistoryWork.RECLAIM}-{_HOLDER_TOKEN}.json",
-            },
-            {
-                "Sid": "CommittedFileRecords",
                 "Effect": "Allow",
                 "Action": ["s3:GetObject", "s3:DeleteObject"],
                 "Resource": f"arn:aws:s3:::{root}/{file_identities.records_of(self.table_uuid)}/*",

@@ -207,15 +207,17 @@ def record_dataset_swept() -> None:
     _datasets_swept.add(1)
 
 
-#: Why a pass that would delete kept everything this time and passes the table again (ADR 0243): a write of the table's
-#: refs held its history (``history_fenced``), or its maintenance policy changed since the pass read it
-#: (``policy_changed``). A closed set: it is a metric label.
-type HeldBack = Literal["history_fenced", "policy_changed"]
+#: Why a pass kept what it would otherwise reclaim this time and passes the table again (ADR 0243): a write of the table's
+#: refs held its history (``history_fenced``), a write of the policy of a namespace or the project above it held that
+#: level's policy fence (``policy_fenced``), its maintenance policy changed since the pass read it (``policy_changed``),
+#: or a cleanup's victims stay marked, a delete the store refused or a policy that now keeps them (``marked``). A closed
+#: set: it is a metric label, and the alert ``MaintenanceReclaimStarved`` reads it.
+type HeldBack = Literal["history_fenced", "policy_fenced", "policy_changed", "marked"]
 
 _reclaims_held_back = _meter.create_counter(
     "maintenance.reclaims.held_back",
     unit="{dataset}",
-    description="Datasets whose pass deleted nothing because another write held the table's history or its policy changed since the pass read it, by reason; each is passed again.",
+    description="Datasets whose pass kept what it would reclaim, by reason: a write held the table's history or a policy fence above it, its policy changed since the pass read it, or a cleanup's victims stay marked; each is passed again.",
 )
 
 

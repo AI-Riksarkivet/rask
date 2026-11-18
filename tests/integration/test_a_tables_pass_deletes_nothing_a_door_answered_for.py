@@ -7,16 +7,19 @@ the other door runs whole, the pass is let go, and the claim is judged by what a
 credential expires part-way is the store answering its manifest deletes 403 ``ExpiredToken``.
 
 Each pins the guard ADR 0243 names for its finding, and where two guards sit at one seam the test is parametrized by
-where it holds the pass. Each runs on moto, and on the pinned RustFS where ``make lifecycle-rustfs-check`` names it; a
-local root has no wire to hold a cleanup on.
+where it holds the pass and which door acts. Each runs on moto, and on the pinned RustFS where ``make
+lifecycle-rustfs-check`` names it; a local root has no wire to hold a cleanup on. The catalog reaches the store through
+the same proxy as the pass, so a test can also answer the catalog's own reads as a store that cannot serve them.
 """
 
 from __future__ import annotations
 
 import os
 import threading
+import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import timedelta
 from typing import Any
 
 import boto3
@@ -26,9 +29,11 @@ import pyarrow as pa
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from lance import blob_array
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel, SecretStr
 
+from lakehouse import fences, policy_fences
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
@@ -101,9 +106,15 @@ class _Estate(BaseModel):
         return ds if version is None else ds.checkout_version(version)
 
     def reads(self, version: int | str | None = None) -> list[int] | str:
-        """The ids the table holds at ``version``, or why a reader could not read them."""
+        """The ids the table holds at ``version``, each row's payload read whole where it has one, or why a reader could
+        not read them."""
         try:
-            return sorted(self.opened(version).to_table().column("id").to_pylist())
+            opened = self.opened(version)
+            ids = sorted(opened.to_table(columns=["id"]).column("id").to_pylist())
+            if "payload" in opened.schema.names:
+                for blob in opened.take_blobs("payload", indices=list(range(opened.count_rows()))):
+                    assert blob is not None and len(blob.read()) > 0, "a payload read empty"
+            return ids
         except Exception as exc:  # noqa: BLE001 — what a reader meets is the claim judged
             return f"{type(exc).__name__}: {exc}"[:200]
 
@@ -121,8 +132,19 @@ class _Estate(BaseModel):
             return run_table_pass(self.task, self.settings())
 
 
-def _rows(ids: list[int]) -> bytes:
-    return encode_arrow_stream(pa.table({"id": pa.array(ids, pa.int64())}))
+def _rows(ids: list[int], payload_bytes: int = 0) -> bytes:
+    """The rows ``ids``, each with a payload of ``payload_bytes`` when it is not 0: past Lance's dedicated threshold (4 MiB),
+    a blob sidecar of its own beside the data file (``lance_docs/lance/format/table/blob.md``)."""
+    columns: dict[str, pa.Array] = {"id": pa.array(ids, pa.int64())}
+    if payload_bytes:
+        columns["payload"] = blob_array([os.urandom(payload_bytes) for _ in ids])
+    return encode_arrow_stream(pa.table(columns))
+
+
+@pytest.fixture
+def payload_bytes() -> int:
+    """How large each row's payload is; 0 for a table of ids alone. A test parametrizes it to write blob sidecars."""
+    return 0
 
 
 def _ok(response: httpx.Response) -> dict[str, Any]:
@@ -131,9 +153,9 @@ def _ok(response: httpx.Response) -> dict[str, Any]:
 
 
 @pytest.fixture
-def estate(store: _Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
-    """Table ``T`` at three versions, each an overwrite (ids [1], [2], [3]), under its own policy keeping one version: a
-    pass reclaims versions 1 and 2."""
+def estate(store: _Store, monkeypatch: pytest.MonkeyPatch, payload_bytes: int) -> Iterator[_Estate]:
+    """Table ``T`` at three versions, each an overwrite (ids [1], [2], [3], each with a payload of ``payload_bytes``),
+    under its own policy keeping one version: a pass reclaims versions 1 and 2."""
     bucket = f"pass-{uuid.uuid4().hex[:10]}"
     boto3.client(
         "s3", endpoint_url=store.endpoint, aws_access_key_id=store.access_key, aws_secret_access_key=store.secret_key, region_name="us-east-1"
@@ -143,7 +165,7 @@ def estate(store: _Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
             "LANCE_REST_IMPL": "dir",
             "LANCE_REST_ROOT": f"s3://{bucket}",
             "LANCE_CONTROL_ROOT": f"s3://{bucket}",
-            "LANCE_S3_ENDPOINT": store.endpoint,
+            "LANCE_S3_ENDPOINT": proxy.url,
             "LANCE_S3_ACCESS_KEY_ID": store.access_key,
             "LANCE_S3_SECRET_ACCESS_KEY": store.secret_key,
             "LANCE_S3_REGION": "us-east-1",
@@ -167,9 +189,9 @@ def estate(store: _Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
         try:
             with TestClient(app) as catalog:
                 _ok(catalog.post(f"/v1/namespace/{NS}/create", json={}))
-                _ok(catalog.post(f"/v1/table/{T}/create?mode=create", content=_rows([1]), headers=ARROW))
+                _ok(catalog.post(f"/v1/table/{T}/create?mode=create", content=_rows([1], payload_bytes), headers=ARROW))
                 for ids in ([2], [3]):
-                    _ok(catalog.post(f"/v1/table/{T}/insert?mode=overwrite", content=_rows(ids), headers=ARROW))
+                    _ok(catalog.post(f"/v1/table/{T}/insert?mode=overwrite", content=_rows(ids, payload_bytes), headers=ARROW))
                 _ok(catalog.post(f"/management/v1/table/{T}/policy/set", json={"retain_versions": 1}))
                 described = _ok(catalog.post(f"/v1/table/{T}/describe", json={}))
                 task = TableTask(uuid=described["properties"]["rask.uuid"], location=described["location"])
@@ -240,19 +262,52 @@ def test_a_restore_answered_200_names_no_file_a_reclaim_beside_it_deletes(estate
     assert restored.status_code != 200 or estate.reads() == [1], f"the restore answered 200 and the head reads {estate.reads()}"
 
 
-@pytest.mark.parametrize("held_at", ["before-its-hold", "at-its-cleanups-first-delete"])
-def test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version(estate: _Estate, monkeypatch: pytest.MonkeyPatch, held_at: str) -> None:
-    """PolicyReadBeforeHold: the pass read the table's policy (keep one version) as it started; the owner then sets a
-    policy keeping the whole history, which answers 200, and the pass, let on, reclaims versions 1 and 2 under the policy
-    it read. Two guards, one a case: held before its hold, the pass reads the policy again once it holds the table's
-    history and deletes nothing when it changed (PolicyReread); held inside its cleanup, the policy door holds the
-    table's history as a ref write does while it writes, so it answers 409 beside a reclaim (PolicyDoorFence)."""
+#: Each policy door a case drives, and the request it makes: the table's hold, the table's record deleted (which hands the
+#: table to its namespace's, keeping every version), the namespace's hold.
+_POLICY_DOORS = {
+    "table-hold": (f"/management/v1/table/{T}/policy/set", {"cleanup_enabled": False}),
+    "table-delete": (f"/management/v1/table/{T}/policy/delete", {}),
+    "namespace-hold": (f"/management/v1/namespace/{NS}/policy/set", {"cleanup_enabled": False}),
+}
+
+
+@pytest.mark.parametrize(
+    ("door", "held_at"),
+    [
+        ("table-hold", "before-its-hold"),
+        ("table-hold", "at-its-cleanups-first-delete"),
+        ("table-delete", "at-its-cleanups-first-delete"),
+        ("namespace-hold", "before-the-pass"),
+        ("namespace-hold", "at-its-cleanups-first-delete"),
+        ("namespace-hold", "its-door-stalled-past-its-hold"),
+    ],
+)
+def test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version(estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: str, held_at: str) -> None:
+    """A policy door answering 200 for keeping the whole history keeps every version, whichever level it writes.
+
+    PolicyReadBeforeHold: the pass read the table's policy (keep one version) as it started; the owner then sets a hold,
+    which answers 200, and the pass, let on, reclaims versions 1 and 2 under the policy it read. Held before its hold, the
+    pass reads the policy again once it holds and deletes nothing when it changed (PolicyReread); held inside its cleanup,
+    the table's policy door holds the table's history as a ref write does, so it answers 409 beside a reclaim
+    (PolicyDoorFence). B1: the table's policy DELETE, handing the table to its namespace's policy keeping every version,
+    takes the same hold (PolicyDeleteFence). A namespace's hold binds every table beneath it whatever its own record says
+    (HoldAnyLevel, even with no pass running), and the pass holds the namespace's policy fence while it deletes, so the namespace's door answers 409
+    beside it (AncestorFence). B4: a namespace door whose process stalls past its hold after its take, while a pass is
+    admitted once the hold lapsed, writes only once a renewal shows its hold still stands (DoorConfirm)."""
+    if door == "table-delete":
+        _ok(estate.catalog.post(f"/management/v1/namespace/{NS}/policy/set", json={"retain_versions": 100}))
     standing = [entry["version"] for entry in estate.opened().versions()]
+    path, body = _POLICY_DOORS[door]
 
     def _door() -> httpx.Response:
-        return estate.catalog.post(f"/management/v1/table/{T}/policy/set", json={"cleanup_enabled": False})
+        return estate.catalog.post(path, json=body)
 
-    if held_at == "before-its-hold":
+    if held_at == "its-door-stalled-past-its-hold":
+        answered = _a_door_stalled_past_its_hold(estate, monkeypatch, _door)
+    elif held_at == "before-the-pass":
+        answered = _door()
+        estate.passed()
+    elif held_at == "before-its-hold":
         reached, let_go = _held_before(monkeypatch, "_history_held")
         running = _Running(estate)
         assert reached.wait(WAIT), "the pass never came to its hold"
@@ -272,14 +327,57 @@ def test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version(est
     assert answered.status_code != 200 or kept == standing, f"the policy answered 200 over versions {standing}, and the pass left {kept}"
 
 
-@pytest.mark.parametrize("door", ["tag", "restore"])
-def test_a_ref_answered_200_names_a_version_a_reader_can_read_whole(estate: _Estate, door: str) -> None:
-    """HalfRemoved: Lance's cleanup deletes the data files of the versions it removes before their manifests (measured on
-    pylance 13.0.0), and the pass's credential expires between the two, so the store refuses the manifest deletes:
-    versions 1 and 2 still stand, over deleted data. A tag on version 1, or a restore of it, then answers 200 for a
-    version no reader can read. The guard (WholeRef): a ref door, holding the table's history, refuses a version whose
-    files are not all stored."""
-    with estate.proxy.answering_expired(lambda request: request.deletes("/_versions/")):
+def _a_door_stalled_past_its_hold(estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: Callable[[], httpx.Response]) -> httpx.Response:
+    """``door`` run in a thread of its own, stalled after its take of a policy fence until the take has lapsed and a pass
+    was admitted and reached its cleanup's first delete; the pass is then held there until the door answers."""
+    monkeypatch.setattr(policy_fences, "HOLD", timedelta(seconds=2))
+    taken, resumed = threading.Event(), threading.Event()
+    confirm = fences.Hold.confirm
+
+    def _stalled(hold: fences.Hold) -> None:
+        if isinstance(hold._fence, policy_fences.PolicyFence) and not resumed.is_set():  # noqa: SLF001 — which fence a hold is of
+            taken.set()
+            assert resumed.wait(WAIT), "the test never resumed the door"
+        confirm(hold)
+
+    monkeypatch.setattr(fences.Hold, "confirm", _stalled)
+    answers: list[httpx.Response] = []
+    stalled = threading.Thread(target=lambda: answers.append(door()), daemon=True)
+    stalled.start()
+    assert taken.wait(WAIT), "the door never took its hold"
+    time.sleep(3)
+    with estate.proxy.holding(_a_cleanup_delete) as held:
+        running = _Running(estate)
+        assert held.reached(WAIT), "the pass's cleanup deleted nothing"
+        resumed.set()
+        stalled.join(WAIT)
+        held.let_go()
+        running.joined()
+    (answered,) = answers
+    return answered
+
+
+@pytest.mark.parametrize(
+    ("door", "payload_bytes", "refused"),
+    [
+        ("tag", 0, "manifests"),
+        ("restore", 0, "manifests"),
+        ("tag", 5 * 1024 * 1024, "data-files-and-manifests"),
+        ("restore", 5 * 1024 * 1024, "data-files-and-manifests"),
+    ],
+)
+def test_a_ref_answered_200_names_a_version_a_reader_can_read_whole(estate: _Estate, door: str, refused: str) -> None:
+    """HalfRemoved: Lance's cleanup deletes the data files of the versions it removes, their blob sidecars, and their
+    manifests last (measured on pylance 13.0.0), and the pass's credential expires part-way, so the store refuses what is
+    left: versions 1 and 2 still stand, over deleted data, or (B2) over deleted sidecars with their data files standing. A
+    tag on version 1, or a restore of it, then answers 200 for a version no reader can read whole. The guard (VictimMark):
+    the pass marks its cleanup's victims before its first delete, and a ref door refuses a version a standing mark names,
+    whatever files still stand."""
+
+    def _refused(request: StoreRequest) -> bool:
+        return request.deletes("/_versions/") or (refused == "data-files-and-manifests" and request.deletes(".lance"))
+
+    with estate.proxy.answering_expired(_refused):
         estate.passed()
     assert 1 in [entry["version"] for entry in estate.opened().versions()], "the pass removed version 1 whole, so nothing stands half-removed"
 
@@ -292,3 +390,34 @@ def test_a_ref_answered_200_names_a_version_a_reader_can_read_whole(estate: _Est
 
     assert answered.status_code in (200, 409), answered.text
     assert answered.status_code != 200 or read == [1], f"the {door} answered 200 for version 1, which reads {read}"
+
+
+def test_a_ref_door_answers_a_store_that_cannot_say_whether_a_version_is_whole_503(estate: _Estate) -> None:
+    """A ref door judging a version no mark names asks the store for each file it names; a store that does not answer is
+    a 503 ServiceUnavailable, never the version's refusal as not whole (which tells its caller the version is being
+    reclaimed) and never a tag on a version nobody judged."""
+
+    def _a_listing_of_data_files(request: StoreRequest) -> bool:
+        return request.method == "GET" and "list-type" in request.query and "/data/" in f"/{request.query.get('prefix', [''])[0]}"
+
+    with estate.proxy.answering_unavailable(_a_listing_of_data_files):
+        answered = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "judged", "version": 1})
+
+    assert (answered.status_code, "judged" in estate.opened().tags.list()) == (503, False), answered.text
+
+
+@pytest.mark.parametrize("door", ["maintenance-run", "version-delete"])
+def test_the_catalogs_own_reclaim_doors_delete_nothing_a_hold_keeps(estate: _Estate, door: str) -> None:
+    """The catalog's ``maintenance/run`` and ``version/delete`` delete with its own credential, and ``version/delete``
+    deleted under a hold ("authorization alone governs it"). A hold at any level that can govern the table, here its
+    namespace's over the table's own record keeping one version, now refuses both 409 InvalidTableState (19), read under
+    the holds every pass takes (``catalog.services.catalog_reclaims``); lifting the hold is a separate act."""
+    _ok(estate.catalog.post(f"/management/v1/namespace/{NS}/policy/set", json={"cleanup_enabled": False}))
+    standing = [entry["version"] for entry in estate.opened().versions()]
+    if door == "maintenance-run":
+        answered = estate.catalog.post(f"/management/v1/table/{T}/maintenance/run", json={"retention_days": 1, "retain_versions": 1})
+    else:
+        answered = estate.catalog.post(f"/v1/table/{T}/version/delete", json={"ranges": [{"start_version": 1, "end_version": 3}]})
+    kept = [entry["version"] for entry in estate.opened().versions()]
+
+    assert (answered.status_code, answered.json().get("code"), kept) == (409, 19, standing), answered.text

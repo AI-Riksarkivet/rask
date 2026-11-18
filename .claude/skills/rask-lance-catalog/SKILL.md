@@ -953,21 +953,38 @@ governing their data. The project-scoped surface is the console's project page, 
   which would end holding nothing. The chart's stream Job reads MAINTENANCE_SCHEDULES back and fails unless it allows
   message schedules, which nats-server older than 2.12 drops without a word. A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
   **What a pass deletes is modelled** (`specs/maintenance/TablePass.tla`, ADR 0243): its cleanup and base reclaim beside
-  the tag, branch, restore and policy doors and a writer, with the pass dying or its credential expiring at any step.
-  Three rules came from it, each a guard a config removes: (1) a **restore holds the table's history as a ref write
-  does** (`tables._restore_holding_history`, `HistoryWork.REFS`), since it brings back an old version's files and a
-  cleanup that listed before it lands deletes them (409 code 14 while a reclaim holds); (2) the pass **reads the
-  table's policy again once it holds the history** (`expiry._policy_changed`) and deletes nothing when it changed
-  (`skipped=policy_changed`, `maintenance.reclaims.held_back{reason}`, retried after `retrySeconds`), and the table's
-  policy door holds the history while it writes (`policies._set_holding_history`, 409 beside a reclaim); a namespace's
-  or a project's policy door holds no table's history, so one written while a cleanup already runs binds the next pass
-  only; (3) Lance's cleanup deletes transaction and data files before manifests and counts a refused delete
-  (`failed_deletes`) without raising, so a cleanup that stops between leaves versions standing over deleted files until
-  the next pass: **every ref door and the restore judge the version whole under their hold**
-  (`dataplane.require_whole`, `lakehouse.whole_versions.missing_files`, 409 code 19; a clone's source tag raises
-  `CloneSourceGoneError`). A maintain-tier credential is vended for at most the history fence's `HOLD` (900 s), so a
-  pass whose hold lapsed signs no delete (A1). `tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py`
-  holds the cleanup on the wire (`store_requests.CountedStore.holding`, `answering_expired`), on moto and in
+  the tag, branch, restore and every policy door (the table's set and delete, a namespace's, a project's) and a writer,
+  with the pass dying, its credential expiring or a door's hold lapsing at any step. The rules, each a guard a config
+  removes: (1) a **restore holds the table's history as a ref write does** (`tables._restore_holding_history`,
+  `HistoryWork.REFS`; 409 code 14 while a reclaim holds); (2) the pass **reads the governing policy again once it holds
+  the history and every ancestor's policy fence** (`expiry._policy_changed`; `skipped=policy_changed`), and **a pass
+  holds, for as long as it deletes, a SHARED reclaim on the policy fence of each namespace of its chain and its project**
+  (`lakehouse.policy_fences.PolicyFence`, `expiry._history_held`; `skipped=policy_fenced`), so the table's policy set
+  AND delete (history as REFS) and a namespace's or project's policy set and delete (that level's fence as SET) answer
+  409 code 14 while a reclaim beneath them runs (`policies._fenced`); (3) **a hold binds at every level**:
+  `cleanup_enabled` false on the table's record, any ancestor namespace's or its project's keeps the whole history,
+  whatever a nearer record says (`maintenance_policies._held`, `held_by` names the level; decided 2026-11-18, for the
+  owner to overturn); every other setting stays nearest-wins; (4) **every door that holds a fence and then writes what
+  its answer promises writes through `Fence.write_held`** (`DoorTable.history_write`): judge under the hold, confirm the
+  hold, write, so a door frozen past `HOLD` writes nothing (409); (5) **a cleanup marks its victims before its first
+  delete** (`lakehouse.reclaim_marks`: Lance's own dry run `explain_cleanup_old_versions`, the mark at
+  `<history fence>/reclaim-victims.<32 hex>.json` naming `{uuid, ref, versions}`, the cleanup restricted to them by its
+  `versions`, the mark removed only once it returned with no failed delete), and **every ref door, the restore and a
+  clone's source refuse a version a standing mark names** (`dataplane.require_whole`, 409 code 19; `CloneSourceGoneError`)
+  whatever files still stand: Lance deletes data files, their blob sidecars and their manifests in that order and
+  counts a refused delete, so a version can stand over deleted sidecars with its data files present, which no
+  enumeration of a manifest catches; `lakehouse.whole_versions.missing_files` is the second line for a version no mark
+  names (data and deletion files by sharded listings, each index segment's bytes against its recorded size; NOT blob
+  sidecars), and a store that cannot answer it is a 503, never "not whole". A maintain-tier credential is vended for at
+  most `HOLD` (900 s) whatever `vending.ttlSeconds` says, so a pass whose holds lapsed signs no delete (A1); it reaches
+  the cleanup's mark, and holds a reclaim in the policy fences of its own warehouse's namespaces and its own project (not
+  each level exactly: one grant per level does not fit STS's 2,048 characters). The catalog's own reclaim doors
+  (`maintenance/run`, `version/delete`) are held as a pass is and confirm every hold before each batch of 16 versions
+  (`catalog.services.catalog_reclaims`), and refuse a held table 409 code 19. `version/create` finalizes the bytes with
+  the catalog's own commit time (`managed_versions.stage`, `manifest_bytes.with_commit_time`), since Lance ages a version
+  by its manifest's stamp. `MaintenanceReclaimStarved` pages a day of held-back passes.
+  `tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py` holds the cleanup on the wire
+  (`store_requests.CountedStore.holding`, `answering_expired`, `answering_unavailable`), on moto and in
   `make lifecycle-rustfs-check`.
   The pass's pre-vend probe and its next-pass time count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes, the time asking with the age a version will then have (`table_pass.versions_due_at`, [[LH-562]]); the catalog's GC preview names the versions by `lakehouse.version_retention`, since Lance's explanation counts them only.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
@@ -1380,7 +1397,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
   20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
-  `tags/update`, `branches/create`, and as ref work `restore` and a table's `policy/set`, ADR 0243) holds the fence,
+  `tags/update`, `branches/create`, and as ref work `restore` and a table's `policy/set` and `policy/delete`, ADR 0243) holds the fence,
   one object per holder under the table's directory `_history_fences/table-<digest>/` (`fences.HolderFence`,
   `history_fences.fence_directory`; a take judges only the names the fence defines directly in the directory, a
   holder's kind by its KEY whatever its body says, live until it is a hold old on the store's clock, and sweeps whatever
@@ -1389,7 +1406,7 @@ governing their data. The project-scoped surface is the console's project page, 
   never contending for a write (measured on RustFS 1.0.3 through the tag door: 16 of 16 and 64 of 64 concurrent tag writes
   answered 200, against 7 to 9 of 16 and 36 to 39 of 64 refused with one record per table, ADR 0233 §9,
   `tests/integration/test_a_tables_ref_writes_share_its_history.py`), the other kind is refused 409 code
-  14 (`DoorTable.history_held`), and a fenced expiry is `skipped="history_fenced"`, its table's pass tried again after
+  14 (`DoorTable.history_write`), and a fenced expiry is `skipped="history_fenced"`, its table's pass tried again after
   `retrySeconds` (`table_pass._dataset_due_at`). A branch create holds the kind `branch`, which also excludes another
   branch create, so two creates of nesting names on one table take turns and each judges a listing no other create
   changes (ADR 0179, [[LH-413]]). An erasure's release holds the kind `release`, which excludes every kind, its own

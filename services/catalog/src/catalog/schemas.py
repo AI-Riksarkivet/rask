@@ -546,6 +546,11 @@ class PolicyRequest(RequestBody):
     winner leaves unset falls to the sweep's global default rather than to the record it shadowed.
     Any surface that displays an effective policy has to say so: an inherited value rendered
     identically to a set one is how nobody can tell what is actually governing their data.
+
+    **A HOLD BINDS AT EVERY LEVEL (ADR 0243 §7).** ``cleanup_enabled`` false on the table's record, on any namespace above
+    it or on its project keeps the table's whole history, whatever a nearer record says: a narrower level cannot lift a
+    hold. A write of a namespace's or a project's policy answers 409 (ConcurrentModification, retryable) while a reclaim of
+    a table it governs runs, and a table's while a reclaim of the table runs.
     """
 
     retention_days: int | None = Field(default=None, ge=1, le=3650)
@@ -566,7 +571,10 @@ class PolicyRequest(RequestBody):
     # different risks. The ORDER is fixed and not configurable — compact, then optimize indices
     # (compaction leaves its new fragments unindexed), then cleanup LAST, because it reclaims the
     # superseded versions both earlier steps produced, in one pass.
-    cleanup_enabled: bool = True
+    cleanup_enabled: bool = Field(
+        default=True,
+        description="False keeps the whole version history (a legal hold): at a namespace or the project it holds every table beneath it, whatever their own policies say; no narrower level lifts it.",
+    )
     optimize_indices_enabled: bool = True
     # The sweep's READ batch, passed to `compact_files`. Lance's default is 8192 ROWS, and rows are
     # not a unit of memory: against page-image rows (~1.8 MB each, measured) 8192 rows is

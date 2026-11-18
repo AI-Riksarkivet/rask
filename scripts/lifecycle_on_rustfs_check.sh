@@ -27,7 +27,7 @@ ls "$root"/chart/charts/*.tgz >/dev/null 2>&1 || { echo "!! chart/charts holds n
 
 cd "$root"
 stop() {
-  kill "${store_pid:-}" 2>/dev/null || true
+  kill "${vend_pid:-}" "${store_pid:-}" 2>/dev/null || true
   wait 2>/dev/null || true
   rm -rf "$work"
 }
@@ -58,6 +58,11 @@ if [ "${KEEP_UP:-}" = 1 ]; then
   echo "RASK_LIFECYCLE_STORE_ENDPOINT=$endpoint RASK_LIFECYCLE_STORE_ACCESS_KEY=rask-lifecycle-root RASK_LIFECYCLE_STORE_SECRET_KEY=$RASK_LIFECYCLE_STORE_SECRET_KEY (pid $store_pid, $work)"
   exit 0
 fi
+# The maintain vend's own credential, which only this lane's store can mint (ADR 0233 §9, ADR 0243 §7.2): every case is the store's,
+# and the cap's (ADR 0243 §7.5) waits out one 900 s session, since RustFS 1.0.3 issues none shorter. It runs beside the
+# other groups, each in buckets of its own, so the lane lasts one session and not one session more.
+uv run --no-sync pytest tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py -p no:cacheprovider -rA "$@" >"$work/maintain-vend.log" 2>&1 &
+vend_pid=$!
 uv run --no-sync pytest \
   tests/integration/test_a_lifecycle_door_keeps_what_it_answered_beside_a_concurrent_door.py \
   tests/integration/test_a_cascade_keeps_what_it_answered.py \
@@ -67,7 +72,9 @@ uv run --no-sync pytest \
   packages/lakehouse/tests/test_a_tables_history_is_held_by_one_kind_of_work_at_a_time.py \
   tests/integration/test_a_keyed_write_lands_once_beside_its_resend.py \
   -k s3 -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"
-# The maintain vend's own credential, which only this lane's store can mint (ADR 0233 §9): every case is the store's.
-uv run --no-sync pytest tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py -p no:cacheprovider -rA "$@"
 # A table's pass beside the doors on its history (ADR 0243), its deletes held or refused on the wire in front of the store.
 uv run --no-sync pytest tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py -k rustfs -p no:cacheprovider -rA "$@"
+vend=0
+wait "$vend_pid" || vend=$?
+cat "$work/maintain-vend.log"
+exit "$vend"

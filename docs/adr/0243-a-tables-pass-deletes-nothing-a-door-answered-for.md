@@ -2,7 +2,9 @@
 
 **Status:** accepted; the model of what ADR 0232 left out ("the pass's effects on the store"). Three findings, each
 confirmed against the real pass and the real catalog on moto and on the pinned RustFS 1.0.3, each fixed model first
-(owner's standing ruling: fix now).
+(owner's standing ruling: fix now). Amended 2026-11-18: an independent review found nine more problems, each reproduced
+first and FIXED model first (§7 to §11); one of them is a decision taken for the owner to overturn (§8, what a hold
+means across levels).
 
 ## Context
 
@@ -21,38 +23,52 @@ unverified age (7 days), the trash read again under the fence, the policy record
    - the pass (`services/maintenance/src/maintenance/services`): `PStart`, `table_pass.run_table_pass`'s reads
      (`read_for`, the governing policy) and the maintain vend (`credentials.write_options_for`; the catalog's vend door
      refuses a table whose policy keeps its whole history, `credentials.require_reclaimable_history`); `PTake`,
-     `expiry._history_held` (`TableHistory.held(RECLAIM)`, under the vend); `PRecheck`, `expiry._dropped_since` and
-     `expiry._policy_changed`; `PList`, Lance's cleanup reading its refs, head and manifests once as it starts
-     (`lakehouse.history_fences`' module note, lance `cleanup.rs:472-511`): the versions it removes, the files only they
-     name, and the root's files no manifest names that are past the unverified age; `PDelData` and `PDelMan`, its
+     `expiry._history_held` (the history's RECLAIM and, guard `AncestorFence`, the policy fence of each namespace and the
+     project above the table, §7.2, all under the vend); `PRecheck`, `expiry._dropped_since` and `expiry._policy_changed`;
+     `PList`, the victims Lance's own dry run names written as the pass's mark (guard `VictimMark`, §7.4) and Lance's cleanup,
+     restricted to them, reading its refs, head and manifests once as it starts (`lakehouse.history_fences`' module note,
+     lance `cleanup.rs:472-511`): the versions it removes, the files only they name, and the root's files no manifest names
+     that are past the unverified age; `PDelData` and `PDelMan` (the marks naming no standing version removed once every
+     victim's manifest is gone), its
      deletes, every transaction and data file before any manifest, one at a time in any order (§3); `PBList` and
      `PBDel`, `base_reclaim.unreferenced` (read after the cleanup, from every retained version) and `base_reclaim.reclaim`;
      `PRelease`. A delete is signed by the vend, and once the vend has expired the store refuses every delete it signs.
    - the doors (`services/catalog/src/catalog`): a tag (`dataplane.create_tag`, and `update_tag`, `create_branch` and
      `lakehouse.clone_sources.take` alike); a restore (`api/v1/endpoints/tables._restore_holding_history`, whose commit,
      `dataplane.restore`, reads the restored version's manifest as it commits: measured on pylance 13.0.0, a `Restore`
-     committed after a cleanup removed the version fails `Not found`); a table's policy door
-     (`api/v1/endpoints/policies._set_holding_history`) writing a policy that keeps the whole history; a writer's commit
-     through any door or `version/create`, which takes no fence.
-   - faults, counted against `MaxFaults`: a pass that dies at any step, and a pass's credential expiring. A pass that
-     dies, or whose take a ref write refused, is passed again (WorkQueue). Time passes at any moment: any superseded
-     version may pass its retention, which over-approximates every clock.
+     committed after a cleanup removed the version fails `Not found`); the policy doors (`api/v1/endpoints/policies._fenced`):
+     the table's set (`policy`) and delete (`pdelete`, which hands the table to its namespace's policy keeping every
+     version), a namespace's and a project's set (`nspolicy`, `projpolicy`), each writing only once its hold is confirmed
+     (guard `DoorConfirm`, `lakehouse.fences.Fence.write_held`, §7.3); a writer's commit through any door or
+     `version/create`, which takes no fence.
+   - the policies: three levels (the table's record keeping one version, its namespace's, its project's), each none, keep
+     one, keep every version, or hold; the nearest record set decides how much is kept and a hold at any level keeps
+     everything (guard `HoldAnyLevel`, §8).
+   - faults, counted against `MaxFaults`: a pass that dies at any step, a pass's credential expiring, and a door's hold
+     lapsing under it (its process frozen past `HOLD`). A pass that dies, or whose take a ref write or a policy write
+     refused, is passed again (WorkQueue). Time passes at any moment: any superseded version may pass its retention, which
+     over-approximates every clock.
 
-2. **What it proves** (`make tla-check`; 2026-11-17, two TLC workers on four cores at a load of 14 to 15, the offline
-   suite running beside it). Every gate config checks every invariant:
-   - `TablePass.cfg` (one pass passed again and again; a tag, a restore, a policy keeping the whole history and a
-     writer; two faults): 115,507 distinct states, 11 s.
+2. **What it proves** (`make tla-check`; 2026-11-18, `-workers auto` on four cores shared with other agents). Every gate
+   config checks every invariant; the whole module's gate and expected failures run in 34 s:
+   - `TablePass.cfg` (one pass passed again and again; a tag, a restore, the table's hold and a writer; two faults):
+     239,544 distinct states.
+   - `TablePassPolicies.cfg` (every policy door: the table's set and delete, a namespace's and a project's hold; one
+     fault, a door's lapse among them): 19,604 states.
    - `TablePassTwo.cfg` (two passes at once, as a claim that lapsed under a live pass admits, WorkQueue A1; a tag and a
-     restore; one fault): 15,444 states, 8 s.
-   - `TablePassLive.cfg` (one fault; a tag, a restore and a writer): 12,547 states, the invariants and the property, 5 s.
-   - `TablePassWide.cfg`, ON DEMAND (two passes, every door, two faults): 1,849,702 states, 75 s.
+     restore; one fault): 22,455 states.
+   - `TablePassLive.cfg` (one fault; a tag, a restore and a writer): 17,358 states, the invariants and the property.
+   - `TablePassWide.cfg`, ON DEMAND (two passes, a tag, a restore, the table's policy delete, a namespace's hold and a
+     writer; one fault): 2,829,068 distinct states, 82 s on one worker. Every door with two faults was stopped by its time limit after 56,419,774 distinct
+     states and no violation, unfinished.
 
    The invariants, each a claim the code makes:
    - `RefsWhole` (nothing live is deleted): the head and every pinned version (a tag, a branch, a registered clone's
      source tag) stand with every file they name.
    - `InFlightKept`: a commit in flight keeps the files it wrote until it lands.
-   - `RetentionKept`: a policy keeping the whole history that answered 200 keeps every version that was whole then.
-   - `HalfOnlyVictims`: a version standing over deleted files is one a cleanup chose to remove, never another.
+   - `RetentionKept`: a policy door that answered 200 for keeping the whole history (a hold at any level, or a table
+     record's delete handing the table to a level keeping every version) keeps every version that was whole then.
+   - `HalfOnlyVictims`: a version standing over deleted files is named by a standing mark, which every ref door reads.
    - `DeletesHeld`: every delete is the pass's while it holds the table's history.
 
    The property, once faults stop: `EventuallyWhole`, no version stands over deleted files for good; the next pass
@@ -83,8 +99,12 @@ unverified age (7 days), the trash read again under the fence, the policy record
    - A3, `TablePassNoTagFence.cfg` (`RefsWhole`): a ref write holds the history as REFS, which RECLAIM excludes
      (`history_fences._excludes`). The measurement in `lakehouse.history_fences` (20 of 60 tags named a deleted version)
      is what it prevents.
-   - A4: the fence's take is atomic here; `specs/catalog/Fence.tla` proves the listings and the put-if-not-exists that
-     make it so.
+   - A4: each fence's take is atomic here; `specs/catalog/Fence.tla` proves the listings and the put-if-not-exists that
+     make it so. A pass's takes of the history and of each ancestor's policy fence are one step: nothing is deleted
+     before every take stands, and a refused take releases the others (`ExitStack` in `expiry._history_held`).
+   - A5: a door's write lands within `HOLD` of the confirm before it. The confirm renews the hold, and the write is the
+     next store request (`Fence.tla` F2); the model makes confirm and write one step. A door frozen for 15 minutes
+     between its confirm and its write is not covered.
 
 5. **The model was shown to bite.** Six defects were planted one at a time in a copy and each was reported on
    `TablePass.cfg`: the cleanup deleting every file a removed version names, shared ones included (`RefsWhole`, 6
@@ -123,23 +143,17 @@ unverified age (7 days), the trash read again under the fence, the policy record
      (`policies._set_holding_history`), so of a reclaim and the write one sees the other, and the door answers 409 (14)
      while a reclaim holds. Test `test_a_policy_keeping_the_whole_history_answered_200_keeps_every_version`, one case
      per guard (held before its hold, held at its cleanup's first delete).
-     **The residual, decided:** a namespace's or a project's policy governs many tables, and its door holds none of
-     their histories; taking each would cost a listing of every table beneath it per write. The pass's re-read under its
-     hold sees such a policy written before the hold, so one written while a cleanup already runs binds the next pass,
-     not that cleanup. An owner who needs a hold honoured at once sets the table's own policy.
-   - **HalfRemoved** (`RefsWhole`; `TablePassNoWholeRef.cfg`). Trace: the cleanup lists and deletes version 1's data
+     The namespace's and the project's policy, left as a residual here on 2026-11-17, is closed by §7.2.
+   - **HalfRemoved** (`RefsWhole`; `TablePassNoVictimMark.cfg`, which replaced `TablePassNoWholeRef.cfg`). Trace: the cleanup lists and deletes version 1's data
      files (`PList PDelData`); the pass's credential expires (`Expire`), so the store refuses its manifest deletes, which
      Lance counts and returns, or the pass dies there; its hold lapses (`Lapse`); a tag on version 1, whose manifest
      stands, is written (`TTake TCheck TWrite`), or a restore of it commits. **What is lost:** nothing more than the
      cleanup was removing, but the tag answers 200 for a version no reader can read and pins it for good, and a restore
-     makes the head unreadable (recoverable by restoring the previous head). **Guard `WholeRef`:** under its hold, every
-     door that pins or brings back a version (`create_tag`, `update_tag`, `create_branch` from a version, the restore,
-     a clone's source tag) refuses one not holding every file it names under its own ref (`dataplane.require_whole`,
-     `lakehouse.whole_versions.missing_files`: one listing of each of the ref's `data/`, `_deletions/` and `_indices/`;
-     409 InvalidTableState (19); `CloneSourceGoneError` for a clone). The hold makes the answer stand: no reclaim deletes
-     while the door holds, and once the ref stands the version is pinned or the head. The next pass removes the version,
-     which is still past its retention and pinned by nothing (`EventuallyWhole`). Test
-     `test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`, one case for the tag and one for the restore.
+     makes the head unreadable (recoverable by restoring the previous head). The guard first fixed here judged the files
+     the manifest names (`WholeRef`); review found it misses a blob sidecar and a partly deleted index, and it is
+     replaced by the cleanup's mark (`VictimMark`, §7.4), with the file check kept as the second line. The next pass
+     removes the version, which is still past its retention and pinned by nothing (`EventuallyWhole`). Test
+     `test_a_ref_answered_200_names_a_version_a_reader_can_read_whole`.
 
    **Verdicts on what looked like candidates and was not:**
    - The staged-manifest reclaim runs after the hold is released and is REFUTED as a hazard: a staged manifest is no
@@ -150,11 +164,170 @@ unverified age (7 days), the trash read again under the fence, the policy record
    - A drop, an undrop and a purge are TableLifecycle.tla's: the purge deletes no registered table's bytes, and a pass
      reads the trash again under its hold, after which a drop costs at most one cleanup under the table's own policy
      (`expiry._dropped_since`'s note), which keeps the head.
-   - UNDECIDED: a version's age is its manifest's timestamp, which its writer's clock stamps and `version/create` does
-     not judge, so a stock writer whose clock runs behind writes a version a later cleanup removes as soon as it is
-     superseded. Settled by a staged manifest whose timestamp is set back (pylance writes the local clock) committed
-     through `version/create` and a pass after one more commit; the fix would be `version/create`'s
-     (`managed_versions.stage`), which this change does not touch.
+   - A version's age is its manifest's timestamp, which its writer's clock stamped: left UNDECIDED on 2026-11-17,
+     reproduced and fixed by §10.
+
+## Found by review (2026-11-18), each FIXED
+
+Each was reproduced first, on moto and on RustFS 1.0.3 (the reviewer's scratch tests and scripts, run unchanged against the
+base of this change: 6 of 10 cases failed), then modelled, then fixed. Each guard's test is in
+`tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py` unless named; each test failed on its harm
+assertion with its guard removed, on moto and on RustFS, and passes with it.
+
+### 7.1 B1: the table's policy DELETE held no fence
+
+`policies._delete` wrote with no hold where `_set` held the table's history. Deleting the table's own record (keep one
+version) hands the table to its namespace's (keep every version): held at its cleanup's first delete, a pass that read
+the table's record deleted versions 1 and 2 after the delete answered 200. **Guard `PolicyDeleteFence`:** the delete takes
+the hold the set takes (`policies._fenced`, every policy write and delete at every level). Config
+`TablePassNoPolicyDeleteFence.cfg` (`RetentionKept`). Test case `table-delete-at-its-cleanups-first-delete`.
+
+### 7.2 A namespace's or a project's policy, written while a cleanup ran
+
+Reproduced: a namespace's hold set while a cleanup of a table beneath it ran answered 200, and versions [1, 2, 3] became
+[3]. **Guard `AncestorFence`:** a pass holds, for as long as it deletes, a SHARED holder (`PolicyWork.RECLAIM`) on the
+policy fence of each namespace of its chain and of its project (`lakehouse.policy_fences.PolicyFence`, a `HolderFence`
+subclass, `expiry._history_held`, `table_pass._policy_fences`), under its vend, beside the history's; a namespace's or a
+project's set or delete holds that level's fence as `PolicyWork.SET`, which every reclaim excludes, and writes only once
+it is confirmed (`policies._fenced`). Passes never exclude each other; a policy write answers 409 ConcurrentModification
+(14), retryable, while any pass deletes beneath it; a pass that finds a door's hold deletes nothing
+(`skipped=policy_fenced`) and is passed again after `retrySeconds`. The catalog's own reclaim doors take the same holds
+(§9). Config `TablePassNoAncestorFence.cfg` (`RetentionKept`). Test case `namespace-hold-at-its-cleanups-first-delete`.
+
+THE GRANT IS NOT EXACT, AND WHY. The brief asked the vend to reach exactly the holder objects of the table's own levels.
+An STS session policy holds 2,048 characters (`vending.SESSION_POLICY_LIMIT`), and the maintain tier's, without any policy
+fence and without `Sid`s, counts 1,389 under a 17-character bucket and 1,757 when the control and the data bucket names are
+both 63 characters (`vending.counted_length`); one grant per level
+costs about 200 characters, so a chain of three namespaces and a project did not fit (measured: the lane's first run
+refused the vend 400 SessionPolicyTooLong at 2,054 with one level). So every namespace fence of a warehouse lies beneath
+one directory (`policy_fences.warehouse_directory`, `_policy_fences/w<digest>/n<digest>`), the project's at
+`_policy_fences/p<digest>`, and the vend holds two strings whatever the depth: put and delete of `/reclaim-*.json` beneath
+its warehouse's directory and its project's, list and read of every policy fence (who holds one, never a policy). Measured
+on RustFS 1.0.3 with the real session policy (`tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py`):
+a reclaim's holder at its namespace and at its project answered 200; a policy door's holder (`set-`) at its namespace, and
+a reclaim's in another warehouse, AccessDenied. What a compromised maintain tier can plant is a reclaim's hold on a
+namespace of its own warehouse, for one hold, which delays a policy write there and nothing else. The four fence
+statements carry no `Sid`; the maintain tier now costs 1,638 characters under a 17-character bucket and 2,144 when both
+the control and the data bucket names are 63 characters, past the limit: such an estate's maintain vend answers 400
+SessionPolicyTooLong, and its passes keep everything, a stated limit.
+
+THE COST, measured on moto through the counting proxy: each level a pass holds costs five requests (two listings, the
+holder's put, the release's read and delete) and two more per renewal (every five minutes while it deletes); the policy is
+now read at every level, not only up to the nearest record (`governing_policy`: the table's depth plus two reads, every
+pass); the pre-vend probe lists the table's history fence for a mark (one listing a dataset); and the mark costs a put and
+a delete. A pass of one table one level deep sent 123 requests in all, nine of them these.
+
+### 7.3 B4: a door's write after its hold lapsed
+
+The table policy door held with `held(REFS)` and wrote, where the tag and restore doors confirmed first; `clone_sources.take`
+had the same shape. A catalog process frozen past the hold's 15 minutes resumed and wrote, answering 200, beside a cleanup
+admitted once the hold lapsed. **Guard `DoorConfirm`:** `lakehouse.fences.Fence.write_held` holds, runs the door's
+judgement under the hold, confirms the hold (a renewal that succeeds only while it stands), and only then writes; it is the
+one way a door writes what its answer promises under a fence: `DoorTable.history_write` for the tag, branch and restore
+doors, `policies._fenced` for every policy door, `clone_sources.take` for a clone's source tag. The model lets a door's hold
+lapse (`DoorLapse`). Config `TablePassNoDoorConfirm.cfg` (`RetentionKept`). Test case
+`namespace-hold-its-door-stalled-past-its-hold`: the door's hold shortened to 2 s, the door stalled before its confirm
+until the hold lapsed and a pass was admitted and reached its first delete.
+
+### 7.4 B2: the wholeness check missed what a cleanup deletes
+
+Reproduced on RustFS 1.0.3 and pylance 13.0.0: one cleanup sends its deletes as `.txn`, `.lance`, the data file's blob
+sidecar (`data/<stem>/<id>.blob`), the manifest; with the `.lance` and manifest deletes refused and the sidecar deleted,
+`missing_files` returned nothing, a tag or restore answered 200, and reading the blobs failed. **Guard `VictimMark`:** the
+guard rests on what the cleanup decided, not on file kinds (`lakehouse.reclaim_marks`). Under its RECLAIM hold, before any
+delete, a reclaim names its victims from Lance's own dry run (`explain_cleanup_old_versions(..., include_files=True)`, the
+manifests it names; every untagged version below the head when the dry run truncates, a superset), writes the mark, and
+runs `cleanup_old_versions` restricted to them by its `versions`, which `lance_docs/lance/guide/read_and_write.md` § Cleanup
+old versions says limits which versions it can remove (and an empty `versions` is refused, measured, so none is sent). The
+mark is removed only once every cleanup returned with no failed delete, and with it each standing mark of the ref naming no
+version that still stands. Every door that calls `require_whole` (tag create and update, branch create, restore, a clone's
+source) refuses a version a standing mark names, whatever files still stand (409 InvalidTableState, 19). A later pass that
+finds a mark finishes its versions while its policy still reclaims them (the probe lists the table's fence directory for
+one, and a mark makes the pass reclaim below its threshold); a mark whose versions a policy now keeps stays, and no door
+names them (`held_back{reason="marked"}`): when in doubt the pass keeps the file.
+
+THE MARK: key `<history fence directory>/reclaim-victims.<32 hex>.json` (`history_fences.VICTIMS_MARK`, one per cleanup,
+directly in the directory, never swept by a take), body `{"uuid": <table uuid>, "ref": <branch or null>, "versions":
+[...]}` (`reclaim_marks.VictimsMark`, extra fields refused). A maintain-tier vend may put and delete one; the catalog
+trusts one only at that key, with that shape and naming its own table, and ignores and logs anything else. Anything it can
+plant only makes a ref door refuse versions of its own table, which its RECLAIM hold already lets it do. It ends with the
+table (`history_fences.end`).
+
+THE SECOND LINE (`whole_versions.missing_files`) answers for a version no mark names: a data or deletion file the
+manifest names, read off sharded listings of only the prefixes their names begin with, sixteen at once
+(`stored_objects.present`); each index segment's directory listed and its bytes summed against the segment's recorded
+`size_bytes` (measured equal for BTREE, BITMAP, INVERTED and IVF_PQ segments on pylance 13.0.0), or held to one object
+where none is recorded. It does NOT judge blob sidecars or managed blob objects, whose names only the rows' descriptors
+carry; its docstring says so. A store that cannot answer is a 503 ServiceUnavailable, never "not whole" (test
+`test_a_ref_door_answers_a_store_that_cannot_say_whether_a_version_is_whole_503`). Its cost, measured on the local RustFS:
+1,000 fragments 0.16 s in 16 requests, 10,000 fragments 1.6 s in 16 requests (the base's one sequential listing: 0.3 s and
+2.4 s; one HEAD per file, sixteen at once, 1.5 s and 15 s, so it was not kept).
+
+Config `TablePassNoVictimMark.cfg` (`RefsWhole`). Test cases `tag-5242880-data-files-and-manifests` and
+`restore-5242880-data-files-and-manifests` (a 5 MiB payload per row, a dedicated sidecar); with the mark's check removed
+both fail, and the two manifest-only cases still pass on the second line.
+
+### 7.5 B3: no test pinned the maintain credential's cap
+
+**Test** `test_a_maintain_vend_dies_within_the_history_hold_whatever_the_ttl_configured` (the real-store lane): with the
+vendor's TTL configured at an hour, the maintain tier vended through the real door expires within the history hold on the
+store's clock, and the store refuses a delete it signs once it has, the file standing. RustFS 1.0.3 issues no session
+shorter than 900 s whatever is asked (measured: 5, 15, 60 and 900 s each expired at the same instant), so the case waits
+out one hold: the file's two cases took 911 s on the lane. With the cap removed it fails at once, the vend lasting 3,600 s.
+
+## 8. What a hold means across levels (decided 2026-11-18, for the owner to overturn)
+
+Before this, the nearest record governed every setting: a table's own policy overrode a namespace's `cleanup_enabled`
+false outright, and a namespace's hold never froze a table that had a policy of its own. **Decision:** `cleanup_enabled`
+false at ANY level that can govern a table (its own record, any ancestor namespace's, its project's) keeps that table's
+whole history; a narrower level cannot undo a hold. Every other setting (how many versions, how many days, the cadence)
+stays nearest-wins. This is the conservative reading (when in doubt a pass keeps the file); the owner may overturn it for
+nearest-wins on holds too, which `TablePassNearestHold.cfg` (`RetentionKept`) shows breaks the claim a hold's door
+answered. **Where:** `maintenance_policies._held`, used by `governing_policy` (every reader: the pass's `read_for` and its
+re-read under its holds, the vend door's `require_reclaimable_history`, the catalog's reclaim doors) and by
+`resolve_policy`; the record returned is the nearest one with `cleanup_enabled` false and `held_by` naming the holding level
+as `<kind>:<key>`. The policy doors' OpenAPI descriptions and `PolicyRequest.cleanup_enabled` say so, and the console's
+namespace page no longer says a table policy overrides a namespace's. Test case `namespace-hold-before-the-pass`.
+
+## 9. The catalog's own reclaim doors
+
+`maintenance/run` and `POST /v1/table/{id}/version/delete` delete with the catalog's credential, which never dies, so A1
+does not cover them, and `version/delete` deleted under a legal hold ("authorization alone governs it"). **Decision:** both
+are held as a pass is (`catalog.services.catalog_reclaims.held`): the history and each level's policy fence as reclaims,
+the governing policy read under them, a held table refused 409 InvalidTableState (19) (lifting the hold is a separate,
+audited act at a policy door), the victims marked before the first delete, and every hold confirmed before each cleanup
+call, one call per 16 versions (`catalog_reclaims.BATCH`). Of the two the brief offered, a confirm before each delete
+request is not open (Lance issues a cleanup's deletes with no hook between them) and a capped credential minted for the
+door works only where the catalog vends (`LANCE_VENDING_MODE=web_identity`); the per-batch confirm is the leaner that
+holds everywhere, and what it leaves (a door frozen inside one batch past `HOLD`) touches only versions its mark names.
+`maintenance/run` refuses a held table too, since it reclaims under the same bar. Reproduced first: under a table's hold
+both doors reclaimed (versions [1, 2, 3] became fewer); now each answers 409. Named in "Not modelled".
+
+## 10. A version's age is the catalog's clock
+
+`version/create` committed a stock client's manifest as staged, and Lance's cleanup ages a version by the manifest's
+`timestamp`. Reproduced through stock pylance against the live catalog, each staged manifest restamped by the writer
+before it asks for its commit: a version stamped ten years ahead survived the erasure release's own cleanup at a one-second
+retention (`erasure.reclaim_refs`, what `erasure_release._reclaim` runs; at retention 0 every superseded version goes
+whatever its stamp, measured, so the stamp bites at any retention above 0), and one stamped ten years behind was taken by
+a cleanup keeping a day. **Decision:** the catalog does not trust the writer's clock; the bytes it finalizes carry its own
+commit time (`managed_versions.stage`, `manifest_bytes.with_commit_time`, field 7 of `Manifest` rewritten, every other
+field and the sections before the message kept byte for byte, as `with_manifest_version` keeps them), and the digest the
+author record names is of those bytes. Measured on pylance 13.0.0: the stock client reads its commit back as its own (its
+write answers the version it asked for) and `versions()` reads the catalog's stamp, since the client matches the
+transaction, never the stamp. Every other commit path is stamped in the catalog's process already (the one-call doors,
+the restore, the floor raise and the disarm commit through pylance in the catalog; maintenance commits nothing). Test
+`tests/integration/test_a_versions_age_is_the_catalogs_commit_time.py`, a case each way; both failed before the fix.
+
+## 11. Starvation
+
+`maintenance.reclaims.held_back{reason}` had no alert: a table held back pass after pass meets neither its retention nor
+an erasure's deadline. **`MaintenanceReclaimStarved`** (`deploy/alerting/rules.yml`, warning) fires when held-back passes
+of one reason occur in every hour for 24 hours: a starved table is retried every `retrySeconds` (15 minutes), four an hour,
+and a day is one of the seven an erasure release's grace gives (`catalog.erasure.releaseGraceDays`), leaving six to find
+the writer or the mark. The counter names no table (an open set would be unbounded cardinality); the reason's log line
+does. Its case is in `rules_test.yml`; promtool is not installed where this was written, so `make alert-rules-check` was
+not run.
 
 ## What the model assumes beyond §4
 
@@ -166,35 +339,61 @@ unverified age (7 days), the trash read again under the fence, the policy record
 
 ## Not modelled
 
-A drop, undrop and purge (TableLifecycle.tla); an erasure release, whose RELEASE excludes every kind (Erasure.tla);
-the staged manifests and the committed-file records a pass removes (above); the floor raise, a catalog commit like any
-writer's; the orphan check, which deletes nothing; a branch's own cleanup (each branch is a ref of its own with the same
-steps); two tables sharing a data directory, which the directory's claim excludes (`data_directories.claimed_by`); a
-namespace's or project's policy (the residual above).
+A drop, undrop and purge (TableLifecycle.tla); an erasure release, whose RELEASE excludes every kind (Erasure.tla), and
+whose cleanup writes no mark, so a release cut short is judged by the second line alone (`whole_versions.missing_files`,
+blind to blob sidecars, §7.4); the staged manifests and the committed-file records a pass removes (above); the floor
+raise, a catalog commit like any writer's; the orphan check, which deletes nothing; a branch's own cleanup (each branch is
+a ref of its own with the same steps, its mark naming the branch); two tables sharing a data directory, which the
+directory's claim excludes (`data_directories.claimed_by`); a version expiring by its writer's clock (ages change at any
+time here, which over-approximates every clock; `version/create` stamps the catalog's own, §10); the catalog's own reclaim
+doors, `maintenance/run` and `version/delete` (§9), passes of the modelled shape signed by a credential that never dies,
+held by a confirm of every hold before each batch of 16 versions, so a door frozen inside one batch past `HOLD` can still
+delete that batch's files, of versions its mark names and no ref door may name; the project level's door is modelled as
+the namespace's (`projpolicy`), the same code path at its own fence (§7.2), and the integration tests drive the namespace's
+alone.
 
 ## What an operator observes
 
-- `maintenance.reclaims.held_back{reason}` counts each dataset whose pass deleted nothing because a ref write held the
-  table's history (`history_fenced`) or its policy changed since the pass read it (`policy_changed`); each is passed
-  again after `retrySeconds`. The log line `maintenance_policy_changed_mid_pass` names the table.
+- `maintenance.reclaims.held_back{reason}` counts each dataset whose pass kept what it would reclaim because a ref write
+  held the table's history (`history_fenced`), a policy write held a fence above it (`policy_fenced`), its policy changed
+  since the pass read it (`policy_changed`), or a cleanup's victims stay marked (`marked`); each is passed again after
+  `retrySeconds`. The log lines `maintenance_history_fenced`, `maintenance_policy_fenced`,
+  `maintenance_policy_changed_mid_pass` and `maintenance_victims_marked` name the table. `MaintenanceReclaimStarved`
+  (`deploy/alerting/rules.yml`) warns after a day of held-back passes in every hour (§11).
 - A restore beside a running reclaim answers 409 ConcurrentModification (14) where it answered 200; a table's
-  `policy/set` beside one answers 409 (14).
-- A tag, a branch from a version, a restore or a clone registration naming a version a cleanup half removed answers
-  409 InvalidTableState (19), logged `ref_on_a_version_being_reclaimed`, until the next pass removes the version; a
-  clone's registration answers 400 InvalidInput, as it answers a source version no longer kept
-  (`table_bases._tag`).
-- A maintain-tier credential expires within 900 s whatever `vending.ttlSeconds` is.
+  `policy/set` and `policy/delete` beside one answer 409 (14); a namespace's or a project's `policy/set` and
+  `policy/delete` beside a reclaim of a table it governs answer 409 (14), retryable.
+- A hold (`cleanup_enabled` false) on a namespace or a project keeps the whole history of every table beneath it, a table
+  whose own record keeps less among them: the maintain vend is refused for it (409 InvalidTableState, 19), the
+  catalog's `maintenance/run` and `version/delete` answer 409 (19) for it, and the effective record a pass reads names the
+  holding level under `held_by`.
+- A tag, a branch from a version, a restore or a clone registration naming a version a cleanup marked, or one missing a
+  file it names, answers 409 InvalidTableState (19), logged `ref_on_a_version_being_reclaimed`, until the next pass
+  removes the version; a clone's registration answers 400 InvalidInput, as it answers a source version no longer kept
+  (`table_bases._tag`). A store that cannot say whether the version is whole answers 503.
+- A maintain-tier credential expires within 900 s whatever `vending.ttlSeconds` is, and its session policy reaches the
+  cleanup's mark and a reclaim's holder in the policy fences of its own warehouse's namespaces and its own project.
+- A version a stock client commits through `version/create` carries the catalog's commit time, whatever its writer's clock
+  said (§10).
 
 ## The four facts
 
-- **GitOps**: met. No new chart value: the hold (900 s) is the fence's, the retry is `retrySeconds`, and the cap ties the
-  maintain credential to the hold rather than to a value an operator could set past it.
+- **GitOps**: met. No new chart value: the holds (900 s) are the fences', the retry is `retrySeconds`, the cap ties the
+  maintain credential to the hold rather than to a value an operator could set past it, the policy fences live on the
+  control root as every lease does (`control_prefixes.POLICY_FENCES`, a lease a backup skips), and the starvation
+  alert's day is derived from the chart's `catalog.erasure.releaseGraceDays` (§11).
 - **Cloud native**: met. Every exclusion is a record on the store any replica reads; no process holds a lock another
-  would not see.
-- **Lance-namespace/table-idiomatic**: met. Cleanup is Lance's own `cleanup_old_versions`, unchanged; the guards judge
-  what Lance's manifest names (`get_fragments`, `describe_indices`) and the restore is Lance's own `Restore`.
-- **Zero trust**: met, and widened. The maintain credential can no longer outlive the hold that licenses its deletes; a
-  door's answer rests on the store's conditional writes (the fence) and a listing read under it, never on timing.
+  would not see; the policy fence is the existing per-holder fence (`HolderFence`), a subclass, not a third mechanism.
+- **Lance-namespace/table-idiomatic**: met. Cleanup is Lance's own `cleanup_old_versions`, restricted by its own
+  documented `versions` to the victims its own dry run (`explain_cleanup_old_versions`) names; the restore is Lance's own
+  `Restore`; the stock client's path is unchanged (the version it commits carries the catalog's commit time, which it does
+  not read back to decide its commit).
+- **Zero trust**: met, with one stated widening. The maintain credential cannot outlive the holds that license its
+  deletes; a door's answer rests on the store's conditional writes and a renewal just before its write, never on timing;
+  the mark is trusted only at the key and shape the catalog defines, and a planted one only makes a door refuse. The
+  widening: the vend may hold a reclaim in the policy fence of any namespace of its own warehouse, not only its own
+  chain's, since one grant per level does not fit STS's 2,048 characters (§7.2); what it can plant there delays a policy
+  write there by one hold and nothing else.
 
 ## Consequences
 
@@ -202,4 +401,6 @@ namespace's or project's policy (the residual above).
   pins or brings back a version holding the history and judging the version whole. A change to that order changes this
   model first.
 - `make lifecycle-rustfs-check` runs the finding tests on RustFS; the offline suite runs them on moto.
-- `make tla-check` runs this model's gate and expected failures in about 45 s at a load of 15.
+- `make tla-check` runs this model's gate and expected failures in about 35 s.
+- A port of the policy doors keeps their fences and `write_held`; a port of a ref door keeps `require_whole`'s two lines,
+  the mark first.

@@ -9641,10 +9641,11 @@
       },
       "PolicyRequest": {
         "additionalProperties": false,
-        "description": "The maintenance policy for one table, namespace or project \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.\n\n**Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace\nrecord which shadows the project record \u2014 the winning record supplies EVERY field, and a field the\nwinner leaves unset falls to the sweep's global default rather than to the record it shadowed.\nAny surface that displays an effective policy has to say so: an inherited value rendered\nidentically to a set one is how nobody can tell what is actually governing their data.",
+        "description": "The maintenance policy for one table, namespace or project \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.\n\n**Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace\nrecord which shadows the project record \u2014 the winning record supplies EVERY field, and a field the\nwinner leaves unset falls to the sweep's global default rather than to the record it shadowed.\nAny surface that displays an effective policy has to say so: an inherited value rendered\nidentically to a set one is how nobody can tell what is actually governing their data.\n\n**A HOLD BINDS AT EVERY LEVEL (ADR 0243 \u00a77).** ``cleanup_enabled`` false on the table's record, on any namespace above\nit or on its project keeps the table's whole history, whatever a nearer record says: a narrower level cannot lift a\nhold. A write of a namespace's or a project's policy answers 409 (ConcurrentModification, retryable) while a reclaim of\na table it governs runs, and a table's while a reclaim of the table runs.",
         "properties": {
           "cleanup_enabled": {
             "default": true,
+            "description": "False keeps the whole version history (a legal hold): at a namespace or the project it holds every table beneath it, whatever their own policies say; no narrower level lifts it.",
             "title": "Cleanup Enabled",
             "type": "boolean"
           },
@@ -15571,7 +15572,7 @@
     },
     "/management/v1/namespace/{id}/policy/delete": {
       "post": {
-        "description": "Remove the namespace's maintenance policy (idempotent) \u2014 owner-gated by the router.",
+        "description": "Remove the namespace's maintenance policy (idempotent) \u2014 owner-gated by the router. Answers 409 (code 14,\nretryable) while a reclaim of a table beneath it runs.",
         "operationId": "delete_namespace_policy_management_v1_namespace__id__policy_delete_post",
         "parameters": [
           {
@@ -15711,7 +15712,7 @@
     },
     "/management/v1/namespace/{id}/policy/set": {
       "post": {
-        "description": "Set (or replace) a namespace-level policy \u2014 applies to every table under the namespace, at any depth, unless\na table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``).",
+        "description": "Set (or replace) a namespace-level policy \u2014 applies to every table under the namespace, at any depth: its\nretention and cadence unless a table policy or a nearer namespace's sets them, and a hold (``cleanup_enabled`` false)\nover every table beneath it whatever their own policies say. Answers 409 (ConcurrentModification, code 14, retryable)\nwhile a reclaim of a table beneath it runs. Owner-gated by the router (``can_delete``).",
         "operationId": "set_namespace_policy_management_v1_namespace__id__policy_set_post",
         "parameters": [
           {
@@ -16131,7 +16132,7 @@
     },
     "/management/v1/project/{id}/policy/delete": {
       "post": {
-        "description": "Remove the project's maintenance policy (idempotent) \u2014 admin-gated.",
+        "description": "Remove the project's maintenance policy (idempotent) \u2014 admin-gated. Answers 409 (code 14, retryable) while a\nreclaim of a table it governs runs.",
         "operationId": "delete_project_policy_management_v1_project__id__policy_delete_post",
         "parameters": [
           {
@@ -16271,7 +16272,7 @@
     },
     "/management/v1/project/{id}/policy/set": {
       "post": {
-        "description": "Set (or replace) the project-level maintenance policy (#84) \u2014 the tenant-wide default the sweep\nfalls back to when no table or namespace policy matches. Admin-gated (``can_administer`` on\n``project:<id>``, checked explicitly \u2014 see the module docstring).\n\nThe record's ``buckets`` are the project's ACTIVE warehouse buckets, resolved from the warehouse\nregistry NOW: a warehouse provisioned after this set is not covered until the policy is re-set\n(the same set-time-resolution stance as the table policy's physical path). Staleness runs the OTHER\nway too: a warehouse deactivated AFTER this set stays on the stored record \u2014 the policy keeps\ngoverning that bucket's datasets until the policy is re-set (or deleted); a deactivation does not\nrewrite existing policy records. A project with no active warehouse is refused \u2014 a policy that\ncould never match anything should fail loudly at set time, not lie dormant.\n\nDefense in depth (audit 2026-07-23): a resolved bucket that ANOTHER project's warehouse also claims\nis refused with 409 \u2014 even if a rival claim somehow got past ``create_warehouse``'s guards, it must\nnot become a policy governing (and destroying version history in) the other tenant's data.",
+        "description": "Set (or replace) the project-level maintenance policy (#84) \u2014 the tenant-wide default the sweep\nfalls back to when no table or namespace policy matches, and, when it holds (``cleanup_enabled`` false), a hold over\nevery table in the project's buckets whatever their own policies say. Answers 409 (ConcurrentModification, code 14,\nretryable) while a reclaim of a table it governs runs. Admin-gated (``can_administer`` on\n``project:<id>``, checked explicitly \u2014 see the module docstring).\n\nThe record's ``buckets`` are the project's ACTIVE warehouse buckets, resolved from the warehouse\nregistry NOW: a warehouse provisioned after this set is not covered until the policy is re-set\n(the same set-time-resolution stance as the table policy's physical path). Staleness runs the OTHER\nway too: a warehouse deactivated AFTER this set stays on the stored record \u2014 the policy keeps\ngoverning that bucket's datasets until the policy is re-set (or deleted); a deactivation does not\nrewrite existing policy records. A project with no active warehouse is refused \u2014 a policy that\ncould never match anything should fail loudly at set time, not lie dormant.\n\nDefense in depth (audit 2026-07-23): a resolved bucket that ANOTHER project's warehouse also claims\nis refused with 409 \u2014 even if a rival claim somehow got past ``create_warehouse``'s guards, it must\nnot become a policy governing (and destroying version history in) the other tenant's data.",
         "operationId": "set_project_policy_management_v1_project__id__policy_set_post",
         "parameters": [
           {
@@ -19767,7 +19768,7 @@
     },
     "/management/v1/table/{id}/maintenance/run": {
       "post": {
-        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.",
+        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.\n\nHELD AS A MAINTENANCE PASS IS (ADR 0243 \u00a78, ``catalog.services.catalog_reclaims``): the table's history and the policy\nfence of each level above it, the governing policy read under them, the victims marked before the first delete, and\nevery hold confirmed before each cleanup call. A hold at any level that can govern the table answers 409\nInvalidTableState (19), a ref write or a policy write holding a fence 409 ConcurrentModification (14).",
         "operationId": "run_maintenance_management_v1_table__id__maintenance_run_post",
         "parameters": [
           {
@@ -19861,7 +19862,7 @@
     },
     "/management/v1/table/{id}/policy/delete": {
       "post": {
-        "description": "Remove the table's maintenance policy (idempotent) \u2014 owner-gated by the router.",
+        "description": "Remove the table's maintenance policy (idempotent) \u2014 owner-gated by the router. The table is then governed by its\nnearest namespace's, else its project's, policy; answers 409 (code 14, retryable) while a reclaim of the table runs.",
         "operationId": "delete_table_policy_management_v1_table__id__policy_delete_post",
         "parameters": [
           {
@@ -20001,7 +20002,7 @@
     },
     "/management/v1/table/{id}/policy/set": {
       "post": {
-        "description": "Set (or replace) the table's maintenance policy \u2014 owner-gated by the router (``can_drop``).",
+        "description": "Set (or replace) the table's maintenance policy \u2014 owner-gated by the router (``can_drop``).\n\nIts settings govern the table over any namespace's or project's, but for a hold: ``cleanup_enabled`` false at any level\nthat can govern the table keeps its whole history, and this record cannot lift a farther level's. Answers 409\n(ConcurrentModification, code 14, retryable) while a reclaim of the table runs.",
         "operationId": "set_table_policy_management_v1_table__id__policy_set_post",
         "parameters": [
           {
@@ -30008,7 +30009,7 @@
     },
     "/v1/table/{id}/version/delete": {
       "post": {
-        "description": "Delete old versions of this table \u2014 never the current one, and never one a tag or a branch pins.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the\nlatest\". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:\nLance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again\nby the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a\nchild branch pins is refused (409), naming the pin. Every range is judged before anything is\ndeleted, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears), and authorization alone governs it: this\nreclaims history, as ``maintenance/run`` does, and deletion protection guards dropping the table, not its\nhistory (ADR 0150). A version that must survive is tagged.",
+        "description": "Delete old versions of this table \u2014 never the current one, and never one a tag or a branch pins.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the\nlatest\". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:\nLance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again\nby the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a\nchild branch pins is refused (409), naming the pin. Every range is judged before anything is\ndeleted, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which\nno retention judges and deletion protection does not guard (protection guards dropping the table, not its history,\nADR 0150). A version that must survive is tagged. A HOLD IS JUDGED (ADR 0243 \u00a78): while ``cleanup_enabled`` is false at\nany level that can govern the table (its own policy, a namespace's above it, its project's) the delete answers 409\nInvalidTableState (19), since lifting the hold is a separate, audited act at a policy door. It is held as a\nmaintenance pass is (``catalog.services.catalog_reclaims``): the table's history and each level's policy fence, its\ntargets marked before the first delete, every hold confirmed before each cleanup call; a ref write or a policy write\nholding a fence answers 409 ConcurrentModification (14).",
         "operationId": "batch_delete_table_versions_v1_table__id__version_delete_post",
         "parameters": [
           {

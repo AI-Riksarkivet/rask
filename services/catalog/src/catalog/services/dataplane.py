@@ -135,6 +135,7 @@ from lakehouse import (
     file_identities,
     idempotency,
     location_claims,
+    reclaim_marks,
     stored_objects,
     trash,
     whole_versions,
@@ -143,6 +144,7 @@ from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_a
 from lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
+from lakehouse.fences import Hold
 from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.history_fences import HistoryWork
@@ -4329,23 +4331,53 @@ def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableT
 
 
 def require_whole(
-    table: table_claims.DoorTable, so: StorageOptions, dataset: lance.LanceDataset, *, branch: str | None, version: int | None, kind: str, name: str
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    dataset: lance.LanceDataset,
+    *,
+    branch: str | None,
+    version: int | None,
+    kind: str,
+    name: str,
+    marks: frozenset[tuple[str, str]],
 ) -> None:
-    """Refuse a ref or a restore naming a version of ``branch`` (main for ``None``) that no longer holds every file it names:
-    one a cleanup that stopped part-way was removing (:mod:`lakehouse.whole_versions`, ADR 0243). Asked while the door
-    holds the table's history as ref work, which every reclaim excludes, so a version found whole stays whole until the
-    ref stands. ``dataset`` is the table's handle; ``kind`` and ``name`` say what the door writes, for its refusal. A ref's
-    latest version (``version`` ``None``) is its head, which no cleanup removes.
+    """Refuse a ref or a restore naming a version of ``branch`` (main for ``None``) a cleanup was removing (ADR 0243).
+
+    First, a version a standing mark names (:mod:`lakehouse.reclaim_marks`): a cleanup wrote it under its hold before its
+    first delete, so the version may stand over any deleted file, its blob sidecars among them, whatever still stands.
+    ``marks`` are the ones the door's take of the table's history listed (:attr:`lakehouse.fences.Hold.marks`). Then, for
+    a version no mark names, one missing a file its manifest names (:func:`lakehouse.whole_versions.missing_files`).
+    Asked while the door holds the table's history as ref work, which every reclaim excludes, so the answer stands until
+    the ref does. ``dataset`` is the table's handle; ``kind`` and ``name`` say what the door writes, for its refusal. A
+    ref's latest version (``version`` ``None``) is its head, which no cleanup removes.
 
     Raises:
         TableVersionNotFoundError: The ref has no such version (code 11), as :func:`_ref_errors` answers it.
-        InvalidTableStateError: A file the version names is gone; a later maintenance pass removes the version (code 19).
+        InvalidTableStateError: A cleanup marked the version, or a file it names is gone; a later maintenance pass removes
+            it (code 19).
+        ServiceUnavailableError: The store did not answer a read of a mark or a file, so whether the version is whole is
+            unknown (503); nothing was written.
     """
     if version is None:
         return
     with _ref_errors(kind, name):
         opened = dataset.checkout_version((branch, version) if branch is not None else version)
-    gone = whole_versions.missing_files(opened, branch_layout.ref_root(table.location, branch), so)
+    fence = table.history_fence()
+    try:
+        marked = reclaim_marks.marked_versions(
+            reclaim_marks.read(fence.control_root, fence.storage_options, table_uuid=fence.table_uuid, marks=marks), recorded_branch(branch)
+        )
+        gone = [] if version in marked else whole_versions.missing_files(opened, branch_layout.ref_root(table.location, branch), so)
+    except OSError as exc:
+        raise ServiceUnavailableError(
+            f"the store did not answer whether version {version} of {branch or MAIN_BRANCH} is whole, so no {kind} was written: {exc}"[:600]
+        ) from exc
+    if version in marked:
+        log.warning("ref_on_a_version_being_reclaimed", extra={"kind": kind, "ref": name, "branch": branch, "version": version, "marked": True})
+        raise InvalidTableStateError(
+            f"version {version} of {branch or MAIN_BRANCH} is being reclaimed: a cleanup marked it before its first delete, "
+            "so no ref may name it and no restore bring it back; a later maintenance pass removes it"
+        )
     if gone:
         log.warning("ref_on_a_version_being_reclaimed", extra={"kind": kind, "ref": name, "branch": branch, "version": version, "gone": gone[:5]})
         raise InvalidTableStateError(
@@ -4389,7 +4421,7 @@ class PlacedRef(BaseModel):
 
 #: What a ref door asks inside its hold of the table's history, before it writes ``ref``: given the marks its take saw
 #: (:attr:`lakehouse.fences.Hold.marks`) and its handle on the table (``catalog.services.erasure_release.RefNotices``).
-#: Every ref door then confirms its hold (:meth:`lakehouse.fences.Hold.confirm`) just before its write: a door whose hold
+#: Every ref door then confirms its hold just before its write (:meth:`table_claims.DoorTable.history_write`): a door whose hold
 #: lapsed while it stalled may have let a reclaim, a release's scheduling or the release itself in, and writes nothing
 #: (G11 of ``specs/catalog/Erasure.tla``, 409 code 14).
 type BeforeRef = Callable[[frozenset[tuple[str, str]], lance.LanceDataset, PlacedRef], None]
@@ -4406,13 +4438,18 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
     """
     _refuse_a_ref_name_no_key_segment_holds("tag", req.tag)
     dataset = _open_with_branch(table, so, req.branch)
-    with table.history_held(HistoryWork.REFS) as hold:
+    branch = recorded_branch(req.branch)
+
+    def judge(hold: Hold) -> None:
         if before_ref is not None:
-            before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=recorded_branch(req.branch), version=req.version))
-        require_whole(table, so, dataset, branch=recorded_branch(req.branch), version=req.version, kind="tag", name=req.tag)
-        hold.confirm()
+            before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=branch, version=req.version))
+        require_whole(table, so, dataset, branch=branch, version=req.version, kind="tag", name=req.tag, marks=hold.marks)
+
+    def write() -> None:
         with _ref_errors("tag", req.tag):
-            dataset.tags.create(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
+            dataset.tags.create(req.tag, _tag_reference(branch, req.version))
+
+    table.history_write(HistoryWork.REFS, write, judge=judge)
     return CreateTableTagResponse()
 
 
@@ -4469,13 +4506,18 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
     """
     _require_a_tag_a_key_segment_can_hold(req.tag)
     dataset = _open_with_branch(table, so, req.branch)
-    with table.history_held(HistoryWork.REFS) as hold:
+    branch = recorded_branch(req.branch)
+
+    def judge(hold: Hold) -> None:
         if before_ref is not None:
-            before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=recorded_branch(req.branch), version=req.version))
-        require_whole(table, so, dataset, branch=recorded_branch(req.branch), version=req.version, kind="tag", name=req.tag)
-        hold.confirm()
+            before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=branch, version=req.version))
+        require_whole(table, so, dataset, branch=branch, version=req.version, kind="tag", name=req.tag, marks=hold.marks)
+
+    def write() -> None:
         with _ref_errors("tag", req.tag):
-            dataset.tags.update(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
+            dataset.tags.update(req.tag, _tag_reference(branch, req.version))
+
+    table.history_write(HistoryWork.REFS, write, judge=judge)
     return UpdateTableTagResponse()
 
 
@@ -4556,8 +4598,11 @@ def create_branch(
     # JUDGED INSIDE THE TABLE'S BRANCH-CREATE HOLD ([[LH-413]]): `a` and `a/b` are two ref files no write on a ref makes
     # collide, so two creates of nesting names each passed a listing the other had not yet changed. The hold excludes
     # every other branch create on the table, so the listing judged here is the one this create commits against.
-    with table.history_held(HistoryWork.BRANCH) as hold:
+    opened: list[lance.LanceDataset] = []
+
+    def judge(hold: Hold) -> None:
         dataset = table.open(so)
+        opened.append(dataset)
         branches = dataset.branches.list()
         if req.name in branches:
             raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
@@ -4573,15 +4618,18 @@ def create_branch(
             with _ref_errors("branch", source, invalid_name=req.name):
                 cut_at = req.from_version if req.from_version is not None else int(_source_head(dataset, req.from_branch))
             before_ref(hold.marks, dataset, PlacedRef(kind="branch", name=req.name, branch=req.from_branch, version=cut_at))
-        require_whole(table, so, dataset, branch=req.from_branch, version=req.from_version, kind="branch", name=source)
-        hold.confirm()
+        require_whole(table, so, dataset, branch=req.from_branch, version=req.from_version, kind="branch", name=source, marks=hold.marks)
+
+    def write() -> None:
         try:
             with _ref_errors("branch", source, invalid_name=req.name):
-                dataset.create_branch(req.name, _branch_reference(req))
+                opened[0].create_branch(req.name, _branch_reference(req))
         except OSError:
             if req.name in table.open(so).branches.list():
                 raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists") from None
             raise
+
+    table.history_write(HistoryWork.BRANCH, write, judge=judge)
     return CreateTableBranchResponse()
 
 

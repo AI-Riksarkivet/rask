@@ -103,6 +103,7 @@ from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent, ControlAction
 from lakehouse.features import CREATE_FORMAT, table_file_format
+from lakehouse.fences import Hold
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
@@ -1888,20 +1889,23 @@ def _restore_holding_history(
     runs: a reclaim that listed the table's versions before the restore committed would delete the files the restored
     head names (measured on pylance 13.0.0: 2 restores of 40 beside a cleanup at age 0 left a head no reader could read).
     The hold excludes every reclaim, so the restore answers 409 while one deletes; and under it the version must still
-    hold every file it names (:func:`dataplane.require_whole`), since a cleanup that stopped part-way leaves its versions
-    standing over deleted files. A branch the table does not have is left to the restore's own refusal (code 22).
+    be named by no cleanup's mark and hold every file it names (:func:`dataplane.require_whole`), since a cleanup that
+    stopped part-way leaves its versions standing over deleted files. A branch the table does not have is left to the
+    restore's own refusal (code 22). The commit is made only once the hold is confirmed (:meth:`DoorTable.history_write`).
 
     Raises:
         ConcurrentModificationError: A reclaim holds the table's history, or the hold lapsed before the commit (code 14).
-        InvalidTableStateError: A file the version names is gone (code 19).
+        InvalidTableStateError: A cleanup marked the version, or a file it names is gone (code 19).
+        ServiceUnavailableError: The store did not answer whether the version is whole (503).
     """
     branch = recorded_branch(body.branch)
-    with table.history_held(HistoryWork.REFS) as hold:
+
+    def judge(hold: Hold) -> None:
         dataset = table.open_unchecked(so)
         if branch is None or branch in dataset.branches.list():
-            dataplane.require_whole(table, so, dataset, branch=branch, version=body.version, kind="restore", name=branch or MAIN_BRANCH)
-        hold.confirm()
-        return dataplane.restore(table, so, body, transaction_properties=transaction_properties)
+            dataplane.require_whole(table, so, dataset, branch=branch, version=body.version, kind="restore", name=branch or MAIN_BRANCH, marks=hold.marks)
+
+    return table.history_write(HistoryWork.REFS, partial(dataplane.restore, table, so, body, transaction_properties=transaction_properties), judge=judge)
 
 
 @router.post("/{id}/stats", response_model_exclude_none=True)

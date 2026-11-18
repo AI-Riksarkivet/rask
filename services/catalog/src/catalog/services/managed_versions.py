@@ -20,6 +20,7 @@ import json
 import logging
 from collections import Counter
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from functools import partial
 from typing import Final
 
@@ -254,9 +255,16 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     # between the judgement and the finalize, and a version judged as one operation commit another. Sealing that file
     # first is no answer: the writer puts it again, under the same name, on each attempt of the commit.
     _require_an_inline_transaction(manifest, ref, so)
+    # THE VERSION'S AGE IS THE CATALOG'S CLOCK, NEVER THE WRITER'S (ADR 0243 §9). Lance's cleanup ages a version by its
+    # manifest's `timestamp` (`lance_docs/lance/guide/read_and_write.md` § Cleanup old versions), which a stock writer
+    # stamps on its own clock: one stamped years ahead outlived every retention and an erasure release's cleanup, one
+    # stamped behind was reclaimed as soon as it was superseded. The bytes finalized carry the catalog's commit time in its
+    # place, every other field as staged (`with_commit_time`); measured on pylance 13.0.0 the stock client reads its commit
+    # back as its own, since it matches the transaction, never the stamp.
+    finalized = manifest_bytes.with_commit_time(manifest, datetime.now(UTC))
     detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
     _write(location, so, f"d{detached_id}.manifest", manifest_bytes.with_manifest_version(manifest, detached_id))
-    _write(location, so, f"d{finalize_id}.manifest", manifest)
+    _write(location, so, f"d{finalize_id}.manifest", finalized)
     try:
         transaction = lance.dataset(location, version=detached_id, storage_options=so.in_clear() or None).read_transaction(detached_id)
     except (OSError, ValueError) as exc:
@@ -300,7 +308,7 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         operation=operation,
         properties=properties,
         transaction_uuid=transaction.uuid,
-        manifest_digest=commit_records.manifest_digest(manifest),
+        manifest_digest=commit_records.manifest_digest(finalized),
         read_version=transaction.read_version,
         max_fragment_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.MAX_FRAGMENT_ID_FIELD),
         next_row_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.NEXT_ROW_ID_FIELD),

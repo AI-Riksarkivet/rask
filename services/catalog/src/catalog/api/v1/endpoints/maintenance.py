@@ -28,13 +28,12 @@ from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import DoorTableDep, FgaClientDep, ResolverDep, SettingsDep, StorageOptionsDep, ancestor_uuids
 from catalog.api.security import CurrentToken
 from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
-from catalog.services import maintenance, maintenance_commits, table_claims
+from catalog.services import catalog_reclaims, maintenance, maintenance_commits, table_claims
 from lakehouse import branch_layout, maintenance_due, stored_objects
 from lakehouse.governed import fga
-from lakehouse.history_fences import HistoryWork
 
 
 log = logging.getLogger(__name__)
@@ -84,6 +83,7 @@ async def run_maintenance(
     so: StorageOptionsDep,
     token: CurrentToken,
     client: FgaClientDep,
+    resolver: ResolverDep,
     branch: Annotated[
         str | None, Query(description="The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files.")
     ] = None,
@@ -97,15 +97,25 @@ async def run_maintenance(
 
     Reclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is
     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
-    parent's data files, counted before and after — rather than which ref the door opened."""
+    parent's data files, counted before and after — rather than which ref the door opened.
+
+    HELD AS A MAINTENANCE PASS IS (ADR 0243 §8, ``catalog.services.catalog_reclaims``): the table's history and the policy
+    fence of each level above it, the governing policy read under them, the victims marked before the first delete, and
+    every hold confirmed before each cleanup call. A hold at any level that can govern the table answers 409
+    InvalidTableState (19), a ref write or a policy write holding a fence 409 ConcurrentModification (14)."""
     ds = await run_in_threadpool(partial(table.open, so, branch=branch))
+    namespace_uuids = await ancestor_uuids(resolver, table.resolved.segments)
 
     def _reclaim() -> maintenance.GcRunData:
         # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
         # version this deletes. A ref write holding it answers this request 409.
         # [[LH-232]] Each transaction file the cleanup removes is recorded; Lance records the rest itself.
-        with table.history_held(HistoryWork.RECLAIM), stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, branch), so):
-            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch)
+        with (
+            catalog_reclaims.held(table, settings, namespace_uuids=namespace_uuids) as held,
+            stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, branch), so),
+        ):
+            marked = catalog_reclaims.marked(held, table, ref=branch)
+            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch, marked=marked)
 
     return GcRunResult(**await run_in_threadpool(_reclaim))
 

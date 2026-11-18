@@ -67,7 +67,19 @@ from lakehouse.storage_options import StorageOptions
 
 PREFIX: Final = control_prefixes.HISTORY_FENCES
 
-__all__ = ["HOLD", "PREFIX", "RELEASE_MARK", "HistoryFencedError", "HistoryHolder", "HistoryWork", "Holder", "TableHistory", "end", "fence_directory"]
+__all__ = [
+    "HOLD",
+    "PREFIX",
+    "RELEASE_MARK",
+    "VICTIMS_MARK",
+    "HistoryFencedError",
+    "HistoryHolder",
+    "HistoryWork",
+    "Holder",
+    "TableHistory",
+    "end",
+    "fence_directory",
+]
 
 
 def fence_directory(table_uuid: str) -> str:
@@ -99,7 +111,7 @@ class HistoryWork(StrEnum):
     #: Deletes versions: ``cleanup_old_versions`` in any of its callers.
     RECLAIM = "reclaim"
     #: Writes a tag or moves a branch's ref, each of which pins a version against a reclaim; a restore, which brings an old
-    #: version's files back, and a table's policy write, which a reclaim reads under its hold, hold it too (ADR 0243).
+    #: version's files back, and a table's policy set or delete, which a reclaim reads under its hold, hold it too (ADR 0243).
     REFS = "refs"
     #: Creates a branch: ref work no other branch create may share, since each judges the branch names the table holds.
     BRANCH = "branch"
@@ -112,6 +124,11 @@ class HistoryWork(StrEnum):
 #: The kind of an erasure release's mark in a table's fence directory (``catalog.services.erasure_release.mark_key``): the
 #: one mark a take hands its holder, and one only the catalog's own credential can write.
 RELEASE_MARK: Final = "erasure-release"
+
+#: The kind of a cleanup's mark in a table's fence directory (:mod:`lakehouse.reclaim_marks`): the versions one cleanup will
+#: remove, written under its RECLAIM hold before its first delete and removed once it returned with no failed delete. A
+#: maintain-tier vend may put and delete one (``catalog.core.vending.TableRecords``); a ref door refuses a version one names.
+VICTIMS_MARK: Final = "reclaim-victims"
 
 #: The kinds that keep refs off the table's history while they hold it: they delete versions, or write what a ref write
 #: must see before it lands. They share it with their own kind and with each other.
@@ -154,7 +171,7 @@ class TableHistory(HolderFence):
     stored_field: ClassVar[str] = "uuid"
     holder_model: ClassVar[type[HolderRecord]] = HistoryHolder
     kinds: ClassVar[frozenset[str]] = frozenset(HistoryWork)
-    mark_kinds: ClassVar[frozenset[str]] = frozenset({RELEASE_MARK})
+    mark_kinds: ClassVar[frozenset[str]] = frozenset({RELEASE_MARK, VICTIMS_MARK})
 
     table_uuid: str
 

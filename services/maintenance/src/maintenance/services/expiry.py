@@ -12,14 +12,15 @@ from __future__ import annotations
 
 import logging
 import re
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Generator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Final, Literal
 
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import maintenance_policies, trash
+from lakehouse import maintenance_policies, reclaim_marks, trash
 from lakehouse.base_registry import RecordedBase
 from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from lakehouse.features import (
@@ -29,8 +30,10 @@ from lakehouse.features import (
     mixes_data_file_versions,
     unsupported_features_from_open_error,
 )
+from lakehouse.fences import Hold
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.lineage_events import DatasetUuids
+from lakehouse.policy_fences import PolicyFence, PolicyFencedError, PolicyWork
 from lakehouse.storage_options import StorageOptions
 from lakehouse.stored_objects import delete_objects, list_under_at, recording_removed_transactions
 from maintenance.core.config import shared_lance_session
@@ -57,6 +60,9 @@ HISTORY_FENCED: Final = "history_fenced"
 #: it and its hold of the table's history (ADR 0243), so the policy the pass planned under may keep less than the one an
 #: owner was answered for.
 POLICY_CHANGED: Final = "policy_changed"
+#: Why a pass that would delete did not run this tick: a write of the policy of a namespace or the project above the table
+#: held that level's policy fence (ADR 0243 §6).
+POLICY_FENCED: Final = "policy_fenced"
 
 
 class DatasetResult(BaseModel):
@@ -64,8 +70,9 @@ class DatasetResult(BaseModel):
 
     uri: str
     #: Why this dataset's pass did not run this tick: the policy cadence (``policy_interval``), a write of one of the
-    #: table's tags or branches holding its history ([[LH-308]], :data:`HISTORY_FENCED`), or its policy changed since the
-    #: pass read it (:data:`POLICY_CHANGED`); ``None`` when the pass ran.
+    #: table's tags or branches holding its history ([[LH-308]], :data:`HISTORY_FENCED`), a write of a policy above it
+    #: holding that level's fence (:data:`POLICY_FENCED`), or its policy changed since the pass read it
+    #: (:data:`POLICY_CHANGED`); ``None`` when the pass ran.
     skipped: str | None = None
     #: Why this dataset was REFUSED, and by which gate (:data:`Gate`, or one of the catalog's answers for the id).
     refused: str | None = None
@@ -149,6 +156,8 @@ class PolicyRead(BaseModel):
     namespace_uuids: list[str]
     #: The record that governed the table, ``None`` for the global defaults.
     policy: dict[str, object] | None
+    #: The project whose policy may govern the table, the one its bucket's claim names; ``None`` where none does.
+    project: str | None = None
 
     def changed(self, storage_options: StorageOptions) -> bool:
         """Whether the governing policy is another record now, or can no longer be read: either way the pass keeps
@@ -199,6 +208,14 @@ class ExpiryTarget(BaseModel):
     #: The versions the policy would reclaim, as the probe counted them on the handle this pass reads (no vend); ``None``
     #: counts them here.
     reclaimable_versions: int | None = None
+    #: The ref the dataset is, a branch's name, ``None`` for the table's main: whose versions a cleanup's mark names.
+    ref: str | None = None
+    #: The policy fence of each namespace and the project above the table, under the vend, which the pass holds as a
+    #: reclaim beside its history while it deletes (ADR 0243 §6); empty holds none.
+    policy_fences: list[PolicyFence] = Field(default_factory=list)
+    #: Whether a standing mark names a version of the ref the policy reclaims (:mod:`lakehouse.reclaim_marks`), which a
+    #: dead cleanup left half removed: the pass reclaims below its threshold to finish it.
+    marked_due: bool = False
 
     @property
     def opened_with(self) -> StorageOptions:
@@ -410,25 +427,55 @@ def _count(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarge
         result.base_fragments_holding_deleted_rows = base_reclaim.fragments_holding_deleted_rows(ds, target.data_directories)
 
 
-def _versions_due(result: DatasetResult, policy: ExpiryPolicy) -> bool:
-    """Whether enough superseded versions are reclaimable for the pass to reclaim them."""
-    return policy.cleanup_enabled and (result.reclaimable_versions or 0) >= policy.min_reclaimable
+def _versions_due(result: DatasetResult, policy: ExpiryPolicy, target: ExpiryTarget) -> bool:
+    """Whether enough superseded versions are reclaimable for the pass to reclaim them, or a dead cleanup's victims wait to
+    be finished."""
+    return policy.cleanup_enabled and ((result.reclaimable_versions or 0) >= policy.min_reclaimable or target.marked_due)
 
 
-def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
+def _reclaim_versions(
+    ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy, hold: Hold | None
+) -> None:
     """Reclaim superseded versions once enough are reclaimable; tagged versions are EXEMPT.
+
+    MARKED (ADR 0243, :mod:`lakehouse.reclaim_marks`): under the hold, the versions Lance's dry run names are written as a
+    mark in the table's history fence directory, under the vend, before the first delete; the cleanup is restricted to
+    them, and the mark is removed only once it returned with no failed delete, with each standing mark of this ref naming
+    no version that still stands. A mark left (a delete the store refused, or a policy that now keeps a dead cleanup's
+    victims) keeps every ref door off its versions, and is counted (``maintenance.reclaims.held_back{reason="marked"}``).
 
     ``error_if_tagged_old_versions=False``: the default RAISES once any tag ages past ``older_than``, and a table's
     long-lived tag (a pipeline's ``stable``) would then stall reclamation on that dataset forever. Each transaction file the cleanup
     removes is recorded under the vend ([[LH-232]]); Lance records the rest itself.
     """
-    if not _versions_due(result, policy):
+    if not _versions_due(result, policy, target):
         log.debug("maintenance_expiry_below_threshold", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
         return
+    history, table_uuid = target.history, target.table_uuid
+    if history is None or table_uuid is None or hold is None:
+        # Held by no fence (a caller that holds none, as a test of the ladder alone): nothing a door reads is written.
+        with recording_removed_transactions(target.uri, vend):
+            stats = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
+        result.old_versions_removed, result.bytes_removed = stats.old_versions, stats.bytes_removed
+        return
+    standing = reclaim_marks.read(history.control_root, vend, table_uuid=table_uuid, marks=hold.marks)
     with recording_removed_transactions(target.uri, vend):
-        stats = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
-    result.old_versions_removed = stats.old_versions
-    result.bytes_removed = stats.bytes_removed
+        done = reclaim_marks.cleanup(
+            ds,
+            control_root=history.control_root,
+            storage_options=vend,
+            table_uuid=table_uuid,
+            ref=target.ref,
+            older_than=policy.older_than,
+            retain_versions=policy.retain_versions,
+            standing=standing,
+        )
+    result.old_versions_removed, result.bytes_removed = done.old_versions, done.bytes_removed
+    if done.marks_left:
+        log.warning(
+            "maintenance_victims_marked", extra={"uri": result.uri, "uuid": table_uuid, "marks": done.marks_left, "failed_deletes": done.failed_deletes}
+        )
+        record_reclaim_held_back("marked")
 
 
 def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions) -> None:
@@ -446,22 +493,33 @@ def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, 
 
 def _deletes(result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> bool:
     """Whether this pass will delete: versions past the policy's threshold, or files in the table's data directories."""
-    return _versions_due(result, policy) or (policy.cleanup_enabled and bool(target.data_directories))
+    return _versions_due(result, policy, target) or (policy.cleanup_enabled and bool(target.data_directories))
 
 
-def _history_held(result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> AbstractContextManager[None]:
-    """The table's history held for a reclaim while a pass that deletes runs ([[LH-308]]); nothing held for one that does not.
+@contextmanager
+def _history_held(result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> Generator[Hold | None]:
+    """The table's history, and the policy fence of each level above it, held for a reclaim while a pass that deletes runs
+    ([[LH-308]], ADR 0243 §6), the history's :class:`lakehouse.fences.Hold` handed to the block; nothing held, and ``None``
+    handed, for one that does not.
 
     ``cleanup_old_versions`` reads the table's tags and branches once, when it starts, so a ref written while it runs can
-    name a version it deletes. Only a pass that deletes holds the fence, so a table's ref writes wait on no pass that
-    reclaims nothing.
+    name a version it deletes; and the pass reads the policy that governs the table once more under these holds, so a
+    policy written at any level while it deletes is refused rather than answered beside the cleanup. Only a pass that
+    deletes holds them, so a table's ref writes and its levels' policy writes wait on no pass that reclaims nothing. A
+    refused take releases what was taken.
 
     Raises:
         HistoryFencedError: A write of the table's tags or branches holds its history.
+        PolicyFencedError: A write of the policy of a level above the table holds that level's fence.
     """
     if target.history is None or not _deletes(result, target, policy):
-        return nullcontext()
-    return target.history.held(HistoryWork.RECLAIM)
+        yield None
+        return
+    with ExitStack() as held:
+        hold = held.enter_context(target.history.hold_for(HistoryWork.RECLAIM))
+        for fence in target.policy_fences:
+            held.enter_context(fence.held(PolicyWork.RECLAIM))
+        yield hold
 
 
 def _dropped_since(target: ExpiryTarget) -> bool:
@@ -483,7 +541,9 @@ def _policy_changed(target: ExpiryTarget) -> bool:
     The pass plans its cleanup under the policy it read as it started, and an owner may set one that keeps more meanwhile
     (a legal hold among them). A table's own policy door holds the table's history while it writes, so of that write and
     this hold one sees the other: the door answers 409 while the pass holds, and a write that landed first is read here.
-    A changed policy, or one no longer readable, keeps everything this pass, which comes again after ``retry_seconds``.
+    A changed policy, or one no longer readable, keeps everything this pass, which comes again after ``retry_seconds``. A
+    namespace's or a project's policy door holds that level's policy fence, which the pass holds too (ADR 0243 §6), so
+    the same holds at every level that can govern the table.
     """
     return target.policy_read is not None and target.policy_read.changed(target.storage_options)
 
@@ -521,10 +581,10 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: Datas
         if (vend := target.write_options) is None:
             # A pass holding no vend writes nothing: versions that crossed the threshold since its probe counted them are
             # the next pass's.
-            if _versions_due(result, policy):
+            if _versions_due(result, policy, target):
                 log.info("maintenance_reclaim_awaits_its_vend", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
             return result
-        with _history_held(result, target, policy):
+        with _history_held(result, target, policy) as hold:
             if _dropped_since(target):
                 log.info("maintenance_table_trashed_mid_pass", extra={"uri": result.uri, "uuid": target.table_uuid})
                 result.trashed = target.table_uuid
@@ -534,7 +594,7 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: Datas
                 record_reclaim_held_back("policy_changed")
                 result.skipped = POLICY_CHANGED
                 return result
-            _reclaim_versions(opened.ds, result=result, target=target, vend=vend, policy=policy)
+            _reclaim_versions(opened.ds, result=result, target=target, vend=vend, policy=policy, hold=hold)
             _reclaim_data_directories(opened.ds, result=result, target=target, vend=vend)
         # Whether or not any version is due: a lost staged manifest is no version's, so no ref's fence guards it, and a
         # pass that left it would find the table due again at once.
@@ -543,6 +603,10 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: Datas
         log.info("maintenance_history_fenced", extra={"uri": result.uri, "table_id": result.table_id, "reason": str(exc)})
         record_reclaim_held_back("history_fenced")
         result.skipped = HISTORY_FENCED
+    except PolicyFencedError as exc:
+        log.info("maintenance_policy_fenced", extra={"uri": result.uri, "table_id": result.table_id, "reason": str(exc)})
+        record_reclaim_held_back("policy_fenced")
+        result.skipped = POLICY_FENCED
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
         # A pyo3 panic derives from BaseException; measured on the live estate 2026-08-16, one escaping panic answered
         # the entire sweep HTTP 500 and every other dataset lost its reclamation.

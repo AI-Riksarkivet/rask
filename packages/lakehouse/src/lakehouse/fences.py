@@ -21,7 +21,9 @@ A DIRECTORY MAY CARRY MARKS (:data:`MARK_NAME`): objects named ``<kind>.<id>.jso
 (:attr:`Fence.mark_kinds`), that no take sweeps or judges, and that every take's second listing hands its holder
 (:attr:`Hold.marks`), so work coming to the fenced object is seen by every holder admitted after its mark was written, at
 no round trip of its own. A table's history carries the mark of each erasure release scheduled on it
-(``catalog.services.erasure_release``), which only the catalog's own credential can write there.
+(``catalog.services.erasure_release``), which only the catalog's own credential can write there, and the mark of each
+cleanup's victims (:mod:`lakehouse.reclaim_marks`), which a reclaim writes before its first delete and which only makes a
+ref door refuse more.
 
 A LISTING JUDGES ONLY THE NAMES THE FENCE DEFINES, DIRECTLY IN ITS DIRECTORY (``specs/catalog/Fence.tla`` F3). A table's
 history is also written by maintenance under its table's maintain-tier vend, which may put and delete every key below
@@ -55,7 +57,7 @@ import logging
 import re
 import threading
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, Final
@@ -245,6 +247,27 @@ class Fence(BaseModel):
             stopped.set()
             keeper.join(timeout=self._renewal_seconds())
             self.release(token)
+
+    def write_held[T](self, work: str, write: Callable[[], T], *, judge: Callable[[Hold], None] | None = None, renewed: bool = True) -> T:
+        """``write`` while the fence is held for ``work``, once ``judge`` has passed under the hold and the hold is confirmed
+        (:meth:`Hold.confirm`): the one way a door writes what its answer promises while it holds a fence (ADR 0243, B4).
+
+        A door that holds a fence and then writes answers for what the hold excluded. Its process may stall past the hold
+        between its take and its write (measured nowhere and possible anywhere: a paused pod, a long GC), and a holder of an
+        excluding kind may be admitted once the hold has lapsed; so the write is made only once a renewal has shown the hold
+        still stands, and the hold is renewed by it for one more :meth:`hold`, inside which the write lands
+        (``specs/maintenance/TablePass.tla`` DoorConfirm, ``specs/catalog/Fence.tla`` F2).
+
+        Raises:
+            Exception: :meth:`refused`'s error: work that excludes ``work`` holds the fence, or the hold lapsed before the
+                write; nothing was written.
+            botocore.exceptions.ClientError: The store refused the take or the confirm.
+        """
+        with self.hold_for(work, renewed=renewed) as hold:
+            if judge is not None:
+                judge(hold)
+            hold.confirm()
+            return write()
 
 
 class Hold:

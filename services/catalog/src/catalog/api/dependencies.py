@@ -390,6 +390,17 @@ def get_resolver(request: Request, settings: SettingsDep) -> Resolver:
 ResolverDep = Annotated[Resolver, Depends(get_resolver)]
 
 
+async def ancestor_uuids(resolver: Resolver, segments: list[str]) -> list[str]:
+    """The uuids of the namespaces the table ``segments`` names lies in, outermost first: the levels whose maintenance
+    policy may govern it. A name no namespace holds keeps no policy, and a namespace whose uuid cannot be read is refused
+    by the resolver (``UnidentifiedObjectError``)."""
+    uuids: list[str] = []
+    for depth in range(1, len(segments)):
+        if (namespace_uuid := await resolver.namespace_uuid(segments[:depth])) is not None:
+            uuids.append(namespace_uuid)
+    return uuids
+
+
 async def get_resolved_table(request: Request, ns: NamespaceDep, resolver: ResolverDep) -> ResolvedTable:
     """The table the request's ``{id}`` names, resolved once to its location and that location's claim (ADR 0173 §7).
 
