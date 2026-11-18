@@ -47,6 +47,8 @@ what it owns is the part that is identical in all of them:
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import logging
 import os
 from collections.abc import AsyncGenerator, Callable, Sequence
@@ -119,7 +121,18 @@ class _UncachedApp(FastAPI):
 
     @override
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        await NoStoreMiddleware(super().__call__)(scope, receive, send)
+        answered = NoStoreMiddleware(super().__call__)(scope, receive, send)
+        if scope["type"] == "lifespan":
+            await answered
+            return
+        # A REQUEST RUNS IN A CONTEXT OF ITS OWN. A server starts a connection's next request from wherever it finished
+        # the last, and a request whose bytes arrived before the previous answer ended is started by the task that
+        # answered it, in a copy of that task's context (measured 2026-11-18 on uvicorn 0.51, asyncio and uvloop, h11 and
+        # httptools: of two requests written together, the second ran inside the first's span, took its trace id and never
+        # read its own ``traceparent``, and saw every context variable the first door had set). The instrumentation below
+        # reads the caller's ``traceparent`` only where no span is current, and the Gateway reuses a connection across
+        # callers, so the request is run in a task holding an empty context, which nothing another request did can reach.
+        await asyncio.get_running_loop().create_task(answered, context=contextvars.Context())
 
 
 def _trace_every_request(app: FastAPI) -> None:
