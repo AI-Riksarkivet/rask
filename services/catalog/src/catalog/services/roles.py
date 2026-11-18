@@ -17,7 +17,6 @@ All IO here is blocking; callers threadpool it.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -33,6 +32,7 @@ from lakehouse import control_prefixes
 from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
+from lakehouse.record_store import load_json
 from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
 from lakehouse.storage_options import StorageOptions
 
@@ -105,8 +105,7 @@ def _read_roles(control_root: str, storage_options: StorageOptions, project: str
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
-            with fs.open_input_stream(info.path) as stream:
-                stored = StoredRole.model_validate(json.loads(stream.readall().decode("utf-8")))
+            stored = StoredRole.model_validate(load_json(fs, info.path))
         except FileNotFoundError:
             continue
         except (OSError, ValueError, ValidationError) as exc:
@@ -135,8 +134,7 @@ def every_stored_role(control_root: str, storage_options: StorageOptions) -> tup
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
-            with fs.open_input_stream(info.path) as stream:
-                stored = StoredRole.model_validate(json.loads(stream.readall().decode("utf-8")))
+            stored = StoredRole.model_validate(load_json(fs, info.path))
         except FileNotFoundError:
             continue
         except (OSError, ValueError, ValidationError) as exc:

@@ -35,7 +35,6 @@ parse is reported as an incomplete scan, never allowed to void a category.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
@@ -53,6 +52,7 @@ from lakehouse.governed import fga
 from lakehouse.governed.tenancy import UUID
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
+from lakehouse.record_store import load_json
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 from lakehouse.trash import TrashKind
 from maintenance.core import metrics
@@ -365,8 +365,7 @@ def _list_json_records(
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
+            record = load_json(fs, info.path)
         except Exception as exc:
             skipped.append(f"{info.path} is unreadable ({type(exc).__name__}: {exc})")
             continue

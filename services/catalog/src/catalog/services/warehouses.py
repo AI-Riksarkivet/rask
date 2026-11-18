@@ -11,7 +11,6 @@ All IO here is blocking; callers threadpool it.
 
 from __future__ import annotations
 
-import json
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -54,7 +53,7 @@ from lakehouse.governed import tenancy
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
-from lakehouse.record_store import get_record, put_record
+from lakehouse.record_store import get_record, load_json, put_record
 from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, Stored, create_json, exchange_json, replace_json
 from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
 
@@ -426,8 +425,7 @@ def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
+            record = load_json(fs, info.path)
         except FileNotFoundError:
             continue
         except Exception as exc:
@@ -523,8 +521,7 @@ def read_claims(control_root: str, storage_options: StorageOptions) -> tuple[lis
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
+            record = load_json(fs, info.path)
         except FileNotFoundError:
             continue
         except Exception as exc:

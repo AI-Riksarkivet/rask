@@ -31,6 +31,7 @@ from lakehouse import control_prefixes
 from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
 from lakehouse.protection import is_protected
+from lakehouse.record_store import load_json
 from lakehouse.records import RecordChangedError, RecordMissingError, Stored, mutate_json, read_json_at, remove_json, replace_json
 from lakehouse.storage_options import StorageOptions
 
@@ -63,11 +64,9 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict[
     """The record at ``key``, or ``None`` when nothing is stored there."""
     fs, base = fs_and_base(root_uri, storage_options)
     try:
-        stream = fs.open_input_stream(f"{base}/{key}")
+        return load_json(fs, f"{base}/{key}")
     except FileNotFoundError:
         return None
-    with stream:
-        return json.loads(stream.readall().decode("utf-8"))
 
 
 # --------------------------------------------------------------------------- #
@@ -292,8 +291,7 @@ def read_ended(root_uri: str, storage_options: StorageOptions) -> tuple[list[End
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
-            with fs.open_input_stream(info.path) as stream:
-                out.append(EndedCreation.model_validate_json(stream.readall()))
+            out.append(EndedCreation.model_validate(load_json(fs, info.path)))
         except FileNotFoundError:
             continue
         except (ValidationError, ValueError, OSError) as exc:

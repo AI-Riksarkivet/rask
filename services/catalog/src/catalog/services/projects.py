@@ -16,7 +16,6 @@ All IO here is blocking; callers threadpool it.
 
 from __future__ import annotations
 
-import json
 import logging
 
 import pyarrow.fs as pafs
@@ -38,6 +37,7 @@ from catalog.services.control_records import (
 from lakehouse import control_prefixes
 from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
+from lakehouse.record_store import load_json
 from lakehouse.records import Stored, create_json
 from lakehouse.storage_options import StorageOptions
 
@@ -203,8 +203,7 @@ def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[l
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
+            record = load_json(fs, info.path)
         except Exception as exc:
             log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
             unreadable.append(info.path)

@@ -112,6 +112,34 @@ def read_record(control_root: str, storage_options: StorageOptions, key: str) ->
     return loaded
 
 
+#: How many times a document that does not parse is read before it is called unreadable (:func:`load_json`).
+_READS = 3
+
+
+def load_json(fs: pafs.FileSystem, path: str) -> Any:  # noqa: ANN401 — whatever JSON document is stored
+    """The JSON document stored at ``path``, read whole.
+
+    A stream sizes the object with one request and fetches that many bytes with a second (measured 2026-11-18 on pyarrow
+    25 against moto 5.2.2: a ``HEAD``, then one ranged ``GET``), so a record replaced by a longer one between the two
+    arrives cut to the old length. A cut JSON object or array never parses, and a record replaced by one no longer arrives
+    whole, so a document that does not parse is read again, and is not JSON only when no read of it parsed.
+
+    Raises:
+        FileNotFoundError: Nothing is stored at ``path``.
+        ValueError: What is stored is not JSON.
+        OSError: The store failed the read.
+    """
+    for last in (False,) * (_READS - 1) + (True,):
+        with fs.open_input_stream(path) as stream:
+            raw = stream.readall()
+        try:
+            return json.loads(raw)
+        except ValueError:
+            if last:
+                raise
+    raise AssertionError("unreachable: the last read returns or raises")
+
+
 def _loaded(control_root: str, storage_options: StorageOptions, key: str) -> object:
     """The JSON stored at ``key``, or ``None`` when nothing is.
 
@@ -121,8 +149,7 @@ def _loaded(control_root: str, storage_options: StorageOptions, key: str) -> obj
     """
     fs, base = fs_and_base(control_root, storage_options)
     try:
-        with fs.open_input_stream(f"{base}/{key}") as stream:
-            return json.loads(stream.readall().decode())
+        return load_json(fs, f"{base}/{key}")
     except FileNotFoundError:
         return None
 
@@ -163,8 +190,7 @@ def list_records(
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
-            with fs.open_input_stream(info.path) as stream:
-                loaded: Any = json.loads(stream.readall().decode())
+            loaded: Any = load_json(fs, info.path)
         except FileNotFoundError:
             # Removed since the listing named it: no longer a record, and no record this listing failed to read.
             continue
