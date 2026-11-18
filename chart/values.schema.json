@@ -322,7 +322,7 @@
                             ]
                         },
                         "grants": {
-                            "description": "Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:\u003cid\u003e` or `warehouse:\u003cid\u003e`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:\u003cnamespace\u003e:\u003cname\u003e`). The catalog revokes a grant removed from here, and only one it wrote from here.",
+                            "description": "Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:\u003cid\u003e` or `warehouse:\u003cid\u003e` (the id; the catalog writes it on the creation the id names, ADR 0245), `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:\u003cnamespace\u003e:\u003cname\u003e`). The catalog revokes a grant removed from here, and only one it wrote from here.",
                             "type": "array"
                         },
                         "projects": {

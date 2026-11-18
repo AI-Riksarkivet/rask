@@ -12,8 +12,6 @@ Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-from collections.abc import AsyncGenerator, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -33,17 +31,28 @@ def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
     return SimpleNamespace(user=user, relation=relation, object=obj)
 
 
+#: The project's live creation as OpenFGA names it (ADR 0245).
+ACME = f"project:{'a' * 32}"
+
+
 class _Harness:
     """Answers the gate and records the writes the endpoint issues."""
 
     def __init__(self, existing: list[SimpleNamespace] | None = None, *, allow: bool = True) -> None:
-        # The project as its door made it: born, its token standing (ADR 0241).
-        self.existing = [_tuple("revision:i1", "revision", "project:acme"), _tuple("revision:i1.0", "revision", "project:acme"), *(existing or [])]
+        self.existing = list(existing or [])
         self.allow = allow
         self.written: list[Any] = []
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from catalog.api import fga_deps
+
+        acme = members.tenancy.Tenant(kind="project", id="acme", obj=ACME, record={"id": "acme", "uuid": "a" * 32, "state": "live"})
+
+        async def fake_resolve(_s: object, _kind: str, _id: str) -> members.tenancy.Tenant:
+            return acme
+
+        async def fake_still(_s: object, _tenant: object) -> None:
+            return None
 
         async def fake_require(_c: object, _s: object, _t: object, *, relation: str, obj: str) -> None:
             if not self.allow:
@@ -52,23 +61,21 @@ class _Harness:
         async def fake_read(_c: object, _obj: str, **_kw: object) -> list[SimpleNamespace]:
             return list(self.existing)
 
-        @contextlib.asynccontextmanager
-        async def fake_fenced(_c: object, obj: str, **_kw: object) -> AsyncGenerator[members.fga.Fence]:
-            yield members.fga.Fence(obj, "i1", members.fga.ClientTuple(user=obj, relation="ticket", object="fence:t"))
-
         async def fake_holds(_c: object, t: Any) -> bool:  # noqa: ANN401 — a ClientTuple
             return any((e.user, e.relation, e.object) == (t.user, t.relation, t.object) for e in self.existing)
 
-        async def fake_write(_c: object, _fences: object, *, writes: Sequence[Any] = (), **_kw: object) -> bool:
-            self.written.extend(writes)
-            self.existing.extend(_tuple(t.user, t.relation, t.object) for t in writes)
+        async def fake_write(_c: object, t: Any, **_kw: object) -> bool:  # noqa: ANN401 — a ClientTuple
+            self.written.append(t)
+            self.existing.append(_tuple(t.user, t.relation, t.object))
             return True
 
+        monkeypatch.setattr(members.tenancy, "require", fake_resolve)
+        monkeypatch.setattr(members.tenancy, "require_still", fake_still)
         monkeypatch.setattr(fga_deps, "require_relation", fake_require)
         monkeypatch.setattr(members.fga, "read_object_tuples", fake_read)
-        monkeypatch.setattr(members.fga, "fenced", fake_fenced)
         monkeypatch.setattr(members.fga, "holds", fake_holds)
-        monkeypatch.setattr(members.fga, "commit_fenced", fake_write)
+        monkeypatch.setattr(members.project_admins, "confer", fake_write)
+        monkeypatch.setattr(members.project_admins, "write_absent", fake_write)
 
 
 def _client() -> Any:
@@ -119,7 +126,7 @@ def test_grant_writes_the_tuple_and_normalises_a_bare_subject(monkeypatch: pytes
     h.install(monkeypatch)
     out = _grant(h, "dex~bob", "member")
     assert len(h.written) == 1
-    assert (h.written[0].user, h.written[0].relation, h.written[0].object) == ("user:dex~bob", "member", "project:acme")
+    assert (h.written[0].user, h.written[0].relation, h.written[0].object) == ("user:dex~bob", "member", ACME)
     assert members.Member(user="user:dex~bob", relation="member") in out.members
 
 
@@ -134,7 +141,7 @@ def test_a_qualified_userset_passes_through_verbatim(monkeypatch: pytest.MonkeyP
 def test_regranting_what_someone_already_holds_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Not an optimisation: an OpenFGA Write is transactional and REJECTS an existing tuple, so without
     the pre-read the second call would 400."""
-    h = _Harness([_tuple("user:dex~bob", "member", "project:acme")])
+    h = _Harness([_tuple("user:dex~bob", "member", ACME)])
     h.install(monkeypatch)
     _grant(h, "dex~bob", "member")
     assert h.written == []

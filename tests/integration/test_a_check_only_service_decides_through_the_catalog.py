@@ -29,6 +29,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pyarrow as pa
@@ -69,10 +70,12 @@ class Estate(BaseModel):
 
     url: str
     uuids: dict[str, tuple[str, str]]
+    #: Each project's object as the test names it (``project:<id>``) mapped to its creation's (ADR 0245).
+    creations: dict[str, str]
 
     def asked(self, name: str) -> str:
-        """The object a question names ``name`` by: a table's uuid object, or ``name`` itself for any other object."""
-        return f"table:{self.uuids[name][0]}" if name in self.uuids else name
+        """The object a question names ``name`` by: a table's uuid object, a project's creation, or ``name`` itself."""
+        return f"table:{self.uuids[name][0]}" if name in self.uuids else self.creations.get(name, name)
 
     def decision(self, name: str, *, allowed: bool) -> TableDecision:
         """The door's answer about the table ``name`` names: with its uuids only when allowed."""
@@ -95,14 +98,14 @@ class Refused(BaseModel):
 _FORBIDDEN, _MALFORMED = Refused(status=403, code=15), Refused(status=400, code=13)
 
 
-def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]]:  # noqa: ANN401 — the root conftest's OpenFgaStore and DexIssuer
+def _arrange(url: str, store: Any, dex_issuer: Any) -> tuple[dict[str, tuple[str, str]], dict[str, str]]:  # noqa: ANN401 — the root conftest's OpenFgaStore and DexIssuer
     """root, the estate admin as the catalog's declaration grants it, makes both tenants through the doors and grants bob reading
     both tables and acme's membership; acme's admin grants acme's service the asking on acme, and the estate admin grants
     a notifier the expansion of members at the tuple door."""
     from lance_namespace import connect
 
     from catalog.core.config import get_settings
-    from catalog.services import warehouses
+    from catalog.services import projects, warehouses
 
     store.write(
         (user_object("dex~root"), "admin", "estate:rask"),
@@ -111,9 +114,12 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
     settings, rows = get_settings(), encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
     root = {"Authorization": f"Bearer {dex_issuer.mint('root', connector='local', audience='lance-catalog')}"}
     uuids: dict[str, tuple[str, str]] = {}
+    creations: dict[str, str] = {}
     with httpx.Client(base_url=url, headers=root, timeout=30) as client:
         for project, (warehouse, namespace) in _TENANTS.items():
             _ok(client.post("/management/v1/projects", json={"id": project}))
+            under = (projects.get_project(settings.registry_root, settings.storage_options(), project) or {})["uuid"]
+            creations[f"project:{project}"] = f"project:{under}"
             made = {
                 "id": warehouse,
                 "bucket": warehouse,
@@ -121,11 +127,13 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
                 "project": project,
                 "status": "active",
                 "created_at": datetime.now(UTC).isoformat(),
+                "uuid": uuid4().hex,
+                "project_uuid": under,
+                "state": "live",
             }
             warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), made)
-            # Born, as its create door bears it (ADR 0241): its incarnation's marker and token, beside its tenancy edge.
-            born = (f"revision:{made['incarnation']}", f"revision:{made['incarnation']}.0")
-            store.write(*((user, "revision", f"warehouse:{warehouse}") for user in born), (f"project:{project}", "project", f"warehouse:{warehouse}"))
+            # Live, as its create door leaves it (ADR 0245): its tenancy edge, between the two creations.
+            store.write((f"project:{under}", "project", f"warehouse:{made['uuid']}"))
             warehouses.ensure_catalog_row(connect("dir", {"root": settings.root}), warehouse)
             _ok(client.post(f"/v1/namespace/{namespace}/create", json={}))
             table = f"{namespace}$t"
@@ -137,7 +145,7 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
         _ok(client.put(f"/management/v1/projects/{ACME}/members", json={"user": "dex~bob", "relation": "member"}))
         _ok(client.post("/management/v1/access/tuples", json={"user": user_object(_account(NOTIFIER)), "relation": "member_expander", "object": "estate:rask"}))
         _ok(client.post(f"/management/v1/projects/{ACME}/access/grant", json={"user": _account(ACME_SERVICE), "relation": "decider"}))
-    return uuids
+    return uuids, creations
 
 
 @pytest.fixture
@@ -180,7 +188,8 @@ def estate(sa_issuer: Any, dex_issuer: Any, openfga_store: Any, tmp_path: Path, 
         time.sleep(0.05)
     url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
     try:
-        yield Estate(url=url, uuids=_arrange(url, openfga_store, dex_issuer))
+        uuids, creations = _arrange(url, openfga_store, dex_issuer)
+        yield Estate(url=url, uuids=uuids, creations=creations)
     finally:
         server.should_exit = True
         thread.join(timeout=30)
@@ -230,7 +239,7 @@ async def test_a_check_only_service_is_answered_only_inside_its_scope(
             return await decider.batch_check(user="dex~bob", relation=args[0], objects=[estate.asked(name) for name in args[1]])
         if route == "governed":
             return await decider.governed([estate.asked(name) for name in args[0]])
-        return await decider.list_users(relation=args[0], obj=args[1])
+        return await decider.list_users(relation=args[0], obj=estate.asked(args[1]))
 
     try:
         if isinstance(answer, Refused):

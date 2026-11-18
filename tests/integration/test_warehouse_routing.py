@@ -19,6 +19,7 @@ from lance_namespace import CreateNamespaceRequest, connect
 from moto.server import ThreadedMotoServer
 
 from catalog.core.identifiers import with_minted_uuid
+from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from lakehouse.storage_options import StorageOptions
 from tests.integration import store_requests
@@ -69,10 +70,13 @@ def _routing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env: str) ->
 
 def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-a", control: str | None = None, options: StorageOptions | None = None) -> None:
     """Register warehouse ``wid`` on a LOCAL root the resolver opens in-process, with its own row in that root's catalog
-    and a namespace ``bronze`` beneath it, as the create door leaves a warehouse and CreateNamespace a namespace. The
+    and a namespace ``bronze`` beneath it, under project ``acme`` (recorded here where it is not), as the create door
+    leaves a warehouse and CreateNamespace a namespace. The
     record goes to ``registry``, or to the control root ``control`` read with ``options``."""
     control = control or f"file://{registry}"
     options = options or StorageOptions()
+    if proj_svc.get_project_record(control, options, "acme") is None:
+        proj_svc.put_project(control, options, {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(control, options, {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
     wh_ns = connect("dir", {"root": str(warehouse_root)})
     wh_ns.create_namespace(CreateNamespaceRequest(id=[wid], properties=with_minted_uuid(None)))

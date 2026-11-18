@@ -247,12 +247,15 @@ principal, a userset, an OpenFGA object id and `*` address nobody.
 The catalog announces each governance change on the `catalog.control.v1` topic as a `CatalogControlEvent` (maintenance
 announces its purges there too), after the change succeeds, signed by the role `control_signer_role` names for its
 action. Most actions name an object and nobody.
+A project's or a warehouse's own events (`project_created`, `project_deleted`, `warehouse_created`, `warehouse_deleted`)
+name it by its id in `object_id` (`project:<id>`, `warehouse:<id>`) and the uuid of the creation they are about in
+`extra.uuid` (ADR 0245): an id is taken again once its object is deleted, and the uuid tells two creations apart.
 These name a person in `extra.subject`, the OpenFGA user the change concerns (`user:` and the principal key
 percent-encoded, which `fga.subject_of` decodes, or a userset):
 
 | `action` | `extra.subject` |
 | --- | --- |
-| `grant_added`, `grant_revoked` | the principal or userset the grant names; `extra.relation` is the rung and `object_id` the object |
+| `grant_added`, `grant_revoked` | the principal or userset the grant names; `extra.relation` is the rung and `object_id` the object as OpenFGA names it. A project's and a warehouse's object is its creation's (`project:<uuid>`, `warehouse:<uuid>`, ADR 0245), with `object_name` the id the door was addressed by and `object_uuid` the creation, as a table's is named by its uuid with its name beside it |
 | `erasure_release_scheduled` | one event per person the release costs (the erasure's requester and each table owner), with the deadline in `extra.due_at`; its `event_id` is the same however often it is sent. Sent again with `extra.held_by_clones` while registered clones hold the release, under an `event_id` of its own per person and clones. And to whoever puts a ref the release will take while it stands, naming the ref in `extra.ref`, under an `event_id` of its own per person and ref |
 | `principal_deleted` | the principal the estate admin offboarded: nobody is left to tell, so a notifier erases what it keeps for them |
 

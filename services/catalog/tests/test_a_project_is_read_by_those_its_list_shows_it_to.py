@@ -23,6 +23,8 @@ from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 
 
 PROJECT, ESTATE = "acme", "estate:rask"
+#: Stands for acme's object, which OpenFGA names by its creation (ADR 0245) and the test reads once acme is made.
+CREATION = "<acme's creation>"
 #: The estate's owner, who made acme; a member of acme holding nothing on the estate; another owner of the estate, who
 #: is no member of acme; and a signed-in person holding no grant.
 OWNER, MEMBER, OBSERVER, STRANGER = "alice", "carol", "erin", "mallory"
@@ -36,7 +38,7 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
     catalog.store.write((catalog.person(OWNER), "admin", ESTATE), (catalog.person(OBSERVER), "owner", ESTATE))
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(OWNER))
     assert made.status_code == 200, made.text
-    catalog.store.write((catalog.person(MEMBER), "member", f"project:{PROJECT}"))
+    catalog.store.write((catalog.person(MEMBER), "member", catalog.creation("project", PROJECT)))
     return catalog
 
 
@@ -60,7 +62,7 @@ def _recorded(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str, str, str
 @pytest.mark.parametrize(
     ("caller", "opened_by"),
     [
-        pytest.param(MEMBER, ("member", f"project:{PROJECT}"), id="a-member-who-observes-nothing-estate-wide"),
+        pytest.param(MEMBER, ("member", CREATION), id="a-member-who-observes-nothing-estate-wide"),
         pytest.param(OBSERVER, ("can_list_all_projects", ESTATE), id="an-estate-observer-who-is-no-member"),
     ],
 )
@@ -79,7 +81,8 @@ def test_a_project_is_read_by_a_caller_its_list_shows_it_to(
 
     assert read.status_code == 200, read.text
     assert read.json() == next(listing for listing in listed.json() if listing["project"] == PROJECT)
-    assert _recorded(caplog) == [(AuditAction.AUTHZ, AuditOutcome.ALLOW, *opened_by)]
+    relation, obj = opened_by
+    assert _recorded(caplog) == [(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation, estate.creation("project", PROJECT) if obj == CREATION else obj)]
 
 
 def test_a_caller_the_list_shows_nothing_is_answered_what_a_missing_project_answers(
@@ -96,5 +99,5 @@ def test_a_caller_the_list_shows_nothing_is_answered_what_a_missing_project_answ
     assert _answer(refused) == (404, "application/problem+json", 4, f"project not found: {PROJECT}")
     assert _recorded(caplog) == [
         (AuditAction.AUTHZ, AuditOutcome.DENY, "can_list_all_projects", ESTATE),
-        (AuditAction.AUTHZ, AuditOutcome.DENY, "member", f"project:{PROJECT}"),
+        (AuditAction.AUTHZ, AuditOutcome.DENY, "member", estate.creation("project", PROJECT)),
     ]

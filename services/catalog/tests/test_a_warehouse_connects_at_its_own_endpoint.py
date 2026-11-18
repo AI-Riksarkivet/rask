@@ -83,15 +83,16 @@ async def test_the_resolver_carries_the_RECORDS_endpoint(
     not an override to the empty endpoint, which would build a connection pointing nowhere.
     """
     from catalog.api import dependencies
+    from catalog.services import warehouses
 
-    record: dict[str, str] = {"id": "wh-1", "status": "active", "root_uri": "s3://tenant-bucket"}
+    record: dict[str, str] = {"id": "wh-1", "status": "active", "root_uri": "s3://tenant-bucket", "uuid": "b" * 32, "project_uuid": "a" * 32, "state": "live"}
     if record_endpoint is not None:
         record["endpoint"] = record_endpoint
-    monkeypatch.setattr(dependencies.warehouses, "get_warehouse", lambda *a, **k: record)
+    monkeypatch.setattr(warehouses, "get_warehouse_record", lambda *a, **k: record)
 
     resolved = await dependencies._resolve_warehouse_root(cast(Request, _Req()), settings, "wh-1")
 
-    assert resolved == dependencies.ServedWarehouse(root_uri="s3://tenant-bucket", endpoint=expected)
+    assert resolved == dependencies.ServedWarehouse(root_uri="s3://tenant-bucket", obj=f"warehouse:{'b' * 32}", endpoint=expected)
 
 
 def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500(settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

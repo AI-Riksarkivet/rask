@@ -36,10 +36,13 @@ from typing import Any
 import lance_namespace
 import pytest
 
-from catalog.services import warehouses
+from catalog.services import projects, warehouses
 from lakehouse.storage_options import StorageOptions
 
 
+#: The creations of the projects and of warehouse ``house`` (ADR 0245).
+CREATIONS = {"acme": "a" * 32, "beta": "b" * 32}
+HOUSE = "c" * 32
 #: Each target's grant door and the door dave reads it through: a namespace's describe, a warehouse's own self-view.
 DOORS = {
     "namespace": ("/management/v1/namespace/{name}/access/grant", "/v1/namespace/{name}/describe"),
@@ -84,14 +87,13 @@ def test_a_role_is_granted_only_inside_its_own_tenant(
     name = "house$bronze" if tenant is not None else "lance_catalog$bronze"
     if tenant is not None:
         root = tmp_path / "house"
-        warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "house", "project": tenant, "bucket": tenant, "root_uri": str(root)})
+        projects.put_project(str(tmp_path), StorageOptions(), {"id": tenant, "uuid": CREATIONS[tenant]})
+        record = {"id": "house", "project": tenant, "bucket": tenant, "root_uri": str(root), "uuid": HOUSE, "project_uuid": CREATIONS[tenant]}
+        warehouses.put_warehouse(str(tmp_path), StorageOptions(), record)
         warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": str(root)}), "house")
         catalog.store.write(
-            (catalog.person("alice"), "admin", f"project:{tenant}"),
-            (f"project:{tenant}", "project", "warehouse:house"),
-            # The warehouse born, as its create bears it (ADR 0241): its incarnation's marker and token.
-            ("revision:i1", "revision", "warehouse:house"),
-            ("revision:i1.0", "revision", "warehouse:house"),
+            (catalog.person("alice"), "admin", f"project:{CREATIONS[tenant]}"),
+            (f"project:{CREATIONS[tenant]}", "project", f"warehouse:{HOUSE}"),
         )
     if target == "namespace":
         created = (
@@ -102,8 +104,10 @@ def test_a_role_is_granted_only_inside_its_own_tenant(
         assert created.status_code == 200, created.text
     catalog.store.write(
         (catalog.person("dave"), "assignee", "role:analyst"),
-        *([(f"project:{role_project}", "project", "role:analyst")] if role_project is not None else []),
+        *([(f"project:{CREATIONS[role_project]}", "project", "role:analyst")] if role_project is not None else []),
     )
+    if role_project is not None and role_project != tenant:
+        projects.put_project(str(tmp_path), StorageOptions(), {"id": role_project, "uuid": CREATIONS[role_project]})
     grant_door, read_door = (door.format(name=name) for door in DOORS[target])
 
     grant = catalog.client.post(grant_door, json={"user": "role:analyst#assignee", "relation": relation}, headers=alice)

@@ -86,7 +86,7 @@ def estate(governed_catalog: Any) -> Iterator[tuple[Any, _Lanes]]:  # noqa: ANN4
     assert made.status_code == 200, made.text
     made = catalog.create_in_the_estate(ADMIN, "db")
     assert made.status_code == 200, made.text
-    catalog.store.write((catalog.person(MEMBER), "member", "project:acme"))
+    catalog.store.write((catalog.person(MEMBER), "member", catalog.creation("project", "acme")))
     lanes = _Lanes()
     app = catalog.client.app
     kept = app.state.lineage_emitter

@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from catalog.core.config import get_settings
-from catalog.services import warehouses
+from catalog.services import projects, warehouses
 
 
 PROJECT, WAREHOUSE = "acme", "wh-acme"
@@ -27,6 +27,9 @@ ADMIN, MEMBER, GRANTER, GRANTEE = "alice", "carol", "judy", "erin"
 #: A refusal: its status and spec code (`lance_docs/ns_catalog/namespace/operations/errors.md`, PermissionDenied).
 REFUSED = (403, 15)
 #: What a door answered: a refusal's status and code, a grant's or revoke's body, or who a listing names on `can_create_table`.
+#: The creation of acme's warehouse, and the object OpenFGA names it by (ADR 0245).
+WAREHOUSE_UUID = "c" * 32
+WAREHOUSE_OBJ = f"warehouse:{WAREHOUSE_UUID}"
 type Answered = tuple[int, int] | dict[str, object] | list[str]
 
 
@@ -39,30 +42,31 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
     settings = get_settings()
+    project = projects.get_project(settings.registry_root, settings.storage_options(), PROJECT)
+    assert project is not None
     record = {
         "id": WAREHOUSE,
         "bucket": WAREHOUSE,
         "root_uri": settings.root,
         "project": PROJECT,
+        "uuid": WAREHOUSE_UUID,
+        "project_uuid": project["uuid"],
+        "state": "live",
         "status": "active",
         "created_at": datetime.now(UTC).isoformat(),
     }
     warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), record)
-    incarnation = record["incarnation"]
     catalog.store.write(
-        # Born as its create bears it (ADR 0241): its incarnation's marker and token.
-        (f"revision:{incarnation}", "revision", f"warehouse:{WAREHOUSE}"),
-        (f"revision:{incarnation}.0", "revision", f"warehouse:{WAREHOUSE}"),
-        (f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"),
-        (catalog.person(MEMBER), "member", f"project:{PROJECT}"),
-        (catalog.person(GRANTER), "manage_grants", f"warehouse:{WAREHOUSE}"),
+        (f"project:{project['uuid']}", "project", WAREHOUSE_OBJ),
+        (catalog.person(MEMBER), "member", f"project:{project['uuid']}"),
+        (catalog.person(GRANTER), "manage_grants", WAREHOUSE_OBJ),
     )
     return catalog
 
 
 def _held(estate: Any, user: str) -> set[str]:
     """The rungs ``user`` holds directly on the warehouse, but the `manage_grants` the fixture gave judy."""
-    return {relation for held, relation, obj in estate.store.tuples() if held == estate.person(user) and obj == f"warehouse:{WAREHOUSE}"} - {"manage_grants"}
+    return {relation for held, relation, obj in estate.store.tuples() if held == estate.person(user) and obj == WAREHOUSE_OBJ} - {"manage_grants"}
 
 
 def _answered(door: str, answer: Any) -> Answered:
@@ -75,7 +79,7 @@ def _answered(door: str, answer: Any) -> Answered:
 
 
 def _granted(relation: str, *, granted: bool, user: str = GRANTEE) -> dict[str, object]:
-    return {"object": f"warehouse:{WAREHOUSE}", "name": None, "user": f"user:dex~{user}", "relation": relation, "granted": granted}
+    return {"object": WAREHOUSE_OBJ, "name": WAREHOUSE, "user": f"user:dex~{user}", "relation": relation, "granted": granted}
 
 
 @pytest.mark.parametrize(
@@ -104,7 +108,7 @@ def _granted(relation: str, *, granted: bool, user: str = GRANTEE) -> dict[str, 
 def test_a_rung_is_granted_revoked_and_listed_only_by_who_may_manage_its_grants(
     estate: Any, caller: str, door: str, grantee: str, relation: str, holding: set[str], answered: Answered, after: set[str]
 ) -> None:
-    estate.store.write(*[(estate.person(grantee), held, f"warehouse:{WAREHOUSE}") for held in holding])
+    estate.store.write(*[(estate.person(grantee), held, WAREHOUSE_OBJ) for held in holding])
     body = {"user": estate.person(grantee), "relation": relation} if door != "list" else {}
 
     answer = estate.client.post(f"/management/v1/warehouse/{WAREHOUSE}/access/{door}", json=body, headers=estate.bearer(caller))

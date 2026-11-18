@@ -39,7 +39,16 @@ def _write(tmp_path: Path, prefix: str, name: str, payload: object) -> None:
 
 
 def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_path: Path) -> None:
-    good = {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t", "incarnation": "w1"}
+    good = {
+        "id": "wh-a",
+        "bucket": "bkt-a",
+        "root_uri": "s3://bkt-a",
+        "project": "acme",
+        "created_at": "t",
+        "uuid": "1" * 32,
+        "project_uuid": "2" * 32,
+        "state": "live",
+    }
     wh_svc.put_warehouse(_root(tmp_path), StorageOptions(), good)
     # Present and truthy on every identity field, and structurally useless: `bucket` can never equal
     # the string a claim guard compares it to, and `project` reaches `str(...)` as a dict repr.
@@ -48,7 +57,7 @@ def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_pat
 
 
 def test_a_project_record_with_a_WRONG_TYPED_id_is_skipped(tmp_path: Path) -> None:
-    good = {"id": "acme", "created_at": "t", "created_by": "root", "incarnation": "a1"}
+    good = {"id": "acme", "created_at": "t", "created_by": "root", "uuid": "3" * 32, "state": "live"}
     proj_svc.put_project(_root(tmp_path), StorageOptions(), good)
     _write(tmp_path, "_projects", "zz-typed", {"id": ["acme"]})
     assert proj_svc.list_projects(_root(tmp_path), StorageOptions()) == [good]

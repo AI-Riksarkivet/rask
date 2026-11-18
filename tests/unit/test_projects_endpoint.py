@@ -38,15 +38,30 @@ def _settings(*, fga_enabled: bool = False) -> Any:
     )
 
 
+#: Each project's creation (ADR 0245): its record names the uuid, and OpenFGA names it ``project:<uuid>``.
+CREATIONS = {"acme": "a" * 32, "globex": "b" * 32, "fresh": "c" * 32}
+ACME, GLOBEX, FRESH = (f"project:{CREATIONS[p]}" for p in ("acme", "globex", "fresh"))
+_PROJECTS: list[dict[str, str]] = [{"id": p, "uuid": CREATIONS[p], "state": "live"} for p in ("acme", "globex")]
+
 _RECORDS: list[dict[str, str]] = [
-    {"id": "wh-b", "bucket": "bkt-b", "root_uri": "s3://bkt-b", "project": "acme", "status": "deactivated"},
-    {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme"},  # no status → "active"
-    {"id": "wh-g", "bucket": "bkt-g", "root_uri": "s3://bkt-g", "project": "globex", "status": "active"},
+    {"id": "wh-b", "bucket": "bkt-b", "root_uri": "s3://bkt-b", "project": "acme", "project_uuid": CREATIONS["acme"], "status": "deactivated"},
+    {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "project_uuid": CREATIONS["acme"]},  # no status → "active"
+    {"id": "wh-g", "bucket": "bkt-g", "root_uri": "s3://bkt-g", "project": "globex", "project_uuid": CREATIONS["globex"], "status": "active"},
 ]
 
 
-def _patch_records(monkeypatch: pytest.MonkeyPatch, records: list[dict[str, str]]) -> None:
+def _patch_records(monkeypatch: pytest.MonkeyPatch, records: list[dict[str, str]], projects: list[dict[str, str]] = _PROJECTS) -> None:
+    """The registries as these records: the warehouses, and the projects the resolver reads one of."""
     monkeypatch.setattr(ep.warehouses, "list_warehouses", lambda _root, _so: records)
+    monkeypatch.setattr(ep.project_registry, "list_projects", lambda _root, _so: projects)
+    held = {p["id"]: p for p in projects}
+    monkeypatch.setattr(
+        ep.tenancy,
+        "resolve",
+        lambda _root, _so, kind, pid, **_kw: (
+            ep.tenancy.Tenant(kind=kind, id=pid, obj=f"project:{held[pid]['uuid']}", record=held[pid]) if pid in held else None
+        ),
+    )
 
 
 _BOB = PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="i", sub="bob", aud="lance", exp=1, iat=1))
@@ -103,17 +118,16 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     """An estate observer lists every tenant; anyone else lists the registry's projects they are a member of.
 
     `fresh` has a registry record and no warehouse, so it comes from the project registry; `ghost` is a
-    membership FGA holds for a project no registry knows, which lists nothing.
+    membership FGA holds for a creation no registry record names, which lists nothing.
     """
-    _patch_records(monkeypatch, _RECORDS)
-    monkeypatch.setattr(ep.project_registry, "list_projects", lambda _root, _so: [{"id": "fresh", "incarnation": "f1"}])
+    _patch_records(monkeypatch, _RECORDS, projects=[*_PROJECTS, {"id": "fresh", "uuid": CREATIONS["fresh"], "state": "live"}])
     checks: list[tuple[str, str, str]] = []
 
     async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
         checks.append((user, relation, obj))
         return estate_observer
 
-    members = {"project:globex", "project:fresh", "project:ghost"}
+    members = {GLOBEX, FRESH, f"project:{'d' * 32}"}
     asked: list[list[str]] = []
 
     async def _fake_batch_check(_client: Any, *, user: str, relation: str, objects: list[str], **_kw: Any) -> dict[str, bool]:
@@ -131,7 +145,7 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     assert [p.project for p in result] == expected
     assert checks == [("dex~bob", "can_list_all_projects", "warehouse:lance_catalog")]
     # A member's listing judges the registry's own candidates, never the projects FGA says the caller reaches.
-    assert asked == ([] if estate_observer else [["project:acme", "project:fresh", "project:globex"]])
+    assert asked == ([] if estate_observer else [[ACME, GLOBEX, FRESH]])
 
 
 # ── admins: fga.list_users on project:<id>#can_administer, degrading — never a 500 ───────────────────
@@ -157,12 +171,12 @@ def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
         # Display-only path: a single attempt under the tight per-call budget — the wrapper's default
         # bounded-retry ladder alone could exceed it, so the endpoint must pin retry_attempts=1.
         assert kw == {"retry_attempts": 1}
-        return ["alice"] if obj == "project:acme" else []
+        return ["alice"] if obj == ACME else []
 
     monkeypatch.setattr(ep.fga, "list_users", _fake_list_users)
     result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [(p.project, p.admins) for p in result] == [("acme", ["alice"]), ("globex", [])]
-    assert sorted(calls) == [("can_administer", "project:acme"), ("can_administer", "project:globex")]
+    assert sorted(calls) == [("can_administer", ACME), ("can_administer", GLOBEX)]
 
 
 def test_admins_degrade_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:

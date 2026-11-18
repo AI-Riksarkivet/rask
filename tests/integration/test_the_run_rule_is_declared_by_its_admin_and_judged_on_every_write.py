@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
-from catalog.services import object_uuids, table_claims, warehouses
+from catalog.services import object_uuids, projects, table_claims, warehouses
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.storage_options import StorageOptions
@@ -37,6 +37,8 @@ AUTH = {"Authorization": "Bearer t"}
 ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
 WAREHOUSE = "acme-bucket"
 PROJECT = "acme"
+#: The project and its warehouse as OpenFGA names them, by the creations their records name (ADR 0245).
+PROJECT_OBJ, WAREHOUSE_OBJ = f"project:{'a' * 32}", f"warehouse:{'b' * 32}"
 SALES = f"{WAREHOUSE}$sales"
 LEDGER = f"{WAREHOUSE}$ledger"
 
@@ -68,13 +70,16 @@ def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
     real_ns_client.app.state.oidc = MagicMock()
     store = Grants()
     real_ns_client.app.state.fga = store
+    projects.put_project(root, StorageOptions(), {"id": PROJECT, "uuid": "a" * 32, "created_at": "t"})
     warehouses.put_warehouse(
-        root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
+        root,
+        StorageOptions(),
+        {"id": WAREHOUSE, "uuid": "b" * 32, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"},
     )
     warehouses.ensure_catalog_row(real_ns_client.app.dependency_overrides[get_namespace](), WAREHOUSE)
     for user in ("alice", "bob"):
-        store.grant(user, ("can_create_namespace", f"warehouse:{WAREHOUSE}"))
-    store.grant("alice", ("can_administer", f"project:{PROJECT}"))
+        store.grant(user, ("can_create_namespace", WAREHOUSE_OBJ))
+    store.grant("alice", ("can_administer", PROJECT_OBJ))
     yield store
 
 

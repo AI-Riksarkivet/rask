@@ -21,11 +21,10 @@ not there is a no-op, not a 404".
 from __future__ import annotations
 
 import logging
-from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Path, status
-from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
+from lance_namespace import ServiceUnavailableError
 
 from catalog.api import announcing, fga_deps
 from catalog.api.announcing import Announcer, AnnouncerDep
@@ -33,9 +32,10 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
-from catalog.services import project_admins
+from catalog.services import project_admins, tenancy
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.tenancy import PROJECT
 
 
 if TYPE_CHECKING:
@@ -89,14 +89,13 @@ async def list_members(project_id: ProjectId, client: FgaClientDep, settings: Se
     DIRECT grants only. A person who holds a rung through a role is not listed: the role is, and it is revoked
     here; who is in it is the role's assignees door.
     """
-    obj = f"project:{project_id}"
-    await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=obj)
+    project = await fga_deps.require_on_tenant(client, settings, token, relation="can_read_assignments", kind=PROJECT, object_id=project_id)
     if (client := fga_deps.wired(settings, client)) is None:
         # Authz off (local dev): there are no tuples, and an empty list is the honest answer. Inventing
         # names here would put people in front of someone who never granted them.
         return MemberList(members=[])
-    tuples = await fga.read_object_tuples(client, obj)
-    return MemberList(members=_direct_grants(tuples, obj))
+    tuples = await fga.read_object_tuples(client, project.obj)
+    return MemberList(members=_direct_grants(tuples, project.obj))
 
 
 @router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
@@ -114,55 +113,53 @@ async def grant_member(
     on the second call. An ``admin`` is granted through :func:`project_admins.confer`, which asks nothing of the
     caller beyond the gate here.
 
-    The authority is asked first, with no write, then again under a fence of the project (ADR 0241,
-    ``fga_deps.door_fence``): a caller refused has written nothing, and a project deleted meanwhile, and one made again
-    under its id by another tenant, is not the project the grant was decided on, and the grant lands on neither. Grants
-    for different people never refuse each other: each deletes only its own ticket.
+    The id is resolved to its live creation, the gate asked on it, and the grant written on it in one Write (ADR 0245):
+    a caller refused has written nothing, and a grant decided on a project deleted meanwhile lands on that dead
+    creation, never on one made again under its id. The id is resolved again once the grant is written, and a project
+    deleted meanwhile is answered as the deleted project it is. Grants never refuse each other.
     \f
 
     Raises:
         PermissionDeniedError: The caller may not grant the rung.
         InvalidInputError: The subject is a role another project owns.
-        TableNotFoundError: No project stands under the id, or its delete has begun.
-        SettlingError: The project stands and is still being established; ask again after ``Retry-After``.
-        ConcurrentModificationError: The project was deleted while the grant ran.
+        TableNotFoundError: No live project holds the id, or it was deleted while the grant ran.
     """
-    obj = f"project:{project_id}"
+    project = await tenancy.require(settings, PROJECT, project_id)
     wired = _client_or_conflict(client, settings)
-    gate = partial(fga_deps.require_relation, client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
-    async with fga_deps.door_fence(wired, settings, obj, token, gate=gate) as (door, _):
-        fences = await fga_deps.require_fence(door, settings)
-        return await _grant(wired, announcer, settings, token, project_id, payload, fences)
+    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=project.obj)
+    return await _grant(wired, announcer, settings, token, project, payload)
 
 
 async def _grant(
-    wired: OpenFgaClient, announcer: Announcer, settings: Settings, token: Caller | None, project_id: str, payload: GrantRequest, fences: list[fga.Fence]
+    wired: OpenFgaClient, announcer: Announcer, settings: Settings, token: Caller | None, project: tenancy.Tenant, payload: GrantRequest
 ) -> MemberList:
-    """The members door's grant once its caller is authorized, under ``fences``."""
-    obj = f"project:{project_id}"
+    """The members door's grant once its caller is authorized on ``project``'s creation."""
+    obj = project.obj
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
-    await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
+    await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project.id], settings=settings)
 
     tup = fga.ClientTuple(user=user, relation=payload.relation, object=obj)
+    trail = {"subject": actor, "resource": obj, "project": project.id, "grantee": user, "relation": payload.relation}
     if await fga.holds(wired, tup):
-        audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+        audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, **trail)
         return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
     # TELL THE PERSON, filed before the write so a door failing after it still does ([[LH-576]]). Only a grant that
     # changes the store is announced: a re-grant is a no-op there, and an announcement of an unchanged state would put a
     # row in someone's inbox for something that did not happen.
-    told = announcing.grant_announcement(tup, action="grant_added", actor=f"user:{token.subject}" if token else None)
-    async with announcer.announcing(door="member_grant", target=obj, announcements=[told]) as filing:
-        try:
-            if payload.relation in ADMINISTRATIVE:
-                if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api", fences=fences):
-                    return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
-            elif not await fga.commit_fenced(wired, fences, writes=[tup], actor=actor, origin="grant_api"):
-                return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
-        except fga.IncarnationEnded as exc:
-            raise ConcurrentModificationError(f"project {project_id!r} was deleted while this grant ran; nothing was granted") from exc
+    told = announcing.grant_announcement(
+        tup, action="grant_added", actor=f"user:{token.subject}" if token else None, object_name=project.id, object_uuid=project.uuid
+    )
+    async with announcer.announcing(door="member_grant", target=f"project:{project.id}", announcements=[told]) as filing:
+        if payload.relation in ADMINISTRATIVE:
+            written = await project_admins.confer(wired, tup, actor=actor, origin="grant_api")
+        else:
+            written = await project_admins.write_absent(wired, tup, actor=actor, origin="grant_api")
+        await tenancy.require_still(settings, project)
         existing = await fga.read_object_tuples(wired, obj)
-        audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+        if not written:
+            return MemberList(members=_direct_grants(existing, obj))
+        audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, **trail)
         await filing.send(told)
     return MemberList(members=_direct_grants(existing, obj))
 
@@ -181,33 +178,26 @@ async def revoke_member(
     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
     state already holds.
 
-    Fenced as a grant is (ADR 0241): a revoke decided on a project deleted meanwhile takes nothing from one made again
-    under its id, and is answered 409.
+    Resolved, gated and written on the project's live creation as a grant is (ADR 0245): a revoke decided on a project
+    deleted meanwhile takes nothing from one made again under its id, and is answered as the deleted project it is.
     \f
 
     Raises:
         PermissionDeniedError: The caller may not revoke the rung.
-        TableNotFoundError: No project stands under the id, or its delete has begun.
-        SettlingError: The project stands and is still being established; ask again after ``Retry-After``.
-        ConcurrentModificationError: The removal would leave the project nobody administers, or the project was deleted
-            while the revoke ran.
+        TableNotFoundError: No live project holds the id, or it was deleted while the revoke ran.
+        ConcurrentModificationError: The removal would leave the project nobody administers.
     """
-    obj = f"project:{project_id}"
+    project = await tenancy.require(settings, PROJECT, project_id)
     wired = _client_or_conflict(client, settings)
-    gate = partial(fga_deps.require_relation, client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
-    async with fga_deps.door_fence(wired, settings, obj, token, gate=gate) as (door, _):
-        fences = await fga_deps.require_fence(door, settings)
-        try:
-            return await _revoke(wired, announcer, token, project_id, payload, fences)
-        except fga.IncarnationEnded as exc:
-            raise ConcurrentModificationError(f"project {project_id!r} was deleted while this revoke ran; nothing was revoked") from exc
+    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=project.obj)
+    return await _revoke(wired, announcer, settings, token, project, payload)
 
 
 async def _revoke(
-    wired: OpenFgaClient, announcer: Announcer, token: Caller | None, project_id: str, payload: GrantRequest, fences: list[fga.Fence]
+    wired: OpenFgaClient, announcer: Announcer, settings: Settings, token: Caller | None, project: tenancy.Tenant, payload: GrantRequest
 ) -> MemberList:
-    """The members door's revoke once its caller is authorized, under ``fences``."""
-    obj = f"project:{project_id}"
+    """The members door's revoke once its caller is authorized on ``project``'s creation."""
+    obj = project.obj
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
 
@@ -219,13 +209,17 @@ async def _revoke(
     # why being NAMED is the targeting. Unannounced, losing tenant access is discovered as a 403 in the
     # middle of work, the failure this lane exists to end; so it is filed before the revoke, and a door that
     # fails after the revoke still tells them ([[LH-576]]). A no-op revoke announces nothing.
-    told = announcing.grant_announcement(tup, action="grant_revoked", actor=f"user:{token.subject}" if token else None)
-    async with announcer.announcing(door="member_revoke", target=obj, announcements=[told]) as filing:
+    told = announcing.grant_announcement(
+        tup, action="grant_revoked", actor=f"user:{token.subject}" if token else None, object_name=project.id, object_uuid=project.uuid
+    )
+    async with announcer.announcing(door="member_revoke", target=f"project:{project.id}", announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
-            if not await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api", fences=fences):
-                return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
-        elif not await fga.commit_fenced(wired, fences, deletes=[tup], actor=actor, origin="grant_api"):
+            removed = bool(await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api"))
+        else:
+            removed = await fga.commit_unless_changed(wired, deletes=[tup], writes=[], actor=actor, origin="grant_api")  # noqa: TID251
+        await tenancy.require_still(settings, project)
+        if not removed:
             return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
-        audit(AuditAction.PROJECT_MEMBER_REVOKE, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+        audit(AuditAction.PROJECT_MEMBER_REVOKE, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project.id, grantee=user, relation=payload.relation)
         await filing.send(told)
     return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))

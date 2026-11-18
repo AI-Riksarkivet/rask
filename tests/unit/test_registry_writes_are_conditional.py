@@ -44,7 +44,7 @@ def _seed(control_root: str, **overrides: str) -> dict[str, str]:
         "bucket": "acme-wh",
         "root_uri": "s3://acme-wh",
         "project": "acme",
-        "project_incarnation": "a1",
+        "project_uuid": "a" * 32,
         "status": "active",
         "created_at": "t0",
     } | overrides
@@ -82,7 +82,7 @@ def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(cont
     _, written = warehouses.upsert_warehouse(
         control_root,
         StorageOptions(),
-        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_incarnation": "a1", "created_at": "t2"},
+        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_uuid": "a" * 32, "created_at": "t2"},
     )
 
     assert fired["n"] == 1, "the conditional write seam was never reached — the race was not exercised"
@@ -105,14 +105,14 @@ def test_a_re_create_naming_nothing_keeps_deletion_protection(control_root: str)
     _, armed = warehouses.upsert_warehouse(
         control_root,
         StorageOptions(),
-        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_incarnation": "a1"},
+        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_uuid": "a" * 32},
         protection=ProtectionChange(protected=True, by="user:dex~anna"),
     )
     assert armed["protected"] == "true"
 
     # A later re-POST that does not name it must not disarm it: a field it does not name stands as it is.
     _, plain = warehouses.upsert_warehouse(
-        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_incarnation": "a1"}
+        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_uuid": "a" * 32}
     )
     assert plain["protected"] == "true", "a re-create disarmed deletion protection"
 
@@ -126,7 +126,7 @@ def test_a_record_that_vanished_is_a_conflict_not_a_resurrection(control_root: s
     """
     with pytest.raises(RecordMissingError):
         warehouses.upsert_warehouse(
-            control_root, StorageOptions(), {"id": "gone", "bucket": "b", "root_uri": "s3://b", "project": "acme", "project_incarnation": "a1"}
+            control_root, StorageOptions(), {"id": "gone", "bucket": "b", "root_uri": "s3://b", "project": "acme", "project_uuid": "a" * 32}
         )
 
 
@@ -223,7 +223,7 @@ def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_roo
     _, armed = warehouses.upsert_warehouse(
         control_root,
         StorageOptions(),
-        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_incarnation": "a1"},
+        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_uuid": "a" * 32},
         primary=True,
     )
     assert armed.get("primary") == "true", f"the primary marker did not survive the conditional write: {armed}"
@@ -231,6 +231,6 @@ def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_roo
     # A later re-POST naming nothing must carry it forward — the same rule as `protected`. A GitOps
     # re-apply that silently demoted the primary would stop the tenant's cascade, not misroute it.
     _, plain = warehouses.upsert_warehouse(
-        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_incarnation": "a1"}
+        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "project_uuid": "a" * 32}
     )
     assert plain.get("primary") == "true", f"a plain re-POST demoted the primary warehouse: {plain}"

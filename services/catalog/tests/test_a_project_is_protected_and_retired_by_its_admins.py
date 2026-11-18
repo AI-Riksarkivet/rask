@@ -60,8 +60,8 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
     catalog.store.write(
-        (catalog.person(CO_ADMIN), "admin", f"project:{PROJECT}"),
-        (catalog.person(MEMBER), "member", f"project:{PROJECT}"),
+        (catalog.person(CO_ADMIN), "admin", catalog.creation("project", PROJECT)),
+        (catalog.person(MEMBER), "member", catalog.creation("project", PROJECT)),
     )
     return catalog
 
@@ -137,7 +137,7 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
     id is another tenant, which a policy kept for the id would govern as soon as it named a bucket."""
     settings = get_settings()
     project = projects.get_project(settings.registry_root, settings.storage_options(), PROJECT) or {}
-    policy = {"kind": "project", "id": PROJECT, "project_incarnation": project.get("incarnation"), "buckets": ["acme-lake"], "retain_versions": 1}
+    policy = {"kind": "project", "id": PROJECT, "project_uuid": project.get("uuid"), "buckets": ["acme-lake"], "retain_versions": 1}
     maintenance_policies.put_policy(settings.registry_root, settings.storage_options(), policy)
     armed = estate.client.post(f"/management/v1/projects/{PROJECT}/protection", json={"protected": True}, headers=estate.bearer(CO_ADMIN))
     assert armed.status_code == 200, armed.text

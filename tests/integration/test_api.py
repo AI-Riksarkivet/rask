@@ -691,9 +691,12 @@ def test_project_policy_describe_of_a_project_with_no_record_is_not_found(client
 def test_project_policy_set_refused_without_an_active_warehouse(client: TestClient, tmp_path: object) -> None:
     # A policy that could never match anything must fail loudly at set time, not lie dormant.
     from catalog.core.config import get_settings
+    from catalog.services import projects as proj_svc
 
-    client.app.dependency_overrides[get_settings] = lambda: _project_policy_settings(tmp_path)
-    resp = client.post("/management/v1/project/ghost/policy/set", json={"retention_days": 90})
+    s = _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    proj_svc.put_project(s.registry_root, s.storage_options(), {"id": "bare", "created_at": "t", "created_by": "seed"})
+    resp = client.post("/management/v1/project/bare/policy/set", json={"retention_days": 90})
     assert resp.status_code == 400
     assert "no active warehouse" in resp.json()["error"]
 
@@ -724,10 +727,12 @@ def test_project_policy_set_is_refused_while_a_registry_record_cannot_be_read(cl
     from pathlib import Path
 
     from catalog.core.config import get_settings
+    from catalog.services import projects as proj_svc
     from catalog.services import warehouses as wh_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
+    proj_svc.put_project(s.registry_root, s.storage_options(), {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(
         s.registry_root,
         s.storage_options(),
@@ -736,9 +741,8 @@ def test_project_policy_set_is_refused_while_a_registry_record_cannot_be_read(cl
     (Path(str(tmp_path)) / "_warehouses" / "zzz-corrupt.json").write_text("{truncated")
 
     resp = client.post("/management/v1/project/acme/policy/set", json={"retention_days": 90})
-
     assert (resp.status_code, resp.headers["content-type"], resp.json().get("code")) == (500, "application/problem+json", 18), resp.text
-    assert client.post("/management/v1/project/acme/policy/describe").status_code == 404
+    assert client.post("/management/v1/project/acme/policy/describe").json()["set"] is False
 
 
 def test_project_policy_rejects_a_malformed_project_id(client: TestClient, tmp_path: object) -> None:
@@ -856,9 +860,9 @@ def test_project_policies_list_returns_only_its_own_project_record(client: TestC
     so = s.storage_options()
     proj_svc.put_project(s.registry_root, so, {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
-    acme = (proj_svc.get_project(s.registry_root, so, "acme") or {})["incarnation"]
-    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "acme", "project_incarnation": acme, "buckets": ["acme-wh"], "retention_days": 90})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "other", "project_incarnation": "o1", "buckets": ["acme-wh"], "retention_days": 1})
+    acme = (proj_svc.get_project(s.registry_root, so, "acme") or {})["uuid"]
+    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "acme", "project_uuid": acme, "buckets": ["acme-wh"], "retention_days": 90})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "other", "project_uuid": "e" * 32, "buckets": ["acme-wh"], "retention_days": 1})
 
     body = _list_policies_for(client, "acme")
     assert [(p["kind"], p["id"]) for p in body["policies"]] == [("project", "acme")]

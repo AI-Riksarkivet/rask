@@ -32,6 +32,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
@@ -40,8 +41,11 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import MeProject, MeResponse
+from catalog.services import projects as project_registry
+from catalog.services import tenancy
 from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.tenancy import PROJECT
 
 
 log = logging.getLogger(__name__)
@@ -81,8 +85,10 @@ async def _estate_standing(client: OpenFgaClient, settings: Settings, sub: str, 
         return False
 
 
-async def _project_ids(client: OpenFgaClient, sub: str, relation: str, deadline: float) -> list[str]:
-    """The project ids the caller holds ``relation`` on, via ``fga.list_objects`` (#51) — sorted.
+async def _project_ids(client: OpenFgaClient, settings: Settings, sub: str, relation: str, deadline: float) -> list[str]:
+    """The project ids the caller holds ``relation`` on, via ``fga.list_objects`` (#51) — sorted. OpenFGA answers the
+    creations (``project:<uuid>``, ADR 0245), each mapped to the id its live record holds; one no live record names is
+    a dead creation and is left out.
 
     Degrades to ``[]`` PER RELATION on an outage or budget expiry (never 5xxes the endpoint): a missing
     member list still leaves the admin list serving, and vice versa.
@@ -93,7 +99,8 @@ async def _project_ids(client: OpenFgaClient, sub: str, relation: str, deadline:
     except (ServiceUnavailableError, TimeoutError):
         log.warning("me_projects_unavailable", extra={"relation": relation})
         return []
-    return sorted(o.removeprefix("project:") for o in objects)
+    ids = tenancy.ids_by_object(PROJECT, await run_in_threadpool(project_registry.list_projects, settings.registry_root, settings.storage_options()))
+    return sorted(ids[o] for o in objects if o in ids)
 
 
 @router.get("")
@@ -117,8 +124,8 @@ async def get_me(settings: SettingsDep, token: CurrentToken, client: FgaClientDe
     deadline = asyncio.get_running_loop().time() + _LOOKUP_BUDGET_SECONDS
     estate_admin = await _estate_standing(client, settings, token.subject, "can_administer_estate", deadline)
     can_create_project = await _estate_standing(client, settings, token.subject, "can_create_project", deadline)
-    admin_ids = await _project_ids(client, token.subject, "can_administer", deadline)
-    member_ids = await _project_ids(client, token.subject, "member", deadline)
+    admin_ids = await _project_ids(client, settings, token.subject, "can_administer", deadline)
+    member_ids = await _project_ids(client, settings, token.subject, "member", deadline)
     # The model folds admins into members (`member: ... or admin`), so every admin project also shows up
     # in the member list — keep the admin row, drop the duplicate.
     projects = [MeProject(project=p, role="admin") for p in admin_ids]

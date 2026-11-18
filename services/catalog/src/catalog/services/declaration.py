@@ -208,9 +208,9 @@ class GrantRecord(BaseModel):
     #: The subject of the evidence (``revision:git-<hex>``) the tick's Write leaves on the object beside the tuple, while
     #: the intent is unsettled: it stands exactly when that Write committed.
     evidence: str | None = None
-    #: The incarnation of the project or warehouse it is written on; none on the estate's own objects, which no delete
-    #: ends.
-    incarnation: str | None = None
+    #: The uuid of the creation of the project or warehouse it is written on (ADR 0245); none on the estate's own objects,
+    #: which no delete ends.
+    uuid: str | None = None
 
     @property
     def grant(self) -> GrantTuple:
@@ -236,10 +236,10 @@ def recorded_grants(control_root: str, storage_options: StorageOptions) -> set[G
     return {record.grant for record in ledger(control_root, storage_options) if record.evidence is None}
 
 
-def record_intent(control_root: str, storage_options: StorageOptions, grant: GrantTuple, *, evidence: str, incarnation: str | None) -> bool:
+def record_intent(control_root: str, storage_options: StorageOptions, grant: GrantTuple, *, evidence: str, uuid: str | None) -> bool:
     """Record the intent to write ``grant`` with ``evidence``, before the Write; whether this call recorded it (a record
     already there stays as it is: another tick's intent, which that tick or the next settles, or the declaration's)."""
-    record = GrantRecord(user=grant.user, relation=grant.relation, object=grant.object, evidence=evidence, incarnation=incarnation)
+    record = GrantRecord(user=grant.user, relation=grant.relation, object=grant.object, evidence=evidence, uuid=uuid)
     try:
         create_json(control_root, storage_options, _grant_key(grant), record.model_dump(exclude_none=True))
     except RecordExistsError:

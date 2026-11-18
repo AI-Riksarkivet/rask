@@ -48,14 +48,11 @@ def test_a_project_admin_manages_a_role_and_its_grant_reaches_its_assignees(gove
     catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")), 200)
     _status(catalog.client.put("/management/v1/projects/acme/members", json={"user": "dex~alice", "relation": "admin"}, headers=catalog.bearer("root")), 200)
-    warehouses.put_warehouse(
-        str(tmp_path), StorageOptions(), {"id": "acme-wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path), "incarnation": "w1"}
-    )
+    settings = catalog.client.app.state.settings
+    warehouses.put_warehouse(settings.registry_root, StorageOptions(), {"id": "acme-wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path)})
     warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": str(tmp_path)}), "acme-wh")
-    # Born as its create door bears it (ADR 0241): its incarnation's marker and token, beside its tenancy edge.
-    catalog.store.write(
-        ("revision:w1", "revision", "warehouse:acme-wh"), ("revision:w1.0", "revision", "warehouse:acme-wh"), ("project:acme", "project", "warehouse:acme-wh")
-    )
+    # Live as its create door leaves it (ADR 0245): its tenancy edge, between the two creations.
+    catalog.store.write((catalog.creation("project", "acme"), "project", catalog.creation("warehouse", "acme-wh")))
     _status(catalog.client.post("/v1/namespace/acme-wh$lake/create", json={}, headers=alice), 200)
 
     role = _status(catalog.client.post(ROLES, json={"name": "analysts", "description": "reads the lake"}, headers=alice), 201).json()
@@ -66,7 +63,7 @@ def test_a_project_admin_manages_a_role_and_its_grant_reaches_its_assignees(gove
     _status(catalog.client.get(ROLES, headers=dave), 404, TABLE_NOT_FOUND)
     _status(catalog.client.put(assignees, json={"user": "dex~alice"}, headers=alice), 403, PERMISSION_DENIED)
     elsewhere = f"role:{uuid.uuid4()}"
-    catalog.store.write(("project:beta", "project", elsewhere))
+    catalog.store.write((f"project:{'e' * 32}", "project", elsewhere))
     _status(catalog.client.put(assignees, json={"user": f"{elsewhere}#assignee"}, headers=alice), 400, INVALID_INPUT)
 
     assert _status(catalog.client.put(assignees, json={"user": "dex~dave"}, headers=alice), 200).json()["assignees"] == [catalog.person("dave")]
@@ -109,7 +106,8 @@ def test_a_role_nested_beneath_an_admin_role_is_filled_and_emptied_as_the_admin_
     for admin in ("admins", "empty"):
         _status(catalog.client.put(members, json={"user": everyone_in[admin], "relation": "admin"}, headers=root), 200)
     _status(catalog.client.request("DELETE", members, json={"user": "dex~root", "relation": "admin"}, headers=alice), 200)
-    catalog.store.write((catalog.person("grace"), "security_admin", "project:acme"))
+    acme = catalog.creation("project", "acme")
+    catalog.store.write((catalog.person("grace"), "security_admin", acme))
     before = sorted(catalog.store.tuples())
 
     for role in ("oncall", "admins"):
@@ -134,15 +132,14 @@ def test_a_role_nested_beneath_an_admin_role_is_filled_and_emptied_as_the_admin_
     )
 
     _status(catalog.client.delete("/management/v1/projects/acme", headers=catalog.bearer("bob")), 200)
-    ended = {"project:acme", *(f"role:{role_id}" for role_id in made.values())}
-    # The project's incarnation marker stays (ADR 0241): it confers nothing and keeps a stalled birth from bearing it again.
-    survived = [t for t in catalog.store.tuples() if {t[0].split("#")[0], t[2]} & ended and t[1] not in fga.BOOKKEEPING_RELATIONS]
+    ended = {acme, *(f"role:{role_id}" for role_id in made.values())}
+    survived = [t for t in catalog.store.tuples() if {t[0].split("#")[0], t[2]} & ended]
     assert not survived, "a tuple of the project or its roles survived it"
 
 
 def test_an_unassignment_and_an_admin_revoke_at_once_leave_the_project_administered(governed_catalog: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
     """alice administers acme through the role ``admins`` and bob directly. Each removes the other at once, and each
-    judged a project the other still administers: both removals move the project's token (``revision``, ADR 0241) in
+    judged a project the other still administers: both removals move the project's token (``revision``, ADR 0213) in
     their own Write, so the store commits one and the other reads again and is refused, leaving the winner administering
     it ([[LH-597]])."""
     catalog = governed_catalog
@@ -214,17 +211,17 @@ def test_an_ending_that_lost_a_race_ends_no_role_it_did_not_read(tmp_path: Path,
     root, so = str(tmp_path), StorageOptions()
     ended = RoleRecord(id=uuid.uuid4(), project="acme", name="analysts", created_at=datetime.now(UTC), created_by="dex~alice")
     taken = RoleRecord(id=uuid.uuid4(), project="acme", name="analysts", created_at=datetime.now(UTC), created_by="dex~bob")
-    roles.create_role_record(root, so, ended, project_incarnation="p1")
+    roles.create_role_record(root, so, ended, project_uuid="a" * 32)
     read = roles.read_json
 
     def read_then_the_rivals_land(control_root: str, storage_options: StorageOptions, key: str) -> tuple[dict[str, Any], str] | None:
         found = read(control_root, storage_options, key)
         monkeypatch.setattr(roles, "read_json", read)
         roles.end_role_record(root, so, ended)
-        roles.create_role_record(root, so, taken, project_incarnation="p1")
+        roles.create_role_record(root, so, taken, project_uuid="a" * 32)
         return found
 
     monkeypatch.setattr(roles, "read_json", read_then_the_rivals_land)
     roles.end_role_record(root, so, ended)
 
-    assert roles.list_roles(root, so, "acme", incarnation="p1") == [taken]
+    assert roles.list_roles(root, so, "acme", project_uuid="a" * 32) == [taken]

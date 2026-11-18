@@ -20,10 +20,10 @@ from lance_namespace import ServiceUnavailableError
 from catalog import main as boot
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import warehouses as warehouse_doors
-from catalog.services import declaration, projects, warehouses
+from catalog.services import declaration, projects, tenancy, warehouses
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
-from lakehouse.records import mutate_json
+from lakehouse.governed.tenancy import Kind
 
 
 CONNECTOR, IDP = "local", "dex"
@@ -48,6 +48,14 @@ def _grant(obj: str, relation: str) -> dict[str, str]:
     return {"object": obj, "relation": relation, "principal": PIPELINE}
 
 
+def _creation(estate: Any, kind: Kind, object_id: str) -> str:  # noqa: ANN401 — the conftest's Estate
+    """The object OpenFGA names the live creation of ``kind`` ``object_id`` by (ADR 0245)."""
+    settings = estate.client.app.state.settings
+    found = tenancy.resolve(settings.registry_root, settings.storage_options(), kind, object_id)
+    assert found is not None, f"no live {kind} {object_id!r}"
+    return found.obj
+
+
 def test_a_tick_makes_every_declared_project_warehouse_and_service_grant_with_no_door_called(estate: Any) -> None:
     estate.declare(
         projects=[_project("acme"), _project("research", admin="bob")],
@@ -65,7 +73,7 @@ def test_a_tick_makes_every_declared_project_warehouse_and_service_grant_with_no
         "research": ("research", "git"),
     }
     assert listed == {"alice": ["acme"], "bob": ["lab"]}
-    assert (fga.user_object(PIPELINE), "writer", "warehouse:acme") in estate.store.tuples()
+    assert (fga.user_object(PIPELINE), "writer", _creation(estate, "warehouse", "acme")) in estate.store.tuples()
 
 
 def _declared_acme(estate: Any) -> None:
@@ -341,10 +349,10 @@ def test_a_grant_removed_from_git_is_revoked_and_one_made_at_a_door_stands(estat
     else:
         real_write = fga.write_evidenced
 
-        async def _dies(client: Any, fences: Any, t: fga.ClientTuple, *args: Any, **kwargs: Any) -> bool:  # noqa: ANN401 — write_evidenced's own arguments
+        async def _dies(client: Any, t: fga.ClientTuple, *args: Any, **kwargs: Any) -> bool:  # noqa: ANN401 — write_evidenced's own arguments
             if t.relation == "reader":
                 raise ServiceUnavailableError("the tick's process died before its write")
-            return await real_write(client, fences, t, *args, **kwargs)
+            return await real_write(client, t, *args, **kwargs)
 
         monkeypatch.setattr(fga, "write_evidenced", _dies)
         estate.tick()
@@ -355,35 +363,30 @@ def test_a_grant_removed_from_git_is_revoked_and_one_made_at_a_door_stands(estat
 
     estate.tick()
 
-    held = {relation for user, relation, obj in estate.store.tuples() if user == fga.user_object(PIPELINE) and obj == "warehouse:acme"}
+    held = {relation for user, relation, obj in estate.store.tuples() if user == fga.user_object(PIPELINE) and obj == _creation(estate, "warehouse", "acme")}
     assert held == {"reader"}
 
 
 @pytest.mark.parametrize("converged_by", ["boot", "tick"])
-def test_an_incarnation_whose_birth_never_landed_is_born_by_the_catalog_and_a_record_naming_none_is_refused(
-    estate: Any, monkeypatch: pytest.MonkeyPatch, converged_by: str
-) -> None:
-    """A create can die between its record and its birth (ADR 0241 §8 B5, `GrantsUnbornUnconverged`): the catalog bears
-    it at boot and on every converge tick, its marker and token with no seed of its own, so the create asked again writes
-    its creator's admin under a fence and the doors work, with no hand-run step. A record naming no incarnation was
-    written by no create of this catalog: it is an internal error where the incarnation is relied on and in the
-    convergence, never repaired."""
+def test_a_project_whose_create_died_before_its_seed_is_finished_by_the_catalog(estate: Any, monkeypatch: pytest.MonkeyPatch, converged_by: str) -> None:
+    """A create can die between its record and its flip (ADR 0245, `GrantsCreatingUnsettled`): the record stands
+    `creating`, which no door resolves. The catalog finishes it at boot and on every converge tick from what the record
+    names, its admin's seed on its uuid and then `live`, with no hand-run step, and the doors work."""
     estate.store.write((fga.user_object(f"{IDP}~alice"), "admin", ROOT))
     alice, members = estate.bearer("alice"), "/management/v1/projects/acme/members"
-    real_bear = fga.bear
+    real_seed = fga_deps.seed_project_admin
 
-    async def _birth_lost(*_args: Any, **_kwargs: Any) -> bool:  # noqa: ANN401 — bear's own arguments
+    async def _seed_lost(*_args: Any, **_kwargs: Any) -> bool:  # noqa: ANN401 — seed_project_admin's own arguments
         raise ServiceUnavailableError("authorization service unavailable")
 
-    monkeypatch.setattr(fga, "bear", _birth_lost)
+    monkeypatch.setattr(fga_deps, "seed_project_admin", _seed_lost)
     assert estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=alice).status_code == 503
-    monkeypatch.setattr(fga, "bear", real_bear)
+    monkeypatch.setattr(fga_deps, "seed_project_admin", real_seed)
     settings = estate.client.app.state.settings
-    record = projects.get_project(settings.registry_root, settings.storage_options(), "acme")
-    assert record is not None
-    incarnation = record["incarnation"]
-    born = {(f"revision:{incarnation}", "revision", "project:acme"), (f"revision:{incarnation}.0", "revision", "project:acme")}
-    assert not born & estate.store.tuples()
+    record = projects.get_project_record(settings.registry_root, settings.storage_options(), "acme")
+    assert record is not None and record["state"] == "creating", record
+    # Gated as an object nobody holds anything on, so the caller learns nothing of a record no door resolves.
+    assert estate.client.get(members, headers=alice).status_code == 403, "a door resolved a creating record"
 
     app = cast(FastAPI, estate.client.app)
     assert estate.client.portal is not None
@@ -392,18 +395,10 @@ def test_an_incarnation_whose_birth_never_landed_is_born_by_the_catalog_and_a_re
     else:
         assert estate.tick().failed == []
     held = estate.store.tuples()
-    assert born <= held and (fga.user_object(f"{IDP}~alice"), "admin", "project:acme") not in held, "the convergence bore no birth, or a seed"
-    remade = estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=alice)
+    assert (fga.user_object(f"{IDP}~alice"), "admin", f"project:{record['uuid']}") in held, "the convergence wrote no seed"
     granted = estate.client.put(members, json={"user": f"{IDP}~bob", "relation": "member"}, headers=alice)
     last = estate.client.request("DELETE", members, json={"user": f"{IDP}~alice", "relation": "admin"}, headers=alice)
-    assert (remade.status_code, granted.status_code, last.status_code, last.json()["code"]) == (200, 200, 409, 14), (remade.text, granted.text, last.text)
-
-    mutate_json(
-        settings.registry_root, settings.storage_options(), projects.record_key("acme"), lambda record: {k: v for k, v in record.items() if k != "incarnation"}
-    )
-    refused = estate.client.delete("/management/v1/projects/acme", headers=alice)
-    assert (refused.status_code, refused.json()["code"]) == (500, 18), refused.text
-    assert [failed for failed in estate.tick().failed if failed.startswith("project:acme")], "a record naming no incarnation converged silently"
+    assert (granted.status_code, last.status_code, last.json()["code"]) == (200, 409, 14), (granted.text, last.text)
 
 
 class _Gate:
@@ -416,64 +411,44 @@ class _Gate:
             assert await asyncio.to_thread(self.release.wait, 30), "the held step was never released"
 
 
-@pytest.mark.parametrize("deleted", ["its-project", "itself"])
-def test_a_warehouse_made_across_a_delete_lands_in_no_tenant_made_again_under_the_id(estate: Any, monkeypatch: pytest.MonkeyPatch, deleted: str) -> None:
-    """alice makes warehouse ``wh`` in her project ``acme`` and is held: in its store's probe while acme is deleted and
-    erin makes acme again (ADR 0241, `GrantsEdgeUnfenced`), or between its record and its birth while ``wh`` is deleted and
-    erin makes it again (`GrantsRebirth`). Neither tenant erin made holds alice's warehouse or alice as its owner."""
+def test_a_warehouse_made_across_its_projects_delete_lands_in_no_tenant_made_again_under_the_id(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """alice makes warehouse ``wh-a`` in her project ``acme`` and is held in its store's probe while acme is deleted and
+    erin makes acme again (ADR 0245, `GrantsChildReadFirst`): its record, written after the delete, names acme's dead
+    creation, and its resolve after the record finds another, so it ends its record and answers 404. Erin's acme holds no
+    warehouse of alice's, and no record of it stands."""
     for person in ("alice", "erin"):
         estate.store.write((fga.user_object(f"{IDP}~{person}"), "admin", ROOT))
     alice, erin = estate.bearer("alice"), estate.bearer("erin")
     assert estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=alice).status_code == 200
     made = {"id": "wh-a", "project": "acme", "bucket": "wh-a-bucket"}
-    gate = _Gate()
-    if deleted == "its-project":
-        real_probe = warehouse_doors._require_a_conforming_store
+    gate, real_probe = _Gate(), warehouse_doors._require_a_conforming_store
 
-        async def _probe(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the probe's own arguments
-            await gate.hold()
-            await real_probe(*args, **kwargs)
+    async def _probe(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the probe's own arguments
+        await gate.hold()
+        await real_probe(*args, **kwargs)
 
-        monkeypatch.setattr(warehouse_doors, "_require_a_conforming_store", _probe)
-    else:
-        granted = estate.client.put("/management/v1/projects/acme/members", json={"user": f"{IDP}~erin", "relation": "admin"}, headers=alice)
-        assert granted.status_code == 200, granted.text
-        real_seed = fga_deps.seed_warehouse
-
-        async def _seed(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — seed_warehouse's own arguments
-            await gate.hold()
-            await real_seed(*args, **kwargs)
-
-        monkeypatch.setattr(fga_deps, "seed_warehouse", _seed)
+    monkeypatch.setattr(warehouse_doors, "_require_a_conforming_store", _probe)
     answered: list[int] = []
     making = threading.Thread(target=lambda: answered.append(estate.client.post("/management/v1/warehouses", json=made, headers=alice).status_code))
     making.start()
     assert gate.arrived.wait(30), "alice's create never reached the held step"
-    if deleted == "its-project":
-        steps = [
-            estate.client.delete("/management/v1/projects/acme", headers=alice),
-            estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=erin),
-        ]
-    else:
-        steps = [
-            estate.client.delete("/management/v1/warehouses/wh-a", headers=alice),
-            estate.client.post("/management/v1/warehouses", json=made, headers=erin),
-        ]
+    steps = [
+        estate.client.delete("/management/v1/projects/acme", headers=alice),
+        estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=erin),
+    ]
     gate.release.set()
     making.join(30)
 
     assert [step.status_code for step in steps] == [200, 200], [step.text for step in steps]
-    held = estate.store.tuples()
-    planted = ("project:acme", "project", "warehouse:wh-a") in held and deleted == "its-project"
-    assert (answered, planted, (fga.user_object(f"{IDP}~alice"), "owner", "warehouse:wh-a") in held) == ([409], False, False)
-    if deleted == "its-project":
-        assert estate.record("wh-a") is None, "alice's warehouse is recorded in the project erin made"
+    assert (answered, estate.record("wh-a")) == ([404], None), "alice's warehouse is recorded in the project erin made"
+    assert not [t for t in estate.store.tuples() if t[0] == _creation(estate, "project", "acme") and t[1] == "project"], "erin's acme holds a warehouse edge"
 
 
 def test_a_namespace_made_in_a_warehouse_across_its_delete_lands_in_no_warehouse_made_again_under_the_id(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """alice's namespace ``wh-a$sales`` is created and held before its seed while ``wh-a`` is deleted with what it holds
-    and erin makes ``wh-a`` again in a project of hers (ADR 0241 §8 B4, G9b): its ``parent`` edge names the warehouse,
-    and is written under the fence its request opened there, so it lands in no warehouse made again under the id."""
+    and erin makes ``wh-a`` again in a project of hers (ADR 0245, `ChildUnderLiveParent` with Cascade): its ``parent``
+    edge names the creation of ``wh-a`` the router resolved, and once written the door resolves the warehouse again,
+    finds another creation, takes the namespace back and answers 404, so it lands in no warehouse made again under the id."""
     for person in ("alice", "erin"):
         estate.store.write((fga.user_object(f"{IDP}~{person}"), "admin", ROOT))
     alice, erin = estate.bearer("alice"), estate.bearer("erin")
@@ -500,8 +475,9 @@ def test_a_namespace_made_in_a_warehouse_across_its_delete_lands_in_no_warehouse
     making.join(30)
 
     assert [step.status_code for step in steps] == [200, 200], [step.text for step in steps]
-    edges = [t for t in estate.store.tuples() if "warehouse:wh-a" in (t[0], t[2]) and t[1] in ("parent", "child")]
-    assert (answered, edges) == ([409], []), f"the namespace door answered {answered}, and erin's warehouse holds {edges}"
+    erins = _creation(estate, "warehouse", "wh-a")
+    edges = [t for t in estate.store.tuples() if erins in (t[0], t[2]) and t[1] in ("parent", "child")]
+    assert (answered, edges) == ([404], []), f"the namespace door answered {answered}, and erin's warehouse holds {edges}"
 
 
 def _released_acme(estate: Any) -> dict[str, str]:
@@ -521,7 +497,7 @@ def test_a_project_removed_from_git_is_released_and_keeps_its_data(estate: Any) 
 
     project = estate.client.get("/management/v1/projects/acme", headers=alice).json()
     assert (sorted(answer.released), answer.grants_revoked, answer.failed) == (["project:acme", "warehouse:acme"], 0, [])
-    assert (fga.user_object(f"{IDP}~alice"), "admin", "project:acme") in estate.store.tuples()
+    assert (fga.user_object(f"{IDP}~alice"), "admin", _creation(estate, "project", "acme")) in estate.store.tuples()
     assert (project["managed_by"], (estate.record("acme") or {}).get("managed_by")) == ("self", None)
     assert estate.client.get("/v1/namespace/acme$sales/table/list", headers=alice).json()["tables"] == ["t"]
 

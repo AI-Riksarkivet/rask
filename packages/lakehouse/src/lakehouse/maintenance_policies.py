@@ -12,9 +12,9 @@ the bucket by the maintenance sweep on every tick (it has no catalog client by d
 * namespace policy — keyed by the namespace's ``uuid``, governing every table under the namespace;
 * project policy (#84) — the tenant-wide default, keyed by the project id: instead of a uuid it carries
   ``buckets`` (the project's active warehouse buckets, resolved from the warehouse registry at set time),
-  matched at the bucket level, and ``project_incarnation``, the incarnation of the project that set it (ADR 0241 §9 P2):
-  a project's id may be held again by another tenant once it is deleted, so a record an earlier incarnation left governs
-  only a bucket whose claim names that incarnation, never one the tenant holding the id now claimed.
+  matched at the bucket level, and ``project_uuid``, the creation of the project that set it (ADR 0241 §9 P2, ADR 0245):
+  a project's id may be held again by another tenant once it is deleted, so a record an earlier creation left governs
+  only a bucket whose claim names that creation, never one the tenant holding the id now claimed.
 
 A table or namespace record also keeps the object's name under ``id``, as it was when the policy was set, for
 display. Resolution order (:func:`resolve_policy`): a table policy wins over the nearest namespace policy wins
@@ -47,6 +47,7 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse import control_prefixes, records, stored_objects, warehouse_records
+from lakehouse.governed.tenancy import PROJECT_UUID
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, read_record, record_key
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, on_s3
@@ -166,7 +167,7 @@ def _record_is_well_formed(record: dict[str, Any]) -> bool:
         return False
     if kind == "project":
         buckets = record.get("buckets")
-        return bool(record.get("id")) and bool(record.get(warehouse_records.PROJECT_INCARNATION)) and isinstance(buckets, list) and bool(buckets)
+        return bool(record.get("id")) and bool(record.get(PROJECT_UUID)) and isinstance(buckets, list) and bool(buckets)
     return bool(record.get("uuid"))
 
 
@@ -248,8 +249,9 @@ def governing_policy(
     any of those levels holds it (:func:`_held`). The precedence is :func:`resolve_policy`'s, which a caller may hand the
     one record this returns; the project level differs only where several project records name one bucket, which
     :func:`resolve_policy` refuses to choose between and the store's claim, written once by the warehouse that took the
-    bucket, settles. The project's record governs only where it names the incarnation of the project the claim names
-    (ADR 0241 §9 P2): one an earlier incarnation of the id left governs no bucket the tenant holding the id now claimed.
+    bucket, settles. The project's record governs only where it names the creation of the project the claim names
+    (ADR 0241 §9 P2, ADR 0245): one an earlier creation of the id left governs no bucket the tenant holding the id now
+    claimed.
     The policy records are read under ``control_root`` and the bucket's claim under ``claims_root``, the catalog's
     registry, which a deployment may keep apart from its policies.
 
@@ -273,7 +275,7 @@ def governing_policy(
         raise UnreadablePolicyError(f"a maintenance policy that may govern the table {table_uuid} could not be read: {exc}") from exc
     except ValueError as exc:
         raise MalformedPolicyError(f"a maintenance policy that may govern the table {table_uuid} cannot be read as one: {exc}") from exc
-    governs = claimant is not None and tenant is not None and tenant.get(warehouse_records.PROJECT_INCARNATION) == claimant[1]
+    governs = claimant is not None and tenant is not None and tenant.get(PROJECT_UUID) == claimant[1]
     tenant = tenant if governs and tenant is not None and bucket in (tenant.get("buckets") or []) else None
     return _held([record for record in (own, *nearest, tenant) if record is not None])
 

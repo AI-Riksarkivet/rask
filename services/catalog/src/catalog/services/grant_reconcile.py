@@ -19,8 +19,11 @@ from typing import Any
 
 from catalog.core.config import Settings
 from catalog.services import projects, table_claims, warehouses
+from catalog.services.control_records import UUID
+from catalog.services.tenancy import object_of_record
 from lakehouse import location_claims, trash
 from lakehouse.governed import fga
+from lakehouse.governed.tenancy import PROJECT, WAREHOUSE, made_under
 
 
 def platform_objects(settings: Settings) -> frozenset[str]:
@@ -69,25 +72,29 @@ def ghost_refusal(settings: Settings, obj: str) -> str | None:
     kind, _, key = obj.partition(":")
     if obj in platform_objects(settings):
         return "the deployment keeps the object for itself"
+    root, so = settings.registry_root, settings.storage_options()
     match kind:
         case "project":
-            return f"the project record {key!r} names it" if projects.get_project(settings.registry_root, settings.storage_options(), key) else None
+            named = [str(r["id"]) for r in projects.read_projects(root, so)[0] if r.get(UUID) == key]
+            return f"the project record {named[0]!r} names its creation" if named else None
         case "warehouse":
-            return f"the warehouse record {key!r} names it" if warehouses.get_warehouse(settings.registry_root, settings.storage_options(), key) else None
+            named = [str(r["id"]) for r in warehouses.every_warehouse(root, so) if r.get(UUID) == key]
+            return f"the warehouse record {named[0]!r} names its creation" if named else None
         case "table":
             return "a trash record keeps the table for its undrop" if trash.keeps(settings.registry_root, settings.storage_options(), key) else None
         case _:
             return f"no drift report finds a ghost {kind!r}, so none is judged here"
 
 
-def tenancy_edge(record: dict[str, Any] | None, warehouse_id: str) -> fga.ClientTuple | str:
-    """The warehouse's tenancy pointer as its record names it, or why the record justifies none.
+def tenancy_edge(record: dict[str, Any] | None, project: dict[str, Any] | None, warehouse_id: str) -> fga.ClientTuple | str:
+    """The warehouse's tenancy pointer as its live record names it, between the creations its record names, or why
+    the record justifies none: none stands live, or the project's live creation is not the one it was made in (ADR 0245).
 
     Relation ``project``, as the catalog seeds it at the warehouse's creation: the model's warehouse type declares
     ``project: [project]`` and no ``parent``, so the structural edge a warehouse holds is this one.
     """
     if record is None:
-        return f"no warehouse record names {warehouse_id!r}"
-    if not (project := record.get("project")):
-        return f"the warehouse record {warehouse_id!r} names no project, so its tenancy is unknown"
-    return fga.ClientTuple(user=f"project:{project}", relation="project", object=f"warehouse:{warehouse_id}")
+        return f"no live warehouse record names {warehouse_id!r}"
+    if project is None or not made_under(record, project.get(UUID)):
+        return f"the warehouse record {warehouse_id!r} was made in a creation of project {record.get('project')!r} that is not live"
+    return fga.ClientTuple(user=object_of_record(PROJECT, project), relation="project", object=object_of_record(WAREHOUSE, record))

@@ -30,6 +30,7 @@ from pydantic import Field, ValidationError
 
 from catalog.schemas import RoleRecord
 from lakehouse import control_prefixes
+from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
@@ -44,11 +45,11 @@ ASSIGNEE: Final = "assignee"
 
 
 class StoredRole(RoleRecord):
-    """A role's record as the store keeps it: ``ended_at`` is set once the role is ended, and ``project_incarnation``
-    names the incarnation of the project it was made in (ADR 0241 §8 B3), so a role a create left across its project's
+    """A role's record as the store keeps it: ``ended_at`` is set once the role is ended, and ``project_uuid``
+    names the creation of the project it was made in (ADR 0245), so a role a create left across its project's
     delete is listed under no project made again under the id."""
 
-    project_incarnation: str = Field(min_length=1)
+    project_uuid: str = Field(pattern=rf"^{tenancy.UUID_PATTERN}$")
     ended_at: datetime | None = None
 
 
@@ -66,15 +67,15 @@ def _key(project: str, name: str) -> str:
     return f"{_ROLES_PREFIX}/{project}/{blake2s(name.encode('utf-8')).hexdigest()}.json"
 
 
-def create_role_record(control_root: str, storage_options: StorageOptions, record: RoleRecord, *, project_incarnation: str) -> None:
-    """Write ``record``, made in ``project_incarnation`` of its project, iff no standing role of its project holds its
+def create_role_record(control_root: str, storage_options: StorageOptions, record: RoleRecord, *, project_uuid: str) -> None:
+    """Write ``record``, made in the creation ``project_uuid`` of its project, iff no standing role of its project holds its
     name.
 
     Raises:
         lakehouse.records.RecordExistsError: A standing role holds the name, or another create took it first.
     """
     key = _key(record.project, record.name)
-    body = StoredRole(**record.model_dump(), project_incarnation=project_incarnation).model_dump(mode="json")
+    body = StoredRole(**record.model_dump(), project_uuid=project_uuid).model_dump(mode="json")
     try:
         create_json(control_root, storage_options, key, body)
         return
@@ -90,7 +91,7 @@ def create_role_record(control_root: str, storage_options: StorageOptions, recor
 
 
 def _read_roles(control_root: str, storage_options: StorageOptions, project: str) -> tuple[list[StoredRole], list[str]]:
-    """Every standing role of ``project``, of any incarnation of it, ordered by name, and the path of each record that is
+    """Every standing role of ``project``, of any creation of it, ordered by name, and the path of each record that is
     there and cannot be read as one. A record deleted since the listing named it is no record.
 
     Raises:
@@ -150,18 +151,18 @@ def every_stored_role(control_root: str, storage_options: StorageOptions) -> tup
 
 
 def _role(stored: StoredRole) -> RoleRecord:
-    return RoleRecord(**stored.model_dump(exclude={"ended_at", "project_incarnation"}))
+    return RoleRecord(**stored.model_dump(exclude={"ended_at", "project_uuid"}))
 
 
-def list_roles(control_root: str, storage_options: StorageOptions, project: str, *, incarnation: str) -> list[RoleRecord]:
-    """Every standing role of ``incarnation`` of ``project``, ordered by name: a role another incarnation's create left is
+def list_roles(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> list[RoleRecord]:
+    """Every standing role of the creation ``project_uuid`` of ``project``, ordered by name: a role another creation's create left is
     no role of this one. An unreadable record is skipped and logged, so one bad object does not void the project's roles;
     a caller ending them all asks :func:`every_role`."""
-    return [_role(stored) for stored in _read_roles(control_root, storage_options, project)[0] if stored.project_incarnation == incarnation]
+    return [_role(stored) for stored in _read_roles(control_root, storage_options, project)[0] if stored.project_uuid == project_uuid]
 
 
 def every_role(control_root: str, storage_options: StorageOptions, project: str) -> list[RoleRecord]:
-    """Every standing role of ``project``, of any incarnation of it, read whole, for a caller ending them all: a record
+    """Every standing role of ``project``, of any creation of it, read whole, for a caller ending them all: a record
     that cannot be read may be one of the roles it must end, so it is refused rather than left standing with its grants
     ([[LH-572]]).
 
@@ -178,11 +179,11 @@ def every_role(control_root: str, storage_options: StorageOptions, project: str)
     return [_role(stored) for stored in roles]
 
 
-def find_role(control_root: str, storage_options: StorageOptions, project: str, role_id: uuid.UUID | str, *, incarnation: str | None) -> RoleRecord | None:
-    """The standing role ``role_id`` of ``incarnation`` of ``project`` (of any incarnation for ``None``: whether it stands
+def find_role(control_root: str, storage_options: StorageOptions, project: str, role_id: uuid.UUID | str, *, project_uuid: str | None) -> RoleRecord | None:
+    """The standing role ``role_id`` of the creation ``project_uuid`` of ``project`` (of any creation for ``None``: whether it stands
     at all), or ``None`` when it holds none of that id."""
     found = (stored for stored in _read_roles(control_root, storage_options, project)[0] if str(stored.id) == str(role_id))
-    return next((_role(stored) for stored in found if incarnation in (None, stored.project_incarnation)), None)
+    return next((_role(stored) for stored in found if project_uuid in (None, stored.project_uuid)), None)
 
 
 #: How many times an ending reads the record: once, and once more after another write moved it.

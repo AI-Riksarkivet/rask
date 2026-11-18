@@ -744,15 +744,14 @@ catalog:
     warehouses: []
     # -- The seal of the estate's own warehouse, on `objectStore.bucket`, which has no registration to probe: `required` (the default; a commit whose seal the store refuses fails before it lands) or `detection_only` (commits tag where the store grants it and go on where it refuses; `WarehouseSealUnenforced` fires). ADR 0242.
     estateWarehouseSeal: required # @schema enum: [required, detection_only]
-    # -- Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:<id>` or `warehouse:<id>`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:<namespace>:<name>`). The catalog revokes a grant removed from here, and only one it wrote from here.
+    # -- Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:<id>` or `warehouse:<id>` (the id; the catalog writes it on the creation the id names, ADR 0245), `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:<namespace>:<name>`). The catalog revokes a grant removed from here, and only one it wrote from here.
     grants: []
   declarationConverge:
-    # A tick first converges every project's and warehouse's incarnation (ADR 0241): one listing of each registry (projects,
-    # warehouses, roles, bucket claims, policies) and OpenFGA requests only for what needs work, an incarnation not yet
-    # known born, an orphan, an open ticket, plus one read of the estate's open tickets; measured on OpenFGA's memory
-    # datastore at 10,000 warehouses, one request and 0.2 s once every record is known born. It then costs one registry
-    # read per declared object and one tuple read per object granted on, so it runs often enough that a change to the
-    # declaration lands within a minute or two.
+    # A tick first converges the tenancy (ADR 0245): one listing of each registry (projects, warehouses, roles, bucket
+    # claims, policies, ended creations) and OpenFGA requests only for what needs work, a record still creating, an ended
+    # creation not yet swept, an orphan; at 10,000 warehouses, every record live, it makes no OpenFGA request. It then
+    # costs one registry read per declared object and one tuple read per object granted on, so it runs often enough that a
+    # change to the declaration lands within a minute or two.
     # -- Seconds between two ticks of the timer on which the catalog converges the estate onto `catalog.declared` (`LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS`); lateness only delays a declared change.
     periodSeconds: 60 # @schema type: integer; minimum: 1
   # ADR 0242: the catalog probes the seal of every warehouse it serves, the estate's own included, at its start and on

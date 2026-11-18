@@ -18,15 +18,17 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import suppress
+from datetime import UTC, datetime
 
 import pyarrow.fs as pafs
-from lance_namespace import InternalError
 
 from catalog.services.control_records import (
-    INCARNATION,
+    STATE,
+    UUID,
     ProjectRecord,
     ProtectionChange,
-    new_incarnation,
+    end_creation,
     read_json,
     validated,
     validated_or_refuse,
@@ -35,6 +37,7 @@ from catalog.services.control_records import (
     write_json,
 )
 from lakehouse import control_prefixes
+from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
 from lakehouse.records import RecordMissingError, create_json, mutate_json
 from lakehouse.storage_options import StorageOptions
@@ -44,9 +47,9 @@ log = logging.getLogger(__name__)
 
 _PROJECTS_PREFIX = control_prefixes.PROJECTS
 
-#: The field a project's delete writes on its record before its first destructive step: the principal key of the caller
-#: who started it. From then on the project is absent to every door but its delete, which that caller can finish though
-#: the delete's revoke took their own admin grant ([[LH-576]]).
+#: The field a project's delete writes on its record before its first destructive step, beside its state ``deleting``:
+#: the principal key of the caller who started it. From then on the project is absent to every door but its delete, which
+#: that caller can finish though the delete's revoke took their own admin grant ([[LH-576]]).
 DELETING_BY = "deleting_by"
 
 
@@ -64,10 +67,10 @@ def put_project(control_root: str, storage_options: StorageOptions, record: dict
     :func:`create_project_record`, conditional on absence (F1).
 
     What is left is fixture setup, which has no concurrency to lose to. Do not reach for it in service
-    or endpoint code; there is a conditional door for every real mutation. The record is written as its create writes
-    it: one naming no incarnation is given a fresh one, as :func:`create_project_record` gives it (ADR 0241).
+    or endpoint code; there is a conditional door for every real mutation. The record is written live with a fresh uuid
+    unless it names its own (ADR 0245).
     """
-    write_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", {INCARNATION: new_incarnation(), **record})
+    write_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", {UUID: tenancy.new_uuid(), STATE: tenancy.LIVE, **record})
 
 
 #: The fields an idempotent re-POST OWNS. Everything else belongs to the record's own lifecycle and
@@ -94,21 +97,17 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
 
     `mutate_json` re-reads and re-applies on a lost race, so a concurrent protection change survives.
     Raises ``RecordMissingError`` if the record vanished (a concurrent delete — retryable, never a
-    blind re-create), and :class:`ProjectBeingDeletedError` while a delete of the project stands unfinished.
+    blind re-create), and :class:`ProjectBeingDeletedError` while a delete of the project stands unfinished. The uuid
+    and the state are the record's own, which no re-POST changes (ADR 0245).
     """
 
     def merge(live: dict[str, str]) -> dict[str, str]:
-        if live.get(DELETING_BY):
+        if live.get(STATE) == tenancy.DELETING:
             raise ProjectBeingDeletedError(f"project {record['id']!r} is being deleted")
         merged = {**live, **{k: v for k, v in record.items() if k in _CALLER_OWNED}}
         # Identity fields belong to the ORIGINAL create; a re-POST never resets a tenant's age or author.
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
         merged["created_by"] = live.get("created_by") or record.get("created_by", "")
-        # The incarnation is the original create's (ADR 0241), which every record carries from its mint (§8 B5).
-        if not live.get(INCARNATION):
-            raise InternalError(
-                f"project {record['id']!r}'s record names no incarnation; every create mints one, so this record was not written by this catalog"
-            )
         return merged
 
     return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", merge)
@@ -148,13 +147,13 @@ def set_project_manager(control_root: str, storage_options: StorageOptions, proj
 
 
 def create_project_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Mint ``_projects/<id>.json`` iff absent — the STORE arbitrates (F1).
+    """Mint ``_projects/<id>.json`` iff absent — the STORE arbitrates (F1). ``record`` names its creation's uuid and is
+    ``creating`` (ADR 0245): nothing is written in OpenFGA before it stands.
 
     Raises :class:`lakehouse.records.RecordExistsError` on a lost race; the caller
     re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
-    like the sequential idempotent re-POST path. A record naming no incarnation is given one here (ADR 0241).
+    like the sequential idempotent re-POST path.
     """
-    record.setdefault(INCARNATION, new_incarnation())
     create_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
 
 
@@ -164,7 +163,8 @@ def record_key(project_id: str) -> str:
 
 
 def get_project(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
-    """The project record, or ``None`` if the tenant does not exist or is being deleted ([[LH-576]]).
+    """The project record, or ``None`` if the tenant does not exist, is still being created, or is being deleted
+    ([[LH-576]], ADR 0245).
 
     A malformed record REFUSES rather than reading as a missing tenant: `require_project_exists` gates
     warehouse creation on this answer, and project delete acts on it, so "does not exist" is a verdict
@@ -172,7 +172,7 @@ def get_project(control_root: str, storage_options: StorageOptions, project_id: 
     but that delete's (:func:`get_project_record`), so no warehouse, role, grant or policy is made for it
     while its delete revokes and ends what it held."""
     record = get_project_record(control_root, storage_options, project_id)
-    return None if record is None or record.get(DELETING_BY) else record
+    return None if record is None or record.get(STATE) != tenancy.LIVE else record
 
 
 def get_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
@@ -184,7 +184,8 @@ def get_project_record(control_root: str, storage_options: StorageOptions, proje
 
 
 def mark_deleting(control_root: str, storage_options: StorageOptions, project_id: str, *, by: str) -> dict[str, str] | None:
-    """Record on the project's record that ``by`` started its delete, conditional on the record's ETag ([[LH-576]]).
+    """Mark the project's record ``deleting`` and record that ``by`` started its delete, conditional on the record's
+    ETag ([[LH-576]]): from here no door resolves it (ADR 0245).
 
     A delete another caller started first keeps its starter, so the record names one delete whoever asks again.
 
@@ -196,21 +197,35 @@ def mark_deleting(control_root: str, storage_options: StorageOptions, project_id
             control_root,
             storage_options,
             f"{_PROJECTS_PREFIX}/{project_id}.json",
-            lambda record: record if record.get(DELETING_BY) else {**record, DELETING_BY: by},
+            lambda record: record if record.get(DELETING_BY) else {**record, STATE: tenancy.DELETING, DELETING_BY: by},
         )
     except RecordMissingError:
         return None
 
 
-def delete_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> None:
-    """Remove the registry record. Idempotent — deleting an absent record is a no-op, so the
-    partial-failure retry path (record removed, tuple revoke failed, caller retries) cannot fail on
-    its second pass."""
-    fs, base = fs_and_base(control_root, storage_options)
+def set_live(control_root: str, storage_options: StorageOptions, project_id: str, uuid: str) -> dict[str, str] | None:
+    """Flip project ``project_id``'s record from ``creating`` to ``live`` where it still names the creation ``uuid``,
+    conditional on its ETag: its seed stands by then (ADR 0245). The record as it stands, ``None`` where it is gone or
+    another creation's."""
+
+    def flip(record: dict[str, str]) -> dict[str, str]:
+        if record.get(UUID) != uuid:
+            raise RecordMissingError(f"project {project_id!r} is not the creation {uuid}")
+        return {**record, STATE: tenancy.LIVE} if record.get(STATE) == tenancy.CREATING else record
+
     try:
-        fs.delete_file(f"{base}/{_PROJECTS_PREFIX}/{project_id}.json")
-    except FileNotFoundError:
-        return
+        return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", flip)
+    except RecordMissingError:
+        return None
+
+
+def end_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
+    """End the creation ``record`` names, its delete's last step: kept as ended (``control_records.end_creation``) and
+    its registry record removed, which frees its id. Idempotent, so a delete asked again after this step finishes."""
+    end_creation(control_root, storage_options, tenancy.PROJECT, record, now=datetime.now(UTC))
+    fs, base = fs_and_base(control_root, storage_options)
+    with suppress(FileNotFoundError):
+        fs.delete_file(f"{base}/{_PROJECTS_PREFIX}/{record['id']}.json")
 
 
 def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
@@ -237,11 +252,11 @@ def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[l
 
 
 def list_projects(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every readable project record (unordered) but those being deleted, which are no tenant (:func:`get_project`). An
-    absent registry prefix yields ``[]``.
+    """Every readable live project record (unordered): one being created or deleted is no tenant (:func:`get_project`).
+    An absent registry prefix yields ``[]``.
 
     One corrupt or unreadable record is SKIPPED with a warning (mirroring ``list_warehouses``):
     the listing feeds the tenant gallery and the existence guard, and a single bad object voiding
     it would turn one tenant's registry corruption into an every-tenant outage.
     """
-    return [record for record in read_projects(control_root, storage_options)[0] if not record.get(DELETING_BY)]
+    return [record for record in read_projects(control_root, storage_options)[0] if record.get(STATE) == tenancy.LIVE]

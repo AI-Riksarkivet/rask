@@ -590,9 +590,8 @@ export interface paths {
          *     Each object's grants are read, then it is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
          *     record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a
          *     table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]). Only what
-         *     was read is revoked, and on a project or warehouse only while nothing was born under the id since the read (ADR
-         *     0241, ``fga.revoke_ghost``): one made meanwhile keeps its grants, even a seed equal to a ghost tuple read, and is
-         *     answered refused.
+         *     was read is revoked. A project's or warehouse's object is its creation's uuid (ADR 0245), which no create mints
+         *     again, so one made meanwhile is another object and keeps its grants.
          */
         post: operations["revoke_ghost_grants_management_v1_grants_ghosts_revoke_post"];
         delete?: never;
@@ -612,10 +611,12 @@ export interface paths {
         put?: never;
         /**
          * Rebuild Warehouse Tenancy
-         * @description Write each warehouse's tenancy edge, ``project:<p> project warehouse:<id>``, as its registry record names it.
+         * @description Write each warehouse's tenancy edge, ``project:<uuid> project warehouse:<uuid>``, as its live registry record
+         *     names it, between the creations it names (ADR 0245).
          *
-         *     A structural edge confers nothing on its own, so rebuilding it re-grants no one; a warehouse whose record names no
-         *     project, or no record at all, is answered unjustified.
+         *     A structural edge confers nothing on its own, so rebuilding it re-grants no one; a warehouse with no live record, or
+         *     whose record was made in a creation of its project that is not live, is answered unjustified. A rebuild that read a
+         *     record deleted meanwhile writes onto dead creations, which the converge tick sweeps, never onto one made again.
          */
         post: operations["rebuild_warehouse_tenancy_management_v1_grants_tenancy_rebuild_post"];
         delete?: never;
@@ -1203,8 +1204,8 @@ export interface paths {
         put?: never;
         /**
          * Grant Project Access
-         * @description Grant a rung on the project to a subject, gated by :func:`project_grant_fence` ([[LH-563]]), under the fence
-         *     opened between the gate's two askings (ADR 0241).
+         * @description Grant a rung on the project to a subject, gated by :func:`project_grant_gate` ([[LH-563]]), on its live creation
+         *     (ADR 0245).
          *
          *     The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
          *     nothing beyond them. Who belongs to the project is the members door's.
@@ -1288,9 +1289,8 @@ export interface paths {
         put?: never;
         /**
          * Revoke Project Access
-         * @description Revoke a rung on the project from a subject, gated by :func:`project_revoke_fence` ([[LH-563]]), under the fence
-         *     opened between the gate's two askings (ADR 0241): a revoke decided on a project deleted meanwhile takes nothing from
-         *     one made again under its id.
+         * @description Revoke a rung on the project from a subject, gated by :func:`project_revoke_gate` ([[LH-563]]), on its live
+         *     creation (ADR 0245): a revoke decided on a project deleted meanwhile takes nothing from one made again under its id.
          */
         post: operations["revoke_project_access_management_v1_projects__id__access_revoke_post"];
         delete?: never;
@@ -1500,10 +1500,10 @@ export interface paths {
          *     on the second call. An ``admin`` is granted through :func:`project_admins.confer`, which asks nothing of the
          *     caller beyond the gate here.
          *
-         *     The authority is asked first, with no write, then again under a fence of the project (ADR 0241,
-         *     ``fga_deps.door_fence``): a caller refused has written nothing, and a project deleted meanwhile, and one made again
-         *     under its id by another tenant, is not the project the grant was decided on, and the grant lands on neither. Grants
-         *     for different people never refuse each other: each deletes only its own ticket.
+         *     The id is resolved to its live creation, the gate asked on it, and the grant written on it in one Write (ADR 0245):
+         *     a caller refused has written nothing, and a grant decided on a project deleted meanwhile lands on that dead
+         *     creation, never on one made again under its id. The id is resolved again once the grant is written, and a project
+         *     deleted meanwhile is answered as the deleted project it is. Grants never refuse each other.
          */
         put: operations["grant_member_management_v1_projects__project_id__members_put"];
         post?: never;
@@ -1519,8 +1519,8 @@ export interface paths {
          *     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
          *     state already holds.
          *
-         *     Fenced as a grant is (ADR 0241): a revoke decided on a project deleted meanwhile takes nothing from one made again
-         *     under its id, and is answered 409.
+         *     Resolved, gated and written on the project's live creation as a grant is (ADR 0245): a revoke decided on a project
+         *     deleted meanwhile takes nothing from one made again under its id, and is answered as the deleted project it is.
          */
         delete: operations["revoke_member_management_v1_projects__project_id__members_delete"];
         options?: never;
@@ -1564,25 +1564,22 @@ export interface paths {
         /**
          * List Roles
          * @description The project's standing roles, ordered by name, gated on ``can_list_roles``; a role's assignees are its own read. A
-         *     role made in an earlier incarnation of the project is no role of it (ADR 0241 §8 B3).
+         *     role made in an earlier creation of the project is no role of it (ADR 0245).
          */
         get: operations["list_roles_management_v1_projects__project_id__roles_get"];
         put?: never;
         /**
          * Create Role
-         * @description Mint a role in the project, gated on ``can_create_role``: its ``project`` edge, then its record.
+         * @description Mint a role in the project, gated on ``can_create_role``: its record, then its ``project`` edge.
          *
-         *     A name a standing role of the project holds is refused 409 (code 2). The edge is written first, and removed again
-         *     when the record cannot be written, so a role is listed only once it can be governed; an edge left by a request that
-         *     died between the two names a uuid no record holds, which grants nothing. The role starts with no assignee: filling
-         *     it is the security admins' (``can_manage_assignees``), a different authority from minting it.
+         *     A name a standing role of the project holds is refused 409 (code 2). The role starts with no assignee: filling it is
+         *     the security admins' (``can_manage_assignees``), a different authority from minting it.
          *
-         *     The edge names the project, so it is written under a fence of the project opened between the gate's two askings (ADR
-         *     0241): a caller refused writes nothing, and a role decided on a project deleted meanwhile is made in no project made
-         *     again under the id. Its record names the incarnation the fence read, so a record a create left across the project's
-         *     delete is listed under no project made again under the id, and the converge tick ends it. The project's delete
-         *     revokes every edge naming it and then ends every role its registry lists; a record written after that listing finds
-         *     its edge gone, and is taken back here.
+         *     The project's id is resolved to its live creation, and the gate asked there (ADR 0245). The record names that
+         *     creation and is written first; the project is then resolved again, and one deleted meanwhile is answered as deleted
+         *     with the record ended here. The project's delete marks the project before it ends the roles its registry lists, so
+         *     either that listing finds this record or this resolve finds the project gone. The edge names the creation, so one
+         *     written after the project's delete stands on a dead creation, which the converge tick sweeps.
          */
         post: operations["create_role_management_v1_projects__project_id__roles_post"];
         delete?: never;
@@ -1634,8 +1631,8 @@ export interface paths {
          *     the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
          *
          *     The assignment is one Write (:func:`project_admins.confer`), judged on the read that found whether ``admin`` reaches
-         *     the role, under a fence of the role's project opened between the gate's two askings (ADR 0241): a caller refused
-         *     writes nothing, and an assignment decided on a project deleted meanwhile lands in no project made again under its id.
+         *     the role. A role is named by its uuid and a project by its creation's (ADR 0245), so an assignment decided on a
+         *     project deleted meanwhile lands on that dead creation's ended role, in no project made again under its id.
          */
         put: operations["assign_role_management_v1_projects__project_id__roles__role_id__assignees_put"];
         post?: never;
@@ -1644,8 +1641,7 @@ export interface paths {
          * @description Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.
          *
          *     Refused 409 (code 14) when the project's ``admin`` would reach nobody without it
-         *     (:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is), and fenced as an
-         *     assignment is (ADR 0241).
+         *     (:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is).
          */
         delete: operations["unassign_role_management_v1_projects__project_id__roles__role_id__assignees_delete"];
         options?: never;
@@ -2538,8 +2534,8 @@ export interface paths {
         put?: never;
         /**
          * Grant Warehouse Access
-         * @description Grant a base rung on the warehouse to a subject, gated by :func:`warehouse_grant_fence` ([[LH-555]]), under the
-         *     fence opened between the gate's two askings (ADR 0241).
+         * @description Grant a base rung on the warehouse to a subject, gated by :func:`warehouse_grant_gate` ([[LH-555]]), on its live
+         *     creation (ADR 0245).
          */
         post: operations["grant_warehouse_access_management_v1_warehouse__id__access_grant_post"];
         delete?: never;
@@ -2609,8 +2605,8 @@ export interface paths {
         put?: never;
         /**
          * Revoke Warehouse Access
-         * @description Revoke a base rung on the warehouse from a subject, gated by :func:`warehouse_revoke_fence` ([[LH-555]]), under
-         *     the fence opened between the gate's two askings (ADR 0241).
+         * @description Revoke a base rung on the warehouse from a subject, gated by :func:`warehouse_revoke_gate` ([[LH-555]]), on its
+         *     live creation (ADR 0245).
          */
         post: operations["revoke_warehouse_access_management_v1_warehouse__id__access_revoke_post"];
         delete?: never;
@@ -2699,15 +2695,12 @@ export interface paths {
          *
          *     Order (fail-closed): the request's shape (400), then the project must EXIST (``require_project_exists`` — 404 naming
          *     ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
-         *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, then :func:`establish_warehouse`
-         *     makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is, and the catalog converges
-         *     it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
+         *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project's live creation, then
+         *     :func:`establish_warehouse` makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is,
+         *     and the catalog converges it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
          *
-         *     The warehouse's birth names its project, so it is written under a fence of the project opened between the gate's two
-         *     askings (ADR 0241): a caller refused writes nothing, and a project deleted while the bucket is provisioned and
-         *     probed, and made again under its id by another tenant, holds no warehouse its old admin was making; the create is
-         *     answered 409. Its record and its bucket's claim name the project incarnation the fence read, so one a create held
-         *     across that delete wrote is no warehouse of the tenant made again (ADR 0241 §8 B3).
+         *     The warehouse's record names the creation of the project the gate was asked on (ADR 0245), so a create that ran
+         *     across that project's delete makes no warehouse of a tenant made again under its id.
          */
         post: operations["create_warehouse_management_v1_warehouses_post"];
         delete?: never;
@@ -2725,7 +2718,8 @@ export interface paths {
         };
         /**
          * Get Warehouse
-         * @description One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage).
+         * @description One warehouse record — reader-gated on its creation, live or being deleted (fail-closed on an OpenFGA outage): a
+         *     delete that stopped part-way leaves the warehouse there until the same call asked again finishes it.
          */
         get: operations["get_warehouse_management_v1_warehouses__warehouse_id__get"];
         put?: never;
@@ -2773,7 +2767,7 @@ export interface paths {
          *        bucket a same-project sibling still claims, or reserved platform storage — refuses BEFORE the cascade
          *        (:func:`_require_bucket_purgeable`). Before its first delete the purge takes the bucket's claim for itself
          *        (``warehouses.take_for_purge``: stamped ``purging`` under the read's ETag, where it names this warehouse's
-         *        project at its incarnation), which refuses every create on the bucket (409) until it ends; the bytes are deleted
+         *        project at its creation), which refuses every create on the bucket (409) until it ends; the bytes are deleted
          *        while the claim read again is still its stamp (``warehouses.purge_bucket``), and the claim is released last
          *        (``warehouses.end_purge``). A purge that dies leaves the stamp, and only this delete asked again resumes it. A
          *        claim released, absent or naming anyone else keeps every byte: the record goes, and the answer's ``bytes_kept``
@@ -2783,12 +2777,13 @@ export interface paths {
          *     Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
          *     reaches its bucket.
          *
-         *     **What a dead tenant left is the estate admin's to purge** (ADR 0241 §9 P3): a record made under an incarnation of its
-         *     project that no longer stands, or one the converge tick ended, is administered by no tenant, and only
-         *     ``can_purge_dead_tenant_warehouse`` on the estate deletes it, with ``?purge_bucket=true``. Its record is stamped
-         *     ``purging`` first, so no create takes its key meanwhile; a claim no longer its own leaves the bucket untouched, its
-         *     catalog included. Announced as ``warehouse_deleted`` with ``dead_tenant: true``. The same relation reaches, by its
-         *     bucket in the warehouse's place, a dead incarnation's claim no record names (ADR 0241 §10 Q2).
+         *     **A dead creation's claim no record names is the estate owner's to purge, by its bucket** (ADR 0241 §10 Q2):
+         *     ``can_purge_dead_tenant_warehouse`` on the estate reaches it with ``?purge_bucket=true``, the bucket in the
+         *     warehouse's place.
+         *
+         *     **The record is marked ``deleting`` before the namespaces are read for the cascade** (ADR 0245): from then on no door
+         *     resolves the warehouse, so a namespace created in it either was made before that read, which finds it, or finds the
+         *     warehouse gone when its create resolves it again, and takes itself back.
          */
         delete: operations["delete_warehouse_management_v1_warehouses__warehouse_id__delete"];
         options?: never;

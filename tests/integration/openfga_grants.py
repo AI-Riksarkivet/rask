@@ -18,10 +18,11 @@ from openfga_sdk.models import CheckResponse, ListUsersResponse, ReadRequestTupl
 from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.validation_error_message_response import ValidationErrorMessageResponse
 
-from lakehouse.governed.fga import BOOKKEEPING_RELATIONS, INCARNATED_TYPES, REVISION, user_object
+from lakehouse.governed.fga import BOOKKEEPING_RELATIONS, user_object
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal, is_principal
+from lakehouse.governed.tenancy import UUID, Kind
 
 
 if TYPE_CHECKING:
@@ -55,12 +56,9 @@ class Grants:
         )
 
     async def read(self, body: ReadRequestTupleKey, options: Options = None) -> ReadResponse:
-        """No tuple, but each project and warehouse born, its incarnation's token standing (ADR 0241), so a door writing
-        on one opens its fence as on an estate the catalog converged."""
-        del options
-        obj = str(body.object or "")
-        born = [Tuple(key=TupleKey(user="revision:held.0", relation=REVISION, object=obj), timestamp=datetime.now(UTC))]
-        return ReadResponse(tuples=born if obj.partition(":")[0] in INCARNATED_TYPES and obj.partition(":")[2] else [], continuation_token="")
+        """No tuple: the claim is who may act, not what stands."""
+        del body, options
+        return ReadResponse(tuples=[], continuation_token="")
 
     async def write(self, body: ClientWriteRequest, options: Options = None) -> None:
         del body, options
@@ -122,8 +120,8 @@ class TupleStore:
         return None
 
     def naming(self, objects: list[str]) -> dict[str, set[Triple]]:
-        """The held grants naming each of ``objects`` as their object or their user, for those any grant names: an
-        incarnation's `revision` is bookkeeping a delete leaves (ADR 0241), no grant."""
+        """The held grants naming each of ``objects`` as their object or their user, for those any grant names: a
+        `revision` is bookkeeping, no grant."""
         named = {obj: {t for t in self.tuples if obj in (t[0], t[2]) and t[1] not in BOOKKEEPING_RELATIONS} for obj in objects}
         return {obj: held for obj, held in named.items() if held}
 
@@ -136,6 +134,18 @@ def _absent_delete() -> ApiException:
         message="cannot delete a tuple which does not exist",
     )
     return exc
+
+
+def creation(client: TestClient, kind: Kind, object_id: str) -> str:
+    """The object OpenFGA names the live creation of ``kind`` ``object_id`` by (ADR 0245): ``project:<uuid>`` or
+    ``warehouse:<uuid>``, the uuid its registry record names."""
+    from catalog.services import projects, warehouses
+
+    settings = client.app.state.settings
+    read = projects.get_project_record if kind == "project" else warehouses.get_warehouse_record
+    record = read(settings.registry_root, settings.storage_options(), object_id)
+    assert record is not None, f"no {kind} record for {object_id!r}"
+    return f"{kind}:{record[UUID]}"
 
 
 def principal_key(who: str) -> str:

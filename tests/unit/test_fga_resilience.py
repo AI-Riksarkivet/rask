@@ -19,11 +19,15 @@ from typing import Any, cast
 
 import aiohttp
 import pytest
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import InternalError, ServiceUnavailableError
 from openfga_sdk import ApiException, OpenFgaClient
 from openfga_sdk.client.models import ClientCheckRequest, ClientTuple, ClientWriteRequest
 
 from lakehouse.governed import fga
+
+
+#: A project and a warehouse as OpenFGA names them, by their creation (ADR 0245).
+ACME, WH_A = f"project:{'a' * 32}", f"warehouse:{'b' * 32}"
 
 
 def test_is_transient_classifies_network_errors() -> None:
@@ -162,11 +166,11 @@ def test_write_tuples_lands_siblings_when_one_tuple_already_exists() -> None:
     whole transaction, ``write_tuples`` swallowed it as "already idempotent", and the creator never got
     ``owner`` — the next call 403'd with ``can_create_namespace required on warehouse:e2e-wh-a``.
     """
-    seeded = ("user:alice", "admin", "project:acme")
+    seeded = ("user:alice", "admin", ACME)
     store = _TransactionalStore({seeded})
-    owner = ClientTuple(user="user:alice", relation="owner", object="warehouse:wh-a")
-    parent = ClientTuple(user="project:acme", relation="project", object="warehouse:wh-a")
-    dupe = ClientTuple(user="user:alice", relation="admin", object="project:acme")
+    owner = ClientTuple(user="user:alice", relation="owner", object=WH_A)
+    parent = ClientTuple(user=ACME, relation="project", object=WH_A)
+    dupe = ClientTuple(user="user:alice", relation="admin", object=ACME)
 
     asyncio.run(
         fga.write_tuples(
@@ -180,8 +184,8 @@ def test_write_tuples_lands_siblings_when_one_tuple_already_exists() -> None:
         )
     )
 
-    assert ("user:alice", "owner", "warehouse:wh-a") in store.tuples, "the owner grant was dropped because a SIBLING tuple already existed"
-    assert ("project:acme", "project", "warehouse:wh-a") in store.tuples
+    assert ("user:alice", "owner", WH_A) in store.tuples, "the owner grant was dropped because a SIBLING tuple already existed"
+    assert (ACME, "project", WH_A) in store.tuples
     # ONE transactional call: the conflict option lands the siblings server-side (SKG-01 replaced
     # the client-side one-tuple-at-a-time fallback, which paid [3, 1, 1, 1] here).
     assert store.write_calls == [3]
@@ -192,12 +196,12 @@ def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
     a server that 400s duplicates regardless of the option, the seam must raise 503 — never guess
     from the message text that the post-condition might hold. A silent success here is exactly the
     warehouse-owner bug (siblings dropped, caller told the grant landed)."""
-    store = _TransactionalStore({("user:alice", "owner", "warehouse:wh-a")}, honours_conflict=False)
+    store = _TransactionalStore({("user:alice", "owner", WH_A)}, honours_conflict=False)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             fga.write_tuples(
                 cast(OpenFgaClient, store),
-                [ClientTuple(user="user:alice", relation="owner", object="warehouse:wh-a")],
+                [ClientTuple(user="user:alice", relation="owner", object=WH_A)],
                 actor="test",
                 origin="admin_api",
                 retry_attempts=1,
@@ -205,7 +209,7 @@ def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
                 retry_max_backoff_seconds=0.0,
             )
         )
-    assert store.tuples == {("user:alice", "owner", "warehouse:wh-a")}, "a failed write mutated the store"
+    assert store.tuples == {("user:alice", "owner", WH_A)}, "a failed write mutated the store"
 
 
 @pytest.mark.parametrize(
@@ -253,3 +257,14 @@ def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
         )
     )
     assert [r.user for r in client.requests] == ["role:project_admin#member"]
+
+
+@pytest.mark.parametrize("named", ["project:acme", "warehouse:wh-a"])
+def test_a_write_naming_a_project_or_warehouse_by_its_id_reaches_no_store(named: str) -> None:
+    """A project and a warehouse are named in OpenFGA by their creation (ADR 0245): a tuple naming one by an id, which a
+    delete frees for another tenant, is refused before the store is asked, as its object or as its subject."""
+    store = _TransactionalStore(set())
+    for tup in (ClientTuple(user="user:alice", relation="admin", object=named), ClientTuple(user=named, relation="project", object=WH_A)):
+        with pytest.raises(InternalError):
+            asyncio.run(fga.write_tuples(cast(OpenFgaClient, store), [tup], actor="test", origin="admin_api", retry_attempts=1))
+    assert store.write_calls == []

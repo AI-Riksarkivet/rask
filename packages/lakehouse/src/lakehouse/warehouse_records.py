@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Final
 
 from lakehouse import control_prefixes
+from lakehouse.governed.tenancy import PROJECT_UUID
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.record_store import list_records, read_record
 from lakehouse.storage_options import StorageOptions
@@ -25,10 +26,6 @@ from lakehouse.storage_options import StorageOptions
 #: `catalog/services/warehouses.py`.
 REGISTRY_PREFIX = control_prefixes.WAREHOUSES
 _BUCKET_CLAIMS_PREFIX: Final = f"{REGISTRY_PREFIX}/bucket-claims"
-#: The field of a record naming a project (a warehouse's, a bucket's claim, a project's maintenance policy) that names the
-#: incarnation of the project it was made under (ADR 0241 §8 B3, §9 P2): a project's id may be held again by another
-#: tenant once it is deleted, so a record naming only the id would be the next tenant's.
-PROJECT_INCARNATION: Final = "project_incarnation"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "warehouse_record"
@@ -98,7 +95,7 @@ def warehouse_record(control_root: str, storage_options: StorageOptions, warehou
 
 
 def bucket_claimant(control_root: str, storage_options: StorageOptions, bucket: str) -> tuple[str, str] | None:
-    """The project that owns ``bucket`` and the incarnation of it that claimed it, as the claim the catalog wrote when a
+    """The project that owns ``bucket`` and the creation of it that claimed it, as the claim the catalog wrote when a
     warehouse first took the bucket records them; ``None`` when no warehouse took it, or its claim was released (the
     catalog stamps ``released_at``, ADR 0241 §9 P3). A bucket is one project's, which the store arbitrates.
 
@@ -109,12 +106,12 @@ def bucket_claimant(control_root: str, storage_options: StorageOptions, bucket: 
     claim = read_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
     if claim is None or claim.get("released_at"):
         return None
-    project, incarnation = claim.get("project"), claim.get(PROJECT_INCARNATION)
+    project, project_uuid = claim.get("project"), claim.get(PROJECT_UUID)
     if not isinstance(project, str) or not project:
         raise ValueError(f"the claim on bucket {bucket!r} names no project")
-    if not isinstance(incarnation, str) or not incarnation:
-        raise ValueError(f"the claim on bucket {bucket!r} names no incarnation of project {project!r}")
-    return project, incarnation
+    if not isinstance(project_uuid, str) or not project_uuid:
+        raise ValueError(f"the claim on bucket {bucket!r} names no creation of project {project!r}")
+    return project, project_uuid
 
 
 def bucket_project(control_root: str, storage_options: StorageOptions, bucket: str) -> str | None:

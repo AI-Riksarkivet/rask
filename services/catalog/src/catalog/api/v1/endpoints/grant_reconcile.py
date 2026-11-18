@@ -25,9 +25,10 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep, namespace_for_ta
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GhostRevokeRequest, GhostRevokeResponse, GrantCensusResponse, TenancyRebuildRequest, TenancyRebuildResponse
-from catalog.services import grant_reconcile, incarnations, table_claims, warehouses
+from catalog.services import grant_reconcile, table_claims, tenancy
 from lakehouse import location_claims
 from lakehouse.governed import fga
+from lakehouse.governed.tenancy import PROJECT, WAREHOUSE
 
 
 async def require_can_reconcile_grants(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
@@ -61,9 +62,8 @@ async def revoke_ghost_grants(
     Each object's grants are read, then it is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
     record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a
     table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]). Only what
-    was read is revoked, and on a project or warehouse only while nothing was born under the id since the read (ADR
-    0241, ``fga.revoke_ghost``): one made meanwhile keeps its grants, even a seed equal to a ghost tuple read, and is
-    answered refused.
+    was read is revoked. A project's or warehouse's object is its creation's uuid (ADR 0245), which no create mints
+    again, so one made meanwhile is another object and keeps its grants.
     """
     held = await run_in_threadpool(grant_reconcile.held_table_claims, settings)
     answer = GhostRevokeResponse()
@@ -99,28 +99,21 @@ async def _claim_refusal(request: Request, settings: Settings, claim: location_c
 
 @management_router.post("/tenancy/rebuild")
 async def rebuild_warehouse_tenancy(body: TenancyRebuildRequest, settings: SettingsDep, client: FgaClientDep, token: CurrentToken) -> TenancyRebuildResponse:
-    """Write each warehouse's tenancy edge, ``project:<p> project warehouse:<id>``, as its registry record names it.
+    """Write each warehouse's tenancy edge, ``project:<uuid> project warehouse:<uuid>``, as its live registry record
+    names it, between the creations it names (ADR 0245).
 
-    A structural edge confers nothing on its own, so rebuilding it re-grants no one; a warehouse whose record names no
-    project, or no record at all, is answered unjustified.
+    A structural edge confers nothing on its own, so rebuilding it re-grants no one; a warehouse with no live record, or
+    whose record was made in a creation of its project that is not live, is answered unjustified. A rebuild that read a
+    record deleted meanwhile writes onto dead creations, which the converge tick sweeps, never onto one made again.
     """
     answer = TenancyRebuildResponse()
     for warehouse_id in dict.fromkeys(body.warehouses):
-        record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
-        match grant_reconcile.tenancy_edge(record, warehouse_id):
+        warehouse = await tenancy.resolved(settings, WAREHOUSE, warehouse_id)
+        project = await tenancy.resolved(settings, PROJECT, str(warehouse.record["project"])) if warehouse is not None and warehouse.record else None
+        match grant_reconcile.tenancy_edge(warehouse.record if warehouse is not None else None, project.record if project is not None else None, warehouse_id):
             case str() as reason:
                 answer.unjustified[warehouse_id] = reason
             case edge:
-                obj = f"warehouse:{warehouse_id}"
-                incarnation = incarnations.require_incarnation(record or {}, obj)
-                project_incarnation = incarnations.require_project_incarnation(record or {}, obj)
-                try:
-                    await fga_deps.write_registry_edge(client, settings, edge, incarnation=incarnation, project_incarnation=project_incarnation, token=token)
-                except fga.IncarnationEnded:
-                    answer.unjustified[warehouse_id] = (
-                        f"warehouse {warehouse_id!r} or its project names an incarnation no token stands for: one of them is being deleted, "
-                        "or the record is one a create of an earlier incarnation of its project left"
-                    )
-                    continue
+                await fga_deps.write_registry_edge(client, settings, edge, token=token)
                 answer.written.append(f"{edge.user} {edge.relation} {edge.object}")
     return answer

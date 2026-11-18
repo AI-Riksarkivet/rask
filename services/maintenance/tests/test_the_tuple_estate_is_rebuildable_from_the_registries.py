@@ -51,8 +51,18 @@ def _sources(*, projects: list[dict[str, str]] | None = None, warehouses: list[d
     return Sources(project_records=projects or [], warehouse_records=warehouses or [])
 
 
-_ACME = {"id": "acme", "created_at": "2026-08-07T06:48:27.0329", "created_by": "CiQwOGE4Njg0Yi"}
-_ACME_WH = {"id": "acme-bucket", "bucket": "acme-bucket", "root_uri": "s3://acme-bucket", "project": "acme", "status": "active"}
+#: A project and its warehouse as their records name them, each by its creation (ADR 0245), and the edge between them.
+_ACME = {"id": "acme", "uuid": "a" * 32, "state": "live", "created_at": "2026-08-07T06:48:27.0329", "created_by": "CiQwOGE4Njg0Yi"}
+_ACME_WH = {
+    "id": "acme-bucket",
+    "uuid": "b" * 32,
+    "project_uuid": "a" * 32,
+    "bucket": "acme-bucket",
+    "root_uri": "s3://acme-bucket",
+    "project": "acme",
+    "status": "active",
+}
+_EDGE = (f"project:{'a' * 32}", "project", f"warehouse:{'b' * 32}")
 
 
 def test_a_stranded_project_is_REPORTED_not_re_granted() -> None:
@@ -91,7 +101,7 @@ def test_a_record_with_no_creator_says_SO_rather_than_going_quiet() -> None:
 def test_a_warehouse_under_a_revived_tenant_regains_its_tenancy_pointer() -> None:
     planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
 
-    assert ("project:acme", "project", "warehouse:acme-bucket") in [(t.user, t.relation, t.object) for t in planned]
+    assert _EDGE in [(t.user, t.relation, t.object) for t in planned]
 
 
 def test_a_warehouse_under_a_healthy_tenant_is_left_alone() -> None:
@@ -118,7 +128,7 @@ def _writing(door: respx.MockRouter) -> respx.Route:
 
     def _answer(request: httpx.Request) -> httpx.Response:
         asked = json.loads(request.content)["warehouses"]
-        return httpx.Response(200, json={"written": [f"project:acme project warehouse:{w}" for w in asked if w != "acme-second"], "unjustified": {}})
+        return httpx.Response(200, json={"written": [" ".join(_EDGE) for w in asked if w != "acme-second"], "unjustified": {}})
 
     return door.post(_DOOR).mock(side_effect=_answer)
 
@@ -139,7 +149,7 @@ async def test_a_disabled_pass_asks_nothing(door: respx.MockRouter) -> None:
 async def test_a_dry_run_reports_the_plan_and_asks_nothing(door: respx.MockRouter) -> None:
     report = await _run(_settings(MAINTENANCE_TUPLE_REBUILD_DRY_RUN=True))
 
-    assert [(t.user, t.relation, t.object) for t in report.written] == [("project:acme", "project", "warehouse:acme-bucket")]
+    assert [(t.user, t.relation, t.object) for t in report.written] == [_EDGE]
 
 
 @pytest.mark.asyncio
@@ -149,7 +159,7 @@ async def test_the_catalog_writes_the_planned_edges_and_the_pass_reports_what_it
     report = await _run(_settings())
 
     assert json.loads(asked.calls.last.request.content) == {"warehouses": ["acme-bucket"]}
-    assert [(t.user, t.relation, t.object) for t in report.written] == [("project:acme", "project", "warehouse:acme-bucket")]
+    assert [(t.user, t.relation, t.object) for t in report.written] == [_EDGE]
 
 
 @pytest.mark.asyncio
@@ -169,6 +179,9 @@ async def test_the_remainder_beyond_the_cap_is_reported(door: respx.MockRouter) 
     cron fire into an estate-wide authorization write."""
     asked = _writing(door)
 
-    report = await _run(_settings(MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK=1), warehouses=[_ACME_WH, {"id": "acme-second", "project": "acme"}])
+    report = await _run(
+        _settings(MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK=1),
+        warehouses=[_ACME_WH, {"id": "acme-second", "project": "acme", "uuid": "c" * 32, "project_uuid": "a" * 32}],
+    )
 
     assert (len(report.written), report.capped, json.loads(asked.calls.last.request.content)) == (1, 1, {"warehouses": ["acme-bucket"]})

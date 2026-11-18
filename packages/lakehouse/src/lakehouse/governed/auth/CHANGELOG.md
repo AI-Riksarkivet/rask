@@ -6,6 +6,28 @@ One entry per change to `model.fga` that a store holding tuples has to know abou
 whether the change writes new tuples into a store. When both are `FALSE`, deploying the model is the whole migration:
 `write_model.py` writes it, and every tuple in the store keeps its name and is read by the new model as it stands.
 
+## 2026-11-18: projects and warehouses are named by their creation, and the fence is removed
+
+```text
+MODIFIES_TUPLES: TRUE
+ADDS_TUPLES:     FALSE
+```
+
+ADR 0245.
+
+- **Renamed objects:** a project's and a warehouse's object is `project:<uuid>` / `warehouse:<uuid>`, the uuid its create
+  minted and its registry record names, where it was `project:<id>` / `warehouse:<id>`. No relation changes. Every tuple
+  stored on or naming `project:<id>` or `warehouse:<id>` is test data (the estate is pre-production): the catalog refuses
+  a Write naming one (`tenancy.require_named_by_creation`) and reads none, so a store holding them is wiped.
+- **Removed:** `type fence` (`fence#ticket`, `fence#open`). No ticket is written any more; a store's stored tickets
+  authorize nothing and are deleted with the store above.
+- **Changed meaning:** `project#revision`'s token is `revision:<n>` on the project's creation (ADR 0213's last-admin
+  guard), where it was `revision:<incarnation>.<n>`; the marker `revision:<incarnation>` is no longer written. A declared
+  grant's evidence (`revision:git-<hex>`) is unchanged.
+- **Kept:** `estate#can_purge_dead_tenant_warehouse` gates the estate owner's purge of a bucket a dead creation's claim
+  holds (`DELETE /management/v1/warehouses/<bucket>?purge_bucket=true`); there is no record of a dead tenant's warehouse
+  left to purge, since a warehouse never goes live under a project creation that ended.
+
 ## 2026-11-18: a ticket's index, and the estate owner's purge of a dead tenant's warehouse
 
 ```text

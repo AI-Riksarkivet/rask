@@ -50,6 +50,7 @@ from pydantic import BaseModel, Field
 from lakehouse import control_prefixes, location_claims, trash
 from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
+from lakehouse.governed.tenancy import UUID
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
@@ -536,9 +537,10 @@ def _ghosts(kind: str, tuple_counts: Mapping[str, int], *, record_ids: set[str],
     ]
 
 
-def _unreferenced_projects(record_ids: set[str], tuple_counts: Mapping[str, int]) -> list[UnreferencedProject]:
-    """Project records with no tuples at all — an undeletable tenant is drift too."""
-    return [UnreferencedProject(id=project_id) for project_id in sorted(record_ids) if not tuple_counts.get(project_id)]
+def _unreferenced_projects(record_ids: Mapping[str, str], tuple_counts: Mapping[str, int]) -> list[UnreferencedProject]:
+    """Project records whose creation holds no tuples at all — an undeletable tenant is drift too. ``record_ids`` maps
+    each record's creation uuid to its id."""
+    return [UnreferencedProject(id=project_id) for uuid, project_id in sorted(record_ids.items(), key=lambda item: item[1]) if not tuple_counts.get(uuid)]
 
 
 def _trashed_keys(trashed: Iterable[str]) -> set[str]:
@@ -832,7 +834,7 @@ async def load_sources(
     ) = await asyncio.gather(
         _fga_source(sources, grants),
         _registry_source(
-            sources, source_name="registry:projects", control_root=control_root, storage_options=storage_options, prefix=_PROJECTS_PREFIX, required=("id",)
+            sources, source_name="registry:projects", control_root=control_root, storage_options=storage_options, prefix=_PROJECTS_PREFIX, required=("id", UUID)
         ),
         _registry_source(
             sources,
@@ -840,7 +842,7 @@ async def load_sources(
             control_root=control_root,
             storage_options=storage_options,
             prefix=_WAREHOUSES_PREFIX,
-            required=("id", "bucket", "project"),
+            required=("id", "bucket", "project", UUID),
         ),
         _bucket_source(sources, bucket_client),
         _registry_source(
@@ -955,8 +957,10 @@ def build_report(
     ``served`` is the warehouses each scanned root serves (:func:`served_by_root`), read off the same registry snapshot.
     """
     report = ReconcileReport(checked_at=datetime.now(UTC).isoformat(), incomplete=list(sources.incomplete))
-    project_ids = {str(r["id"]) for r in sources.project_records or []}
-    warehouse_ids = {str(r["id"]) for r in sources.warehouse_records or []}
+    # OpenFGA names a project or a warehouse by its creation's uuid (ADR 0245): the census is judged against the uuids
+    # the records name, and a finding names the id beside it.
+    project_uuids = {str(r.get(UUID)): str(r["id"]) for r in sources.project_records or []}
+    warehouse_uuids = {str(r.get(UUID)): str(r["id"]) for r in sources.warehouse_records or []}
     # The shared input orders, named once. Three categories read the tuple scan and the project
     # registry; three read the warehouse registry. Naming them is what stops a fourth category from
     # quietly introducing a fourth opinion about which outage to report.
@@ -967,19 +971,19 @@ def build_report(
         report,
         "ghost_projects",
         inputs=tuples_and_projects,
-        detect=lambda: _ghosts("project", _by_type(sources, "project"), record_ids=project_ids),
+        detect=lambda: _ghosts("project", _by_type(sources, "project"), record_ids=set(project_uuids)),
     )
     report.ghost_warehouses = _run_category(
         report,
         "ghost_warehouses",
         inputs=tuples_and_warehouses,
-        detect=lambda: _ghosts("warehouse", _by_type(sources, "warehouse"), record_ids=warehouse_ids),
+        detect=lambda: _ghosts("warehouse", _by_type(sources, "warehouse"), record_ids=set(warehouse_uuids)),
     )
     report.unreferenced_projects = _run_category(
         report,
         "unreferenced_projects",
         inputs=tuples_and_projects,
-        detect=lambda: _unreferenced_projects(project_ids, _by_type(sources, "project")),
+        detect=lambda: _unreferenced_projects(project_uuids, _by_type(sources, "project")),
     )
 
     # `warehouse_records_error` joins the guard: that registry is what ENUMERATES the roots to scan and

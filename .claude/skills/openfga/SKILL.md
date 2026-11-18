@@ -144,37 +144,29 @@ fine. A catalog door resolves the name once per request (`catalog.api.dependenci
 an object by resolving the name first, never by joining it into `table:<name>`. A
 warehouse, a project, a classification label and a transaction keep their ids.
 
-**A project's and a warehouse's id is reused once it is deleted, so a write on or naming it is fenced by its incarnation**
-(ADR 0241, `specs/catalog/Grants.tla`): `revision` on `project`, `warehouse` and `estate` is bookkeeping holding the marker
-`revision:<incarnation>` (never revoked), the token `revision:<incarnation>.<n>`, the drift repair's token
-`revision:repair-<hex>` and a declared grant's evidence `revision:git-<hex>`; a door's ticket is `<object> ticket
-fence:<hex>` on `type fence` (§8 B1, B2), off the object, so no read of the object reads it, written and deleted in the
-same Writes as its index `fence:open open fence:<hex>` (§9 P5, `fga.Fence.tuples`): OpenFGA 1.18.3's Read takes a
-type-only object only beside a user (`{object: "fence:"}` alone is refused 400 `validation_error`, measured), so the one
-party every index names makes the estate's open tickets one paged Read. A test planting a ticket a dead request left
-plants its index too (`fga.ticket_index`). The audit trail leaves the three relations out, and a delete writes the
-retirement as its own row. A door asks its gate with NO write first, then opens a
-fence (`fga_deps.door_fence(gate=)`, the context manager `fga.fenced` underneath, the ONE way a fence is opened, which takes
-its ticket back on every exit), then asks its gate again on the incarnation the fence read, and writes or revokes through
-`fga.commit_fenced` (or `project_admins.confer` / `withdraw(fences=)`), never `fga.write_tuples` / `delete_tuples`; a
-namespace created in a warehouse gets this from the router's `parent_fence`, listed after `authorize`. This covers a tuple
-naming the object as SUBJECT too (a warehouse's tenancy edge, a role's `project` edge). A Write cannot require a tuple
-without deleting it (a Write that deletes and writes one tuple is refused `cannot_allow_duplicate_tuples_in_one_request`,
-measured on 1.18.3), so each writer deletes its own ticket and grants never refuse each other. **Read what you need and
-no more:** an incarnation through `fga.read_incarnation` (the `revision` relation, filtered on the server), one tuple
-through `fga.holds` (its key), one relation through `fga.read_relation`; `fga.read_object_tuples` grows with the object's
-use and is for a listing or a delete. Every read pages to the end with no ceiling (`fga.read_all`); OpenFGA 1.18.3 takes
-at most 100 tuples in one Write (`fga.TUPLES_PER_WRITE`, refused 400 `exceeded_entity_limit` past it). A delete ends the
-incarnation with `fga.end_incarnation` (mark born, retire, drain until a read finds nothing, tickets deleted in Writes of
-100 with `on_missing_deletes: IGNORE`); the converge tick sweeps every ticket older than the request deadline plus five
-minutes, on any id, from one read of the indexes (`fga.sweep_tickets`), judged against the catalog's clock: a catalog
-clock more than the five minutes ahead of the store's can sweep a live request's ticket, whose Write is then refused 409.
-The tick asks OpenFGA about a record's birth once: it stamps the record `born` (`control_records.BORN`), and a marker is
-never revoked. `estate#can_purge_dead_tenant_warehouse` (the estate owner) is the one door to a dead tenant's warehouse,
-and, by its bucket in the warehouse's place, to a dead incarnation's bucket claim no record names (ADR 0241 §10 Q2); the
-gate is asked before the door says whether either exists, so no other caller learns which ids or buckets a dead tenant left. A test seeding a project or warehouse straight to the store must seed its marker and token
-too, or its doors answer 409 with `Retry-After` (being established); `tests/integration/openfga_grants.Grants` answers
-every project and warehouse as born.
+**A project and a warehouse are named by their creation's uuid, never by their id** (ADR 0245, `specs/catalog/Grants.tla`):
+an id is reused once its object is deleted, so each create mints a uuid, the registry record names it (`uuid`, and
+`project_uuid` on every record belonging to a project), and OpenFGA names the object `project:<uuid>` /
+`warehouse:<uuid>`, as tables and namespaces are named by theirs. `lakehouse.governed.tenancy.object_of` is the ONE
+builder (a ruff banned-api rule admits it only at the resolver `catalog.services.tenancy` and maintenance's rebuild),
+and every OpenFGA Write refuses a tuple naming a project or warehouse by anything a create could take as an id
+(`tenancy.require_named_by_creation`, in `fga.write_tuples`, `delete_tuples` and `commit_unless_changed`); a create
+refuses an id shaped like a uuid. A door resolves the id to its LIVE record (`tenancy.resolved`, one registry read;
+a record `creating` or `deleting` resolves to nothing), asks its gate on that object, writes there in ONE Write, and
+resolves again (`tenancy.require_still`): a project deleted meanwhile is answered 404 and what was written stands on a
+dead object, which the converge tick sweeps (`control_records.read_ended`, `fga.revoke_object_tuples(naming=)`). An
+absent id is gated as an object nobody holds (`fga_deps.require_on_tenant`, `tenancy.nowhere`) so a 403 discloses
+nothing. A listing that asks OpenFGA maps objects back to ids through the registry (`tenancy.ids_by_object`). `revision`
+on `project`, `warehouse` and `estate` is bookkeeping: a project's administration token `revision:<n>` (ADR 0213,
+`fga.next_token`, moved by every admin removal) and a declared grant's evidence `revision:git-<hex>`
+(`fga.write_evidenced`); the trail leaves it out. **Read what you need and no more:** one tuple through `fga.holds`
+(its key), one relation through `fga.read_relation`; `fga.read_object_tuples` grows with the object's use and is for a
+listing or a delete. Every read pages to the end with no ceiling (`fga.read_all`); OpenFGA 1.18.3 takes at most 100
+tuples in one Write (`fga.TUPLES_PER_WRITE`, refused 400 `exceeded_entity_limit` past it).
+`estate#can_purge_dead_tenant_warehouse` (the estate owner) is the one door to a dead creation's bucket claim no record
+names, by its bucket in the warehouse's place (ADR 0241 §10 Q2); the gate is asked before the door says whether one
+exists. A test seeding a project or warehouse straight to the store writes its record with a `uuid` (and
+`project_uuid`) and its tuples on `project:<uuid>` / `warehouse:<uuid>` (`tests/integration/openfga_grants.creation`).
 
 ### Testing
 | File | Description |

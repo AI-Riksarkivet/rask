@@ -414,6 +414,10 @@ def test_invalid_id_rejected_400(client: TestClient, tmp_path: Any, store: str, 
     _mk_projects(client, "acme")
     # Uppercase + underscore is not a DNS-safe bucket fragment → 400 (never a malformed bucket create).
     assert client.post("/management/v1/warehouses", json={"id": "Bad_Name", "project": "acme"}).status_code == 400
+    # An id shaped like the uuid a creation is named by in OpenFGA is refused, so an id and a uuid are never one string
+    # (ADR 0245); a project's create refuses one the same way.
+    assert client.post("/management/v1/warehouses", json={"id": "0" * 32, "project": "acme"}).status_code == 400
+    assert client.post("/management/v1/projects", json={"id": "0" * 32}).status_code == 400
 
 
 def test_recreate_does_not_reactivate_a_deactivated_warehouse(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -591,7 +595,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     _mk_projects(client, "acme", "evil")
     assert client.post("/management/v1/warehouses", json={"id": "wh-race", "project": "acme"}).status_code == 200
 
-    real_get = wh_svc.get_warehouse
+    real_get = wh_svc.get_warehouse_record
     reads = {"n": 0}
 
     def racy_get(root: str, so: StorageOptions, wid: str) -> dict[str, str] | None:
@@ -601,7 +605,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
         return real_get(root, so, wid)  # the post-conflict re-read sees the truth
 
     # F4 moved the post-conflict re-read OUT of `get_warehouse` and INTO the conditional write
-    # (`upsert_warehouse` → `mutate_json` → `read_json`), so counting `get_warehouse` calls stopped
+    # (`upsert_warehouse` → `mutate_json` → `read_json`), so counting the guard's record reads stopped
     # measuring anything. Count where the work actually happens now; the property under test —
     # "the store, not the guard, refused" — is unchanged.
     from lakehouse import records as rec
@@ -613,7 +617,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
         conditional_reads["n"] += 1
         return real_read_json(root, so, key)
 
-    monkeypatch.setattr(wh_svc, "get_warehouse", racy_get)
+    monkeypatch.setattr(wh_svc, "get_warehouse_record", racy_get)
     monkeypatch.setattr(rec, "read_json", counting_read_json)
     # evil names a DIFFERENT bucket so the (unblinded) bucket-claim scan cannot catch this — the
     # id-mint conditional create is the only remaining defense, which is the point of the test.
@@ -621,7 +625,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     assert r.status_code == 409, r.text
     assert conditional_reads["n"] >= 1, "the conditional write never re-read — the guard refused, not the store"
     assert reads["n"] == 1, "the guard read more than once; the blinding no longer models the race"
-    monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
+    monkeypatch.setattr(wh_svc, "get_warehouse_record", real_get)
     assert wh_svc.get_warehouse(f"file://{tmp_path}", StorageOptions(), "wh-race")["project"] == "acme"
 
 
@@ -636,7 +640,7 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     root = f"file://{tmp_path}"
     wh_svc.set_warehouse_status(root, StorageOptions(), "wh-conv", "deactivated")
 
-    real_get = wh_svc.get_warehouse
+    real_get = wh_svc.get_warehouse_record
     reads = {"n": 0}
 
     def racy_get(rt: str, so: StorageOptions, wid: str) -> dict[str, str] | None:
@@ -645,10 +649,10 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
             return None
         return real_get(rt, so, wid)
 
-    monkeypatch.setattr(wh_svc, "get_warehouse", racy_get)
+    monkeypatch.setattr(wh_svc, "get_warehouse_record", racy_get)
     r = client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"})
     assert r.status_code == 200, r.text
-    monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
+    monkeypatch.setattr(wh_svc, "get_warehouse_record", real_get)
     surviving = wh_svc.get_warehouse(root, StorageOptions(), "wh-conv")
     assert surviving is not None, "the loser's rebuild must not have DELETED the record it lost the race for"
     assert surviving["status"] == "deactivated"
@@ -745,9 +749,11 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
     # leaves every series as it was, and the next load drops the deleted warehouse's, so `WarehouseSealUnmeasured` does
     # not page for it here two periods later (ADR 0242 § Found by review, fourth round, C3).
     # A warehouse on another store, which the probe does not serve, is owed no measurement and exports none.
-    elsewhere = {key: value for key, value in (wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {}).items() if key not in {"sealed", "sealed_at"}}
+    elsewhere = {
+        key: value for key, value in (wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {}).items() if key not in {"sealed", "sealed_at", "uuid"}
+    }
     wh_svc.put_warehouse(control, StorageOptions(), {**elsewhere, "id": "wh-elsewhere", "endpoint": "http://another-store:9000"})
-    wh_svc.delete_warehouse_record(control, StorageOptions(), "wh-p")
+    wh_svc.end_warehouse(control, StorageOptions(), wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {})
 
     def unanswered_registry(*_args: Any) -> list[dict[str, str]]:
         raise ServiceUnavailableError("the object store did not answer reading the registry")

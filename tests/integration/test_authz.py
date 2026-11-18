@@ -62,10 +62,10 @@ from openfga_sdk.client.models.batch_check_single_response import ClientBatchChe
 from openfga_sdk.models.check_error import CheckError
 from starlette.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import get_namespace, get_resolver, warehouse_object
+from catalog.api.dependencies import get_namespace, get_resolver
 from catalog.api.v1.endpoints.access import _can_relations as _model_can_relations
 from catalog.core.config import Settings, get_settings
-from catalog.services import object_uuids, table_claims
+from catalog.services import object_uuids, table_claims, tenancy
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.governed import fga as fga_module
@@ -79,6 +79,8 @@ from tests.unit.named_resolver import NamedResolver, uuid_of
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 #: The create door reads its body before anything it orchestrates, so the stubbed write still needs a real stream.
 ARROW_BODY = encode_arrow_stream(pa.table({"id": [1]}))
+#: The object a gate on a project no live record holds is asked on, one nobody holds, so its refusal tells nothing (ADR 0245).
+NOWHERE = tenancy.nowhere("project")
 
 
 def _auth_settings() -> Settings:
@@ -140,7 +142,8 @@ class _DoubleResolver(NamedResolver):
     async def object(self, kind: str, segments: list[str]) -> str | None:
         if kind != "table":
             if len(segments) == 1:
-                return warehouse_object(_auth_settings(), segments[0])
+                warehouse = await tenancy.resolved(_auth_settings(), "warehouse", segments[0])
+                return None if warehouse is None else warehouse.obj
             uuid = await self.namespace_uuid(segments)
             return None if uuid is None else fga_module.namespace_object(uuid)
         resolved = await self.table(segments)
@@ -1014,7 +1017,7 @@ def test_project_policy_set_requires_project_admin(client: TestClient, monkeypat
         json={"retention_days": 90},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": "project:acme"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": NOWHERE}
     assert registry_reads == []  # fail-closed ORDER: gate first, registry read only after an allow
 
 
@@ -1027,7 +1030,7 @@ def test_project_policy_describe_and_delete_require_project_admin(client: TestCl
     for action in ("describe", "delete"):
         resp = client.post(f"/management/v1/project/acme/policy/{action}", headers={"Authorization": "Bearer t"})
         assert resp.status_code == 403, action
-        assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": "project:acme"}
+        assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": NOWHERE}
 
 
 def test_project_policies_list_requires_project_admin(client: TestClient, monkeypatch) -> None:
@@ -1048,7 +1051,7 @@ def test_project_policies_list_requires_project_admin(client: TestClient, monkey
 
     resp = client.get("/management/v1/projects/acme/policies", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": "project:acme"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": NOWHERE}
     assert registry_reads == []  # gate first, registry read only after an allow
 
 

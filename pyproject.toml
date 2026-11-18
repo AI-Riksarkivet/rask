@@ -209,6 +209,7 @@ extend-select = ["TID251", "FAST001"]
 "lakehouse.governed.fga.name_child".msg = "A hierarchy edge moves only where a rename moves its table."
 "lakehouse.governed.fga.unname_child".msg = "A hierarchy edge moves only where a rename moves its table."
 "lakehouse.governed.fga.hierarchy_edge_tuples".msg = "Hierarchy edges are seeded only by fga.py."
+"lakehouse.governed.tenancy.object_of".msg = "A project or a warehouse is named in OpenFGA by its creation's uuid, built only by the resolver (catalog.services.tenancy) from a live record (ADR 0245)."
 "torch".msg = "No model framework in the lakehouse: a model runs in a client's own environment."
 "pyannote".msg = "No model framework in the lakehouse: a model runs in a client's own environment."
 "nats".msg = "The broker is reached only through lakehouse.bus (events) and maintenance.services.queue (the work queue)."

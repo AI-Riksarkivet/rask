@@ -309,18 +309,18 @@ def _governed_by_a_project(estate: _Estate) -> None:
     project's policy can govern the table."""
     from catalog.core.config import get_settings
     from catalog.services import projects, warehouses
-    from catalog.services.control_records import INCARNATION, PROJECT_INCARNATION
+    from catalog.services.control_records import PROJECT_UUID, UUID
 
     settings = get_settings()
     so = settings.storage_options()
     made = "a" * 32
-    projects.put_project(settings.registry_root, so, {"id": PROJECT, "created_at": "t", "created_by": "seed", INCARNATION: made})
+    projects.put_project(settings.registry_root, so, {"id": PROJECT, "created_at": "t", "created_by": "seed", UUID: made})
     warehouses.put_warehouse(
         settings.registry_root,
         so,
-        {"id": "lance_catalog", "bucket": estate.bucket, "project": PROJECT, "status": "active", INCARNATION: "b" * 32, PROJECT_INCARNATION: made},
+        {"id": "lance_catalog", "bucket": estate.bucket, "project": PROJECT, "status": "active", UUID: "b" * 32, PROJECT_UUID: made},
     )
-    claim = {"bucket": estate.bucket, "project": PROJECT, PROJECT_INCARNATION: made, "warehouse_id": "lance_catalog"}
+    claim = {"bucket": estate.bucket, "project": PROJECT, PROJECT_UUID: made, "warehouse_id": "lance_catalog"}
     estate.s3().put_object(Bucket=estate.bucket, Key=f"_warehouses/bucket-claims/{estate.bucket}.json", Body=json.dumps(claim).encode())
 
 

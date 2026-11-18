@@ -26,6 +26,8 @@ PROJECT, WAREHOUSE = "acme", "wh-acme"
 ADMIN, CO_ADMIN, OWNER, MEMBER = "alice", "dave", "bob", "carol"
 #: What a missing warehouse is answered: its status, media type and spec code (`lance_docs/ns_catalog/namespace/operations/errors.md`).
 NOT_FOUND = (404, "application/problem+json", 4)
+#: The creation of acme's warehouse (ADR 0245).
+WAREHOUSE_UUID = "c" * 32
 
 
 @pytest.fixture
@@ -45,16 +47,18 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
         "bucket": WAREHOUSE,
         "root_uri": settings.root,
         "project": PROJECT,
-        "project_incarnation": project["incarnation"],
+        "uuid": WAREHOUSE_UUID,
+        "project_uuid": project["uuid"],
+        "state": "live",
         "status": "active",
         "created_at": datetime.now(UTC).isoformat(),
     }
     warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), record)
     catalog.store.write(
-        (f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"),
-        (catalog.person(CO_ADMIN), "admin", f"project:{PROJECT}"),
-        (catalog.person(OWNER), "owner", f"warehouse:{WAREHOUSE}"),
-        (catalog.person(MEMBER), "member", f"project:{PROJECT}"),
+        (f"project:{project['uuid']}", "project", f"warehouse:{WAREHOUSE_UUID}"),
+        (catalog.person(CO_ADMIN), "admin", f"project:{project['uuid']}"),
+        (catalog.person(OWNER), "owner", f"warehouse:{WAREHOUSE_UUID}"),
+        (catalog.person(MEMBER), "member", f"project:{project['uuid']}"),
     )
     return catalog
 

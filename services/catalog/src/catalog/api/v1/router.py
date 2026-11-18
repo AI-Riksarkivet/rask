@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from catalog.api.fga_deps import authorize, parent_fence, require_request_names
+from catalog.api.fga_deps import authorize, require_request_names
 from catalog.api.security import authenticate
 from catalog.api.v1.endpoints import (
     access,
@@ -42,11 +42,9 @@ from catalog.api.v1.endpoints import (
 
 # Every route passes three rungs before its door runs, in the order every door judges a request: who is asking (401,
 # `authenticate`), whether the request names only what a door can read (400, `require_request_names`), and whether the
-# caller may make it (403, `authorize`; a no-op when authentication and authorization are both off). Then the fence a
-# namespace created in a warehouse is seeded under is opened and the gate asked again on the incarnation it read
-# (`parent_fence`, ADR 0241): after the gate, so a caller refused writes nothing. Router-level, so the next route added
-# inherits all of them.
-api_router = APIRouter(dependencies=[Depends(authenticate), Depends(require_request_names), Depends(authorize), Depends(parent_fence)])
+# caller may make it (403, `authorize`; a no-op when authentication and authorization are both off). Router-level, so
+# the next route added inherits all of them.
+api_router = APIRouter(dependencies=[Depends(authenticate), Depends(require_request_names), Depends(authorize)])
 for _module in (
     erasure,
     namespaces,

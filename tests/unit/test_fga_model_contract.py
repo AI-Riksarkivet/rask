@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -134,12 +135,12 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     # 2. Create-on-parent: the parent of a child nested in a namespace is that namespace, and the parent of a namespace
     #    directly in a warehouse is the warehouse, which the resolver governs a one-segment namespace name as — so each
     #    can_create_* must resolve on BOTH types.
-    resolver = Resolver(cast("Request", None), settings)
+    resolver = Resolver(cast("Request", SimpleNamespace(state=SimpleNamespace())), settings)
     for resource in fga_deps._CREATE_ON_PARENT_SUFFIXES:
         nested = fga_deps._create_parent_rung(resource, ["acme-wh", "parent_ns", "child"])
         assert nested is not None
         pairs.add((_rung_type(nested), nested.relation))
-        top = fga_deps._create_parent_rung(resource, ["acme-wh", "child"])
+        top = fga_deps._create_parent_rung(resource, [settings.estate_warehouse, "child"])
         assert top is not None and isinstance(top.on, write_judge.Named)
         warehouse = asyncio.run(resolver.object(top.on.kind, list(top.on.segments)))
         assert warehouse is not None and _obj_type(warehouse) == "warehouse", f"a create directly in a warehouse is asked on {warehouse!r}"
@@ -384,13 +385,6 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     ("warehouse", "revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
     # A declared grant's evidence on the estate (ADR 0241): bookkeeping the converge deletes once it settles its intent.
     ("estate", "revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
-    # A door's fence ticket naming a project or warehouse (ADR 0241 §8): its delete reads the tickets naming it by subject
-    # and deletes them (`fga.end_incarnation`), and the converge tick sweeps one older than a request runs.
-    ("fence", "ticket", "project"): "the project's delete reads its tickets by subject and deletes them",
-    ("fence", "ticket", "warehouse"): "the warehouse's delete reads its tickets by subject and deletes them",
-    # A ticket's index (ADR 0241 §9 P5) names the one party `fence:open`, which is no object a delete ends: it is deleted
-    # with its ticket by every Write that takes the ticket, and the converge tick sweeps one a dead request left.
-    ("fence", "open", "fence"): "deleted with its ticket by every Write that takes it, and swept with it past the bound",
     ("namespace", "managed_access", "role"): "role is a subject type, not a droppable object",
     ("warehouse", "managed_access", "role"): "role is a subject type, not a droppable object",
     # A project cannot be deleted while a warehouse claims it — `projects.py`'s emptiness refusal

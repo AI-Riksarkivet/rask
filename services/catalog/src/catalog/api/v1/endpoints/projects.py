@@ -80,16 +80,17 @@ from catalog.schemas import (
     ProtectionResponse,
     SetProtectionRequest,
 )
-from catalog.services import incarnations, object_labels, role_grants, roles, warehouses
+from catalog.services import object_labels, role_grants, roles, tenancy, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
-from catalog.services.control_records import GIT, MANAGED_BY, ProtectionChange
+from catalog.services.control_records import GIT, MANAGED_BY, STATE, UUID, ProtectionChange
 from lakehouse import maintenance_policies, protection
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.governed.tenancy import CREATING, LIVE, PROJECT, made_under, new_uuid, require_an_id, warehouses_of
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import RecordExistsError, RecordMissingError
 from lakehouse.storage_options import StorageOptions
@@ -119,20 +120,20 @@ def _listed(records: list[dict[str, str]]) -> list[ProjectWarehouse]:
 _ADMINS_TIMEOUT_SECONDS = 2.0
 
 
-async def _admins_for(client: OpenFgaClient | None, settings: Settings, project: str) -> list[str]:
+async def _admins_for(client: OpenFgaClient | None, settings: Settings, project: dict[str, str] | None) -> list[str]:
     """The project's effective ``can_administer`` subjects via ``fga.list_users`` (#51), or ``[]``.
 
     Degrades on an outage: FGA off yields ``[]`` outright (on with no client wired it is the 503 every gate answers); an OpenFGA outage
     (``ServiceUnavailableError``) or a lookup blowing the per-call ``_ADMINS_TIMEOUT_SECONDS`` budget is
     logged and yields ``[]`` too, so the registry-derived facts still serve while the authz lookup is
     down or slow. The estate gate already ran fail-closed before this, so a degraded ``admins`` is a
-    display gap, not an authz gap.
+    display gap, not an authz gap. A tenant no project record holds (``project`` ``None``) has no creation to ask on.
     """
-    if (client := fga_deps.wired(settings, client)) is None:
+    if project is None or (client := fga_deps.wired(settings, client)) is None:
         return []
     try:
         async with asyncio.timeout(_ADMINS_TIMEOUT_SECONDS):
-            return await fga.list_users(client, relation="can_administer", obj=f"project:{project}", retry_attempts=1)
+            return await fga.list_users(client, relation="can_administer", obj=tenancy.object_of_record(PROJECT, project), retry_attempts=1)
     except (ServiceUnavailableError, TimeoutError):
         log.warning("project_admins_unavailable", extra={"project": project})
         return []
@@ -187,11 +188,8 @@ class Registries(BaseModel):
         Registry records define the tenants — a fresh project has zero warehouses and must still list. Warehouse-derived
         entries without a registry record are pre-registry legacy: kept visible (the reconciler reports them as drift; a
         listing that hid them would make the drift undiagnosable), and never protected, since protection lives on the
-        record. A tenant's warehouses are its standing incarnation's (:func:`incarnations.warehouses_of`), judged only for
-        the tenants chosen, so a caller shown none of them is answered before any record is judged.
-
-        Raises:
-            InternalError: A chosen tenant's record, or a warehouse record naming it, names no incarnation.
+        record. A tenant's warehouses are its live creation's (``tenancy.warehouses_of``, ADR 0245), judged only for the
+        tenants chosen, so a caller shown none of them is answered before any record is judged.
         """
         wanted = (lambda project: True) if chosen is None else (lambda project: project in chosen)
         registered = {str(record["id"]): record for record in self.projects}
@@ -202,9 +200,8 @@ class Registries(BaseModel):
         tenants = {project: Tenant(project=project, warehouses=_listed(held)) for project, held in unregistered.items()}
         for project, record in registered.items():
             if wanted(project):
-                # A warehouse record an earlier incarnation of the project left is no warehouse of this one (ADR 0241 §8 B3).
-                incarnation = incarnations.require_incarnation(record, f"project:{project}")
-                tenants[project] = Tenant(project=project, record=record, warehouses=_listed(incarnations.warehouses_of(self.warehouses, project, incarnation)))
+                # A warehouse record an earlier creation of the project left is no warehouse of this one (ADR 0245).
+                tenants[project] = Tenant(project=project, record=record, warehouses=_listed(warehouses_of(self.warehouses, record[UUID])))
         return tenants
 
 
@@ -272,7 +269,7 @@ async def create_project(
     admin = fga_deps.project_admin_for(token, body.admin)
     await fga_deps.require_relation(client, settings, token, relation="can_create_project", obj=settings.fga_root_object)
     record = await establish_project(settings, client, announcer, project_id=project_id, admin=admin, author=author_of(token))
-    return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, project_id))
+    return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, record))
 
 
 async def establish_project(
@@ -286,37 +283,59 @@ async def establish_project(
     re-asserted. The grant is audited and published like any other ACL change, only when it was actually written; what
     the create announces is filed before the record, so a create that fails after it still announces it ([[LH-576]]).
 
+    In the order ADR 0245 sets: the record first, ``creating``, naming the uuid this creation mints and the admin it
+    seeds; then the admin's grant on that uuid; then the record flips ``live``, and only then does any door resolve it.
+    A create that dies between is finished by the converge tick from what the record names. A re-POST of a project still
+    ``creating`` finishes it the same way.
+
     Raises:
+        InvalidInputError: ``project_id`` has the shape of a uuid (ADR 0245).
         ConcurrentModificationError: The project is being deleted, or its write raced a delete.
     """
+    try:
+        require_an_id(project_id, what="project id")
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
     so = settings.storage_options()
-    existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
+    existing = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, so, project_id)
     actor = author.actor if author is not None else None
-    obj = f"project:{project_id}"
+    target = f"project:{project_id}"
+    # The creation this create mints, or the one a re-POST finds, which its merge keeps.
+    uuid = existing[UUID] if existing else new_uuid()
+    obj = tenancy.object_of_record(PROJECT, {UUID: uuid})
     created = Announcement(
         evidence=RecordHeld(key=project_registry.record_key(project_id)),
-        message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=obj, actor=actor)),
+        message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=target, actor=actor, extra={UUID: uuid})),
     )
     # `seed_project_admin` writes the admin's grant exactly when authorization is on and an admin is named.
     seeds = author is not None and admin is not None and fga_deps.wired(settings, client) is not None
     admin_granted = (
         announcing.grant_announcement(
-            fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=obj), action="grant_added", actor=actor, extra={"reason": "project_created"}
+            fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=obj),
+            action="grant_added",
+            actor=actor,
+            object_name=project_id,
+            object_uuid=uuid,
+            extra={"reason": "project_created"},
         )
         if seeds and admin is not None
         else None
     )
-    filed = announcer.announcing(door="create_project", target=obj, announcements=[created, *([admin_granted] if admin_granted is not None else [])])
+    filed = announcer.announcing(door="create_project", target=target, announcements=[created, *([admin_granted] if admin_granted is not None else [])])
     record = {
         "id": project_id,
+        UUID: uuid,
+        STATE: CREATING,
         "created_at": (existing.get("created_at") if existing else None) or datetime.now(UTC).isoformat(),
         "created_by": (existing.get("created_by") if existing else None) or (author.subject if author is not None else ""),
+        **({"admin": admin} if admin is not None else {}),
     }
     async with filed as filing:
         record = await _write_project_record(settings, so, record, existing=existing)
-        granted = await fga_deps.seed_project_admin(
-            client, settings, author.subject if author is not None else None, project=project_id, admin=admin, incarnation=record["incarnation"]
-        )
+        granted = await fga_deps.seed_project_admin(client, settings, author.subject if author is not None else None, project=record, admin=admin)
+        record = await run_in_threadpool(project_registry.set_live, settings.registry_root, so, project_id, record[UUID]) or record
+        if record.get(STATE) != LIVE:
+            raise ConcurrentModificationError(f"project {project_id!r} was deleted while it was made; make it again")
         log.info("project_created", extra={"project": project_id, "existing": existing is not None})
         await filing.send(created)
         if granted and admin is not None and admin_granted is not None:
@@ -325,6 +344,7 @@ async def establish_project(
                 AuditOutcome.SUCCESS,
                 subject=actor,
                 resource=obj,
+                project=project_id,
                 grantee=fga.user_object(admin),
                 relation="admin",
                 reason="project_created",
@@ -333,8 +353,9 @@ async def establish_project(
     return record
 
 
-async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
-    """Which of ``candidates`` (the registry's project ids) this caller may list, or ``None`` for every tenant.
+async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: dict[str, str]) -> set[str] | None:
+    """Which of ``candidates`` (the registry's live project ids, each to the object of its creation) this caller may
+    list, or ``None`` for every tenant.
 
     ``None`` for the estate admin, and with FGA off, as for every gate. Otherwise the candidates are batch-checked on
     ``member`` ([[LH-223]]): the listing never asks OpenFGA which projects the caller reaches, an answer the server stops
@@ -346,7 +367,7 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
     root = settings.fga_root_object
     try:
         observer = await fga.check(authz.client, user=authz.subject, relation="can_list_all_projects", obj=root)
-        allowed = None if observer else await authz.batch_check("member", [f"project:{p}" for p in candidates])
+        allowed = None if observer else await authz.batch_check("member", list(candidates.values()))
     except ServiceUnavailableError:
         audit(AuditAction.LIST_PROJECTS, AuditOutcome.FAILURE, subject=authz.subject, resource=root, reason="authz_unavailable")
         raise
@@ -360,7 +381,7 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
         resource=root,
         reason="list_projects",
     )
-    return None if allowed is None else {p for p in candidates if allowed.get(f"project:{p}")}
+    return None if allowed is None else {p for p, obj in candidates.items() if allowed.get(obj)}
 
 
 @router.get("")
@@ -370,14 +391,14 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
     facts still serve; the visibility decision itself fails closed (``_visible_projects``)."""
     registries = await _registries(settings)
-    visible = await _visible_projects(client, settings, token, registries.ids())
+    visible = await _visible_projects(client, settings, token, {str(r["id"]): tenancy.object_of_record(PROJECT, r) for r in registries.projects})
     tenants = registries.tenants(visible)
     # The per-project admins lookups run CONCURRENTLY: sequential awaits would stack N × the per-call
     # budget on a slow OpenFGA (a brownout, not an outage) and blow past the caller's request deadline;
     # gathered, the worst case is ONE _ADMINS_TIMEOUT_SECONDS regardless of tenant count (each call
     # still degrades to [] on its own expiry — see _admins_for).
     projects = sorted(tenants)
-    admins = await asyncio.gather(*(_admins_for(client, settings, project) for project in projects))
+    admins = await asyncio.gather(*(_admins_for(client, settings, tenants[project].record) for project in projects))
     return [tenants[project].response(project_admins) for project, project_admins in zip(projects, admins, strict=True)]
 
 
@@ -390,7 +411,8 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    doors = [("can_list_all_projects", settings.fga_root_object), ("member", f"project:{project_id}")]
+    live = await tenancy.require(settings, PROJECT, project_id)
+    doors = [("can_list_all_projects", settings.fga_root_object), ("member", live.obj)]
     try:
         await fga_deps.require_any_relation(client, settings, token, doors=doors)
     except PermissionDeniedError as exc:
@@ -398,7 +420,7 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     tenant = (await _registries(settings)).tenants({project_id}).get(project_id)
     if tenant is None:
         raise TableNotFoundError(f"project not found: {project_id}")
-    return tenant.response(await _admins_for(client, settings, project_id))
+    return tenant.response(await _admins_for(client, settings, tenant.record))
 
 
 async def administered_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
@@ -427,14 +449,12 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    record = await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project_id)
-    if record is None:
-        raise TableNotFoundError(f"project not found: {project_id}")
+    live = await tenancy.require(settings, PROJECT, project_id)
     try:
-        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project_id}")
+        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=live.obj)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
-    return record
+    return live.record
 
 
 async def project_to_delete(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
@@ -462,13 +482,13 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
     record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, settings.storage_options(), project_id)
-    if record is None:
+    if record is None or record.get(STATE) == CREATING:
         raise TableNotFoundError(f"project not found: {project_id}")
     starter = record.get(project_registry.DELETING_BY)
     if starter is not None and starter == current_subject(token):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=f"project:{project_id}")
         return record
-    doors = [("can_administer", f"project:{project_id}")]
+    doors = [("can_administer", tenancy.object_of_record(PROJECT, record))]
     if starter is not None:
         doors.append(("can_finish_project_delete", settings.fga_root_object))
     try:
@@ -557,15 +577,10 @@ async def protect_project(settings: Settings, control: ControlEmitter, project_i
     )
 
 
-def _warehouses_of(records: list[dict[str, str]], project_id: str, project: dict[str, str]) -> list[str]:
-    """The ids of the warehouses among ``records`` made in the incarnation of ``project_id`` its record ``project`` names
-    (:func:`incarnations.warehouses_of`).
-
-    Raises:
-        InternalError: A record names the project and no incarnation of it.
-    """
-    incarnation = incarnations.require_incarnation(project, f"project:{project_id}")
-    return sorted(str(r["id"]) for r in incarnations.warehouses_of(records, project_id, incarnation))
+def _warehouses_of(records: list[dict[str, str]], project: dict[str, str]) -> list[str]:
+    """The ids of the warehouses among ``records``, in every state, made in the creation ``project`` names
+    (``tenancy.warehouses_of``): one still creating counts (ADR 0245, ``CountsCreating``)."""
+    return sorted(str(r["id"]) for r in warehouses_of(records, project[UUID]))
 
 
 async def _start_delete(project_id: str, record: dict[str, str], settings: Settings, token: CurrentToken, *, force: bool) -> None:
@@ -583,7 +598,7 @@ async def _start_delete(project_id: str, record: dict[str, str], settings: Setti
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
     # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
     # read may be one of this project's own ([[LH-572]]).
-    held = _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), project_id, record)
+    held = _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), record)
     if held:
         raise NamespaceNotEmptyError(
             f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "
@@ -656,38 +671,37 @@ async def delete_project(
             recorded by then is finished by a retry.
     """
     so = settings.storage_options()
-    obj = f"project:{project_id}"
+    target = f"project:{project_id}"
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = fga_deps.wired(settings, client)
-    incarnation = incarnations.require_incarnation(record, obj)
+    obj = tenancy.object_of_record(PROJECT, record)
     if record.get(project_registry.DELETING_BY) is None:
         await _start_delete(project_id, record, settings, token, force=force)
-    # The incarnation as the record names it once the delete is recorded, which no later write changes.
-    record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, so, project_id) or record
+    # Marked `deleting` from here (ADR 0245): no door resolves it, so nothing more is granted or made in it. A warehouse
+    # whose create wrote its record before the mark is found by this read, which comes after it; one whose record came
+    # after the mark finds the project gone when its create resolves it again, and ends itself. Either way none stands
+    # under a project creation that ended (`ChildUnderLiveParent`). The project is not deleted under one: the warehouse is
+    # deleted first, then this asked again, the project kept marked meanwhile.
+    if late := _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), record):
+        raise NamespaceNotEmptyError(
+            f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete ran; delete each, then delete the project again"
+        )
     actor = f"user:{token.subject}" if token is not None else None
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(
         await fga.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
     )
-    deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=obj, actor=actor, extra={"incarnation": incarnation})
+    deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=target, actor=actor, extra={UUID: record[UUID]})
     deleted = Announcement(evidence=RecordGone(key=project_registry.record_key(project_id)), message=ControlMessage(event=deleted_event))
-    async with announcer.announcing(door="delete_project", target=obj, announcements=[deleted, *grants.values()]) as filing:
+    async with announcer.announcing(door="delete_project", target=target, announcements=[deleted, *grants.values()]) as filing:
         removed: list[fga.ClientTuple] = []
         # Tuples FIRST, record second. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully
         # described and re-deletable; the opposite order would strand grants on a project no API can name any
         # more — privilege that nothing in the product can see, let alone clear.
-        # Its incarnation ended first (ADR 0241, `fga.end_incarnation`): retired, so no door opens a fence on it from here,
-        # then drained: every tuple on it and every tuple naming it (a role's `project` edge, a warehouse's tenancy edge)
-        # revoked, with the tickets of the doors that were writing, until a read finds nothing. No grant, role or
-        # warehouse decided on it reaches a project made again under the id.
-        removed = await fga_deps.end_incarnation(authz, settings, obj, incarnation, token=token)
-        # A warehouse whose create was decided on this project before the drain, and whose record stands, holds no
-        # tenancy edge to it now; the project is not deleted under it: the warehouse is deleted first, then this asked again.
-        # A record an earlier incarnation left is not this one's, and the converge tick ends it.
-        if late := _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), project_id, record):
-            raise NamespaceNotEmptyError(
-                f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete ran; delete each, then delete the project again"
-            )
+        # Every tuple on its creation and every tuple naming it (a role's `project` edge, a warehouse's tenancy edge).
+        # A door that wrote on it after this read wrote on a dead object nothing resolves to, which the converge tick
+        # sweeps once the creation is ended (ADR 0245).
+        removed = await fga_deps.end_object(authz, settings, obj, token=token)
         # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
         for role in await run_in_threadpool(roles.every_role, settings.registry_root, so, project_id):
             ending = await announcing.role_ending(authz, role, actor=actor, reason="project_deleted")
@@ -700,15 +714,15 @@ async def delete_project(
         # record claims this project, and a warehouse's delete revokes its own tuples (that edge among them) before its
         # record goes.
         # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant.
-        # The record names the incarnation that set it (ADR 0241 §9 P2), so one an earlier incarnation left is not this
+        # The record names the creation that set it (ADR 0241 §9 P2, ADR 0245), so one an earlier creation left is not this
         # delete's to end, and governs no bucket the next tenant claims whether or not it stands.
         policy = await run_in_threadpool(maintenance_policies.get_policy, settings.registry_root, so, "project", project_id)
-        if policy is not None and incarnations.made_under(policy, incarnation, obj=f"policy:project:{project_id}"):
+        if policy is not None and made_under(policy, record[UUID]):
             await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
         # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object
         # lay in a warehouse of it, and each ended its labels as it went.
         await run_in_threadpool(object_labels.end_definitions, settings.registry_root, so, project_id)
-        await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
+        await run_in_threadpool(project_registry.end_project, settings.registry_root, so, record)
 
         log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})
         if authz is not None:
@@ -721,6 +735,7 @@ async def delete_project(
                 AuditOutcome.SUCCESS,
                 subject=actor,
                 resource=obj,
+                project=project_id,
                 grantee="*",
                 relation="*",
                 removed=len(removed),

@@ -23,8 +23,13 @@ from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 
 
+#: Each project's creation as OpenFGA names it (ADR 0245), and the live records the door maps them back to ids by.
+ACME, GLOBEX = f"project:{'a' * 32}", f"project:{'b' * 32}"
+_RECORDS = [{"id": "acme", "uuid": "a" * 32, "state": "live"}, {"id": "globex", "uuid": "b" * 32, "state": "live"}]
+
+
 def _settings(*, fga_enabled: bool = False) -> Any:
-    return SimpleNamespace(fga_enabled=fga_enabled, fga_root_object="warehouse:lance_catalog")
+    return SimpleNamespace(fga_enabled=fga_enabled, fga_root_object="warehouse:lance_catalog", registry_root="unread", storage_options=lambda: None)
 
 
 def _token(**claims: Any) -> PersonPrincipal:
@@ -92,6 +97,7 @@ def _wire(
 
     monkeypatch.setattr(ep.fga, "check", _fake_check)
     monkeypatch.setattr(ep.fga, "list_objects", _fake_list)
+    monkeypatch.setattr(ep.project_registry, "list_projects", lambda _root, _so: _RECORDS)
 
 
 def test_governed_shape_and_admin_first_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,8 +109,8 @@ def test_governed_shape_and_admin_first_dedupe(monkeypatch: pytest.MonkeyPatch) 
         monkeypatch,
         estate={"can_administer_estate": True, "can_create_project": False},
         lists={
-            "can_administer": ["project:acme"],
-            "member": ["project:globex", "project:acme"],
+            "can_administer": [ACME],
+            "member": [GLOBEX, ACME],
         },
         calls=calls,
     )
@@ -122,7 +128,7 @@ def test_governed_shape_and_admin_first_dedupe(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_non_admin_gets_estate_admin_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    _wire(monkeypatch, estate=False, lists={"member": ["project:acme"]})
+    _wire(monkeypatch, estate=False, lists={"member": [ACME]})
     result = _me(_settings(fga_enabled=True), token=_token(), client=object())
     assert result.estate_admin is False
     assert [(p.project, p.role) for p in result.projects] == [("acme", "member")]
@@ -134,7 +140,7 @@ def test_non_admin_gets_estate_admin_false(monkeypatch: pytest.MonkeyPatch) -> N
 def test_estate_check_outage_degrades_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
     # Fail-safe: a broken authz layer must never paint admin surfaces — and never 5xx the self-describe
     # (the real gates on /management/v1/events / /management/v1/projects still fail closed on their own).
-    _wire(monkeypatch, estate=ServiceUnavailableError("down"), lists={"can_administer": ["project:acme"]})
+    _wire(monkeypatch, estate=ServiceUnavailableError("down"), lists={"can_administer": [ACME]})
     result = _me(_settings(fga_enabled=True), token=_token(), client=object())
     assert result.estate_admin is False
     assert [(p.project, p.role) for p in result.projects] == [("acme", "admin")]
@@ -144,7 +150,7 @@ def test_one_relation_outage_degrades_only_that_list(monkeypatch: pytest.MonkeyP
     # Per-relation degrade: the member lookup dying must not void the admin list (or vice versa).
     _wire(
         monkeypatch,
-        lists={"can_administer": ["project:acme"], "member": ServiceUnavailableError("down")},
+        lists={"can_administer": [ACME], "member": ServiceUnavailableError("down")},
     )
     result = _me(_settings(fga_enabled=True), token=_token(), client=object())
     assert [(p.project, p.role) for p in result.projects] == [("acme", "admin")]
@@ -161,7 +167,7 @@ def test_slow_fga_degrades_on_the_shared_budget(monkeypatch: pytest.MonkeyPatch)
 
     async def _slow_list(*_a: Any, **_k: Any) -> Any:
         await asyncio.sleep(0.5)
-        return ep.fga.ObjectListing(objects=["project:acme"], truncated=False)
+        return ep.fga.ObjectListing(objects=[ACME], truncated=False)
 
     monkeypatch.setattr(ep.fga, "check", _slow_check)
     monkeypatch.setattr(ep.fga, "list_objects", _slow_list)

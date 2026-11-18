@@ -17,7 +17,11 @@ from __future__ import annotations
 from typing import Any
 
 from catalog.core.config import get_settings
-from catalog.services import warehouses
+from catalog.services import projects, warehouses
+
+
+#: The creations of project ``acme`` and warehouse ``wh-a`` (ADR 0245).
+ACME, WH_A = "a" * 32, "b" * 32
 
 
 def test_the_census_counts_each_objects_grants_and_leaves_out_the_deployments_own(governed_catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
@@ -25,7 +29,7 @@ def test_the_census_counts_each_objects_grants_and_leaves_out_the_deployments_ow
     root = get_settings().fga_root_object
     catalog.store.write(
         (catalog.person("mx"), "reconciler", root),
-        (catalog.person("alice"), "admin", "project:acme"),
+        (catalog.person("alice"), "admin", f"project:{ACME}"),
         (catalog.person("alice"), "owner", "warehouse:lance_catalog"),
     )
 
@@ -36,7 +40,7 @@ def test_the_census_counts_each_objects_grants_and_leaves_out_the_deployments_ow
     root_type, _, root_id = root.partition(":")
     assert (census.json()["enabled"], counts.get("project"), root_id in counts.get(root_type, {}), "lance_catalog" in counts.get("warehouse", {})) == (
         True,
-        {"acme": 1},
+        {ACME: 1},
         False,
         False,
     ), counts
@@ -47,14 +51,9 @@ def test_the_tenancy_rebuild_writes_the_edge_a_warehouses_record_names_and_none_
 ) -> None:
     catalog = governed_catalog
     settings = get_settings()
-    # wh-a and its project born as their creates bear them (ADR 0241), its tenancy edge since lost.
-    catalog.store.write(
-        (catalog.person("mx"), "reconciler", settings.fga_root_object),
-        ("revision:i1", "revision", "warehouse:wh-a"),
-        ("revision:i1.0", "revision", "warehouse:wh-a"),
-        ("revision:p1", "revision", "project:acme"),
-        ("revision:p1.0", "revision", "project:acme"),
-    )
+    # wh-a and its project live, its tenancy edge since lost.
+    catalog.store.write((catalog.person("mx"), "reconciler", settings.fga_root_object))
+    projects.put_project(settings.registry_root, settings.storage_options(), {"id": "acme", "uuid": ACME})
     warehouses.put_warehouse(
         settings.registry_root,
         settings.storage_options(),
@@ -64,16 +63,16 @@ def test_the_tenancy_rebuild_writes_the_edge_a_warehouses_record_names_and_none_
             "root_uri": "s3://bkt-a",
             "project": "acme",
             "created_at": "2026-11-08T00:00:00Z",
-            "incarnation": "i1",
-            "project_incarnation": "p1",
+            "uuid": WH_A,
+            "project_uuid": ACME,
         },
     )
 
     rebuilt = catalog.client.post("/management/v1/grants/tenancy/rebuild", json={"warehouses": ["wh-a", "wh-gone"]}, headers=catalog.bearer("mx"))
 
     assert rebuilt.status_code == 200, rebuilt.text
-    assert (rebuilt.json()["written"], list(rebuilt.json()["unjustified"]), ("project:acme", "project", "warehouse:wh-a") in catalog.store.tuples()) == (
-        ["project:acme project warehouse:wh-a"],
+    assert (rebuilt.json()["written"], list(rebuilt.json()["unjustified"]), (f"project:{ACME}", "project", f"warehouse:{WH_A}") in catalog.store.tuples()) == (
+        [f"project:{ACME} project warehouse:{WH_A}"],
         ["wh-gone"],
         True,
     )

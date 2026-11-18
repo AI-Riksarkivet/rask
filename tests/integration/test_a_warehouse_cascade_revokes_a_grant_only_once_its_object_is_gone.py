@@ -100,9 +100,11 @@ class _Tenant:
         self.monkeypatch = monkeypatch
         #: The uuid each table's policy is kept under, as the policy door answered it (ADR 0173 §8).
         self.policy_uuids: dict[str, str] = {}
-        #: The FGA object each ``<kind>:<name>`` this tenant made is governed as (ADR 0173 §8): its warehouse by id,
-        #: every table and namespace by the uuid it was minted.
-        self.objects: dict[str, str] = {f"warehouse:{WAREHOUSE}": f"warehouse:{WAREHOUSE}"}
+        #: The FGA object each ``<kind>:<name>`` this tenant made is governed as (ADR 0173 §8, ADR 0245): its warehouse by
+        #: the uuid its record names, every table and namespace by the uuid it was minted.
+        settings = get_settings()
+        record = warehouses.get_warehouse_record(settings.registry_root, settings.storage_options(), WAREHOUSE) or {}
+        self.objects: dict[str, str] = {f"warehouse:{WAREHOUSE}": f"warehouse:{record['uuid']}"}
 
     def _minted(self, kind: str, name: str) -> None:
         answer = self.client.post(f"/v1/{kind}/{name}/describe", json={})
@@ -540,7 +542,7 @@ def _a_backend_that_removes_the_row_and_answers_not_found(tenant: _Tenant) -> No
     [
         pytest.param(_a_store_that_will_not_delete_directories, (503, 17, 200), False, id="directory-delete-before-the-native-call"),
         pytest.param(_a_backend_that_will_not_deregister, (503, 17, 200), True, id="the-native-call-failed"),
-        pytest.param(_a_backend_that_removes_the_row_and_answers_not_found, (200, None, 404), True, id="the-native-call-answered-not-found"),
+        pytest.param(_a_backend_that_removes_the_row_and_answers_not_found, (200, None, 403), True, id="the-native-call-answered-not-found"),
     ],
 )
 def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_never_reached_the_row(
@@ -550,8 +552,8 @@ def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_n
     that fails leaves the row, and with it the clone's holds, its own, so the cascade removes the ending it filed. A native
     deregister that was attempted leaves the ending, whatever it answered (a failure with the row in place, or
     TableNotFound once another request removed it): no read tells the cascade whether the row it then finds is still the
-    clone's, and the finish judges it. Every check is allowed, so once the warehouse is gone its name still vouches for
-    asking and a describe answers the absent clone 404. A table the cascade did not detach keeps its location's claim, with the fence the
+    clone's, and the finish judges it. Every check is allowed, yet once the warehouse is gone its name names no object
+    (ADR 0245), and a describe of the absent clone is refused as for any absent name. A table the cascade did not detach keeps its location's claim, with the fence the
     cascade held it by lifted."""
     _, clone, _ = _registered_clone(tenant, moto_url)
     failing(tenant)
@@ -669,5 +671,5 @@ def test_a_warehouse_deleted_beside_a_recoverable_drop_leaves_none_of_its_trash(
     if len(dropped) != 1:
         pytest.fail(f"no recoverable drop was sent beside the delete: {dropped}")
     left = tenant.trashed([("table", "acme-wh$bronze$a"), ("namespace", "acme-wh$bronze")])
-    stands = warehouses.get_warehouse(settings.registry_root, settings.storage_options(), tenant.warehouse) is not None
+    stands = warehouses.get_warehouse_record(settings.registry_root, settings.storage_options(), tenant.warehouse) is not None
     assert (ended.status_code == 200, not left or stands) == (not lapsed, True), f"the delete answered {ended.status_code} and left {left}: {ended.text}"

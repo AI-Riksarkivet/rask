@@ -53,33 +53,17 @@ type role
     # A role's name and assignees are read with the project's roles (`can_list_roles from project`).
     define can_read: can_list_roles from project
 
-# An incarnation of a project or warehouse id, and a count of the grants on it (ADR 0241). It confers nothing: it is
-# the subject of `project#revision`, `warehouse#revision` and `estate#revision`.
+# A count of the changes to who administers a project (ADR 0213), and a declared grant's evidence (ADR 0241 G13). It
+# confers nothing: it is the subject of `project#revision`, `warehouse#revision` and `estate#revision`.
 type revision
-
-# BOOKKEEPING, NOT A RUNG: a door's fence ticket on a project or warehouse (ADR 0241), `<object> ticket fence:<hex>`,
-# written after the door asked its caller's authority and before it reads the object's incarnation, deleted by the Write
-# that makes its change, taken back when the door ends, and swept by the converge tick once older than a request runs.
-# Kept on an object of its own so nothing that reads the project or warehouse reads a ticket. Each ticket is written and
-# deleted with its index `fence:open open fence:<hex>`, which names one fixed party, so every ticket open in the estate
-# is one paged Read (OpenFGA reads a type-only object only beside a user): what the sweep reads (ADR 0241 §9 P5). No
-# permission reads either.
-type fence
-  relations
-    define ticket: [project, warehouse]
-    define open: [fence]
 
 # A project = a tenant. Holds its warehouses and its roles.
 type project
   relations
-    # BOOKKEEPING, NOT A RUNG: no permission reads it. A project's id may be held again by another tenant once it is
-    # deleted, and its tuples name the id, so each incarnation is told apart here: `revision:<incarnation>`, written by
-    # its birth and never revoked, and the token `revision:<incarnation>.<n>`, which stands while the incarnation does.
-    # A door writing on or naming the project writes a ticket of its own naming it (`fence#ticket`) before it reads the
-    # token, and deletes it in the Write that makes its change; the project's delete retires the token and deletes every
-    # ticket naming it, so a change decided on a deleted incarnation lands nowhere (ADR 0241). An admin removal
-    # moves the token, so two overlapping ones cannot both pass the last-admin guard ([[LH-434]]). The drift repair's
-    # token (`revision:repair-<hex>`) and a declared grant's evidence (`revision:git-<hex>`) are kept here too.
+    # BOOKKEEPING, NOT A RUNG: no permission reads it. A project is named by its creation's uuid (`project:<uuid>`, ADR
+    # 0245), never by its id, so nothing here tells creations apart. It holds the token `revision:<n>` each change to who
+    # administers the project moves, so two overlapping admin removals cannot both pass the last-admin guard
+    # ([[LH-434]], ADR 0213), and a declared grant's evidence (`revision:git-<hex>`).
     define revision: [revision]
     define admin: [user, role#assignee]
     define member: [user, role#assignee] or admin
@@ -156,7 +140,7 @@ type estate
         # cleanup decided in the same change.
         # BOOKKEEPING, NOT A RUNG: no permission reads it. A grant git declares on the estate is written with an
         # evidence of the converge's own (`revision:git-<hex>`) in the same Write, so a tick that died after it can
-        # tell its own write from a door's (ADR 0241).
+        # tell its own write from a door's (ADR 0241 G13).
         define revision: [revision]
         define admin: [user, role#assignee]
         # A machine identity is a RELATION on the top type, never a principal type — the ruling is
@@ -187,8 +171,8 @@ type estate
         define can_list_all_projects: owner
         # Finishing a project delete that another admin started and did not complete.
         define can_finish_project_delete: owner
-        # Purging what a dead tenant left (ADR 0241 §9 P3): a warehouse record made under a project incarnation that
-        # no longer stands, or one the converge tick ended, with its bucket's bytes and claim. No tenant administers it.
+        # Purging what a dead creation left (ADR 0241 §10, ADR 0245): a bucket whose claim a warehouse's creation took and
+        # that no record names, reached by its bucket, with its bytes and claim. No tenant administers it.
         define can_purge_dead_tenant_warehouse: owner
         # Every `/management/v1/access/*` route: reading and WRITING the raw tuple store, the authorization state
         # of the whole estate, and offboarding a principal from it.
@@ -264,7 +248,8 @@ type estate
 type warehouse
   relations
     define project: [project]
-    # BOOKKEEPING, NOT A RUNG: the incarnation of this warehouse id and the token its grants move, as on `project`.
+    # BOOKKEEPING, NOT A RUNG: a declared grant's evidence (`revision:git-<hex>`), as on `project`. A warehouse is named
+    # by its creation's uuid (`warehouse:<uuid>`, ADR 0245).
     define revision: [revision]
     # The INVERSE of `namespace#parent`, written by the same `grant_on_create` batch. It exists for one
     # reason: upward visibility (see `can_get_metadata`). Keeping it a separate edge rather than deriving

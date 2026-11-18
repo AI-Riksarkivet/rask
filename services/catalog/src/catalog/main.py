@@ -94,25 +94,24 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
 
 
 async def converge_at_boot(app: FastAPI) -> None:
-    """Converge every project's and warehouse's incarnation and end what a dead request or tenant left
-    (``incarnations.converge``, ADR 0241), then run the warehouse-grant backfill, which writes under them, reporting
-    rather than raising, then probe every warehouse's seal where the chart gives the probe a period
-    (``catalog.api.seal_probe``). See its call site for why."""
-    from catalog.services import incarnations
+    """Finish or end every creating project and warehouse record and sweep what a dead creation left
+    (``tenancy_converge.converge``, ADR 0245), then run the warehouse-grant backfill, reporting rather than raising, then
+    probe every warehouse's seal where the chart gives the probe a period (``catalog.api.seal_probe``). See its call
+    site for why."""
+    from catalog.services import tenancy, tenancy_converge
     from catalog.services.warehouse_grant_backfill import backfill
 
     settings: Settings = app.state.settings
     # The convergence never raises (it names what it could not converge among its failures), so no one tenant's corrupt
     # record costs the backfill after it (ADR 0241 §10 Q3).
-    converged = await incarnations.converge(
-        settings.registry_root,
-        settings.storage_options(),
+    converged = await tenancy_converge.converge(
+        settings,
         getattr(app.state, "fga", None) if settings.fga_enabled else None,
-        bound=incarnations.ticket_bound(settings.request_deadline_seconds),
+        bound=tenancy.create_bound(settings.request_deadline_seconds),
         connections=app.state.connections,
     )
     if converged.failed:
-        log.warning("incarnations_converge_failed_at_boot", extra={"failed": converged.failed[:20]})
+        log.warning("tenancy_converge_failed_at_boot", extra={"failed": converged.failed[:20]})
     try:
         seen, written, failures = await backfill(settings)
     except asyncio.CancelledError:

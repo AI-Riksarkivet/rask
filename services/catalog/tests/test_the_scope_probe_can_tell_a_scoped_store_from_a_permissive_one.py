@@ -322,7 +322,8 @@ class TestTheDoorGatesBeforeItWrites:
     async def test_a_DENIED_caller_gets_the_same_answer_as_a_missing_warehouse(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from lance_namespace import PermissionDeniedError, TableNotFoundError
 
-        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: {"project": "acme", "root_uri": ROOT})
+        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: {"project": "acme", "project_uuid": "a" * 32, "root_uri": ROOT})
+        monkeypatch.setattr(endpoint.project_registry, "get_project_record", lambda *a, **k: {"id": "acme", "uuid": "a" * 32, "state": "live"})
 
         async def _deny(*a: Any, **k: Any) -> None:
             raise PermissionDeniedError("nope")
@@ -346,7 +347,8 @@ class TestTheDoorGatesBeforeItWrites:
         """The happy path, and the one assertion that matters in it: the root the probe writes under
         comes off the REGISTRY RECORD, not off the request. A door that took a caller-supplied root
         would write into any bucket the catalog can reach, under an admin gate for a different one."""
-        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: {"project": "acme", "root_uri": ROOT})
+        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: {"project": "acme", "project_uuid": "a" * 32, "root_uri": ROOT})
+        monkeypatch.setattr(endpoint.project_registry, "get_project_record", lambda *a, **k: {"id": "acme", "uuid": "a" * 32, "state": "live"})
 
         async def _allow(*a: Any, **k: Any) -> None:
             return None

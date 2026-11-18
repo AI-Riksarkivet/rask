@@ -107,7 +107,7 @@ def test_the_root_lists_exactly_the_warehouses_its_caller_may_see(estate: Any, c
     for warehouse in ("acme-wh", "beta-wh"):
         record = {"id": warehouse, "bucket": warehouse, "project": "acme", "root_uri": f"{settings.root}/{warehouse}"}
         warehouses.put_warehouse(settings.registry_root, settings.storage_options(), record)
-    estate.store.write((estate.person("dave"), "reader", "warehouse:acme-wh"))
+    estate.store.write((estate.person("dave"), "reader", estate.creation("warehouse", "acme-wh")))
 
     listed = _ok(estate, "/v1/namespace/$/list", caller=caller)
 

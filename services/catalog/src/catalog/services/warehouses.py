@@ -30,15 +30,16 @@ from lance_namespace import (
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core.identifiers import warehouse_of, with_minted_uuid
-from catalog.services import incarnations, native
+from catalog.services import native
 from catalog.services.control_records import (
-    INCARNATION,
-    PROJECT_INCARNATION,
+    PROJECT_UUID,
+    STATE,
+    UUID,
     BucketClaimRecord,
     DeleteMode,
     ProtectionChange,
     WarehouseRecord,
-    new_incarnation,
+    end_creation,
     read_json,
     validated,
     validated_or_refuse,
@@ -47,6 +48,7 @@ from catalog.services.control_records import (
     write_json,
 )
 from lakehouse import control_prefixes, records, trash
+from lakehouse.governed import tenancy
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
@@ -71,20 +73,15 @@ SEALED = "sealed"
 #: When that check measured it, an ISO-8601 time on the catalog's clock: the age ``WarehouseSealUnmeasured`` reads, kept on
 #: the record so no restart of a replica resets it (ADR 0242 § Found by review, third round, B2).
 SEALED_AT = "sealed_at"
-#: When the converge tick ended a record a dead tenant's create left, and why (ADR 0241 §9 P3). An ended record is no
-#: warehouse: every door but the estate admin's purge reads it as absent (:func:`get_warehouse`), no listing names it
-#: (:func:`read_warehouses`), and a create of its id takes its key (:func:`create_warehouse_record`). A claim released is
-#: stamped the same way, ``released_at`` and ``released_reason``, and a later claim takes its key (:func:`claim_bucket`).
-ENDED_AT: Final = "ended_at"
-ENDED_REASON: Final = "ended_reason"
+#: When a bucket's claim was released, and why: a released claim is no claim, and a later claim takes its key
+#: (:func:`claim_bucket`).
 RELEASED_AT: Final = "released_at"
 RELEASED_REASON: Final = "released_reason"
-#: When a bucket's claim was taken, which the converge tick judges a dead incarnation's claim no record names by: a create
+#: When a bucket's claim was taken, which the converge tick judges a dead creation's claim no record names by: a create
 #: still running between its claim and its record is not ended (:func:`claim_bucket`).
 CLAIMED_AT: Final = "claimed_at"
 #: The purge that holds a bucket's claim, and since when (ADR 0241 §10 Q1): stamped on the claim by
-#: :func:`take_for_purge`, and on a dead tenant's warehouse record its purge removes (:func:`mark_purging`), so no create
-#: takes the record's key and no claim lands on the bucket until the purge ends.
+#: :func:`take_for_purge`, so no claim lands on the bucket until the purge ends.
 PURGING: Final = "purging"
 PURGING_AT: Final = "purging_at"
 
@@ -176,13 +173,15 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
     if this appears in a production path again, that test names it. Do not reach for it in service or
     endpoint code; there is a conditional door for every real mutation.
 
-    The caller stamps ``created_at`` (kept out of here so unit tests stay deterministic). The record is written as its
-    create writes it (ADR 0241): one naming no incarnation is given a fresh one, and one naming no incarnation of its
-    project names the one its project's record names, where that record stands.
+    The caller stamps ``created_at`` (kept out of here so unit tests stay deterministic). The record is written live with
+    a fresh uuid unless it names its own, and names the creation of its project its project's record names, where that
+    record stands, and otherwise a creation no record holds (ADR 0245): a fixture seeding a warehouse alone gets one that
+    routes, and that no project administers.
     """
-    seeded = {INCARNATION: new_incarnation(), **record}
-    if PROJECT_INCARNATION not in seeded and (project := read_json(control_root, storage_options, f"{control_prefixes.PROJECTS}/{record.get('project')}.json")):
-        seeded[PROJECT_INCARNATION] = str(project.get(INCARNATION, ""))
+    seeded = {UUID: tenancy.new_uuid(), STATE: tenancy.LIVE, **record}
+    if PROJECT_UUID not in seeded:
+        project = read_json(control_root, storage_options, f"{control_prefixes.PROJECTS}/{record.get('project')}.json")
+        seeded[PROJECT_UUID] = str(project[UUID]) if project and project.get(UUID) else tenancy.new_uuid()
     write_json(control_root, storage_options, _warehouse_key(record["id"]), seeded)
 
 
@@ -215,9 +214,9 @@ class WarehouseProjectConflict(Exception):
 
 
 class WarehouseOfADeadTenant(Exception):
-    """The live record names the caller's project id at another incarnation of it: a create that raced that project's
-    delete left it (ADR 0241 §8 B3), and it is no warehouse of the tenant holding the id now. Raised from inside the
-    conditional write, as :class:`WarehouseProjectConflict` is; the converge tick ends the record."""
+    """The record names the caller's project id at another creation of it: a create that raced that project's delete
+    wrote it (ADR 0245), and it is no warehouse of the tenant holding the id now. Raised from inside the conditional
+    write, as :class:`WarehouseProjectConflict` is; the converge tick ends the record."""
 
 
 def set_warehouse_protection(
@@ -343,9 +342,8 @@ def upsert_warehouse(
     def merge(live: dict[str, str]) -> dict[str, str]:
         if live.get("project") != project:
             raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
-        obj = f"warehouse:{record['id']}"
-        if not incarnations.made_under(live, incarnations.require_project_incarnation(record, obj), obj=obj):
-            raise WarehouseOfADeadTenant(f"warehouse {record['id']!r} was made under an earlier incarnation of project {project!r}")
+        if not tenancy.made_under(live, record[PROJECT_UUID]):
+            raise WarehouseOfADeadTenant(f"warehouse {record['id']!r} was made under an earlier creation of project {project!r}")
         if DELETE_MODE in record:
             live = {k: v for k, v in live.items() if k != TRASH_GRACE_DAYS}
         merged = {**live, **{k: v for k, v in record.items() if k in _CALLER_OWNED}}
@@ -354,11 +352,6 @@ def upsert_warehouse(
         # A record written before the lifecycle feature has no status, and absent means live.
         merged.setdefault("status", "active")
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
-        # The incarnation is the original create's (ADR 0241), which every record carries from its mint (§8 B5).
-        if not live.get(INCARNATION):
-            raise InternalError(
-                f"warehouse {record['id']!r}'s record names no incarnation; every create mints one, so this record was not written by this catalog"
-            )
         if protection is not None:
             merged = with_protection(merged, protection)
         # THE THIRD REQUEST FIELD, and it must be one: `merged` takes only `_CALLER_OWNED` keys from
@@ -374,106 +367,60 @@ def upsert_warehouse(
 
 
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Mint ``_warehouses/<id>.json`` iff absent or ended — the STORE arbitrates (F1).
+    """Mint ``_warehouses/<id>.json`` iff absent — the STORE arbitrates (F1). ``record`` names its creation's uuid and is
+    ``creating`` (ADR 0245): nothing is written in OpenFGA before it stands.
 
-    Raises :class:`lakehouse.records.RecordExistsError` on a lost race. The caller
-    re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
-    guard's read may predate the rival's write; this refusal is what closes that window). A record naming no
-    incarnation is given one here (ADR 0241). A record the converge tick ended (:data:`ENDED_AT`) is replaced under the
-    ETag of the read that found it, as a role's ended record is, so of two creates taking its id one wins; but only once
-    its bucket's claim no longer names it and no purge has stamped it (:func:`require_key_free`).
-
-    Raises:
-        RecordExistsError: The id is held, by a record standing or by a race lost.
-        EndedRecordHoldsItsClaim: The id is an ended record's whose claim stands or whose purge runs.
+    Raises :class:`lakehouse.records.RecordExistsError` on a lost race. The caller re-reads and re-applies its guards
+    against the WINNER's record (the cross-project takeover guard's read may predate the rival's write; this refusal is
+    what closes that window).
     """
-    record.setdefault(INCARNATION, new_incarnation())
-    key = _warehouse_key(record["id"])
-    try:
-        create_json(control_root, storage_options, key, record)
-        return
-    except RecordExistsError:
-        pass
-    stored = records.read_json(control_root, storage_options, key)
-    if stored is None or not stored[0].get(ENDED_AT):
-        raise RecordExistsError(key)
-    require_key_free(control_root, storage_options, stored[0])
-    try:
-        replace_json(control_root, storage_options, key, record, etag=stored[1])
-    except RecordChangedError as exc:
-        raise RecordExistsError(key) from exc
+    create_json(control_root, storage_options, _warehouse_key(record["id"]), record)
 
 
-class EndedRecordHoldsItsClaim(Exception):
-    """A create names the id of a record the converge tick ended whose bucket's claim still names it, or that a purge has
-    stamped (ADR 0241 §10 Q2): the record is the estate owner's handle on that claim, so its key is not taken while the
-    claim stands."""
+def set_live(control_root: str, storage_options: StorageOptions, warehouse_id: str, uuid: str) -> dict[str, str] | None:
+    """Flip warehouse ``warehouse_id``'s record from ``creating`` to ``live`` where it still names the creation ``uuid``,
+    conditional on its ETag: its seed stands by then (ADR 0245). The record as it stands, ``None`` where it is gone or
+    another creation's."""
 
-
-def require_key_free(control_root: str, storage_options: StorageOptions, ended: dict[str, Any]) -> None:
-    """Refuse a create of the id of ``ended``, a record the tick ended, while its bucket's claim still names it, or while
-    a purge has stamped it: a create that took its key would leave the claim with no record, which no tick reports by the
-    warehouse and the purge door, addressed by that id, would reach the live warehouse instead (ADR 0241 §10 Q2).
-
-    Raises:
-        EndedRecordHoldsItsClaim: The key is not free; the estate owner's purge of the ended record frees it.
-        ServiceUnavailableError: The claim is there and cannot be read as one.
-    """
-    warehouse_id, bucket = str(ended["id"]), str(ended["bucket"])
-    claim = bucket_claim(control_root, storage_options, bucket=bucket)
-    held = claim is not None and _names(claim, project=str(ended["project"]), project_incarnation=ended.get(PROJECT_INCARNATION), bucket=bucket)
-    if held or ended.get(PURGING):
-        raise EndedRecordHoldsItsClaim(
-            f"warehouse {warehouse_id!r} is held by a record a dead tenant left whose bucket {bucket!r} it still claims; the estate "
-            f"owner frees it with DELETE /management/v1/warehouses/{warehouse_id}?purge_bucket=true"
-        )
-
-
-def mark_purging(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, incarnation: str, holder: str) -> bool:
-    """Stamp warehouse ``warehouse_id``'s record :data:`PURGING` ``holder`` where it still names ``incarnation``, so no
-    create takes its key while the purge that removes it runs (:func:`require_key_free`); whether it does. Conditional on
-    the record's ETag: a record a create took meanwhile is another incarnation's and is left as it is."""
-
-    def stamp(record: dict[str, str]) -> dict[str, str]:
-        if record.get(INCARNATION) != incarnation:
-            raise RecordMissingError(f"warehouse {warehouse_id!r} is not incarnation {incarnation!r}")
-        return {**record, PURGING: holder}
+    def flip(record: dict[str, str]) -> dict[str, str]:
+        if record.get(UUID) != uuid:
+            raise RecordMissingError(f"warehouse {warehouse_id!r} is not the creation {uuid}")
+        return {**record, STATE: tenancy.LIVE} if record.get(STATE) == tenancy.CREATING else record
 
     try:
-        mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), stamp)
+        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), flip)
     except RecordMissingError:
-        return False
-    return True
+        return None
 
 
-def end_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, incarnation: str, reason: str) -> dict[str, str] | None:
-    """Stamp warehouse ``warehouse_id``'s record ended, with when and ``reason``, where it still names ``incarnation`` and is
-    not ended; the record as stamped, ``None`` where it is gone or is another incarnation's. Conditional on the record's
-    ETag (``mutate_json``), so a create taking the id meanwhile is never stamped (ADR 0241 §9 P3)."""
+def mark_deleting(control_root: str, storage_options: StorageOptions, warehouse_id: str, uuid: str) -> dict[str, str] | None:
+    """Mark warehouse ``warehouse_id``'s record ``deleting`` where it still names the creation ``uuid``, conditional on
+    its ETag: from here no door resolves it (ADR 0245). The record as written, ``None`` where it is gone or another
+    creation's."""
 
-    def stamp(record: dict[str, str]) -> dict[str, str]:
-        if record.get(INCARNATION) != incarnation or record.get(ENDED_AT):
-            raise RecordMissingError(f"warehouse {warehouse_id!r} is not incarnation {incarnation!r} unended")
-        return {**record, ENDED_AT: datetime.now(UTC).isoformat(), ENDED_REASON: reason}
+    def mark(record: dict[str, str]) -> dict[str, str]:
+        if record.get(UUID) != uuid:
+            raise RecordMissingError(f"warehouse {warehouse_id!r} is not the creation {uuid}")
+        return {**record, STATE: tenancy.DELETING}
 
     try:
-        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), stamp)
+        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), mark)
     except RecordMissingError:
         return None
 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
-    """The warehouse record, or ``None`` if unregistered or ended (:data:`ENDED_AT`).
+    """The warehouse record, or ``None`` if unregistered, still being created or being deleted (ADR 0245).
 
     A malformed record REFUSES rather than reading as unregistered: every destructive door starts here,
     and "not found" is an answer they act on."""
     record = get_warehouse_record(control_root, storage_options, warehouse_id)
-    return None if record is None or record.get(ENDED_AT) else record
+    return None if record is None or record.get(STATE) != tenancy.LIVE else record
 
 
 def get_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
-    """The warehouse record, ended or not, or ``None`` if unregistered: what the estate admin's purge of a dead tenant's
-    warehouse reads (ADR 0241 §9 P3).
+    """The warehouse record in whatever state it is, or ``None`` if unregistered: what its delete and the converge tick
+    read.
 
     Raises:
         ServiceUnavailableError: The record is there and cannot be read as one.
@@ -483,10 +430,9 @@ def get_warehouse_record(control_root: str, storage_options: StorageOptions, war
     return validated_or_refuse(record, WarehouseRecord, event="warehouse_record_malformed", path=key) if record is not None else None
 
 
-def read_warehouses(control_root: str, storage_options: StorageOptions, *, ended: bool = False) -> tuple[list[dict[str, str]], list[str]]:
-    """``(readable warehouse records, paths that are there and could NOT be read as one)``, unordered. An absent prefix
-    yields ``([], [])``. A record the converge tick ended (:data:`ENDED_AT`) is no warehouse and is left out, unless
-    ``ended`` asks for it: the convergence's own pass over the registry.
+def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+    """``(readable warehouse records in every state, paths that are there and could NOT be read as one)``, unordered. An
+    absent prefix yields ``([], [])``.
 
     The skipped paths are returned because the callers need opposite things from one tolerance: a listing survives one
     bad object, while a decision that no record names something (the last warehouse of a project, another claim on a
@@ -520,25 +466,27 @@ def read_warehouses(control_root: str, storage_options: StorageOptions, *, ended
             continue
         if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is None:
             skipped.append(info.path)
-        elif ended or not valid.get(ENDED_AT):
+        else:
             out.append(valid)
     return out, skipped
 
 
 def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every readable warehouse record (unordered), the tolerant half of :func:`read_warehouses`, for a caller that only
-    enumerates. An absent registry prefix yields ``[]``.
+    """Every readable live warehouse record (unordered), the tolerant half of :func:`read_warehouses`, for a caller that
+    only enumerates: one being created or deleted is no warehouse to a door (ADR 0245). An absent registry prefix yields
+    ``[]``.
 
     One corrupt record is SKIPPED with a warning, never allowed to 500 the whole listing: a single bad object voiding it
     would turn one tenant's registry corruption into an every-tenant control-plane outage. A read the store did not
     answer raises, as a failed listing does. A caller deciding something destructive or protective asks
     :func:`every_warehouse`.
     """
-    return read_warehouses(control_root, storage_options)[0]
+    return [record for record in read_warehouses(control_root, storage_options)[0] if record.get(STATE) == tenancy.LIVE]
 
 
 def every_warehouse(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every warehouse record, read whole, for a caller deciding from the registry that no record names something.
+    """Every warehouse record in every state, read whole, for a caller deciding from the registry that no record names
+    something: a record still being created counts (ADR 0245, ``CountsCreating``).
 
     Raises:
         ServiceUnavailableError: The store did not answer a read of the registry.
@@ -620,18 +568,18 @@ def read_claims(control_root: str, storage_options: StorageOptions) -> tuple[lis
     return claims, unreadable
 
 
-def _names(claim: dict[str, str], *, project: str, project_incarnation: str | None, bucket: str) -> bool:
-    """Whether ``claim`` names ``project`` at ``project_incarnation``."""
-    return claim.get("project") == project and incarnations.made_under(claim, project_incarnation, obj=f"bucket:{bucket}")
+def _names(claim: dict[str, str], *, project: str, project_uuid: str | None) -> bool:
+    """Whether ``claim`` names ``project`` at its creation ``project_uuid``."""
+    return claim.get("project") == project and tenancy.made_under(claim, project_uuid)
 
 
-def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_incarnation: str, warehouse_id: str) -> datetime:
-    """Record that ``project``, at ``project_incarnation``, owns ``bucket``, or refuse because another project already
-    does, or another incarnation of it (ADR 0241 §8 B3): a tenant made again under a deleted project's id does not
+def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_uuid: str, warehouse_id: str) -> datetime:
+    """Record that ``project``, at its creation ``project_uuid``, owns ``bucket``, or refuse because another project
+    already does, or another creation of it (ADR 0245): a tenant made again under a deleted project's id does not
     register a bucket that still holds the bytes of the one before. Answers the time the claim was taken, which the
     create's every later write into the bucket is judged by (:func:`require_claim_held`).
 
-    A claim the project at the incarnation already holds has its ``claimed_at`` moved to now under the read's ETag: the
+    A claim the project at the creation already holds has its ``claimed_at`` moved to now under the read's ETag: the
     converge tick judges a claim by its age, so a create of a second warehouse on the bucket, or a retry, is a create
     the tick does not take the bucket from while it runs. A claim a purge holds (:data:`PURGING`) refuses every create
     on the bucket (409, code 14) until the purge ends (ADR 0241 §10 Q1).
@@ -657,7 +605,7 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
     payload = {
         "bucket": bucket,
         "project": project,
-        PROJECT_INCARNATION: project_incarnation,
+        PROJECT_UUID: project_uuid,
         "warehouse_id": warehouse_id,
         CLAIMED_AT: now.isoformat(),
     }
@@ -679,7 +627,7 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
         if claim.get(RELEASED_AT):
             # A released claim is taken under the ETag of the read that found it, so of two creates one wins (ADR 0241 §9 P3).
             replacement = payload
-        elif _names(claim, project=project, project_incarnation=project_incarnation, bucket=bucket):
+        elif _names(claim, project=project, project_uuid=project_uuid):
             # This project already owns the bucket (a second warehouse, or a retry): its age is this create's.
             replacement = {**claim, CLAIMED_AT: now.isoformat()}
         else:
@@ -697,16 +645,16 @@ _CLAIM_ATTEMPTS: Final = 3
 
 
 def require_claim_held(
-    control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_incarnation: str, since: datetime, bound: timedelta
+    control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_uuid: str, since: datetime, bound: timedelta
 ) -> None:
     """Refuse a create's next write into ``bucket`` once the claim it took at ``since`` is no longer its own, or once it
     has run past ``bound`` (ADR 0241 §10 Q6b).
 
-    A door is not cancelled at its deadline (``lakehouse.deadline``), and the converge tick releases a dead incarnation's
+    A door is not cancelled at its deadline (``lakehouse.deadline``), and the converge tick releases a dead creation's
     claim judged by its age against the same bound, so a create stalled past it may find its bucket released and taken by
     another tenant. It asks this before each write into the bucket and before its record: the claim must stand
-    unreleased, unstamped by a purge, naming its project at its incarnation, and the create must be younger than the
-    bound. A sibling create of the same incarnation moving ``claimed_at`` keeps it its own.
+    unreleased, unstamped by a purge, naming its project at its creation, and the create must be younger than the
+    bound. A sibling create of the same project creation moving ``claimed_at`` keeps it its own.
 
     Raises:
         ConcurrentModificationError: The claim is no longer the create's, or the create outran the bound; it writes
@@ -715,7 +663,7 @@ def require_claim_held(
     if datetime.now(UTC) - since > bound:
         raise ConcurrentModificationError(f"the create on bucket {bucket!r} ran past {bound}; the tick may have released its claim, so it writes nothing more")
     claim = bucket_claim(control_root, storage_options, bucket=bucket)
-    if claim is None or claim.get(PURGING) or not _names(claim, project=project, project_incarnation=project_incarnation, bucket=bucket):
+    if claim is None or claim.get(PURGING) or not _names(claim, project=project, project_uuid=project_uuid):
         raise ConcurrentModificationError(f"bucket {bucket!r} is no longer claimed by this create; it writes nothing more")
 
 
@@ -728,17 +676,15 @@ class PurgeHold(BaseModel):
     holder: str
 
 
-def purge_holder(kind: str, name: str, incarnation: str) -> str:
+def purge_holder(kind: str, name: str, uuid: str) -> str:
     """The stamp a purge writes on the claim it holds: what it purges for (``warehouse``, ``bucket`` or the tick's
-    ``catalog``), its name and the incarnation, so only a purge of the same object resumes one that died."""
-    return f"{kind}:{name}@{incarnation}"
+    ``catalog``), its name and the creation's uuid, so only a purge of the same object resumes one that died."""
+    return f"{kind}:{name}@{uuid}"
 
 
-def take_for_purge(
-    control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_incarnation: str | None, holder: str
-) -> PurgeHold | None:
+def take_for_purge(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_uuid: str | None, holder: str) -> PurgeHold | None:
     """Take the claim on ``bucket`` for a purge, stamping it :data:`PURGING` ``holder`` under the read's ETag, where it
-    names ``project`` at ``project_incarnation``; ``None`` where it is released, absent or names anyone else, and then the
+    names ``project`` at its creation ``project_uuid``; ``None`` where it is released, absent or names anyone else, and then the
     purge deletes no byte (ADR 0241 §10 Q1). A claim this holder stamped already is resumed: a purge that died left it.
 
     Bytes are deleted only under a claim the purge itself holds: a claim stamped refuses every create on the bucket
@@ -753,7 +699,7 @@ def take_for_purge(
         if stored is None:
             return None
         claim, etag = stored
-        if claim.get(RELEASED_AT) or not _names(claim, project=project, project_incarnation=project_incarnation, bucket=bucket):
+        if claim.get(RELEASED_AT) or not _names(claim, project=project, project_uuid=project_uuid):
             return None
         if stamp := claim.get(PURGING):
             if stamp != holder:
@@ -905,19 +851,20 @@ def record_key(warehouse_id: str) -> str:
     return _warehouse_key(warehouse_id)
 
 
-def delete_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> None:
-    """Remove the registry record. Idempotent: an absent record is a no-op, so a retried delete converges.
+def end_warehouse(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
+    """End the creation ``record`` names: kept as ended (``control_records.end_creation``, so the converge tick sweeps
+    its object) and its registry record removed, which frees its id. Idempotent: an absent record is a no-op, so a
+    retried delete converges.
 
     Deleting the RECORD is not deleting the BUCKET: the bytes survive unless the caller explicitly
     asked to purge them (Decision 3 — a catalog entry is recoverable, a customer's bucket is not, and
     the two never share a default). A record-less bucket is reported by the reconciler, not silently
     forgotten. The warehouse's trash is ended by the delete door before this runs (:func:`trash_owned_by`).
     """
+    end_creation(control_root, storage_options, tenancy.WAREHOUSE, record, now=datetime.now(UTC))
     fs, base = fs_and_base(control_root, storage_options)
-    try:
-        fs.delete_file(f"{base}/{_warehouse_key(warehouse_id)}")
-    except FileNotFoundError:
-        return
+    with suppress(FileNotFoundError):
+        fs.delete_file(f"{base}/{_warehouse_key(record['id'])}")
 
 
 def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[dict[str, Any]]:

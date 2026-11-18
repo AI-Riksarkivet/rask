@@ -234,7 +234,6 @@ async def create_namespace(
             segments=segments,
             uuid=minted,
             undo=_undo_create,
-            parent=fga_deps.door_fence_of(request),
         )
         await emit_control(
             control,

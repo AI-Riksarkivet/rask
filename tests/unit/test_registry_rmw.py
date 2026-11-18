@@ -72,7 +72,16 @@ def _client_error(code: str, status: int) -> ClientError:
 
 
 def _seed(tmp_path: Path, warehouse_id: str = "acme-wh", **fields: str) -> dict[str, str]:
-    record = {"id": warehouse_id, "bucket": "b-acme", "project": "acme", "status": "active", **fields}
+    record = {
+        "id": warehouse_id,
+        "bucket": "b-acme",
+        "project": "acme",
+        "status": "active",
+        "uuid": "a" * 32,
+        "project_uuid": "b" * 32,
+        "state": "live",
+        **fields,
+    }
     records.create_json(_root(tmp_path), StorageOptions(), f"_warehouses/{warehouse_id}.json", record)
     return record
 

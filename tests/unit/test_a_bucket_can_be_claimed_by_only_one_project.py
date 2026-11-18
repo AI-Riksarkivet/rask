@@ -35,28 +35,28 @@ def control_root(tmp_path: Path) -> str:
 
 
 def test_the_first_project_to_claim_a_bucket_gets_it(control_root: str) -> None:
-    warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", project_incarnation="a1", warehouse_id="wh-acme")
+    warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", project_uuid="a" * 32, warehouse_id="wh-acme")
 
     claim = warehouses.bucket_claim(control_root, StorageOptions(), bucket="acme-wh") or {}
     assert {k: v for k, v in claim.items() if k != warehouses.CLAIMED_AT} == {
         "bucket": "acme-wh",
         "project": "acme",
-        "project_incarnation": "a1",
+        "project_uuid": "a" * 32,
         "warehouse_id": "wh-acme",
     }
     assert claim[warehouses.CLAIMED_AT]
 
 
-@pytest.mark.parametrize(("project", "incarnation"), [("mallory", "m1"), ("acme", "a2")], ids=["another-project", "the-project-made-again-under-its-id"])
-def test_a_rival_project_is_refused_even_when_it_read_the_listing_first(control_root: str, project: str, incarnation: str) -> None:
+@pytest.mark.parametrize(("project", "creation"), [("mallory", "b" * 32), ("acme", "c" * 32)], ids=["another-project", "the-project-made-again-under-its-id"])
+def test_a_rival_project_is_refused_even_when_it_read_the_listing_first(control_root: str, project: str, creation: str) -> None:
     """The race itself: the rival's scan saw nothing, and the STORE still refuses it.
 
     Written as two claims with no listing in between, because that is what the window amounts to — the
     scan cannot see a record that does not exist yet, so its verdict carries no information about who
-    writes next. A project made again under a deleted one's id is another tenant (ADR 0241 §8 B3), and the bucket may
+    writes next. A project made again under a deleted one's id is another creation (ADR 0245), and the bucket may
     still hold the bytes of the one before.
     """
-    warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", project_incarnation="a1", warehouse_id="wh-acme")
+    warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", project_uuid="a" * 32, warehouse_id="wh-acme")
 
     with pytest.raises(NamespaceAlreadyExistsError, match="acme-wh"):
-        warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project=project, project_incarnation=incarnation, warehouse_id="wh-evil")
+        warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project=project, project_uuid=creation, warehouse_id="wh-evil")

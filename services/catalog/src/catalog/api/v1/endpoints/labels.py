@@ -40,13 +40,14 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import LabelDefinitionRequest, LabelledObjectsResponse, ObjectLabelsResponse, RemoveLabelRequest, SetLabelRequest
-from catalog.services import object_labels, table_claims, warehouses
+from catalog.services import object_labels, table_claims, tenancy, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.object_labels import Attachment, LabelDefinition, LabelScope
 from lakehouse import records, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import ControlAction
 from lakehouse.governed import fga
+from lakehouse.governed.tenancy import PROJECT
 from lakehouse.naming import CONTROL_ID_RE
 
 
@@ -258,7 +259,8 @@ async def _readable_project(id: str, settings: Settings, token: Caller | None, c
     """``id``, for a caller its project list shows the project to: a member, or the estate admin. Anyone else, and a
     project the registry does not hold, is answered the missing project's 404 ([[LH-587]])."""
     project = _project(id)
-    doors = [("can_list_all_projects", settings.fga_root_object), ("member", f"project:{project}")]
+    live = await tenancy.resolved(settings, PROJECT, project)
+    doors = [("can_list_all_projects", settings.fga_root_object), ("member", live.obj if live is not None else tenancy.nowhere(PROJECT))]
     try:
         await fga_deps.require_any_relation(client, settings, token, doors=doors)
     except PermissionDeniedError as exc:
@@ -269,8 +271,8 @@ async def _readable_project(id: str, settings: Settings, token: Caller | None, c
 async def _administered_project(id: str, settings: Settings, token: Caller | None, client: FgaClientDep) -> str:
     """``id``, for its project's admin; a project the registry does not hold is not found, after the gate."""
     project = _project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    return await _registered(settings, project)
+    await fga_deps.require_on_tenant(client, settings, token, relation="can_administer", kind=PROJECT, object_id=project)
+    return project
 
 
 async def _standing(settings: Settings, found: Sequence[Attachment]) -> list[tuple[Attachment, str]]:

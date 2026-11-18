@@ -26,12 +26,13 @@ from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBou
 from catalog.core.namespace import NO_WAREHOUSE, NamespaceConnections
 from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
-from catalog.services import dataplane, object_uuids, provenance_namespace, table_claims, warehouses
+from catalog.services import dataplane, object_uuids, provenance_namespace, table_claims, tenancy
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import trash
 from lakehouse.control_emit import ControlEmitter, NoopControlEmitter
 from lakehouse.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.governed import fga
+from lakehouse.governed.tenancy import WAREHOUSE
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.outage import store_refusal
@@ -49,6 +50,9 @@ class ServedWarehouse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     root_uri: str
+    #: The object OpenFGA names the warehouse by: its creation's (``warehouse:<uuid>``, ADR 0245), or the estate's own
+    #: warehouse's configured object.
+    obj: str
     #: The object store the root is reached at; ``None`` is the estate's ([[LH-067]]).
     endpoint: str | None = None
     deactivated: bool = False
@@ -94,17 +98,20 @@ async def _read_warehouse_root(settings: Settings, warehouse_id: str) -> ServedW
         InternalError: The record is there and is not JSON, which no retry mends.
     """
     if warehouse_id == settings.estate_warehouse:
-        return ServedWarehouse(root_uri=settings.root)
+        return ServedWarehouse(root_uri=settings.root, obj=settings.fga_default_warehouse_object)
     if not names_a_registered_warehouse(warehouse_id):
         return None
     try:
-        record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
+        tenant = await tenancy.resolved(settings, WAREHOUSE, warehouse_id, states=tenancy.SERVED)
     except (OSError, ValueError) as exc:
         log.warning("warehouse_lookup_failed", extra={"warehouse_id": warehouse_id, "error": str(exc)})
         raise store_refusal(exc, reading=f"reading warehouse {warehouse_id!r}", so="its names cannot be routed") from exc
-    if record is None:
+    if tenant is None:
         return None
-    return ServedWarehouse(root_uri=record["root_uri"], endpoint=record.get("endpoint") or None, deactivated=record.get("status", "active") != "active")
+    record = tenant.record
+    return ServedWarehouse(
+        root_uri=record["root_uri"], obj=tenant.obj, endpoint=record.get("endpoint") or None, deactivated=record.get("status", "active") != "active"
+    )
 
 
 def names_a_registered_warehouse(warehouse_id: str) -> bool:
@@ -185,7 +192,7 @@ async def _route_for(request: Request, settings: Settings) -> ServedWarehouse | 
     object_id = request.path_params.get("id")
     segments = parse_identifier(object_id) if object_id else []
     if not segments:
-        return ServedWarehouse(root_uri=settings.root)
+        return ServedWarehouse(root_uri=settings.root, obj=settings.fga_default_warehouse_object)
     return await require_active_warehouse(request, settings, segments[0])
 
 
@@ -250,13 +257,6 @@ async def get_provenance_namespace(request: Request, settings: SettingsDep) -> L
 ProvenanceNamespaceDep = Annotated[LanceNamespace | None, Depends(get_provenance_namespace)]
 
 
-def warehouse_object(settings: Settings, warehouse_id: str) -> str | None:
-    """The FGA object the warehouse a name's first segment names is governed as, or ``None`` for a segment no warehouse id can be."""
-    if warehouse_id == settings.estate_warehouse:
-        return settings.fga_default_warehouse_object
-    return f"warehouse:{warehouse_id}" if names_a_registered_warehouse(warehouse_id) else None
-
-
 class Resolver:
     """The objects a request's names are governed as, each name resolved once per request (ADR 0173 §7, [[LH-524]]).
 
@@ -314,9 +314,9 @@ class Resolver:
     async def object(self, kind: str, segments: list[str]) -> str | None:
         """The FGA object ``kind`` ``segments`` names (``table:<uuid>``, ``namespace:<uuid>``), or ``None`` when nothing has that name.
 
-        A namespace name of one segment is a warehouse ([[LH-593]]), governed as ``warehouse:<id>`` whether or not one
-        is registered under it: asked about a warehouse that is not there, OpenFGA answers as it does for one the
-        caller holds nothing on.
+        A namespace name of one segment is a warehouse ([[LH-593]]), governed as the object its live creation is named by
+        (``warehouse:<uuid>``, ADR 0245), read with the request's one resolution of the warehouse; ``None`` where no live
+        warehouse holds the id, which every caller is answered for as for any absent name.
 
         Raises:
             UnidentifiedObjectError: The object carries no uuid, which no door leaves.
@@ -325,7 +325,8 @@ class Resolver:
             resolved = await self.table(segments)
             return None if resolved.location is None else fga.table_object(resolved.require_uuid())
         if len(segments) == 1:
-            return warehouse_object(self._settings, segments[0])
+            served = await _resolve_warehouse_root(self._request, self._settings, segments[0])
+            return None if served is None else served.obj
         uuid = await self.namespace_uuid(segments)
         return None if uuid is None else fga.namespace_object(uuid)
 

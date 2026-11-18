@@ -75,7 +75,7 @@ def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_delete
     catalog, recorder = estate
     before = catalog.store.tuples()
     assert _naming(catalog, ALICE) == {
-        (fga.user_object(ALICE), "admin", "project:acme"),
+        (fga.user_object(ALICE), "admin", catalog.creation("project", "acme")),
         (fga.user_object(ALICE), "assignee", "role:stewards"),
         (fga.user_object(ALICE), "curator", "classification:pii"),
         (fga.user_object(ALICE), "event_reader", "estate:rask"),

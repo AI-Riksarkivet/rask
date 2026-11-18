@@ -37,6 +37,8 @@ _PRIMARY_BUCKET = "lance-catalog"
 
 #: The estate's own warehouse: the first segment of every name its own root holds.
 ESTATE = "lance_catalog"
+#: The project and its warehouse as OpenFGA names them, by the creations their records name (ADR 0245).
+ACME, WH_A = f"project:{'a' * 32}", f"warehouse:{'b' * 32}"
 
 #: The categories whose answer comes (wholly or partly) from OpenFGA — so an FGA outage must degrade
 #: EXACTLY these and nothing else. Kept as one named set rather than repeated literals: a new
@@ -121,11 +123,11 @@ class _Estate:
         # `bucket` stays `bkt-a` — that is the field the bucket-claim and orphan-bucket categories use.
         self.warehouse_root = f"file://{tmp_path / 'wh-a'}"
         (tmp_path / "wh-a").mkdir(parents=True, exist_ok=True)
-        proj_svc.put_project(self.control_root, StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "alice"})
+        proj_svc.put_project(self.control_root, StorageOptions(), {"id": "acme", "uuid": "a" * 32, "created_at": "t", "created_by": "alice"})
         wh_svc.put_warehouse(
             self.control_root,
             StorageOptions(),
-            {"id": "wh-a", "bucket": "bkt-a", "root_uri": self.warehouse_root, "project": "acme", "created_at": "t"},
+            {"id": "wh-a", "uuid": "b" * 32, "bucket": "bkt-a", "root_uri": self.warehouse_root, "project": "acme", "created_at": "t"},
         )
         # Each catalog holds its warehouse's own row, the estate's under its own id, and every name beneath begins with it.
         wh_svc.ensure_catalog_row(connect("dir", {"root": str(tmp_path / "data")}), ESTATE)
@@ -134,8 +136,8 @@ class _Estate:
         warehouse.create_namespace(CreateNamespaceRequest(id=["wh-a", "team_ns"]))
         self.fga = _FakeGrants(
             {
-                "project:acme": [("user:alice", "admin")],
-                "warehouse:wh-a": [("user:alice", "owner"), ("project:acme", "project")],
+                ACME: [("user:alice", "admin")],
+                WH_A: [("user:alice", "owner"), (ACME, "project")],
             }
         )
         self.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a"])
@@ -223,13 +225,13 @@ def test_unreferenced_projects_fires_on_a_record_with_no_tuples(tmp_path: Path, 
     """The mirror image of a ghost, and just as undeletable: the record exists, so every door 404s no
     one — but no tuple grants anyone `can_administer`, so the delete door can never be passed either.
 
-    Its incarnation token (ADR 0241) is bookkeeping and grants no one anything, so it does not count."""
+    Its last-admin token (ADR 0213) is bookkeeping and grants no one anything, so it does not count."""
     estate = _Estate(tmp_path)
-    proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
-    estate.fga.tuples["project:orphaned"] = [("revision:i1.3", "revision")]
+    proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "uuid": "c" * 32, "created_at": "t", "created_by": "gone"})
+    estate.fga.tuples[f"project:{'c' * 32}"] = [("revision:3", "revision")]
     report = estate.run(monkeypatch)
     assert [p.id for p in report.unreferenced_projects] == ["orphaned"]
-    assert [p.id for p in mod._unreferenced_projects({"acme"}, {"acme": 1})] == []  # ...and silent when tuples exist
+    assert [p.id for p in mod._unreferenced_projects({"a" * 32: "acme"}, {"a" * 32: 1})] == []  # ...and silent when tuples exist
 
 
 # --------------------------------------------------------------------------- #

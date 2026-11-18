@@ -37,7 +37,6 @@ from lance_namespace import (
     InvalidInputError,
     LanceNamespace,
     NamespaceAlreadyExistsError,
-    TableNotFoundError,
 )
 
 from catalog.api import fga_deps
@@ -46,13 +45,13 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, PolicyResponse, PolicyUnset, ProjectPoliciesResponse
-from catalog.services import incarnations, table_claims, warehouses
-from catalog.services import projects as project_registry
-from catalog.services.control_records import PROJECT_INCARNATION
+from catalog.services import table_claims, warehouses
+from catalog.services.control_records import PROJECT_UUID
 from lakehouse import history_fences, policy_fences, reclaim_marks, records
 from lakehouse import maintenance_policies as policies
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
+from lakehouse.governed.tenancy import PROJECT, made_under, warehouses_of
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CONTROL_ID_RE
@@ -172,10 +171,10 @@ def _response(record: dict[str, object]) -> PolicyResponse:
 
 
 async def _describe(
-    settings: Settings, *, kind: PolicyKind, key: str, canonical: str, uuid: str | None, incarnation: str | None = None
+    settings: Settings, *, kind: PolicyKind, key: str, canonical: str, uuid: str | None, project_uuid: str | None = None
 ) -> PolicyResponse | PolicyUnset:
     """Read one policy, once for all three rungs: its record, or :class:`PolicyUnset` where the object holds none. A
-    project's record is its only when it names ``incarnation``, the one standing (:func:`_of_incarnation`).
+    project's record is its only when it names ``project_uuid``, its live creation (:func:`_of_creation`).
 
     Each route establishes its object before this read, a table's or namespace's by resolving its name and a
     project's by reading its registry record, so an object that does not stand, or that its caller may not see,
@@ -183,7 +182,7 @@ async def _describe(
     """
     record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, key)
     if kind == "project":
-        record = _of_incarnation(record, key, incarnation)
+        record = _of_creation(record, project_uuid)
     if record is None:
         return PolicyUnset(kind=kind, id=canonical, uuid=uuid, set=False)
     # Named as the door was addressed: the name the record kept is the one its object had when it was set.
@@ -317,15 +316,11 @@ async def _namespace(id: str, ns: LanceNamespace, settings: Settings) -> fga_dep
     return await fga_deps.identify(ns, settings, "namespace", segments)
 
 
-def _of_incarnation(record: dict[str, Any] | None, project: str, incarnation: str | None) -> dict[str, Any] | None:
-    """``record``, the policy stored under ``project``'s id, where it was set by ``incarnation`` of the project, the one
-    standing; ``None`` for one an earlier incarnation left (ADR 0241 §9 P2), which is no policy of the tenant holding the
-    id now: it is neither read nor merged onto, and the converge tick reports it.
-
-    Raises:
-        InternalError: The record names no incarnation of its project.
-    """
-    if record is None or not incarnations.made_under(record, incarnation, obj=f"policy:project:{project}"):
+def _of_creation(record: dict[str, Any] | None, project_uuid: str | None) -> dict[str, Any] | None:
+    """``record``, the policy stored under a project's id, where it was set by the creation ``project_uuid`` of the
+    project, the live one; ``None`` for one an earlier creation left (ADR 0241 §9 P2, ADR 0245), which is no policy of the
+    tenant holding the id now: it is neither read nor merged onto, and the converge tick reports it."""
+    if record is None or not made_under(record, project_uuid):
         return None
     return record
 
@@ -363,14 +358,14 @@ async def set_project_policy(
     is refused with 409 — even if a rival claim somehow got past ``create_warehouse``'s guards, it must
     not become a policy governing (and destroying version history in) the other tenant's data."""
     project = _validated_project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    tenant = await fga_deps.require_on_tenant(client, settings, token, relation="can_administer", kind=PROJECT, object_id=project)
     so = settings.storage_options()
-    standing = await run_in_threadpool(incarnations.project_incarnation, settings.registry_root, so, project)
+    standing = tenant.uuid
     # Read whole ([[LH-572]]): a record that cannot be read is a bucket of this project the policy would leave on the
-    # defaults, or another project's claim on one it would govern. A record a dead tenant's create left is no warehouse of
-    # the incarnation standing (ADR 0241 §9 P2).
+    # defaults, or another project's claim on one it would govern. A record a dead creation's create left is no warehouse
+    # of the live one (ADR 0241 §9 P2, ADR 0245).
     registered = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
-    mine = incarnations.warehouses_of(registered, project, standing)
+    mine = warehouses_of(registered, standing)
     buckets = sorted({str(r["bucket"]) for r in mine if r.get("bucket") and (r.get("status") or "active") == "active"})
     if not buckets:
         raise InvalidInputError(
@@ -385,15 +380,15 @@ async def set_project_policy(
                 "contested; refusing to set a policy over another tenant's data (fix the warehouse "
                 "records first)"
             )
-    # The record names the incarnation that set it, and merges onto none an earlier incarnation of the id left.
+    # The record names the creation that set it, and merges onto none an earlier creation of the id left.
     record = await _set(
         settings,
         "project",
         project,
         lambda stored: {
-            **_record("project", project, body, _of_incarnation(stored, project, standing), uuid=None),
+            **_record("project", project, body, _of_creation(stored, standing), uuid=None),
             "buckets": buckets,
-            PROJECT_INCARNATION: standing,
+            PROJECT_UUID: standing,
         },
     )
     log.info("maintenance_policy_set", extra={"kind": "project", "id": project})
@@ -413,12 +408,10 @@ async def describe_project_policy(id: str, settings: SettingsDep, token: Current
     """The project's maintenance policy — admin-gated like set/delete (``project`` defines no
     reader-tier relation) — or ``set: false`` when none is set; a project the registry does not know is not found."""
     project = _validated_project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    # Read after the gate, so a caller who may not administer the project is refused alike whether it exists or not.
-    if (record := await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project)) is None:
-        raise TableNotFoundError(f"project not found: {project}")
-    incarnation = incarnations.require_incarnation(record, f"project:{project}")
-    return await _describe(settings, kind="project", key=project, canonical=project, uuid=None, incarnation=incarnation)
+    # Gated before the existence is told, so a caller who may not administer the project is refused alike whether it
+    # exists or not (``fga_deps.require_on_tenant``).
+    tenant = await fga_deps.require_on_tenant(client, settings, token, relation="can_administer", kind=PROJECT, object_id=project)
+    return await _describe(settings, kind="project", key=project, canonical=project, uuid=None, project_uuid=tenant.uuid)
 
 
 @project_router.post("/{id}/policy/delete", response_model_exclude_none=True)
@@ -426,7 +419,7 @@ async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentTo
     """Remove the project's maintenance policy (idempotent) — admin-gated. Answers 409 (code 14, retryable) while a
     reclaim of a table it governs runs."""
     project = _validated_project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await fga_deps.require_on_tenant(client, settings, token, relation="can_administer", kind=PROJECT, object_id=project)
     return await _delete(settings, control, token, "project", key=project, canonical=project)
 
 
@@ -448,19 +441,19 @@ def _with_current_name(store: ClaimStore, record: dict[str, Any]) -> dict[str, A
     return None if name is None else {**record, "id": name}
 
 
-def _scoped_to_project(record: dict[str, Any], *, warehouse_ids: frozenset[str], project: str, incarnation: str | None) -> bool:
-    """Whether one stored policy record governs data inside ``project``'s standing ``incarnation``.
+def _scoped_to_project(record: dict[str, Any], *, warehouse_ids: frozenset[str], project: str, project_uuid: str | None) -> bool:
+    """Whether one stored policy record governs data inside ``project``'s live creation ``project_uuid``.
 
-    A ``project`` record matches by ID and incarnation and by nothing else — matching it on buckets would surface a rival
+    A ``project`` record matches by ID and creation and by nothing else — matching it on buckets would surface a rival
     tenant's project record the moment two registry entries contest a bucket (the state
-    ``set_project_policy`` refuses at write time, and a read must not resurrect it), and one an earlier incarnation of
-    the id left is the dead tenant's (:func:`_of_incarnation`).
+    ``set_project_policy`` refuses at write time, and a read must not resurrect it), and one an earlier creation of the
+    id left is the dead tenant's (:func:`_of_creation`).
 
     A table/namespace record matches when its object's name begins with one of the project's warehouses ([[LH-593]]).
     """
     kind = record.get("kind")
     if kind == "project":
-        return record.get("id") == project and _of_incarnation(record, project, incarnation) is not None
+        return record.get("id") == project and _of_creation(record, project_uuid) is not None
     if kind not in ("table", "namespace"):
         return False
     segments = parse_identifier(str(record.get("id") or ""))
@@ -485,16 +478,16 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
     by the registry primitives themselves.
     """
     project = _validated_project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    tenant = await fga_deps.require_on_tenant(client, settings, token, relation="can_administer", kind=PROJECT, object_id=project)
     so = settings.storage_options()
-    standing = await run_in_threadpool(incarnations.project_incarnation, settings.registry_root, so, project)
+    standing = tenant.uuid
     registered = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
-    mine = incarnations.warehouses_of(registered, project, standing)
+    mine = warehouses_of(registered, standing)
     buckets = sorted({str(r["bucket"]) for r in mine if r.get("bucket")})
     warehouse_ids = sorted({str(r["id"]) for r in mine if r.get("id")})
     records = await run_in_threadpool(policies.list_policies, settings.registry_root, so)
     named = await run_in_threadpool(_named_now, settings, records)
-    scoped = [r for r in named if _scoped_to_project(r, warehouse_ids=frozenset(warehouse_ids), project=project, incarnation=standing)]
+    scoped = [r for r in named if _scoped_to_project(r, warehouse_ids=frozenset(warehouse_ids), project=project, project_uuid=standing)]
     scoped.sort(key=lambda r: (str(r.get("kind")), str(r.get("id"))))
     log.info("maintenance_policies_listed", extra={"project": project, "policies": len(scoped), "buckets": len(buckets), "warehouses": len(warehouse_ids)})
     return ProjectPoliciesResponse(project=project, buckets=buckets, warehouses=warehouse_ids, policies=[_response(r) for r in scoped])

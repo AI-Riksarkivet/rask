@@ -30,6 +30,8 @@ AUTH = {"Authorization": "Bearer t"}
 ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
 WAREHOUSE = "acme-bucket"
 PROJECT = "acme"
+#: The project and its warehouse as OpenFGA names them, by the creations their records name (ADR 0245).
+PROJECT_OBJ, WAREHOUSE_OBJ = f"project:{'a' * 32}", f"warehouse:{'b' * 32}"
 SALES = f"{WAREHOUSE}$sales"
 ORDERS = f"{SALES}$orders"
 REFUNDS = f"{SALES}$refunds"
@@ -63,12 +65,14 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
     client.app.state.oidc = MagicMock()
     store = Grants()
     client.app.state.fga = store
-    projects.put_project(root, StorageOptions(), {"id": PROJECT, "created_at": "t"})
+    projects.put_project(root, StorageOptions(), {"id": PROJECT, "uuid": "a" * 32, "created_at": "t"})
     warehouses.put_warehouse(
-        root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
+        root,
+        StorageOptions(),
+        {"id": WAREHOUSE, "uuid": "b" * 32, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"},
     )
     warehouses.ensure_catalog_row(client.app.dependency_overrides[get_namespace](), WAREHOUSE)
-    store.grant("alice", ("can_create_namespace", f"warehouse:{WAREHOUSE}"), ("can_administer", f"project:{PROJECT}"), ("member", f"project:{PROJECT}"))
+    store.grant("alice", ("can_create_namespace", WAREHOUSE_OBJ), ("can_administer", PROJECT_OBJ), ("member", PROJECT_OBJ))
     act_as(client, "alice")
     assert client.post(f"/v1/namespace/{SALES}/create", json={}, headers=AUTH).status_code == 200
     sales = _object(client, "namespace", SALES)
@@ -77,8 +81,8 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
         assert client.post(f"/v1/table/{table}/create?mode=create", content=_rows(), headers=ARROW).status_code == 200
         store.grant("alice", ("can_label", _object(client, "table", table)), ("can_get_metadata", _object(client, "table", table)))
     orders, refunds = _object(client, "table", ORDERS), _object(client, "table", REFUNDS)
-    store.grant("bob", ("can_label", orders), ("can_get_metadata", orders), ("member", f"project:{PROJECT}"))
-    store.grant("carol", ("can_get_metadata", refunds), ("member", f"project:{PROJECT}"))
+    store.grant("bob", ("can_label", orders), ("can_get_metadata", orders), ("member", PROJECT_OBJ))
+    store.grant("carol", ("can_get_metadata", refunds), ("member", PROJECT_OBJ))
     yield store
 
 

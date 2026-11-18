@@ -290,6 +290,17 @@ class GovernedCatalog:
         """The OpenFGA user the person ``user_id`` is, the one a tuple naming them carries."""
         return f"user:{self.IDP}~{user_id}"
 
+    def creation(self, kind: str, object_id: str) -> str:
+        """The object OpenFGA names the live ``kind`` ``object_id`` by: ``project:<uuid>`` or ``warehouse:<uuid>``, the
+        uuid its registry record names (ADR 0245)."""
+        from catalog.services import projects, warehouses
+
+        settings = self.client.app.state.settings
+        read = projects.get_project_record if kind == "project" else warehouses.get_warehouse_record
+        record = read(settings.registry_root, settings.storage_options(), object_id)
+        assert record is not None, f"no {kind} record for {object_id!r}"
+        return f"{kind}:{record['uuid']}"
+
     def bearer(self, user_id: str) -> dict[str, str]:
         """The headers of a request the person ``user_id`` signs in for."""
         return {"Authorization": f"Bearer {self._dex.mint(user_id, connector=self.CONNECTOR, audience='lance-catalog')}"}

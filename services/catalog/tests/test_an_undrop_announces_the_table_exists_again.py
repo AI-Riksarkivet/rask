@@ -86,6 +86,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         trash_grace_days=7,
         fga_enabled=False,
         estate_warehouse="lance_catalog",
+        fga_default_warehouse_object="warehouse:lance_catalog",
         root=str(tmp_path / "data"),
     )
     for dependency, value in (

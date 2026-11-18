@@ -2385,51 +2385,32 @@ tests:
         object: classification:pii
         assertions: { can_apply: false, can_grant_apply: false }
 
-  - name: an incarnation's marker and token are bookkeeping and grant nothing
-    # ADR 0241. A project's or warehouse's id may be held again once it is deleted, so each incarnation keeps its marker
-    # `revision:<incarnation>` and its token `revision:<incarnation>.<n>` under `revision`, beside the drift repair's
-    # token and a declared grant's evidence; an admin revoke moves the token in the Write that deletes the admin tuple
-    # ([[LH-434]]). A door's ticket is a `fence` object naming the project or warehouse. No permission reads either: a
-    # revision is no subject of any rung, a ticket's object is no object any rung is asked of, and an admin's rungs stand
-    # beside them.
+  - name: a project's administration token and a declared grant's evidence are bookkeeping and grant nothing
+    # ADR 0213, ADR 0245. A project keeps the token `revision:<n>` an admin removal moves in the Write that deletes the
+    # admin tuple ([[LH-434]]), and a declared grant's evidence `revision:git-<hex>` stands beside the grant git wrote.
+    # No permission reads either: a revision is no subject of any rung, and an admin's rungs stand beside them.
     tuples:
-      - { user: revision:i1, relation: revision, object: project:solo }
-      - { user: revision:i1.1, relation: revision, object: project:solo }
-      - { user: project:solo, relation: ticket, object: fence:a1 }
-      - { user: fence:open, relation: open, object: fence:a1 }
-      - { user: warehouse:solo, relation: ticket, object: fence:b1 }
+      - { user: revision:1, relation: revision, object: project:solo }
       - { user: revision:git-b2, relation: revision, object: estate:solo_estate }
+      - { user: revision:git-w1, relation: revision, object: warehouse:solo }
       - { user: user:sole_admin, relation: admin, object: project:solo }
-      - { user: revision:w1.0, relation: revision, object: warehouse:solo }
       - { user: project:solo, relation: project, object: warehouse:solo }
     check:
-      - user: revision:i1.1
+      - user: revision:1
         object: project:solo
         assertions: { revision: true, admin: false, member: false, can_administer: false, can_grant_admin: false, can_read_assignments: false }
       - user: user:sole_admin
         object: project:solo
         assertions: { revision: false, can_administer: true, can_grant_admin: true }
-      - user: revision:w1.0
+      - user: revision:git-w1
         object: warehouse:solo
         assertions: { revision: true, owner_effective: false, reader_effective: false, can_get_metadata: false, manage_grants: false }
       - user: user:sole_admin
         object: warehouse:solo
         assertions: { revision: false, owner_effective: true, can_grant_reader: true }
       - user: project:solo
-        object: fence:a1
-        assertions: { ticket: true, open: false }
-      - user: fence:open
-        object: fence:a1
-        assertions: { open: true, ticket: false }
-      - user: fence:open
-        object: project:solo
-        assertions: { revision: false, admin: false, member: false, can_administer: false }
-      - user: project:solo
         object: warehouse:solo
         assertions: { revision: false, owner_effective: false, reader_effective: false, can_get_metadata: false, manage_grants: false }
-      - user: project:solo
-        object: project:solo
-        assertions: { revision: false, admin: false, member: false, can_administer: false }
       - user: revision:git-b2
         object: estate:solo_estate
         assertions: { revision: true, admin: false, operator: false, owner: false, can_create_project: false }

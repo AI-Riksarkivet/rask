@@ -64,11 +64,10 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> t
             "status": "active",
             "created_at": datetime.now(UTC).isoformat(),
         }
-        warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), record)
+        warehouses.put_warehouse(settings.registry_root, settings.storage_options(), record)
         warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": settings.root}), warehouse)
-        # Born, as its create door bears it (ADR 0241): its incarnation's marker and token, beside its tenancy edge.
-        born = (f"revision:{record['incarnation']}", f"revision:{record['incarnation']}.0")
-        catalog.store.write(*((user, "revision", f"warehouse:{warehouse}") for user in born), (f"project:{PROJECT}", "project", f"warehouse:{warehouse}"))
+        # Live, as its create door leaves it (ADR 0245): its tenancy edge, between the two creations.
+        catalog.store.write((catalog.creation("project", PROJECT), "project", catalog.creation("warehouse", warehouse)))
     for name in (f"{HERE}$sales", f"{HERE}$gone", f"{ELSEWHERE}$far"):
         _ok(catalog, "POST", f"/v1/namespace/{name}/create", json={})
     uuids = {

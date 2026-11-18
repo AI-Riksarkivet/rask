@@ -409,9 +409,9 @@ def test_a_projects_hold_governs_its_buckets_table_where_the_policies_are_kept_a
     apart = f"{bucket}-policies"
     s3.create_bucket(Bucket=apart)
     monkeypatch.setenv("MAINTENANCE_POLICY_ROOT", f"s3://{apart}")
-    hold = {"kind": "project", "id": "acme", "project_incarnation": "a1", "buckets": [bucket], "cleanup_enabled": False}
+    hold = {"kind": "project", "id": "acme", "project_uuid": "a" * 32, "buckets": [bucket], "cleanup_enabled": False}
     maintenance_policies.put_policy(f"s3://{apart}", store, hold)
-    s3.put_object(Bucket=bucket, Key=f"_warehouses/bucket-claims/{bucket}.json", Body=b'{"project": "acme", "project_incarnation": "a1"}')
+    s3.put_object(Bucket=bucket, Key=f"_warehouses/bucket-claims/{bucket}.json", Body=json.dumps({"project": "acme", "project_uuid": "a" * 32}).encode())
     held = location_claims.holder(location_claims.ClaimStore(control_root=f"s3://{bucket}", storage_options=store), task.location)
     assert held is not None
 

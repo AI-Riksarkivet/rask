@@ -23,6 +23,9 @@ from typing import Final
 TRASH: Final = "_trash"
 PROJECTS: Final = "_projects"
 WAREHOUSES: Final = "_warehouses"
+#: An ended creation of a project or a warehouse, ``<kind>/<uuid>.json``, kept until the converge tick has swept what a
+#: write racing its delete left on its object (ADR 0245).
+ENDED: Final = "_ended"
 POLICIES: Final = "_policies"
 PROTECTION: Final = "_protection"
 BASES: Final = "_bases"

@@ -17,14 +17,17 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
+from contextlib import suppress
+from datetime import datetime
 from enum import StrEnum
 from typing import Final, Self
 
+import pyarrow.fs as pafs
 from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lakehouse import warehouse_records
+from lakehouse import control_prefixes
+from lakehouse.governed import tenancy
 from lakehouse.objectfs import fs_and_base
 from lakehouse.protection import is_protected
 from lakehouse.storage_options import StorageOptions
@@ -32,22 +35,12 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-#: The field of a project's or warehouse's record naming its incarnation (ADR 0241): minted when the record is, kept by
-#: every merge, and what each write of a tuple on its id is fenced by, since another tenant may hold the id once it is
-#: deleted.
-INCARNATION: Final = "incarnation"
-#: The field of a record that names a project (a warehouse's, a role's, a bucket's claim, a project's policy) naming the
-#: incarnation of the project it was made under (ADR 0241 §8 B3): the project's id may be held again by another tenant,
-#: so a record naming only the id would be the next tenant's the moment a create that raced the project's delete wrote it.
-PROJECT_INCARNATION: Final = warehouse_records.PROJECT_INCARNATION
-#: The field of a project's or warehouse's record naming the incarnation the converge tick found born (ADR 0241 §9 P5), so
-#: no later tick asks OpenFGA about it; written by the tick alone, kept by every merge.
-BORN: Final = "born"
-
-
-def new_incarnation() -> str:
-    """A fresh incarnation for a project or warehouse record."""
-    return uuid.uuid4().hex
+#: The field of a project's or warehouse's record naming the uuid its creation minted, which OpenFGA names it by, and the
+#: field of a record belonging to a project naming the uuid of that project's creation (ADR 0245).
+UUID: Final = tenancy.UUID
+PROJECT_UUID: Final = tenancy.PROJECT_UUID
+#: The field naming where a project's or warehouse's record is in its life (``creating``, ``live``, ``deleting``).
+STATE: Final = tenancy.STATE
 
 
 def write_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, str]) -> None:
@@ -115,6 +108,11 @@ class WarehouseRecord(_Record):
     id: str = Field(min_length=1)
     bucket: str = Field(min_length=1)
     project: str = Field(min_length=1)
+    #: The uuid this warehouse's creation minted, which OpenFGA names it by, and the uuid of the creation of its project
+    #: it was made in (ADR 0245): a record naming either not is not one this catalog wrote, and does not parse.
+    uuid: str = Field(pattern=rf"^{tenancy.UUID_PATTERN}$")
+    project_uuid: str = Field(pattern=rf"^{tenancy.UUID_PATTERN}$")
+    state: tenancy.State
     #: The warehouse's delete profile (ADR 0146); absent where it takes the estate's grace period. Declared because a
     #: drop under the warehouse acts on it, so a record whose profile cannot be read is refused at the read rather than
     #: read as some other profile.
@@ -140,9 +138,9 @@ class BucketClaimRecord(_Record):
 
     bucket: str = Field(min_length=1)
     project: str = Field(min_length=1)
-    #: The incarnation of the project that claimed it (:data:`PROJECT_INCARNATION`): a tenant made again under the
+    #: The uuid of the creation of the project that claimed it (:data:`PROJECT_UUID`): a tenant made again under the
     #: project's id is another claimant.
-    project_incarnation: str = Field(min_length=1)
+    project_uuid: str = Field(pattern=rf"^{tenancy.UUID_PATTERN}$")
     warehouse_id: str = Field(min_length=1)
 
 
@@ -150,6 +148,12 @@ class ProjectRecord(_Record):
     """A tenant. Existence lives in the record, so the id is the whole of its identity."""
 
     id: str = Field(min_length=1)
+    #: The uuid this project's creation minted, which OpenFGA names it by (ADR 0245).
+    uuid: str = Field(pattern=rf"^{tenancy.UUID_PATTERN}$")
+    state: tenancy.State
+    #: The person seeded as its admin, which the converge tick writes where the create died before its seed; ``None``
+    #: with authorization off, where nothing is seeded.
+    admin: str | None = None
     #: The principal key of the caller who started its delete, while that delete is unfinished ([[LH-576]]).
     deleting_by: str | None = Field(default=None, min_length=1)
 
@@ -248,3 +252,62 @@ def validated(record: object, model: type[_Record], *, event: str, path: str) ->
     except ValidationError as exc:
         log.warning(event, extra={"path": path, "error": exc.errors(include_url=False)})
         return None
+
+
+class EndedCreation(BaseModel):
+    """A project's or a warehouse's creation its delete ended (ADR 0245): kept until the converge tick has swept what a
+    write racing the delete left on its object, then forgotten."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: tenancy.Kind
+    id: str
+    uuid: str = Field(pattern=rf"^{tenancy.UUID_PATTERN}$")
+    ended_at: str
+    #: Set by the first sweep that found nothing on the object; the sweep past the converge tick's bound forgets it.
+    swept_at: str | None = None
+
+
+def ended_key(kind: tenancy.Kind, uuid: str) -> str:
+    """Where the ended creation ``uuid`` of a ``kind`` is kept."""
+    return f"{control_prefixes.ENDED}/{kind}/{uuid}.json"
+
+
+def end_creation(root_uri: str, storage_options: StorageOptions, kind: tenancy.Kind, record: dict[str, str], *, now: datetime) -> None:
+    """Keep the creation ``record`` names as ended, before its registry record is removed, so the converge tick sweeps
+    its object whatever wrote on it after the delete read it. Unconditional: a uuid is ended once, by its own delete.
+    Blocking."""
+    ended = EndedCreation(kind=kind, id=str(record["id"]), uuid=str(record[UUID]), ended_at=now.isoformat())
+    write_json(root_uri, storage_options, ended_key(kind, ended.uuid), ended.model_dump(mode="json", exclude_none=True))
+
+
+def read_ended(root_uri: str, storage_options: StorageOptions) -> tuple[list[EndedCreation], list[str]]:
+    """Every ended creation kept, and the path of each that is there and cannot be read as one. Blocking."""
+    fs, base = fs_and_base(root_uri, storage_options)
+    out: list[EndedCreation] = []
+    unreadable: list[str] = []
+    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{control_prefixes.ENDED}", allow_not_found=True, recursive=True)):
+        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
+            continue
+        try:
+            with fs.open_input_stream(info.path) as stream:
+                out.append(EndedCreation.model_validate_json(stream.readall()))
+        except FileNotFoundError:
+            continue
+        except (ValidationError, ValueError, OSError) as exc:
+            log.warning("ended_creation_unreadable", extra={"path": info.path, "error": str(exc)[:300]})
+            unreadable.append(info.path)
+    return out, unreadable
+
+
+def mark_swept(root_uri: str, storage_options: StorageOptions, ended: EndedCreation, *, now: datetime) -> None:
+    """Record that a sweep of ``ended``'s object found nothing standing. Blocking."""
+    swept = ended.model_copy(update={"swept_at": now.isoformat()})
+    write_json(root_uri, storage_options, ended_key(ended.kind, ended.uuid), swept.model_dump(mode="json", exclude_none=True))
+
+
+def forget_ended(root_uri: str, storage_options: StorageOptions, ended: EndedCreation) -> None:
+    """Forget ``ended`` once no write can still land on its object. Idempotent. Blocking."""
+    fs, base = fs_and_base(root_uri, storage_options)
+    with suppress(FileNotFoundError):
+        fs.delete_file(f"{base}/{ended_key(ended.kind, ended.uuid)}")

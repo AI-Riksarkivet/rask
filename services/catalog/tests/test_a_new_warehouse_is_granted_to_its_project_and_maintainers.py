@@ -17,6 +17,7 @@ import pytest
 
 from catalog.api import fga_deps
 from catalog.core.config import Settings
+from catalog.services import tenancy
 from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
@@ -50,7 +51,7 @@ def _fga_settings(**overrides: object) -> Settings:
 
 
 async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
-    """Run `fn` with the birth (`fga.bear`, ADR 0241) stubbed, and return the tuples it tried to write with it.
+    """Run `fn` with the Write stubbed, and return the tuples it tried to write.
 
     This replaces an `inspect.getsource(...)` string match. That assertion broke the moment the tuple
     set was extracted into `cascade_tuples` for the backfill to share — while the BEHAVIOUR it was
@@ -58,16 +59,21 @@ async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
     """
     seen: list[fga.ClientTuple] = []
 
-    async def _capture(_client, _obj, _incarnation, tuples, **_kw) -> bool:
+    async def _capture(_client, tuples, **_kw) -> None:
         seen.extend(tuples)
-        return True
 
-    monkeypatch.setattr(fga, "bear", _capture)
+    monkeypatch.setattr(fga, "write_tuples", _capture)
     await fn()
     return seen
 
 
-def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+#: The project's and the warehouse's records, each naming its creation (ADR 0245), and their objects.
+ACME = {"id": "acme", "uuid": "a" * 32, "state": "live"}
+WH1 = {"id": "wh1", "uuid": "b" * 32, "project": "acme", "project_uuid": "a" * 32, "state": "live"}
+PROJECT_OBJ, WAREHOUSE_OBJ = f"project:{ACME['uuid']}", f"warehouse:{WH1['uuid']}"
+
+
+def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openfga_store: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
     """A repair writes the warehouse's project edge and the declared maintainer's rung, takes the rung back from each of the
     release's own accounts it no longer declares, leaving that account's other grants and a client's door-made rung as they
     are ([[XC-164]], [[LH-563]]).
@@ -78,30 +84,30 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     declared = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-maintenance")
     dropped = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-lineage")
     client = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-a-tenant-service")
-    # The project as its door bore it (ADR 0241): the edge naming it is written under a fence of it.
-    born = (("revision:p1", "revision", "project:acme"), ("revision:p1.0", "revision", "project:acme"))
-    openfga_store.write(*born, (dropped, "maintenance", "warehouse:wh1"), (dropped, "reader", "warehouse:wh1"), (client, "maintenance", "warehouse:wh1"))
+    openfga_store.write((dropped, "maintenance", WAREHOUSE_OBJ), (dropped, "reader", WAREHOUSE_OBJ), (client, "maintenance", WAREHOUSE_OBJ))
     settings = _fga_settings(
         LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"],
         LANCE_OWN_ACCOUNTS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance", "kubernetes~system:serviceaccount:rask:rask-sa-lineage"],
     )
 
+    # The project's live creation, as the registry answers it.
+    async def _acme(_settings: Settings, _kind: str, _id: str) -> tenancy.Tenant:
+        return tenancy.Tenant(kind="project", id="acme", obj=PROJECT_OBJ, record=ACME)
+
+    monkeypatch.setattr(tenancy, "resolved", _acme)
+    warehouse = tenancy.Tenant(kind="warehouse", id="wh1", obj=WAREHOUSE_OBJ, record=WH1)
+
     async def _repair() -> None:
         async with fga.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
-            await fga_deps.converge_warehouse_grants(
-                store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill", incarnation="i1", project_incarnation="p1"
-            )
+            await fga_deps.converge_warehouse_grants(store, settings, warehouse=warehouse, actor="system:warehouse-grant-backfill")
 
     asyncio.run(_repair())
 
     assert openfga_store.tuples() == {
-        *born,
-        ("revision:i1", "revision", "warehouse:wh1"),
-        ("revision:i1.0", "revision", "warehouse:wh1"),
-        ("project:acme", "project", "warehouse:wh1"),
-        (declared, "maintenance", "warehouse:wh1"),
-        (dropped, "reader", "warehouse:wh1"),
-        (client, "maintenance", "warehouse:wh1"),
+        (PROJECT_OBJ, "project", WAREHOUSE_OBJ),
+        (declared, "maintenance", WAREHOUSE_OBJ),
+        (dropped, "reader", WAREHOUSE_OBJ),
+        (client, "maintenance", WAREHOUSE_OBJ),
     }
 
 
@@ -116,7 +122,7 @@ _MACHINE = ServicePrincipal.for_account("system:serviceaccount:etl:loader")
 @pytest.mark.parametrize(
     ("creator", "owners"),
     [
-        pytest.param(_PERSON, [("user:dex~alice", "owner", "warehouse:wh1")], id="a-person-owns-the-warehouse-they-create"),
+        pytest.param(_PERSON, [("user:dex~alice", "owner", WAREHOUSE_OBJ)], id="a-person-owns-the-warehouse-they-create"),
         pytest.param(_MACHINE, [], id="a-machine-owns-nothing-its-project-administers-what-it-creates"),
     ],
 )
@@ -136,12 +142,14 @@ async def test_creating_a_warehouse_grants_it(monkeypatch, creator: PersonPrinci
     settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
 
     seen = await _captured_tuples(
-        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, creator, warehouse_id="wh1", project="acme", incarnation="i1", fences=[]),
+        lambda: fga_deps.seed_warehouse(
+            cast("OpenFgaClient", object()), settings, fga_deps.warehouse_owner(creator), warehouse=WH1, project=ACME, actor=creator.subject
+        ),
         monkeypatch,
     )
 
     assert [(t.user, t.relation, t.object) for t in seen] == [
         *owners,
-        ("project:acme", "project", "warehouse:wh1"),
-        ("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-maintenance", "maintenance", "warehouse:wh1"),
+        (PROJECT_OBJ, "project", WAREHOUSE_OBJ),
+        ("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-maintenance", "maintenance", WAREHOUSE_OBJ),
     ]

@@ -100,9 +100,10 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
 
 def test_create_warehouse_record_second_mint_refused(tmp_path: Any) -> None:
     root, so = _root(tmp_path), StorageOptions()
-    warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b", "root_uri": "s3://b", "project": "acme", "created_at": "t"})
+    made = {"uuid": "a" * 32, "project_uuid": "b" * 32, "state": "live"}
+    warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b", "root_uri": "s3://b", "project": "acme", "created_at": "t", **made})
     with pytest.raises(records.RecordExistsError):
-        warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b2", "root_uri": "s3://b2", "project": "evil", "created_at": "t"})
+        warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b2", "root_uri": "s3://b2", "project": "evil", "created_at": "t", **made})
     winner = warehouses.get_warehouse(root, so, "wh-a")
     assert winner is not None, "the refused second mint must leave the FIRST record standing, not delete it"
     assert winner["project"] == "acme"

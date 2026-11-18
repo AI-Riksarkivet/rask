@@ -49,6 +49,8 @@ from typing import TYPE_CHECKING
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from lakehouse.governed import tenancy
+from lakehouse.governed.tenancy import PROJECT, PROJECT_UUID, UUID, WAREHOUSE
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, rebuild_tenancy
 
 
@@ -108,12 +110,18 @@ def _warehouse_tenancy(record: dict[str, str]) -> RebuiltTuple | None:
     `seed_warehouse` writes this relation directly for the same reason, and its being a plain pointer
     rather than a hierarchy edge is why rebuilding it does not touch the TID251 banned-api entry on
     `lakehouse.governed.fga.hierarchy_edge_tuples`, whose closed set of callers is about
-    `parent`/`child` pairs.
+    `parent`/`child` pairs. It names the creations the record names, the warehouse's and its project's (ADR 0245); the
+    catalog writes it only where both stand live.
     """
-    warehouse, project = record.get("id"), record.get("project")
-    if not warehouse or not project:
+    warehouse, project, uuid, project_uuid = record.get("id"), record.get("project"), record.get(UUID), record.get(PROJECT_UUID)
+    if not warehouse or not project or not tenancy.is_uuid(uuid) or not tenancy.is_uuid(project_uuid):
         return None
-    return RebuiltTuple(user=f"project:{project}", relation="project", object=f"warehouse:{warehouse}", justified_by=f"_warehouses/{warehouse}.json")
+    return RebuiltTuple(
+        user=tenancy.object_of(PROJECT, str(project_uuid)),  # noqa: TID251 — the edge a record justifies, named by its creations
+        relation="project",
+        object=tenancy.object_of(WAREHOUSE, str(uuid)),  # noqa: TID251
+        justified_by=f"_warehouses/{warehouse}.json",
+    )
 
 
 def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[RebuiltTuple], dict[str, str]]:
@@ -141,10 +149,15 @@ def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[Rebuil
         if record.get("project") not in stranded:
             continue
         if (pointer := _warehouse_tenancy(record)) is None:
-            unjustified[f"warehouse:{record.get('id')}"] = "the record names no project, so its tenancy is unknown"
+            unjustified[f"warehouse:{record.get('id')}"] = "the record names no project or no creation, so its tenancy is unknown"
             continue
         planned.append(pointer)
     return planned, unjustified
+
+
+def _warehouse_of(edge: RebuiltTuple) -> str:
+    """The id of the warehouse whose record justified ``edge``."""
+    return edge.justified_by.removeprefix("_warehouses/").removesuffix(".json")
 
 
 async def rebuild_tuples(settings: MaintenanceSettings, *, report: ReconcileReport, sources: Sources) -> RebuildReport:
@@ -165,7 +178,7 @@ async def rebuild_tuples(settings: MaintenanceSettings, *, report: ReconcileRepo
         out.written = planned
         return out
     try:
-        answered = await run_in_threadpool(rebuild_tenancy, settings, [edge.object.removeprefix("warehouse:") for edge in planned])
+        answered = await run_in_threadpool(rebuild_tenancy, settings, [_warehouse_of(edge) for edge in planned])
     except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
         log.warning("tuple_rebuild_refused_by_the_catalog", extra={"error": str(exc), "planned": len(planned)})
         out.error = str(exc)

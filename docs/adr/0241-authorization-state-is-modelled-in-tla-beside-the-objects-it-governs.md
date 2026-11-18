@@ -16,6 +16,15 @@ purger holds, an ended record's id is taken only once its claim is released and 
 its bucket, one unreadable record stops no tick, a purge is audited before and after it, and a bucket is released holding
 nothing, to no create that outlived its claim.
 
+**Superseded in part by ADR 0245** (2026-11-18): projects and warehouses are named in OpenFGA by the uuid each create
+mints, so the container part of this ADR is superseded: §1's container part and its guards, §5 F1's rejection of naming
+by a uuid and F1/F3's fixes (the incarnation token, the second ask), §7 (the fence, its ticket and the drain), §8 B1 to
+B5 (the ticket object, the authorize-first fence, the ticket bound and sweep, the parent incarnation, the convergence's
+birth), §9's ticket index, the ended warehouse record and the dead tenant's purge by record (G21, G20 as written), and
+§10 Q2's ended key (G23). What stands: the table part, the converge part (G5, G13), the bucket half (G19, G22, G24, §9's
+claim release, §10 Q1, Q3, Q5, Q6) and ADR 0213's last-admin guard, now on the project's creation. The sections below
+are kept as written; ADR 0245 says what replaced each.
+
 ## Context
 
 The models so far arbitrate the object store: a create, a drop, an undrop, a rename, a cascade, an erasure, a commit,
