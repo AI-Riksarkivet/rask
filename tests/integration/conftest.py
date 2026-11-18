@@ -3,7 +3,10 @@
 ``client`` injects a ``MagicMock(spec=LanceNamespace)`` via dependency override, so the tests on it
 exercise *our* layer only — routing, identifier parsing, request assembly, serialization, and error
 mapping — never lance's actual operations. ``real_ns_client`` runs the real ``dir`` namespace on
-``tmp_path``, and ``moto_url`` is an S3 endpoint the native Lance and Arrow clients can reach.
+``tmp_path``, and ``moto_url`` is an S3 endpoint the native Lance and Arrow clients can reach. ``estate`` is the catalog
+as deployed over ``moto_url``: every caller signed in through a loopback Dex, authorization on a real OpenFGA store of
+the test's own, a declaration mounted (``Estate.declare``) and the converge tick run on the app's own loop
+(``Estate.tick``); ``open_estate`` is the same catalog authenticating nobody.
 """
 
 from __future__ import annotations
@@ -12,19 +15,26 @@ import importlib.util
 import json
 import os
 import secrets
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import boto3
 import lance
 import pyarrow as pa
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, LanceNamespace
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
+from catalog.api import declaration_converge
+from catalog.api.ticks import Tick
+from catalog.services import warehouses
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
 from lakehouse.store_session import IssuedSession
@@ -279,3 +289,96 @@ def claim_described(client: TestClient, fake_ns: MagicMock) -> Callable[[str], s
         return minted
 
     return _claim
+
+
+#: The estate's own bucket, the people's Dex connector and the idp it maps to, and one of the release's own accounts
+#: (``LANCE_OWN_ACCOUNTS``), as :func:`estate` deploys the catalog.
+ESTATE_BUCKET = "estate"
+CONNECTOR, IDP = "local", "dex"
+MAINTENANCE = "kubernetes~system:serviceaccount:default:rask-sa-maintenance"
+
+
+class Estate:
+    """The catalog as deployed with a declaration mounted, and what a test reads it back through."""
+
+    def __init__(self, client: TestClient, store: Any, dex: Any, declaration: Path) -> None:  # noqa: ANN401 — root conftest's OpenFgaStore and DexIssuer
+        self.client = client
+        self.store = store
+        self._dex = dex
+        self._declaration = declaration
+
+    def declare(self, **declared: Any) -> None:
+        """Replace the declaration, as a reconcile of the chart's ConfigMap does."""
+        self._declaration.write_text(json.dumps(declared))
+
+    def tick(self) -> declaration_converge.ConvergeTick:
+        """One converge tick on the catalog app's own event loop, as its timer runs one; what the tick did."""
+        app = cast(FastAPI, self.client.app)
+        assert self.client.portal is not None, "the converge ticks inside the app's lifespan"
+        return self.client.portal.call(declaration_converge.tick, Tick(app, app.state.settings))
+
+    def bearer(self, user_id: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._dex.mint(user_id, connector=CONNECTOR, audience='lance-catalog')}"}
+
+    def record(self, warehouse_id: str) -> dict[str, str] | None:
+        settings = self.client.app.state.settings
+        return warehouses.get_warehouse(settings.registry_root, settings.storage_options(), warehouse_id)
+
+
+@contextmanager
+def _catalog(moto_url: str, declaration: Path, monkeypatch: pytest.MonkeyPatch, governed: dict[str, str]) -> Generator[TestClient]:
+    """The catalog over an emptied S3 store, ``declaration`` mounted (empty), under ``governed``'s auth settings."""
+    s3 = boto3.resource("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    for bucket in s3.buckets.all():
+        bucket.objects.all().delete()
+        bucket.delete()
+    s3.create_bucket(Bucket=ESTATE_BUCKET)
+    declaration.write_text("{}")
+    for key, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": f"s3://{ESTATE_BUCKET}",
+        "LANCE_S3_ENDPOINT": moto_url,
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        "LANCE_CONTROL_EMIT_ENABLED": "false",
+        "LANCE_DECLARATION_FILE": str(declaration),
+        **governed,
+    }.items():
+        monkeypatch.setenv(key, value)
+    from catalog.core.config import get_settings
+
+    get_settings.cache_clear()
+    from catalog.main import app
+
+    with TestClient(app) as client:
+        yield client
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def estate(moto_url: str, openfga_store: Any, dex_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Estate]:  # noqa: ANN401 — root conftest's fixtures
+    """The catalog as deployed: every caller authenticated, authorization on a real OpenFGA store of the test's own."""
+    governed = {
+        "RASK_OIDC_ENABLED": "true",
+        "RASK_OIDC_ISSUER": dex_issuer.issuer,
+        "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_IDP_ID": "dex",
+        "RASK_OIDC_CONNECTORS": json.dumps({CONNECTOR: IDP}),
+        "RASK_FGA_ENABLED": "true",
+        "RASK_FGA_API_URL": openfga_store.url,
+        "RASK_FGA_STORE_ID": openfga_store.store_id,
+        "RASK_FGA_MODEL_ID": openfga_store.model_id,
+        "LANCE_OWN_ACCOUNTS": json.dumps([MAINTENANCE]),
+    }
+    declaration = tmp_path / "declaration.json"
+    with _catalog(moto_url, declaration, monkeypatch, governed) as client:
+        yield Estate(client, openfga_store, dex_issuer, declaration)
+
+
+@pytest.fixture
+def open_estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Estate]:
+    """The catalog on a stack that authenticates nobody: no caller, no authorization store."""
+    declaration = tmp_path / "declaration.json"
+    with _catalog(moto_url, declaration, monkeypatch, {"RASK_OIDC_ENABLED": "false", "RASK_FGA_ENABLED": "false"}) as client:
+        yield Estate(client, None, None, declaration)

@@ -31,10 +31,12 @@ def _policy(kind: str = "table", id_: str = "db$t", uuid: str = TABLE_UUID, **fi
 
 
 def _project_policy(id_: str = "acme", buckets: list[str] | None = None, **fields: Any) -> dict[str, Any]:
-    # #84 shape: no uuid — a project record matches by its warehouse BUCKETS (resolved at set time).
+    # #84 shape: no uuid — a project record matches by its warehouse BUCKETS (resolved at set time), and names the
+    # incarnation of the project that set it (ADR 0241 §9 P2).
     return {
         "kind": "project",
         "id": id_,
+        "project_incarnation": f"{id_}-1",
         "buckets": buckets if buckets is not None else ["acme-wh"],
         "compact_enabled": True,
         **fields,

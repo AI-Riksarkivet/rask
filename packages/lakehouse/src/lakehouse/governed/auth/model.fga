@@ -60,10 +60,14 @@ type revision
 # BOOKKEEPING, NOT A RUNG: a door's fence ticket on a project or warehouse (ADR 0241), `<object> ticket fence:<hex>`,
 # written after the door asked its caller's authority and before it reads the object's incarnation, deleted by the Write
 # that makes its change, taken back when the door ends, and swept by the converge tick once older than a request runs.
-# Kept on an object of its own so nothing that reads the project or warehouse reads a ticket. No permission reads it.
+# Kept on an object of its own so nothing that reads the project or warehouse reads a ticket. Each ticket is written and
+# deleted with its index `fence:open open fence:<hex>`, which names one fixed party, so every ticket open in the estate
+# is one paged Read (OpenFGA reads a type-only object only beside a user): what the sweep reads (ADR 0241 §9 P5). No
+# permission reads either.
 type fence
   relations
     define ticket: [project, warehouse]
+    define open: [fence]
 
 # A project = a tenant. Holds its warehouses and its roles.
 type project
@@ -183,6 +187,9 @@ type estate
         define can_list_all_projects: owner
         # Finishing a project delete that another admin started and did not complete.
         define can_finish_project_delete: owner
+        # Purging what a dead tenant left (ADR 0241 §9 P3): a warehouse record made under a project incarnation that
+        # no longer stands, or one the converge tick ended, with its bucket's bytes and claim. No tenant administers it.
+        define can_purge_dead_tenant_warehouse: owner
         # Every `/management/v1/access/*` route: reading and WRITING the raw tuple store, the authorization state
         # of the whole estate, and offboarding a principal from it.
         define can_administer_authz: owner

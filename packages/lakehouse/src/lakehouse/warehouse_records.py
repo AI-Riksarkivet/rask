@@ -25,6 +25,10 @@ from lakehouse.storage_options import StorageOptions
 #: `catalog/services/warehouses.py`.
 REGISTRY_PREFIX = control_prefixes.WAREHOUSES
 _BUCKET_CLAIMS_PREFIX: Final = f"{REGISTRY_PREFIX}/bucket-claims"
+#: The field of a record naming a project (a warehouse's, a bucket's claim, a project's maintenance policy) that names the
+#: incarnation of the project it was made under (ADR 0241 §8 B3, §9 P2): a project's id may be held again by another
+#: tenant once it is deleted, so a record naming only the id would be the next tenant's.
+PROJECT_INCARNATION: Final = "project_incarnation"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "warehouse_record"
@@ -93,18 +97,32 @@ def warehouse_record(control_root: str, storage_options: StorageOptions, warehou
     return read_record(control_root, storage_options, f"{REGISTRY_PREFIX}/{warehouse_id}.json")
 
 
-def bucket_project(control_root: str, storage_options: StorageOptions, bucket: str) -> str | None:
-    """The project that owns ``bucket``, as the claim the catalog wrote when a warehouse first took the bucket records it;
-    ``None`` when no warehouse took it. A bucket is one project's, which the store arbitrates.
+def bucket_claimant(control_root: str, storage_options: StorageOptions, bucket: str) -> tuple[str, str] | None:
+    """The project that owns ``bucket`` and the incarnation of it that claimed it, as the claim the catalog wrote when a
+    warehouse first took the bucket records them; ``None`` when no warehouse took it, or its claim was released (the
+    catalog stamps ``released_at``, ADR 0241 §9 P3). A bucket is one project's, which the store arbitrates.
 
     Raises:
         ValueError: The claim cannot be read as one.
         OSError: The store failed the read.
     """
     claim = read_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
-    if claim is None:
+    if claim is None or claim.get("released_at"):
         return None
-    project = claim.get("project")
+    project, incarnation = claim.get("project"), claim.get(PROJECT_INCARNATION)
     if not isinstance(project, str) or not project:
         raise ValueError(f"the claim on bucket {bucket!r} names no project")
-    return project
+    if not isinstance(incarnation, str) or not incarnation:
+        raise ValueError(f"the claim on bucket {bucket!r} names no incarnation of project {project!r}")
+    return project, incarnation
+
+
+def bucket_project(control_root: str, storage_options: StorageOptions, bucket: str) -> str | None:
+    """The project that owns ``bucket`` (:func:`bucket_claimant`); ``None`` when no warehouse took it.
+
+    Raises:
+        ValueError: The claim cannot be read as one.
+        OSError: The store failed the read.
+    """
+    claimant = bucket_claimant(control_root, storage_options, bucket)
+    return None if claimant is None else claimant[0]

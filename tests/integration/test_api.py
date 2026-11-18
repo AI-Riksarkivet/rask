@@ -704,12 +704,15 @@ def test_project_policy_set_refused_on_a_cross_claimed_bucket(client: TestClient
     # resolve a bucket another project's warehouse also claims must be refused — never a retention policy
     # over the other tenant's data.
     from catalog.core.config import get_settings
+    from catalog.services import projects as proj_svc
     from catalog.services import warehouses as wh_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
+    proj_svc.put_project(s.registry_root, so, {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "shared-bkt", "project": "acme", "status": "active"})
+    proj_svc.put_project(s.registry_root, so, {"id": "evil", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-evil", "bucket": "shared-bkt", "project": "evil", "status": "active"})
     resp = client.post("/management/v1/project/evil/policy/set", json={"retention_days": 1, "retain_versions": 1})
     assert resp.status_code == 409, resp.text
@@ -768,6 +771,7 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     # name the table holds now ([[LH-523]]). Two warehouses, a table policy in each — the rival's record must never
     # cross, and acme's table, renamed since its policy was set, is listed as `wh-a$db$u`.
     from catalog.core.config import get_settings
+    from catalog.services import projects as proj_svc
     from catalog.services import table_claims
     from catalog.services import warehouses as wh_svc
     from lakehouse import location_claims
@@ -776,7 +780,9 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
+    proj_svc.put_project(s.registry_root, so, {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
+    proj_svc.put_project(s.registry_root, so, {"id": "other", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-z", "bucket": "other-wh", "project": "other", "status": "active"})
     renamed, location = str(uuid4()), f"s3://acme-wh/{uuid4()}"
     # The rename handed the table's claim, and the uuid it records, to the table's new name.
@@ -793,12 +799,14 @@ def test_project_policies_list_finds_a_namespace_policy_by_its_warehouse(client:
     # THE decisive one: a namespace's record names no bucket, only the namespace, so the listing finds it
     # through the warehouse its name begins with.
     from catalog.core.config import get_settings
+    from catalog.services import projects as proj_svc
     from catalog.services import warehouses as wh_svc
     from lakehouse import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
+    proj_svc.put_project(s.registry_root, so, {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     # What set_namespace_policy writes: keyed by the namespace's uuid, with the name it had kept under `id`.
     pol_svc.put_policy(s.registry_root, so, {"kind": "namespace", "id": "wh-a$gold", "uuid": str(uuid4()), "retention_days": 30})
@@ -814,6 +822,7 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     # still governing it — is still the tenant's. Narrowing here would hide the retention record an
     # operator is looking for at exactly the moment they are offboarding.
     from catalog.core.config import get_settings
+    from catalog.services import projects as proj_svc
     from catalog.services import table_claims
     from catalog.services import warehouses as wh_svc
     from lakehouse import location_claims
@@ -822,6 +831,7 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
+    proj_svc.put_project(s.registry_root, so, {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-old", "bucket": "acme-old", "project": "acme", "status": "deactivated"})
     table_uuid, location = str(uuid4()), f"s3://acme-old/{uuid4()}"
     location_claims.take(table_claims.claim_store(s), location, "wh-old$arch$t", ["wh-old", "arch", "t"], is_gone=lambda _claim: False, uuid=table_uuid)
@@ -837,15 +847,18 @@ def test_project_policies_list_returns_only_its_own_project_record(client: TestC
     # the contested-registry state `set_project_policy` refuses at write time — so a bucket match would
     # surface another tenant's project policy inside acme's view.
     from catalog.core.config import get_settings
+    from catalog.services import projects as proj_svc
     from catalog.services import warehouses as wh_svc
     from lakehouse import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
+    proj_svc.put_project(s.registry_root, so, {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "acme", "buckets": ["acme-wh"], "retention_days": 90})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "other", "buckets": ["acme-wh"], "retention_days": 1})
+    acme = (proj_svc.get_project(s.registry_root, so, "acme") or {})["incarnation"]
+    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "acme", "project_incarnation": acme, "buckets": ["acme-wh"], "retention_days": 90})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "other", "project_incarnation": "o1", "buckets": ["acme-wh"], "retention_days": 1})
 
     body = _list_policies_for(client, "acme")
     assert [(p["kind"], p["id"]) for p in body["policies"]] == [("project", "acme")]

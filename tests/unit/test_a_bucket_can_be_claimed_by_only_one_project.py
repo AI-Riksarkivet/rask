@@ -37,12 +37,14 @@ def control_root(tmp_path: Path) -> str:
 def test_the_first_project_to_claim_a_bucket_gets_it(control_root: str) -> None:
     warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", project_incarnation="a1", warehouse_id="wh-acme")
 
-    assert warehouses.bucket_claim(control_root, StorageOptions(), bucket="acme-wh") == {
+    claim = warehouses.bucket_claim(control_root, StorageOptions(), bucket="acme-wh") or {}
+    assert {k: v for k, v in claim.items() if k != warehouses.CLAIMED_AT} == {
         "bucket": "acme-wh",
         "project": "acme",
         "project_incarnation": "a1",
         "warehouse_id": "wh-acme",
     }
+    assert claim[warehouses.CLAIMED_AT]
 
 
 @pytest.mark.parametrize(("project", "incarnation"), [("mallory", "m1"), ("acme", "a2")], ids=["another-project", "the-project-made-again-under-its-id"])

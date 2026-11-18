@@ -556,16 +556,32 @@ A table or namespace is named in OpenFGA by its uuid; a project and a warehouse 
   it is an `InternalError` naming it (`incarnations.require_incarnation`, 500 code 18) wherever the incarnation is relied
   on, never a 409 and never repaired (§8 B5: an estate whose records predate incarnations is re-created from git).
 - **A record naming a parent that can be deleted and made again names the parent's incarnation**
-  (`control_records.PROJECT_INCARNATION`, §8 B3): a warehouse's record and its bucket's claim, and a role's record, each
-  from the fence its create held. A record whose project incarnation no longer stands is a dead tenant's orphan: the
-  backfill, the convergence, the tenancy rebuild, the re-create (409), the delete door's gate (404), the project's
-  listing and emptiness checks and the role listing and gates all refuse or skip it, it is reported
-  (`catalog.incarnations.orphans`, `record_of_a_dead_tenant`), and the converge tick ends it once older than the request
-  deadline plus five minutes and unborn: its record goes, its bucket, bytes and claim stay.
+  (`control_records.PROJECT_INCARNATION`, §8 B3): a warehouse's record and its bucket's claim, a role's record, and a
+  project's maintenance policy (§9 P2), each from the fence or the incarnation its write held. ONE comparison judges it,
+  `incarnations.made_under`, and ONE function lists a project's warehouses, `incarnations.warehouses_of` (§9 P1): every
+  reader of a project's warehouses (its listing, its delete's emptiness, its policy's buckets, the purge's siblings) asks
+  it, and a record naming a project and no incarnation of it is an `InternalError` (500, code 18), never another
+  tenant's. A record whose project incarnation no longer stands is a dead tenant's orphan: the backfill, the convergence,
+  the tenancy rebuild, the re-create (409), the tenant's delete door (404), the project's listing and emptiness checks,
+  its policy doors and the role listing and gates all refuse or skip it, and it is reported
+  (`catalog.incarnations.orphans`, `record_of_a_dead_tenant`) until it is gone. Past the request deadline plus five
+  minutes the converge tick stamps an UNBORN one `ended_at`/`ended_reason` (never deleted: `warehouses.get_warehouse`
+  reads it as absent, `get_warehouse_record` reads it, a create of its id takes its key) and releases its bucket's claim
+  (stamped `released_at`, under the read's ETag, `warehouses.release_claim`) where the bucket holds only what a create
+  writes (`warehouses.written_by_others`: `_validate/` and the `__manifest` row of the warehouse alone); a claim of a dead
+  incarnation no record names is released the same way (§9 P3). A BORN orphan keeps its record and its claim until the
+  estate admin purges it: `DELETE /management/v1/warehouses/{id}?purge_bucket=true`, gated on
+  `estate#can_purge_dead_tenant_warehouse` (`warehouses.warehouse_to_delete`), audited `dead_tenant_purge` and announced
+  `warehouse_deleted` with `dead_tenant: true`. A project policy record of a dead incarnation governs no bucket claimed
+  by another (`maintenance_policies.governing_policy` compares it with the claim's); the tick reports it and never removes
+  it (a removal under the id would be unconditional and could take the live tenant's policy), and the next set replaces it.
 - **Every write on or naming the object is fenced, after its gate** (`fga_deps.door_fence(gate=)`, `fga.fenced`,
   `fga.commit_fenced`): the door asks its gate with no write, writes a ticket naming the object (`fence:<hex>`), reads the
   token, asks its gate again on that incarnation, and commits in ONE Write that deletes its ticket; the ticket is taken
-  back on every exit, and the converge tick sweeps one a dead request left (`fga.sweep_tickets`). The members door, the
+  back on every exit, and the converge tick sweeps one a dead request left. A ticket is written and taken with its index
+  `fence:open open fence:<hex>` (`fga.ticket_index`, `Fence.tuples`), so the estate's open tickets are ONE paged Read
+  (`fga.sweep_tickets`, §9 P5): the tick's OpenFGA cost is what needs work, never one request per record, and a born
+  record is stamped `born` on its registry record so no later tick asks about it. The members door, the
   access doors' `*_grant_fence` / `*_revoke_fence` dependencies, the role doors, the warehouse create, the warehouse
   managed-access door; `fga_deps.parent_fence`, a router dependency AFTER `authorize`, for a namespace created directly in
   a warehouse; the declaration and the tenancy rebuild open their own. Revokes too. A grant is refused (409) only by the
@@ -580,14 +596,19 @@ A table or namespace is named in OpenFGA by its uuid; a project and a warehouse 
 - **Drift repair.** `fga.revoke_ghost`: a repair token, the read, the judgement, and ONE Write revoking what was read and
   deleting the token, which a birth since has deleted.
 
-Model: `specs/catalog/Grants.tla` (configs `Grants*.cfg`, every guard removed by one that must fail). Pinned by
+Model: `specs/catalog/Grants.tla` (configs `Grants*.cfg`, every guard removed by one that must fail; the bucket claim,
+the ended record, the convergence's fenced birth and the purge are its child level, `GrantsChild`). Pinned by
 `services/catalog/tests/test_a_grant_on_a_deleted_project_reaches_no_project_made_again_under_its_id.py`,
 `test_a_ghost_revoke_takes_nothing_a_project_made_after_its_judgement_holds.py`,
 `tests/integration/test_grants_on_one_project_never_refuse_each_other.py`,
 `tests/integration/test_a_fence_reads_nothing_that_grows_with_its_object.py`,
-`services/catalog/tests/test_a_caller_refused_at_a_fenced_door_writes_nothing_and_no_ticket_outlives_its_request.py` and,
-in `tests/integration/test_the_catalog_converges_what_git_declares.py`, the unborn-incarnation, warehouse-across-a-delete,
-warehouse-record-of-a-dead-tenant and namespace-across-a-warehouse-delete tests.
+`services/catalog/tests/test_a_caller_refused_at_a_fenced_door_writes_nothing_and_no_ticket_outlives_its_request.py`,
+`tests/integration/test_a_dead_tenants_records_reach_no_live_tenant.py` (a record naming no incarnation, a project policy,
+the bucket git declares freed from a dead tenant's claim, the purge of a born orphan),
+`tests/integration/test_a_fenced_door_asks_again_on_the_incarnation_its_fence_read.py` (`parent_fence` and `door_fence`
+held between their two asks) and, in `tests/integration/test_the_catalog_converges_what_git_declares.py`, the
+unborn-incarnation, warehouse-across-a-delete and namespace-across-a-warehouse-delete tests. The `estate` fixture (the
+catalog over moto with a real OpenFGA and Dex) is in `tests/integration/conftest.py`.
 
 ## The declaration: the catalog converges what git declares ([[XC-213]], ADR 0206)
 

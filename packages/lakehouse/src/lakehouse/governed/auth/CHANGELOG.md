@@ -6,6 +6,24 @@ One entry per change to `model.fga` that a store holding tuples has to know abou
 whether the change writes new tuples into a store. When both are `FALSE`, deploying the model is the whole migration:
 `write_model.py` writes it, and every tuple in the store keeps its name and is read by the new model as it stands.
 
+## 2026-11-18: a ticket's index, and the estate owner's purge of a dead tenant's warehouse
+
+```text
+MODIFIES_TUPLES: FALSE
+ADDS_TUPLES:     TRUE
+```
+
+ADR 0241 §9 (P3, P5).
+
+- **Added:** `fence#open: [fence]`. Every ticket is written and deleted with its index `fence:open open fence:<hex>`, so
+  the converge tick reads every open ticket of the estate in one paged Read (OpenFGA's Read takes a type-only object only
+  beside a user) and its cost is the number of open tickets, not of projects and warehouses. Bookkeeping: no permission
+  reads it.
+- **Added:** `estate#can_purge_dead_tenant_warehouse: owner`, the gate of `DELETE /management/v1/warehouses/{id}` on a
+  warehouse record a dead tenant left (made under a project incarnation that no longer stands, or ended by the converge
+  tick), which no tenant administers.
+- **Stored tickets with no index** (written before this change) are never swept; a store holding some is test data.
+
 ## 2026-11-18: a door's ticket is a `fence` object naming the project or warehouse
 
 ```text

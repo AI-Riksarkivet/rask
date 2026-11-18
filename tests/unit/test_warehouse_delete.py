@@ -161,11 +161,11 @@ def _delete(
     from catalog.api.v1.endpoints import warehouses as wh_ep
 
     async def _resolved_then_deleted() -> Any:
-        # The door's gate is its `AdministeredWarehouseDep`, which FastAPI resolves before the handler runs.
-        record = await wh_ep.administered_warehouse(warehouse_id, settings, token, client)
+        # The door's gate is its `WarehouseToDeleteDep`, which FastAPI resolves before the handler runs.
+        addressed = await wh_ep.warehouse_to_delete(warehouse_id, settings, token, client)
         return await wh_ep.delete_warehouse(
             warehouse_id=warehouse_id,
-            record=record,
+            addressed=addressed,
             request=request,
             settings=settings,
             token=token,

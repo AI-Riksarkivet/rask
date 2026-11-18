@@ -2768,6 +2768,12 @@ export interface paths {
          *
          *     Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
          *     reaches its bucket.
+         *
+         *     **What a dead tenant left is the estate admin's to purge** (ADR 0241 §9 P3): a record made under an incarnation of its
+         *     project that no longer stands, or one the converge tick ended, is administered by no tenant, and only
+         *     ``can_purge_dead_tenant_warehouse`` on the estate deletes it, with ``?purge_bucket=true``: its bytes are no tenant's to
+         *     keep, and a delete keeping them would keep the claim that blocks the bucket. The purge releases the claim, is audited
+         *     (``dead_tenant_purge``) and is announced as ``warehouse_deleted`` with ``dead_tenant: true``.
          */
         delete: operations["delete_warehouse_management_v1_warehouses__warehouse_id__delete"];
         options?: never;

@@ -15,7 +15,7 @@ import json
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 import pyarrow.fs as pafs
 from lance_namespace import (
@@ -28,7 +28,7 @@ from lance_namespace import (
 )
 
 from catalog.core.identifiers import warehouse_of, with_minted_uuid
-from catalog.services import native
+from catalog.services import incarnations, native
 from catalog.services.control_records import (
     INCARNATION,
     PROJECT_INCARNATION,
@@ -44,12 +44,12 @@ from catalog.services.control_records import (
     with_protection,
     write_json,
 )
-from lakehouse import control_prefixes, trash
+from lakehouse import control_prefixes, records, trash
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
-from lakehouse.record_store import delete_record, get_record, put_record
-from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
+from lakehouse.record_store import get_record, put_record
+from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json, replace_json
 from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
 
 
@@ -69,6 +69,17 @@ SEALED = "sealed"
 #: When that check measured it, an ISO-8601 time on the catalog's clock: the age ``WarehouseSealUnmeasured`` reads, kept on
 #: the record so no restart of a replica resets it (ADR 0242 § Found by review, third round, B2).
 SEALED_AT = "sealed_at"
+#: When the converge tick ended a record a dead tenant's create left, and why (ADR 0241 §9 P3). An ended record is no
+#: warehouse: every door but the estate admin's purge reads it as absent (:func:`get_warehouse`), no listing names it
+#: (:func:`read_warehouses`), and a create of its id takes its key (:func:`create_warehouse_record`). A claim released is
+#: stamped the same way, ``released_at`` and ``released_reason``, and a later claim takes its key (:func:`claim_bucket`).
+ENDED_AT: Final = "ended_at"
+ENDED_REASON: Final = "ended_reason"
+RELEASED_AT: Final = "released_at"
+RELEASED_REASON: Final = "released_reason"
+#: When a bucket's claim was taken, which the converge tick judges a dead incarnation's claim no record names by: a create
+#: still running between its claim and its record is not ended (:func:`claim_bucket`).
+CLAIMED_AT: Final = "claimed_at"
 
 
 def sealed_fields(sealed: str) -> dict[str, str]:
@@ -325,7 +336,8 @@ def upsert_warehouse(
     def merge(live: dict[str, str]) -> dict[str, str]:
         if live.get("project") != project:
             raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
-        if live.get(PROJECT_INCARNATION) != record.get(PROJECT_INCARNATION):
+        obj = f"warehouse:{record['id']}"
+        if not incarnations.made_under(live, incarnations.require_project_incarnation(record, obj), obj=obj):
             raise WarehouseOfADeadTenant(f"warehouse {record['id']!r} was made under an earlier incarnation of project {project!r}")
         if DELETE_MODE in record:
             live = {k: v for k, v in live.items() if k != TRASH_GRACE_DAYS}
@@ -355,30 +367,71 @@ def upsert_warehouse(
 
 
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
-    """Mint ``_warehouses/<id>.json`` iff absent — the STORE arbitrates (F1).
+    """Mint ``_warehouses/<id>.json`` iff absent or ended — the STORE arbitrates (F1).
 
     Raises :class:`lakehouse.records.RecordExistsError` on a lost race. The caller
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
     guard's read may predate the rival's write; this refusal is what closes that window). A record naming no
-    incarnation is given one here (ADR 0241).
+    incarnation is given one here (ADR 0241). A record the converge tick ended (:data:`ENDED_AT`) is replaced under the
+    ETag of the read that found it, as a role's ended record is, so of two creates taking its id one wins.
     """
     record.setdefault(INCARNATION, new_incarnation())
-    create_json(control_root, storage_options, _warehouse_key(record["id"]), record)
+    key = _warehouse_key(record["id"])
+    try:
+        create_json(control_root, storage_options, key, record)
+        return
+    except RecordExistsError:
+        pass
+    stored = records.read_json(control_root, storage_options, key)
+    if stored is None or not stored[0].get(ENDED_AT):
+        raise RecordExistsError(key)
+    try:
+        replace_json(control_root, storage_options, key, record, etag=stored[1])
+    except RecordChangedError as exc:
+        raise RecordExistsError(key) from exc
+
+
+def end_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, incarnation: str, reason: str) -> dict[str, str] | None:
+    """Stamp warehouse ``warehouse_id``'s record ended, with when and ``reason``, where it still names ``incarnation`` and is
+    not ended; the record as stamped, ``None`` where it is gone or is another incarnation's. Conditional on the record's
+    ETag (``mutate_json``), so a create taking the id meanwhile is never stamped (ADR 0241 §9 P3)."""
+
+    def stamp(record: dict[str, str]) -> dict[str, str]:
+        if record.get(INCARNATION) != incarnation or record.get(ENDED_AT):
+            raise RecordMissingError(f"warehouse {warehouse_id!r} is not incarnation {incarnation!r} unended")
+        return {**record, ENDED_AT: datetime.now(UTC).isoformat(), ENDED_REASON: reason}
+
+    try:
+        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), stamp)
+    except RecordMissingError:
+        return None
 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
-    """The warehouse record, or ``None`` if unregistered.
+    """The warehouse record, or ``None`` if unregistered or ended (:data:`ENDED_AT`).
 
     A malformed record REFUSES rather than reading as unregistered: every destructive door starts here,
     and "not found" is an answer they act on."""
+    record = get_warehouse_record(control_root, storage_options, warehouse_id)
+    return None if record is None or record.get(ENDED_AT) else record
+
+
+def get_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, str] | None:
+    """The warehouse record, ended or not, or ``None`` if unregistered: what the estate admin's purge of a dead tenant's
+    warehouse reads (ADR 0241 §9 P3).
+
+    Raises:
+        ServiceUnavailableError: The record is there and cannot be read as one.
+    """
     key = _warehouse_key(warehouse_id)
     record = read_json(control_root, storage_options, key)
     return validated_or_refuse(record, WarehouseRecord, event="warehouse_record_malformed", path=key) if record is not None else None
 
 
-def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+def read_warehouses(control_root: str, storage_options: StorageOptions, *, ended: bool = False) -> tuple[list[dict[str, str]], list[str]]:
     """``(readable warehouse records, paths that are there and could NOT be read as one)``, unordered. An absent prefix
-    yields ``([], [])``.
+    yields ``([], [])``. A record the converge tick ended (:data:`ENDED_AT`) is no warehouse and is left out, unless
+    ``ended`` asks for it: the convergence's own pass over the registry.
 
     The skipped paths are returned because the callers need opposite things from one tolerance: a listing survives one
     bad object, while a decision that no record names something (the last warehouse of a project, another claim on a
@@ -410,10 +463,10 @@ def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple
             log.warning("warehouse_record_unreadable", extra={"path": info.path, "error": str(exc)})
             skipped.append(info.path)
             continue
-        if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is not None:
-            out.append(valid)
-        else:
+        if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is None:
             skipped.append(info.path)
+        elif ended or not valid.get(ENDED_AT):
+            out.append(valid)
     return out, skipped
 
 
@@ -451,17 +504,40 @@ def projects_claiming_bucket(records: list[dict[str, str]], bucket: str) -> set[
     return {str(r["project"]) for r in records if r.get("bucket") == bucket and r.get("project")}
 
 
+def _claim_key(bucket: str) -> str:
+    return f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
+
+
 def bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: str) -> dict[str, str] | None:
-    """Who owns ``bucket``, or ``None`` when nobody has claimed it.
+    """Who owns ``bucket``, or ``None`` when nobody has claimed it, or its claim was released (:data:`RELEASED_AT`).
 
     ``None`` rather than an exception so a caller can distinguish "unclaimed" from "claimed by someone"
     without control flow, the same shape :func:`get_warehouse` answers with.
     """
-    key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
+    key = _claim_key(bucket)
     record = read_json(control_root, storage_options, key)
     if record is None:
         return None
-    return {str(k): str(v) for k, v in validated_or_refuse(record, BucketClaimRecord, event="bucket_claim_malformed", path=key).items()}
+    claim = {str(k): str(v) for k, v in validated_or_refuse(record, BucketClaimRecord, event="bucket_claim_malformed", path=key).items()}
+    return None if claim.get(RELEASED_AT) else claim
+
+
+def every_claim(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+    """Every bucket claim standing, released ones left out: one listing, what the converge tick judges a dead tenant's
+    claims by (ADR 0241 §9 P3).
+
+    Raises:
+        ServiceUnavailableError: The store did not answer, or a claim is there and cannot be read as one.
+    """
+    fs, base = fs_and_base(control_root, storage_options)
+    claims: list[dict[str, str]] = []
+    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_BUCKET_CLAIMS_PREFIX}", allow_not_found=True)):
+        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
+            continue
+        bucket = info.path.rsplit("/", 1)[1].removesuffix(".json")
+        if (claim := bucket_claim(control_root, storage_options, bucket=bucket)) is not None:
+            claims.append(claim)
+    return claims
 
 
 def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_incarnation: str, warehouse_id: str) -> None:
@@ -485,24 +561,58 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
     pass rather than a collision, and why keying this by warehouse id would refuse the second half of a
     legitimate pair. It is also what keeps `create_warehouse`'s partial-failure retry idempotent.
     """
-    key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
-    payload = {"bucket": bucket, "project": project, PROJECT_INCARNATION: project_incarnation, "warehouse_id": warehouse_id}
+    key = _claim_key(bucket)
+    payload = {
+        "bucket": bucket,
+        "project": project,
+        PROJECT_INCARNATION: project_incarnation,
+        "warehouse_id": warehouse_id,
+        CLAIMED_AT: datetime.now(UTC).isoformat(),
+    }
     try:
         create_json(control_root, storage_options, key, payload)
+        return
     except RecordExistsError:
-        # VALIDATED rather than compared raw, the rule every singular read of this registry follows: on
-        # a record nobody can parse the comparison merely fails, which would refuse the create (right)
-        # while naming a competing project that may not exist (wrong), and send an operator looking for
-        # a tenant that is not there.
-        existing = read_json(control_root, storage_options, key)
-        parsed = validated_or_refuse(existing, BucketClaimRecord, event="bucket_claim_malformed", path=key) if existing is not None else None
-        if parsed is not None and parsed.get("project") == project and parsed.get(PROJECT_INCARNATION) == project_incarnation:
-            return  # this project already owns the bucket — a second warehouse, or a retry
-        raise NamespaceAlreadyExistsError(f"bucket {bucket!r} is already registered to another project's warehouse") from None
+        pass
+    # VALIDATED rather than compared raw, the rule every singular read of this registry follows: on
+    # a record nobody can parse the comparison merely fails, which would refuse the create (right)
+    # while naming a competing project that may not exist (wrong), and send an operator looking for
+    # a tenant that is not there.
+    stored = records.read_json(control_root, storage_options, key)
+    parsed = validated_or_refuse(stored[0], BucketClaimRecord, event="bucket_claim_malformed", path=key) if stored is not None else None
+    if parsed is not None and parsed.get(RELEASED_AT) and stored is not None:
+        # A released claim is taken under the ETag of the read that found it, so of two creates one wins (ADR 0241 §9 P3).
+        try:
+            replace_json(control_root, storage_options, key, payload, etag=stored[1])
+            return
+        except RecordChangedError:
+            pass
+    elif parsed is not None and parsed.get("project") == project and incarnations.made_under(parsed, project_incarnation, obj=f"bucket:{bucket}"):
+        return  # this project already owns the bucket — a second warehouse, or a retry
+    raise NamespaceAlreadyExistsError(f"bucket {bucket!r} is already registered to another project's warehouse")
 
 
-def release_bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: str, warehouse_id: str) -> bool:
-    """Delete the claim on ``bucket`` once no warehouse record but ``warehouse_id``'s names it; whether a claim was deleted.
+def release_claim(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_incarnation: str, reason: str) -> bool:
+    """Stamp the claim on ``bucket`` released, with when and ``reason``, where it still names ``project`` at
+    ``project_incarnation``; whether it did. Under the ETag of the read that found it, so a claim another create took
+    meanwhile is never released: the one way a claim is released (ADR 0241 §9 P3)."""
+    key = _claim_key(bucket)
+    stored = records.read_json(control_root, storage_options, key)
+    if stored is None:
+        return False
+    claim = stored[0]
+    if claim.get(RELEASED_AT) or claim.get("project") != project or not incarnations.made_under(claim, project_incarnation, obj=f"bucket:{bucket}"):
+        return False
+    try:
+        replace_json(control_root, storage_options, key, {**claim, RELEASED_AT: datetime.now(UTC).isoformat(), RELEASED_REASON: reason}, etag=stored[1])
+    except RecordChangedError:
+        return False
+    return True
+
+
+def release_bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: str, record: dict[str, str]) -> bool:
+    """Release the claim on ``bucket`` (:func:`release_claim`) its warehouse ``record`` names, once no warehouse record
+    but that one names the bucket; whether a claim was released.
 
     Asked by a warehouse delete that PURGED the bucket, after the purge and before the warehouse's own record goes: the
     bytes the claim kept from another project are gone, and the record still standing keeps a re-issue of the delete
@@ -514,9 +624,55 @@ def release_bucket_claim(control_root: str, storage_options: StorageOptions, *, 
         InternalError: A warehouse record cannot be read, so whether another warehouse still names the bucket is unknown.
         OSError: The store refused the claim's delete.
     """
-    if any(r.get("bucket") == bucket and r.get("id") != warehouse_id for r in every_warehouse(control_root, storage_options)):
+    if any(r.get("bucket") == bucket and r.get("id") != record["id"] for r in every_warehouse(control_root, storage_options)):
         return False
-    return delete_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
+    project_incarnation = incarnations.require_project_incarnation(record, f"warehouse:{record['id']}")
+    return release_claim(
+        control_root, storage_options, bucket=bucket, project=record["project"], project_incarnation=project_incarnation, reason="bucket_purged"
+    )
+
+
+#: What a warehouse's create writes into its bucket before its birth, and nothing else does while it is unborn (ADR 0241
+#: §9 P3; read from `establish_warehouse` and measured 2026-11-18 on moto): the storage probe's objects under
+#: ``_validate/``, each removed by the probe's cleanup and left only where that cleanup failed, and the warehouse's own
+#: catalog, the directory namespace's ``__manifest`` table holding one row, the warehouse's (``ensure_catalog_row``).
+CREATE_PREFIXES: Final = ("_validate/", "__manifest/")
+
+
+def written_by_others(bucket: str, storage_options: StorageOptions, *, warehouse_id: str) -> list[str]:
+    """What stands in ``bucket`` that a create of warehouse ``warehouse_id`` did not write (:data:`CREATE_PREFIXES`), at
+    most ten keys or rows: empty only where every object is one the create writes and its catalog holds no row but the
+    warehouse's own. A bucket that is gone holds nothing.
+
+    Raises:
+        botocore.exceptions.ClientError: The store refused the listing.
+        OSError: The catalog's manifest could not be read.
+    """
+    import lance
+    from botocore.exceptions import ClientError
+
+    client = object_client(storage_options)
+    foreign: list[str] = []
+    manifest = False
+    try:
+        for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket):
+            for obj in page.get("Contents", []):
+                key = str(obj["Key"])
+                manifest = manifest or key.startswith("__manifest/")
+                if not key.startswith(CREATE_PREFIXES):
+                    foreign.append(key)
+                if len(foreign) >= 10:
+                    return foreign
+    except ClientError as exc:
+        if str(exc.response.get("Error", {}).get("Code", "")) in ("NoSuchBucket", "404"):
+            return []
+        raise
+    if manifest and not foreign:
+        rows = (
+            lance.dataset(f"s3://{bucket}/__manifest", storage_options=storage_options.in_clear() or None).to_table(columns=["object_id"]).column("object_id")
+        )
+        foreign += [f"__manifest row {row}" for row in rows.to_pylist() if row != warehouse_id][:10]
+    return foreign
 
 
 def project_of(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> str | None:

@@ -148,8 +148,12 @@ warehouse, a project, a classification label and a transaction keep their ids.
 (ADR 0241, `specs/catalog/Grants.tla`): `revision` on `project`, `warehouse` and `estate` is bookkeeping holding the marker
 `revision:<incarnation>` (never revoked), the token `revision:<incarnation>.<n>`, the drift repair's token
 `revision:repair-<hex>` and a declared grant's evidence `revision:git-<hex>`; a door's ticket is `<object> ticket
-fence:<hex>` on `type fence` (§8 B1, B2), off the object, so no read of the object reads it. The audit trail leaves both
-relations out, and a delete writes the retirement as its own row. A door asks its gate with NO write first, then opens a
+fence:<hex>` on `type fence` (§8 B1, B2), off the object, so no read of the object reads it, written and deleted in the
+same Writes as its index `fence:open open fence:<hex>` (§9 P5, `fga.Fence.tuples`): OpenFGA 1.18.3's Read takes a
+type-only object only beside a user (`{object: "fence:"}` alone is refused 400 `validation_error`, measured), so the one
+party every index names makes the estate's open tickets one paged Read. A test planting a ticket a dead request left
+plants its index too (`fga.ticket_index`). The audit trail leaves the three relations out, and a delete writes the
+retirement as its own row. A door asks its gate with NO write first, then opens a
 fence (`fga_deps.door_fence(gate=)`, the context manager `fga.fenced` underneath, the ONE way a fence is opened, which takes
 its ticket back on every exit), then asks its gate again on the incarnation the fence read, and writes or revokes through
 `fga.commit_fenced` (or `project_admins.confer` / `withdraw(fences=)`), never `fga.write_tuples` / `delete_tuples`; a
@@ -162,8 +166,11 @@ through `fga.holds` (its key), one relation through `fga.read_relation`; `fga.re
 use and is for a listing or a delete. Every read pages to the end with no ceiling (`fga.read_all`); OpenFGA 1.18.3 takes
 at most 100 tuples in one Write (`fga.TUPLES_PER_WRITE`, refused 400 `exceeded_entity_limit` past it). A delete ends the
 incarnation with `fga.end_incarnation` (mark born, retire, drain until a read finds nothing, tickets deleted in Writes of
-100 with `on_missing_deletes: IGNORE`); the converge tick sweeps a ticket older than the request deadline plus five
-minutes (`fga.sweep_tickets`). A test seeding a project or warehouse straight to the store must seed its marker and token
+100 with `on_missing_deletes: IGNORE`); the converge tick sweeps every ticket older than the request deadline plus five
+minutes, on any id, from one read of the indexes (`fga.sweep_tickets`), judged against the catalog's clock: a catalog
+clock more than the five minutes ahead of the store's can sweep a live request's ticket, whose Write is then refused 409.
+The tick asks OpenFGA about a record's birth once: it stamps the record `born` (`control_records.BORN`), and a marker is
+never revoked. `estate#can_purge_dead_tenant_warehouse` (the estate owner) is the one door to a dead tenant's warehouse. A test seeding a project or warehouse straight to the store must seed its marker and token
 too, or its doors answer 409 with `Retry-After` (being established); `tests/integration/openfga_grants.Grants` answers
 every project and warehouse as born.
 

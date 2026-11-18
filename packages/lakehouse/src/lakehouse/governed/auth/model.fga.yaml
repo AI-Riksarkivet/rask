@@ -2209,6 +2209,7 @@ tests:
         assertions:
           can_list_all_projects: true
           can_finish_project_delete: true
+          can_purge_dead_tenant_warehouse: true
           can_administer_authz: true
           can_declare_unowned_run_rule: true
           can_deregister_unidentified_table: true
@@ -2222,6 +2223,7 @@ tests:
         assertions: &no_estate_admin_verb
           can_list_all_projects: false
           can_finish_project_delete: false
+          can_purge_dead_tenant_warehouse: false
           can_administer_authz: false
           can_declare_unowned_run_rule: false
           can_deregister_unidentified_table: false
@@ -2394,6 +2396,7 @@ tests:
       - { user: revision:i1, relation: revision, object: project:solo }
       - { user: revision:i1.1, relation: revision, object: project:solo }
       - { user: project:solo, relation: ticket, object: fence:a1 }
+      - { user: fence:open, relation: open, object: fence:a1 }
       - { user: warehouse:solo, relation: ticket, object: fence:b1 }
       - { user: revision:git-b2, relation: revision, object: estate:solo_estate }
       - { user: user:sole_admin, relation: admin, object: project:solo }
@@ -2414,7 +2417,13 @@ tests:
         assertions: { revision: false, owner_effective: true, can_grant_reader: true }
       - user: project:solo
         object: fence:a1
-        assertions: { ticket: true }
+        assertions: { ticket: true, open: false }
+      - user: fence:open
+        object: fence:a1
+        assertions: { open: true, ticket: false }
+      - user: fence:open
+        object: project:solo
+        assertions: { revision: false, admin: false, member: false, can_administer: false }
       - user: project:solo
         object: warehouse:solo
         assertions: { revision: false, owner_effective: false, reader_effective: false, can_get_metadata: false, manage_grants: false }

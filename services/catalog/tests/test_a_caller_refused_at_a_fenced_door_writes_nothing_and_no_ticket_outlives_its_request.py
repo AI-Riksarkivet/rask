@@ -1,12 +1,12 @@
 """A caller refused at a door writing on a project writes nothing there, and no ticket outlives the request that wrote
 it (ADR 0241 §8 B2, `specs/catalog/Grants.tla`).
 
-A door writing on or naming a project opens a fence, a ticket of its own naming the project. It used to open it before
-it asked its caller's authority, so a caller with no right on another tenant's project wrote there, paid a paginated
-read of it, and left its ticket standing whenever the request died before taking it back (`GrantsIntruderFenced`,
-`GrantsTicketsLeft`). The door now asks first with no write, opens its fence, and asks again on the incarnation it read
-(``fga_deps.door_fence``); the fence is a context manager that takes its ticket back on every exit (``fga.fenced``); and
-the converge tick sweeps a ticket older than a request runs (``incarnations.converge``).
+A door writing on or naming a project opens a fence, a ticket of its own naming the project. A door that opened it
+before asking its caller's authority would let a caller with no right on another tenant's project write there
+(`GrantsIntruderFenced`), and a ticket a request that died left would stand for ever (`GrantsTicketsLeft`). So the door
+asks first with no write, opens its fence, and asks again on the incarnation it read (``fga_deps.door_fence``); the
+fence is a context manager that takes its ticket back on every exit (``fga.fenced``); and the converge tick sweeps a
+ticket older than a request runs (``incarnations.converge``).
 
 Against the catalog as deployed: a loopback Dex signing callers in, a real OpenFGA deciding on a store of the test's own,
 and the store's own changelog read for what each request wrote.
@@ -81,19 +81,28 @@ def test_a_caller_the_project_authorizes_for_nothing_is_refused_having_written_n
 @pytest.mark.parametrize("died", ["its-write-failed", "its-process-died"])
 def test_no_ticket_outlives_the_request_that_wrote_it(acme: Any, monkeypatch: pytest.MonkeyPatch, died: str) -> None:  # noqa: ANN401 — the fixture's GovernedCatalog
     """A door whose write fails takes its ticket back as it answers; a ticket a dead process left, which nothing else
-    takes back, stands until the converge tick finds it older than a request runs, and then it goes."""
+    takes back, stands until the converge tick finds it older than a request runs, and then it goes, on an id no record
+    names too: the tick reads the estate's open tickets in one read of their indexes (ADR 0241 §9 P5)."""
     app = acme.client.app
     assert isinstance(app, FastAPI) and acme.client.portal is not None
+
+    async def _unanswered(*_args: Any, **_kwargs: Any) -> bool:  # noqa: ANN401 — commit_fenced's own arguments
+        raise ServiceUnavailableError("authorization service unavailable")
+
+    monkeypatch.setattr(fga, "commit_fenced", _unanswered)
     if died == "its-write-failed":
-
-        async def _unanswered(*_args: Any, **_kwargs: Any) -> bool:  # noqa: ANN401 — commit_fenced's own arguments
-            raise ServiceUnavailableError("authorization service unavailable")
-
-        monkeypatch.setattr(fga, "commit_fenced", _unanswered)
         answered = acme.client.put(MEMBERS, json={"user": "dex~bob", "relation": "member"}, headers=acme.bearer(ALICE))
         assert (answered.status_code, _tickets(acme)) == (503, []), answered.text
         return
-    acme.store.write((f"project:{PROJECT}", fga.TICKET, f"{fga.FENCE_TYPE}:{uuid.uuid4().hex}"))
+    # A door whose commit and take-back OpenFGA both leave unanswered leaves its ticket as a dead process does; a ticket
+    # (and its index, written in the same Write) on an id no record names stands beside it.
+    real_take_back = fga.delete_absent_ignored
+    monkeypatch.setattr(fga, "delete_absent_ignored", _unanswered)
+    left = acme.client.put(MEMBERS, json={"user": "dex~bob", "relation": "member"}, headers=acme.bearer(ALICE))
+    monkeypatch.setattr(fga, "delete_absent_ignored", real_take_back)
+    ticket = fga.ClientTuple(user="project:gone", relation=fga.TICKET, object=f"{fga.FENCE_TYPE}:{uuid.uuid4().hex}")
+    index = fga.ticket_index(ticket)
+    acme.store.write((str(ticket.user), str(ticket.relation), str(ticket.object)), (str(index.user), str(index.relation), str(index.object)))
     settings = app.state.settings
     converge = partial(incarnations.converge, settings.registry_root, settings.storage_options(), app.state.fga)
 
@@ -101,4 +110,5 @@ def test_no_ticket_outlives_the_request_that_wrote_it(acme: Any, monkeypatch: py
     kept = len(_tickets(acme))
     swept = acme.client.portal.call(partial(converge, bound=timedelta(0)))
 
-    assert (kept, swept.swept, _tickets(acme)) == (1, {f"project:{PROJECT}": 1}, [])
+    assert (left.status_code, kept, swept.swept, _tickets(acme)) == (503, 1, {f"project:{PROJECT}": 1, "project:gone": 1}, []), left.text
+    assert not [t for t in acme.store.tuples() if t[2].startswith(f"{fga.FENCE_TYPE}:")], "a ticket or its index stands"

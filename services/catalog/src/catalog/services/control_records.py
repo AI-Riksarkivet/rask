@@ -24,6 +24,7 @@ from typing import Final, Self
 from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from lakehouse import warehouse_records
 from lakehouse.objectfs import fs_and_base
 from lakehouse.protection import is_protected
 from lakehouse.storage_options import StorageOptions
@@ -35,10 +36,13 @@ log = logging.getLogger(__name__)
 #: every merge, and what each write of a tuple on its id is fenced by, since another tenant may hold the id once it is
 #: deleted.
 INCARNATION: Final = "incarnation"
-#: The field of a record that names a project (a warehouse's, a role's, a bucket's claim) naming the incarnation of the
-#: project it was made under (ADR 0241 §8 B3): the project's id may be held again by another tenant, so a record naming
-#: only the id would be the next tenant's the moment a create that raced the project's delete wrote it.
-PROJECT_INCARNATION: Final = "project_incarnation"
+#: The field of a record that names a project (a warehouse's, a role's, a bucket's claim, a project's policy) naming the
+#: incarnation of the project it was made under (ADR 0241 §8 B3): the project's id may be held again by another tenant,
+#: so a record naming only the id would be the next tenant's the moment a create that raced the project's delete wrote it.
+PROJECT_INCARNATION: Final = warehouse_records.PROJECT_INCARNATION
+#: The field of a project's or warehouse's record naming the incarnation the converge tick found born (ADR 0241 §9 P5), so
+#: no later tick asks OpenFGA about it; written by the tick alone, kept by every merge.
+BORN: Final = "born"
 
 
 def new_incarnation() -> str:

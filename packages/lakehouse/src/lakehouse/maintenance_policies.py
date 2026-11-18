@@ -12,7 +12,9 @@ the bucket by the maintenance sweep on every tick (it has no catalog client by d
 * namespace policy — keyed by the namespace's ``uuid``, governing every table under the namespace;
 * project policy (#84) — the tenant-wide default, keyed by the project id: instead of a uuid it carries
   ``buckets`` (the project's active warehouse buckets, resolved from the warehouse registry at set time),
-  matched at the bucket level.
+  matched at the bucket level, and ``project_incarnation``, the incarnation of the project that set it (ADR 0241 §9 P2):
+  a project's id may be held again by another tenant once it is deleted, so a record an earlier incarnation left governs
+  only a bucket whose claim names that incarnation, never one the tenant holding the id now claimed.
 
 A table or namespace record also keeps the object's name under ``id``, as it was when the policy was set, for
 display. Resolution order (:func:`resolve_policy`): a table policy wins over the nearest namespace policy wins
@@ -156,7 +158,7 @@ def _record_is_well_formed(record: dict[str, Any]) -> bool:
         return False
     if kind == "project":
         buckets = record.get("buckets")
-        return bool(record.get("id")) and isinstance(buckets, list) and bool(buckets)
+        return bool(record.get("id")) and bool(record.get(warehouse_records.PROJECT_INCARNATION)) and isinstance(buckets, list) and bool(buckets)
     return bool(record.get("uuid"))
 
 
@@ -238,8 +240,10 @@ def governing_policy(
     any of those levels holds it (:func:`_held`). The precedence is :func:`resolve_policy`'s, which a caller may hand the
     one record this returns; the project level differs only where several project records name one bucket, which
     :func:`resolve_policy` refuses to choose between and the store's claim, written once by the warehouse that took the
-    bucket, settles. The policy records are read under ``control_root`` and the bucket's claim under ``claims_root``, the
-    catalog's registry, which a deployment may keep apart from its policies.
+    bucket, settles. The project's record governs only where it names the incarnation of the project the claim names
+    (ADR 0241 §9 P2): one an earlier incarnation of the id left governs no bucket the tenant holding the id now claimed.
+    The policy records are read under ``control_root`` and the bucket's claim under ``claims_root``, the catalog's
+    registry, which a deployment may keep apart from its policies.
 
     Every level is read by its key, since a farther level's hold binds the table: what this costs is the table's depth
     plus two reads (its own record, the bucket's claim and the project's record), never the estate's policies. STRICT: a record
@@ -255,13 +259,14 @@ def governing_policy(
         own = _keyed(control_root, storage_options, "table", table_uuid)
         nearest = [_keyed(control_root, storage_options, "namespace", namespace_uuid) for namespace_uuid in reversed(namespace_uuids)]
         bucket = split_s3_uri(location)[0] if on_s3(location) else ""
-        project = governing_project(claims_root, storage_options, location)
-        tenant = _keyed(control_root, storage_options, "project", project) if project is not None else None
+        claimant = warehouse_records.bucket_claimant(claims_root, storage_options, bucket) if bucket else None
+        tenant = _keyed(control_root, storage_options, "project", claimant[0]) if claimant is not None else None
     except OSError as exc:
         raise UnreadablePolicyError(f"a maintenance policy that may govern the table {table_uuid} could not be read: {exc}") from exc
     except ValueError as exc:
         raise MalformedPolicyError(f"a maintenance policy that may govern the table {table_uuid} cannot be read as one: {exc}") from exc
-    tenant = tenant if tenant is not None and bucket in (tenant.get("buckets") or []) else None
+    governs = claimant is not None and tenant is not None and tenant.get(warehouse_records.PROJECT_INCARNATION) == claimant[1]
+    tenant = tenant if governs and tenant is not None and bucket in (tenant.get("buckets") or []) else None
     return _held([record for record in (own, *nearest, tenant) if record is not None])
 
 

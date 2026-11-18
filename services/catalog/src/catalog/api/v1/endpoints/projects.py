@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -82,7 +83,7 @@ from catalog.schemas import (
 from catalog.services import incarnations, object_labels, role_grants, roles, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
-from catalog.services.control_records import GIT, INCARNATION, MANAGED_BY, PROJECT_INCARNATION, ProtectionChange
+from catalog.services.control_records import GIT, MANAGED_BY, ProtectionChange
 from lakehouse import maintenance_policies, protection
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
@@ -104,33 +105,12 @@ router = APIRouter(prefix="/management/v1/projects", tags=["projects"])
 _ID_RE = CONTROL_ID_RE
 
 
-def _group_by_project(records: list[dict[str, str]]) -> dict[str, list[ProjectWarehouse]]:
-    """Group warehouse records by their ``project``, sorted for a deterministic response.
-
-    Per-record corruption tolerance, same posture as ``warehouses.list_warehouses``: a record missing its
-    ``project`` or ``id`` is SKIPPED with a warning — one tenant's registry corruption must not void the
-    whole estate listing. ``status`` defaults to ``"active"`` for pre-lifecycle records (the
-    ``warehouse_status`` backward-compat rule).
-    """
-    grouped: dict[str, list[ProjectWarehouse]] = {}
-    for record in records:
-        project, warehouse_id = record.get("project"), record.get("id")
-        if not project or not warehouse_id:
-            log.warning(
-                "project_record_skipped",
-                extra={"warehouse": warehouse_id, "fields": sorted(record)},
-            )
-            continue
-        grouped.setdefault(str(project), []).append(
-            ProjectWarehouse(
-                id=str(warehouse_id),
-                bucket=str(record.get("bucket") or ""),
-                status=str(record.get("status") or "active"),
-            )
-        )
-    for entries in grouped.values():
-        entries.sort(key=lambda w: w.id)
-    return grouped
+def _listed(records: list[dict[str, str]]) -> list[ProjectWarehouse]:
+    """``records`` as a tenant's listing names its warehouses, sorted by id for a deterministic response. ``status``
+    defaults to ``"active"`` for a record written before the lifecycle feature."""
+    return sorted(
+        (ProjectWarehouse(id=str(r["id"]), bucket=str(r.get("bucket") or ""), status=str(r.get("status") or "active")) for r in records), key=lambda w: w.id
+    )
 
 
 # Per-project budget for the display-only admins lookup. A caller gives the whole request a few seconds; a slow (not
@@ -189,28 +169,50 @@ class Tenant(BaseModel):
         )
 
 
-async def _load_tenants(settings: Settings) -> dict[str, Tenant]:
-    """The tenant map: PROJECT REGISTRY ∪ warehouse-derived (blocking S3/FS IO → threadpool).
+class Registries(BaseModel):
+    """The project and warehouse registries as one read found them, from which the tenant map is built."""
 
-    Registry records define the tenants — a fresh project has zero warehouses and must still list.
-    Warehouse-derived entries without a registry record are pre-registry legacy: kept visible (the
-    reconciler reports them as drift; a listing that hid them would make the drift undiagnosable), and never
-    protected, since protection lives on the record."""
+    model_config = ConfigDict(frozen=True)
+
+    projects: list[dict[str, str]]
+    warehouses: list[dict[str, str]]
+
+    def ids(self) -> list[str]:
+        """Every tenant id: each project record's, and each a warehouse record names with no project record."""
+        return sorted({str(r["id"]) for r in self.projects} | {str(r.get("project")) for r in self.warehouses})
+
+    def tenants(self, chosen: Collection[str] | None = None) -> dict[str, Tenant]:
+        """The tenant map, of the ``chosen`` ids alone (every one for ``None``): PROJECT REGISTRY ∪ warehouse-derived.
+
+        Registry records define the tenants — a fresh project has zero warehouses and must still list. Warehouse-derived
+        entries without a registry record are pre-registry legacy: kept visible (the reconciler reports them as drift; a
+        listing that hid them would make the drift undiagnosable), and never protected, since protection lives on the
+        record. A tenant's warehouses are its standing incarnation's (:func:`incarnations.warehouses_of`), judged only for
+        the tenants chosen, so a caller shown none of them is answered before any record is judged.
+
+        Raises:
+            InternalError: A chosen tenant's record, or a warehouse record naming it, names no incarnation.
+        """
+        wanted = (lambda project: True) if chosen is None else (lambda project: project in chosen)
+        registered = {str(record["id"]): record for record in self.projects}
+        unregistered: dict[str, list[dict[str, str]]] = {}
+        for r in self.warehouses:
+            if str(r.get("project")) not in registered and wanted(str(r.get("project"))):
+                unregistered.setdefault(str(r.get("project")), []).append(r)
+        tenants = {project: Tenant(project=project, warehouses=_listed(held)) for project, held in unregistered.items()}
+        for project, record in registered.items():
+            if wanted(project):
+                # A warehouse record an earlier incarnation of the project left is no warehouse of this one (ADR 0241 §8 B3).
+                incarnation = incarnations.require_incarnation(record, f"project:{project}")
+                tenants[project] = Tenant(project=project, record=record, warehouses=_listed(incarnations.warehouses_of(self.warehouses, project, incarnation)))
+        return tenants
+
+
+async def _registries(settings: Settings) -> Registries:
+    """The project and warehouse registries, read now (blocking S3/FS IO → threadpool)."""
     so = settings.storage_options()
     projects = await run_in_threadpool(project_registry.list_projects, settings.registry_root, so)
-    standing = {str(record["id"]): record.get(INCARNATION) for record in projects}
-    # A warehouse record an earlier incarnation of a standing project left is no warehouse of that tenant (ADR 0241 §8 B3).
-    owned = [
-        r
-        for r in await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
-        if str(r.get("project")) not in standing or r.get(PROJECT_INCARNATION) == standing[str(r.get("project"))]
-    ]
-    grouped = _group_by_project(owned)
-    tenants = {project: Tenant(project=project, warehouses=held) for project, held in grouped.items()}
-    for record in projects:
-        project = str(record["id"])
-        tenants[project] = Tenant(project=project, record=record, warehouses=grouped.get(project, []))
-    return tenants
+    return Registries(projects=projects, warehouses=await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so))
 
 
 async def _converge_project(settings: Settings, so: StorageOptions, record: dict[str, str]) -> dict[str, str]:
@@ -367,13 +369,14 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
 
     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
     facts still serve; the visibility decision itself fails closed (``_visible_projects``)."""
-    tenants = await _load_tenants(settings)
-    visible = await _visible_projects(client, settings, token, sorted(tenants))
+    registries = await _registries(settings)
+    visible = await _visible_projects(client, settings, token, registries.ids())
+    tenants = registries.tenants(visible)
     # The per-project admins lookups run CONCURRENTLY: sequential awaits would stack N × the per-call
     # budget on a slow OpenFGA (a brownout, not an outage) and blow past the caller's request deadline;
     # gathered, the worst case is ONE _ADMINS_TIMEOUT_SECONDS regardless of tenant count (each call
     # still degrades to [] on its own expiry — see _admins_for).
-    projects = sorted(p for p in tenants if visible is None or p in visible)
+    projects = sorted(tenants)
     admins = await asyncio.gather(*(_admins_for(client, settings, project) for project in projects))
     return [tenants[project].response(project_admins) for project, project_admins in zip(projects, admins, strict=True)]
 
@@ -392,7 +395,7 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
         await fga_deps.require_any_relation(client, settings, token, doors=doors)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
-    tenant = (await _load_tenants(settings)).get(project_id)
+    tenant = (await _registries(settings)).tenants({project_id}).get(project_id)
     if tenant is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     return tenant.response(await _admins_for(client, settings, project_id))
@@ -555,8 +558,14 @@ async def protect_project(settings: Settings, control: ControlEmitter, project_i
 
 
 def _warehouses_of(records: list[dict[str, str]], project_id: str, project: dict[str, str]) -> list[str]:
-    """The ids of the warehouses among ``records`` made in the incarnation of ``project_id`` its record ``project`` names."""
-    return sorted(str(r["id"]) for r in records if r.get("project") == project_id and r.get(PROJECT_INCARNATION) == project.get(INCARNATION))
+    """The ids of the warehouses among ``records`` made in the incarnation of ``project_id`` its record ``project`` names
+    (:func:`incarnations.warehouses_of`).
+
+    Raises:
+        InternalError: A record names the project and no incarnation of it.
+    """
+    incarnation = incarnations.require_incarnation(project, f"project:{project_id}")
+    return sorted(str(r["id"]) for r in incarnations.warehouses_of(records, project_id, incarnation))
 
 
 async def _start_delete(project_id: str, record: dict[str, str], settings: Settings, token: CurrentToken, *, force: bool) -> None:
@@ -690,9 +699,12 @@ async def delete_project(
         # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse
         # record claims this project, and a warehouse's delete revokes its own tuples (that edge among them) before its
         # record goes.
-        # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant,
-        # and a policy kept for the id would govern that tenant's buckets as soon as it named them.
-        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
+        # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant.
+        # The record names the incarnation that set it (ADR 0241 §9 P2), so one an earlier incarnation left is not this
+        # delete's to end, and governs no bucket the next tenant claims whether or not it stands.
+        policy = await run_in_threadpool(maintenance_policies.get_policy, settings.registry_root, so, "project", project_id)
+        if policy is not None and incarnations.made_under(policy, incarnation, obj=f"policy:project:{project_id}"):
+            await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
         # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object
         # lay in a warehouse of it, and each ended its labels as it went.
         await run_in_threadpool(object_labels.end_definitions, settings.registry_root, so, project_id)

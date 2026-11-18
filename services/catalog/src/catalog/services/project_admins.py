@@ -212,7 +212,7 @@ async def _commit(
         fga.IncarnationEnded: A fence's ticket is gone: its project was deleted while the removal ran.
     """
     moved, stale = _revisions(scope)
-    tickets = [fence.ticket for fence in fences]
+    tickets = [t for fence in fences for t in fence.tuples]
     if await fga.commit_unless_changed(client, deletes=[*deletes, *stale, *tickets], writes=moved, actor=actor, origin=origin):  # noqa: TID251
         return True
     if not await fga.fences_stand(client, fences):

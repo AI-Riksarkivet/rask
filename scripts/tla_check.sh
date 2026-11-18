@@ -33,7 +33,7 @@ for model in "$root"/specs/*/*.tla; do
     fi
     work="$(mktemp -d)"
     # TLC exits non-zero on a violation, which an expected one is: its output decides, not its status.
-    out="$(cd "$(dirname "$model")" && java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto -deadlock -metadir "$work" -config "$(basename "$config")" "$(basename "$model")" 2>&1 || true)"
+    out="$(cd "$(dirname "$model")" && java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-auto}" -deadlock -metadir "$work" -config "$(basename "$config")" "$(basename "$model")" 2>&1 || true)"
     rm -rf "$work"
     states="$(grep -oE '[0-9,]+ distinct states found' <<<"$out" | tail -1 || true)"
     if [[ "$first" =~ EXPECT\ VIOLATION\ ([A-Za-z]+) ]]; then

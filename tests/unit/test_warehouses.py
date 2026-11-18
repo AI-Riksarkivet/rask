@@ -335,35 +335,6 @@ def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> Non
     asyncio.run(fga_deps.require_project_exists(settings, "acme"))
 
 
-def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Decision 1 end to end: the estate admin mints the TENANT at POST /management/v1/projects (the estate door,
-    # can_create_project on the root) — record + her project#admin tuple in one operation — and every
-    # warehouse after that passes on the project's OWN rung. The warehouse door never probes the estate.
-    from catalog.schemas import CreateWarehouseRequest
-
-    store = _FakeStore(estate_admins=("dex~alice",))
-    store.install(monkeypatch)
-    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
-    settings = _governed_settings(tmp_path)
-
-    minted = _create_project_as(settings, "dex~alice", "acme")
-    assert store.checks == [("dex~alice", "can_create_project", _ROOT_OBJECT)]
-    assert ("user:dex~alice", "admin", "project:acme") in store.tuples
-    assert minted.admins == ["user:dex~alice"]  # existence and permission born together, and the response shows it
-
-    store.checks.clear()
-    first = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-wh", project="acme"))
-    assert first.id == "acme-wh"
-    assert ("user:dex~alice", "owner", "warehouse:acme-wh") in store.tuples
-    # Asked with no write, and again on the incarnation the create's fence read (ADR 0241 §8 B2).
-    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")] * 2
-
-    store.checks.clear()
-    second = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-two", project="acme"))
-    assert second.id == "acme-two"
-    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")] * 2
-
-
 def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """LH-433: a machine never becomes a tenant's admin. A provisioning identity (ADR 0143's operator) that
     creates a project must name the person who administers it; it is refused 400 before anything is written

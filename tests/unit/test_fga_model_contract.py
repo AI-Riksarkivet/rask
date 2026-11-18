@@ -388,6 +388,9 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     # and deletes them (`fga.end_incarnation`), and the converge tick sweeps one older than a request runs.
     ("fence", "ticket", "project"): "the project's delete reads its tickets by subject and deletes them",
     ("fence", "ticket", "warehouse"): "the warehouse's delete reads its tickets by subject and deletes them",
+    # A ticket's index (ADR 0241 §9 P5) names the one party `fence:open`, which is no object a delete ends: it is deleted
+    # with its ticket by every Write that takes the ticket, and the converge tick sweeps one a dead request left.
+    ("fence", "open", "fence"): "deleted with its ticket by every Write that takes it, and swept with it past the bound",
     ("namespace", "managed_access", "role"): "role is a subject type, not a droppable object",
     ("warehouse", "managed_access", "role"): "role is a subject type, not a droppable object",
     # A project cannot be deleted while a warehouse claims it — `projects.py`'s emptiness refusal
