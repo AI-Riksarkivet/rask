@@ -106,10 +106,12 @@ from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.history_fences import HistoryWork
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import uuid_of
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.storage_options import StorageOptions
+from lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 
 
 log = logging.getLogger(__name__)
@@ -1857,7 +1859,7 @@ async def restore_table(
         await converge.remember(200, response)
         return response
     response, committed = await run_in_threadpool(
-        partial(dataplane.restore, table, so, body, transaction_properties=lineage_deps.door_stamp(token, RESTORE_TABLE))
+        partial(_restore_holding_history, table, so, body, transaction_properties=lineage_deps.door_stamp(token, RESTORE_TABLE))
     )
     # Recorded as soon as the restore has committed, as an append's answer is: a failure after this line answers the caller
     # an error, and its resend under the key is answered with this commit rather than restoring again.
@@ -1875,6 +1877,31 @@ async def restore_table(
         branch=body.branch,
     )
     return response
+
+
+def _restore_holding_history(
+    table: DoorTable, so: StorageOptions, body: RestoreTableRequest, *, transaction_properties: dict[str, str]
+) -> tuple[RestoreTableResponse, int]:
+    """:func:`dataplane.restore`, while the door holds the table's history as a ref write does (ADR 0243).
+
+    A restore brings back the files of the version it names, so it pins that version as a tag does for as long as it
+    runs: a reclaim that listed the table's versions before the restore committed would delete the files the restored
+    head names (measured on pylance 13.0.0: 2 restores of 40 beside a cleanup at age 0 left a head no reader could read).
+    The hold excludes every reclaim, so the restore answers 409 while one deletes; and under it the version must still
+    hold every file it names (:func:`dataplane.require_whole`), since a cleanup that stopped part-way leaves its versions
+    standing over deleted files. A branch the table does not have is left to the restore's own refusal (code 22).
+
+    Raises:
+        ConcurrentModificationError: A reclaim holds the table's history, or the hold lapsed before the commit (code 14).
+        InvalidTableStateError: A file the version names is gone (code 19).
+    """
+    branch = recorded_branch(body.branch)
+    with table.history_held(HistoryWork.REFS) as hold:
+        dataset = table.open_unchecked(so)
+        if branch is None or branch in dataset.branches.list():
+            dataplane.require_whole(table, so, dataset, branch=branch, version=body.version, kind="restore", name=branch or MAIN_BRANCH)
+        hold.confirm()
+        return dataplane.restore(table, so, body, transaction_properties=transaction_properties)
 
 
 @router.post("/{id}/stats", response_model_exclude_none=True)

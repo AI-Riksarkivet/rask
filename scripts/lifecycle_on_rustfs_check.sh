@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # lifecycle_on_rustfs_check.sh: run the table lifecycle's, the namespace cascade's, the stock create's, the history
-# fence's and the keyed commit's race tests (ADR 0227, ADR 0233, ADR 0240), and the store's refusal of a vended write
-# credential's put over a committed file, with the commits that name a file the store does not hold, a transaction put
-# over while judged, a long branch's vend and a seal the store refuses (ADR 0242),
+# fence's, the keyed commit's and a table's maintenance pass's race tests (ADR 0227, ADR 0233, ADR 0240, ADR 0243), and
+# the store's refusal of a vended write credential's put over a committed file, with the commits that name a file the
+# store does not hold, a transaction put over while judged, a long branch's vend and a seal the store refuses (ADR 0242),
 # with the catalog's root and control root on a REAL S3 store, so every fence, claim and record is arbitrated by the
 # store's own conditional writes (put-if-not-exists, If-Match) rather than the local root's file lock.
 #
@@ -69,3 +69,5 @@ uv run --no-sync pytest \
   -k s3 -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"
 # The maintain vend's own credential, which only this lane's store can mint (ADR 0233 §9): every case is the store's.
 uv run --no-sync pytest tests/integration/test_a_maintain_vend_plants_nothing_the_fence_trusts.py -p no:cacheprovider -rA "$@"
+# A table's pass beside the doors on its history (ADR 0243), its deletes held or refused on the wire in front of the store.
+uv run --no-sync pytest tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py -k rustfs -p no:cacheprovider -rA "$@"

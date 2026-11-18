@@ -138,6 +138,7 @@ from lakehouse import (
     location_claims,
     stored_objects,
     trash,
+    whole_versions,
 )
 from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
 from lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
@@ -4297,6 +4298,32 @@ def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableT
     return ListTableTagsResponse.model_validate({"tags": tags, "page_token": next_token})
 
 
+def require_whole(
+    table: table_claims.DoorTable, so: StorageOptions, dataset: lance.LanceDataset, *, branch: str | None, version: int | None, kind: str, name: str
+) -> None:
+    """Refuse a ref or a restore naming a version of ``branch`` (main for ``None``) that no longer holds every file it names:
+    one a cleanup that stopped part-way was removing (:mod:`lakehouse.whole_versions`, ADR 0243). Asked while the door
+    holds the table's history as ref work, which every reclaim excludes, so a version found whole stays whole until the
+    ref stands. ``dataset`` is the table's handle; ``kind`` and ``name`` say what the door writes, for its refusal. A ref's
+    latest version (``version`` ``None``) is its head, which no cleanup removes.
+
+    Raises:
+        TableVersionNotFoundError: The ref has no such version (code 11), as :func:`_ref_errors` answers it.
+        InvalidTableStateError: A file the version names is gone; a later maintenance pass removes the version (code 19).
+    """
+    if version is None:
+        return
+    with _ref_errors(kind, name):
+        opened = dataset.checkout_version((branch, version) if branch is not None else version)
+    gone = whole_versions.missing_files(opened, branch_layout.ref_root(table.location, branch), so)
+    if gone:
+        log.warning("ref_on_a_version_being_reclaimed", extra={"kind": kind, "ref": name, "branch": branch, "version": version, "gone": gone[:5]})
+        raise InvalidTableStateError(
+            f"version {version} of {branch or MAIN_BRANCH} is being reclaimed: {len(gone)} file(s) it names are gone (e.g. {gone[0]}), "
+            "so no ref may name it and no restore bring it back; a later maintenance pass removes it"
+        )
+
+
 def _open_with_branch(table: table_claims.DoorTable, so: StorageOptions, branch: str | None) -> lance.LanceDataset:
     """Main's handle, once the ``branch`` a tag op names is one the table has ([[LH-406]]).
 
@@ -4352,6 +4379,7 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
     with table.history_held(HistoryWork.REFS) as hold:
         if before_ref is not None:
             before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=recorded_branch(req.branch), version=req.version))
+        require_whole(table, so, dataset, branch=recorded_branch(req.branch), version=req.version, kind="tag", name=req.tag)
         hold.confirm()
         with _ref_errors("tag", req.tag):
             dataset.tags.create(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
@@ -4414,6 +4442,7 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
     with table.history_held(HistoryWork.REFS) as hold:
         if before_ref is not None:
             before_ref(hold.marks, dataset, PlacedRef(kind="tag", name=req.tag, branch=recorded_branch(req.branch), version=req.version))
+        require_whole(table, so, dataset, branch=recorded_branch(req.branch), version=req.version, kind="tag", name=req.tag)
         hold.confirm()
         with _ref_errors("tag", req.tag):
             dataset.tags.update(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
@@ -4514,6 +4543,7 @@ def create_branch(
             with _ref_errors("branch", source, invalid_name=req.name):
                 cut_at = req.from_version if req.from_version is not None else int(_source_head(dataset, req.from_branch))
             before_ref(hold.marks, dataset, PlacedRef(kind="branch", name=req.name, branch=req.from_branch, version=cut_at))
+        require_whole(table, so, dataset, branch=req.from_branch, version=req.from_version, kind="branch", name=source)
         hold.confirm()
         try:
             with _ref_errors("branch", source, invalid_name=req.name):

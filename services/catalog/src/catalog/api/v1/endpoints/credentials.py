@@ -40,7 +40,7 @@ from catalog.core.vending import (
 )
 from catalog.schemas import CredentialResponse, VendedCredentials
 from catalog.services import table_claims
-from lakehouse import maintenance_policies
+from lakehouse import history_fences, maintenance_policies
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.version_retention import recorded_branch
@@ -213,6 +213,11 @@ async def vend_credentials(
         at_most_seconds = await run_in_threadpool(
             partial(table_claims.renewed_for_its_declarer, table_claims.claim_store(settings), table.resolved, declarer=subject)
         )
+    elif tier == "maintain":
+        # A maintain credential lives no longer than a hold of the table's history (ADR 0243 A1): a pass takes its hold
+        # after its vend, so once the hold lapses (its holder dead or paused) the store refuses every delete the credential
+        # signs, whatever `LANCE_VENDING_TTL_SECONDS` says, and no reclaim deletes beside a ref write the lapse admitted.
+        at_most_seconds = int(history_fences.HOLD.total_seconds())
     # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
     # (`vend_or_refuse`), never a bare 500.
     vended = await run_in_threadpool(

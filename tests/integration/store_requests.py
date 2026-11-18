@@ -48,6 +48,14 @@ class StoreRequest(BaseModel):
     query: dict[str, list[str]]
     #: The access key id the request's SigV4 credential names; empty for an unsigned request.
     access_key: str = ""
+    #: The request's body: a bulk ``DeleteObjects`` names its keys there.
+    body: bytes = b""
+
+    def deletes(self, fragment: str) -> bool:
+        """Whether this request deletes a key holding ``fragment``: one ``DELETE``, or a bulk ``POST ?delete`` naming one."""
+        if self.method == "DELETE":
+            return fragment in self.path
+        return self.method == "POST" and "delete" in self.query and fragment.encode() in self.body
 
     def lists(self, prefix: str) -> bool:
         """Whether this is a listing of the keys under ``prefix``."""
@@ -56,6 +64,8 @@ class StoreRequest(BaseModel):
 
 #: The body S3 answers a request with while it cannot serve it (its ``ServiceUnavailable`` error).
 _UNAVAILABLE = b"<?xml version='1.0' encoding='UTF-8'?><Error><Code>ServiceUnavailable</Code><Message>Service is unable to handle request.</Message></Error>"
+#: The body S3 answers a request signed by a session past its expiry with (its ``ExpiredToken`` error).
+_EXPIRED = b"<?xml version='1.0' encoding='UTF-8'?><Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message></Error>"
 
 
 class _Forwarding(http.server.ThreadingHTTPServer):
@@ -68,6 +78,13 @@ class _Forwarding(http.server.ThreadingHTTPServer):
         self.seen: list[StoreRequest] = []
         #: The requests answered 503 rather than forwarded: none unless a test names them (:meth:`CountedStore.answering_unavailable`).
         self.answered_unavailable: Callable[[StoreRequest], bool] | None = None
+        #: The requests answered 403 ``ExpiredToken``, as a store answers a credential past its expiry
+        #: (:meth:`CountedStore.answering_expired`).
+        self.answered_expired: Callable[[StoreRequest], bool] | None = None
+        #: The requests held before they are forwarded, until the test lets them go (:meth:`CountedStore.holding`).
+        self.holding: Callable[[StoreRequest], bool] | None = None
+        self.held = threading.Event()
+        self.let_go = threading.Event()
 
 
 class _Relaying(http.server.BaseHTTPRequestHandler):
@@ -119,25 +136,37 @@ class _Handler(_Relaying):
         request = StoreRequest(
             method=self.command,
             path=urllib.parse.unquote(parsed.path),
-            query=urllib.parse.parse_qs(parsed.query),
+            query=urllib.parse.parse_qs(parsed.query, keep_blank_values=True),
             access_key=signed.group(1) if signed else "",
+            body=body,
         )
         unavailable = forwarding.answered_unavailable
         if unavailable is not None and unavailable(request):
             self._answer_unavailable()
             return
+        expired = forwarding.answered_expired
+        if expired is not None and expired(request):
+            self._answer(403, "Forbidden", _EXPIRED)
+            return
+        holding = forwarding.holding
+        if holding is not None and holding(request):
+            forwarding.held.set()
+            forwarding.let_go.wait(timeout=120)
         headers = {key: value for key, value in self.headers.items() if key.lower() not in _HOP_HEADERS}
         self._relay(forwarding.upstream, self.path, body=body, headers=headers)
         with forwarding.lock:
             forwarding.seen.append(request)
 
     def _answer_unavailable(self) -> None:
-        self.send_response_only(503, "Service Unavailable")
+        self._answer(503, "Service Unavailable", _UNAVAILABLE)
+
+    def _answer(self, status: int, reason: str, body: bytes) -> None:
+        self.send_response_only(status, reason)
         self.send_header("Content-Type", "application/xml")
-        self.send_header("Content-Length", str(len(_UNAVAILABLE)))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(_UNAVAILABLE)
+            self.wfile.write(body)
 
     do_GET = do_PUT = do_POST = do_HEAD = do_DELETE = _forward
 
@@ -167,6 +196,46 @@ class CountedStore:
             yield
         finally:
             self._server.answered_unavailable = None
+
+    @contextmanager
+    def answering_expired(self, requests: Callable[[StoreRequest], bool]) -> Generator[None]:
+        """For the life of the block, answer each of ``requests`` 403 ``ExpiredToken`` instead of forwarding it, as a store
+        answers a request signed by a credential that expired; every other request is forwarded."""
+        self._server.answered_expired = requests
+        try:
+            yield
+        finally:
+            self._server.answered_expired = None
+
+    @contextmanager
+    def holding(self, requests: Callable[[StoreRequest], bool]) -> Generator[HeldRequests]:
+        """For the life of the block, hold each of ``requests`` before it reaches the store, until the block lets them go
+        (:meth:`HeldRequests.let_go`, and at its end): a client's step held at the request a trace names."""
+        server = self._server
+        server.held.clear()
+        server.let_go.clear()
+        server.holding = requests
+        try:
+            yield HeldRequests(server)
+        finally:
+            server.holding = None
+            server.let_go.set()
+
+
+class HeldRequests:
+    """The requests :meth:`CountedStore.holding` holds: whether one has reached the proxy, and the hand that lets them go."""
+
+    def __init__(self, server: _Forwarding) -> None:
+        self._server = server
+
+    def reached(self, timeout: float) -> bool:
+        """Whether a held request reached the proxy within ``timeout`` seconds."""
+        return self._server.held.wait(timeout)
+
+    def let_go(self) -> None:
+        """Forward every request held, and every one the block holds from now on."""
+        self._server.holding = None
+        self._server.let_go.set()
 
 
 @contextmanager

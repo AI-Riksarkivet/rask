@@ -249,3 +249,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0240](0240-the-commit-path-is-modelled-in-tla.md) |  | The commit path is modelled in TLA+; five defects found and fixed (2026-11-17) | accepted |
 | [0241](0241-authorization-state-is-modelled-in-tla-beside-the-objects-it-governs.md) |  | Authorization state is modelled in TLA+ beside the objects it governs; three defects found and fixed (2026-11-17) | accepted |
 | [0242](0242-the-store-refuses-a-put-over-a-committed-file.md) |  | The store refuses a put over a committed file: the catalog seals what a commit adds (2026-11-17) | accepted |
+| [0243](0243-a-tables-pass-deletes-nothing-a-door-answered-for.md) |  | What a maintenance pass deletes is modelled in TLA+; three defects found and fixed (2026-11-17) | accepted |

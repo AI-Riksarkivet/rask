@@ -19,7 +19,7 @@ from typing import Final, Literal
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import trash
+from lakehouse import maintenance_policies, trash
 from lakehouse.base_registry import RecordedBase
 from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from lakehouse.features import (
@@ -34,7 +34,7 @@ from lakehouse.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
 from lakehouse.stored_objects import delete_objects, list_under_at, recording_removed_transactions
 from maintenance.core.config import shared_lance_session
-from maintenance.core.metrics import CatalogRefusal
+from maintenance.core.metrics import CatalogRefusal, record_reclaim_held_back
 from maintenance.services import base_reclaim
 
 
@@ -53,14 +53,19 @@ type DueVerdict = Literal["due", "clear", "unnamed", "failed"]
 
 #: Why a pass that would delete did not run this tick: a write of the table's tags or branches held its history ([[LH-308]]).
 HISTORY_FENCED: Final = "history_fenced"
+#: Why a pass that would delete did not run this tick: the table's maintenance policy changed between the pass's read of
+#: it and its hold of the table's history (ADR 0243), so the policy the pass planned under may keep less than the one an
+#: owner was answered for.
+POLICY_CHANGED: Final = "policy_changed"
 
 
 class DatasetResult(BaseModel):
     """What one dataset's pass did, or why it did not run."""
 
     uri: str
-    #: Why this dataset's pass did not run this tick: the policy cadence (``policy_interval``), or a write of one of the
-    #: table's tags or branches holding its history ([[LH-308]], :data:`HISTORY_FENCED`); ``None`` when the pass ran.
+    #: Why this dataset's pass did not run this tick: the policy cadence (``policy_interval``), a write of one of the
+    #: table's tags or branches holding its history ([[LH-308]], :data:`HISTORY_FENCED`), or its policy changed since the
+    #: pass read it (:data:`POLICY_CHANGED`); ``None`` when the pass ran.
     skipped: str | None = None
     #: Why this dataset was REFUSED, and by which gate (:data:`Gate`, or one of the catalog's answers for the id).
     refused: str | None = None
@@ -130,6 +135,39 @@ class ExpiryPolicy(BaseModel):
     staged_grace: timedelta = timedelta(minutes=10)
 
 
+class PolicyRead(BaseModel):
+    """The maintenance policy governing a table as its pass read it before holding the table's history, and where it was
+    read, so the pass reads it again once it holds (:meth:`changed`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    policy_root: str
+    claims_root: str
+    #: The table's location, as the task names it: a project's policy is matched by its bucket.
+    location: str
+    table_uuid: str
+    namespace_uuids: list[str]
+    #: The record that governed the table, ``None`` for the global defaults.
+    policy: dict[str, object] | None
+
+    def changed(self, storage_options: StorageOptions) -> bool:
+        """Whether the governing policy is another record now, or can no longer be read: either way the pass keeps
+        everything, since a record it cannot read may be a legal hold (``maintenance_policies.governing_policy``)."""
+        try:
+            now = maintenance_policies.governing_policy(
+                self.policy_root,
+                storage_options,
+                claims_root=self.claims_root,
+                location=self.location,
+                table_uuid=self.table_uuid,
+                namespace_uuids=self.namespace_uuids,
+            )
+        except (maintenance_policies.MalformedPolicyError, maintenance_policies.UnreadablePolicyError) as exc:
+            log.warning("maintenance_policy_unread_under_hold", extra={"table_uuid": self.table_uuid, "error": str(exc)[:300]})
+            return True
+        return now != self.policy
+
+
 class ExpiryTarget(BaseModel):
     """The dataset an expiry pass runs on, and what the sweep already knows about it."""
 
@@ -155,6 +193,9 @@ class ExpiryTarget(BaseModel):
     table_uuid: str | None = None
     #: The control root holding the trash.
     control_root: str | None = None
+    #: The policy the pass planned under, read again once the table's history is held and before anything is reclaimed;
+    #: ``None`` reads none.
+    policy_read: PolicyRead | None = None
     #: The versions the policy would reclaim, as the probe counted them on the handle this pass reads (no vend); ``None``
     #: counts them here.
     reclaimable_versions: int | None = None
@@ -436,6 +477,17 @@ def _dropped_since(target: ExpiryTarget) -> bool:
     return trash.keeps(target.control_root, target.storage_options, target.table_uuid)
 
 
+def _policy_changed(target: ExpiryTarget) -> bool:
+    """Whether the table's policy changed since its pass read it, read again once its history is held (ADR 0243).
+
+    The pass plans its cleanup under the policy it read as it started, and an owner may set one that keeps more meanwhile
+    (a legal hold among them). A table's own policy door holds the table's history while it writes, so of that write and
+    this hold one sees the other: the door answers 409 while the pass holds, and a write that landed first is read here.
+    A changed policy, or one no longer readable, keeps everything this pass, which comes again after ``retry_seconds``.
+    """
+    return target.policy_read is not None and target.policy_read.changed(target.storage_options)
+
+
 def _record_failure(result: DatasetResult, exc: BaseException) -> None:
     """A reclaim that raised: a ref Lance will never accept is a refusal, anything else a failure."""
     if (gate := classify_maintain_failure(str(exc))) is not None:
@@ -477,6 +529,11 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: Datas
                 log.info("maintenance_table_trashed_mid_pass", extra={"uri": result.uri, "uuid": target.table_uuid})
                 result.trashed = target.table_uuid
                 return result
+            if _deletes(result, target, policy) and _policy_changed(target):
+                log.info("maintenance_policy_changed_mid_pass", extra={"uri": result.uri, "uuid": target.table_uuid})
+                record_reclaim_held_back("policy_changed")
+                result.skipped = POLICY_CHANGED
+                return result
             _reclaim_versions(opened.ds, result=result, target=target, vend=vend, policy=policy)
             _reclaim_data_directories(opened.ds, result=result, target=target, vend=vend)
         # Whether or not any version is due: a lost staged manifest is no version's, so no ref's fence guards it, and a
@@ -484,6 +541,7 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: Datas
         _reclaim_staged_manifests(opened.ds, result=result, target=target, vend=vend, policy=policy)
     except HistoryFencedError as exc:
         log.info("maintenance_history_fenced", extra={"uri": result.uri, "table_id": result.table_id, "reason": str(exc)})
+        record_reclaim_held_back("history_fenced")
         result.skipped = HISTORY_FENCED
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
         # A pyo3 panic derives from BaseException; measured on the live estate 2026-08-16, one escaping panic answered

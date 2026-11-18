@@ -207,6 +207,24 @@ def record_dataset_swept() -> None:
     _datasets_swept.add(1)
 
 
+#: Why a pass that would delete kept everything this time and passes the table again (ADR 0243): a write of the table's
+#: refs held its history (``history_fenced``), or its maintenance policy changed since the pass read it
+#: (``policy_changed``). A closed set: it is a metric label.
+type HeldBack = Literal["history_fenced", "policy_changed"]
+
+_reclaims_held_back = _meter.create_counter(
+    "maintenance.reclaims.held_back",
+    unit="{dataset}",
+    description="Datasets whose pass deleted nothing because another write held the table's history or its policy changed since the pass read it, by reason; each is passed again.",
+)
+
+
+def record_reclaim_held_back(reason: HeldBack | None = None) -> None:
+    """Count one dataset whose pass kept everything for ``reason``; ``None`` creates every reason's series at 0."""
+    for each in get_args(HeldBack.__value__):
+        _reclaims_held_back.add(1 if each == reason else 0, {"reason": each})
+
+
 def record_trash_purge(
     *,
     purged_by_kind: dict[str, int],

@@ -914,6 +914,23 @@ governing their data. The project-scoped surface is the console's project page, 
   firing (`maintenance.services.audit.run_audit`); a trash record already released, or carrying no deadline, gets no task,
   which would end holding nothing. The chart's stream Job reads MAINTENANCE_SCHEDULES back and fails unless it allows
   message schedules, which nats-server older than 2.12 drops without a word. A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
+  **What a pass deletes is modelled** (`specs/maintenance/TablePass.tla`, ADR 0243): its cleanup and base reclaim beside
+  the tag, branch, restore and policy doors and a writer, with the pass dying or its credential expiring at any step.
+  Three rules came from it, each a guard a config removes: (1) a **restore holds the table's history as a ref write
+  does** (`tables._restore_holding_history`, `HistoryWork.REFS`), since it brings back an old version's files and a
+  cleanup that listed before it lands deletes them (409 code 14 while a reclaim holds); (2) the pass **reads the
+  table's policy again once it holds the history** (`expiry._policy_changed`) and deletes nothing when it changed
+  (`skipped=policy_changed`, `maintenance.reclaims.held_back{reason}`, retried after `retrySeconds`), and the table's
+  policy door holds the history while it writes (`policies._set_holding_history`, 409 beside a reclaim); a namespace's
+  or a project's policy door holds no table's history, so one written while a cleanup already runs binds the next pass
+  only; (3) Lance's cleanup deletes transaction and data files before manifests and counts a refused delete
+  (`failed_deletes`) without raising, so a cleanup that stops between leaves versions standing over deleted files until
+  the next pass: **every ref door and the restore judge the version whole under their hold**
+  (`dataplane.require_whole`, `lakehouse.whole_versions.missing_files`, 409 code 19; a clone's source tag raises
+  `CloneSourceGoneError`). A maintain-tier credential is vended for at most the history fence's `HOLD` (900 s), so a
+  pass whose hold lapsed signs no delete (A1). `tests/integration/test_a_tables_pass_deletes_nothing_a_door_answered_for.py`
+  holds the cleanup on the wire (`store_requests.CountedStore.holding`, `answering_expired`), on moto and in
+  `make lifecycle-rustfs-check`.
   The pass's pre-vend probe and its next-pass time count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes, the time asking with the age a version will then have (`table_pass.versions_due_at`, [[LH-562]]); the catalog's GC preview names the versions by `lakehouse.version_retention`, since Lance's explanation counts them only.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
@@ -1309,7 +1326,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
   20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
-  `tags/update`, `branches/create`) holds the fence,
+  `tags/update`, `branches/create`, and as ref work `restore` and a table's `policy/set`, ADR 0243) holds the fence,
   one object per holder under the table's directory `_history_fences/table-<digest>/` (`fences.HolderFence`,
   `history_fences.fence_directory`; a take judges only the names the fence defines directly in the directory, a
   holder's kind by its KEY whatever its body says, live until it is a hold old on the store's clock, and sweeps whatever

@@ -98,7 +98,8 @@ class HistoryWork(StrEnum):
 
     #: Deletes versions: ``cleanup_old_versions`` in any of its callers.
     RECLAIM = "reclaim"
-    #: Writes a tag or moves a branch's ref, each of which pins a version against a reclaim.
+    #: Writes a tag or moves a branch's ref, each of which pins a version against a reclaim; a restore, which brings an old
+    #: version's files back, and a table's policy write, which a reclaim reads under its hold, hold it too (ADR 0243).
     REFS = "refs"
     #: Creates a branch: ref work no other branch create may share, since each judges the branch names the table holds.
     BRANCH = "branch"

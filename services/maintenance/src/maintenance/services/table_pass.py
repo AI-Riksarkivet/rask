@@ -55,6 +55,7 @@ from maintenance.core.metrics import (
     record_failed,
     record_mixed_file_versions,
     record_overwritten_files,
+    record_reclaim_held_back,
     record_reclaimed,
     record_refused,
     record_table_parked,
@@ -64,10 +65,12 @@ from maintenance.services import base_reclaim, committed_files, credentials
 from maintenance.services.due import refresh_due, table_ids_of
 from maintenance.services.expiry import (
     HISTORY_FENCED,
+    POLICY_CHANGED,
     DatasetOpener,
     DatasetResult,
     ExpiryPolicy,
     ExpiryTarget,
+    PolicyRead,
     count_reclaimable,
     expire_versions,
     lost_staged_manifests,
@@ -121,6 +124,9 @@ class PassReadings(BaseModel):
     policy_unreadable: str | None = None
     #: The maintain-tier vends this pass was answered, one serving the table and every branch ([[LH-576]]).
     vends: credentials.PassVends = Field(default_factory=credentials.PassVends)
+    #: Where the policy in ``context`` was read, which each expiry reads again once it holds the table's history
+    #: (ADR 0243); ``None`` where no policy was read, which reclaims nothing.
+    policy_read: PolicyRead | None = None
 
 
 class NamedDataset(BaseModel):
@@ -151,6 +157,7 @@ def emit_zero_baselines() -> None:
     record_mixed_file_versions(0)
     record_overwritten_files(0)
     record_unrecorded_bases(0)
+    record_reclaim_held_back()
 
 
 def base_record_reader(settings: MaintenanceSettings, options: StorageOptions) -> Callable[[str], base_registry.BaseRecord | None]:
@@ -374,7 +381,13 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
         return _stopped_by_vend(probe, target, exc)
     disarm = _disarm(uri, table, readings=readings, settings=settings) if probe.armed else DisarmOutcome()
     history = TableHistory(control_root=settings.resolved_control_root, storage_options=vended, table_uuid=named.owners.table_uuid)
-    held = {"write_options": vended, "history": history, "table_uuid": named.owners.table_uuid, "control_root": settings.resolved_control_root}
+    held = {
+        "write_options": vended,
+        "history": history,
+        "table_uuid": named.owners.table_uuid,
+        "control_root": settings.resolved_control_root,
+        "policy_read": readings.policy_read,
+    }
     return disarm.onto(expire_versions(target.model_copy(update=held), policy))
 
 
@@ -793,6 +806,16 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
             log.error("maintenance_policy_unreadable", extra={"uuid": held.uuid, "table": held.table, "error": str(exc)[:300]})
             return None
         policies = [policy] if policy is not None else []
+        read = PolicyRead(
+            policy_root=settings.resolved_policy_root,
+            claims_root=settings.resolved_control_root,
+            location=location,
+            table_uuid=owners.table_uuid,
+            namespace_uuids=owners.namespace_uuids,
+            policy=policy,
+        )
+        context = PlanContext(policies=policies, now=now, older_than=timedelta(days=settings.older_than_days))
+        return PassReadings(table_ids=ids, context=context, table=held.table, owners=owners, policy_read=read)
     context = PlanContext(policies=policies, now=now, older_than=timedelta(days=settings.older_than_days))
     return PassReadings(table_ids=ids, context=context, table=held.table, owners=owners)
 
@@ -917,7 +940,7 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
     commit or the recheck. So is one whose due record could not be evaluated: the record stays as it was, and a recheck
     a day out would leave a compaction or an index optimize it now names unlisted for that long."""
     now = readings.context.now
-    if result.error is not None or result.skipped == HISTORY_FENCED or result.refused_by in _ASKED_AGAIN:
+    if result.error is not None or result.skipped in (HISTORY_FENCED, POLICY_CHANGED) or result.refused_by in _ASKED_AGAIN:
         return now + timedelta(seconds=settings.retry_seconds)
     if result.refused is not None or result.trashed is not None:
         return None

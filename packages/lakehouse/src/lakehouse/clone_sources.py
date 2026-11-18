@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import location_claims, objectfs, stored_objects
+from lakehouse import branch_layout, location_claims, objectfs, stored_objects, whole_versions
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.history_fences import HistoryWork, TableHistory
@@ -174,6 +174,11 @@ def take(source: CloneSource, *, clone_location: str, control_root: str, storage
             return
         if not _holds(dataset, source):
             raise CloneSourceGoneError(f"version {source.version} of {source.table} is not retained")
+        # A version a cleanup that stopped part-way was removing still stands over deleted files (ADR 0243): the clone
+        # would read through a tag on data no reader can read.
+        version = dataset.checkout_version((source.branch, source.version) if source.branch is not None else source.version)
+        if gone := whole_versions.missing_files(version, branch_layout.ref_root(_dataset_key(source.location), source.branch), storage_options):
+            raise CloneSourceGoneError(f"version {source.version} of {source.table} is being reclaimed: {len(gone)} file(s) it names are gone")
         if held is None:
             dataset.tags.create(tag, _reference(source))
             log.info("clone_source_tagged", extra={"source": source.table, "clone": clone_location, "version": source.version, "branch": source.branch})

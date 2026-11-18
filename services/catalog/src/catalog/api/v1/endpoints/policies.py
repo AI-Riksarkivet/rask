@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter
@@ -51,6 +52,7 @@ from lakehouse import maintenance_policies as policies
 from lakehouse import records
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
+from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CONTROL_ID_RE
 
@@ -102,13 +104,36 @@ async def _set(settings: Settings, kind: PolicyKind, key: str, compose: Callable
     """Write the record ``compose`` merges onto the one stored, conditional on that record (`policies.set_policy`), once
     for all three rungs; the record written.
 
+    A table's record is written while the door holds the table's history as a ref write does (:func:`_set_holding_history`).
+
     Raises:
-        ConcurrentModificationError: The record kept changing under the set (409, code 14).
+        ConcurrentModificationError: The record kept changing under the set, or a reclaim holds the table's history (409,
+            code 14).
     """
+    write = partial(policies.set_policy, settings.registry_root, settings.storage_options(), kind, key, compose)
     try:
-        return await run_in_threadpool(policies.set_policy, settings.registry_root, settings.storage_options(), kind, key, compose)
+        return await run_in_threadpool(partial(_set_holding_history, settings, key, write) if kind == "table" else write)
     except records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the {kind} policy kept changing while it was set; set it again") from exc
+    except HistoryFencedError as exc:
+        raise ConcurrentModificationError(f"a reclaim holds the table's history, which it reads its policy under; set it again once it ends: {exc}") from exc
+
+
+def _set_holding_history(settings: Settings, table_uuid: str, write: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """``write`` a table's policy while holding the table's history as a ref write does (ADR 0243).
+
+    A maintenance pass reads the policy it plans its cleanup under before it holds the table's history, and reads it again
+    once it holds it. Holding the history here, which a reclaim excludes, makes the two exclusive, as a tag write and a
+    reclaim are: a policy written before the pass's hold is read under it, and one asked for while a reclaim holds is
+    refused, so a policy that keeps more history (a legal hold among them) is never answered 200 while a cleanup planned
+    under the earlier one still deletes.
+
+    Raises:
+        HistoryFencedError: A reclaim holds the table's history; nothing was written.
+    """
+    history = TableHistory(control_root=settings.registry_root, storage_options=settings.storage_options(), table_uuid=table_uuid)
+    with history.held(HistoryWork.REFS):
+        return write()
 
 
 def _response(record: dict[str, object]) -> PolicyResponse:
