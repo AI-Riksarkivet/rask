@@ -41,7 +41,8 @@ class _Lanes:
 
     def __init__(self) -> None:
         self.events: list[CatalogControlEvent] = []
-        self.markers: list[tuple[str, str, str | None, str | None]] = []
+        #: ``(operation, table id, event time, table uuid, namespace uuid)`` of each marker sent.
+        self.markers: list[tuple[str, str, str | None, str | None, str | None]] = []
         self.stopping = False
 
     def _stop(self) -> None:
@@ -72,7 +73,15 @@ class _Lanes:
     ) -> None:
         del namespace, version
         uuids = fields.get("uuids")
-        self.markers.append((operation, table_id, fields.get("event_time"), uuids.table_uuid if uuids is not None else None))
+        self.markers.append(
+            (
+                operation,
+                table_id,
+                fields.get("event_time"),
+                uuids.table_uuid if uuids is not None else None,
+                uuids.namespace_uuid if uuids is not None else None,
+            )
+        )
         self._stop()
 
 
@@ -220,3 +229,33 @@ def test_a_tables_lifecycle_door_that_stopped_after_its_change_is_announced_by_t
     assert lanes.markers == attempted * 2, "the finish's marker is another run than the one the door filed"
     expected = [(told, named, f"table:{attempted[0][3]}")] if told is not None else []
     assert [(event.action, event.object_name, event.object_id) for event in lanes.events] == expected
+
+
+@pytest.fixture
+def kept_by_the_trash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An estate whose drops the trash keeps for a week, set before the app reads its settings."""
+    monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "7")
+    get_settings.cache_clear()
+
+
+def test_a_namespace_undrop_that_stopped_after_restoring_a_table_is_announced_by_the_finish(kept_by_the_trash: None, estate: tuple[Any, _Lanes]) -> None:
+    """A namespace's undrop restores each table its cascade trashed, and lineage has to hear of each: a restored table
+    nobody announced is a live table its feed never names again. The door files the markers before it rebuilds anything,
+    so one that stops at a table's marker leaves the finish to send it, and to tell the control plane of the undrop."""
+    catalog, lanes = estate
+    _nested(catalog)
+    dropped = catalog.client.post("/v1/namespace/lance_catalog$db$sub/drop", json={"behavior": "Cascade"}, headers=catalog.bearer(ADMIN))
+    assert dropped.status_code == 200, dropped.text
+    assert _finish(catalog)["left"] == 0
+    lanes.markers.clear()
+    lanes.events.clear()
+
+    status = _stopped_after_its_change(catalog, lanes, "POST", "/management/v1/namespace/lance_catalog$db$sub/undrop", {})
+    attempted = list(lanes.markers)
+
+    assert (status, _finish(catalog)) == (None, {"finished": 1, "sent": 2, "unlanded": 0, "young": 0, "left": 0})
+    assert [marker[:2] for marker in attempted] == [("register_table", "lance_catalog$db$sub$t")]
+    assert None not in attempted[0][3:], "the restored table is announced without its own or its namespace's uuid"
+    assert lanes.markers == attempted * 2
+    (told,) = lanes.events
+    assert (told.action, told.object_name, told.object_id) == ("namespace_undropped", "lance_catalog$db$sub", f"namespace:{told.object_uuid}")

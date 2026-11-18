@@ -70,21 +70,6 @@ def _settings(tmp_path: Any, *, grace_days: int = 0) -> Settings:
     return Settings.model_validate(data)
 
 
-class _NoopLineage:
-    """The lineage protocol's write half, doing nothing — the doors' happy path awaits it."""
-
-    async def project_for(self, warehouse_id: str) -> str | None:
-        """Part of `LineageEmitter` since the tenant became `rask_lance.project` (WATCH targeting's key).
-        `None` is the honest answer for a fake with no registry behind it."""
-        return None
-
-    async def emit_write(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-    async def emit_create(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-
 def _uuid(canonical: str) -> str:
     """The uuid the catalog minted for the object named ``canonical`` (ADR 0173 §2).
 
@@ -671,9 +656,7 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any, monkeypatch:
             root=_ROOT,
             settings=settings,
             token=None,
-            control=NoopControlEmitter(),
-            emitter=_NoopLineage(),
-            uuids=NO_OBJECT_UUIDS,
+            announcer=unfiled(NoopControlEmitter()),
             resolver=_resolver(settings, ns, monkeypatch),
         )
     )
@@ -702,9 +685,7 @@ def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any, monke
                 root=_ROOT,
                 settings=settings,
                 token=None,
-                control=NoopControlEmitter(),
-                emitter=_NoopLineage(),
-                uuids=NO_OBJECT_UUIDS,
+                announcer=unfiled(NoopControlEmitter()),
                 resolver=_resolver(settings, ns, monkeypatch),
             )
         )

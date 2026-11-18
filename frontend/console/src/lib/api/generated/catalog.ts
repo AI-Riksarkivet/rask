@@ -11582,7 +11582,6 @@ export interface operations {
             };
             header?: {
                 "Idempotency-Key"?: string | null;
-                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;

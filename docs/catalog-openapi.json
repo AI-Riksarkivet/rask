@@ -16095,22 +16095,6 @@
               ],
               "title": "Idempotency-Key"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
           }
         ],
         "responses": {

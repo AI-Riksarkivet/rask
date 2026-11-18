@@ -111,8 +111,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         emitted.append({"segments": list(segments), **kwargs})
 
     monkeypatch.setattr(namespace_doors, "emit_control", _noop)
-    # The namespace undrop announces each table itself; a table's undrop sends from the filing it files first ([[LH-576]]).
-    monkeypatch.setattr(namespace_doors, "emit_write_event", _record)
+    # Each undrop sends from the filing it files first ([[LH-576]]).
     monkeypatch.setattr(announcing, "emit_write_event", _record)
     with TestClient(application) as test_client:
         yield test_client

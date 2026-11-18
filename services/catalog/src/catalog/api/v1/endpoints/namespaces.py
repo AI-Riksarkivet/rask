@@ -44,7 +44,6 @@ from catalog.api.announcing import AnnouncerDep
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
-    LineageEmitterDep,
     NamespaceDep,
     NamespaceRootDep,
     ObjectUuidsDep,
@@ -60,7 +59,7 @@ from catalog.core import write_judge
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, with_minted_uuid
-from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_event
+from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
@@ -78,6 +77,7 @@ from lakehouse.governed import fga
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.storage_options import StorageOptions
+from lakehouse.trash import TrashRecord
 
 
 log = logging.getLogger(__name__)
@@ -1024,9 +1024,7 @@ async def undrop_namespace(
     root: NamespaceRootDep,
     settings: SettingsDep,
     token: CurrentToken,
-    control: ControlEmitterDep,
-    emitter: LineageEmitterDep,
-    uuids: ObjectUuidsDep,
+    announcer: AnnouncerDep,
     resolver: ResolverDep,
     uuid: TrashedUuidQuery = None,
 ) -> CreateNamespaceResponse:
@@ -1082,6 +1080,63 @@ async def undrop_namespace(
     # Before anything is rebuilt: a residue record's table was destroyed, not trashed ([[LH-532]]).
     for t_rec in table_records:
         trash_doors.require_restorable(t_rec, name=t_rec.id)
+    # What the undrop announces is filed before it rebuilds anything, as the table undrop files its own ([[LH-576]]): a
+    # marker per table it re-registers, landed once the table's name names it again, and its own `namespace_undropped`,
+    # landed once the namespace's name does. A restored table lineage never hears of is skipped by its feed for good
+    # ([[LH-144]]), so an undrop that stops midway leaves each one to the finish.
+    author = token.subject if token is not None else None
+    restored_tables: dict[str, Announcement] = {}
+    for t_rec in table_records:
+        if not t_rec.location:
+            continue
+        if t_rec.uuid is None:
+            raise InternalError(f"the trash record of table {t_rec.id!r} keeps no uuid, so its restore cannot be announced")
+        t_segments = parse_identifier(t_rec.id)
+        restored_tables[t_rec.id] = Announcement(
+            evidence=NameResolves(segments=t_segments, uuid=t_rec.uuid, held=True),
+            message=announcer.marker(
+                t_segments,
+                author=author,
+                operation=REGISTER_TABLE,
+                # The record's own, stamped by the cascade: the parent is still dropped here, so no describe names it.
+                uuids=DatasetUuids(table_uuid=t_rec.uuid, namespace_uuid=t_rec.namespace_uuid),
+                source_uri=t_rec.location,
+            ),
+        )
+    declared_only = sum(1 for t_rec in table_records if not t_rec.location)
+    restored_namespace = Announcement(
+        evidence=NamespaceResolves(segments=segments, uuid=root_uuid, held=True),
+        message=ControlMessage(
+            event=CatalogControlEvent(
+                action="namespace_undropped",
+                object_type="namespace",
+                object_id=fga.namespace_object(root_uuid),
+                object_name=canonical,
+                object_uuid=root_uuid,
+                namespace_uuid=record.namespace_uuid,
+                actor=f"user:{token.subject}" if token is not None else None,
+                extra={"namespaces": len(namespace_records), "tables": len(table_records) - declared_only, "declared_only_skipped": declared_only},
+            )
+        ),
+    )
+    async with announcer.announcing(
+        door="undrop_namespace", target=fga.namespace_object(root_uuid), announcements=[*restored_tables.values(), restored_namespace]
+    ) as filing:
+        response = await _rebuild_namespaces(ns, settings, namespace_records, canonical=canonical)
+        async for restored in _reregister_tables(ns, settings, table_records, root=root):
+            await filing.send(restored_tables[restored])
+        # NO SEED: an undrop is a pure restore (owner ruling, diff2 F10 item 4b), on this door for the same reason as
+        # the table door. The recoverable cascade kept every tuple, so the descendants' owners are intact, and a seed
+        # would only add whoever pressed the button on the root of a subtree they may have had no claim to.
+        await filing.send(restored_namespace)
+    await converge.remember(200, response)
+    return response
+
+
+async def _rebuild_namespaces(ns: LanceNamespace, settings: CatalogStore, namespace_records: list[TrashRecord], *, canonical: str) -> CreateNamespaceResponse:
+    """Re-create a cascade's namespaces shallowest first, clearing each record once its namespace stands again; the
+    response of the namespace ``canonical`` names."""
+    so = settings.storage_options()
     response = CreateNamespaceResponse()
     for n_rec in namespace_records:
         n_id = n_rec.id
@@ -1101,7 +1156,13 @@ async def undrop_namespace(
             response = created
         # Clear only AFTER the create commits — a failed rebuild must leave the subtree recoverable.
         await run_in_threadpool(trash.clear, settings.registry_root, so, str(n_rec.uuid), kind="namespace")
-    skipped = 0
+    return response
+
+
+async def _reregister_tables(ns: LanceNamespace, settings: CatalogStore, table_records: list[TrashRecord], *, root: str) -> AsyncIterator[str]:
+    """Re-register each of a cascade's tables from its bytes and yield its id once it is registered, for its door to
+    announce; its record is cleared after that. A table only declared held no bytes and is cleared unannounced."""
+    so = settings.storage_options()
     for t_rec in table_records:
         t_id = t_rec.id
         location = t_rec.location
@@ -1124,49 +1185,10 @@ async def undrop_namespace(
             except TableAlreadyExistsError:
                 log.info("undrop_table_already_registered", extra={"table": t_id})
             await run_in_threadpool(warn_if_mixed_file_versions, location, so, table=t_id)
-            # Each re-registered table exists again, and lineage has to hear it, for the reason the table
-            # undrop states ([[LH-144]]). Guarded per table like the cascade's own emits: one table's
-            # failed announcement must not strand the rest of the recovery.
-            try:
-                await emit_write_event(
-                    emitter,
-                    parse_identifier(t_id),
-                    author=token.subject if token is not None else None,
-                    version=None,
-                    operation=REGISTER_TABLE,
-                    uuids=uuids,
-                    source_uri=location,
-                )
-            except Exception:
-                log.exception("undrop_lineage_emit_failed", extra={"table": t_id})
+            yield t_id
         else:
-            skipped += 1
             log.warning("undrop_skipped_declared_only_table", extra={"table": t_id})
         await run_in_threadpool(trash.clear, settings.registry_root, so, str(t_rec.uuid))
-    # NO SEED — undrop is a PURE RESTORE (owner ruling, diff2 F10 item 4b), on this door for the same
-    # reason as the table door.
-    #
-    # The comment that stood here made the argument against itself: "the recoverable cascade kept every
-    # tuple (#75's rule), so the descendants' owners are intact — seeding the ROOT records the undrop
-    # actor". If every tuple survived, there is nothing to restore; the seed only ADDED whoever pressed
-    # the button, on the root of a whole subtree they may have had no prior claim to.
-    #
-    # It also deletes this door's worst residual. The seed carried `undo=None` deliberately, because by
-    # this line the loop above has re-registered N tables and cleared N records, and a compensating
-    # `drop_namespace` would destroy the cascade the user just recovered in order to repair one tuple.
-    # That was the right call given a seed had to happen at all — and with no seed, the door has no
-    # uncompensatable step left.
-    await emit_control(
-        control,
-        action="namespace_undropped",
-        object_type="namespace",
-        object_id=fga.namespace_object(root_uuid),
-        object_name=canonical,
-        actor=f"user:{token.subject}" if token is not None else None,
-        extra={"namespaces": len(namespace_records), "tables": len(table_records) - skipped, "declared_only_skipped": skipped},
-    )
-    await converge.remember(200, response)
-    return response
 
 
 @management_router.get("/{id}/protection", response_model_exclude_none=True)
