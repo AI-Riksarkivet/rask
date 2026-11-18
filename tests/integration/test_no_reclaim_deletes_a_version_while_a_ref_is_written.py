@@ -199,5 +199,5 @@ def test_a_table_dropped_after_its_pass_read_the_trash_is_not_reclaimed(estate: 
     result = estate.swept([policy])
 
     assert (result.trashed, result.error, result.old_versions_removed, estate.versions()) == (estate.table_uuid, None, 0, versions)
-    stamped = maintenance_policies.read_state(estate.root, estate.key, policy, table_uuid=estate.table_uuid, uri=estate.location)
+    stamped = maintenance_policies.read_state(estate.root, estate.key, seeding.policy(policy), table_uuid=estate.table_uuid, uri=estate.location)
     assert (seeding.read_due(estate.root, estate.key, estate.table_uuid), stamped) == (None, None)

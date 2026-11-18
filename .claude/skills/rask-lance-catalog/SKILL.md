@@ -1043,7 +1043,7 @@ governing their data. The project-scoped surface is the console's project page, 
   the table's history fence on the control root: maintenance's two commits are the catalog's, at the maintainer doors
   `maintenance/disarm` and `maintenance/floor` (ADR 0204, [[LH-575]]), and the warehouse scope probe signs with a `probe`
   tier of its own, which no door vends. The management door refuses the tier 409 code 19 for a table whose maintenance policy keeps its
-  whole history (`cleanup_enabled` false, `lakehouse.maintenance_policies.keeps_whole_history`, gate
+  whole history (`cleanup_enabled` false, `lakehouse.maintenance_policies.PolicyRecord.keeps_whole_history`, gate
   `require_reclaimable_history` in `api/v1/endpoints/credentials.py`) or is there and cannot be read as a policy (it may
   be the hold, and no retry reads it otherwise), and 503 code 17 when the store did not answer the policy read; and
   maintenance's probe asks no vend for such a table.

@@ -14,7 +14,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lakehouse.maintenance_policies import get_policy
+import pytest
+
+from lakehouse.maintenance_policies import MalformedPolicyError, get_policy
 from lakehouse.storage_options import StorageOptions
 from tests import seeding
 
@@ -28,13 +30,15 @@ _NAMESPACE_UUID = "3f9d1c2e-8a4b-4c6d-b5e7-1a2b3c4d5e6f"
 # --------------------------------------------------------------------------------------------------
 
 
-def test_a_malformed_policy_record_is_refused_like_its_two_siblings(tmp_path: Path) -> None:
-    """`get_protection` and `trash.get` both return None on a non-dict record. `get_policy` did not."""
+def test_a_policy_record_that_is_no_object_is_refused_by_its_key_and_never_read_as_unset(tmp_path: Path) -> None:
+    """A stored record that is not an object may be a hold, so the read refuses it by the key it is stored under, as the
+    trash's and the protection's reads refuse theirs."""
     seeding.put_policy(str(tmp_path), StorageOptions(), {"kind": "table", "id": "db$t", "uuid": _TABLE_UUID})
     key = next(p for p in (tmp_path / "_policies").iterdir() if p.suffix == ".json")
     key.write_text(json.dumps(["not", "a", "record"]))
 
-    assert get_policy(str(tmp_path), StorageOptions(), "table", _TABLE_UUID) is None
+    with pytest.raises(MalformedPolicyError, match=key.name):
+        get_policy(str(tmp_path), StorageOptions(), "table", _TABLE_UUID)
 
 
 def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:

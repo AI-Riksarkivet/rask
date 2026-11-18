@@ -562,6 +562,34 @@ def test_maintenance_policy_crud_round_trips(client: TestClient, fake_ns: MagicM
     assert (unset.status_code, unset.json()) == (200, {"kind": "table", "id": "lance_catalog$db1$users", "uuid": users, "set": False})
 
 
+def test_a_policy_record_that_cannot_be_read_is_a_fault_until_its_owner_deletes_it(
+    client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]
+) -> None:
+    """A record stored for the table that is no policy may be a hold: describe never answers that none is set, and a set
+    never merges onto nothing over it, which would drop the hold. Its owner deletes it and sets the policy they mean."""
+    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
+    from catalog.core.config import get_settings
+    from lakehouse import maintenance_policies, record_store
+    from lakehouse.record_store import record_key
+
+    users = claim_described("lance_catalog$db1$users")
+    settings = get_settings()
+    held = {"kind": "table", "id": ["not", "text"], "uuid": users, "cleanup_enabled": False}
+    seeding.put_policy(settings.registry_root, settings.storage_options(), held)
+    door = "/management/v1/table/lance_catalog$db1$users/policy"
+
+    described = client.post(f"{door}/describe")
+    refused = client.post(f"{door}/set", json={"retention_days": 7})
+    stored = record_store.read_record(settings.registry_root, settings.storage_options(), record_key(maintenance_policies.PREFIX, "table", users))
+    deleted = client.post(f"{door}/delete")
+    replaced = client.post(f"{door}/set", json={"retention_days": 7})
+
+    faults = [(answer.status_code, answer.headers["content-type"], answer.json()["code"]) for answer in (described, refused)]
+    assert faults == [(500, "application/problem+json", 18)] * 2
+    assert stored == held, "the refused set changed the record it could not read"
+    assert (deleted.status_code, replaced.status_code, replaced.json()["retention_days"]) == (200, 200, 7)
+
+
 @pytest.mark.parametrize(
     ("meanwhile", "kept"),
     [
@@ -582,13 +610,15 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
     real_record = policy_doors._record  # noqa: SLF001 — the merge, where another request's write is landed in between
     landed: list[str] = []
 
-    def _another_request_lands(kind: str, canonical: str, body: Any, existing: dict[str, object] | None, *, uuid: str | None) -> dict[str, object]:
+    def _another_request_lands(
+        kind: policy_doors.PolicyKind, canonical: str, body: Any, existing: maintenance_policies.PolicyRecord | None, *, uuid: str | None
+    ) -> maintenance_policies.PolicyRecord:
         if not landed:
             landed.append(meanwhile)
             settings = get_settings()
             if meanwhile == "set":
                 record = real_record(kind, canonical, policy_doors.PolicyRequest(scan_batch_size=64), existing, uuid=uuid)
-                seeding.put_policy(settings.registry_root, settings.storage_options(), record)
+                seeding.put_policy(settings.registry_root, settings.storage_options(), record.stored())
             else:
                 maintenance_policies.delete_policy(settings.registry_root, settings.storage_options(), kind, str(uuid))
         return real_record(kind, canonical, body, existing, uuid=uuid)

@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import CreateNamespaceRequest, LanceNamespace, NamespaceAlreadyExistsError
@@ -53,6 +52,7 @@ from catalog.schemas import PolicyRequest
 from catalog.services import native, object_uuids
 from lakehouse import maintenance_policies, protection
 from lakehouse.governed import fga
+from lakehouse.maintenance_policies import PolicyRecord
 from lakehouse.naming import CATALOG_DELIMITER
 
 
@@ -95,10 +95,10 @@ def provenance_tuples(settings: CatalogLineageSettings, *, namespace_uuid: str, 
     ]
 
 
-def _declared_policy(retain_versions: int, *, canonical: str, namespace_uuid: str) -> dict[str, Any]:
+def _declared_policy(retain_versions: int, *, canonical: str, namespace_uuid: str) -> PolicyRecord:
     """The maintenance policy this step writes: keep the last ``retain_versions``, every other knob at its default."""
     knobs = PolicyRequest.model_construct(retain_versions=retain_versions).model_dump()
-    return {**knobs, "kind": "namespace", "id": canonical, "uuid": namespace_uuid, "set_by": ACTOR}
+    return PolicyRecord.model_validate({**knobs, "kind": "namespace", "id": canonical, "uuid": namespace_uuid, "set_by": ACTOR})
 
 
 def keep_declared_retention(settings: Settings, *, canonical: str, namespace_uuid: str) -> None:
@@ -115,11 +115,20 @@ def keep_declared_retention(settings: Settings, *, canonical: str, namespace_uui
     if (retain := settings.provenance_retain_versions) is not None:
         declared = _declared_policy(retain, canonical=canonical, namespace_uuid=namespace_uuid)
         maintenance_policies.set_policy(
-            root, options, "namespace", namespace_uuid, lambda stored: declared if stored is None else {**stored, "retain_versions": retain}
+            root,
+            options,
+            "namespace",
+            namespace_uuid,
+            lambda stored: declared if stored is None else PolicyRecord.model_validate({**stored.stored(), "retain_versions": retain}),
         )
         return
-    held = maintenance_policies.get_policy(root, options, "namespace", namespace_uuid)
-    retain = held.get("retain_versions") if held is not None else None
+    try:
+        held = maintenance_policies.get_policy(root, options, "namespace", namespace_uuid)
+    except maintenance_policies.MalformedPolicyError as exc:
+        # Not the policy this step wrote, so not its to remove; the policy door replaces it.
+        log.warning("provenance_policy_unreadable", extra={"namespace": canonical, "error": str(exc)[:300]})
+        return
+    retain = held.stored().get("retain_versions") if held is not None else None
     if isinstance(retain, int) and held == _declared_policy(retain, canonical=canonical, namespace_uuid=namespace_uuid):
         maintenance_policies.delete_policy(root, options, "namespace", namespace_uuid)
 

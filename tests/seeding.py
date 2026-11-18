@@ -25,16 +25,26 @@ def put_project(control_root: str, storage_options: StorageOptions, record: dict
     put_record(control_root, storage_options, f"{control_prefixes.PROJECTS}/{record['id']}.json", record)
 
 
-def put_policy(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
-    """Hold ``record`` as the maintenance policy of the object it names, under the key the policy door writes."""
-    key = record_key(maintenance_policies.PREFIX, record["kind"], maintenance_policies.policy_key(record))
-    put_record(control_root, storage_options, key, record)
+def policy(record: dict[str, Any] | maintenance_policies.PolicyRecord) -> maintenance_policies.PolicyRecord:
+    """``record`` as the policy record the registry would read it as."""
+    return record if isinstance(record, maintenance_policies.PolicyRecord) else maintenance_policies.read(record, at="a record of this test's")
 
 
-def put_cadence_stamp(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, table_uuid: str, uri: str, at: str) -> None:
+def put_policy(control_root: str, storage_options: StorageOptions, record: dict[str, Any] | maintenance_policies.PolicyRecord) -> None:
+    """Hold ``record`` as the maintenance policy of the object it names, under the key the policy door writes; a map is
+    held as it is, whatever it holds."""
+    if isinstance(record, maintenance_policies.PolicyRecord):
+        record = record.stored()
+    keyed_by = "uuid" if record["kind"] in ("table", "namespace") else "id"
+    put_record(control_root, storage_options, record_key(maintenance_policies.PREFIX, record["kind"], str(record[keyed_by])), record)
+
+
+def put_cadence_stamp(
+    control_root: str, storage_options: StorageOptions, record: dict[str, Any] | maintenance_policies.PolicyRecord, *, table_uuid: str, uri: str, at: str
+) -> None:
     """Hold ``at`` as the cadence stamp of the dataset ``uri`` under the policy ``record``, whatever ``at`` spells: a
     stamp maintenance's own writer would refuse to write."""
-    stamp = maintenance_policies.CadenceStamp.under(record, datetime.now(UTC)).model_dump(mode="json")
+    stamp = maintenance_policies.CadenceStamp.under(policy(record), datetime.now(UTC)).model_dump(mode="json")
     put_record(control_root, storage_options, maintenance_policies.cadence_key(table_uuid, uri), {**stamp, "last_maintained_at": at})
 
 

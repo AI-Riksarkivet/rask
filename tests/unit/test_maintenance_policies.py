@@ -28,19 +28,21 @@ TABLE_UUID = "0b1e5c1a-0000-4000-8000-000000000001"
 _STAMPED = datetime(2026, 7, 16, tzinfo=UTC)
 
 
-def _policy(kind: str = "table", id_: str = "db$t", uuid: str = TABLE_UUID, **fields: Any) -> dict[str, Any]:
-    return {"kind": kind, "id": id_, "uuid": uuid, "compact_enabled": True, **fields}
+def _policy(kind: str = "table", id_: str = "db$t", uuid: str = TABLE_UUID, **fields: Any) -> mp.PolicyRecord:
+    return seeding.policy({"kind": kind, "id": id_, "uuid": uuid, "compact_enabled": True, **fields})
 
 
-def _project_policy(id_: str = "acme", buckets: list[str] | None = None, **fields: Any) -> dict[str, Any]:
+def _project_policy(id_: str = "acme", buckets: list[str] | None = None, **fields: Any) -> mp.PolicyRecord:
     # #84 shape: no uuid — a project record matches by its warehouse BUCKETS (resolved at set time).
-    return {
-        "kind": "project",
-        "id": id_,
-        "buckets": buckets if buckets is not None else ["acme-wh"],
-        "compact_enabled": True,
-        **fields,
-    }
+    return seeding.policy(
+        {
+            "kind": "project",
+            "id": id_,
+            "buckets": buckets if buckets is not None else ["acme-wh"],
+            "compact_enabled": True,
+            **fields,
+        }
+    )
 
 
 def test_registry_round_trips_and_lists(tmp_path: Path) -> None:
@@ -49,7 +51,7 @@ def test_registry_round_trips_and_lists(tmp_path: Path) -> None:
     seeding.put_policy(root, StorageOptions(), _policy(kind="namespace", id_="silver", uuid="ns-silver"))
 
     stored = mp.get_policy(root, StorageOptions(), "table", TABLE_UUID)
-    assert stored is not None and stored["retention_days"] == 7
+    assert stored is not None and stored.stored()["retention_days"] == 7
     assert mp.get_policy(root, StorageOptions(), "table", "db$t") is None, "a table's record is keyed by its uuid, never its name"
     assert len(mp.list_policies(root, StorageOptions())) == 2
 
@@ -95,7 +97,7 @@ def test_list_policies_skips_a_corrupt_record(tmp_path: Path) -> None:
     (tmp_path / "_policies" / "table-corrupt.json").write_text("{truncated")
     (tmp_path / "_policies" / "table-nouuid.json").write_text('{"kind": "table"}')
     records = mp.list_policies(root, StorageOptions())
-    assert len(records) == 1 and records[0]["retention_days"] == 365
+    assert len(records) == 1 and records[0].settings.retention_days == 365
 
 
 def test_resolve_precedence_table_over_namespace_over_none() -> None:
@@ -106,11 +108,11 @@ def test_resolve_precedence_table_over_namespace_over_none() -> None:
         _policy(id_="silver$features", uuid="t-features", retention_days=1),
     ]
     hit = mp.resolve_policy(records, "s3://bkt/t-features", table_uuid="t-features", namespace_uuids=["ns-silver", "ns-deep"])
-    assert hit is not None and hit["retention_days"] == 1
+    assert hit is not None and hit.settings.retention_days == 1
     hit = mp.resolve_policy(records, "s3://bkt/t-other", table_uuid="t-other", namespace_uuids=["ns-silver", "ns-deep"])
-    assert hit is not None and hit["retention_days"] == 10
+    assert hit is not None and hit.settings.retention_days == 10
     hit = mp.resolve_policy(records, "s3://bkt/t-other", table_uuid="t-other", namespace_uuids=["ns-silver"])
-    assert hit is not None and hit["retention_days"] == 30
+    assert hit is not None and hit.settings.retention_days == 30
     assert mp.resolve_policy(records, "s3://bkt/t-elsewhere", table_uuid="t-elsewhere", namespace_uuids=["ns-gold"]) is None
 
 
@@ -120,9 +122,9 @@ def test_project_policy_round_trips_and_lists(tmp_path: Path) -> None:
     root = str(tmp_path)
     seeding.put_policy(root, StorageOptions(), _project_policy(retention_days=90))
     stored = mp.get_policy(root, StorageOptions(), "project", "acme")
-    assert stored is not None and stored["buckets"] == ["acme-wh"]
+    assert stored is not None and stored.buckets == ["acme-wh"]
     listed = mp.list_policies(root, StorageOptions())
-    assert len(listed) == 1 and listed[0]["kind"] == "project"
+    assert len(listed) == 1 and listed[0].kind == "project"
     assert mp.delete_policy(root, StorageOptions(), "project", "acme") is True
     assert mp.delete_policy(root, StorageOptions(), "project", "acme") is False  # idempotent
 
@@ -135,7 +137,7 @@ def test_list_policies_rejects_a_bucketless_project_record(tmp_path: Path) -> No
     seeding.put_policy(root, StorageOptions(), {"kind": "project", "id": "ghost", "buckets": []})
     (tmp_path / "_policies" / "project-nolist.json").write_text('{"kind": "project", "id": "x"}')
     records = mp.list_policies(root, StorageOptions())
-    assert len(records) == 1 and records[0]["id"] == "acme"
+    assert len(records) == 1 and records[0].id == "acme"
 
 
 def test_resolve_precedence_table_beats_namespace_beats_project_beats_none() -> None:
@@ -147,13 +149,13 @@ def test_resolve_precedence_table_beats_namespace_beats_project_beats_none() -> 
         _project_policy(buckets=["acme-wh", "acme-wh2"], retention_days=90),
     ]
     hit = mp.resolve_policy(records, "s3://acme-wh/t-features", table_uuid="t-features", namespace_uuids=["ns-silver"])
-    assert hit is not None and hit["retention_days"] == 1  # table beats namespace beats project
+    assert hit is not None and hit.settings.retention_days == 1  # table beats namespace beats project
     hit = mp.resolve_policy(records, "s3://acme-wh/t-other", table_uuid="t-other", namespace_uuids=["ns-silver"])
-    assert hit is not None and hit["retention_days"] == 30  # namespace beats project
+    assert hit is not None and hit.settings.retention_days == 30  # namespace beats project
     hit = mp.resolve_policy(records, "s3://acme-wh/t-events", table_uuid="t-events", namespace_uuids=["ns-bronze"])
-    assert hit is not None and hit["retention_days"] == 90  # project catches the rest of its buckets
+    assert hit is not None and hit.settings.retention_days == 90  # project catches the rest of its buckets
     hit = mp.resolve_policy(records, "s3://acme-wh2/t-x", table_uuid="t-x", namespace_uuids=[])
-    assert hit is not None and hit["retention_days"] == 90  # every bucket in the record is covered
+    assert hit is not None and hit.settings.retention_days == 90  # every bucket in the record is covered
     assert mp.resolve_policy(records, "s3://other-wh/t-x", table_uuid="t-x", namespace_uuids=[]) is None  # cross-bucket never matches
     # A bucket-NAME prefix must not match ("acme-wh2" covered explicitly above; "acme-whx" is not).
     assert mp.resolve_policy(records, "s3://acme-whx/t-x", table_uuid="t-x", namespace_uuids=[]) is None
@@ -175,11 +177,11 @@ def test_resolve_overlapping_project_claims_warns_and_matches_nothing(
     assert any(r.message == "maintenance_policy_project_overlap" for r in caplog.records)
     # The uncontested bucket in the same records still resolves its (single) claimant.
     hit = mp.resolve_policy(contested, "s3://evil-wh/t", table_uuid="t", namespace_uuids=["ns-db"])
-    assert hit is not None and hit["id"] == "evil"
+    assert hit is not None and hit.id == "evil"
     # A namespace record shadows the project tier entirely — the overlap never reaches it.
     shadowed = [_policy(kind="namespace", id_="db", uuid="ns-db", retention_days=7), *contested]
     hit = mp.resolve_policy(shadowed, "s3://shared-bkt/t", table_uuid="t", namespace_uuids=["ns-db"])
-    assert hit is not None and hit["retention_days"] == 7
+    assert hit is not None and hit.settings.retention_days == 7
 
 
 def test_resolve_matches_a_table_by_its_uuid_never_by_its_name() -> None:
@@ -188,7 +190,7 @@ def test_resolve_matches_a_table_by_its_uuid_never_by_its_name() -> None:
     records = [_policy(id_="db1$users", uuid="t-old", retention_days=1)]
     assert mp.resolve_policy(records, "s3://bkt/t-new", table_uuid="t-new", namespace_uuids=["ns-db1"]) is None
     hit = mp.resolve_policy(records, "s3://bkt/t-old", table_uuid="t-old", namespace_uuids=["ns-elsewhere"])
-    assert hit is not None and hit["retention_days"] == 1
+    assert hit is not None and hit.settings.retention_days == 1
 
 
 def _settings(tmp_path: Path) -> MaintenanceSettings:
@@ -250,11 +252,11 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
     from catalog.schemas import PolicyRequest
 
     stored = _record("table", "bronze$pages", PolicyRequest(scan_batch_size=64, cleanup_enabled=False), None, uuid=TABLE_UUID)
-    assert stored["scan_batch_size"] == 64
+    assert stored.stored()["scan_batch_size"] == 64
 
     # A later save that only flips compaction off — exactly what the form sends.
     updated = _record("table", "bronze$pages", PolicyRequest(compact_enabled=False), stored, uuid=TABLE_UUID)
 
-    assert updated["compact_enabled"] is False, "the field the caller DID set must apply"
-    assert updated["scan_batch_size"] == 64, "the memory bound was silently cleared"
-    assert updated["cleanup_enabled"] is False, "the legal hold was silently lifted"
+    assert updated.stored()["compact_enabled"] is False, "the field the caller DID set must apply"
+    assert updated.stored()["scan_batch_size"] == 64, "the memory bound was silently cleared"
+    assert updated.stored()["cleanup_enabled"] is False, "the legal hold was silently lifted"

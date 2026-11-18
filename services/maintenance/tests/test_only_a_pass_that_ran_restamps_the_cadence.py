@@ -23,6 +23,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.expiry import DatasetOpener, DatasetResult, ExpiryPolicy, ExpiryTarget
 from maintenance.services.plan import DatasetPlan
+from tests import seeding
 
 
 def _refused(target: ExpiryTarget, _policy: ExpiryPolicy, *, opener: DatasetOpener | None = None) -> DatasetResult:
@@ -56,7 +57,9 @@ def test_only_a_pass_that_ran_restamps_the_cadence(
         monkeypatch.setattr(table_pass, "expire_versions", refusal)
     settings = MaintenanceSettings(s3_bucket="b", s3_secret_access_key=SecretStr("unit"))
 
-    result = maintain_one(uri, settings, plan=DatasetPlan(policy={"id": "p1", "compact_interval_hours": 6}))
+    result = maintain_one(
+        uri, settings, plan=DatasetPlan(policy=seeding.policy({"kind": "project", "id": "p1", "buckets": ["b"], "compact_interval_hours": 6}))
+    )
 
     assert result.skipped == skipped, result
     assert len(written) == stamps, f"the cadence stamp was written {len(written)} time(s) for a {skipped or 'completed'} pass"

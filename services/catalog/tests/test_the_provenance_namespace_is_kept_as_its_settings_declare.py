@@ -29,6 +29,7 @@ from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse import maintenance_policies
 from lakehouse.governed import fga
+from lakehouse.storage_options import StorageOptions
 from tests import seeding
 
 
@@ -74,6 +75,13 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **declared: str) 
     return governed
 
 
+def _stored(root: str, options: StorageOptions, namespace_uuid: str) -> dict[str, Any]:
+    """The namespace's policy record as the registry stores it."""
+    held = maintenance_policies.get_policy(root, options, "namespace", namespace_uuid)
+    assert held is not None
+    return held.stored()
+
+
 def _booted(settings: Settings, store: Any) -> tuple[LanceNamespace, str]:  # noqa: ANN401 — the root conftest's OpenFgaStore
     """Run the boot step against ``store``; answer the namespace connection and the provenance namespace's uuid."""
     ns = connect("dir", {"root": settings.root})
@@ -103,7 +111,7 @@ def test_a_boot_takes_back_an_own_accounts_writer_it_no_longer_declares_and_keep
     _booted(settings, openfga_store)
 
     policy = maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "namespace", namespace_uuid)
-    assert policy is not None and (policy["retain_versions"], policy["retention_days"]) == (20, None), policy
+    assert policy is not None and (policy.settings.retain_versions, policy.settings.retention_days) == (20, None), policy
     held: dict[str, set[str]] = {}
     for user, relation, obj in openfga_store.tuples():
         if obj == namespace and user.startswith("user:"):
@@ -121,12 +129,12 @@ def test_a_boot_that_declares_a_retention_keeps_a_hold_set_through_the_policy_do
     _ns, namespace_uuid = _booted(_settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="20"), openfga_store)
     declared = _settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="30")
     root, options = declared.registry_root, declared.storage_options()
-    held = {**(maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) or {}), "cleanup_enabled": False}
+    held = {**_stored(root, options, namespace_uuid), "cleanup_enabled": False}
     seeding.put_policy(root, options, held)
 
     _booted(declared, openfga_store)
 
-    assert maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) == {**held, "retain_versions": 30}
+    assert maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) == seeding.policy({**held, "retain_versions": 30})
 
 
 @pytest.mark.parametrize(
@@ -147,9 +155,27 @@ def test_a_boot_that_declares_no_retention_removes_only_the_policy_it_wrote(
     _ns, namespace_uuid = _booted(declared, openfga_store)
     root, options = declared.registry_root, declared.storage_options()
     # The policy door merges what its caller sets into the record it finds (`policies._record`), as this does.
-    record = {**(maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) or {}), **changed_through_the_door}
+    record = {**_stored(root, options, namespace_uuid), **changed_through_the_door}
     seeding.put_policy(root, options, record)
 
     _booted(_settings(tmp_path, monkeypatch), openfga_store)
 
-    assert maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) == (record if stands else None)
+    assert maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) == (seeding.policy(record) if stands else None)
+
+
+def test_a_boot_that_declares_no_retention_leaves_a_policy_it_cannot_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
+) -> None:
+    """A record stored for the namespace that is no policy is not the one this step wrote, so the boot neither removes it
+    nor fails on it: the policy door is where it is replaced."""
+    declared = _settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="20")
+    _ns, namespace_uuid = _booted(declared, openfga_store)
+    root, options = declared.registry_root, declared.storage_options()
+    seeding.put_policy(root, options, {"kind": "namespace", "id": ["not", "text"], "uuid": namespace_uuid})
+
+    _booted(_settings(tmp_path, monkeypatch), openfga_store)
+
+    with pytest.raises(maintenance_policies.MalformedPolicyError):
+        maintenance_policies.get_policy(root, options, "namespace", namespace_uuid)

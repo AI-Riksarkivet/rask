@@ -141,7 +141,7 @@ def test_a_rename_keeps_the_tables_protection_policy_and_contract_and_writes_no_
     namespace = _ok(real_ns_client, "/v1/namespace/lance_catalog$db/describe")["properties"]["rask.uuid"]
     assert owners.namespace_uuids == [namespace], "a policy above the table is looked for under something other than its namespaces"
     plan = resolve_plan(location, context=readings.context, owners=owners)
-    assert (plan.policy or {}).get("uuid") == minted, f"maintenance resolves another policy for the renamed table: {plan.policy}"
+    assert plan.policy is not None and plan.policy.uuid == minted, f"maintenance resolves another policy for the renamed table: {plan.policy}"
     assert plan.older_than == timedelta(days=7)
 
 

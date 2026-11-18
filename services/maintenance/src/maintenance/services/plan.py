@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
 
 from pydantic import BaseModel
 
 from lakehouse import maintenance_policies
 from lakehouse.governed.store_credential import StoreCredentialUnavailableError
+from lakehouse.maintenance_policies import PolicyRecord
 from maintenance.core.config import MaintenanceStore
 from maintenance.services.due import DueQuestion
 from maintenance.services.expiry import ExpiryPolicy
@@ -31,7 +31,7 @@ class DatasetPlan(BaseModel):
     #: ``policy_interval`` (the cadence has not elapsed), or ``None`` to maintain.
     skipped: str | None = None
     #: The matched policy record, or ``None`` when no record applies (or one could not be read).
-    policy: dict[str, Any] | None = None
+    policy: PolicyRecord | None = None
     older_than: timedelta | None = None
     retain_versions: int | None = None
     cleanup_enabled: bool = True
@@ -63,9 +63,9 @@ class DatasetPlan(BaseModel):
         """Which record won, as a person reads it: the table's own is named as the table is named now."""
         if self.policy is None:
             return None
-        if self.policy.get("kind") == "table":
+        if self.policy.kind == "table":
             return table
-        return str(self.policy.get("id") or "") or None
+        return self.policy.id or None
 
 
 def _age_bound(settings: maintenance_policies.PolicySettings, *, default: timedelta) -> timedelta | None:
@@ -81,15 +81,15 @@ def _age_bound(settings: maintenance_policies.PolicySettings, *, default: timede
     return default
 
 
-def plan_from_policy(policy: dict[str, Any] | None, *, older_than: timedelta) -> DatasetPlan:
+def plan_from_policy(policy: PolicyRecord | None, *, older_than: timedelta) -> DatasetPlan:
     """The plan one resolved record makes, ``None`` meaning the global defaults.
 
     Raises:
-        MalformedPolicyError: The record's settings cannot be read (:func:`lakehouse.maintenance_policies.policy_settings`).
+        MalformedPolicyError: The record's settings cannot be read (:attr:`lakehouse.maintenance_policies.PolicyRecord.settings`).
     """
     if policy is None:
         return DatasetPlan(older_than=older_than)
-    settings = maintenance_policies.policy_settings(policy)
+    settings = policy.settings
     return DatasetPlan(
         policy=policy,
         older_than=_age_bound(settings, default=older_than),
@@ -104,7 +104,7 @@ def plan_from_policy(policy: dict[str, Any] | None, *, older_than: timedelta) ->
 class PlanContext(BaseModel):
     """What resolving one dataset's plan reads: this tick's policies, its clock, and the default retention."""
 
-    policies: list[dict[str, Any]]
+    policies: list[PolicyRecord]
     now: datetime
     older_than: timedelta
 
@@ -124,7 +124,7 @@ def resolve_plan(uri: str, *, context: PlanContext, owners: PolicyOwners) -> Dat
     return plan_from_policy(policy, older_than=context.older_than)
 
 
-def last_maintained(policy: dict[str, Any], *, settings: MaintenanceStore, table_uuid: str, uri: str) -> datetime | None:
+def last_maintained(policy: PolicyRecord, *, settings: MaintenanceStore, table_uuid: str, uri: str) -> datetime | None:
     """When a pass last maintained this dataset under ``policy``, or ``None`` when none did or the store cannot say.
 
     A stamp the store fails to give maintains, never the other way, or a lost stamp would silence maintenance for
@@ -133,17 +133,17 @@ def last_maintained(policy: dict[str, Any], *, settings: MaintenanceStore, table
     try:
         return maintenance_policies.read_state(settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=uri)
     except (OSError, StoreCredentialUnavailableError) as exc:
-        log.warning("compaction_policy_state_unreadable", extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)})
+        log.warning("compaction_policy_state_unreadable", extra={"policy": policy.id, "uri": uri, "error": str(exc)})
         return None
 
 
-def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceStore, table_uuid: str, uri: str, now: datetime) -> str | None:
+def cadence_skip(policy: PolicyRecord, *, settings: MaintenanceStore, table_uuid: str, uri: str, now: datetime) -> str | None:
     """``policy_interval`` while the policy's ``compact_interval_hours`` has not elapsed since this dataset's stamp.
 
     Raises:
         MalformedPolicyError: The policy's settings cannot be read.
     """
-    interval = maintenance_policies.policy_settings(policy).compact_interval_hours
+    interval = policy.settings.compact_interval_hours
     if interval is None:
         return None
     stamped = last_maintained(policy, settings=settings, table_uuid=table_uuid, uri=uri)

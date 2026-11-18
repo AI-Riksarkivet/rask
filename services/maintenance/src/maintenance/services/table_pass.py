@@ -600,12 +600,12 @@ def _stamp_cadence(result: DatasetResult, *, table_uuid: str, plan: DatasetPlan,
     policy = plan.policy
     if policy is None or result.error is not None or result.refused is not None or result.skipped is not None:
         return
-    if maintenance_policies.policy_settings(policy).compact_interval_hours is None:
+    if policy.settings.compact_interval_hours is None:
         return
     try:
         maintenance_policies.write_state(settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=result.uri, at=now)
     except Exception as exc:  # noqa: BLE001 — a lost stamp re-paces one dataset; it must not fail the pass
-        log.warning("compaction_policy_stamp_failed", extra={"policy": policy.get("id"), "uri": result.uri, "error": str(exc)})
+        log.warning("compaction_policy_stamp_failed", extra={"policy": policy.id, "uri": result.uri, "error": str(exc)})
 
 
 def _record_dataset_metrics(result: DatasetResult) -> None:
@@ -771,7 +771,7 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
     ids = table_ids_of(root, options, segments=held.segments)
     if ids is None:
         return None
-    policies: list[dict[str, object]] = []
+    policies: list[maintenance_policies.PolicyRecord] = []
     owners = policy_owners(ids, held.table, claims=claim_store(settings))
     if owners is not None:
         try:
@@ -937,7 +937,7 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
         log.warning("maintenance_next_due_unread", extra={"uri": result.uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return now + timedelta(seconds=settings.retry_seconds)
     earliest = min(due, default=None)
-    if earliest is None or plan.policy is None or (interval := maintenance_policies.policy_settings(plan.policy).compact_interval_hours) is None:
+    if earliest is None or plan.policy is None or (interval := plan.policy.settings.compact_interval_hours) is None:
         return earliest
     stamped = last_maintained(plan.policy, settings=settings, table_uuid=named.owners.table_uuid, uri=result.uri)
     return max(earliest, stamped + timedelta(hours=interval)) if stamped is not None else earliest

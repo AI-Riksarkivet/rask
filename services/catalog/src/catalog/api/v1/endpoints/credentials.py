@@ -96,7 +96,7 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
     )
     try:
         policy = await run_in_threadpool(resolve)
-        held = maintenance_policies.keeps_whole_history(policy)
+        held = policy is not None and policy.keeps_whole_history
     except maintenance_policies.MalformedPolicyError as exc:
         raise InvalidTableStateError(
             "a maintenance policy that may govern the table cannot be read as one, and may keep its whole history, so no credential that could delete or rewrite it is vended"

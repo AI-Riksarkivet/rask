@@ -350,7 +350,7 @@ def test_a_tables_next_pass_comes_when_its_first_dataset_needs_one(
         if policy.get(_STAMP) == "without-an-offset":
             seeding.put_cadence_stamp(f"s3://{bucket}", store, record, table_uuid=task.uuid, uri=dataset, at=now.replace(tzinfo=None).isoformat())
         else:
-            maintenance_policies.write_state(f"s3://{bucket}", store, record, table_uuid=task.uuid, uri=dataset, at=now)
+            maintenance_policies.write_state(f"s3://{bucket}", store, seeding.policy(record), table_uuid=task.uuid, uri=dataset, at=now)
     held = location_claims.holder(location_claims.ClaimStore(control_root=f"s3://{bucket}", storage_options=store), task.location)
     assert held is not None
     readings = table_pass.read_for(task.location, held, configured, now=now)
@@ -467,4 +467,4 @@ def test_a_projects_hold_governs_its_buckets_table_where_the_policies_are_kept_a
 
     readings = table_pass.read_for(task.location, held, settings(), now=datetime.now(UTC))
 
-    assert readings is not None and [policy.get("cleanup_enabled") for policy in readings.context.policies] == [False]
+    assert readings is not None and [policy.settings.cleanup_enabled for policy in readings.context.policies] == [False]

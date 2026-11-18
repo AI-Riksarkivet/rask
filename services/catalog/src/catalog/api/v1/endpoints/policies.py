@@ -27,12 +27,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
 
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
+    InternalError,
     InvalidInputError,
     LanceNamespace,
     NamespaceAlreadyExistsError,
@@ -52,6 +52,7 @@ from lakehouse import records
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimStore
+from lakehouse.maintenance_policies import PolicyRecord
 from lakehouse.naming import CONTROL_ID_RE
 
 
@@ -76,7 +77,16 @@ projects_router = APIRouter(prefix="/management/v1/projects", tags=["policy"])
 _PROJECT_ID_RE = CONTROL_ID_RE
 
 
-def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[str, object] | None, *, uuid: str | None) -> dict[str, object]:
+def _record(
+    kind: PolicyKind,
+    canonical_id: str,
+    body: PolicyRequest,
+    existing: PolicyRecord | None,
+    *,
+    uuid: str | None,
+    location: str | None = None,
+    buckets: list[str] | None = None,
+) -> PolicyRecord:
     """The record to persist. A field the caller did not SET keeps whatever the stored record had.
 
     The record is written whole, so `model_dump()` alone made every set a full replace:
@@ -88,17 +98,19 @@ def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[st
 
     Only EXPLICITLY set fields are applied (`exclude_unset`), which is also what the request model's
     empty-body guard already keys on — one notion of "the caller meant this", not two. ``existing`` is the record as it
-    stands when the write lands (`policies.set_policy`), never one read earlier.
+    stands when the write lands (`policies.set_policy`), never one read earlier. The identity is this door's: its kind,
+    the name it was addressed by, and what its kind is matched by (a ``uuid``, a table's ``location``, a project's
+    ``buckets``).
     """
-    merged: dict[str, object] = dict(existing or {})
+    merged: dict[str, object] = existing.stored() if existing is not None else {}
     merged.update(body.model_dump(exclude_unset=True))
     # Defaults still apply on a FIRST write, where there is nothing to inherit from.
     for field, value in body.model_dump().items():
         merged.setdefault(field, value)
-    return {**merged, "kind": kind, "id": canonical_id, **({"uuid": uuid} if uuid is not None else {})}
+    return PolicyRecord.model_validate({**merged, "kind": kind, "id": canonical_id, "uuid": uuid, "location": location, "buckets": buckets or []})
 
 
-async def _set(settings: CatalogStore, kind: PolicyKind, key: str, compose: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
+async def _set(settings: CatalogStore, kind: PolicyKind, key: str, compose: Callable[[PolicyRecord | None], PolicyRecord]) -> PolicyRecord:
     """Write the record ``compose`` merges onto the one stored, conditional on that record (`policies.set_policy`), once
     for all three rungs; the record written.
 
@@ -109,10 +121,12 @@ async def _set(settings: CatalogStore, kind: PolicyKind, key: str, compose: Call
         return await run_in_threadpool(policies.set_policy, settings.registry_root, settings.storage_options(), kind, key, compose)
     except records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the {kind} policy kept changing while it was set; set it again") from exc
+    except policies.MalformedPolicyError as exc:
+        raise InternalError(f"{exc}; delete the policy, then set it") from exc
 
 
-def _response(record: dict[str, object]) -> PolicyResponse:
-    return PolicyResponse.model_validate({**record, "set": True})
+def _response(record: PolicyRecord) -> PolicyResponse:
+    return PolicyResponse.model_validate({**record.stored(), "set": True})
 
 
 async def _describe(settings: CatalogStore, *, kind: PolicyKind, key: str, canonical: str, uuid: str | None) -> PolicyResponse | PolicyUnset:
@@ -122,14 +136,17 @@ async def _describe(settings: CatalogStore, *, kind: PolicyKind, key: str, canon
     project's by reading its registry record, so an object that does not stand, or that its caller may not see,
     never reaches it ([[LH-589]]).
     """
-    record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, key)
+    try:
+        record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, key)
+    except policies.MalformedPolicyError as exc:
+        raise InternalError(f"{exc}; delete the policy, then set it") from exc
     if record is None:
         return PolicyUnset(kind=kind, id=canonical, uuid=uuid, set=False)
     # Named as the door was addressed: the name the record kept is the one its object had when it was set.
-    return _response({**record, "id": canonical})
+    return _response(record.model_copy(update={"id": canonical}))
 
 
-async def _delete(settings: CatalogStore, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str) -> PolicyDeleteResponse:
+async def _delete(settings: CatalogStore, control: ControlEmitter, token: Caller | None, kind: PolicyKind, *, key: str, canonical: str) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs."""
     await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key)
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
@@ -159,9 +176,7 @@ async def set_table_policy(
     canonical = fga.canonical_object_id(table.segments)
     table_uuid = table.require_uuid()
     # The location beside the uuid, so a listing names the table as it is named now (`table_claims.names_now`).
-    record = await _set(
-        settings, "table", table_uuid, lambda stored: {**_record("table", canonical, body, stored, uuid=table_uuid), "location": str(table.location)}
-    )
+    record = await _set(settings, "table", table_uuid, lambda stored: _record("table", canonical, body, stored, uuid=table_uuid, location=str(table.location)))
     log.info("maintenance_policy_set", extra={"kind": "table", "id": canonical})
     await emit_control(
         control,
@@ -282,7 +297,7 @@ async def set_project_policy(
                 "contested; refusing to set a policy over another tenant's data (fix the warehouse "
                 "records first)"
             )
-    record = await _set(settings, "project", project, lambda stored: {**_record("project", project, body, stored, uuid=None), "buckets": buckets})
+    record = await _set(settings, "project", project, lambda stored: _record("project", project, body, stored, uuid=None, buckets=buckets))
     log.info("maintenance_policy_set", extra={"kind": "project", "id": project})
     await emit_control(
         control,
@@ -315,7 +330,7 @@ async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentTo
     return await _delete(settings, control, token, "project", key=project, canonical=project)
 
 
-def _named_now(settings: CatalogStore, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _named_now(settings: CatalogStore, records: list[PolicyRecord]) -> list[PolicyRecord]:
     """Each record, a table's named as its table is named now, which a rename since the policy was set changed; a
     table's whose table is gone governs nothing and is left out (``table_claims.names_now``)."""
     store = table_claims.claim_store(settings)
@@ -323,17 +338,16 @@ def _named_now(settings: CatalogStore, records: list[dict[str, Any]]) -> list[di
     return [record for record in named if record is not None]
 
 
-def _with_current_name(store: ClaimStore, record: dict[str, Any]) -> dict[str, Any] | None:
+def _with_current_name(store: ClaimStore, record: PolicyRecord) -> PolicyRecord | None:
     """A table record with ``id`` its table's name now (:func:`table_claims.current_name`), ``None`` when that table is
     gone; any other record as kept. A namespace is never renamed, and a project's id is its own."""
-    if record.get("kind") != "table":
+    if record.kind != "table":
         return record
-    location, uuid = record.get("location"), record.get("uuid")
-    name = table_claims.current_name(store, str(location), str(uuid)) if location and uuid else None
-    return None if name is None else {**record, "id": name}
+    name = table_claims.current_name(store, record.location, str(record.uuid)) if record.location else None
+    return None if name is None else record.model_copy(update={"id": name})
 
 
-def _scoped_to_project(record: dict[str, Any], *, warehouse_ids: frozenset[str], project: str) -> bool:
+def _scoped_to_project(record: PolicyRecord, *, warehouse_ids: frozenset[str], project: str) -> bool:
     """Whether one stored policy record governs data inside ``project``.
 
     A ``project`` record matches by ID and by nothing else — matching it on buckets would surface a rival
@@ -342,12 +356,9 @@ def _scoped_to_project(record: dict[str, Any], *, warehouse_ids: frozenset[str],
 
     A table/namespace record matches when its object's name begins with one of the project's warehouses ([[LH-593]]).
     """
-    kind = record.get("kind")
-    if kind == "project":
-        return record.get("id") == project
-    if kind not in ("table", "namespace"):
-        return False
-    segments = parse_identifier(str(record.get("id") or ""))
+    if record.kind == "project":
+        return record.id == project
+    segments = parse_identifier(record.id)
     return bool(segments) and segments[0] in warehouse_ids
 
 
@@ -378,7 +389,7 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
     records = await run_in_threadpool(policies.list_policies, settings.registry_root, so)
     named = await run_in_threadpool(_named_now, settings, records)
     scoped = [r for r in named if _scoped_to_project(r, warehouse_ids=frozenset(warehouse_ids), project=project)]
-    scoped.sort(key=lambda r: (str(r.get("kind")), str(r.get("id"))))
+    scoped.sort(key=lambda r: (r.kind, r.id))
     log.info("maintenance_policies_listed", extra={"project": project, "policies": len(scoped), "buckets": len(buckets), "warehouses": len(warehouse_ids)})
     return ProjectPoliciesResponse(project=project, buckets=buckets, warehouses=warehouse_ids, policies=[_response(r) for r in scoped])
 
