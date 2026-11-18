@@ -1338,12 +1338,13 @@ async def register_table(
     table_uuid = str(uuid4())
     await fga_deps.seed_before_write(client, settings, token, resolver, segments=segments, uuid=table_uuid)
     try:
-        # The registration lands only while the request's key is still this attempt's: one a resend took over while this
-        # attempt ran would attach the dataset again after whatever the key's registration met since (ADR 0240).
-        await run_in_threadpool(dataplane.renew_held, converge.held)
         # The run rule the write judge read is read again under the namespace's add fence, held through the add (ADR 0244 R1).
         placed = write_judge.Write(op="register", obj=f"table:{fga.canonical_object_id(segments)}", rung=None, table=tuple(segments))
         async with write_judge.placing(placed, ns, control_root=settings.registry_root, storage_options=settings.storage_options()):
+            # The registration lands only while the request's key is still this attempt's: one a resend took over while
+            # this attempt ran would attach the dataset again after whatever the key's registration met since (ADR 0240).
+            # Renewed once the fence is held and the rule read, so nothing slow stands between it and the add (ADR 0227 §8).
+            await run_in_threadpool(dataplane.renew_held, converge.held)
             response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
         await fga_deps.take_back_seed(client, settings, token, segments=segments, uuid=table_uuid, reason="not_registered")

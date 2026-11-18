@@ -1024,6 +1024,10 @@ class ContractResponse(BaseModel):
     contract: dict[str, Any] | None = None
     set_by: str | None = None
     set_at: datetime | None = None
+    #: Whether the set that wrote ``contract`` answered 200: false while it is in flight, or for one that died there, whose
+    #: record holds every commit to it and to the contract in force before it until its owner sets or deletes one (ADR
+    #: 0244). ``None`` for a table holding no contract.
+    in_force: bool | None = None
 
 
 class LabelledObjectsResponse(BaseModel):

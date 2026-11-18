@@ -3188,6 +3188,17 @@
             ],
             "title": "Contract"
           },
+          "in_force": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Force"
+          },
           "set_at": {
             "anyOf": [
               {
@@ -18875,7 +18886,7 @@
     },
     "/management/v1/table/{id}/contract/set": {
       "post": {
-        "description": "Set the table's data contract: an ODCS v3 document naming the columns its consumers rely on. Asked at\n``can_set_contract``, the table owner's.\n\nThe document is read strictly: a quality or service-level rule is refused 406, since the catalog checks a\ncontract's schema on every commit and nothing else. The table must meet the contract now, and a contract that takes\nback what the standing one promises carries a higher major version. Once the record stands the door commits on main\nand on every branch a version stamped ``rask.contract`` with the contract it judged that ref against, each announced\nas a schema metadata update; a ref a commit made stop meeting the contract meanwhile refuses the set 409 (code 19),\nand the door then puts back the contract it replaced. From the answer on, a commit that drops, renames, retypes or\nloosens a contracted column is refused 409 (code 19), through every door and from a stock client alike.",
+        "description": "Set the table's data contract: an ODCS v3 document naming the columns its consumers rely on. Asked at\n``can_set_contract``, the table owner's.\n\nThe document is read strictly: a quality or service-level rule is refused 406, since the catalog checks a\ncontract's schema on every commit and nothing else. The table must meet the contract now, and a contract that takes\nback what the standing one promises carries a higher major version. The record is written in flight: until the set\nanswers, a commit is held to it and to the contract in force before it, and ``describe`` shows it with ``in_force``\nfalse. Once the record stands the door commits on main and on every branch a version that changes nothing, each\nannounced as a schema metadata update; a ref a commit made stop meeting the contract meanwhile refuses the set 409\n(code 19), and the door then puts back the contract in force it replaced. A set whose record another set or the\ndelete door replaced before it took effect is refused 409 (code 14). From the answer on, a commit that drops,\nrenames, retypes or loosens a contracted column is refused 409 (code 19), through every door and from a stock client\nalike.",
         "operationId": "set_table_contract_management_v1_table__id__contract_set_post",
         "parameters": [
           {

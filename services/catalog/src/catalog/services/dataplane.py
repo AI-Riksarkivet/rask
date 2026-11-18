@@ -925,7 +925,7 @@ def create_table(
             if overwriting is not None:
                 # An Overwrite is a new version of the same table, so it keeps what the table's contract names (ADR 0212):
                 # judged here before its rows are written, and again by its stamped commit against the version it lands on.
-                contracts.require_kept(overwriting.contract(), current.schema, kept.schema, door="create")
+                contracts.require_kept(overwriting.binding(), current.schema, kept.schema, door="create")
                 _before_commit(before_commit, existing, registry)
                 version = _overwrite_stamped(
                     overwriting,
@@ -1833,7 +1833,7 @@ def commit_stamped[T](
                     _refuse_a_lost_label(dataset, detached)
                 encoding.require_no_new_invalid_encoding(dataset, detached)
                 primary_keys.refuse_repeats_in_version(detached, dataset, door=properties[OPERATION_PROPERTY])
-                contracts.require_kept(table.contract(), dataset.schema, detached.schema, door=properties[OPERATION_PROPERTY])
+                contracts.require_kept(table.binding(), dataset.schema, detached.schema, door=properties[OPERATION_PROPERTY])
                 wrote = committed_files.added(
                     dataset,
                     detached,

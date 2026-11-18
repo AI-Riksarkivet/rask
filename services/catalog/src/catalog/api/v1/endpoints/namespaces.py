@@ -384,6 +384,13 @@ async def _create_or_replace_empty_namespace(
 
     Catching rather than pre-checking, as in :func:`create_or_keep_namespace`: a create that wins needs no
     drop, and a concurrent create between the drop and the re-create answers the ordinary 409.
+
+    THE NAMESPACE'S DROP FENCE IS HELD FROM THE EMPTINESS CHECK THROUGH THE RE-CREATE (ADR 0244 W1). The re-create is an
+    add under the PARENT's fence, which nothing on this name excludes, so a door placing a table here that took the
+    name's add fence after the drop would otherwise meet the namespace missing and then made afresh, perhaps declaring
+    the run rule; held, such a door is refused 409 (code 14) until the namespace stands again, and an add already holding
+    the fence refuses this Overwrite 409. The hold is the name's and the re-create's take is the parent's, and every take
+    refuses rather than waits, so the two cannot deadlock.
     """
     try:
         return await run_in_threadpool(native.call, ns, "create_namespace", req)
@@ -393,17 +400,17 @@ async def _create_or_replace_empty_namespace(
     replaced = await fga_deps.identify(ns, settings, "namespace", segments)
     await fga_deps.require_relation(client, settings, token, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
     await fga_deps.require_namespace_unprotected(settings, replaced, force=False)
-    _, tables = await _drain_tables(ns, segments)
-    _, children = await _drain_namespaces(ns, segments)
-    if tables or children:
-        raise NamespaceNotEmptyError(
-            f"cannot overwrite namespace '{canonical}': Overwrite drops only an empty namespace, and it holds "
-            f"tables {tables} and namespaces {children}. Drop or move them first, or drop the namespace with behavior=Cascade."
-        )
-    # A table landing between the listing and this drop is refused by the backend's own Restrict check.
-    await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
-    await _forget_namespace(settings, client, token, namespace_uuid=replaced.uuid)
-    return await run_in_threadpool(native.call, ns, "create_namespace", req)
+    async with _held_by_the_door(settings, segments, NamespaceWork.DROP):
+        _, tables = await _drain_tables(ns, segments)
+        _, children = await _drain_namespaces(ns, segments)
+        if tables or children:
+            raise NamespaceNotEmptyError(
+                f"cannot overwrite namespace '{canonical}': Overwrite drops only an empty namespace, and it holds "
+                f"tables {tables} and namespaces {children}. Drop or move them first, or drop the namespace with behavior=Cascade."
+            )
+        await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
+        await _forget_namespace(settings, client, token, namespace_uuid=replaced.uuid)
+        return await run_in_threadpool(native.call, ns, "create_namespace", req)
 
 
 @router.get("/{id}/list", response_model_exclude_none=True)

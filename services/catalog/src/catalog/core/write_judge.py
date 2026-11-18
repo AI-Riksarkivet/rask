@@ -15,8 +15,9 @@ table by what its commits declared (ADR 0183). The judge answers allow or refuse
 here.
 
 A DOOR THAT PLACES A TABLE IN A NAMESPACE (a create, a register, a rename in) reads the rule again under that
-namespace's add fence, held until the table stands there (:func:`placing`, ADR 0244 R1): the judge's read comes before
-the add, and an Overwrite can make the namespace afresh under the rule in between.
+namespace's add fence, held until the table stands there, and refuses there a namespace that does not stand
+(:func:`placing`, ADR 0244 R1, W1): the judge's read comes before the add, and the namespace can be made afresh under the
+rule in between.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from catalog.core import fenced_namespace
 from catalog.core.provenance_guard import RESERVED_METADATA_PREFIXES, is_reserved_key
 from catalog.core.run_context import INPUTS_HEADER, INPUTS_PROPERTY, RUN_ID_HEADER, RUN_ID_PROPERTY, RunContext
 from catalog.services import native
+from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.namespace_fences import NamespaceWork
 from lakehouse.storage_options import StorageOptions
@@ -135,12 +137,12 @@ def declares_requires_run(properties: Mapping[str, str] | None) -> bool:
     return True
 
 
-async def declared_on(ns: LanceNamespace, namespace: Sequence[str]) -> bool:
-    """Whether namespace ``namespace`` itself declares the run rule (a namespace that does not exist declares nothing)."""
+async def _declaration(ns: LanceNamespace, namespace: Sequence[str]) -> bool | None:
+    """Whether namespace ``namespace`` itself declares the run rule; ``None`` when it does not exist."""
     try:
         described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=list(namespace)))
     except NamespaceNotFoundError:
-        return False
+        return None
     value = (described.properties or {}).get(REQUIRES_RUN_PROPERTY)
     if value is not None and value != REQUIRED:
         # Only the create door writes the key and it refuses this value, so a stored one is not a caller's
@@ -149,17 +151,32 @@ async def declared_on(ns: LanceNamespace, namespace: Sequence[str]) -> bool:
     return value is not None
 
 
-async def requires_run(ns: LanceNamespace, namespace: Sequence[str]) -> bool:
+async def declared_on(ns: LanceNamespace, namespace: Sequence[str]) -> bool:
+    """Whether namespace ``namespace`` itself declares the run rule (a namespace that does not exist declares nothing)."""
+    return bool(await _declaration(ns, namespace))
+
+
+async def requires_run(ns: LanceNamespace, namespace: Sequence[str], *, must_stand: bool = False) -> bool:
     """Whether the namespace path ``namespace`` requires a run: any namespace on it, the shallowest first, declares it.
 
     The walk starts at the name's first segment, its warehouse's own row, which no door gives the rule, so a namespace
-    directly in a warehouse costs two describes. A namespace that does not exist declares nothing; the door that needs
-    it answers its own 404.
+    directly in a warehouse costs two describes. A namespace that does not exist declares nothing, and the door that
+    needs it answers its own 404, unless ``must_stand``: then it is refused here, and every namespace on the path is read.
+
+    Raises:
+        NamespaceNotFoundError: ``must_stand`` and a namespace on the path does not exist.
     """
+    required = False
     for depth in range(1, len(namespace) + 1):
-        if await declared_on(ns, namespace[:depth]):
+        declared = await _declaration(ns, namespace[:depth])
+        if declared is None:
+            if must_stand:
+                raise NamespaceNotFoundError(f"namespace {fga.canonical_object_id(list(namespace[:depth]))!r} does not exist")
+            return required
+        required = required or declared
+        if required and not must_stand:
             return True
-    return False
+    return required
 
 
 async def judge(
@@ -217,23 +234,28 @@ async def placing(op: Write, ns: LanceNamespace, *, control_root: str, storage_o
     """Judge again the run rule of the namespace ``op`` places its table in, holding that namespace's add fence until the
     block, the add, ends (ADR 0244 R1).
 
-    The write judge read the rule when the request arrived, and a namespace's rule changes only when an Overwrite drops
-    it, empty, and makes it afresh (ADR 0211 §2). That drop takes the namespace's DROP fence, which no add shares, and
-    the backend refuses it once a table stands in the namespace; so read under the add fence and kept there through
-    the add, the rule is the one the table lands under. ``ns`` is the connection of the table's warehouse, a rename's
-    source included (the rename door keeps a rename within its warehouse). A door that places no new table (an
-    Overwrite or ExistOk of a standing one) holds the fence of a namespace that cannot be dropped anyway.
+    The write judge read the rule when the request arrived, and a namespace's rule changes only when it is dropped,
+    empty, and made afresh (ADR 0211 §2). That drop takes the namespace's DROP fence, which no add shares, and the backend
+    refuses it once a table stands in the namespace; so read under the add fence and kept there through the add, the
+    rule is the one the table lands under. The fence is the NAME's, held whether or not a namespace stands under it, and
+    the namespace is created again as an add under its PARENT's fence, which this hold does not exclude: so inside the
+    hold a namespace that does not stand is refused before its rule is read (ADR 0244 W1), since one created under the
+    name after that read could declare the rule. ``ns`` is the connection of the table's warehouse, a rename's source
+    included (the rename door keeps a rename within its warehouse). A door that places no new table (an Overwrite or
+    ExistOk of a standing one) holds the fence of a namespace that cannot be dropped anyway.
 
     Raises:
-        NamespaceFencedError: The namespace is being dropped (409, code 14).
+        NamespaceFencedError: The namespace is being dropped, or made afresh by an Overwrite (409, code 14).
+        NamespaceNotFoundError: The namespace does not stand (404, code 1).
         InvalidInputError: A rename in from a namespace requiring no run, or a create naming no run, under the rule.
         UnsupportedOperationError: A register under the rule.
     """
     namespace = list(op.table[:-1])
     # A warehouse's own row declares no rule and is no namespace door's to drop, so a table placed in it holds no fence.
-    held = fenced_namespace.holding(control_root, storage_options, namespace, NamespaceWork.ADD) if len(namespace) > 1 else nullcontext()
+    fenced = len(namespace) > 1
+    held = fenced_namespace.holding(control_root, storage_options, namespace, NamespaceWork.ADD) if fenced else nullcontext()
     async with held:
-        required = await requires_run(ns, namespace)
+        required = await requires_run(ns, namespace, must_stand=fenced)
         await _refuse_under_the_rule(op, required, ns=ns)
         if op.op in STAMPING_DOORS:
             require_named_run(required, op.run, names=_CONTEXT_HEADERS)

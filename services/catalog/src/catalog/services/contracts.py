@@ -25,10 +25,18 @@ follows and refuses a violation the commit introduces. A violation the table alr
 older than the contract) is not the next writer's: its commits land, and the owner mends the table or the contract.
 
 A SET COMMITS ON EVERY REF (ADR 0244). A commit reads the contract after its plan and lands exactly at the slot after
-the version it planned on, so the contract door, once its record stands, commits on every ref a version stamped with
-the contract (:data:`CONTRACT_KEY`) whose plan judges the ref's head against it: a commit that read the contract before
-the record stood either landed before that version, and the set judged it, or loses its slot to it, plans again, and
-reads the contract (`specs/catalog/WriteGovernance.tla`, ContractKept).
+the version it planned on, so the contract door, once its record stands, commits on every ref a version that changes
+nothing, whose plan judges the ref's head against the contract: a commit that read the contract before the record stood
+either landed before that version, and the set judged it, or loses its slot to it, plans again, and reads the contract
+(`specs/catalog/WriteGovernance.tla`, ContractKept).
+
+A RECORD IS IN FLIGHT UNTIL ITS SET ANSWERS (ADR 0244 W2). :func:`keep` writes the record in flight, carrying the
+in-force record it replaced (:attr:`ContractRecord.replaced`), read inside its own conditional write; the set marks it
+in force (:func:`confirm`) once its commit landed on every ref, and a refused set puts back what it carries
+(:func:`take_back`). While a record is in flight a commit is held to both contracts, the stricter reading
+(:meth:`ContractRecord.binding`): the set may yet be refused and the one in force put back. A record whose set died in
+flight keeps judging commits that way until its owner sets a contract over it or deletes it; ``describe`` shows it as not
+in force.
 
 One record per table, at ``record_key("_contracts", "table", uuid)``: keyed by the table's uuid as every record kept
 for an object is (ADR 0173 §8), so a rename keeps it and the table's ending ends it (`lakehouse.object_records`).
@@ -39,7 +47,7 @@ All IO here is blocking; callers threadpool it.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Final, Literal
 
@@ -51,16 +59,12 @@ from catalog.services import primary_keys
 from lakehouse import control_prefixes
 from lakehouse.outage import store_refusal
 from lakehouse.record_store import delete_record, read_record, record_key
-from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, mutate_json, read_json, replace_json
+from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, read_json, replace_json
 from lakehouse.storage_options import StorageOptions
 
 
 #: The ODCS keys that state a check on data or on time. The catalog runs neither, so a document carrying one is refused.
 UNENFORCED_KEYS: Final = frozenset({"quality", "slaProperties", "slaDefaultElement"})
-
-#: The schema metadata key a set's commit on a ref stamps with the contract it judged that ref against, ``<id>@<version>``:
-#: under the platform's prefix, so no door's caller writes it (``provenance_guard``).
-CONTRACT_KEY: Final = "rask.contract"
 
 _SEMVER: Final = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
@@ -261,27 +265,30 @@ def require_met(contract: Contract, schema: pa.Schema, *, ref: str) -> None:
         )
 
 
-def require_kept(contract: Contract | None, before: pa.Schema | None, after: pa.Schema, *, door: str) -> None:
-    """Refuse a commit that breaks the table's ``contract``: one whose schema ``after`` drops, renames, retypes or
-    loosens a contracted column that the schema it follows, ``before``, kept. A violation ``before`` already had is not
-    this commit's, so it is not refused for it.
+def require_kept(binding: Sequence[Contract], before: pa.Schema | None, after: pa.Schema, *, door: str) -> None:
+    """Refuse a commit that breaks a contract of the table's ``binding`` (:meth:`ContractRecord.binding`): one whose
+    schema ``after`` drops, renames, retypes or loosens a contracted column that the schema it follows, ``before``, kept.
+    A violation ``before`` already had is not this commit's, so it is not refused for it.
 
     Raises:
-        InvalidTableStateError: The commit introduces a violation of the contract.
+        InvalidTableStateError: The commit introduces a violation of a contract.
     """
-    if contract is None:
-        return
-    already = set(violations(contract, before)) if before is not None else set()
-    if broken := [violation for violation in violations(contract, after) if violation not in already]:
-        raise InvalidTableStateError(
-            f"{door}: the commit breaks the table's data contract {contract.id!r} version {contract.version}: {'; '.join(broken)}. "
-            "A breaking change is made by setting a contract that allows it, under a higher major version, and committing after"
-        )
+    for contract in binding:
+        already = set(violations(contract, before)) if before is not None else set()
+        if broken := [violation for violation in violations(contract, after) if violation not in already]:
+            raise InvalidTableStateError(
+                f"{door}: the commit breaks the table's data contract {contract.id!r} version {contract.version}: {'; '.join(broken)}. "
+                "A breaking change is made by setting a contract that allows it, under a higher major version, and committing after"
+            )
 
 
 class ContractRecord(BaseModel):
     """The contract a table holds, and who set it; ``document`` is ``None`` in the record a refused set leaves where it
-    took its own back over none (:func:`take_back`), which holds no contract."""
+    put back none (:func:`take_back`), which holds no contract.
+
+    ``in_force`` is false from the set's :func:`keep` until the set marks it (:func:`confirm`), once its commit landed on
+    every ref and right before it answers 200; a record whose set died in flight stays so. An in-flight record carries
+    in ``replaced`` the in-force record it replaced (``None`` for none), which a refusal puts back."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -289,9 +296,24 @@ class ContractRecord(BaseModel):
     document: dict[str, Any] | None
     set_by: str | None = None
     set_at: datetime
+    in_force: bool
+    replaced: ContractRecord | None = None
 
     def contract(self) -> Contract | None:
         return None if self.document is None else Contract.model_validate(self.document)
+
+    def binding(self) -> tuple[Contract, ...]:
+        """The contracts a commit is held to: the record's own and, while it is in flight, the one in force it replaced,
+        which its set's refusal would put back. The stricter of the two holds while a set is undecided."""
+        held = [self.contract(), None if self.in_force or self.replaced is None else self.replaced.contract()]
+        return tuple(contract for contract in held if contract is not None)
+
+    def in_force_record(self) -> ContractRecord | None:
+        """The record in force where this one stands: itself once marked (``None`` when it holds no contract), else the
+        one it replaced."""
+        if not self.in_force:
+            return self.replaced
+        return self if self.document is not None else None
 
 
 def _key(table_uuid: str) -> str:
@@ -299,8 +321,8 @@ def _key(table_uuid: str) -> str:
 
 
 def held(control_root: str, storage_options: StorageOptions, table_uuid: str) -> ContractRecord | None:
-    """The contract the table ``table_uuid`` holds, or ``None``. A record that is there and cannot be read refuses: it
-    may be the contract a commit breaks.
+    """The contract record the table ``table_uuid`` holds, in force or in flight, or ``None`` for none. A record that is
+    there and cannot be read refuses: it may be the contract a commit breaks.
 
     Raises:
         ServiceUnavailableError: The store did not answer the read.
@@ -309,7 +331,7 @@ def held(control_root: str, storage_options: StorageOptions, table_uuid: str) ->
     try:
         record = read_record(control_root, storage_options, _key(table_uuid))
         kept = None if record is None else ContractRecord.model_validate(record)
-        return kept if kept is not None and kept.contract() is not None else None
+        return kept if kept is not None and kept.binding() else None
     except (OSError, ValueError) as exc:
         raise store_refusal(exc, reading="reading the table's data contract", so="nothing was committed or answered") from exc
 
@@ -354,44 +376,49 @@ _ROUNDS: Final = 3
 def keep(
     control_root: str, storage_options: StorageOptions, table_uuid: str, contract: Contract, *, document: Mapping[str, Any], actor: str | None
 ) -> ContractRecord:
-    """Record ``contract`` as the table's, kept as the ``document`` it was read from so a read answers what was set, over
-    the one standing only as :func:`require_evolves` allows. The store arbitrates: the first contract is a put-if-absent,
-    a replacement a write over the record it judged.
+    """Record ``contract`` as the table's, in flight, kept as the ``document`` it was read from so a read answers what was
+    set, over the one standing only as :func:`require_evolves` allows; answer the record written, which carries the
+    in-force record it replaced. The store arbitrates: the first contract is a put-if-absent, a replacement a write over
+    the record it judged, and what it replaced is read from that same write (ADR 0244 W2): a record read before it could
+    be one another set replaced meanwhile.
 
     Raises:
         InvalidInputError: The contract does not evolve from the one the table holds.
         RecordChangedError: Other sets kept landing first.
     """
-    record = ContractRecord(table_uuid=table_uuid, document=dict(document), set_by=actor, set_at=datetime.now(UTC))
-    body = record.model_dump(mode="json")
+    record = ContractRecord(table_uuid=table_uuid, document=dict(document), set_by=actor, set_at=datetime.now(UTC), in_force=False)
 
     def _over(stored: dict[str, Any]) -> dict[str, Any]:
-        require_evolves(_readable(stored), contract)
-        return body
+        standing = _readable(stored)
+        require_evolves(standing.contract() if standing is not None else None, contract)
+        replaced = standing.in_force_record() if standing is not None else None
+        return record.model_copy(update={"replaced": replaced}).model_dump(mode="json")
 
     key = _key(table_uuid)
     for _ in range(_ROUNDS):
         try:
-            create_json(control_root, storage_options, key, body)
+            create_json(control_root, storage_options, key, record.model_dump(mode="json"))
         except RecordExistsError:
             pass
         else:
             return record
         try:
-            mutate_json(control_root, storage_options, key, _over)
+            _, written = exchange_json(control_root, storage_options, key, _over)
         except RecordMissingError:
             continue
-        return record
+        return ContractRecord.model_validate(written)
     raise RecordMissingError(key)
 
 
-def _readable(stored: Mapping[str, Any]) -> Contract | None:
-    """The contract a stored record states, or ``None`` for one that is no contract: its owner replaces or deletes such
-    a record at the contract's own doors, since every commit is refused while it stands."""
+def _readable(stored: Mapping[str, Any]) -> ContractRecord | None:
+    """The record stored, or ``None`` for one that is no contract record: its owner replaces or deletes such a record at
+    the contract's own doors, since every commit is refused while it stands, and a set over it replaces none in force."""
     try:
-        return ContractRecord.model_validate(stored).contract()
+        record = ContractRecord.model_validate(stored)
+        record.binding()
     except ValidationError:
         return None
+    return record
 
 
 def standing(control_root: str, storage_options: StorageOptions, table_uuid: str) -> ContractRecord | None:
@@ -407,21 +434,33 @@ def standing(control_root: str, storage_options: StorageOptions, table_uuid: str
         return None
 
 
-def take_back(control_root: str, storage_options: StorageOptions, table_uuid: str, own: ContractRecord, replaced: ContractRecord | None) -> bool:
-    """Put back ``replaced``, the contract a refused set's record ``own`` replaced, while ``own`` is still the record;
-    whether it was. A record another set or the delete door wrote since is theirs, answered or about to be, and stays
-    (ADR 0244 C3). The write is a replace under the ETag of the read that found ``own``, and none is put back as a record
-    holding no contract, since the store deletes unconditionally."""
-    key = _key(table_uuid)
+def _replace_own(control_root: str, storage_options: StorageOptions, own: ContractRecord, by: ContractRecord) -> bool:
+    """Write ``by`` over ``own`` while ``own`` is still the record, under the ETag of the read that found it; whether it was."""
+    key = _key(own.table_uuid)
     found = read_json(control_root, storage_options, key)
     if found is None or found[0] != own.model_dump(mode="json"):
         return False
-    back = replaced or ContractRecord(table_uuid=table_uuid, document=None, set_by=own.set_by, set_at=datetime.now(UTC))
     try:
-        replace_json(control_root, storage_options, key, back.model_dump(mode="json"), etag=found[1])
+        replace_json(control_root, storage_options, key, by.model_dump(mode="json"), etag=found[1])
     except RecordChangedError:
         return False
     return True
+
+
+def take_back(control_root: str, storage_options: StorageOptions, own: ContractRecord) -> bool:
+    """Put back, in force, the record a refused set's record ``own`` replaced (:attr:`ContractRecord.replaced`), while
+    ``own`` is still the record; whether it was. A record another set or the delete door wrote since is theirs, answered
+    or about to be, and stays (ADR 0244 C3). What is put back was in force, or is none, never another set's in flight
+    (ADR 0244 W2). None is put back as a record holding no contract, since the store deletes unconditionally."""
+    back = own.replaced or ContractRecord(table_uuid=own.table_uuid, document=None, set_by=own.set_by, set_at=datetime.now(UTC), in_force=True)
+    return _replace_own(control_root, storage_options, own, back)
+
+
+def confirm(control_root: str, storage_options: StorageOptions, own: ContractRecord) -> ContractRecord | None:
+    """Mark the set's record ``own`` in force, while it is still the record; the record marked, or ``None`` when another
+    set or the delete door wrote over it since, which then stands and refuses this set (ADR 0244 W2)."""
+    marked = own.model_copy(update={"in_force": True, "replaced": None})
+    return marked if _replace_own(control_root, storage_options, own, marked) else None
 
 
 def forget(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:

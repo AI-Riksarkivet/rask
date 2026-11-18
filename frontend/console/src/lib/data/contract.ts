@@ -52,6 +52,7 @@ export const ContractResponseSchema = v.object({
 	contract: v.optional(v.nullable(ContractDocumentSchema)),
 	set_by: v.optional(v.nullable(v.string())),
 	set_at: v.optional(v.nullable(v.string())),
+	in_force: v.optional(v.nullable(v.boolean())),
 } satisfies Record<keyof ContractWire, unknown>);
 export type ContractResponse = v.InferOutput<typeof ContractResponseSchema>;
 

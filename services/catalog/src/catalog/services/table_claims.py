@@ -451,9 +451,9 @@ class DoorTable:
         """
         file_identities.record(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), committed)
 
-    def contract(self) -> contracts.Contract | None:
-        """The data contract the table holds (ADR 0212), read off the control root its claim is kept on; ``None`` for a
-        table holding none.
+    def binding(self) -> tuple[contracts.Contract, ...]:
+        """The data contracts a commit of the table is held to (ADR 0212, ADR 0244: :meth:`contracts.ContractRecord.binding`),
+        read off the control root its claim is kept on; empty for a table holding none.
 
         Raises:
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
@@ -461,7 +461,7 @@ class DoorTable:
             InternalError: The record is there and is not a contract.
         """
         record = contracts.held(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid())
-        return record.contract() if record is not None else None
+        return record.binding() if record is not None else ()
 
     def forget_committed_files(self, transaction_uuid: str) -> None:
         """Delete the record of what the commit of ``transaction_uuid`` added, a commit that did not land ([[LH-564]]).

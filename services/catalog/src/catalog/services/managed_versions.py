@@ -950,7 +950,7 @@ def judge(
     *,
     base_judge: BaseJudge,
     external_bases: Sequence[base_registry.RecordedBase],
-    contract: contracts.Contract | None,
+    binding: Sequence[contracts.Contract],
 ) -> Verdict:
     """Refuse the staged version if it breaks a rule the catalog's own write doors hold; say whether it adds data, and
     what it adds under the table's root.
@@ -963,14 +963,15 @@ def judge(
 
     Raises:
         InvalidInputError: The version breaks one of the rules below; nothing was finalized.
-        InvalidTableStateError: The version breaks ``contract``, the data contract the table holds (ADR 0212).
+        InvalidTableStateError: The version breaks a contract of ``binding``, the data contracts the table holds it to
+            (ADR 0212, ADR 0244).
         UnsupportedOperationError: The version needs a Lance feature this catalog does not serve.
     """
     proposed = _open(staged, so)
     current = None if staged.creates else lance.dataset(staged.location, version=staged.version - 1, storage_options=so.in_clear() or None)
     _refuse_changed_invariants(proposed, current)
     _refuse_changed_schema_governance(proposed, current, operation=staged.operation)
-    contracts.require_kept(contract, current.schema if current is not None else None, proposed.schema, door="version/create")
+    contracts.require_kept(binding, current.schema if current is not None else None, proposed.schema, door="version/create")
     encoding.require_no_new_invalid_encoding(current, proposed)
     _refuse_config(proposed, current)
     held = None if current is None else _held_counters(staged.location, so, staged.version - 1)

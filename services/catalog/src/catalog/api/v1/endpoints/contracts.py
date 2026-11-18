@@ -9,20 +9,19 @@ route. Addressed by name as every governed door is, and the contract is kept und
   control event.
 
 The contract is checked where every commit passes (`catalog.services.contracts`), and nowhere else: these doors hold no
-version, scan no row and run no timer. A set commits one version on each ref, which changes no column and stamps the
-contract it judged the ref against, so that every commit is ordered with it (ADR 0244).
+version, scan no row and run no timer. A set commits one version on each ref, which changes nothing, so that every
+commit is ordered with it (ADR 0244).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from functools import partial
 from typing import Annotated, Any
 
 import lance
 from fastapi import APIRouter, Body, Header
 from fastapi.concurrency import run_in_threadpool
-from lance.dataset import Transaction
+from lance.dataset import LanceOperation, Transaction
 from lance_namespace import ConcurrentModificationError
 
 from catalog.api import lineage_deps
@@ -53,6 +52,7 @@ def _answer(table: DoorTable, record: contracts.ContractRecord | None) -> Contra
         contract=record.document if record is not None else None,
         set_by=record.set_by if record is not None else None,
         set_at=record.set_at if record is not None else None,
+        in_force=record.in_force if record is not None else None,
     )
 
 
@@ -86,27 +86,25 @@ def _require_described(table: DoorTable, so: StorageOptions, contract: contracts
 def _verify_on_every_ref(
     table: DoorTable, so: StorageOptions, contract: contracts.Contract, properties: dict[str, str], landed: list[tuple[str | None, int]]
 ) -> None:
-    """Commit on main and on every branch, as listed once the record stands, a version stamped with ``contract`` whose plan
-    judges the ref's head against it, each appended to ``landed`` as it lands (ADR 0244 C1).
+    """Commit on main and on every branch, as listed once the record stands, a version that changes nothing, whose plan
+    judges the ref's head against ``contract``, each appended to ``landed`` as it lands (ADR 0244 C1).
 
     The version is a stamped commit, finalized exactly at the slot after the one it planned on: a commit that read no
     contract and planned on that version loses its slot to it and reads the contract when it plans again, and one that
     landed first is in the head this plan judges. A second read of each ref could not order such a commit: it lands
-    after the read as well as before.
+    after the read as well as before. What orders it is the slot alone, so the version is an ``UpdateConfig`` that
+    updates nothing: it carries no key a restore to an older version would have to keep or a stock client to carry
+    (ADR 0244 W3; measured on pylance 13.0.0, it lands a version whose schema metadata and config are its parent's).
 
     Raises:
         InvalidTableStateError: A ref does not meet the contract: a commit landed since the door's first read.
         ConcurrentModificationError: Every attempt of a ref's commit lost its race.
     """
-    stamp: dict[str, str | None] = {contracts.CONTRACT_KEY: f"{contract.id}@{contract.version}"}
     for ref in [None, *_branches(table, so)]:
-        stamped = dataplane.captured(table, so, lambda handle: handle.update_schema_metadata(stamp), branch=ref)
 
-        def plan(
-            dataset: lance.LanceDataset, stamped: Callable[[lance.LanceDataset], tuple[Transaction, None]] = stamped, ref: str | None = ref
-        ) -> tuple[Transaction, None]:
+        def plan(dataset: lance.LanceDataset, ref: str | None = ref) -> tuple[Transaction, None]:
             contracts.require_met(contract, dataset.schema, ref=ref or "main")
-            return stamped(dataset)
+            return Transaction(read_version=dataset.version, operation=LanceOperation.UpdateConfig()), None
 
         version, _ = dataplane.commit_stamped(table, so, properties, plan, branch=ref)
         landed.append((ref, version))
@@ -137,17 +135,21 @@ async def set_table_contract(
 
     The document is read strictly: a quality or service-level rule is refused 406, since the catalog checks a
     contract's schema on every commit and nothing else. The table must meet the contract now, and a contract that takes
-    back what the standing one promises carries a higher major version. Once the record stands the door commits on main
-    and on every branch a version stamped ``rask.contract`` with the contract it judged that ref against, each announced
-    as a schema metadata update; a ref a commit made stop meeting the contract meanwhile refuses the set 409 (code 19),
-    and the door then puts back the contract it replaced. From the answer on, a commit that drops, renames, retypes or
-    loosens a contracted column is refused 409 (code 19), through every door and from a stock client alike.
+    back what the standing one promises carries a higher major version. The record is written in flight: until the set
+    answers, a commit is held to it and to the contract in force before it, and ``describe`` shows it with ``in_force``
+    false. Once the record stands the door commits on main and on every branch a version that changes nothing, each
+    announced as a schema metadata update; a ref a commit made stop meeting the contract meanwhile refuses the set 409
+    (code 19), and the door then puts back the contract in force it replaced. A set whose record another set or the
+    delete door replaced before it took effect is refused 409 (code 14). From the answer on, a commit that drops,
+    renames, retypes or loosens a contracted column is refused 409 (code 19), through every door and from a stock client
+    alike.
     """
     contract = contracts.parsed(document)
     await run_in_threadpool(_require_described, table, so, contract)
     uuid = table.resolved.require_uuid()
     root, control_so = settings.registry_root, settings.storage_options()
-    replaced = await run_in_threadpool(_standing, settings, table)
+    # The record is kept under the uuid the router authorized, so the door first asks that the name still holds it.
+    await run_in_threadpool(table.require_held)
     try:
         record = await run_in_threadpool(partial(contracts.keep, root, control_so, uuid, contract, document=document, actor=_actor(token)))
     except (records.RecordChangedError, records.RecordMissingError) as exc:
@@ -156,7 +158,7 @@ async def set_table_contract(
     try:
         await run_in_threadpool(_verify_on_every_ref, table, so, contract, lineage_deps.door_stamp(token, UPDATE_SCHEMA_METADATA), landed)
     except BaseException:
-        await run_in_threadpool(contracts.take_back, root, control_so, uuid, record, replaced)
+        await run_in_threadpool(contracts.take_back, root, control_so, record)
         raise
     finally:
         for ref, version in landed:
@@ -172,6 +174,12 @@ async def set_table_contract(
                 pin_version=version,
                 branch=ref,
             )
+    confirmed = await run_in_threadpool(contracts.confirm, root, control_so, record)
+    if confirmed is None:
+        raise ConcurrentModificationError(
+            f"another set or the contract's delete replaced this contract of {fga.canonical_object_id(table.segments)} before it took effect; "
+            "what that door wrote stands: read it with describe, and set this contract again"
+        )
     await emit_control(
         control,
         action="table_contract_set",
@@ -181,7 +189,7 @@ async def set_table_contract(
         actor=_actor(token),
         extra={"contract": contract.id, "version": contract.version},
     )
-    return _answer(table, record)
+    return _answer(table, confirmed)
 
 
 @router.post("/{id}/contract/delete")

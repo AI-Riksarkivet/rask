@@ -1915,11 +1915,14 @@ export interface paths {
          *
          *     The document is read strictly: a quality or service-level rule is refused 406, since the catalog checks a
          *     contract's schema on every commit and nothing else. The table must meet the contract now, and a contract that takes
-         *     back what the standing one promises carries a higher major version. Once the record stands the door commits on main
-         *     and on every branch a version stamped ``rask.contract`` with the contract it judged that ref against, each announced
-         *     as a schema metadata update; a ref a commit made stop meeting the contract meanwhile refuses the set 409 (code 19),
-         *     and the door then puts back the contract it replaced. From the answer on, a commit that drops, renames, retypes or
-         *     loosens a contracted column is refused 409 (code 19), through every door and from a stock client alike.
+         *     back what the standing one promises carries a higher major version. The record is written in flight: until the set
+         *     answers, a commit is held to it and to the contract in force before it, and ``describe`` shows it with ``in_force``
+         *     false. Once the record stands the door commits on main and on every branch a version that changes nothing, each
+         *     announced as a schema metadata update; a ref a commit made stop meeting the contract meanwhile refuses the set 409
+         *     (code 19), and the door then puts back the contract in force it replaced. A set whose record another set or the
+         *     delete door replaced before it took effect is refused 409 (code 14). From the answer on, a commit that drops,
+         *     renames, retypes or loosens a contracted column is refused 409 (code 19), through every door and from a stock client
+         *     alike.
          */
         post: operations["set_table_contract_management_v1_table__id__contract_set_post"];
         delete?: never;
@@ -5850,6 +5853,8 @@ export interface components {
             contract?: {
                 [key: string]: unknown;
             } | null;
+            /** In Force */
+            in_force?: boolean | null;
             /** Set At */
             set_at?: string | null;
             /** Set By */

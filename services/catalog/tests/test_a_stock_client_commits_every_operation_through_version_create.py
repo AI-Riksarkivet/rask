@@ -925,12 +925,17 @@ def _answer_to_the_staged_commit(served: Served, table: str, version: int, *, br
     at ``version``; the table's ``location`` is described unless given.
 
     pylance reports a refused finalize as an unknown outcome and keeps its staged manifest; asking for it again shows
-    the answer the client was given.
+    the answer the client was given. Where several refused commits wait, the one asked about is the one staged for
+    ``version``, named by Lance's V2 scheme ``{u64::MAX - version:020}.manifest``
+    (`lance_docs/lance/format/table/transaction.md` § Manifest Naming Schemes); a lone one is asked about at ``version``
+    whatever it was staged for, as a commit naming a version already taken is.
     """
     ref = f"tree/{branch}/" if branch is not None else ""
     if location is None:
         location = httpx.post(f"{served.url}/v1/table/{table}/describe", json={"vend_credentials": False}, headers=_TOKEN).json()["location"]
     pending = _staged_manifests(served, location, ref)
+    if len(pending) > 1:
+        pending = [path for path in pending if Path(path).name.startswith(f"{2**64 - 1 - version:020}.manifest-")]
     assert len(pending) == 1, f"one staged manifest of {table} awaits its answer, found {pending}: none means the commit landed"
     (staged,) = pending
     request = {"version": version, "manifest_path": staged, **({"branch": branch} if branch is not None else {})}
@@ -1862,14 +1867,19 @@ def test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_make
 
     assert _answered(served, f"{_CONTRACT_DOOR}/set", contract) == (200, None)
     described = httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()
-    assert (described["contract"], described["set_by"]) == (contract, "user:dex~alice")
-    # The set committed on main a version that changes no column, stamped with the contract it judged main against.
-    assert (_opened(stock).version, _opened(stock).schema.metadata[b"rask.contract"]) == (3, b"orders@1.0.0")
+    assert (described["contract"], described["set_by"], described["in_force"]) == (contract, "user:dex~alice", True)
+    # The set committed on main a version that changes nothing a later commit or a restore keeps (ADR 0244 W3).
+    barrier, before = _opened(stock), _opened(stock).checkout_version(2)
+    assert (barrier.version, barrier.schema.metadata, barrier.config()) == (3, before.schema.metadata, before.config())
+    # A restore to a version older than the set that meets the contract lands, from a stock client and at the door.
+    _opened(stock).checkout_version(2).restore()
+    assert _answered(served, f"{table}/restore", {"version": 2}) == (200, None)
+    assert _opened(stock).version == 5
 
     # A stock client's retype of a contracted column: refused at `version/create`, the table left at its version.
     with contextlib.suppress(OSError):
         _opened(stock).alter_columns(cast("Iterable[AlterColumn]", {"path": "v", "data_type": pa.large_string()}))
-    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 4)
+    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 6)
     assert (status, code) == (409, 19), detail
     assert "column 'v' is large_string, and the contract states string" in detail and "version 1.0.0" in detail, detail
     # The catalog's own doors commit through the same judge: a loosening, a rename, a drop, and an Overwrite that leaves
@@ -1879,12 +1889,12 @@ def test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_make
     assert _answered(served, f"{table}/drop_columns", {"columns": ["v"]}) == (409, 19)
     overwrite = encode_arrow_stream(_keyed([9], ["z"]).drop_columns(["v"]))
     assert _answered(served, f"{table}/create?mode=overwrite", arrow=overwrite) == (409, 19)
-    assert (_opened(stock).version, _opened(stock).schema.names) == (3, ["id", "v"])
+    assert (_opened(stock).version, _opened(stock).schema.names) == (5, ["id", "v"])
 
     # An additive change lands, from a stock client and from a door.
     _opened(stock).add_columns({"n": "id * 2"})
     assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "m", "expression": "id + 1"}]}) == (200, None)
-    assert (_opened(stock).version, _opened(stock).schema.names) == (5, ["id", "v", "n", "m"])
+    assert (_opened(stock).version, _opened(stock).schema.names) == (7, ["id", "v", "n", "m"])
 
     # A changed contract carries a higher version, and taking `v` out of it is a breaking change to it: refused under
     # the same major, set under the next.
@@ -1896,10 +1906,33 @@ def test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_make
     assert _answered(served, f"{_CONTRACT_DOOR}/delete") == (200, None)
     assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] is None
     assert _answered(served, f"{table}/drop_columns", {"columns": ["w"]}) == (200, None)
+
+    # A restore to a version that lacks a contracted column is refused by the contract, from a stock client and at the
+    # door; one to a version older than the set that keeps it lands.
+    head = _opened(stock).version
+    keeps_n = {
+        **_CONTRACT,
+        "version": "3.0.0",
+        "schema": [{"name": "t", "properties": [_CONTRACT["schema"][0]["properties"][0], {"name": "n", "physicalType": "int64"}]}],
+    }
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", keeps_n) == (200, None)
+    _opened(stock).checkout_version(head).restore()
+    assert _answered(served, f"{table}/restore", {"version": head}) == (200, None)
+    assert (_opened(stock).version, _opened(stock).schema.names) == (head + 3, ["id", "n", "m"])
+    with contextlib.suppress(OSError):
+        _opened(stock).checkout_version(5).restore()
+    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", head + 4)
+    assert (status, code) == (409, 19), detail
+    assert "column 'n' is gone" in detail and "contract 'orders' version 3.0.0" in detail, detail
+    refused = httpx.post(f"{served.url}{table}/restore", headers=_TOKEN, json={"version": 5})
+    assert (refused.status_code, refused.json()["code"]) == (409, 19), refused.text
+    assert "column 'n' is gone" in refused.json()["detail"], refused.text
+    assert _opened(stock).version == head + 3
     assert [(action, extra.get("version")) for action, extra in announced.actions if "contract" in action] == [
         ("table_contract_set", "1.0.0"),
         ("table_contract_set", "2.0.0"),
         ("table_contract_deleted", "2.0.0"),
+        ("table_contract_set", "3.0.0"),
     ]
 
 
@@ -1915,18 +1948,30 @@ def test_a_table_already_breaking_its_contract_is_not_frozen_and_an_unreadable_c
     uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
     key = record_key(control_prefixes.CONTRACTS, "table", uuid)
     breached = _with_v({"name": "v", "physicalType": "int32"}, "1.0.0")
-    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": breached, "set_at": "2026-11-16T00:00:00Z"})
+    put_record(
+        settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": breached, "set_at": "2026-11-16T00:00:00Z", "in_force": True}
+    )
 
     lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
     assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "m", "expression": "id + 1"}]}) == (200, None)
     assert _answered(served, f"{table}/drop_columns", {"columns": ["v"]}) == (409, 19)
     assert _opened(stock).version == 3
 
-    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z"})
+    put_record(
+        settings.registry_root,
+        settings.storage_options(),
+        key,
+        {"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z", "in_force": True},
+    )
     assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "k", "expression": "id + 2"}]}) == (500, 18)
     assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).status_code == 500
     assert _answered(served, f"{_CONTRACT_DOOR}/set", _CONTRACT) == (200, None)
-    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z"})
+    put_record(
+        settings.registry_root,
+        settings.storage_options(),
+        key,
+        {"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z", "in_force": True},
+    )
     assert _answered(served, f"{_CONTRACT_DOOR}/delete") == (200, None)
     assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "k", "expression": "id + 2"}]}) == (200, None)
 
@@ -1968,17 +2013,24 @@ def test_a_contract_the_catalog_cannot_hold_the_table_to_is_refused_and_none_is_
 
 
 class _HeldOnce:
-    """``real`` held once its first call returns, until ``release`` is set: a request stopped right after that step."""
+    """``real`` held once its first call returns, or ``before`` it runs, until ``release`` is set: a request stopped
+    right after that step, or right before it."""
 
-    def __init__(self, real: Callable[..., Any]) -> None:
-        self.real, self.arrived, self.release, self._first = real, threading.Event(), threading.Event(), True
+    def __init__(self, real: Callable[..., Any], *, before: bool = False) -> None:
+        self.real, self.arrived, self.release, self._first, self._before = real, threading.Event(), threading.Event(), True, before
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the held function's own types
-        answered = self.real(*args, **kwargs)
+    def _hold(self) -> None:
         if self._first:
             self._first = False
             self.arrived.set()
             assert self.release.wait(30), "the held step was never released"
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the held function's own types
+        if self._before:
+            self._hold()
+        answered = self.real(*args, **kwargs)
+        if not self._before:
+            self._hold()
         return answered
 
 
@@ -2014,8 +2066,8 @@ def test_a_commit_judged_before_its_contract_was_set_does_not_land_after_the_set
     from catalog.services import table_claims as claims
 
     stock = _created(served)
-    held = _HeldOnce(claims.DoorTable.contract)
-    monkeypatch.setattr(claims.DoorTable, "contract", lambda table: held(table))
+    held = _HeldOnce(claims.DoorTable.binding)
+    monkeypatch.setattr(claims.DoorTable, "binding", lambda table: held(table))
     dropping = _in_thread(lambda: _DROPS_V[way](served, stock))
     assert held.arrived.wait(30), "the commit never read the contract"
 
@@ -2028,25 +2080,43 @@ def test_a_commit_judged_before_its_contract_was_set_does_not_land_after_the_set
     assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] == contract
 
 
-def test_a_refused_set_takes_back_only_the_contract_it_wrote(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
-    """ADR 0244 C3: a set refused once its record stood puts back what it replaced only over its own record. The first
-    set is held right after it wrote its record; a second, which no longer names ``v``, is set and answered 200; ``v`` is
-    dropped under it; the first is released and refused, since the table no longer meets it. The second stands."""
+#: Where the first set is held, and the two contracts: ``after-its-record`` right after it wrote its record, which the
+#: second set's then replaces; ``before-its-record`` (review W2) after its first read and before it writes its record,
+#: which then replaces the second's, answered 200.
+_RACING_SETS: dict[str, tuple[bool, dict[str, Any], dict[str, Any]]] = {
+    "after-its-record": (False, _with_v({"name": "v", "logicalType": "string", "physicalType": "string"}, "1.0.0"), _without_v("2.0.0")),
+    "before-its-record": (True, _with_v({"name": "v", "logicalType": "string", "physicalType": "string"}, "2.0.0"), _without_v("1.0.0")),
+}
+
+
+@pytest.mark.parametrize("held_where", list(_RACING_SETS))
+def test_a_refused_set_takes_back_only_the_contract_it_wrote(served: Served, monkeypatch: pytest.MonkeyPatch, held_where: str) -> None:
+    """ADR 0244 C3 and W2: a set refused once its record stood puts back, over its own record only, the record its own
+    write replaced, in force. The first set is held; a second, which no longer names ``v``, is set and answered 200; ``v``
+    is dropped under it; the first is released and refused 409 (code 19), since the table no longer meets it. The second
+    stands, in force."""
     from catalog.services import contracts
 
     _created(served)
-    held = _HeldOnce(contracts.keep)
+    before, first, second = _RACING_SETS[held_where]
+    held = _HeldOnce(contracts.keep, before=before)
     monkeypatch.setattr(contracts, "keep", held)
-    first = _with_v({"name": "v", "logicalType": "string", "physicalType": "string"}, "1.0.0")
-    setting = _in_thread(lambda: _answered(served, f"{_CONTRACT_DOOR}/set", first))
-    assert held.arrived.wait(30), "the first set never wrote its record"
+    answers: list[tuple[int, int | None]] = []
+    setting = _in_thread(lambda: answers.append(_answered(served, f"{_CONTRACT_DOOR}/set", first)))
+    assert held.arrived.wait(30), "the first set never reached its record"
+    if not before:
+        # A set in flight is shown as one: its record judges commits, and promises nothing until it answers.
+        described = httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()
+        assert (described["contract"], described["in_force"]) == (first, False), described
 
-    assert _answered(served, f"{_CONTRACT_DOOR}/set", _without_v("2.0.0")) == (200, None)
+    assert _answered(served, f"{_CONTRACT_DOOR}/set", second) == (200, None)
     assert _answered(served, "/v1/table/lance_catalog$db$t/drop_columns", {"columns": ["v"]}) == (200, None)
     held.release.set()
     setting.join(60)
 
-    assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] == _without_v("2.0.0")
+    assert answers == [(409, 19)]
+    described = httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()
+    assert (described["contract"], described["in_force"]) == (second, True), described
 
 
 def test_a_stock_client_marks_a_version_ready_with_a_tag_of_its_own_and_no_publication_door_is_served(served: Served) -> None:
