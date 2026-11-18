@@ -513,10 +513,12 @@ every commit fails 503 until the operator grants the tagging.
 - **A losing stock attempt's transaction file stays unsealed**, named by no version (§ Found by review, third round):
   Lance's cleanup of it is refused the vend, so it stays until an identity that may delete removes it (whether a table's
   pass reclaims it was not measured here); no reader reads it.
-- **A seal never measured conclusively exports nothing to age**: a warehouse whose every probe since its first was
-  inconclusive (the estate's own warehouse, which has no registration, is the one case) has no `sealed_at`, so
-  `WarehouseSealUnmeasured` reads no series for it; its probes count `catalog.warehouse.seal_unprobed`, and a commit
-  there still fails 503 where the seal is refused or unanswered.
+- **A seal never measured conclusively is exported as measured at 0**: a warehouse whose every probe since its first was
+  inconclusive (the estate's own warehouse, which has no registration, is the one case) has no `sealed_at`; the probe
+  that learned nothing exports `catalog.warehouse.seal_measured` 0 for it (`seal_posture.unmeasured`), so
+  `WarehouseSealUnmeasured` fires for it as for a measurement that aged
+  (`test_warehouses.py::test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_measured`). The series
+  is the probing replica's own: a replica that has not yet probed exports none.
 - A file committed before this change carries no seal. The estate is pre-production, so no backfill is made.
 - A maintain-tier credential still deletes a committed file (cleanup is its job); the policies of ADR 0197 bound which
   tables it reaches.

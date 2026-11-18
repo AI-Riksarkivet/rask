@@ -421,7 +421,11 @@ argued each of these in comments; nothing checked them against each other.
       `test_a_retried_create_does_not_rewrite_the_table.py::TestARetriedAppendLandsOnce::test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit`,
       its four doors crossed with `its-version-deleted-since` as well: each answers 409 code 19 naming the version and
       leaves the table at its version; with the earlier search each landed the write again as above, and with the window
-      check removed from the new one each fails (the read of the removed version raises).
+      check removed from the new one each fails (the read of the removed version raises). A version removed between the
+      listing and its read is refused the same way: the read's failure (Lance raises OSError "was not found", measured on
+      pylance 13.0.0) reads the listing again and judges the window on it (`dataplane._require_whole_window`), where the
+      failure answered as the store's; the same test crossed with `its-version-deleted-as-it-is-searched`, which serves
+      the search the listing as it stood before the delete, fails on each door without the second listing.
       **Not taken: a pass that keeps every version a live key may have landed as.** A table's pass (ADR 0243) could keep
       the versions newer than the oldest live key's `written_from`; but a key's record is filed by its caller's scope and
       key (`_idempotency/<scope>/<key>.json`), not by table, so a pass would list and read every live key on the estate to

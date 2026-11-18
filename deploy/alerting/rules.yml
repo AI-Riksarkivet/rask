@@ -1167,12 +1167,14 @@ groups:
           severity: warning
           service: catalog
         annotations:
-          summary: "A commit's files were not recorded, so maintenance never checks them"
+          summary: "A committed file is not sealed or recorded, and the reconciler has not finished it"
           description: >-
-            A write Lance commits in one call (the create door's write, an unkeyed /insert) landed a version whose
-            added files the catalog could not record on its control root, so maintenance never reads them again and an
-            overwrite of them goes unseen. The committed_files_unrecorded ERROR log names the location, the version and
-            the store's error.
+            A version landed with a file the catalog could not seal or record on its control root (a seal or
+            record refused once the version stood, or a reconciler pass that could not finish it), so
+            maintenance does not check that file and an overwrite of it would go unseen. The reconciler
+            holds its mark before the version and finishes it again on every pass, so this fires for as long
+            as the finish keeps failing. The committed_files_unrecorded ERROR log names the location, the
+            version and the store's error.
 
       # ADR 0242: a warehouse whose store does not refuse a put over a sealed file, as the probe's seal check last measured
       # it (`catalog.warehouse.seal`, one series per warehouse, exported from the catalog's start). One git declares

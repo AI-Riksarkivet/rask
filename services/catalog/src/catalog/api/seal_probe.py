@@ -92,6 +92,7 @@ async def probe_all(app: FastAPI, settings: Settings) -> SealProbeTick:
         if report is None or report.sealed is None:
             _unprobed.add(1)
             done.unprobed += 1
+            seal_posture.unmeasured(warehouse_id)
             if report is not None:
                 log.warning("warehouse_seal_unprobed", extra={"warehouse": warehouse_id, "checks": [check.model_dump() for check in report.checks]})
             continue

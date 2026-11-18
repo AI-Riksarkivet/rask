@@ -703,17 +703,23 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
 
     monkeypatch.setattr(warehouse_grant_backfill, "backfill", unanswered)
     monkeypatch.setattr(client.app.state, "settings", settings, raising=False)
+    monkeypatch.setattr(seal_posture, "_never_measured", set())
+    # A warehouse no probe has ever measured exports 0, so the alert on the measurement's age reads a series for it.
+    vending.over_sealed = 503
+    ticks = [asyncio.run(seal_probe.probe_all(client.app, settings))]
+    assert measured_at()[settings.estate_warehouse] == 0.0 and measured_at()["wh-p"] > 0.0
+    vending.over_sealed = None
     asyncio.run(boot.converge_at_boot(client.app))
     assert measured() == {"estate": "enforced", "wh-p": "enforced", "estate-recorded": "enforced", "wh-p-recorded": "enforced"}
     vending.seal = "unenforced"
-    ticks = [asyncio.run(seal_probe.probe_all(client.app, settings))]
+    ticks.append(asyncio.run(seal_probe.probe_all(client.app, settings)))
     assert measured() == {"estate": "unenforced", "wh-p": "unenforced", "estate-recorded": "unenforced", "wh-p-recorded": "unenforced"}
     concluded = measured_at()
     vending.seal, vending.over_sealed = "enforced", 503
     ticks.append(asyncio.run(seal_probe.probe_all(client.app, settings)))
     validated = client.post("/management/v1/warehouses/wh-p/validate")
 
-    assert [(tick.measured, tick.unprobed) for tick in ticks] == [(2, 0), (0, 2)]
+    assert [(tick.measured, tick.unprobed) for tick in ticks] == [(0, 2), (2, 0), (0, 2)]
     assert measured() == {"estate": "unenforced", "wh-p": "unenforced", "estate-recorded": "unenforced", "wh-p-recorded": "unenforced"}
     # The time of the last conclusive measurement stays where it was through the inconclusive tick and validate, and a
     # replica that starts again reads it off the records, so `WarehouseSealUnmeasured` sees its age grow (ADR 0242 § Found

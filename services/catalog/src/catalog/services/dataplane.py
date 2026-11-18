@@ -3021,21 +3021,39 @@ def landed_under_key(
     """
     if key is None or key.written_from is None:
         return None
-    listed = _listed_versions(branch_layout.ref_root(table_location, recorded_branch(branch)), so)
+    ref_root = branch_layout.ref_root(table_location, recorded_branch(branch))
+    listed = _listed_versions(ref_root, so)
     window = range(key.written_from + 1, max(listed, default=key.written_from) + 1)
-    if gone := [version for version in window if version not in listed]:
-        named = ", ".join(str(version) for version in gone[:20]) + (f" and {len(gone) - 20} more" if len(gone) > 20 else "")
-        raise InvalidTableStateError(
-            f"the write under this Idempotency-Key may have landed in a version since removed: version {named} of the table, "
-            f"committed after the key's first write was planned on version {key.written_from}, is no longer readable, so the "
-            "catalog cannot tell whether the write landed and does not apply it again; read the table and send the write "
-            "under a new key if it is missing"
-        )
+    _require_whole_window(key, window, listed)
     for version in reversed(window):
-        transaction = dataset.read_transaction(version)
+        try:
+            transaction = dataset.read_transaction(version)
+        except OSError:
+            # A version listed above and removed before this read is as gone as one never listed (Lance raises OSError
+            # "was not found", measured on pylance 13.0.0): the listing read again says which it was, and any other
+            # failure is the store's.
+            _require_whole_window(key, window, _listed_versions(ref_root, so))
+            raise
         if transaction is not None and (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) == key.mark:
             return version, transaction
     return None
+
+
+def _require_whole_window(key: idempotency.HeldKey, window: range, listed: set[int]) -> None:
+    """Refuse a key's search when a version of its ``window`` is not among the ref's ``listed`` versions.
+
+    Raises:
+        InvalidTableStateError: A version of the window is gone (409, code 19).
+    """
+    if not (gone := [version for version in window if version not in listed]):
+        return
+    named = ", ".join(str(version) for version in gone[:20]) + (f" and {len(gone) - 20} more" if len(gone) > 20 else "")
+    raise InvalidTableStateError(
+        f"the write under this Idempotency-Key may have landed in a version since removed: version {named} of the table, "
+        f"committed after the key's first write was planned on version {key.written_from}, is no longer readable, so the "
+        "catalog cannot tell whether the write landed and does not apply it again; read the table and send the write "
+        "under a new key if it is missing"
+    )
 
 
 def _listed_versions(ref_root: str, so: StorageOptions) -> set[int]:

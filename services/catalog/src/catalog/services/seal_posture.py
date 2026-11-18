@@ -8,7 +8,9 @@ probe, and the record keeps what it measured (``sealed``) and when (``sealed_at`
   (``lance.seal``: ``enforced``, ``unenforced``, ``untaggable``) and whether git requires it (``lance.seal_required``:
   ``false`` for a warehouse declared ``detection_only``). ``WarehouseSealUnenforced`` and ``WarehouseSealLost``
   (``deploy/alerting/rules.yml``) fire while a series is not ``enforced``.
-- ``catalog.warehouse.seal_measured``, one series per warehouse, the Unix time of the last measurement that concluded.
+- ``catalog.warehouse.seal_measured``, one series per warehouse, the Unix time of the last measurement that concluded,
+  and 0 for a warehouse the probe asked about and has never measured (:func:`unmeasured`), so the alert below reads a
+  series for it too.
   A probe that learned nothing moves neither series, so a store whose probe stays inconclusive keeps exporting the
   verdict it last had; ``WarehouseSealUnmeasured`` fires once that time is older than two of the probe's periods, which
   it reads off the period the probe's timer exports (``timer.period``, ``timer="catalog-seal-probe"``,
@@ -57,6 +59,8 @@ class _Posture(BaseModel):
 
 #: Each warehouse's posture as this process last read or measured it.
 _postures: dict[str, _Posture] = {}
+#: The warehouses this process's probe asked about and holds no concluded measurement of.
+_never_measured: set[str] = set()
 _registered = False
 
 
@@ -68,7 +72,8 @@ def _observe(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
 
 
 def _observe_measured(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
-    return [metrics.Observation(posture.at.timestamp(), {_WAREHOUSE: warehouse}) for warehouse, posture in sorted(_postures.items()) if posture.at is not None]
+    concluded = {warehouse: posture.at.timestamp() for warehouse, posture in _postures.items() if posture.at is not None}
+    return [metrics.Observation(at, {_WAREHOUSE: warehouse}) for warehouse, at in sorted({**dict.fromkeys(_never_measured, 0.0), **concluded}.items())]
 
 
 def _register() -> None:
@@ -100,11 +105,22 @@ def observe(warehouse_id: str, record: dict[str, Any] | None, *, required: bool)
     _register()
     if record is not None and isinstance(sealed := record.get(warehouses.SEALED), str):
         _postures[warehouse_id] = _Posture(sealed=sealed, required=required, at=warehouses.sealed_at(record))
+        _never_measured.discard(warehouse_id)
+
+
+def unmeasured(warehouse_id: str) -> None:
+    """A probe of ``warehouse_id`` learned nothing: where this process holds no concluded measurement of it, it exports
+    ``seal_measured`` 0 from now on, so ``WarehouseSealUnmeasured`` fires for a warehouse no probe has ever measured as
+    it does for one whose last measurement has aged."""
+    _register()
+    if warehouse_id not in _postures:
+        _never_measured.add(warehouse_id)
 
 
 def forget(warehouse_id: str) -> None:
     """A warehouse deleted: it exports no series from now on."""
     _postures.pop(warehouse_id, None)
+    _never_measured.discard(warehouse_id)
 
 
 def load(settings: Settings) -> None:

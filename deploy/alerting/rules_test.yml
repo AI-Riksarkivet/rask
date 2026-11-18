@@ -656,8 +656,8 @@ tests:
               severity: "warning"
               service: "catalog"
             exp_annotations:
-              summary: "A commit's files were not recorded, so maintenance never checks them"
-              description: "A write Lance commits in one call (the create door's write, an unkeyed /insert) landed a version whose added files the catalog could not record on its control root, so maintenance never reads them again and an overwrite of them goes unseen. The committed_files_unrecorded ERROR log names the location, the version and the store's error."
+              summary: "A committed file is not sealed or recorded, and the reconciler has not finished it"
+              description: "A version landed with a file the catalog could not seal or record on its control root (a seal or record refused once the version stood, or a reconciler pass that could not finish it), so maintenance does not check that file and an overwrite of it would go unseen. The reconciler holds its mark before the version and finishes it again on every pass, so this fires for as long as the finish keeps failing. The committed_files_unrecorded ERROR log names the location, the version and the store's error."
 
   # Every commit recorded is a flat zero, and stays quiet.
   - interval: 1m
