@@ -8,14 +8,16 @@ that: a role holding ``admin`` may reach nobody.
 
 Every door that changes a project's ``admin`` tuples or who is in a role goes through :func:`confer` or
 :func:`withdraw`: the members door, the role doors, the principal delete door ([[LH-233]]), a role's ending
-([[LH-557]]) and the declaration converge. Each judges the administration it read and commits in one Write that moves
-the project's token (``revision``, ADR 0241), which the store refuses whole once another such change moved it, so no two of them,
-each judged on its own read, both commit.
+([[LH-557]]) and the declaration converge. A removal judges the administration it read and commits in one Write that
+moves the project's token (``revision``, ADR 0241), which the store refuses whole once another removal moved it, so no
+two of them, each judged on its own read, both commit. A grant removes nobody and moves no token, so grants never
+refuse each other. Both commit under the fences their door opened before it asked its caller's authority
+(``fga.open_fence``), so neither lands on a project made again under the id once the one it was decided on is deleted.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Final
 
 from lance_namespace import ConcurrentModificationError, InvalidInputError
@@ -178,10 +180,11 @@ def _revisions(scope: dict[str, Administration]) -> tuple[list[fga.ClientTuple],
     return [t for moved, _ in moves for t in moved], [t for _, replaced in moves for t in replaced]
 
 
-def _fits(scope: dict[str, Administration], targets: list[fga.ClientTuple]) -> bool:
-    """Whether changing ``targets`` and moving every revision in ``scope`` is one Write the store takes."""
+def _fits(scope: dict[str, Administration], targets: list[fga.ClientTuple], fences: Sequence[fga.Fence] = ()) -> bool:
+    """Whether changing ``targets``, moving every revision in ``scope`` and deleting ``fences``' tickets is one Write the
+    store takes."""
     moved, stale = _revisions(scope)
-    return len(targets) + len(moved) + len(stale) <= _TUPLES_PER_WRITE
+    return len(targets) + len(moved) + len(stale) + len(fences) <= _TUPLES_PER_WRITE
 
 
 def _refuse_a_change_past_one_write(scope: dict[str, Administration], target: fga.ClientTuple) -> None:
@@ -196,13 +199,23 @@ async def _commit(
     scope: dict[str, Administration],
     *,
     deletes: list[fga.ClientTuple],
-    writes: list[fga.ClientTuple],
+    fences: Sequence[fga.Fence],
     actor: str,
     origin: fga.TupleOrigin,
 ) -> bool:
-    """Apply the change in one Write that moves the revision of every project in ``scope``; whether it committed."""
+    """Apply the removal in one Write that moves the revision of every project in ``scope`` and deletes ``fences``'
+    tickets; whether it committed.
+
+    Raises:
+        fga.IncarnationEnded: A fence's ticket is gone: its project was deleted while the removal ran.
+    """
     moved, stale = _revisions(scope)
-    return await fga.commit_unless_changed(client, deletes=[*deletes, *stale], writes=[*writes, *moved], actor=actor, origin=origin)  # noqa: TID251
+    tickets = [fence.ticket for fence in fences]
+    if await fga.commit_unless_changed(client, deletes=[*deletes, *stale, *tickets], writes=moved, actor=actor, origin=origin):  # noqa: TID251
+        return True
+    if not await fga.fences_stand(client, fences):
+        raise fga.IncarnationEnded("the project this removal was decided on was deleted while it ran; nothing was removed")
+    return False
 
 
 async def confer(
@@ -212,50 +225,49 @@ async def confer(
     actor: str,
     origin: fga.TupleOrigin,
     permit: Permit | None = None,
-    incarnation: str | None = None,
+    fences: Sequence[fga.Fence] = (),
 ) -> bool:
     """Write ``target``, a project's ``admin`` tuple or a role assignment; whether this call wrote it.
 
     ``permit`` is asked with the projects the tuple makes its subject an administrator of, on the read the Write is
     judged by: a role nested beneath one holding a project's ``admin`` confers that ``admin``, however deep. Writing
-    what is held is a no-op. ``incarnation`` is the project's its caller was authorized on (ADR 0241): an ``admin`` tuple
-    is written only while that incarnation's token stands on its project, in the Write that moves it.
+    what is held is a no-op. The Write moves no token, so grants never refuse each other, and deletes ``fences``'
+    tickets, which its door opened on the project before asking its caller's authority (ADR 0241): it commits only on
+    the incarnation the caller was authorized on.
 
     Raises:
-        ConcurrentModificationError: The administrations the tuple touches changed under both reads.
-        InvalidInputError: The tuple touches more administrations than one Write moves.
-        fga.IncarnationEnded: ``target``'s project is not the incarnation its caller was authorized on.
+        fga.IncarnationEnded: A fence's project was deleted while the grant ran.
+        ConcurrentModificationError: The tuple changed under every attempt.
     """
-    for _ in range(READS):
-        scope = await administrations(client, [target])
-        if incarnation is not None and is_admin(target):
-            standing = fga.standing_incarnation(scope[target.object].tuples, target.object)
-            if standing is None or standing.incarnation != incarnation:
-                raise fga.IncarnationEnded(f"{target.object} is not the project this grant was decided on: it was deleted")
-        if permit is not None:
-            await permit(touched(scope, [target]))
-        if await _held(client, [target]):
-            return False
-        _refuse_a_change_past_one_write(scope, target)
-        if await _commit(client, scope, deletes=[], writes=[target], actor=actor, origin=origin):
-            return True
-    raise ConcurrentModificationError(f"who administers the project of {target.object} changed while this grant ran, twice — read again and retry")
+    scope = await administrations(client, [target])
+    if permit is not None:
+        await permit(touched(scope, [target]))
+    return await fga.commit_fenced(client, list(fences), writes=[target], actor=actor, origin=origin)
 
 
 async def withdraw(
-    client: OpenFgaClient, targets: list[fga.ClientTuple], *, actor: str, origin: fga.TupleOrigin, permit: Permit | None = None
+    client: OpenFgaClient,
+    targets: list[fga.ClientTuple],
+    *,
+    actor: str,
+    origin: fga.TupleOrigin,
+    permit: Permit | None = None,
+    fences: Sequence[fga.Fence] = (),
 ) -> list[fga.ClientTuple]:
     """Delete ``targets``, project ``admin`` tuples and role assignments; those this call removed.
 
     Removing what is not held is a no-op. A removal after which a project's ``admin`` reaches no person is refused
     (409, code 14), whatever ``admin`` tuples are left. ``permit`` is asked as :func:`confer` asks it. Targets whose
     removal and revisions are more than one Write takes are removed in halves, each judged on the administrations the
-    half before it left.
+    half before it left. ``fences`` are those its door opened before asking its caller's authority (ADR 0241): the
+    removal commits only on the incarnation the caller was authorized on, so a revoke decided on a deleted project
+    takes nothing from one made again under the id.
 
     Raises:
         ConcurrentModificationError: The removal would leave a project nobody administers, or the administrations it
             touches changed under both reads.
-        InvalidInputError: One target touches more administrations than one Write moves.
+        InvalidInputError: One target touches more administrations than one Write moves, or fenced targets more than one.
+        fga.IncarnationEnded: A fence's project was deleted while the removal ran.
     """
     for _ in range(READS):
         scope = await administrations(client, targets)
@@ -263,8 +275,11 @@ async def withdraw(
             await permit(touched(scope, targets))
         held = await _held(client, targets)
         if not held:
+            await fga.close_fences(client, fences, actor=actor, origin=origin)
             return []
-        if not _fits(scope, held):
+        if not _fits(scope, held, fences):
+            if fences:
+                raise InvalidInputError("a fenced removal is one Write: remove these one at a time")
             if len(held) == 1:
                 _refuse_a_change_past_one_write(scope, held[0])
             half = len(held) // 2
@@ -276,6 +291,6 @@ async def withdraw(
                 f"{', '.join(sorted({t.user for t in held}))} is the last administrator {', '.join(stranded)} reaches — "
                 "grant another admin first, or nobody will be able to administer or delete it"
             )
-        if await _commit(client, scope, deletes=held, writes=[], actor=actor, origin=origin):
+        if await _commit(client, scope, deletes=held, fences=fences, actor=actor, origin=origin):
             return held
     raise ConcurrentModificationError("who administers the project changed while this removal ran, twice — read again and retry")

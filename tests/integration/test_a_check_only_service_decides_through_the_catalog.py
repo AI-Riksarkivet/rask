@@ -123,7 +123,9 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
                 "created_at": datetime.now(UTC).isoformat(),
             }
             warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), made)
-            store.write((f"project:{project}", "project", f"warehouse:{warehouse}"))
+            # Born, as its create door bears it (ADR 0241): its incarnation's marker and token, beside its tenancy edge.
+            born = (f"revision:{made['incarnation']}", f"revision:{made['incarnation']}.0")
+            store.write(*((user, "revision", f"warehouse:{warehouse}") for user in born), (f"project:{project}", "project", f"warehouse:{warehouse}"))
             warehouses.ensure_catalog_row(connect("dir", {"root": settings.root}), warehouse)
             _ok(client.post(f"/v1/namespace/{namespace}/create", json={}))
             table = f"{namespace}$t"

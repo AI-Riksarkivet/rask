@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
@@ -35,6 +35,7 @@ from lakehouse.governed.principal import Principal
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
+from tests.integration.openfga_grants import Grants
 
 
 def _settings(tmp_path: Any, store: str, *, fga: bool = False, reserved: str = "", detection_only: str = "") -> Settings:
@@ -541,14 +542,8 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, stor
         principal=Principal(idp_id="dex", subject="mallory"), claims=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
     )
     client.app.state.oidc = verifier
-    fga_client = MagicMock()
-    fga_client.close = AsyncMock()
-    client.app.state.fga = fga_client
-
-    async def deny(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        return False
-
-    monkeypatch.setattr(fga_module, "check", deny)
+    # A store that grants nothing and holds every project born (ADR 0241): the door opens its fence, then is refused.
+    client.app.state.fga = Grants()
     resp = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}, headers={"authorization": "Bearer t"})
     assert resp.status_code == 403, resp.text
 

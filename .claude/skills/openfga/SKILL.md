@@ -144,12 +144,19 @@ fine. A catalog door resolves the name once per request (`catalog.api.dependenci
 an object by resolving the name first, never by joining it into `table:<name>`. A
 warehouse, a project, a classification label and a transaction keep their ids.
 
-**A project's and a warehouse's id is reused once it is deleted, so a write on it is fenced by its incarnation** (ADR
-0241, `specs/catalog/Grants.tla`): `revision` on both types is bookkeeping holding the marker `revision:<incarnation>`
-(never revoked) and the token `revision:<incarnation>.<n>`. Write a tuple on one through `fga.write_fenced` (or
-`project_admins.confer(incarnation=)` for an `admin`), never `fga.write_tuples`, and read the token before asking the
-caller's authority; a delete retires the token (`fga.retire`) before it reads what to revoke. A test seeding a project or
-warehouse straight to the store holds no token, so a grant door answers it 404: make it at its door.
+**A project's and a warehouse's id is reused once it is deleted, so a write on or naming it is fenced by its incarnation**
+(ADR 0241, `specs/catalog/Grants.tla`): `revision` on `project`, `warehouse` and `estate` is bookkeeping holding the marker
+`revision:<incarnation>` (never revoked), the token `revision:<incarnation>.<n>`, a door's ticket `revision:ticket-<hex>`,
+the drift repair's token `revision:repair-<hex>` and a declared grant's evidence `revision:git-<hex>`; the audit trail
+leaves them out. Open a fence BEFORE asking the caller's authority (`fga_deps.door_fence`, or the router's `parent_fence`
+for a namespace created in a warehouse) and write or revoke through `fga.commit_fenced` (or `project_admins.confer` /
+`withdraw(fences=)` for an administration change), never `fga.write_tuples` / `delete_tuples`; this covers a tuple naming
+the object as SUBJECT too (a warehouse's tenancy edge, a role's `project` edge). A Write cannot require a tuple without
+deleting it (a Write that deletes and writes one tuple is refused `cannot_allow_duplicate_tuples_in_one_request`, measured
+on 1.18.3), so each writer deletes its own ticket and grants never refuse each other. A delete ends the incarnation with
+`fga.end_incarnation` (mark born, retire, drain until a read finds nothing). A test seeding a project or warehouse
+straight to the store must seed its marker and token too, or its doors answer 409 with `Retry-After` (being established);
+`tests/integration/openfga_grants.Grants` answers every project and warehouse as born.
 
 ### Testing
 | File | Description |

@@ -78,7 +78,9 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     declared = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-maintenance")
     dropped = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-lineage")
     client = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-a-tenant-service")
-    openfga_store.write((dropped, "maintenance", "warehouse:wh1"), (dropped, "reader", "warehouse:wh1"), (client, "maintenance", "warehouse:wh1"))
+    # The project as its door bore it (ADR 0241): the edge naming it is written under a fence of it.
+    born = (("revision:p1", "revision", "project:acme"), ("revision:p1.0", "revision", "project:acme"))
+    openfga_store.write(*born, (dropped, "maintenance", "warehouse:wh1"), (dropped, "reader", "warehouse:wh1"), (client, "maintenance", "warehouse:wh1"))
     settings = _fga_settings(
         LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"],
         LANCE_OWN_ACCOUNTS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance", "kubernetes~system:serviceaccount:rask:rask-sa-lineage"],
@@ -93,6 +95,7 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     asyncio.run(_repair())
 
     assert openfga_store.tuples() == {
+        *born,
         ("revision:i1", "revision", "warehouse:wh1"),
         ("revision:i1.0", "revision", "warehouse:wh1"),
         ("project:acme", "project", "warehouse:wh1"),
@@ -133,7 +136,7 @@ async def test_creating_a_warehouse_grants_it(monkeypatch, creator: PersonPrinci
     settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
 
     seen = await _captured_tuples(
-        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, creator, warehouse_id="wh1", project="acme", incarnation="i1"),
+        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, creator, warehouse_id="wh1", project="acme", incarnation="i1", fences=[]),
         monkeypatch,
     )
 

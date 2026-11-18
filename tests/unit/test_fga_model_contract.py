@@ -382,6 +382,8 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     # delete retires the token and keeps the marker, which confers nothing, so no birth bears the incarnation again.
     ("project", "revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
     ("warehouse", "revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
+    # A declared grant's evidence on the estate (ADR 0241): bookkeeping the converge deletes once it settles its intent.
+    ("estate", "revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
     ("namespace", "managed_access", "role"): "role is a subject type, not a droppable object",
     ("warehouse", "managed_access", "role"): "role is a subject type, not a droppable object",
     # A project cannot be deleted while a warehouse claims it — `projects.py`'s emptiness refusal

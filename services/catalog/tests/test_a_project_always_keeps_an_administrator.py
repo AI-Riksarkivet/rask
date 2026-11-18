@@ -3,8 +3,9 @@
 The members door refuses to revoke the last ``admin`` that reaches a person (409, code 14), since a project nobody
 administers can be governed through none of its own doors. The count is a read, so two revokes of two admins each read two and each
 passed: measured live on helm rev 16, 10 of 10 trials of two admins revoking each other at once left the project with
-no admin. The door now deletes the admin tuple and moves the project's ``admin_revision`` in one OpenFGA Write that the
-store refuses whole once another revoke moved the revision, and the loser reads again and judges the admins it finds.
+no admin. The door now deletes the admin tuple and moves the project's token (``revision``, ADR 0241) in one OpenFGA
+Write that the store refuses whole once another revoke moved it, and the loser reads again and judges the admins it
+finds.
 
 Every decision is the real model's, on a store of this test's own. The estate admin's ``owner`` tuple on the estate is
 seeded as the catalog's declaration grants it; everything else goes through the doors: root creates ``acme`` and grants

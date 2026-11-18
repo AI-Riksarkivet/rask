@@ -32,11 +32,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, status
-from lance_namespace import InvalidInputError, NamespaceAlreadyExistsError, PermissionDeniedError, TableNotFoundError
+from lance_namespace import ConcurrentModificationError, InvalidInputError, NamespaceAlreadyExistsError, PermissionDeniedError, TableNotFoundError
 from starlette.concurrency import run_in_threadpool
 
 from catalog.api import announcing, fga_deps
-from catalog.api.announcing import AnnouncerDep
+from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken, current_subject
 from catalog.api.v1.endpoints.members import ProjectId
@@ -107,28 +107,27 @@ async def create_role(
     when the record cannot be written, so a role is listed only once it can be governed; an edge left by a request that
     died between the two names a uuid no record holds, which grants nothing. The role starts with no assignee: filling
     it is the security admins' (``can_manage_assignees``), a different authority from minting it.
+
+    The edge names the project, so it is written under a fence of the project opened before the gate (ADR 0241): a role
+    decided on a project deleted meanwhile is made in no project made again under the id. The project's delete revokes
+    every edge naming it and then ends every role its registry lists; a record written after that listing finds its
+    edge gone, and is taken back here.
     \f
 
     Raises:
         InvalidInputError: The name is not a name (ADR 0173 §4).
         TableNotFoundError: The project is absent, or its caller may not create a role in it.
+        SettlingError: The project stands and is still being established; ask again after ``Retry-After``.
         NamespaceAlreadyExistsError: A standing role of the project holds the name.
+        ConcurrentModificationError: The project was deleted while the role was made.
     """
     require_names([body.name])
-    wired = await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_create_role")
-    actor = current_subject(token)
-    record = RoleRecord(id=uuid.uuid4(), project=project_id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
+    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token) as door:
+        wired = await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_create_role")
+        fences = await fga_deps.require_fence(door, settings)
+        record = await _mint_role(wired, settings, project_id, body, fences, actor=current_subject(token))
     obj = roles.role_object(record.id)
-    edge = fga.ClientTuple(user=f"project:{project_id}", relation="project", object=obj)
-    await fga.write_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
-    try:
-        await run_in_threadpool(roles.create_role_record, settings.registry_root, settings.storage_options(), record)
-    except RecordExistsError:
-        await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
-        raise NamespaceAlreadyExistsError(f"project {project_id!r} already holds a role named {body.name!r}") from None
-    except BaseException:
-        await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
-        raise
+    actor = current_subject(token)
     audit(AuditAction.ROLE_CREATE, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, name=record.name)
     await emit_control(
         control,
@@ -139,6 +138,31 @@ async def create_role(
         extra={"project": project_id, "name": record.name},
     )
     return Role(**record.model_dump(), assignees=[])
+
+
+async def _mint_role(wired: OpenFgaClient, settings: Settings, project_id: str, body: RoleCreateRequest, fences: list[fga.Fence], *, actor: str) -> RoleRecord:
+    """The role's ``project`` edge under ``fences``, then its record, then the edge read again; the record."""
+    record = RoleRecord(id=uuid.uuid4(), project=project_id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
+    edge = fga.ClientTuple(user=f"project:{project_id}", relation="project", object=roles.role_object(record.id))
+    try:
+        await fga.commit_fenced(wired, fences, writes=[edge], actor=actor, origin="create")
+    except fga.IncarnationEnded as exc:
+        raise ConcurrentModificationError(f"project {project_id!r} was deleted while this role was made; nothing was made") from exc
+    so = settings.storage_options()
+    try:
+        await run_in_threadpool(roles.create_role_record, settings.registry_root, so, record)
+    except RecordExistsError:
+        await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
+        raise NamespaceAlreadyExistsError(f"project {project_id!r} already holds a role named {body.name!r}") from None
+    except BaseException:
+        await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
+        raise
+    if edge not in await fga.read_object_tuples(wired, edge.object):
+        # The project's delete revoked the edge after it committed and before this record was listed: the role is ended
+        # here, as the delete would have ended it.
+        await run_in_threadpool(roles.end_role_record, settings.registry_root, so, record)
+        raise ConcurrentModificationError(f"project {project_id!r} was deleted while this role was made; nothing was made")
+    return record
 
 
 @router.get("/{project_id}/roles")
@@ -232,17 +256,34 @@ async def assign_role(
     """Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on
     the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
 
-    The assignment is one Write with the project's token (``revision``) (:func:`project_admins.confer`), judged on the
-    read that found whether ``admin`` reaches the role.
+    The assignment is one Write (:func:`project_admins.confer`), judged on the read that found whether ``admin`` reaches
+    the role, under a fence of the role's project opened before the gate (ADR 0241): an assignment decided on a project
+    deleted meanwhile lands in no project made again under its id.
     \f
 
     Raises:
         TableNotFoundError: The role is absent, or its caller may not manage its assignees.
         InvalidInputError: The assignee is the role itself, neither a principal nor a role, or no standing role of the project.
         PermissionDeniedError: The assignment would raise the caller's own access.
-        ConcurrentModificationError: Who administers the project changed under both of the assignment's reads.
+        ConcurrentModificationError: The project was deleted while the assignment ran.
     """
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token) as door:
+        wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+        fences = await fga_deps.require_fence(door, settings)
+        return await _assign(wired, announcer, settings, token, project_id, role, body, fences)
+
+
+async def _assign(
+    wired: OpenFgaClient,
+    announcer: Announcer,
+    settings: Settings,
+    token: Caller | None,
+    project_id: str,
+    role: RoleRecord,
+    body: AssigneeRequest,
+    fences: list[fga.Fence],
+) -> Role:
+    """The assignment once its caller is authorized, under ``fences``."""
     user = await _assignee(settings=settings, role=role, raw=body.user)
     obj = roles.role_object(role.id)
     if token is not None:
@@ -252,7 +293,11 @@ async def assign_role(
     told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(token))
     permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
     async with announcer.announcing(door="role_assign", target=obj, announcements=[told]) as filing:
-        if await project_admins.confer(wired, tup, actor=actor, origin="grant_api", permit=permit):
+        try:
+            conferred = await project_admins.confer(wired, tup, actor=actor, origin="grant_api", permit=permit, fences=fences)
+        except fga.IncarnationEnded as exc:
+            raise ConcurrentModificationError(f"project {project_id!r} was deleted while this assignment ran; nothing was assigned") from exc
+        if conferred:
             audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
             await filing.send(told)
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
@@ -271,14 +316,32 @@ async def unassign_role(
     """Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.
 
     Refused 409 (code 14) when the project's ``admin`` would reach nobody without it
-    (:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is).
+    (:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is), and fenced as an
+    assignment is (ADR 0241).
     \f
 
     Raises:
         TableNotFoundError: The role is absent, or its caller may not manage its assignees.
-        ConcurrentModificationError: The removal would leave the project nobody administers.
+        ConcurrentModificationError: The removal would leave the project nobody administers, or the project was deleted
+            while it ran.
     """
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token) as door:
+        wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+        fences = await fga_deps.require_fence(door, settings)
+        return await _unassign(wired, announcer, settings, token, project_id, role, body, fences)
+
+
+async def _unassign(
+    wired: OpenFgaClient,
+    announcer: Announcer,
+    settings: Settings,
+    token: Caller | None,
+    project_id: str,
+    role: RoleRecord,
+    body: AssigneeRequest,
+    fences: list[fga.Fence],
+) -> Role:
+    """The removal of an assignee once its caller is authorized, under ``fences``."""
     user = fga.grantee_object(body.user)
     obj = roles.role_object(role.id)
     actor = current_subject(token)
@@ -286,7 +349,11 @@ async def unassign_role(
     told = announcing.grant_announcement(tup, action="grant_revoked", actor=_announced_actor(token))
     permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
     async with announcer.announcing(door="role_unassign", target=obj, announcements=[told]) as filing:
-        if await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api", permit=permit):
+        try:
+            withdrawn = await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api", permit=permit, fences=fences)
+        except fga.IncarnationEnded as exc:
+            raise ConcurrentModificationError(f"project {project_id!r} was deleted while this removal ran; nothing was removed") from exc
+        if withdrawn:
             audit(AuditAction.ROLE_UNASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
             await filing.send(told)
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))

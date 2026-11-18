@@ -37,9 +37,9 @@ from catalog.api.v1.endpoints import warehouses as warehouse_doors
 from catalog.core.config import Settings
 from catalog.core.vending import CredentialVendor
 from catalog.schemas import CreateWarehouseRequest, DeleteProfile
-from catalog.services import declaration, project_admins, warehouses
+from catalog.services import declaration, incarnations, project_admins, warehouses
 from catalog.services import projects as project_registry
-from catalog.services.control_records import GIT, INCARNATION, MANAGED_BY, DeleteMode, ProtectionChange
+from catalog.services.control_records import GIT, MANAGED_BY, DeleteMode, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
 from lakehouse import protection
 from lakehouse.control_emit import ControlEmitter
@@ -180,10 +180,13 @@ class _Converger:
                 self.tick.released.append(f"warehouse:{record['id']}")
 
     async def _grants(self, declared: Declaration) -> None:
-        """Write each declared tuple the store lacks, and revoke each one written from a declaration git no longer makes.
+        """Settle every intent a tick left, write each declared tuple the store lacks, and revoke each one written from a
+        declaration git no longer makes.
 
         A declared tuple the store already holds is left as it is and is not recorded: somebody made it at a door, and
-        it is theirs when git stops declaring it.
+        it is theirs when git stops declaring it. A tuple the converge writes is recorded first as an intent naming an
+        evidence the same Write leaves (ADR 0241): a tick that dies anywhere leaves the intent, and the next settles it
+        by whether the evidence stands, so a door's tuple is never recorded as git's and git's is never left unrecorded.
 
         The admins of a project git stopped declaring are not revoked: a released project is its doors' as it stands,
         its people included, so its admins are handed over by forgetting that the declaration wrote them.
@@ -193,9 +196,11 @@ class _Converger:
         """
         if self._client is None:
             return
+        for pending in [record for record in await run_in_threadpool(declaration.ledger, self._root, self._so) if record.evidence is not None]:
+            await self._attempt(f"settle:{pending.object}#{pending.relation}", partial(self._settle, self._client, pending))
         wanted = self._wanted(declared)
-        recorded = await run_in_threadpool(declaration.recorded_grants, self._root, self._so)
-        held = {obj: await _held(self._client, obj) for obj in sorted({grant.object for grant in wanted | recorded})}
+        recorded = {record.grant: record for record in await run_in_threadpool(declaration.ledger, self._root, self._so) if record.evidence is None}
+        held = {obj: await _held(self._client, obj) for obj in sorted({grant.object for grant in wanted | set(recorded)})}
         ungranted: set[str] = set()
         for grant in sorted(wanted, key=_order):
             if (grant.user, grant.relation) in held[grant.object]:
@@ -205,15 +210,24 @@ class _Converger:
         released = {f"project:{record['id']}" for record in await run_in_threadpool(project_registry.list_projects, self._root, self._so)} - {
             f"project:{project.id}" for project in declared.projects
         }
-        for grant in sorted(recorded - wanted, key=_order):
+        for grant in sorted(set(recorded) - wanted, key=_order):
             if grant.object in ungranted:
                 continue
             if grant.relation == project_admins.ADMIN and grant.object in released:
                 await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
                 continue
-            await self._attempt(f"revoke:{grant.object}#{grant.relation}", partial(self._revoke, self._client, grant))
+            await self._attempt(f"revoke:{grant.object}#{grant.relation}", partial(self._revoke, self._client, recorded[grant]))
         for obj in self._estate_objects:
             await self._attempt(f"own:{obj}", partial(self._revoke_undeclared_own_roles, self._client, obj, wanted))
+
+    async def _settle(self, client: OpenFgaClient, record: declaration.GrantRecord) -> None:
+        """Settle an intent a tick left: the declaration's where its evidence stands, forgotten where it does not."""
+        proof = fga.ClientTuple(user=str(record.evidence), relation=fga.REVISION, object=record.object)
+        if await fga.evidence_stands(client, proof):
+            await run_in_threadpool(declaration.settle_grant, self._root, self._so, record)
+            await fga.delete_tuples(client, [proof], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
+        else:
+            await run_in_threadpool(declaration.forget_grant, self._root, self._so, record.grant)
 
     @property
     def _estate_objects(self) -> tuple[str, str]:
@@ -252,38 +266,84 @@ class _Converger:
     async def _grant(self, client: OpenFgaClient, grant: GrantTuple) -> None:
         if (stands := await self._stands(grant.object)) is None:
             raise LookupError(f"{grant.object} has no registry record, so no grant on it is written")
-        # Read again right before the record: a tuple somebody made at a door since the tick's first read is theirs,
-        # and recording it would have the declaration revoke it later.
-        if (grant.user, grant.relation) in await _held(client, grant.object):
-            return
-        # Recorded before the tuple: a tuple written and never recorded would outlive its declaration.
-        recorded = await run_in_threadpool(declaration.record_grant, self._root, self._so, grant)
-        told = announcing.grant_announcement(grant.client_tuple, action="grant_added", actor=DECLARATION.actor, extra={"reason": "declared"})
-        async with self._announcer.announcing(door="declaration_converge", target=grant.object, announcements=[told]) as filing:
-            if not await _written(client, grant, incarnation=stands.incarnation):
-                # A door made the tuple between the read above and this write (ADR 0241): it is the door's, so the record
-                # this tick made goes and git never revokes it. A record another tick made stays: that tick wrote it.
-                if recorded:
-                    await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+        fences = await self._fences(client, grant.object, stands)
+        try:
+            # Read again right before the intent: a tuple somebody made at a door since the tick's first read is theirs.
+            if (grant.user, grant.relation) in await _held(client, grant.object):
                 return
-            await filing.send(told)
-        self.tick.grants_written += 1
+            proof = fga.evidence(grant.object)
+            if not await run_in_threadpool(
+                partial(declaration.record_intent, self._root, self._so, grant, evidence=str(proof.user), incarnation=stands.incarnation)
+            ):
+                return
+            told = announcing.grant_announcement(grant.client_tuple, action="grant_added", actor=DECLARATION.actor, extra={"reason": "declared"})
+            async with self._announcer.announcing(door="declaration_converge", target=grant.object, announcements=[told]) as filing:
+                record = declaration.GrantRecord(**grant.model_dump(), evidence=str(proof.user), incarnation=stands.incarnation)
+                try:
+                    written = await fga.write_evidenced(client, fences, grant.client_tuple, proof, actor=DECLARATION.subject, origin="declaration")
+                except fga.IncarnationEnded:
+                    await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+                    raise
+                if not written:
+                    # A door made the tuple between the read above and this Write: it is the door's, and the intent goes.
+                    await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+                    return
+                await self._settle(client, record)
+                await filing.send(told)
+            self.tick.grants_written += 1
+        finally:
+            await fga.close_fences(client, fences, actor=DECLARATION.subject, origin="fence")
 
-    async def _revoke(self, client: OpenFgaClient, grant: GrantTuple) -> None:
-        told = announcing.grant_announcement(grant.client_tuple, action="grant_revoked", actor=DECLARATION.actor, extra={"reason": "undeclared"})
-        async with self._announcer.announcing(door="declaration_converge", target=grant.object, announcements=[told]) as filing:
-            if grant.relation == project_admins.ADMIN and grant.object.startswith("project:"):
-                # Through the members door's own rule, which keeps a project administered.
-                await project_admins.withdraw(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")
-            else:
-                await fga.delete_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
-            await filing.send(told)
-        await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
-        self.tick.grants_revoked += 1
+    async def _revoke(self, client: OpenFgaClient, record: declaration.GrantRecord) -> None:
+        grant = record.grant
+        if (stands := await self._stands(grant.object)) is None:
+            # Its object's delete revoked the tuple with everything else on it.
+            await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+            return
+        fences = await self._fences(client, grant.object, stands)
+        try:
+            if stands.incarnation != record.incarnation:
+                # Written on an incarnation since deleted, whose delete revoked it: what stands now is another's.
+                await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+                return
+            told = announcing.grant_announcement(grant.client_tuple, action="grant_revoked", actor=DECLARATION.actor, extra={"reason": "undeclared"})
+            async with self._announcer.announcing(door="declaration_converge", target=grant.object, announcements=[told]) as filing:
+                if grant.relation == project_admins.ADMIN and grant.object.startswith("project:"):
+                    # Through the members door's own rule, which keeps a project administered.
+                    await project_admins.withdraw(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration", fences=fences)
+                elif fences:
+                    await fga.commit_fenced(client, fences, deletes=[grant.client_tuple], actor=DECLARATION.subject, origin="declaration")
+                else:
+                    await fga.delete_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
+                await filing.send(told)
+            await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
+            self.tick.grants_revoked += 1
+        finally:
+            await fga.close_fences(client, fences, actor=DECLARATION.subject, origin="fence")
+
+    @staticmethod
+    async def _fences(client: OpenFgaClient, obj: str, stands: _Standing) -> list[fga.Fence]:
+        """A fence on ``obj`` of the incarnation its record names (ADR 0241); none on the estate's own objects.
+
+        Raises:
+            fga.IncarnationEnded: No incarnation stands, or another than the record's: its delete has begun.
+        """
+        if stands.incarnation is None:
+            return []
+        fence = await fga.open_fence(client, obj, actor=DECLARATION.subject, origin="fence")
+        if fence is None or fence.incarnation != stands.incarnation:
+            if fence is not None:
+                await fga.close_fences(client, [fence], actor=DECLARATION.subject, origin="fence")
+            raise fga.IncarnationEnded(f"{obj} is not the incarnation its record names: it is being deleted, or still being established")
+        return [fence]
 
     async def _stands(self, obj: str) -> _Standing | None:
         """What a grant on ``obj`` is written under: ``None`` where no record names it, no incarnation for the estate's own
-        objects, which no record names and nothing deletes, and the record's for a project or warehouse."""
+        objects, which no record names and nothing deletes, and the record's for a project or warehouse.
+
+        Raises:
+            SettlingError: The record names no incarnation yet: the catalog converges it (``incarnations.converge``).
+        """
         if obj in self._estate_objects:
             return _Standing(incarnation=None)
         kind, _, object_id = obj.partition(":")
@@ -293,29 +353,13 @@ class _Converger:
             record = await run_in_threadpool(warehouses.get_warehouse, self._root, self._so, object_id)
         if record is None:
             return None
-        return _Standing(incarnation=record.get(INCARNATION) or "")
+        return _Standing(incarnation=incarnations.require_incarnation(record, obj))
 
 
 class _Standing(BaseModel):
     """An object a declared grant is written on: the incarnation it is written under, ``None`` for an estate object."""
 
     incarnation: str | None
-
-
-async def _written(client: OpenFgaClient, grant: GrantTuple, *, incarnation: str | None) -> bool:
-    """Write ``grant``'s tuple; whether this write created it. A project's or warehouse's grant is written under the
-    token of the incarnation its record names (ADR 0241), a project's admin with the project's administration.
-
-    Raises:
-        fga.IncarnationEnded: The record's incarnation was retired: its delete has begun.
-    """
-    t = grant.client_tuple
-    if incarnation is None:
-        return await fga.commit_unless_changed(client, deletes=[], writes=[t], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
-    if grant.relation == project_admins.ADMIN and grant.object.startswith("project:"):
-        # As the members door grants it: who administers the project changes.
-        return await project_admins.confer(client, t, actor=DECLARATION.subject, origin="declaration", incarnation=incarnation)
-    return await fga.write_fenced(client, grant.object, incarnation, [t], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
 
 
 async def _held(client: OpenFgaClient, obj: str) -> set[tuple[str, str]]:
@@ -343,8 +387,10 @@ def _spec_drifted(record: dict[str, str], declared: DeclaredWarehouse) -> bool:
 
 
 async def tick(ctx: Tick) -> ConvergeTick:
-    """Converge the estate's tenants onto the mounted declaration; a deployment that mounts none converges nothing."""
+    """Converge every project's and warehouse's incarnation (``incarnations.converge``, ADR 0241), then the estate's
+    tenants onto the mounted declaration; a deployment that mounts none converges only the incarnations."""
     request, settings = ctx.request, ctx.settings
+    await incarnations.converge(settings.registry_root, settings.storage_options(), fga_deps.wired(settings, get_fga_client(request)))
     if not settings.declaration_file:
         return ConvergeTick(skipped=True)
     try:

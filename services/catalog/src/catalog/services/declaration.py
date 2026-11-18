@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, Final, Literal, Self
 
@@ -29,7 +30,7 @@ from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import CONTROL_ID_PATTERN, CONTROL_ID_RE
 from lakehouse.record_store import delete_record, list_records
-from lakehouse.records import RecordExistsError, create_json
+from lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 from lakehouse.storage_options import StorageOptions
 
 
@@ -195,8 +196,30 @@ def _grant_key(grant: GrantTuple) -> str:
     return f"{control_prefixes.DECLARED_GRANTS}/{digest}.json"
 
 
-def recorded_grants(control_root: str, storage_options: StorageOptions) -> set[GrantTuple]:
-    """The tuples the catalog wrote from a declaration and has not revoked.
+class GrantRecord(BaseModel):
+    """The ledger's record of a tuple the declaration writes (ADR 0241): an intent while it names an evidence, the
+    declaration's once settled."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user: str
+    relation: str
+    object: str
+    #: The subject of the evidence (``revision:git-<hex>``) the tick's Write leaves on the object beside the tuple, while
+    #: the intent is unsettled: it stands exactly when that Write committed.
+    evidence: str | None = None
+    #: The incarnation of the project or warehouse it is written on; none on the estate's own objects, which no delete
+    #: ends.
+    incarnation: str | None = None
+
+    @property
+    def grant(self) -> GrantTuple:
+        """The tuple this record is of."""
+        return GrantTuple(user=self.user, relation=self.relation, object=self.object)
+
+
+def ledger(control_root: str, storage_options: StorageOptions) -> list[GrantRecord]:
+    """Every record of a tuple the catalog writes or wrote from a declaration and has not revoked, intents included.
 
     Strict: a record skipped would be a tuple git no longer declares that is never revoked.
 
@@ -205,17 +228,30 @@ def recorded_grants(control_root: str, storage_options: StorageOptions) -> set[G
         ValueError: A record is there and cannot be read as one.
     """
     records = list_records(control_root, storage_options, control_prefixes.DECLARED_GRANTS, event="declared_grant", strict=True)
-    return {GrantTuple.model_validate(record) for record in records}
+    return [GrantRecord.model_validate(record) for record in records]
 
 
-def record_grant(control_root: str, storage_options: StorageOptions, grant: GrantTuple) -> bool:
-    """Record ``grant`` as the declaration's, before its tuple is written; whether this call recorded it (one already
-    recorded stays as it is)."""
+def recorded_grants(control_root: str, storage_options: StorageOptions) -> set[GrantTuple]:
+    """The tuples the catalog wrote from a declaration and has not revoked, its settled records' (:func:`ledger`)."""
+    return {record.grant for record in ledger(control_root, storage_options) if record.evidence is None}
+
+
+def record_intent(control_root: str, storage_options: StorageOptions, grant: GrantTuple, *, evidence: str, incarnation: str | None) -> bool:
+    """Record the intent to write ``grant`` with ``evidence``, before the Write; whether this call recorded it (a record
+    already there stays as it is: another tick's intent, which that tick or the next settles, or the declaration's)."""
+    record = GrantRecord(user=grant.user, relation=grant.relation, object=grant.object, evidence=evidence, incarnation=incarnation)
     try:
-        create_json(control_root, storage_options, _grant_key(grant), grant.model_dump())
+        create_json(control_root, storage_options, _grant_key(grant), record.model_dump(exclude_none=True))
     except RecordExistsError:
         return False
     return True
+
+
+def settle_grant(control_root: str, storage_options: StorageOptions, record: GrantRecord) -> None:
+    """Settle ``record``'s intent as the declaration's: its Write committed. A record gone meanwhile stays gone."""
+    settled = record.model_copy(update={"evidence": None})
+    with suppress(RecordMissingError):
+        mutate_json(control_root, storage_options, _grant_key(record.grant), lambda _: settled.model_dump(exclude_none=True))
 
 
 def forget_grant(control_root: str, storage_options: StorageOptions, grant: GrantTuple) -> None:

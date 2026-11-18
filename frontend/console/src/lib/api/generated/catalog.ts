@@ -589,7 +589,10 @@ export interface paths {
          *
          *     Each object's grants are read, then it is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
          *     record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a
-         *     table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]).
+         *     table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]). Only what
+         *     was read is revoked, and on a project or warehouse only while nothing was born under the id since the read (ADR
+         *     0241, ``fga.revoke_ghost``): one made meanwhile keeps its grants, even a seed equal to a ghost tuple read, and is
+         *     answered refused.
          */
         post: operations["revoke_ghost_grants_management_v1_grants_ghosts_revoke_post"];
         delete?: never;
@@ -1194,8 +1197,8 @@ export interface paths {
         put?: never;
         /**
          * Grant Project Access
-         * @description Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]), under the token
-         *     read before the gate (ADR 0241).
+         * @description Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]), under the fence
+         *     opened before the gate (ADR 0241).
          *
          *     The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
          *     nothing beyond them. Who belongs to the project is the members door's.
@@ -1279,7 +1282,9 @@ export interface paths {
         put?: never;
         /**
          * Revoke Project Access
-         * @description Revoke a rung on the project from a subject, gated by :func:`require_project_revoke` ([[LH-563]]).
+         * @description Revoke a rung on the project from a subject, gated by :func:`require_project_revoke` ([[LH-563]]), under the fence
+         *     opened before the gate (ADR 0241): a revoke decided on a project deleted meanwhile takes nothing from one made again
+         *     under its id.
          */
         post: operations["revoke_project_access_management_v1_projects__id__access_revoke_post"];
         delete?: never;
@@ -1486,12 +1491,13 @@ export interface paths {
          *
          *     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
          *     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
-         *     on the second call. An ``admin`` is granted in one Write with the project's token (``revision``)
-         *     (:func:`project_admins.confer`), since it changes who administers the project.
+         *     on the second call. An ``admin`` is granted through :func:`project_admins.confer`, which asks nothing of the
+         *     caller beyond the gate here.
          *
-         *     The grant is written under the token of the project it was authorized on, read before the authority is asked
-         *     (ADR 0241): a project deleted meanwhile, and one made again under its id by another tenant, is not the project the
-         *     grant was decided on, and the grant lands on neither.
+         *     The grant is written under a fence of the project, opened before the authority is asked (ADR 0241,
+         *     ``fga_deps.door_fence``): a project deleted meanwhile, and one made again under its id by another tenant, is not the
+         *     project the grant was decided on, and the grant lands on neither. Grants for different people never refuse each
+         *     other: each deletes only its own ticket.
          */
         put: operations["grant_member_management_v1_projects__project_id__members_put"];
         post?: never;
@@ -1506,6 +1512,9 @@ export interface paths {
          *
          *     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
          *     state already holds.
+         *
+         *     Fenced as a grant is (ADR 0241): a revoke decided on a project deleted meanwhile takes nothing from one made again
+         *     under its id, and is answered 409.
          */
         delete: operations["revoke_member_management_v1_projects__project_id__members_delete"];
         options?: never;
@@ -1560,6 +1569,11 @@ export interface paths {
          *     when the record cannot be written, so a role is listed only once it can be governed; an edge left by a request that
          *     died between the two names a uuid no record holds, which grants nothing. The role starts with no assignee: filling
          *     it is the security admins' (``can_manage_assignees``), a different authority from minting it.
+         *
+         *     The edge names the project, so it is written under a fence of the project opened before the gate (ADR 0241): a role
+         *     decided on a project deleted meanwhile is made in no project made again under the id. The project's delete revokes
+         *     every edge naming it and then ends every role its registry lists; a record written after that listing finds its
+         *     edge gone, and is taken back here.
          */
         post: operations["create_role_management_v1_projects__project_id__roles_post"];
         delete?: never;
@@ -1610,8 +1624,9 @@ export interface paths {
          * @description Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on
          *     the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
          *
-         *     The assignment is one Write with the project's token (``revision``) (:func:`project_admins.confer`), judged on the
-         *     read that found whether ``admin`` reaches the role.
+         *     The assignment is one Write (:func:`project_admins.confer`), judged on the read that found whether ``admin`` reaches
+         *     the role, under a fence of the role's project opened before the gate (ADR 0241): an assignment decided on a project
+         *     deleted meanwhile lands in no project made again under its id.
          */
         put: operations["assign_role_management_v1_projects__project_id__roles__role_id__assignees_put"];
         post?: never;
@@ -1620,7 +1635,8 @@ export interface paths {
          * @description Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.
          *
          *     Refused 409 (code 14) when the project's ``admin`` would reach nobody without it
-         *     (:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is).
+         *     (:func:`project_admins.withdraw`, arbitrated by the store as the members door's revoke is), and fenced as an
+         *     assignment is (ADR 0241).
          */
         delete: operations["unassign_role_management_v1_projects__project_id__roles__role_id__assignees_delete"];
         options?: never;
@@ -2496,7 +2512,7 @@ export interface paths {
         /**
          * Grant Warehouse Access
          * @description Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]]), under the
-         *     token read before the gate (ADR 0241).
+         *     fence opened before the gate (ADR 0241).
          */
         post: operations["grant_warehouse_access_management_v1_warehouse__id__access_grant_post"];
         delete?: never;
@@ -2566,7 +2582,8 @@ export interface paths {
         put?: never;
         /**
          * Revoke Warehouse Access
-         * @description Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]]).
+         * @description Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]]), under
+         *     the fence opened before the gate (ADR 0241).
          */
         post: operations["revoke_warehouse_access_management_v1_warehouse__id__access_revoke_post"];
         delete?: never;
@@ -2658,6 +2675,10 @@ export interface paths {
          *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, then :func:`establish_warehouse`
          *     makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is, and the catalog converges
          *     it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
+         *
+         *     The warehouse's birth names its project, so it is written under a fence of the project opened before the gate (ADR
+         *     0241): a project deleted while the bucket is provisioned and probed, and made again under its id by another tenant,
+         *     holds no warehouse its old admin was making; the create is answered 409.
          */
         post: operations["create_warehouse_management_v1_warehouses_post"];
         delete?: never;

@@ -27,6 +27,7 @@ something else.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -70,9 +71,9 @@ async def _create(
         segments: list[str],
         uuid: str,
         undo: Any,
-        parent_object: str | None = None,
+        parent: Any = None,
     ) -> None:
-        del uuid, undo, parent_object
+        del uuid, undo, parent
         seeded.append((resource, *segments))
 
     monkeypatch.setattr(ns_ep.fga_deps, "seed_ownership_or_compensate", _seed)
@@ -96,6 +97,8 @@ async def _create(
 
     return await ns_ep.create_namespace(
         id="lance_catalog$acme",
+        # A namespace in the estate's own warehouse, which no request fences (ADR 0241): its request holds no fence.
+        request=cast(Any, SimpleNamespace(state=SimpleNamespace())),
         ns=MagicMock(),
         settings=cast(Settings, _Settings()),
         token=MagicMock(sub="bob"),

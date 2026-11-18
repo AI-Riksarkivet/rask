@@ -9,7 +9,7 @@ from contextlib import AbstractAsyncContextManager, nullcontext, suppress
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Response
+from fastapi import APIRouter, Header, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -153,6 +153,7 @@ def _held_by_the_door(settings: Settings, segments: list[str], work: NamespaceWo
 @router.post("/{id}/create", response_model_exclude_none=True)
 async def create_namespace(
     id: str,
+    request: Request,
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
@@ -233,6 +234,7 @@ async def create_namespace(
             segments=segments,
             uuid=minted,
             undo=_undo_create,
+            parent=fga_deps.door_fence_of(request),
         )
         await emit_control(
             control,

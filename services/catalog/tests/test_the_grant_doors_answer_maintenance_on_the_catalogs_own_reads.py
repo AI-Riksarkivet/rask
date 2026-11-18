@@ -47,11 +47,13 @@ def test_the_tenancy_rebuild_writes_the_edge_a_warehouses_record_names_and_none_
 ) -> None:
     catalog = governed_catalog
     settings = get_settings()
-    # wh-a born as its create bears it (ADR 0241), its tenancy edge since lost.
+    # wh-a and its project born as their creates bear them (ADR 0241), its tenancy edge since lost.
     catalog.store.write(
         (catalog.person("mx"), "reconciler", settings.fga_root_object),
         ("revision:i1", "revision", "warehouse:wh-a"),
         ("revision:i1.0", "revision", "warehouse:wh-a"),
+        ("revision:p1", "revision", "project:acme"),
+        ("revision:p1.0", "revision", "project:acme"),
     )
     warehouses.put_warehouse(
         settings.registry_root,

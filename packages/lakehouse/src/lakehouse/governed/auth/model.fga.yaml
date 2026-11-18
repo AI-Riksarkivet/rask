@@ -2385,12 +2385,15 @@ tests:
 
   - name: an incarnation's marker and token are bookkeeping and grant nothing
     # ADR 0241. A project's or warehouse's id may be held again once it is deleted, so each incarnation keeps its marker
-    # `revision:<incarnation>` and its token `revision:<incarnation>.<n>` under `revision`; every grant on it moves the
-    # token, and an admin revoke does in the Write that deletes the admin tuple ([[LH-434]]). No permission reads it:
-    # a revision is no subject of any rung, and an admin's rungs stand beside it.
+    # `revision:<incarnation>` and its token `revision:<incarnation>.<n>` under `revision`, beside each door's ticket,
+    # the drift repair's token and a declared grant's evidence; an admin revoke moves the token in the Write that deletes
+    # the admin tuple ([[LH-434]]). No permission reads it: a revision is no subject of any rung, and an admin's rungs
+    # stand beside it.
     tuples:
       - { user: revision:i1, relation: revision, object: project:solo }
       - { user: revision:i1.1, relation: revision, object: project:solo }
+      - { user: revision:ticket-a1, relation: revision, object: project:solo }
+      - { user: revision:git-b2, relation: revision, object: estate:solo_estate }
       - { user: user:sole_admin, relation: admin, object: project:solo }
       - { user: revision:w1.0, relation: revision, object: warehouse:solo }
       - { user: project:solo, relation: project, object: warehouse:solo }
@@ -2407,3 +2410,9 @@ tests:
       - user: user:sole_admin
         object: warehouse:solo
         assertions: { revision: false, owner_effective: true, can_grant_reader: true }
+      - user: revision:ticket-a1
+        object: project:solo
+        assertions: { revision: true, admin: false, member: false, can_administer: false, can_grant_admin: false, can_read_assignments: false }
+      - user: revision:git-b2
+        object: estate:solo_estate
+        assertions: { revision: true, admin: false, operator: false, owner: false, can_create_project: false }

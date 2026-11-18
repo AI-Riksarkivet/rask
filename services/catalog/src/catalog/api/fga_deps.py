@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from functools import lru_cache, partial
 from typing import Annotated, Any, Final, Literal, NamedTuple
 
@@ -59,7 +60,9 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, vending, write_judge
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
-from catalog.services import dataplane, native, object_uuids, table_claims, warehouses
+from catalog.services import dataplane, incarnations, native, object_uuids, table_claims, warehouses
+from catalog.services import projects as project_registry
+from catalog.services.control_records import INCARNATION
 from catalog.services.table_claims import ResolvedTable
 from lakehouse import object_records, protection, trash
 from lakehouse.governed import fga
@@ -1449,6 +1452,34 @@ async def _identifiers_given(request: Request) -> list[list[str]]:
     return []
 
 
+#: Where a request's fence on the warehouse its create names is kept for its door (:func:`parent_fence`).
+PARENT_FENCE: Final = "parent_fence"
+
+
+async def parent_fence(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep) -> AsyncIterator[None]:
+    """Open a fence on the warehouse a namespace created directly in it names (:func:`door_fence`, ADR 0241), BEFORE the
+    router's gate asks ``can_create_namespace`` there, and keep it for the door on ``request.state``: the namespace's
+    ``parent`` edge names the warehouse, an id a later warehouse may hold again, so it is written on the incarnation the
+    gate was asked of or nowhere. Every other request passes through. A router dependency, listed before
+    :func:`authorize`; its ticket is taken back when the request is done.
+    """
+    path: str = request.scope["path"]
+    object_id = request.path_params.get("id")
+    segments = parse_identifier(object_id) if object_id is not None and _resource_for(path) == "namespace" else []
+    if len(segments) != 2 or _suffix(path, "namespace", str(object_id)) != "create":
+        yield
+        return
+    async with door_fence(injected, settings, f"warehouse:{segments[0]}", token) as door:
+        setattr(request.state, PARENT_FENCE, door)
+        yield
+
+
+def door_fence_of(request: Request) -> DoorFence | None:
+    """The fence :func:`parent_fence` opened for this request, if it opened one."""
+    fence = getattr(request.state, PARENT_FENCE, None)
+    return fence if isinstance(fence, DoorFence) else None
+
+
 async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
     """Enforce the caller's permission for this route, then the quarantine of the warehouse its ``{id}`` begins with.
 
@@ -2115,21 +2146,98 @@ async def seed_project_admin(
     return await _bear_or_assert(client, obj, incarnation, seed, actor=actor, origin="project_create")
 
 
-async def _bear_or_assert(client: OpenFgaClient, obj: str, incarnation: str, seed: list[fga.ClientTuple], *, actor: str, origin: fga.TupleOrigin) -> bool:
-    """Bear ``incarnation`` of ``obj`` with ``seed``, or, born already, write what ``seed`` still lacks under its token;
-    whether any of ``seed`` was written.
+async def _bear_or_assert(
+    client: OpenFgaClient,
+    obj: str,
+    incarnation: str,
+    seed: list[fga.ClientTuple],
+    *,
+    fences: Sequence[fga.Fence] = (),
+    actor: str,
+    origin: fga.TupleOrigin,
+) -> bool:
+    """Bear ``incarnation`` of ``obj`` with ``seed`` under ``fences`` (those of the objects ``seed`` names, opened before
+    the door asked its caller's authority), or, born already (by the catalog's convergence, or by an earlier attempt),
+    write what ``seed`` still lacks under a fence of ``obj`` and ``fences``; whether any of ``seed`` was written.
 
     Raises:
-        ConcurrentModificationError: The incarnation was born and its token retired: the object is being deleted.
+        ConcurrentModificationError: The incarnation was born and retired, or an object ``seed`` names was deleted: the
+            object, or its project, is being deleted.
     """
-    if await fga.bear(client, obj, incarnation, seed, actor=actor, origin=origin):  # noqa: TID251
-        return bool(seed)
-    if not seed:
-        return False
     try:
-        return await fga.write_fenced(client, obj, incarnation, seed, actor=actor, origin=origin)  # noqa: TID251
+        if await fga.bear(client, obj, incarnation, seed, fences=fences, actor=actor, origin=origin):  # noqa: TID251
+            return bool(seed)
+        own = await fga.open_fence(client, obj, actor=actor, origin="fence")
+        if own is None or own.incarnation != incarnation:
+            if own is not None:
+                await fga.close_fences(client, [own], actor=actor, origin="fence")
+            raise fga.IncarnationEnded(f"{obj} is not the incarnation its record names: it is being deleted")
+        return await fga.commit_fenced(client, [own, *fences], writes=seed, actor=actor, origin=origin)
     except fga.IncarnationEnded as exc:
-        raise ConcurrentModificationError(f"{obj} is being deleted; make it again once its delete has finished") from exc
+        await fga.close_fences(client, fences, actor=actor, origin="fence")
+        raise ConcurrentModificationError(f"{obj} is being deleted, or what it belongs to is; make it again once that delete has finished") from exc
+
+
+#: The origin of a fence's ticket, written and deleted around a door's write: bookkeeping, no grant.
+_FENCE: Final = "fence"
+
+
+class DoorFence(NamedTuple):
+    """What a door opened on the project or warehouse it writes on or names, before it asked its caller's authority."""
+
+    obj: str
+    client: OpenFgaClient | None
+    #: The fence, ``None`` where none was opened: authorization off, the estate's own warehouse (never deleted, and
+    #: named by no registry record), or no incarnation standing.
+    fence: fga.Fence | None
+    #: Whether a write on ``obj`` must go under a fence: FGA on and an object a delete may end.
+    required: bool
+
+
+@asynccontextmanager
+async def door_fence(client: OpenFgaClient | None, settings: Settings, obj: str, token: Caller | None) -> AsyncGenerator[DoorFence]:
+    """Open a fence on ``obj`` for a door's write (:func:`fga.open_fence`), BEFORE the door asks its caller's authority,
+    and take its ticket back when the door is done, whatever it wrote: the authority was then asked of the incarnation
+    the fence names, and the door's Write lands on that incarnation or nowhere (ADR 0241). :func:`require_fence` answers
+    an object no incarnation stands for, after the gate, so a caller who may not act learns nothing from it.
+    """
+    authz = wired(settings, client)
+    if authz is None or obj.partition(":")[0] not in fga.INCARNATED_TYPES or obj == settings.fga_default_warehouse_object:
+        yield DoorFence(obj=obj, client=authz, fence=None, required=False)
+        return
+    actor = token.subject if token is not None else "system:catalog"
+    fence = await fga.open_fence(authz, obj, actor=actor, origin=_FENCE)
+    try:
+        yield DoorFence(obj=obj, client=authz, fence=fence, required=True)
+    finally:
+        if fence is not None:
+            await fga.close_fences(authz, [fence], actor=actor, origin=_FENCE)
+
+
+async def require_fence(door: DoorFence, settings: Settings) -> list[fga.Fence]:
+    """The fences a door's write goes under: none where none is required, else the one it opened.
+
+    Raises:
+        SettlingError: The object's record stands and no incarnation of it is born yet (a create still running, or a
+            record the catalog's convergence has not reached): asked again shortly, it is answered (409 with
+            ``Retry-After``).
+        TableNotFoundError: No record names the object, or its delete has begun.
+    """
+    if not door.required:
+        return []
+    if door.fence is not None:
+        return [door.fence]
+    kind, _, object_id = door.obj.partition(":")
+    so = settings.storage_options()
+    if kind == "project":
+        record = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, object_id)
+    else:
+        record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, object_id)
+    incarnation = record.get(INCARNATION) if record is not None else None
+    retired = incarnation is not None and door.client is not None and fga.marker(door.obj, incarnation) in await fga.read_object_tuples(door.client, door.obj)
+    if record is None or retired:
+        raise TableNotFoundError(f"{kind} not found: {object_id}")
+    raise incarnations.establishing(door.obj)
 
 
 # --------------------------------------------------------------------------- #
@@ -2172,6 +2280,7 @@ async def seed_ownership(
     resource: str,
     segments: list[str],
     uuid: str,
+    parent: DoorFence | None = None,
 ) -> None:
     """Grant the creator ``owner`` + the ``parent`` edge on a just-created object, ``table:<uuid>`` or ``namespace:<uuid>``.
 
@@ -2185,10 +2294,16 @@ async def seed_ownership(
 
     No-op when FGA is off or the request is unauthenticated, and a 503 when FGA is on with no client wired — so
     create endpoints call it unconditionally with one line. This is the ONE place the
-    post-create seed policy lives. The ``parent`` edge names :func:`parent_object_of`.
+    post-create seed policy lives. The ``parent`` edge names :func:`parent_object_of`. A namespace directly in a
+    warehouse names the warehouse, an id a later warehouse may hold again, so its seed is written under ``parent``, the
+    fence its request opened on the warehouse before the gate (:func:`parent_fence`, ADR 0241).
+
+    Raises:
+        ConcurrentModificationError: The parent warehouse was deleted while the create ran.
     """
     if token is None or (client := wired(settings, client)) is None:
         return
+    fences = await require_fence(parent, settings) if parent is not None else []
     # A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust). A service principal
     # registering its own output would become that table's owner, keeping `can_drop`, `can_deregister`,
     # `can_restore` and `manage_grants` on every governed table of every tenant it ever wrote to.
@@ -2211,6 +2326,7 @@ async def seed_ownership(
         actor=token.subject,
         origin="create",
         parent_object=await parent_object_of(resolver, settings, resource, segments),
+        fences=fences,
     )
 
 
@@ -2566,51 +2682,80 @@ async def revoke_removed_object(client: OpenFgaClient | None, settings: Settings
     return len(removed)
 
 
-async def retire_incarnation(client: OpenFgaClient | None, settings: Settings, obj: str, incarnation: str | None, *, token: Caller | None) -> None:
-    """Retire the incarnation of the project or warehouse ``obj`` its delete is ending (:func:`fga.retire`, ADR 0241),
-    before the delete reads what to revoke. A no-op when FGA is off; a 503 when it is on with no client wired."""
-    if (client := wired(settings, client)) is None:
-        return
-    await fga.retire(client, obj, incarnation, actor=token.subject if token is not None else "system:catalog", origin="lifecycle_delete")  # noqa: TID251
+#: What names a project or a warehouse as SUBJECT, by type, which its delete's drain reads besides what stands on it: a
+#: role's ``project`` edge and a warehouse's tenancy edge name a project; a namespace's ``parent`` edge names its warehouse.
+NAMING: Final[dict[str, tuple[str, ...]]] = {"project": ("role", "warehouse"), "warehouse": ("namespace",)}
 
 
-async def read_ghost_object(client: OpenFgaClient | None, settings: Settings, obj: str) -> list[fga.ClientTuple]:
-    """Every tuple on ``obj``, read BEFORE it is judged a ghost (ADR 0241): a project or warehouse made again under the
-    id after that read writes its grants after it, and :func:`revoke_ghost_object` revokes only what this returned. Empty
-    when FGA is off; a 503 when it is on with no client wired."""
+async def end_incarnation(
+    client: OpenFgaClient | None, settings: Settings, obj: str, incarnation: str | None, *, token: Caller | None
+) -> list[fga.ClientTuple]:
+    """End the incarnation of the project or warehouse ``obj`` its delete is ending (:func:`fga.end_incarnation`, ADR
+    0241): retire it, then revoke what stands on it and what names it until a read finds nothing; the tuples revoked.
+    Empty when FGA is off; a 503 when it is on with no client wired."""
     if (client := wired(settings, client)) is None:
         return []
-    return await fga.read_object_tuples(client, obj)
+    actor = token.subject if token is not None else "system:catalog"
+    removed = await fga.end_incarnation(client, obj, incarnation, naming=NAMING[obj.partition(":")[0]], actor=actor, origin="lifecycle_delete")  # noqa: TID251
+    if removed:
+        log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
+    return removed
 
 
-async def revoke_ghost_object(client: OpenFgaClient | None, settings: Settings, obj: str, read: list[fga.ClientTuple], *, token: Caller | None) -> int:
-    """Delete ``read``, the tuples :func:`read_ghost_object` read on ``obj``, an object no registry named when it was then
-    judged ([[LH-061]]'s repair half), and return how many went.
+async def revoke_ghost_object(
+    client: OpenFgaClient | None, settings: Settings, obj: str, judge: Callable[[], Awaitable[str | None]], *, token: Caller | None
+) -> int | str:
+    """Revoke what stands on ``obj`` where ``judge`` finds no registry naming it ([[LH-061]]'s repair half); how many
+    tuples went, or ``judge``'s reason for refusing.
 
     The origin is ``drift_repair``: nothing was destroyed, the object was already gone, and the revoke is justified only
-    by the drift finding the catalog judged again on its own reads. Only what stood before the judgement goes: a create
-    landing after it is a new object's, whose grants are not this ghost's. 0 when FGA is off; a 503 when it is on with
-    no client wired.
+    by the drift finding the catalog judged again on its own reads. Only what stood before the judgement goes, and on a
+    project or warehouse only while nothing was born under the id since (:func:`fga.revoke_ghost`, ADR 0241): a create
+    landing after the read is a new object's, whose grants are not this ghost's, even a seed equal to a ghost tuple the
+    read found. With FGA off only the judgement runs, and 0 tuples go; a 503 when it is on with no client wired.
     """
     if (client := wired(settings, client)) is None:
-        return 0
+        refused = await judge()
+        return refused if refused is not None else 0
     actor = token.subject if token is not None else "system:catalog"
-    return len(await fga.revoke_read_tuples(client, obj, read, actor=actor, origin="drift_repair"))  # noqa: TID251
+    reason: list[str] = []
+
+    async def _ghost() -> bool:
+        if (refused := await judge()) is not None:
+            reason.append(refused)
+            return False
+        return True
+
+    revoked = await fga.revoke_ghost(client, obj, _ghost, actor=actor, origin="drift_repair")  # noqa: TID251
+    if revoked is None:
+        return reason[0] if reason else "something was made under the id while the repair ran; it is no ghost"
+    return len(revoked)
 
 
 async def write_registry_edge(client: OpenFgaClient | None, settings: Settings, edge: fga.ClientTuple, *, incarnation: str, token: Caller | None) -> None:
-    """Write ``edge``, a structural tuple a registry record justifies, under the ``registry_rebuild`` origin ([[LH-061]]):
-    no person granted it, it was reconstructed from the record. Written under the token of the incarnation the record
-    names (ADR 0241), so a rebuild that read a record whose warehouse is deleted meanwhile writes its edge nowhere. A
-    no-op when FGA is off; a 503 when it is on with no client wired.
+    """Write ``edge``, a warehouse's tenancy edge its registry record justifies, under the ``registry_rebuild`` origin
+    ([[LH-061]]): no person granted it, it was reconstructed from the record. Written under a fence of the warehouse, of
+    the incarnation the record names, and of the project the edge names (ADR 0241), so a rebuild that read a record whose
+    warehouse or project is deleted meanwhile writes its edge nowhere. A no-op when FGA is off; a 503 when it is on with
+    no client wired.
 
     Raises:
-        fga.IncarnationEnded: The incarnation was retired: the warehouse's delete has begun.
+        fga.IncarnationEnded: The warehouse's or the project's incarnation was retired, or is not the record's.
     """
     if (client := wired(settings, client)) is None:
         return
     actor = token.subject if token is not None else "system:catalog"
-    await fga.write_fenced(client, edge.object, incarnation, [edge], actor=actor, origin="registry_rebuild")  # noqa: TID251
+    fences: list[fga.Fence] = []
+    try:
+        for obj in (str(edge.object), str(edge.user)):
+            if (fence := await fga.open_fence(client, obj, actor=actor, origin=_FENCE)) is None:
+                raise fga.IncarnationEnded(f"{obj} has no incarnation standing")
+            fences.append(fence)
+        if fences[0].incarnation != incarnation:
+            raise fga.IncarnationEnded(f"{edge.object} is not the incarnation its record names")
+        await fga.commit_fenced(client, fences, writes=[edge], actor=actor, origin="registry_rebuild")
+    finally:
+        await fga.close_fences(client, fences, actor=actor, origin=_FENCE)
 
 
 async def revoke_expired_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> list[fga.ClientTuple]:
@@ -2737,6 +2882,7 @@ async def seed_ownership_or_compensate(
     segments: list[str],
     uuid: str,
     undo: Callable[[], Awaitable[None]] | None,
+    parent: DoorFence | None = None,
 ) -> None:
     """:func:`seed_ownership`, but UNDO the native create when the grant fails (diff2 F3).
 
@@ -2765,7 +2911,11 @@ async def seed_ownership_or_compensate(
     what the caller is told.
     """
     try:
-        await seed_ownership(client, settings, token, resolver, resource=resource, segments=segments, uuid=uuid)
+        await seed_ownership(client, settings, token, resolver, resource=resource, segments=segments, uuid=uuid, parent=parent)
+    except fga.IncarnationEnded as exc:
+        if undo is not None:
+            await compensate_create(client, settings, token, resource=resource, segments=segments, uuid=uuid, undo=undo, reason="grant_failed")
+        raise ConcurrentModificationError(f"warehouse {segments[0]!r} was deleted while this {resource} was made; nothing was made") from exc
     except Exception:
         if undo is not None:
             await compensate_create(client, settings, token, resource=resource, segments=segments, uuid=uuid, undo=undo, reason="grant_failed")
@@ -3078,11 +3228,16 @@ async def seed_warehouse(
     warehouse_id: str,
     project: str,
     incarnation: str,
+    fences: Sequence[fga.Fence],
 ) -> None:
     """Grant a creator who is a person ``owner`` on the new ``warehouse:<id>`` and link it to its ``project:<project>``
     parent, so the concentric cascade (project → warehouse → namespace → table) reaches everything created
     under it, in the Write that bears ``incarnation`` of it (ADR 0241). No-op when FGA is off or unauthenticated; a
     503 when FGA is on with no client wired.
+
+    The birth names the project, so it is written under ``fences``, the fence on the project its door opened before it
+    asked ``can_create_warehouse`` (:func:`door_fence`): a project deleted while the warehouse was provisioned, and made
+    again under its id by another tenant, holds no warehouse its old admin was making.
 
     NOTE: the warehouse's parent-pointer relation is ``project`` (``define project: [project]`` in
     ``lakehouse/governed/auth/model.fga``) — NOT the ``parent`` name that namespaces/tables use. So this writes
@@ -3104,7 +3259,7 @@ async def seed_warehouse(
     # project ([[LH-433]]): its project's admins own it through the project edge.
     owner = [] if isinstance(token, ServicePrincipal) else [fga.ClientTuple(user=fga.user_object(token.subject), relation="owner", object=obj)]
     seed = [*owner, *cascade_tuples(settings, warehouse_id=warehouse_id, project=project)]
-    await _bear_or_assert(client, obj, incarnation, seed, actor=token.subject, origin="warehouse_create")
+    await _bear_or_assert(client, obj, incarnation, seed, fences=fences, actor=token.subject, origin="warehouse_create")
 
 
 def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> list[fga.ClientTuple]:
@@ -3152,12 +3307,14 @@ async def converge_warehouse_grants(
     actor: str,
     incarnation: str | None,
 ) -> int:
-    """Converge one EXISTING warehouse's grants: assert :func:`cascade_tuples` under the token of ``incarnation``, the
-    one its record names (bearing it, where its birth never landed), and take back the maintenance rung from each of
-    the release's own accounts it no longer declares. Returns the number of tuples written plus those revoked.
+    """Converge one EXISTING warehouse's grants: assert :func:`cascade_tuples` under ``incarnation``, the one its record
+    names (bearing it, where its birth never landed), and under a fence of its project, and take back the maintenance
+    rung from each of the release's own accounts it no longer declares. Returns the number of tuples written plus those
+    revoked.
 
     A write for an incarnation whose delete has retired it lands nowhere (ADR 0241), so a converge that read the record
-    before the warehouse was deleted never writes its tenancy edge onto a warehouse made again under the id.
+    before the warehouse was deleted never writes its tenancy edge onto a warehouse made again under the id, nor onto
+    a project made again under its project's id.
 
     Why this is needed at all, given creates already seed: the grants are written ONCE, at create, from
     a config value that CHANGES (``LANCE_FGA_MAINTAINERS``), so every warehouse that predates a change is
@@ -3174,11 +3331,14 @@ async def converge_warehouse_grants(
     """
     if (client := wired(settings, client)) is None:
         return 0
-    if incarnation is None:
-        raise InvalidInputError(f"warehouse {warehouse_id!r} names no incarnation: POST it again to give it one")
     obj = f"warehouse:{warehouse_id}"
+    if incarnation is None:
+        raise incarnations.establishing(obj)
     tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
-    await _bear_or_assert(client, obj, incarnation, tuples, actor=actor, origin="warehouse_grant_backfill")
+    fence = await fga.open_fence(client, f"project:{project}", actor=actor, origin=_FENCE)
+    if fence is None:
+        raise ConcurrentModificationError(f"warehouse {warehouse_id!r} names project {project!r}, which no incarnation stands for")
+    await _bear_or_assert(client, obj, incarnation, tuples, fences=[fence], actor=actor, origin="warehouse_grant_backfill")
     own = own_users(settings)
     revoked = await fga.revoke_undeclared(  # noqa: TID251 — the converge's revoking site
         client, tuples, obj=f"warehouse:{warehouse_id}", relation="maintenance", own=own, actor=actor, origin="warehouse_grant_backfill"

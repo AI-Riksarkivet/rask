@@ -48,9 +48,14 @@ def test_a_project_admin_manages_a_role_and_its_grant_reaches_its_assignees(gove
     catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")), 200)
     _status(catalog.client.put("/management/v1/projects/acme/members", json={"user": "dex~alice", "relation": "admin"}, headers=catalog.bearer("root")), 200)
-    warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "acme-wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path)})
+    warehouses.put_warehouse(
+        str(tmp_path), StorageOptions(), {"id": "acme-wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path), "incarnation": "w1"}
+    )
     warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": str(tmp_path)}), "acme-wh")
-    catalog.store.write(("project:acme", "project", "warehouse:acme-wh"))
+    # Born as its create door bears it (ADR 0241): its incarnation's marker and token, beside its tenancy edge.
+    catalog.store.write(
+        ("revision:w1", "revision", "warehouse:acme-wh"), ("revision:w1.0", "revision", "warehouse:acme-wh"), ("project:acme", "project", "warehouse:acme-wh")
+    )
     _status(catalog.client.post("/v1/namespace/acme-wh$lake/create", json={}, headers=alice), 200)
 
     role = _status(catalog.client.post(ROLES, json={"name": "analysts", "description": "reads the lake"}, headers=alice), 201).json()
@@ -137,9 +142,9 @@ def test_a_role_nested_beneath_an_admin_role_is_filled_and_emptied_as_the_admin_
 
 def test_an_unassignment_and_an_admin_revoke_at_once_leave_the_project_administered(governed_catalog: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
     """alice administers acme through the role ``admins`` and bob directly. Each removes the other at once, and each
-    judged a project the other still administers: both removals move the project's ``admin_revision`` in their own
-    Write, so the store commits one and the other reads again and is refused, leaving the winner administering it
-    ([[LH-597]])."""
+    judged a project the other still administers: both removals move the project's token (``revision``, ADR 0241) in
+    their own Write, so the store commits one and the other reads again and is refused, leaving the winner administering
+    it ([[LH-597]])."""
     catalog = governed_catalog
     root, members = catalog.bearer("root"), "/management/v1/projects/acme/members"
     catalog.store.write((catalog.person("root"), "admin", "estate:rask"))

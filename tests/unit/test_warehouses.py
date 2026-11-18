@@ -140,7 +140,7 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     # Drive BOTH seeds: together they are the full tuple surface this feature writes — seed_warehouse
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
-    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme", incarnation="i1"))
+    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme", incarnation="i1", fences=[]))
     granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice", incarnation="i2"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
@@ -178,7 +178,7 @@ def test_seed_warehouse_never_grants_project_admin(monkeypatch: pytest.MonkeyPat
         return True
 
     monkeypatch.setattr(fga_module, "bear", rec_bear)
-    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme", incarnation="i1"))
+    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme", incarnation="i1", fences=[]))
     assert {(t.user, t.relation, t.object) for t in captured} == {
         (f"user:{_TOKEN.subject}", "owner", "warehouse:wh-a"),
         ("project:acme", "project", "warehouse:wh-a"),
@@ -231,6 +231,17 @@ class _FakeStore:
         self.tuples.update([born, *((t.user, t.relation, t.object) for t in tuples)])
         return True
 
+    async def open_fence(self, _client: object, obj: str, **_kw: object) -> fga_module.Fence | None:
+        """A door's fence on a born project or warehouse (ADR 0241): its ticket confers nothing and is not kept here."""
+        born = next((u.removeprefix("revision:") for u, rel, o in self.tuples if o == obj and rel == "revision"), None)
+        return None if born is None else fga_module.Fence(obj, born, fga_module.ClientTuple(user="revision:ticket-t", relation="revision", object=obj))
+
+    async def close_fences(self, *_a: object, **_kw: object) -> None:
+        return None
+
+    async def fences_stand(self, *_a: object, **_kw: object) -> bool:
+        return True
+
     async def list_users(self, _client: object, *, relation: str, obj: str, **_kw: object) -> list[str]:
         # `can_administer` derives from a direct `admin` tuple in the compiled model; the projects
         # endpoint's display-only admins lookup resolves the same way here.
@@ -240,6 +251,9 @@ class _FakeStore:
         monkeypatch.setattr(fga_module, "check", self.check)
         monkeypatch.setattr(fga_module, "write_tuples", self.write)
         monkeypatch.setattr(fga_module, "bear", self.bear)
+        monkeypatch.setattr(fga_module, "open_fence", self.open_fence)
+        monkeypatch.setattr(fga_module, "close_fences", self.close_fences)
+        monkeypatch.setattr(fga_module, "fences_stand", self.fences_stand)
         monkeypatch.setattr(fga_module, "list_users", self.list_users)
 
 

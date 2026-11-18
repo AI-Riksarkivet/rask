@@ -62,10 +62,12 @@ type project
   relations
     # BOOKKEEPING, NOT A RUNG: no permission reads it. A project's id may be held again by another tenant once it is
     # deleted, and its tuples name the id, so each incarnation is told apart here: `revision:<incarnation>`, written by
-    # its birth and never revoked, and the token `revision:<incarnation>.<n>`. Every grant on the project deletes the
-    # token and writes the next in the same Write, which the store refuses whole once the token moved, so a grant
-    # decided on an incarnation its delete retired lands nowhere (ADR 0241), and two overlapping admin revokes cannot
-    # both pass the last-admin guard ([[LH-434]]).
+    # its birth and never revoked, and the token `revision:<incarnation>.<n>`, which stands while the incarnation does.
+    # A door writing on or naming the project writes a ticket of its own here (`revision:ticket-<hex>`) before it reads
+    # the token, and deletes it in the Write that makes its change; the project's delete retires the token and deletes
+    # every ticket it reads, so a change decided on a deleted incarnation lands nowhere (ADR 0241). An admin removal
+    # moves the token, so two overlapping ones cannot both pass the last-admin guard ([[LH-434]]). The drift repair's
+    # token (`revision:repair-<hex>`) and a declared grant's evidence (`revision:git-<hex>`) are kept here too.
     define revision: [revision]
     define admin: [user, role#assignee]
     define member: [user, role#assignee] or admin
@@ -140,6 +142,10 @@ type estate
         # no lifecycle answering for it. `test_no_new_object_as_user_shape_slips_past_revoke` refuses
         # exactly that, and it refused this. Add the edge when a rule needs to traverse it, with the
         # cleanup decided in the same change.
+        # BOOKKEEPING, NOT A RUNG: no permission reads it. A grant git declares on the estate is written with an
+        # evidence of the converge's own (`revision:git-<hex>`) in the same Write, so a tick that died after it can
+        # tell its own write from a door's (ADR 0241).
+        define revision: [revision]
         define admin: [user, role#assignee]
         # A machine identity is a RELATION on the top type, never a principal type — the ruling is
         # explicit, and `type user` carries no relations for the same reason.

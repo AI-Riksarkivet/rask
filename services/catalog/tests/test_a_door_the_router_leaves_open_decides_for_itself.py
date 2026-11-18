@@ -302,7 +302,9 @@ def estate(request: pytest.FixtureRequest) -> Any:
     record = {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": settings.root, "project": PROJECT, "status": "active", "created_at": now.isoformat()}
     warehouses.create_warehouse_record(root, so, record)
     warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": settings.root}), WAREHOUSE)
-    catalog.store.write((f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"))
+    # Born, as its create door bears it (ADR 0241): its incarnation's marker and token, beside its tenancy edge.
+    born = (f"revision:{record['incarnation']}", f"revision:{record['incarnation']}.0")
+    catalog.store.write(*((user, "revision", f"warehouse:{WAREHOUSE}") for user in born), (f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"))
     for namespace in (NAMESPACE, SIDE):
         _ok(client.post(f"/v1/namespace/{namespace}/create", json={}, headers=alice))
     _ok(client.post(f"/management/v1/namespace/{SIDE}/access/grant", json={"user": f"dex~{READER}", "relation": "reader"}, headers=alice))

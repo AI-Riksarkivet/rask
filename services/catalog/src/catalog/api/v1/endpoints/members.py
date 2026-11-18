@@ -24,12 +24,12 @@ import logging
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Path, status
-from lance_namespace import ConcurrentModificationError, ServiceUnavailableError, TableNotFoundError
+from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
 
 from catalog.api import announcing, fga_deps
-from catalog.api.announcing import AnnouncerDep
+from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.dependencies import FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
@@ -110,27 +110,35 @@ async def grant_member(
 
     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
-    on the second call. An ``admin`` is granted in one Write with the project's token (``revision``)
-    (:func:`project_admins.confer`), since it changes who administers the project.
+    on the second call. An ``admin`` is granted through :func:`project_admins.confer`, which asks nothing of the
+    caller beyond the gate here.
 
-    The grant is written under the token of the project it was authorized on, read before the authority is asked
-    (ADR 0241): a project deleted meanwhile, and one made again under its id by another tenant, is not the project the
-    grant was decided on, and the grant lands on neither.
+    The grant is written under a fence of the project, opened before the authority is asked (ADR 0241,
+    ``fga_deps.door_fence``): a project deleted meanwhile, and one made again under its id by another tenant, is not the
+    project the grant was decided on, and the grant lands on neither. Grants for different people never refuse each
+    other: each deletes only its own ticket.
     \f
 
     Raises:
         PermissionDeniedError: The caller may not grant the rung.
         InvalidInputError: The subject is a role another project owns.
         TableNotFoundError: No project stands under the id, or its delete has begun.
-        ConcurrentModificationError: The project's administration changed under both of an ``admin`` grant's reads, or
-            the project was deleted while the grant ran.
+        SettlingError: The project stands and is still being established; ask again after ``Retry-After``.
+        ConcurrentModificationError: The project was deleted while the grant ran.
     """
     obj = f"project:{project_id}"
     wired = _client_or_conflict(client, settings)
-    standing = await fga.read_incarnation(wired, obj)
-    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
-    if standing is None:
-        raise TableNotFoundError(f"project not found: {project_id}")
+    async with fga_deps.door_fence(wired, settings, obj, token) as door:
+        await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+        fences = await fga_deps.require_fence(door, settings)
+        return await _grant(wired, announcer, settings, token, project_id, payload, fences)
+
+
+async def _grant(
+    wired: OpenFgaClient, announcer: Announcer, settings: Settings, token: Caller | None, project_id: str, payload: GrantRequest, fences: list[fga.Fence]
+) -> MemberList:
+    """The members door's grant once its caller is authorized, under ``fences``."""
+    obj = f"project:{project_id}"
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
     await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
@@ -147,10 +155,10 @@ async def grant_member(
     async with announcer.announcing(door="member_grant", target=obj, announcements=[told]) as filing:
         try:
             if payload.relation in ADMINISTRATIVE:
-                if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api", incarnation=standing.incarnation):
+                if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api", fences=fences):
                     return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
-            else:
-                await fga.write_fenced(wired, obj, standing.incarnation, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+            elif not await fga.commit_fenced(wired, fences, writes=[tup], actor=actor, origin="grant_api"):
+                return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
         except fga.IncarnationEnded as exc:
             raise ConcurrentModificationError(f"project {project_id!r} was deleted while this grant ran; nothing was granted") from exc
         existing = await fga.read_object_tuples(wired, obj)
@@ -172,10 +180,34 @@ async def revoke_member(
 
     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
     state already holds.
+
+    Fenced as a grant is (ADR 0241): a revoke decided on a project deleted meanwhile takes nothing from one made again
+    under its id, and is answered 409.
+    \f
+
+    Raises:
+        PermissionDeniedError: The caller may not revoke the rung.
+        TableNotFoundError: No project stands under the id, or its delete has begun.
+        SettlingError: The project stands and is still being established; ask again after ``Retry-After``.
+        ConcurrentModificationError: The removal would leave the project nobody administers, or the project was deleted
+            while the revoke ran.
     """
     obj = f"project:{project_id}"
-    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(client, settings)
+    async with fga_deps.door_fence(wired, settings, obj, token) as door:
+        await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+        fences = await fga_deps.require_fence(door, settings)
+        try:
+            return await _revoke(wired, announcer, token, project_id, payload, fences)
+        except fga.IncarnationEnded as exc:
+            raise ConcurrentModificationError(f"project {project_id!r} was deleted while this revoke ran; nothing was revoked") from exc
+
+
+async def _revoke(
+    wired: OpenFgaClient, announcer: Announcer, token: Caller | None, project_id: str, payload: GrantRequest, fences: list[fga.Fence]
+) -> MemberList:
+    """The members door's revoke once its caller is authorized, under ``fences``."""
+    obj = f"project:{project_id}"
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
 
@@ -192,10 +224,10 @@ async def revoke_member(
     told = announcing.grant_announcement(tup, action="grant_revoked", actor=f"user:{token.subject}" if token else None)
     async with announcer.announcing(door="member_revoke", target=obj, announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
-            if not await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api"):
+            if not await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api", fences=fences):
                 return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
-        else:
-            await fga.delete_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        elif not await fga.commit_fenced(wired, fences, deletes=[tup], actor=actor, origin="grant_api"):
+            return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
         audit(AuditAction.PROJECT_MEMBER_REVOKE, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
         await filing.send(told)
     return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))

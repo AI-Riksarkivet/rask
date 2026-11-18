@@ -93,12 +93,16 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
         delay = min(delay * 2, _PROVENANCE_RETRY_MAX_SECONDS)
 
 
-async def _backfill_warehouse_grants(app: FastAPI) -> None:
-    """Run the warehouse-grant backfill, reporting rather than raising. See its call site for why."""
+async def converge_at_boot(app: FastAPI) -> None:
+    """Converge every project's and warehouse's incarnation (``incarnations.converge``, ADR 0241), then run the
+    warehouse-grant backfill, which writes under them, reporting rather than raising. See its call site for why."""
+    from catalog.services import incarnations
     from catalog.services.warehouse_grant_backfill import backfill
 
+    settings: Settings = app.state.settings
     try:
-        seen, written, failures = await backfill(app.state.settings)
+        await incarnations.converge(settings.registry_root, settings.storage_options(), getattr(app.state, "fga", None) if settings.fga_enabled else None)
+        seen, written, failures = await backfill(settings)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -325,8 +329,10 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     if isinstance(commit_ids, CommitIdKeyHolder):
         await commit_ids.start(loops)
         stack.push_async_callback(commit_ids.stop)
-    # Re-assert the warehouse grants over warehouses that already exist. BACKGROUND and non-fatal, and
-    # both of those are the design rather than caution:
+    # Give every project and warehouse record an incarnation and bear each unborn one (ADR 0241), then re-assert the
+    # warehouse grants over warehouses that already exist. An upgrade from git starts with records stored before
+    # incarnations, and no door grants on one until this ran, so it runs at boot and again on every converge tick.
+    # BACKGROUND and non-fatal, and both of those are the design rather than caution:
     #
     #   * The grants are written ONCE, at warehouse-create, from `LANCE_FGA_MAINTAINERS` — a value that
     #     CHANGES. Adding a subject extends the list and every older warehouse is missing it, so that
@@ -338,7 +344,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     #     exactly as it was, which is the state this repairs, not a worse one.
     #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
     #     one-by-one past a duplicate), so replicas racing land the same tuples.
-    loops.start("warehouse-grant-backfill", partial(_backfill_warehouse_grants, app))
+    loops.start("warehouse-grant-backfill", partial(converge_at_boot, app))
     # The estate's own warehouse row and the namespace lineage keeps its tables in, in the background for the
     # backfill's reasons: lineage retries its tables until the namespace exists, so a slow OpenFGA or store must not
     # delay this catalog's readiness. A name under the estate's warehouse is absent until the row is there.

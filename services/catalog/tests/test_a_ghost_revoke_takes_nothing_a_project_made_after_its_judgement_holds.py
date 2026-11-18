@@ -7,6 +7,11 @@ absent, a create mints the record and bears the project with its creator's admin
 stands only then, takes that grant with the ghost's: the new tenant stands with nobody to administer, grant on or delete
 it.
 
+The ghost is parametrized: another person's grant, and a grant equal to the seed the project is born with (its creator's
+admin, left by an earlier project under the id; `GrantsRepairUntokened`): the birth skips a tuple that already stands, so
+a repair that revokes what it read would take the new project's only admin. The repair writes a token of its own before
+it reads, and the birth deletes it, so the revoke commits only while nothing was born since its read.
+
 The repair is held after its judgement while the project is made; what its creator holds is read over HTTP at the estate
 admin's check door. Against the catalog as deployed, a loopback Dex and a real OpenFGA ([[LH-235]]).
 """
@@ -15,6 +20,8 @@ from __future__ import annotations
 
 import threading
 from typing import Any
+
+import pytest
 
 from catalog.services import grant_reconcile
 
@@ -25,13 +32,14 @@ ALICE, MAINTENANCE, BOB = "alice", "maintenance", "bob"
 WAIT = 30
 
 
-def test_a_project_made_while_its_ghost_is_revoked_keeps_its_admin(governed_catalog: Any, monkeypatch: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog and pytest's monkeypatch
+@pytest.mark.parametrize(("ghost", "relation"), [pytest.param(BOB, "member", id="another-persons-grant"), pytest.param(ALICE, "admin", id="the-seed-itself")])
+def test_a_project_made_while_its_ghost_is_revoked_keeps_its_admin(governed_catalog: Any, monkeypatch: Any, ghost: str, relation: str) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog and pytest's monkeypatch
     catalog = governed_catalog
     catalog.store.write(
         (catalog.person(ALICE), "admin", "estate:rask"),
         (catalog.person(MAINTENANCE), "reconciler", "estate:rask"),
-        # What a deleted project's grant door left: a tuple on the id no record names.
-        (catalog.person(BOB), "member", f"project:{PROJECT}"),
+        # What an earlier project's door left: a tuple on the id no record names.
+        (catalog.person(ghost), relation, f"project:{PROJECT}"),
     )
     judged, release, real_judge = threading.Event(), threading.Event(), grant_reconcile.ghost_refusal
 

@@ -351,9 +351,10 @@ person its `admin` tuples reach, directly or through roles nested to any depth
 of `admin` tuples, since a role holding `admin` may reach nobody. Every change to a project's `admin` tuples or to who
 is in a role goes through `project_admins.confer` or `project_admins.withdraw`: the members door, the role doors'
 assign and unassign, a role's ending, the offboarding door and the declaration converge. Each judges the administration
-it read and commits in ONE Write that moves the project's token (`project#revision`, `revision:<incarnation>.<n>` to
-`<n+1>`, a bookkeeping relation no permission reads) without ignoring duplicates (`fga.commit_unless_changed`), so of two overlapping changes one
-commits and the other reads again and judges again; a refused Write is a 400 on the memory datastore and a 409 rollback
+it read; a removal commits in ONE Write that moves the project's token (`project#revision`, `revision:<incarnation>.<n>`
+to `<n+1>`, a bookkeeping relation no permission reads) without ignoring duplicates (`fga.commit_unless_changed`), so of
+two overlapping removals one commits and the other reads again and judges again, and a grant moves no token, so grants
+never refuse each other (ADR 0241 §7); both delete the tickets of the fences their door opened; a refused Write is a 400 on the memory datastore and a 409 rollback
 on a SQL one. A removal after which the project's `admin` reaches no person is refused 409 code 14. While a project's
 `admin` reaches a role, filling, emptying or ending it asks `can_grant_admin` on that project (a refusal answers the
 role's 404), so a `security_admin` makes and unmakes no admin through a nested role. The estate admin's raw tuple editor writes past both.
@@ -543,16 +544,35 @@ A table or namespace is named in OpenFGA by its uuid; a project and a warehouse 
 `warehouse:<id>`), which another tenant may hold once the object is deleted. Each record carries an `incarnation`
 (`control_records.INCARNATION`, minted with the record, kept by every merge), and `revision` on `project` and
 `warehouse` holds its marker `revision:<incarnation>` (written by the birth, never revoked) and its token
-`revision:<incarnation>.<n>`. A create bears the incarnation in one Write with its seed (`fga.bear`, through
-`fga_deps.seed_project_admin` / `seed_warehouse` / `converge_warehouse_grants`); every write of a tuple on the object
-moves the token in the same Write (`fga.write_fenced`, `project_admins.confer(incarnation=)`), and a door reads the token
-BEFORE it asks the caller's authority (`members.grant_member`, `access.project_incarnation` / `warehouse_incarnation`
-listed before the gate); a delete retires it (`fga.retire`: marks born, then deletes the token conditionally) before it
-reads what to revoke, and `fga.revoke_read_tuples` never takes `revision`. A grant on an unborn or deleting object is a
-404, one whose object was deleted while it ran a 409. The drift repair reads a ghost's tuples before judging it and
-revokes only what it read (`fga_deps.read_ghost_object`). Model: `specs/catalog/Grants.tla`. Pinned by
-`services/catalog/tests/test_a_grant_on_a_deleted_project_reaches_no_project_made_again_under_its_id.py` and
-`test_a_ghost_revoke_takes_nothing_a_project_made_after_its_judgement_holds.py`.
+`revision:<incarnation>.<n>`, which stands while the incarnation does.
+
+- **Birth.** A create bears the incarnation in one Write with its seed (`fga.bear`, through `fga_deps.seed_project_admin`
+  / `seed_warehouse` / `converge_warehouse_grants`), which commits only while the marker is absent and deletes any drift
+  repair's token it finds.
+- **Every record is born, with no hand-run step** (`catalog.services.incarnations.converge`, at boot in
+  `main.converge_at_boot` and first thing on every converge tick): a record naming no incarnation is given one
+  (conditional on the record, refused once a delete marked it), and an unborn incarnation is born with no seed of its
+  own. A door finding a record standing and nothing born answers 409 with `Retry-After: 5`
+  (`lakehouse.ns_errors.SettlingError`), never 404; the deletes refuse such a record while authorization is on.
+- **Every write on or naming the object is fenced** (`fga.open_fence`, `fga.commit_fenced`): the door writes a ticket of
+  its own, reads the token, asks its caller's authority, and commits in ONE Write that deletes its ticket
+  (`fga_deps.door_fence` + `require_fence` in the members door, the access door's `project_fence` / `warehouse_fence`
+  dependencies listed before the gate, the role doors, the warehouse create's birth, the warehouse managed-access door;
+  `fga_deps.parent_fence`, a router dependency before `authorize`, for a namespace created directly in a warehouse; the
+  declaration and the tenancy rebuild open their own). Revokes too. A grant is refused (409) only by the object's delete.
+- **Delete.** `fga.end_incarnation` (via `fga_deps.end_incarnation`): mark born, retire the token (`retire_tokens`), then
+  drain what stands on the object and what names it (`NAMING`: a role's edge and a warehouse's tenancy edge for a project,
+  a namespace's parent edge for a warehouse), deleting every ticket it read, until a read finds nothing. A project's
+  delete then refuses (409) while a warehouse made in it meanwhile stands, and ends every role its registry lists; a role
+  whose record lands after that listing finds its edge gone and ends itself.
+- **Drift repair.** `fga.revoke_ghost`: a repair token, the read, the judgement, and ONE Write revoking what was read and
+  deleting the token, which a birth since has deleted.
+
+Model: `specs/catalog/Grants.tla` (configs `Grants*.cfg`, every guard removed by one that must fail). Pinned by
+`services/catalog/tests/test_a_grant_on_a_deleted_project_reaches_no_project_made_again_under_its_id.py`,
+`test_a_ghost_revoke_takes_nothing_a_project_made_after_its_judgement_holds.py`,
+`tests/integration/test_grants_on_one_project_never_refuse_each_other.py` and, in
+`tests/integration/test_the_catalog_converges_what_git_declares.py`, the upgrade and the warehouse-across-a-delete tests.
 
 ## The declaration: the catalog converges what git declares ([[XC-213]], ADR 0206)
 
@@ -590,10 +610,13 @@ tables are never declared.
 - **Release on removal.** A record still `managed_by: git` that git no longer names has the marker cleared and keeps
   its data, records and doors (`_release`).
 - **The grant ledger** `_declared_grants/` (`control_prefixes.DECLARED_GRANTS`, one record per tuple keyed by its
-  sha256): a declared tuple the store lacks is recorded BEFORE it is written (`declaration.record_grant`), so a tuple
-  never outlives its declaration unrecorded; a declared tuple the store already holds is not recorded, so a grant made at
-  a door is never taken. The write commits only where the tuple is absent, and a tick whose write found it standing (a
-  door granted it between the tick's read and its write) forgets the record it made (ADR 0241 G5). A recorded tuple git no longer asks for is revoked, then its record forgotten. A project
+  sha256): a declared tuple the store lacks is recorded first as an INTENT naming an evidence
+  (`declaration.record_intent`), then written with that evidence (`revision:git-<hex>`) in ONE Write that commits only
+  where the tuple is absent (`fga.write_evidenced`), and the intent settled by whether the evidence stands
+  (`_Converger._settle`, by this tick or the next if it died): git's where it does, forgotten where it does not. So a
+  tuple never outlives its declaration unrecorded, and a grant made at a door is never taken (ADR 0241 G13). A record
+  carries the incarnation it was written on; a revoke under another forgets it. A recorded tuple git no longer asks for
+  is revoked under a fence of its object, then its record forgotten. A project
   `admin` goes through `project_admins.withdraw`, which keeps a project its last administrator: that revoke fails,
   and is counted on every tick, until another admin is granted. A grant on an object with no registry record is not
   written (`LookupError`, counted). With FGA off no grant is converged.

@@ -6,6 +6,26 @@ One entry per change to `model.fga` that a store holding tuples has to know abou
 whether the change writes new tuples into a store. When both are `FALSE`, deploying the model is the whole migration:
 `write_model.py` writes it, and every tuple in the store keeps its name and is read by the new model as it stands.
 
+## 2026-11-17: a door's ticket, the repair's token and git's evidence are kept in `revision`; the estate keeps one too
+
+```text
+MODIFIES_TUPLES: FALSE
+ADDS_TUPLES:     TRUE
+```
+
+ADR 0241 (the review's findings A1 to A6).
+
+- **Added:** `estate#revision: [revision]`, bookkeeping as on `project` and `warehouse`: a grant git declares on the
+  estate is written with an evidence of the converge's own (`revision:git-<hex>`) in the same Write.
+- **Written, no relation added:** under `project#revision` and `warehouse#revision`, besides the marker and the token, a
+  door's ticket `revision:ticket-<hex>` (written before it reads the token and deleted by the Write that makes its
+  change, so grants on one object no longer move one token and no longer refuse each other), the drift repair's token
+  `revision:repair-<hex>` and a declared grant's evidence `revision:git-<hex>`. No permission reads any of them.
+
+**Stored projects and warehouses.** A record stored before incarnations is given one, and born, by the catalog at boot
+and on each converge tick (`catalog.services.incarnations`); nothing is POSTed again. Until then its doors answer 409
+with `Retry-After`.
+
 ## 2026-11-17: a project's and a warehouse's incarnation is kept in `revision`
 
 ```text
@@ -21,9 +41,7 @@ ADR 0241.
 - **Added:** `warehouse#revision: [revision]`, the same for a warehouse. Bookkeeping: no permission reads either.
 
 **Stored `admin_revision` tuples.** No door rewrites or removes them, and the model no longer defines the relation, so
-each authorizes nothing and fences nothing. A project or warehouse stored before this change holds no token: a grant on
-it is answered not found until it is POSTed again, which bears its incarnation (the record's `incarnation`, given by
-that POST where the record names none).
+each authorizes nothing and fences nothing.
 
 ## 2026-11-16: reading an object's deletion protection has its own verb
 

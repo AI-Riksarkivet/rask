@@ -18,7 +18,7 @@ from openfga_sdk.models import CheckResponse, ListUsersResponse, ReadRequestTupl
 from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.validation_error_message_response import ValidationErrorMessageResponse
 
-from lakehouse.governed.fga import BOOKKEEPING_RELATIONS, user_object
+from lakehouse.governed.fga import BOOKKEEPING_RELATIONS, INCARNATED_TYPES, REVISION, user_object
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal, is_principal
@@ -55,8 +55,12 @@ class Grants:
         )
 
     async def read(self, body: ReadRequestTupleKey, options: Options = None) -> ReadResponse:
-        del body, options
-        return ReadResponse(tuples=[], continuation_token="")
+        """No tuple, but each project and warehouse born, its incarnation's token standing (ADR 0241), so a door writing
+        on one opens its fence as on an estate the catalog converged."""
+        del options
+        obj = str(body.object or "")
+        born = [Tuple(key=TupleKey(user="revision:held.0", relation=REVISION, object=obj), timestamp=datetime.now(UTC))]
+        return ReadResponse(tuples=born if obj.partition(":")[0] in INCARNATED_TYPES and obj.partition(":")[2] else [], continuation_token="")
 
     async def write(self, body: ClientWriteRequest, options: Options = None) -> None:
         del body, options

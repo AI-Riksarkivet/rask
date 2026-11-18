@@ -79,7 +79,7 @@ from catalog.schemas import (
     ProtectionResponse,
     SetProtectionRequest,
 )
-from catalog.services import object_labels, role_grants, roles, warehouses
+from catalog.services import incarnations, object_labels, role_grants, roles, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
 from catalog.services.control_records import GIT, INCARNATION, MANAGED_BY, ProtectionChange
@@ -634,12 +634,18 @@ async def delete_project(
             recorded by then is finished by a retry.
     """
     so = settings.storage_options()
+    obj = f"project:{project_id}"
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = fga_deps.wired(settings, client)
     if record.get(project_registry.DELETING_BY) is None:
+        # Every record names an incarnation once the catalog converged it (`incarnations.converge`); with authorization on,
+        # one that does not yet is refused, so no delete runs on an id whose incarnation is still being given.
+        if authz is not None:
+            incarnations.require_incarnation(record, obj)
         await _start_delete(project_id, record, settings, token, force=force)
+    # The incarnation as the record names it once the delete is recorded, which no later write changes.
+    record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, so, project_id) or record
     actor = f"user:{token.subject}" if token is not None else None
-    obj = f"project:{project_id}"
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(
         await fga.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
@@ -651,17 +657,18 @@ async def delete_project(
         # Tuples FIRST, record second. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully
         # described and re-deletable; the opposite order would strand grants on a project no API can name any
         # more — privilege that nothing in the product can see, let alone clear.
-        if authz is not None:
-            # Its incarnation retired first (ADR 0241): from here no grant decided on it lands, so the revoke below reads
-            # every grant it will hold, and none reaches a project made again under the id.
-            await fga.retire(authz, obj, record.get(INCARNATION), actor=current_subject(token), origin="lifecycle_delete")  # noqa: TID251
-            removed = await fga.revoke_object_tuples(  # noqa: TID251
-                authz,
-                obj,
-                # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
-                # stack, where there genuinely is no principal — never a stand-in for one we failed to thread.
-                actor=token.subject if token is not None else "system:catalog",
-                origin="lifecycle_delete",
+        # Its incarnation ended first (ADR 0241, `fga.end_incarnation`): retired, so no door opens a fence on it from here,
+        # then drained: every tuple on it and every tuple naming it (a role's `project` edge, a warehouse's tenancy edge)
+        # revoked, with the tickets of the doors that were writing, until a read finds nothing. No grant, role or
+        # warehouse decided on it reaches a project made again under the id.
+        removed = await fga_deps.end_incarnation(authz, settings, obj, record.get(INCARNATION), token=token)
+        # A warehouse whose create was decided on this project before the drain, and whose record stands, holds no
+        # tenancy edge to it now; the project is not deleted under it: the warehouse is deleted first, then this asked again.
+        if late := sorted(
+            str(r["id"]) for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.get("project") == project_id
+        ):
+            raise NamespaceNotEmptyError(
+                f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete ran; delete each, then delete the project again"
             )
         # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
         for role in await run_in_threadpool(roles.every_role, settings.registry_root, so, project_id):

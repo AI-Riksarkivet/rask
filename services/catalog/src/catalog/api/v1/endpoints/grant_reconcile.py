@@ -61,22 +61,25 @@ async def revoke_ghost_grants(
 
     Each object's grants are read, then it is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
     record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a
-    table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]).
+    table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]). Only what
+    was read is revoked, and on a project or warehouse only while nothing was born under the id since the read (ADR
+    0241, ``fga.revoke_ghost``): one made meanwhile keeps its grants, even a seed equal to a ghost tuple read, and is
+    answered refused.
     """
     held = await run_in_threadpool(grant_reconcile.held_table_claims, settings)
     answer = GhostRevokeResponse()
     for obj in dict.fromkeys(body.objects):
-        # Read before the judgement, and only what was read is revoked (ADR 0241): a project or warehouse made again under
-        # the id once it is judged absent writes its grants after this read, and keeps them.
-        read = await fga_deps.read_ghost_object(client, settings, obj)
         claim = held.get(obj)
-        reason = await _claim_refusal(request, settings, claim) if claim is not None else None
-        if reason is None:
-            reason = await run_in_threadpool(partial(grant_reconcile.ghost_refusal, settings, obj))
-        if reason is not None:
-            answer.refused[obj] = reason
-            continue
-        answer.revoked[obj] = await fga_deps.revoke_ghost_object(client, settings, obj, read, token=token)
+
+        async def _judge(obj: str = obj, claim: location_claims.LocationClaim | None = claim) -> str | None:
+            reason = await _claim_refusal(request, settings, claim) if claim is not None else None
+            return reason if reason is not None else await run_in_threadpool(partial(grant_reconcile.ghost_refusal, settings, obj))
+
+        match await fga_deps.revoke_ghost_object(client, settings, obj, _judge, token=token):
+            case str() as reason:
+                answer.refused[obj] = reason
+            case int() as revoked:
+                answer.revoked[obj] = revoked
     return answer
 
 
@@ -109,10 +112,15 @@ async def rebuild_warehouse_tenancy(body: TenancyRebuildRequest, settings: Setti
             case str() as reason:
                 answer.unjustified[warehouse_id] = reason
             case edge:
+                if not (incarnation := (record or {}).get(INCARNATION)):
+                    answer.unjustified[warehouse_id] = f"the warehouse record {warehouse_id!r} names no incarnation yet: the catalog converges it"
+                    continue
                 try:
-                    await fga_deps.write_registry_edge(client, settings, edge, incarnation=str((record or {}).get(INCARNATION) or ""), token=token)
+                    await fga_deps.write_registry_edge(client, settings, edge, incarnation=str(incarnation), token=token)
                 except fga.IncarnationEnded:
-                    answer.unjustified[warehouse_id] = f"the warehouse record {warehouse_id!r} names an incarnation no token stands for: it is being deleted"
+                    answer.unjustified[warehouse_id] = (
+                        f"warehouse {warehouse_id!r} or its project names an incarnation no token stands for: one of them is being deleted"
+                    )
                     continue
                 answer.written.append(f"{edge.user} {edge.relation} {edge.object}")
     return answer

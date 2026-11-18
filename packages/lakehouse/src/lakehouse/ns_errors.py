@@ -13,7 +13,7 @@ import logging
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
+from lance_namespace import ConcurrentModificationError, ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.problem import PROBLEM_JSON, occurrence, problem_body
@@ -131,6 +131,18 @@ class PartiallyApplied(ServiceUnavailableError):
         self.problem_extra = problem_extra
 
 
+class SettlingError(ConcurrentModificationError):
+    """A conflict that settles by itself: the object stands and is still being made, so the same request asked again
+    after ``retry_after`` seconds succeeds. Answered 409 (code 14) with a ``Retry-After`` header."""
+
+    #: Seconds until the request is worth asking again.
+    retry_after: int
+
+    def __init__(self, message: str, *, retry_after: int) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
     """Build (status, RFC 9457 problem+json body) for a domain error.
 
@@ -212,7 +224,8 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
             log.info("unsupported_operation", extra={"method": request.method, "path": request.url.path, "status": status})
         elif status >= 500:
             log.exception("domain_error", extra={"method": request.method, "path": request.url.path, "status": status})
-        return JSONResponse(status_code=status, content=body, media_type=PROBLEM_JSON)
+        headers = {"Retry-After": str(exc.retry_after)} if isinstance(exc, SettlingError) else None
+        return JSONResponse(status_code=status, content=body, media_type=PROBLEM_JSON, headers=headers)
 
     def _store_unavailable(request: Request, exc: Exception) -> JSONResponse:
         log.warning("object_store_unavailable", extra={"method": request.method, "path": request.url.path, "error": str(exc)[:300]})

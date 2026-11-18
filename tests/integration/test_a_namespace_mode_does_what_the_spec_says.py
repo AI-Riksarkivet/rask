@@ -108,6 +108,8 @@ def governed(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_TupleStore
     record = {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": "acme", "status": "active", "created_at": "t"}
     warehouses.put_warehouse(root, StorageOptions(), record)
     warehouses.ensure_catalog_row(_ns(real_ns_client), WAREHOUSE)
+    # Born, as its create door bears it (ADR 0241): its incarnation's marker and token.
+    store.tuples |= {("revision:w1", "revision", f"warehouse:{WAREHOUSE}"), ("revision:w1.0", "revision", f"warehouse:{WAREHOUSE}")}
     yield store
 
 
