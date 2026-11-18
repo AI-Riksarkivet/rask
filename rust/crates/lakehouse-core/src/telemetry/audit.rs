@@ -81,8 +81,8 @@ actions! {
     ERASURE_OBLIGATION_RECORDED = "erasure_obligation_recorded", ERASURE_REF_OBLIGED = "erasure_ref_obliged",
     ERASURE_OBLIGATION_VERIFIED = "erasure_obligation_verified", EXPIRE_VERSIONS = "expire_versions",
     DLQ_REPLAY = "dlq_replay", DLQ_PARKED_REPLAY = "dlq_parked_replay", CLONE_ENDING_FINISH = "clone_ending_finish",
-    TRASH_RELEASE = "trash_release", TRASH_END = "trash_end", IDEMPOTENCY_KEYS_RECLAIM = "idempotency_keys_reclaim",
-    ANNOUNCEMENT_INTENTS_FINISH = "announcement_intents_finish",
+    TRASH_RELEASE = "trash_release", TRASH_END = "trash_end", DEAD_TENANT_PURGE = "dead_tenant_purge",
+    IDEMPOTENCY_KEYS_RECLAIM = "idempotency_keys_reclaim", ANNOUNCEMENT_INTENTS_FINISH = "announcement_intents_finish",
 }
 
 /// The trail of one service; a trail the chart turned off emits and counts nothing.
