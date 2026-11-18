@@ -751,6 +751,14 @@ catalog:
     # object granted on, so it runs often enough that a change to the declaration lands within a minute or two.
     # -- Seconds between two ticks of the timer on which the catalog converges the estate onto `catalog.declared` (`LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS`); lateness only delays a declared change.
     periodSeconds: 60 # @schema type: integer; minimum: 1
+  # ADR 0242: the catalog probes the seal of every warehouse it serves, the estate's own included, at its start and on
+  # this period, records what it measured and exports it (`catalog.warehouse.seal`), so `WarehouseSealLost` fires on a
+  # store that stopped enforcing the seal with nothing run by hand. A probe that learns nothing (the store answered with
+  # neither a refusal nor an admission) leaves each warehouse as last measured.
+  sealProbe:
+    # Each tick vends one write credential per warehouse and writes, seals, puts over and deletes one probe file.
+    # -- Seconds between two ticks of the timer on which the catalog probes the seal of every warehouse it serves (`LANCE_SEAL_PROBE_PERIOD_SECONDS`); a store that stops enforcing the seal is recorded and pages within one period.
+    periodSeconds: 3600 # @schema type: integer; minimum: 1
   # LH-251: every namespace operation writes the `dir` backend's namespace index (`<root>/__manifest`) again as a new
   # version, and the backend reclaims none of them; this timer removes each root's versions older than retainSeconds.
   manifestReclaim:

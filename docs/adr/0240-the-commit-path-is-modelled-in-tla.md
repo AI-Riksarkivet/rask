@@ -4,7 +4,10 @@
 commit, its author record and its announcement; nothing modelled what decides whether a write lands, which one, how often,
 and what its writer is told. Five defects were found, each confirmed against the running catalog and fixed model first
 (owner, 2026-11-17: "Fix in Python now"). An independent review of that fix found three more and a regression in the
-commonest write path; each was reproduced, modelled and fixed (§8 to §10).
+commonest write path; each was reproduced, modelled and fixed (§8 to §10). A joint review of the merged keyed-commit and
+seal fixes found a key that lands twice after a chain of takeovers or a refused one, and a rule pinned by no test;
+each was reproduced, modelled and fixed (§11). The seal's steps are modelled here too (ADR 0242 § Found by review,
+second round).
 
 ## Context
 
@@ -262,7 +265,8 @@ argued each of these in comments; nothing checked them against each other.
      `register_table` (`endpoints/tables.py` `register_table`, `dataplane.renew_held`). Case `[register]`: 200 before, 409
      now; with the renewal removed it fails. A keyed `/create` of a new name (mode=Create) was the same before its first
      version renewed: the resend creates, the table is dropped, and the first attempt created it again; case `[create]`.
-   - **The look-back of a takeover's search was coupled to the renewal.** The renewal moves `claimed_at`, and a takeover
+   - **The look-back of a takeover's search was coupled to the renewal** (the time search this item describes was
+     replaced by the version search of §11, which a chain of takeovers or a released key can no longer move). The renewal moves `claimed_at`, and a takeover
      searched from the lapsed claim's `claimed_at` less 10 minutes, so a write longer than that between its plan and its
      renewal would have been missed. Removed: a claim keeps `since`, when its attempt first claimed the key, which no
      renewal moves (`idempotency._Claimed.since`, `TakenOver.since`), and every write is planned after its claim, so the
@@ -330,8 +334,75 @@ argued each of these in comments; nothing checked them against each other.
     pre-commit hook run between its rebase and its put (it has only `commit_lock`, which replaces the conditional put),
     or a conditional put a client can make over two objects at once (the claim and the manifest).
 
+11. **Found by a joint review of the merged fixes, and FIXED (2026-11-18).**
+    - **A keyed write landed twice after a chain of takeovers, or after a takeover refused before its search**
+      (`KeyAppliedOnce`; REPRODUCED on the local root first, the review's scratch tests answering 7 rows where 5 were
+      written). A takeover wrote its new claim with `since` set to the lapsed claim's own `since`, so a takeover of a
+      takeover searched from the second attempt's claim: A1 appends v2 and loses its answer; A2 takes over, finds v2,
+      loses its answer too; A3 takes over from A2, searches from A2's claim less ten minutes, misses v2 (it was older),
+      and appends again. And a released key was answered "nothing was written" even when the claim released was a
+      takeover of a lapsed attempt that had landed: A1 lands and loses its answer; A2 takes over and is refused 409
+      before its search (a busy turn, a table that changed), which gives the key back; A3 claims the released key and
+      appends again. The model missed both: its search had no bound and nothing could refuse between a takeover and its
+      search. Guards **KeyKeepsFirst** and **ReleaseKeepsWritten**: a key's record keeps, for its whole life, the lowest
+      version any attempt under it planned a put on (`idempotency._Claimed.written_from`), which the renewal right before
+      each put records (`idempotency.renew(planned_on=…)`, `HeldKey.renew`, `dataplane.renew_held`: `land_keyed` passes
+      the transaction's read version, `commit_stamped` the version it planned on, at `finalize_version`), and which no
+      takeover and no release moves (`idempotency.claim` carries it onto the new claim). Every attempt claiming a key
+      whose record says a put may have landed is told so (`TakenOver(written_from)`), a released key's included, and its
+      door searches before it writes. The search is by the key's stamp on the ref's versions after `written_from`
+      (`dataplane.landed_under_key`), so no clock bounds it: the ten-minute skew is gone, and with it the time
+      search's coupling of a pod's clock to the store's. Chosen over the time of the first claim (the brief's first form)
+      because the history read is bounded by what the time search read, a subset of it: exactly the versions committed
+      since the first put under the key was planned, each one a version the ref's listing names and whose transaction
+      Lance keeps until a cleanup removes the version. The version is recorded at the renewal, not at the claim, because
+      the claim is made before the door opens the table, and a door that lands no version opens none; the renewal
+      precedes every put, so a record that names no version proves no put was made, and a takeover of an attempt that
+      never reached one searches nothing, as nothing it did can land (its renewal would find the claim another's).
+      Model: the record's `wfrom` (one past the version, 0 for none) and `at` (the claim's own time, the version the
+      table was at), the search bounded by them, and `ScanRefused`, a refusal between a takeover and its search.
+      Configs `CommitPathTakeoverChain.cfg` (KeyKeepsFirst off: the search starts at the lapsed claim's own claim;
+      `KeyAppliedOnce` fails, the shortest trace a takeover of a takeover before the first searched, measured also with
+      `ScanRefused` removed in a copy, a chain of two takeovers and nothing refused) and
+      `CommitPathReleasedUnsearched.cfg` (ReleaseKeepsWritten off: a released key's claim plans without a search). Test
+      `test_a_retried_create_does_not_rewrite_the_table.py::TestARetriedAppendLandsOnce::test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit`,
+      its four doors (both inserts, `/create` mode=Overwrite, `/restore`) now crossed with `one-takeover`,
+      `a-chain-of-takeovers` and `a-takeover-refused-before-its-search`: on the base the review's chain and release
+      answered 7 rows; now 5. With the takeover writing no `written_from` onto its claim (KeyKeepsFirst removed) 8 of the
+      12 cases fail, every chain and every refused case; with a released key's record taken as unwritten
+      (ReleaseKeepsWritten removed) the 4 refused cases fail.
+    - **RecordOwnClaim was pinned by no test** (removing the attempt check from `record_outcome` left every test green;
+      only `CommitPathAnswerReplaced.cfg` failed). The interleaving it exists for is a case of the race test now:
+      `test_a_keyed_write_lands_once_beside_its_resend.py::test_a_keyed_door_resent_while_its_first_attempt_runs_acts_once[create-exist-ok-before-the-resend-records]`:
+      the first attempt is held after its claim; the resend takes the key over, creates the table and is held before it
+      records its answer (`_interleave(resend_hold=…)`, `catalog.api.idempotency:Converge.remember`); an append lands;
+      the first attempt's ExistOk finds the table and answers version 2, true, and reaches its record while the resend
+      still holds the claim. With the rule its record writes nothing and the key answers the resend's version 1; with
+      the attempt check removed the first's answer is written over the resend's claim, the resend's own record then
+      finds the key answered, and a third send is answered 2: the case fails (1 of 13 on the local root).
+    - **The model now has the seal's steps** (ADR 0242 § Found by review, second round): each landed version records
+      whether its data files (`ds`) and its transaction file (`ts`) are sealed and recorded; a stamped commit lands with
+      both, a stock commit and Lance's own commit with the data files and seal the transaction file in a step after
+      landing (`SealLanded`), at which a writer can die; the commit reconciler (`Reconcile`, A4) finishes any landed
+      version. Invariant `LandedDataSealed` (safety: no landed version names an unsealed data file) and property
+      `EveryFileSealed` (liveness: every file of every landed version is sealed in the end). Configs
+      `CommitPathSealAfterLanding.cfg` (guard **SealBeforeLanding** off: data files sealed once landed; `LandedDataSealed`
+      fails) and `CommitPathNoReconciler.cfg` (A4 removed: a writer dying after landing leaves its transaction file
+      unsealed for good; `EveryFileSealed` fails). The reconciler changes only the seal of a version, which no writer
+      reads and a writer's own seal writes again, so it commutes with every writer step and is let run once every writer
+      has ended, which keeps the gate's states down without hiding an interleaving.
+    - **The gate**, measured 2026-11-18 on four cores shared with other agents at a load average of 8 (`scripts/tla_check.sh
+      CommitPath`): seven configs that hold, sixteen that must fail, one on demand, in 89 s; 62 s at a load average of 4 to 5. `CommitPath.cfg` 152,820
+      states; `CommitPathKeys.cfg` 34,477; `CommitPathLane.cfg` 240,802 (one death and one replan:
+      `CommitPathLaneWide.cfg`, two of each, 436,319 states, is `ON DEMAND`); `CommitPathNested.cfg` 27;
+      `CommitPathOverwrite.cfg` 8,151; `CommitPathRebody.cfg` 3,475; `CommitPathRestore.cfg` 7,271.
+
 ## What a client observes that differs
 
+- A keyed write whose earlier attempts under its key all lost their answers, however many took the key over or were
+  refused between, answers the version the first of them landed, never a second landing (§11).
+- A takeover of a keyed attempt that never reached a put no longer searches the table's versions: nothing it did can
+  have landed.
 - A resend under an `Idempotency-Key` with another body or other query parameters answers 400 code 13, where it answered
   the first request's 200, at every keyed door (`/create`, `/insert`, `/restore`, `/register`, `/rename`, `/drop`,
   `/deregister`; each door's OpenAPI description says so).
@@ -380,6 +451,9 @@ keeps its seat.
 ## Consequences
 
 - The Rust catalog keeps the renewal before every put of a keyed write, the claim held in the request's context and read
-  by the seams that land a version, the request digest in the key's binding, the refusal checked against the claim, and
-  an answer recorded only over the attempt's own claim, or changes this model first.
-- `make tla-check` runs the seven CommitPath gate configs and twelve that must fail.
+  by the seams that land a version, the request digest in the key's binding, the refusal checked against the claim, an
+  answer recorded only over the attempt's own claim, the lowest planned version kept on the key's record for its life
+  and searched from by every claim after an unanswered put, and the seal of every data file before its version lands,
+  or changes this model first.
+- `make tla-check` runs the seven CommitPath gate configs and sixteen that must fail; `make tla-check-full` adds the wide
+  lane.

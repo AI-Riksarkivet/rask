@@ -165,12 +165,14 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
 ) -> None:
     from catalog.api import commit_reconcile
     from catalog.core.config import get_settings
-    from catalog.services import commit_authors
-    from lakehouse import commit_records
+    from catalog.services import commit_authors, committed_files
+    from lakehouse import commit_records, file_identities
 
-    counted, unrecorded = _Counter(), _Counter()
+    counted, unrecorded, files_unrecorded, finished = _Counter(), _Counter(), _Counter(), _Counter()
     monkeypatch.setattr(commit_reconcile, "_reannounced", counted)
     monkeypatch.setattr(commit_authors, "_unrecorded", unrecorded)
+    monkeypatch.setattr(committed_files, "_unrecorded", files_unrecorded)
+    monkeypatch.setattr(committed_files, "_finished", finished)
     alice = {"Authorization": f"Bearer {dex_issuer.mint('alice', connector='local', audience='lance-catalog')}"}
     gate = _Gate(alice["Authorization"])
     with serve(gate.app) as gate_url:
@@ -415,10 +417,42 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                     ("lance_catalog$db$late", "insert", "2", author),
                 ]
 
+                # A write through a door whose transaction file the store would not let the catalog record once the version
+                # landed (ADR 0242 § The order of effects): its data files were sealed and recorded before it landed, the
+                # write answers 200, the miss is logged at ERROR and counted, and the next tick seals and records the file,
+                # counted as finished. Before, the miss was only logged, and no tick ever recorded it.
+                real_files = file_identities.record
+                uuid_of_late = catalog.post("/v1/table/lance_catalog$db$late/describe", json={}).json()["properties"]["rask.uuid"]
+
+                def refused_once_landed(root: str, so: Any, table_uuid: str, committed: file_identities.CommittedFiles) -> None:  # noqa: ANN401 — the record's own options
+                    if table_uuid == uuid_of_late and any("_transactions/" in file.path for file in committed.files):
+                        raise OSError("the store refused the write")
+                    real_files(root, so, table_uuid, committed)
+
+                monkeypatch.setattr(file_identities, "record", refused_once_landed)
+                assert catalog.post("/v1/table/lance_catalog$db$late/insert", content=_rows(2, 3), headers=_ARROW).status_code == 200
+                monkeypatch.setattr(file_identities, "record", real_files)
+                assert [amount for amount, _ in files_unrecorded.added[-1:]] == [1], "the landing's miss is counted"
+                late = lance.dataset(catalog.post("/v1/table/lance_catalog$db$late/describe", json={"vend_credentials": False}).json()["location"])
+                landed = late.read_transaction(late.version)
+                assert landed is not None
+
+                def recorded_paths() -> list[str]:
+                    held = file_identities.recorded(control, control_so, uuid_of_late, landed.uuid)
+                    return sorted(file.path for file in held.files) if held is not None else []
+
+                own = f"_transactions/{landed.read_version}-{landed.uuid}.txn"
+                data = [f"data/{late.get_fragments()[-1].data_files()[0].path}"]
+                assert recorded_paths() == data, "the data files are recorded before the version lands, and the transaction file is not"
+                finished_before = len(finished.added)
+                reconcile()
+                assert recorded_paths() == sorted([*data, own])
+                assert [amount for amount, _ in finished.added[finished_before:]] == [1], "the tick finished the one version a landing left"
+
     assert [amount for amount, _ in counted.added] == [1, 1, 1, 1, 1]
     # The create, both inserts the catalog recorded, the refused one, the registered table's insert, and the late table's
-    # create and insert.
-    assert [amount for amount, _ in unrecorded.added] == [0, 0, 1, 0, 0, 0, 0]
+    # create and two inserts.
+    assert [amount for amount, _ in unrecorded.added] == [0, 0, 1, 0, 0, 0, 0, 0]
     assert [dict(attributes or {}) for _, attributes in counted.added] == [
         {"lance.catalog.operation": "create_table"},
         {"lance.catalog.operation": "insert"},

@@ -21,6 +21,7 @@ import logging
 from collections import Counter
 from collections.abc import Callable, Sequence
 from functools import partial
+from typing import Final
 
 import lance
 import pyarrow as pa
@@ -252,7 +253,7 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     # transaction inline is one read the writer cannot change; one read from the writer's `.txn` file could be put over
     # between the judgement and the finalize, and a version judged as one operation commit another. Sealing that file
     # first is no answer: the writer puts it again, under the same name, on each attempt of the commit.
-    _require_an_inline_transaction(manifest)
+    _require_an_inline_transaction(manifest, ref, so)
     detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
     _write(location, so, f"d{detached_id}.manifest", manifest_bytes.with_manifest_version(manifest, detached_id))
     _write(location, so, f"d{finalize_id}.manifest", manifest)
@@ -307,19 +308,40 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     )
 
 
-def _require_an_inline_transaction(manifest: bytes) -> None:
+#: The most bytes of a transaction Lance carries inline in its manifest (``MAX_INLINE_TRANSACTION_BYTES``, 20 MiB, in the
+#: Lance 13 and 14 sources): past it the manifest names only the transaction file. Measured on pylance 13.0.0 (2026-11-18),
+#: an append whose transaction properties held 20,967,424 bytes was inlined, one holding 20,975,616 was not
+#: (`test_the_store_refuses_a_put_over_a_committed_file.py::test_a_stock_commit_past_what_lance_inlines_is_refused_naming_its_size`).
+#: A transaction is about 200 bytes a fragment it touches (from the earlier measurements: some 100,000 fragments touched by
+#: one delete, or 330,000 appended in one commit, reach it).
+MAX_INLINE_TRANSACTION_BYTES: Final = 20 * 1024 * 1024
+
+
+def _require_an_inline_transaction(manifest: bytes, ref: CommitRef, so: StorageOptions) -> None:
     """Refuse a staged manifest that carries no inline transaction (ADR 0242 B2): the catalog judges a commit only on a
-    transaction it reads from its own copy of the manifest. Stock pylance 13.0.0 inlines every transaction it writes
-    (measured: a 5,000-fragment append's and a delete over them, manifests of 0.3 and 1 MB), so no stock commit is refused.
+    transaction it reads from its own copy of the manifest, which no writer can put over. Lance inlines a transaction up to
+    :data:`MAX_INLINE_TRANSACTION_BYTES`, so a stock commit whose transaction is larger is refused, a stated limit of the
+    stock client's path (ADR 0157, ADR 0242 § The supported client): the refusal names the transaction's size, read off the
+    file the manifest names, the limit, and the remedy, committing in smaller steps.
 
     Raises:
         InvalidInputError: The manifest carries no transaction section.
     """
-    if manifest_bytes.transaction_section(manifest) is None:
-        raise InvalidInputError(
-            "commit refused: the staged manifest carries no inline transaction; the catalog judges a commit only on the transaction "
-            "its manifest carries, which no writer can put over before the version lands"
-        )
+    if manifest_bytes.transaction_section(manifest) is not None:
+        return
+    named = committed_files.transaction_file_in(manifest_bytes.manifest_message(manifest))
+    size: int | None = None
+    if named is not None:
+        fs, base = dataplane.dataset_fs(ref.location, so)
+        info = fs.get_file_info(f"{base.rstrip('/')}/{committed_files.TRANSACTIONS}/{named}")
+        size = int(info.size) if info.type == pafs.FileType.File and info.size is not None else None
+    held = f"its transaction is {size:,} bytes" if size is not None else "it names no transaction file the store holds"
+    raise InvalidInputError(
+        f"commit refused: the staged manifest carries no inline transaction ({held}); Lance inlines a transaction of at most "
+        f"{MAX_INLINE_TRANSACTION_BYTES:,} bytes (20 MiB) in its manifest, and the catalog judges a commit only on the "
+        "transaction its manifest carries, which no writer can put over before the version lands. Commit in smaller steps: "
+        "fewer fragments touched or appended in one commit, or smaller transaction properties"
+    )
 
 
 def _unmodelled_operation(manifest: bytes) -> str | None:
@@ -954,7 +976,10 @@ def judge(
             so=so,
             transaction_uuid=staged.transaction_uuid,
             read_version=staged.read_version,
-            # Sealed once the version lands (`finalize`): the writer puts it again, under its name, on each attempt.
+            # Recorded by the door once the commit is authorized (`versions.create_table_version`).
+            record=None,
+            # Required here, sealed and recorded once the version lands: the writer puts it again, under its name, on each
+            # attempt of the commit.
             seal_transaction=False,
         )
     except file_identities.FilesNotHeldError as exc:

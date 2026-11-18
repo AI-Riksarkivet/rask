@@ -412,6 +412,17 @@
                     "type": "integer",
                     "minimum": 1
                 },
+                "sealProbe": {
+                    "type": "object",
+                    "properties": {
+                        "periodSeconds": {
+                            "description": "Seconds between two ticks of the timer on which the catalog probes the seal of every warehouse it serves (`LANCE_SEAL_PROBE_PERIOD_SECONDS`); a store that stops enforcing the seal is recorded and pages within one period.",
+                            "type": "integer",
+                            "minimum": 1
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "trashGraceDays": {
                     "description": "Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.",
                     "type": "number",

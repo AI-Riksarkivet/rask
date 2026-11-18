@@ -12,7 +12,9 @@ credential build both through here, so neither failure can come back in a copy.
 
 from __future__ import annotations
 
+import hashlib
 import threading
+import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
@@ -296,28 +298,67 @@ def object_client(storage_options: StorageOptions) -> S3Client:
     control-root record, claim, seal and fence goes through here, and a client built per call costs about 6 ms of the
     process's interpreter lock and a fresh connection (measured 2026-11-17: sixteen keyed appends to one table on RustFS
     1.0.3 built some 350 clients between them, and the one shared client cut each store read from 80 ms to 7 ms). A
-    rotated or vended credential is another key, so a client signs with one credential only, and the oldest is let go
-    past :data:`_CLIENTS`. The seam ``lakehouse.storage.s3_client`` is part of the key, so a test replacing it gets its own.
+    rotated or vended credential is another key, so a client signs with one credential only.
+
+    NO CREDENTIAL IS KEPT PAST ITS USE (zero trust): the key names a credential by a digest of its secret and token, never
+    the secret itself, and a client is let go when its credential is replaced (:func:`forget_credential`, which the store
+    session calls when it renews, ``lakehouse.store_session.SessionCache.hold``), when it expires (a vended credential's
+    ``expires_at_millis``, the spec's storage option, judged at every call), or past :data:`_CLIENTS`, the oldest first.
     """
     from lakehouse.storage import s3_client
 
     access_key, secret_key, session_token = storage_options.credential_in_clear()
-    key = (s3_client, storage_options.endpoint, access_key, secret_key, session_token, storage_options.region or DEFAULT_REGION)
+    region = storage_options.region or DEFAULT_REGION
+    key = (s3_client, storage_options.endpoint, region, access_key, _digest(secret_key, session_token))
+    now = time.time() * 1000
     with _CLIENTS_LOCK:
-        client = _clients.pop(key, None)
-        if client is None:
-            client = s3_client(storage_options.endpoint, access_key=access_key, secret_key=secret_key, session_token=session_token, region=key[-1])
-        _clients[key] = client
+        for stale in [cached for cached, (_, expires) in _clients.items() if expires is not None and expires <= now]:
+            _clients.pop(stale)
+        held = _clients.pop(key, None)
+        client = (
+            held[0]
+            if held is not None
+            else s3_client(storage_options.endpoint, access_key=access_key, secret_key=secret_key, session_token=session_token, region=region)
+        )
+        _clients[key] = (client, _expiry(storage_options))
         while len(_clients) > _CLIENTS:
             _clients.pop(next(iter(_clients)))
     return client
 
 
+def forget_credential(key_pair: S3KeyPair) -> None:
+    """Let go of every client :func:`object_client` keeps that signs with ``key_pair``: a credential replaced, by a renewed
+    store session, signs nothing more from this process."""
+    digest = _digest(key_pair.secret_access_key.get_secret_value(), key_pair.session_token.get_secret_value() if key_pair.session_token is not None else None)
+    with _CLIENTS_LOCK:
+        for cached in [cached for cached in _clients if cached[3] == (key_pair.access_key_id or None) and cached[4] == digest]:
+            _clients.pop(cached)
+
+
+def _digest(secret_key: str | None, session_token: str | None) -> str:
+    """What names a credential's secret half in :func:`object_client`'s keys: its BLAKE2b, never the secret."""
+    return hashlib.blake2b(f"{secret_key or ''}\0{session_token or ''}".encode(), digest_size=16).hexdigest()
+
+
+def _expiry(storage_options: StorageOptions) -> float | None:
+    """When the credential ``storage_options`` carry expires, in Unix milliseconds: a vended one's ``expires_at_millis``
+    (the Lance Namespace spec's storage option); ``None`` for one that names none."""
+    named = storage_options.options.get(EXPIRES_AT_MILLIS)
+    try:
+        return float(named) if named else None
+    except ValueError:
+        return None
+
+
+#: The storage option a vended credential's expiry rides in (`lance_docs/ns_catalog/spec.yaml`, ``expires_at_millis``).
+EXPIRES_AT_MILLIS: Final = "expires_at_millis"
+
 #: How many clients :func:`object_client` keeps, the most recently used: a process signs with its own identity's
 #: credential, renewed as it rotates, and a handful of vended ones.
 _CLIENTS: Final = 32
 _CLIENTS_LOCK = threading.Lock()
-_clients: dict[tuple[object, ...], S3Client] = {}
+#: Each client by its key, with when its credential expires (Unix milliseconds), ``None`` for one that names none.
+_clients: dict[tuple[object, str | None, str, str | None, str], tuple[S3Client, float | None]] = {}
 
 
 def forget_clients() -> None:

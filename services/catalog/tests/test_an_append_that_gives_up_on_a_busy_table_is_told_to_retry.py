@@ -58,7 +58,8 @@ def test_an_append_lance_gives_up_on_is_answered_as_a_conflict_to_retry(tmp_path
     def gives_up(*_args: object, **_kwargs: object) -> None:
         raise OSError(_GAVE_UP)
 
-    monkeypatch.setattr(lance.LanceDataset, "insert", gives_up)
+    # The unkeyed append's commit is Lance's own, with its own retries, of the fragments written first.
+    monkeypatch.setattr(lance.LanceDataset, "commit", staticmethod(gives_up))
 
     with pytest.raises(ConcurrentModificationError, match="send the write again"):
         insert_into_table(

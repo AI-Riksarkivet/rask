@@ -504,9 +504,9 @@ the rule:
   itself as `rask.author` included) before the finalize, an attempt whose finalize did not land deleting its record (at
   `version/create` only the request that created it, and only when the version it was staged for does not hold the
   manifest it judged, which a finalize whose answer was lost landed); the
-  create door's write and an unkeyed `/insert`, which Lance commits itself and whose transaction uuid it mints inside the
-  commit, just after it lands, under the transaction `committed_files.record_landed` read (`commit_authors.record_landed`,
-  owner 2026-11-01), a failure logged `commit_author_unrecorded` at ERROR and counted on
+  create door's write and an `/insert` to a table declaring no key, which Lance commits itself, just after it lands,
+  under the transaction it committed (`dataplane._record_written`, `dataplane._record_landed_author`,
+  `commit_authors.record_landed`, owner 2026-11-01), a failure logged `commit_author_unrecorded` at ERROR and counted on
   `catalog.commit_authors.unrecorded`.
 - **The commit is the outbox** ([[LH-497]]). A versioned announcement's OpenLineage run id is a UUIDv8 of HMAC-SHA256
   under `commit-id-key` (a secret only the catalog reads; a stack with no store derives under the empty key) over the
@@ -1025,10 +1025,12 @@ governing their data. The project-scoped surface is the console's project page, 
   before the backend's `register_table`; drop, deregister and rename are held by their resolution's claim ETag. A keyed
   append to a table declaring no key is NOT stamped: `land_keyed` renews, then puts one Lance commit with no retry of its own
   (`max_retries=0`, which still rebases), so keyed appends land as concurrently as unkeyed ones; a lost put reads the
-  version it tried for its own transaction before putting again. A claim unanswered past `LEASE` (300 s) is taken over,
-  and the claim says so (`TakenOver`, from `since`, when the lapsed attempt FIRST claimed, which no renewal moves): every
-  door that lands a version looks for the version that attempt landed (`dataplane.landed_under_key`) and answers it
-  ([[LH-577]]). An attempt whose key another took over answers 409 code 14 and lands nothing; one refused (4xx) after its
+  version it tried for its own transaction before putting again. A claim unanswered past `LEASE` (300 s) is taken over.
+  The renewal before each put records the version the put was planned on, and the key's record keeps the lowest one for
+  its whole life (`_Claimed.written_from`), which no takeover and no release moves (ADR 0240 §11): every claim after an
+  unanswered attempt that reached a put, a released key's included, is told so (`TakenOver(written_from)`), and every
+  door that lands a version looks for the key's stamp on the versions after it (`dataplane.landed_under_key`, no clock)
+  and answers what it finds ([[LH-577]]); a takeover of an attempt that reached no put searches nothing. An attempt whose key another took over answers 409 code 14 and lands nothing; one refused (4xx) after its
   key was taken over answers 409 code 14 too, not its refusal (`keyed_door`); and an answer is recorded only over the
   attempt's own claim (`idempotency.record_outcome`), so the key's answer is never replaced. The insert and the restore
   record their answer right after their commit, before the lineage emit. `specs/catalog/CommitPath.tla` models it; every
@@ -1145,22 +1147,35 @@ governing their data. The project-scoped surface is the console's project page, 
   in `make lifecycle-rustfs-check`, which renders that policy from the chart). No vended tier may tag or untag. A commit
   naming a file the store does not hold is REFUSED 400 (`file_identities.FilesNotHeldError`: the key would stay a
   writer's to put after the version lands), and `version/create` admits only a manifest carrying its transaction inline,
-  read once from its own copy (`managed_versions._require_an_inline_transaction`, `StagedVersion.transaction`), and seals
-  the writer's `.txn` file once the version lands (`committed_files.seal_landed_transaction`: a stock writer puts it
-  again, same name, on every retry, so a seal before landing refuses its retry). A seal the store refuses fails the
+  read once from its own copy (`managed_versions._require_an_inline_transaction`, `StagedVersion.transaction`): Lance
+  inlines a transaction of at most 20 MiB (`MAX_INLINE_TRANSACTION_BYTES`), and a larger one is refused 400 naming its
+  size, the limit and to commit in smaller steps (ADR 0242 § The supported client). It seals and records the writer's
+  `.txn` file once the version lands (`committed_files.seal_and_record_transaction`: a stock writer puts it again, same
+  name, on every retry, so a seal before landing refuses its retry). ONE FUNCTION SEALS AND RECORDS every path's files
+  (`committed_files.seal_and_record`: the warehouse's posture, a refusal mapped to 503, the counters); the function that
+  seals and reads is private to it (`_as_stored`), so no path can skip them. Every path that writes its data files
+  before its commit seals and records them BEFORE the version lands (`_write_blob`, `dataplane._land_rows`, through
+  `committed_files.appended`), and only the transaction file Lance writes inside its commit is sealed after; a landed
+  version whose record lacks a file it names is finished by the commit reconciler (`commit_reconcile.finish_landed`,
+  `catalog.committed_files.finished`; ADR 0242 § The order of effects). A seal the store refuses fails the
   commit 503 before its version lands, unless git declares the warehouse's bucket detection-only
   (`catalog.declared.warehouses[].seal`, `LANCE_SEAL_DETECTION_ONLY_BUCKETS`, `committed_files.detection_only`); the
   warehouse probe's seal check (`vend_probe.SEAL_CHECK`) refuses a store that does not enforce the seal at registration
   unless git declares it so, records `sealed` on the warehouse and exports `catalog.warehouse.seal`
-  (`WarehouseSealUnenforced`, `WarehouseSealLost`). A session policy past what a store counts (`vending.counted_length`:
+  (`WarehouseSealUnenforced`, `WarehouseSealLost`). Only the store's explicit refusal counts as one (403; 501 for a
+  store keeping no tags, `stored_objects.refusal`): any other answer is `inconclusive`, which registers nothing (503),
+  leaves a validated record as it was, and fails a commit's seal 503, never `untaggable`. The catalog probes every
+  warehouse it serves, the estate's own included, at its start and on `catalog.sealProbe.periodSeconds`
+  (`catalog.api.seal_probe`, the timer `catalog-seal-probe`), so the alert's signal moves on its own. A session policy past what a store counts (`vending.counted_length`:
   RustFS re-serialises a one-string `Resource` as a list) is refused 400 `SessionPolicyTooLong` naming each part's
   length. Where the seal is not enforced the overwrite lands and is only DETECTED ([[LH-419]], ADR 0184): every catalog commit records
   each file it adds, right after sealing it, with the ETag and size the store answers, before its version is
   announced (`lakehouse.file_identities`, `_file_identities/<table
-  uuid>/<transaction uuid>.json`, written by `version/create` before it judges a stock commit's files, by
-  `commit_stamped` before its finalize, and by the create door and an unkeyed `/insert`, which Lance commits itself,
-  just after it lands, logging `committed_files_unrecorded` at ERROR and counting `catalog.committed_files.unrecorded`,
-  which warns, when that write fails), and each pass of the table reads every recorded file again against one listing
+  uuid>/<transaction uuid>.json`, written by `version/create` once the commit is authorized and before its finalize, by
+  `commit_stamped` before its finalize, and by a write Lance commits itself (the create door, an `/insert` to a table
+  declaring no key) before the commit for its data files and again once it lands with its transaction file, logging
+  `committed_files_unrecorded` at ERROR and counting `catalog.committed_files.unrecorded`, which warns, when a write
+  after landing fails), and each pass of the table reads every recorded file again against one listing
   of the table's root (`maintenance.services.committed_files`, `lakehouse.stored_objects.listed_identities`: a request per
   thousand objects rather than a HEAD per file), reading only the records written since its last through maintenance's
   own copy (`file_identities.recorded_and_copied`, `_maintenance_files/<table uuid>.json`). The store's event of a write
@@ -1171,8 +1186,9 @@ governing their data. The project-scoped surface is the console's project page, 
   `committed_file_overwritten` and counted `maintenance.files.overwritten`, which pages (`CommittedFileOverwritten`). A
   record is forgotten only once no retained version names its files and the store holds none of them. The platform store keeps object versions to restore it (`rask-rustfs` § 8). A
   requirement of `If-None-Match` is no answer: stock pylance sends it only on final manifests (measured behind a
-  counting proxy), and object_store has no conditional multipart. A one-call write (the create door, an unkeyed
-  `/insert`) seals just after its version lands, a window another holder of the table's write vend can put in. A file named through a base is not recorded, since no vend puts there, and a registered table's files are
+  counting proxy), and object_store has no conditional multipart. A version's transaction file is the one file sealed
+  after its version lands, a window another holder of the table's write vend can put in, which changes no reader (Lance
+  reads the transaction inline). A file named through a base is not recorded, since no vend puts there, and a registered table's files are
   recorded only from its first commit through the catalog.
   **Each vend is a session of its own** ([[XC-083]], ADR 0170): the catalog exchanges its OWN projected ServiceAccount
   token through STS `AssumeRoleWithWebIdentity` with that session policy, named for the verified caller

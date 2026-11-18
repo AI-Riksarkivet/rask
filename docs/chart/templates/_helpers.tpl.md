@@ -717,7 +717,7 @@ component's statements are a define of their own, `lance.objectStorePolicy.<comp
 with none fails the render as an undefined template.
 
 - `catalog`: the whole data plane it governs, buckets included, since every vend is a session policy narrowed from it,
-  and `PutObjectTagging`, with which it seals each file a commit adds (`rask-sealed`, `lakehouse.file_identities.as_stored`,
+  and `PutObjectTagging`, with which it seals each file a commit adds (`rask-sealed`, `catalog.services.committed_files.seal_and_record`,
   ADR 0242). Its Deny `NeverOverASealedFile` refuses a put over a sealed key, to the catalog's own IO and to every session
   vended from it, which a session policy can only narrow: measured on RustFS 1.0.3 (2026-11-17), a put, a multipart
   upload's create, part and complete, and a copy onto a sealed key answer 403 AccessDenied. It is the seal's only Deny:

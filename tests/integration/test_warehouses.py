@@ -147,6 +147,14 @@ def test_an_empty_project_is_retired_with_no_grant_to_revoke(client: TestClient,
     assert client.get("/management/v1/projects/acme").status_code == 404
 
 
+def _answered(status: int, code: str, operation: str) -> ClientError:
+    """The error boto3 raises for a store's ``status`` answer with S3 error ``code``."""
+    return ClientError(
+        {"Error": {"Code": code}, "ResponseMetadata": {"RequestId": "", "HostId": "", "HTTPStatusCode": status, "HTTPHeaders": {}, "RetryAttempts": 0}},
+        operation,
+    )
+
+
 class _VendingStore:
     """An object store reached with vended credentials, which honours or ignores what Lance relies on.
 
@@ -154,56 +162,54 @@ class _VendingStore:
     like from outside; ignoring `If-None-Match` lets two writers both commit one Lance version. Its role holds no grant on
     any KMS key, so it refuses every write encrypting with one. `seal` is what it does with the catalog's seal (ADR 0242):
     `enforced` refuses a put over a tagged key, `unenforced` keeps the tag and refuses nothing, `untaggable` keeps no tags.
-    It is both the vended writer's client and the catalog's own, so the probe's seal lands where its writer put.
+    It is both the vended writer's client and the catalog's own, so the probe's seal lands where its writer put. Each
+    refusal is the store's own answer (403 AccessDenied, 412 PreconditionFailed). `over_sealed` and `on_seal` are another
+    answer (a throttling, a 5xx) the store gives instead of its verdict, to a put over a sealed key or to the seal.
     """
 
-    def __init__(self, *, honours_scope: bool, honours_conditional_put: bool, seal: str = "enforced") -> None:
+    def __init__(
+        self, *, honours_scope: bool, honours_conditional_put: bool, seal: str = "enforced", over_sealed: int | None = None, on_seal: int | None = None
+    ) -> None:
         self.honours_scope = honours_scope
         self.honours_conditional_put = honours_conditional_put
         self.seal = seal
+        self.over_sealed = over_sealed
+        self.on_seal = on_seal
         self.scope = ""
         self.keys: dict[str, bytes] = {}
         self.sealed: set[str] = set()
 
-    def _check(self, key: str) -> None:
+    def _check(self, key: str, operation: str) -> None:
         if self.honours_scope and not key.startswith(self.scope):
-            raise PermissionError(f"AccessDenied: {key} is outside {self.scope}")
+            raise _answered(403, "AccessDenied", operation)
+        if key in self.sealed and self.over_sealed is not None:
+            raise _answered(self.over_sealed, "SlowDown", operation)
         if self.seal == "enforced" and key in self.sealed:
-            raise PermissionError(f"AccessDenied: {key} is sealed")
+            raise _answered(403, "AccessDenied", operation)
 
     def put_object(  # noqa: N803 — boto3's casing
         self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None, SSEKMSKeyId: str | None = None, **_sse: object
     ) -> dict[str, Any]:
-        self._check(Key)
+        self._check(Key, "PutObject")
         if SSEKMSKeyId is not None:
-            raise PermissionError(f"AccessDenied: kms:GenerateDataKey on {SSEKMSKeyId} is not granted")
+            raise _answered(403, "AccessDenied", "PutObject")
         if IfNoneMatch is not None and self.honours_conditional_put and Key in self.keys:
-            raise FileExistsError("PreconditionFailed")
+            raise _answered(412, "PreconditionFailed", "PutObject")
         self.keys[Key] = Body
         return {}
 
     def put_object_tagging(self, *, Bucket: str, Key: str, Tagging: dict[str, Any]) -> dict[str, Any]:  # noqa: N803
+        if self.on_seal is not None:
+            raise _answered(self.on_seal, "TooManyRequests", "PutObjectTagging")
         if self.seal == "untaggable":
-            raise ClientError(
-                {
-                    "Error": {"Code": "NotImplemented"},
-                    "ResponseMetadata": {"RequestId": "", "HostId": "", "HTTPStatusCode": 501, "HTTPHeaders": {}, "RetryAttempts": 0},
-                },
-                "PutObjectTagging",
-            )
+            raise _answered(501, "NotImplemented", "PutObjectTagging")
         if Key not in self.keys:
-            raise ClientError(
-                {
-                    "Error": {"Code": "NoSuchKey"},
-                    "ResponseMetadata": {"RequestId": "", "HostId": "", "HTTPStatusCode": 404, "HTTPHeaders": {}, "RetryAttempts": 0},
-                },
-                "PutObjectTagging",
-            )
+            raise _answered(404, "NoSuchKey", "PutObjectTagging")
         self.sealed.add(Key)
         return {}
 
     def create_multipart_upload(self, *, Bucket: str, Key: str, **_sse: object) -> dict[str, Any]:  # noqa: N803
-        self._check(Key)
+        self._check(Key, "CreateMultipartUpload")
         return {"UploadId": "u"}
 
     def abort_multipart_upload(self, *, Bucket: str, Key: str, UploadId: str) -> dict[str, Any]:  # noqa: N803
@@ -214,12 +220,12 @@ class _VendingStore:
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
         if self.honours_scope and not Key.startswith(self.scope):
-            raise PermissionError(f"AccessDenied: {Key} is outside {self.scope}")
+            raise _answered(403, "AccessDenied", "GetObject")
         return {"Body": self.keys[Key]}
 
     def delete_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
         if self.honours_scope and not Key.startswith(self.scope):
-            raise PermissionError(f"AccessDenied: {Key} is outside {self.scope}")
+            raise _answered(403, "AccessDenied", "DeleteObject")
         self.keys.pop(Key, None)
         return {}
 
@@ -250,16 +256,18 @@ _KMS_KEY = "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234
 
 
 @pytest.mark.parametrize(
-    ("honours_scope", "honours_conditional_put", "unreachable", "encrypts_with", "seal", "detection_only", "status", "code", "named"),
+    ("honours_scope", "honours_conditional_put", "unreachable", "encrypts_with", "seal", "answers", "detection_only", "status", "code", "named"),
     [
-        (False, True, False, None, "enforced", "", 400, 13, "write_outside_refused"),
-        (True, False, False, None, "enforced", "", 400, 13, "conditional_put_refused"),
-        (True, True, True, None, "enforced", "", 503, 17, None),
-        (True, True, False, None, "enforced", "", 200, None, None),
-        (True, True, False, _KMS_KEY, "enforced", "", 400, 13, "encrypted_write"),
-        (True, True, False, None, "unenforced", "", 400, 13, "sealed: unenforced"),
-        (True, True, False, None, "untaggable", "", 400, 13, "sealed: untaggable"),
-        (True, True, False, None, "unenforced", "wh-p", 200, None, None),
+        (False, True, False, None, "enforced", {}, "", 400, 13, "write_outside_refused"),
+        (True, False, False, None, "enforced", {}, "", 400, 13, "conditional_put_refused"),
+        (True, True, True, None, "enforced", {}, "", 503, 17, None),
+        (True, True, False, None, "enforced", {}, "", 200, None, None),
+        (True, True, False, _KMS_KEY, "enforced", {}, "", 400, 13, "encrypted_write"),
+        (True, True, False, None, "unenforced", {}, "", 400, 13, "sealed: unenforced"),
+        (True, True, False, None, "untaggable", {}, "", 400, 13, "sealed: untaggable"),
+        (True, True, False, None, "unenforced", {}, "wh-p", 200, None, None),
+        (True, True, False, None, "unenforced", {"over_sealed": 503}, "", 503, 17, None),
+        (True, True, False, None, "enforced", {"on_seal": 429}, "", 503, 17, None),
     ],
     ids=[
         "store-ignores-scope",
@@ -270,6 +278,8 @@ _KMS_KEY = "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234
         "store-takes-a-put-over-a-sealed-file",
         "store-keeps-no-tags",
         "git-declares-the-warehouse-detection-only",
+        "store-answers-a-put-over-a-sealed-file-with-a-5xx",
+        "store-throttles-the-seal",
     ],
 )
 def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
@@ -282,6 +292,7 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     unreachable: bool,
     encrypts_with: str | None,
     seal: str,
+    answers: dict[str, int],
     detection_only: str,
     status: int,
     code: int | None,
@@ -295,8 +306,11 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     holding no grant on the KMS key, broke a guarantee every writer needs ([[LH-262]]). A store's refusal names its check.
 
     The seal fails closed (ADR 0242): a store that takes a vended write credential's put over a sealed file, or keeps no
-    tags, is refused unless git declares the warehouse detection-only, which registers it with what was measured."""
-    vending = _VendingStore(honours_scope=honours_scope, honours_conditional_put=honours_conditional_put, seal=seal)
+    tags, is refused unless git declares the warehouse detection-only, which registers it with what was measured. Only the
+    store's explicit refusal (403) is one (ADR 0242 § Found by review, second round): a 5xx to the put over the sealed file,
+    or a throttling of the seal, measured nothing, and the create answers 503 with nothing registered, where it registered
+    a store that never refused the put as `enforced`, and refused a throttled one as `untaggable`."""
+    vending = _VendingStore(honours_scope=honours_scope, honours_conditional_put=honours_conditional_put, seal=seal, **answers)
     monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending)
     monkeypatch.setattr(stored_objects, "object_client", lambda *a, **k: vending)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store, detection_only=detection_only)
@@ -623,3 +637,65 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     surviving = wh_svc.get_warehouse(root, StorageOptions(), "wh-conv")
     assert surviving is not None, "the loser's rebuild must not have DELETED the record it lost the race for"
     assert surviving["status"] == "deactivated"
+
+
+def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_measured(
+    client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0242 § Found by review, second round: the catalog's own seal probe (`catalog.api.seal_probe`, at its start and
+    on `catalog.sealProbe.periodSeconds`) measures every warehouse it serves, the estate's own included, which no
+    registration ever probed, and records and exports each, so `WarehouseSealLost` reads a signal that moves with no
+    hand-run validate: the start measures them whatever became of the grant backfill before it, and a store that stops
+    enforcing the seal is recorded `unenforced` on the next tick. A probe that
+    learned nothing (the store answering a put over the sealed file with a 503) leaves each warehouse as last measured, at
+    the tick and at validate, which reports the check inconclusive; before, validate recorded whatever the probe answered,
+    and a store that refused nothing read as one that refused everything."""
+    import asyncio
+
+    import catalog.main as boot
+    from catalog.api import seal_probe
+    from catalog.services import warehouse_grant_backfill
+
+    settings = _settings(tmp_path, store).model_copy(update={"seal_probe_period_seconds": 3600.0})
+    vending = _VendingStore(honours_scope=True, honours_conditional_put=True, seal="enforced")
+    monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending)
+    monkeypatch.setattr(stored_objects, "object_client", lambda *a, **k: vending)
+    client.app.dependency_overrides[get_settings] = lambda: settings
+    vendor = _ScopedVendor(vending, unreachable=False, encrypts_with=None)
+    client.app.dependency_overrides[get_vendor] = lambda: vendor
+    monkeypatch.setattr(client.app.state, "vendor", vendor, raising=False)
+    _mk_projects(client, "acme")
+    assert client.post("/management/v1/warehouses", json={"id": "wh-p", "project": "acme"}).status_code == 200
+    control = f"file://{tmp_path}"
+
+    def measured() -> dict[str, str | None]:
+        exported = {
+            str((point.attributes or {})["lance.warehouse"]): str((point.attributes or {})["lance.seal"]) for point in seal_posture._observe(CallbackOptions())
+        }
+        return {
+            "estate": exported.get(settings.estate_warehouse),
+            "wh-p": exported.get("wh-p"),
+            "estate-recorded": wh_svc.estate_sealed(control, StorageOptions(), settings.estate_warehouse),
+            "wh-p-recorded": (wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {}).get("sealed"),
+        }
+
+    async def unanswered(_settings: Any) -> None:
+        raise OSError("the store did not answer the grant backfill")
+
+    monkeypatch.setattr(warehouse_grant_backfill, "backfill", unanswered)
+    monkeypatch.setattr(client.app.state, "settings", settings, raising=False)
+    asyncio.run(boot.converge_at_boot(client.app))
+    assert measured() == {"estate": "enforced", "wh-p": "enforced", "estate-recorded": "enforced", "wh-p-recorded": "enforced"}
+    vending.seal = "unenforced"
+    ticks = [asyncio.run(seal_probe.probe_all(client.app, settings))]
+    assert measured() == {"estate": "unenforced", "wh-p": "unenforced", "estate-recorded": "unenforced", "wh-p-recorded": "unenforced"}
+    vending.seal, vending.over_sealed = "enforced", 503
+    ticks.append(asyncio.run(seal_probe.probe_all(client.app, settings)))
+    validated = client.post("/management/v1/warehouses/wh-p/validate")
+
+    assert [(tick.measured, tick.unprobed) for tick in ticks] == [(2, 0), (0, 2)]
+    assert measured() == {"estate": "unenforced", "wh-p": "unenforced", "estate-recorded": "unenforced", "wh-p-recorded": "unenforced"}
+    assert validated.status_code == 200, validated.text
+    report = validated.json()
+    assert (report["outcome"], report.get("sealed")) == ("inconclusive", None), report
+    assert [check["outcome"] for check in report["checks"] if check["name"] == "overwrite_of_a_sealed_file_refused"] == ["inconclusive"], report

@@ -277,7 +277,7 @@ async def insert_into_table(
     )
     if converge.replay is not None:
         return InsertIntoTableResponse.model_validate(converge.replay.body)
-    if converge.held is not None and converge.held.taken_over_since is not None:
+    if converge.held is not None and converge.held.written_from is not None:
         landed = await run_in_threadpool(lambda: dataplane.landed_under_key(table.open(so, branch=branch), converge.held))
         if landed is not None:
             found = InsertIntoTableResponse(version=landed[0], num_inserted_rows=dataplane.inserted_rows(landed[1]))

@@ -4,21 +4,21 @@ overwrite in place a store let through is found later ([[LH-419]], ADR 0242).
 A writer's vend may put a new object under the paths a commit needs (``table_layout.WRITER_PUT_GLOBS``). Lance requires a
 published payload to stay immutable while a protected snapshot references it (``lance_docs/lance/format/table/blob.md:254-257``)
 and checks none: measured on pylance 13.0.0, a same-size overwrite of a data file is served silently. Every catalog commit
-therefore SEALS, before its version lands, each file it adds under the table's own root (the object tag
-``table_layout.SEALED_TAG``, on which the catalog identity's own store policy refuses every session of it a put), refuses
-a commit naming a file the store does not hold, and records each file with the ETag and size the store answers; each
-pass of the table reads every recorded file again (``maintenance.services.committed_files``), which finds a file replaced
-on a store that does not enforce the seal, or before it. A file a commit adds through a base is neither sealed nor
-recorded: no vend may put there.
+therefore SEALS each file it adds under the table's own root (the object tag ``table_layout.SEALED_TAG``, on which the
+catalog identity's own store policy refuses every session of it a put), refuses a commit naming a file the store does not
+hold, and records each file with the ETag and size the store answers (the catalog's ``committed_files.seal_and_record``,
+the one call that seals and records); each pass of the table reads every recorded file again
+(``maintenance.services.committed_files``), which finds a file replaced on a store that does not enforce the seal. A file
+a commit adds through a base is neither sealed nor recorded: no vend may put there.
 
 ONE RECORD PER COMMIT (``_file_identities/<table uuid>/<transaction uuid>.json``), keyed by the table's uuid so a
 rename moves none and a table created later under the name inherits none (ADR 0173 §8), and by the commit's transaction
 uuid, which a commit that loses its race shares with no other. Each path is relative to the table's root, so a branch's
-files are ``tree/<branch>/...``. What is recorded is sealed and read before a stock commit's files are judged, so the
-file judged is the file committed and no put replaces it after. A file of a write Lance commits in one call (the create
-door's ``write_dataset``, an unkeyed ``/insert``) is sealed just after its version lands: between the landing and the
-seal, another holder of the table's write vend that listed the file can put over it, a window neither the seal nor this
-record closes.
+files are ``tree/<branch>/...``. Every data, deletion and index file is sealed and recorded before its version lands, so
+the file judged is the file committed and no put replaces it after; a version's transaction file, which Lance writes
+inside its own commit and a stock writer puts again on each attempt, is sealed and recorded once the version landed, the
+record written again with it, and a landed version whose record lacks a file it names is finished by the catalog's commit
+reconciler (ADR 0242 § The order of effects).
 
 MAINTENANCE KEEPS A COPY of the records it has read (``_maintenance_files/<table uuid>.json``, under its own identity), so
 a pass reads only the records written since its last ([[LH-494]]): a listing of the records and the copy, then a read
@@ -108,34 +108,6 @@ class FilesNotHeldError(Exception):
         super().__init__(f"the store holds no {', '.join(self.paths[:5])}{' …' if len(self.paths) > 5 else ''}")
 
 
-def as_stored(
-    table_root: str, storage_options: StorageOptions, transaction_uuid: str, paths: Sequence[str], *, where_granted: bool = False, unsealed: Sequence[str] = ()
-) -> CommittedFiles:
-    """The files at ``paths`` under ``table_root`` (the store's own spelling of it), each sealed and then read as the
-    store holds it (ADR 0242).
-
-    THE SEAL COMES FIRST, so the bytes read are the bytes no put can replace: from the seal on, the store refuses every
-    session of the catalog's identity a put over the file (:func:`stored_objects.seal`), and the identity recorded is the
-    one the store keeps. EVERY PATH MUST BE HELD: a commit naming a file the store does not hold would leave a key a writer
-    could put afterwards, untagged and unrecorded, under a committed version. ``where_granted`` is
-    :func:`stored_objects.seal`'s. ``unsealed`` are paths among ``paths`` that are required and recorded and left for the
-    caller to seal once its version lands: a stock writer puts its transaction file again, under the same name, on each
-    attempt of one commit (measured on pylance 13.0.0), so sealing it before the version lands refuses the writer's own
-    retry.
-
-    Raises:
-        FilesNotHeldError: The store holds no object at one of ``paths``.
-        stored_objects.SealRefusedError: The store refused a seal, and ``where_granted`` is off.
-        OSError: The store could not be reached for a seal, or refused or could not be reached for a read.
-    """
-    absent = set(stored_objects.seal(table_root, storage_options, [path for path in paths if path not in unsealed], where_granted=where_granted))
-    found = stored_objects.identities(table_root, storage_options, paths)
-    absent |= {path for path in paths if path not in found}
-    if absent:
-        raise FilesNotHeldError(sorted(absent))
-    return CommittedFiles(transaction_uuid=transaction_uuid, files=[CommittedFile(path=path, identity=found[path]) for path in paths])
-
-
 def as_found(table_root: str, storage_options: StorageOptions, transaction_uuid: str, paths: Sequence[str]) -> CommittedFiles:
     """The files at ``paths`` the store holds, read as it holds them and sealed nowhere: what an attempt that never lands
     wrote, read to delete it ([[LH-564]]).
@@ -151,6 +123,16 @@ def record(control_root: str, storage_options: StorageOptions, table_uuid: str, 
     """Record what one commit of the table ``table_uuid`` added; nothing for a commit that added no file."""
     if committed.files:
         put_record(control_root, storage_options, _key(table_uuid, committed.transaction_uuid), committed.model_dump())
+
+
+def recorded(control_root: str, storage_options: StorageOptions, table_uuid: str, transaction_uuid: str) -> CommittedFiles | None:
+    """What the commit ``transaction_uuid`` of the table ``table_uuid`` recorded it added, ``None`` for none.
+
+    Raises:
+        ValueError: The record is not one a commit wrote.
+        OSError: The store refused, or could not be reached for, the read.
+    """
+    return _read_record(control_root, storage_options, _key(table_uuid, transaction_uuid))
 
 
 def recorded_and_copied(control_root: str, storage_options: StorageOptions, table_uuid: str) -> list[CommittedFiles]:

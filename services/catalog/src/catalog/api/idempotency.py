@@ -175,7 +175,7 @@ async def begin(registry_root: str, storage_options: StorageOptions, scope: str,
         key=key,
         attempt=attempt,
         target=binding.target,
-        taken_over_since=claimed.since if isinstance(claimed, idempotency.TakenOver) else None,
+        written_from=claimed.written_from if isinstance(claimed, idempotency.TakenOver) else None,
     )
     return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, attempt=attempt, held=held)
 

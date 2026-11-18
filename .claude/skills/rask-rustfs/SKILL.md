@@ -132,7 +132,8 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   condition key, `rustfs@1.0.3:crates/policy/src/policy/function/key_name.rs:168-246`; measured 2026-11-08 on a canned and
   a session policy, and 2026-11-17 as `AssumeRole` 400 `InvalidRequest`), and stock pylance sends the header only on a
   final manifest. A write credential is refused a put over a committed file by the SEAL instead (ADR 0242): the catalog
-  tags each file a commit adds `rask-sealed=true` before the version lands, and the catalog's canned policy (and no
+  tags each data, deletion and index file a commit adds `rask-sealed=true` before the version lands, and its transaction
+  file once it landed (the commit reconciler finishes one a crash left), and the catalog's canned policy (and no
   session policy: every vend is a session of that identity and inherits its Deny) denies `s3:PutObject` on a key holding
   the tag; no vended tier may tag or untag. A session policy is counted as RustFS counts it: it re-serialises a
   one-string `Resource` as a one-element list before its 2,048 limit (measured 2026-11-17: a list `Resource` taken at
@@ -314,10 +315,14 @@ to the catalog's identity, and an explicit Deny in that identity's own policy of
 `s3:ExistingObjectTag/rask-sealed` (`Null` false) evaluated for every session of it on every request that writes a key
 (PutObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, a CopyObject's destination), so the seal refuses
 a put over a committed file (ADR 0242 § What a platform S3 store must support; RustFS 1.0.3 does, measured). The
-warehouse probe's seal check measures exactly this with a real vended write credential at registration and on
-validate, records `sealed: enforced | unenforced | untaggable` on the warehouse, and refuses a store that is not
+warehouse probe's seal check measures exactly this with a real vended write credential at registration, on
+validate, at the catalog's start and every `catalog.sealProbe.periodSeconds` (the estate's own warehouse included),
+records `sealed: enforced | unenforced | untaggable` on the warehouse, and refuses a store that is not
 `enforced` unless git declares the warehouse `seal: detection_only`, under which the committed-file pass is the only
-guard and `WarehouseSealUnenforced` warns for as long as it runs so. Whether AWS S3 evaluates the key on PutObject is
+guard and `WarehouseSealUnenforced` warns for as long as it runs so. The store must answer a policy's Deny with 403
+(`AccessDenied`, as RustFS 1.0.3 does, measured) and a `PutObjectTagging` it cannot keep with 501: the catalog reads every
+other answer (a throttling, a timeout, a 5xx, after the client's three adaptive attempts) as no verdict, `inconclusive`,
+which records nothing and fails a commit's seal 503, so a slow store is never recorded as enforcing or untaggable. Whether AWS S3 evaluates the key on PutObject is
 unmeasured: its service authorization reference does not list it among PutObject's condition keys (read 2026-11-17), so
 on AWS the probe decides. Nothing in rask checks that a store keeps
 versions: the dev fixture's buckets are unversioned, so a tampered file there is found and not restorable.

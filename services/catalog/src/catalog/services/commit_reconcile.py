@@ -31,6 +31,7 @@ import json
 import logging
 from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Any, Final
 
 import lance
@@ -40,8 +41,8 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.core import lineage_emit, run_context
 from catalog.core.config import Settings
-from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
-from lakehouse import auto_cleanup, commit_records, stored_objects
+from catalog.services import committed_files, dataplane, maintenance_commits, managed_versions, provenance_namespace
+from lakehouse import auto_cleanup, commit_records, file_identities, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.features import flags_from_open_error
 from lakehouse.governed import fga
@@ -244,6 +245,7 @@ def scan_ref(
     record_of: Callable[[str, int, str], commit_records.CommitAuthor | None],
     authenticates: bool,
     unannounced: Callable[[str], bool],
+    finish: Callable[[int, lance.LanceDataset], object] = lambda _version, _handle: None,
 ) -> RefScan:
     """Every version of ``branch`` after ``mark``, older than ``grace`` and younger than ``horizon``, that the feed
     (``announced``) lacks.
@@ -268,6 +270,10 @@ def scan_ref(
     A version of an operation a door stamps and the feed announces nothing for (:data:`_AUTHORED_UNANNOUNCED`, a floor
     raise) is confirmed once its author is recorded, and counted otherwise, never announced.
 
+    ``finish`` is handed every version the pass reads, older than the grace, whoever made it: the catalog seals and records
+    there what the version names and no commit sealed and recorded (:func:`finish_landed`, ADR 0242 § The order of
+    effects), and it raises nothing.
+
     Raises:
         ReconcileReadError: The ref's ``_versions/`` could not be listed, or a retained version could not be read or is
             not in that listing; the mark stops before it.
@@ -288,6 +294,7 @@ def scan_ref(
             raise ReconcileReadError(f"version {version} of {location} on {branch or 'main'} has no manifest the store lists")
         if when >= before:
             break
+        finish(version, handle)
         on_feed = when < after or (key, version) in announced
         try:
             commit = _commit_at(handle, version, branch=branch, branch_identifier=branch_identifier)
@@ -510,6 +517,7 @@ def reconcile_table(
                     ),
                     authenticates=settings.oidc_enabled,
                     unannounced=lambda operation: provenance_namespace.is_unannounced(parent, operation, settings),
+                    finish=partial(finish_landed, location, so, control, control_so, table_uuid, branch),
                 )
             )
         except ReconcileReadError as exc:
@@ -523,6 +531,42 @@ def reconcile_table(
     if any(marks.refs.get(key) != value for key, value in kept.items()):
         commit_records.write_marks(control, control_so, table_uuid, commit_records.CommitMarks(refs={**marks.refs, **kept}))
     return TableReconcile(scans=tuple(scans), unreadable=tuple(unreadable))
+
+
+def finish_landed(
+    location: str, so: StorageOptions, control: str, control_so: StorageOptions, table_uuid: str, branch: str | None, version: int, handle: lance.LanceDataset
+) -> bool:
+    """Seal and record what ``version`` of ``branch`` names that its commit's record lacks (:func:`committed_files.finish_landed`):
+    the transaction file of a commit whose writer died between its landing and its seal, and every file of a version made
+    with no seal of its own. Whether it finished anything; a version that names no transaction keys no record and is
+    left, as the pass counts it.
+
+    The version before it is the one it was committed over: none for main's first version and for a branch's first, a
+    ``Clone`` whose data files are the parent's, named through a base.
+    """
+    try:
+        transaction = handle.read_transaction(version)
+    except (OSError, ValueError) as exc:
+        log.warning("committed_files_unfinished", extra={"location": location, "branch": branch, "version": version, "error": str(exc)[:300]})
+        return False
+    if transaction is None:
+        return False
+    first = (branch is None and version == 1) or type(transaction.operation).__name__ in _UNANNOUNCED
+    try:
+        before = None if first else handle.checkout_version(version - 1 if branch is None else (branch, version - 1))
+    except (OSError, ValueError) as exc:
+        log.warning("committed_files_unfinished", extra={"location": location, "branch": branch, "version": version, "error": str(exc)[:300]})
+        return False
+    return committed_files.finish_landed(
+        partial(file_identities.record, control, control_so, table_uuid),
+        partial(file_identities.recorded, control, control_so, table_uuid),
+        before,
+        handle,
+        table_location=location,
+        branch=branch,
+        so=so,
+        transaction_uuid=transaction.uuid,
+    )
 
 
 def _forgotten_up_to(scan: RefScan, control: str, control_so: StorageOptions, table_uuid: str) -> int | None:

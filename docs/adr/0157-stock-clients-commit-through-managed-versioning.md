@@ -52,6 +52,11 @@ live chart); the catalog's registry and FGA are the real project store, as in La
   (measured 403 on RustFS 1.0.3 for a put, a multipart upload and a copy onto one, 2026-11-17). A commit naming a file
   the store does not hold is refused 400; a staged manifest must carry its transaction inline, read once from the
   catalog's copy, and the writer's `.txn` file is sealed once the version lands (its retries put it again).
+  **The supported client** (ADR 0242 § The supported client): Lance's own writer, which inlines a transaction of at most
+  `MAX_INLINE_TRANSACTION_BYTES`, 20 MiB (the Lance 13 and 14 sources; measured on pylance 13.0.0, 2026-11-18: 20,967,424
+  bytes of transaction properties inlined, 20,975,616 not). A commit whose transaction is larger (about 100,000 fragments
+  touched by one delete, or 330,000 appended at once) is refused 400 InvalidInput naming its size, the limit and to
+  commit in smaller steps; the threshold is pinned by a test on the installed pylance.
   A store the warehouse probe finds not enforcing the seal registers only where git declares it detection-only, and
   there ADR 0184's pass finds an overwrite after the fact.
 - **A declaration is its declarer's** (ADR 0227 §9, owner 2026-11-17). `DeclareTable` takes the table's location claim

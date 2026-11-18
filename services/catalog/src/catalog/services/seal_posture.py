@@ -6,19 +6,23 @@ the warehouse (``lance.warehouse``), what was measured (``lance.seal``: ``enforc
 and whether git requires it (``lance.seal_required``: ``false`` for a warehouse declared ``detection_only``). The
 alert ``WarehouseSealUnenforced`` (``deploy/alerting/rules.yml``) fires while any series is not ``enforced``.
 
-Read from the registry at the catalog's start (:func:`load`) and updated by every registration and validate in this
-process (:func:`observe`), so a restart keeps the series and a replica that ran no probe still reports every warehouse.
+Read from the registry at the catalog's start (:func:`load`), the estate's own warehouse from the record the catalog's
+seal probe keeps for it, updated by every registration, validate and seal probe in this process (:func:`observe`), and
+read again by a replica whose timer found the probe's window another replica's (:func:`load_in_background`), so a restart
+keeps the series and every replica reports what the last probe measured, which no stale series of its own outlives.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Final
 
 from opentelemetry import metrics
 
 from catalog.core.config import Settings
 from catalog.services import warehouses
+from lakehouse.storage import split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -82,3 +86,16 @@ def load(settings: Settings) -> None:
     for record in records:
         if (sealed := record.get(warehouses.SEALED)) is not None:
             _postures[record["id"]] = (sealed, record.get("bucket") not in detection_only)
+    try:
+        estate = warehouses.estate_sealed(settings.registry_root, settings.storage_options(), settings.estate_warehouse)
+    except (OSError, ValueError) as exc:
+        log.warning("seal_posture_unread", extra={"error": str(exc)[:300]})
+        return
+    if estate is not None:
+        _postures[settings.estate_warehouse] = (estate, split_s3_uri(settings.root.rstrip("/"))[0] not in detection_only)
+
+
+def load_in_background(settings: Settings) -> None:
+    """:func:`load` on a thread of its own: what a replica runs on a seal probe's window another replica ran, from the
+    timer's loop, which must not wait on the store."""
+    threading.Thread(target=load, args=(settings,), name="seal-posture-load", daemon=True).start()

@@ -96,7 +96,8 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
 async def converge_at_boot(app: FastAPI) -> None:
     """Converge every project's and warehouse's incarnation and end what a dead request or tenant left
     (``incarnations.converge``, ADR 0241), then run the warehouse-grant backfill, which writes under them, reporting
-    rather than raising. See its call site for why."""
+    rather than raising, then probe every warehouse's seal where the chart gives the probe a period
+    (``catalog.api.seal_probe``). See its call site for why."""
     from catalog.services import incarnations
     from catalog.services.warehouse_grant_backfill import backfill
 
@@ -113,9 +114,21 @@ async def converge_at_boot(app: FastAPI) -> None:
         raise
     except Exception as exc:
         log.warning("warehouse_grant_backfill_error", extra={"error": str(exc)})
-        return
-    if seen:
-        log.info("warehouse_grant_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
+    else:
+        if seen:
+            log.info("warehouse_grant_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
+    # Every warehouse's seal measured at the start (ADR 0242), off the path readiness waits on and whatever became of the
+    # backfill before it: a store that does not answer leaves each record as it was, and the timer probes again on its
+    # period.
+    if settings.seal_probe_period_seconds:
+        from catalog.api import seal_probe
+
+        try:
+            await seal_probe.probe_all(app, settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the timer probes again; a start must not fail over a store hiccup
+            log.warning("warehouse_seal_unprobed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 def bound_lance_scans(settings: Settings) -> None:

@@ -383,6 +383,10 @@ class CatalogVendingSettings(BaseSettings):
     #: grants it and go on where it refuses. Every other warehouse requires the seal: registration refuses a store that
     #: does not enforce it, and a commit whose seal the store refuses fails before its version lands.
     seal_detection_only: str = Field(default="", alias="LANCE_SEAL_DETECTION_ONLY_BUCKETS")
+    #: Seconds between two ticks of the timer that probes the seal of every warehouse the catalog serves, the estate's own
+    #: included (`catalog/api/seal_probe.py`, ADR 0242); the catalog probes each at its start as well. 0 = no timer and no
+    #: probe at the start, so a store that stops enforcing the seal is found only by a validate.
+    seal_probe_period_seconds: float = Field(default=0, ge=0, alias="LANCE_SEAL_PROBE_PERIOD_SECONDS")
 
     @property
     def seal_detection_only_buckets(self) -> frozenset[str]:

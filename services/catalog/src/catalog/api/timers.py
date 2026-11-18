@@ -14,9 +14,10 @@ from functools import partial
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api import commit_reconcile, control_relay, declaration_converge, erasure_release, manifest_reclaim
+from catalog.api import commit_reconcile, control_relay, declaration_converge, erasure_release, manifest_reclaim, seal_probe
 from catalog.api.ticks import Tick
 from catalog.core.config import Settings
+from catalog.services import committed_files, seal_posture
 from lakehouse import outbox_metrics
 from lakehouse.supervision import Supervisor
 from lakehouse.timers import Timer
@@ -54,6 +55,10 @@ def catalog_timers(settings: Settings) -> dict[str, CatalogTimer]:
         "catalog-commit-reconcile": CatalogTimer(period=settings.commit_reconcile_period_seconds, tick=commit_reconcile.tick),
         "catalog-manifest-reclaim": CatalogTimer(period=settings.manifest_reclaim_period_seconds, tick=manifest_reclaim.tick),
         "catalog-declaration-converge": CatalogTimer(period=settings.declaration_converge_period_seconds, tick=declaration_converge.tick),
+        # The probe's verdict is kept on the registry, so a replica another ran the window of reads it from there.
+        "catalog-seal-probe": CatalogTimer(
+            period=settings.seal_probe_period_seconds, tick=seal_probe.tick, elsewhere=partial(seal_posture.load_in_background, settings)
+        ),
     }
 
 
@@ -65,6 +70,8 @@ def start_timers(app: FastAPI, settings: Settings, loops: Supervisor) -> None:
     """
     outbox_metrics.create_series("control")
     commit_reconcile.create_series()
+    committed_files.create_series()
+    seal_probe.create_series()
     manifest_reclaim.create_series()
     timers: dict[str, Timer] = {}
     for name, timer in catalog_timers(settings).items():

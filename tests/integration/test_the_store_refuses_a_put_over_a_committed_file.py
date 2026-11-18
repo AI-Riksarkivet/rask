@@ -298,6 +298,42 @@ def test_the_transaction_judged_is_the_one_committed(race_catalog: RaceCatalog, 
     assert _refused(lambda: writer.put_object(Bucket=bucket, Key=f"{root}/_transactions/{staged['txn']}", Body=b"corrupt")) == 403
 
 
+#: Lance's ``MAX_INLINE_TRANSACTION_BYTES``, and how far either side of it the two commits below hold.
+_INLINE_LIMIT = 20 * 1024 * 1024
+_MARGIN = 4096
+
+
+@pytest.mark.parametrize("past", [False, True], ids=["inside-what-lance-inlines", "past-what-lance-inlines"])
+def test_a_stock_commit_past_what_lance_inlines_is_refused_naming_its_size(race_catalog: RaceCatalog, past: bool) -> None:
+    """A stock commit whose transaction Lance does not inline is refused 400 (InvalidInput) by ``version/create``, which
+    judges a commit only on the transaction its manifest carries (ADR 0242 B2): a stated limit of the stock client's path,
+    which the refusal names (the transaction's size, the 20 MiB Lance inlines, and to commit in smaller steps). Both sides
+    of the limit are measured on the installed pylance, so a Lance that moves its threshold fails here: an append whose
+    transaction properties hold 4 KiB less than 20 MiB stages its transaction inline and lands; one holding 4 KiB more
+    stages a manifest with no inline section and is refused, the table left at its version. Before, the refusal named
+    neither the size nor the limit."""
+    table_id = ["lance_catalog", f"inline{int(past)}", "t"]
+    assert httpx.post(f"{race_catalog.url}/v1/namespace/{'$'.join(table_id[:-1])}/create", json={}, timeout=60).status_code == 200
+    stock = _stock(race_catalog)
+    lance.write_dataset(_rows(range(10), 16), namespace_client=stock, table_id=table_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    hooked = _HookedCommits(stock, lambda _request: None)
+    padding: dict[str, str] = {"padding": "x" * (_INLINE_LIMIT + (_MARGIN if past else -_MARGIN))}
+    append = partial(lance.write_dataset, _rows(range(10, 20), 16), namespace_client=hooked, table_id=table_id, mode="append", transaction_properties=padding)
+
+    if past:
+        with pytest.raises(OSError, match="unknown"):
+            append()
+        assert len(hooked.refused) == 1, hooked.refused
+        refusal = hooked.refused[0]
+        assert "Invalid input" in refusal and "carries no inline transaction" in refusal, f"Lance moved its inline threshold: {refusal[:300]}"
+        assert f"{_INLINE_LIMIT:,} bytes" in refusal and "transaction is 20," in refusal and "Commit in smaller steps" in refusal, refusal[:600]
+    else:
+        append()
+        assert hooked.refused == [], f"Lance moved its inline threshold: {[refused[:300] for refused in hooked.refused]}"
+    after = lance.dataset(namespace_client=_stock(race_catalog), table_id=table_id)
+    assert (after.version, after.count_rows()) == ((1, 10) if past else (2, 20))
+
+
 def _manifest_message(manifest: bytes) -> bytes:
     footer = struct.Struct("<QHH4s")
     offset = footer.unpack(manifest[-footer.size :])[0]
@@ -360,21 +396,40 @@ class _RefusesTagging:
         return getattr(self._inner, name)
 
 
+def _unkeyed_rows(ids: range) -> bytes:
+    from lakehouse.arrow_ipc import encode_arrow_stream
+
+    return encode_arrow_stream(pa.table({"id": pa.array(list(ids), pa.int64())}))
+
+
 @pytest.mark.parametrize("race_catalog", ["s3"], indirect=True)
+@pytest.mark.parametrize("writer", ["stock", "insert", "keyed-insert", "keyed-create-overwrite"])
 @pytest.mark.parametrize("detection_only", [False, True], ids=["seal-required", "git-declares-detection-only"])
 def test_a_seal_the_store_refuses_fails_the_commit_unless_git_declares_detection_only(
-    race_catalog: RaceCatalog, monkeypatch: pytest.MonkeyPatch, detection_only: bool
+    race_catalog: RaceCatalog, monkeypatch: pytest.MonkeyPatch, detection_only: bool, writer: str
 ) -> None:
     """ADR 0242 B4: where the seal is required, a commit whose seal the store refuses fails before its version lands,
     answered 503 (ServiceUnavailable, code 17) for its writer to retry once the store's operator grants the tagging; never a
     landed version whose files no seal guards. Where git declares the warehouse's bucket detection-only
     (``LANCE_SEAL_DETECTION_ONLY_BUCKETS``), the commit lands with its files untagged and recorded, so maintenance's pass
-    still checks them."""
+    still checks them. The same at every path that adds files, through the one call that seals and records them
+    (``committed_files.seal_and_record``, ADR 0242 § Found by review, second round): a stock client's commit, and an
+    ``/insert`` and a ``/create`` mode=Overwrite Lance commits itself, with an Idempotency-Key and without. Before that call
+    was the only one, a keyed append answered 500 on a detection-only warehouse and on a required one alike, its files left
+    behind, and an unkeyed append on a required one LANDED with 200, sealed only after its version, which then failed."""
     from catalog.core.config import get_settings
     from lakehouse import stored_objects
+    from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
     table_id = ["lance_catalog", "untagged", "t"]
-    dataset = _created(race_catalog, table_id)
+    table = f"{race_catalog.url}/v1/table/{'$'.join(table_id)}"
+    if writer == "stock":
+        dataset = _created(race_catalog, table_id)
+    else:
+        assert httpx.post(f"{race_catalog.url}/v1/namespace/lance_catalog$untagged/create", json={}, timeout=60).status_code == 200
+        made = httpx.post(f"{table}/create", content=_unkeyed_rows(range(10)), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}, timeout=60)
+        assert made.status_code == 200, made.text
+        dataset = lance.dataset(namespace_client=_stock(race_catalog), table_id=table_id)
     bucket, _, root = dataset.uri.removeprefix("s3://").partition("/")
     if detection_only:
         monkeypatch.setenv("LANCE_SEAL_DETECTION_ONLY_BUCKETS", bucket)
@@ -383,11 +438,28 @@ def test_a_seal_the_store_refuses_fails_the_commit_unless_git_declares_detection
     monkeypatch.setattr(stored_objects, "object_client", lambda *a, **k: _RefusesTagging(real(*a, **k)))
     hooked = _HookedCommits(_stock(race_catalog), lambda _request: None)
 
-    if detection_only:
-        lance.write_dataset(_rows(range(10, 20), 16), namespace_client=hooked, table_id=table_id, mode="append")
-    else:
-        with pytest.raises(OSError):  # noqa: PT011 — pylance reports the refused commit as of unknown outcome
+    def write() -> httpx.Response | None:
+        if writer == "stock":
             lance.write_dataset(_rows(range(10, 20), 16), namespace_client=hooked, table_id=table_id, mode="append")
+            return None
+        headers = {
+            "Content-Type": ARROW_STREAM_MEDIA_TYPE,
+            **({"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f6a"} if writer.startswith("keyed") else {}),
+        }
+        if writer == "keyed-create-overwrite":
+            return httpx.post(f"{table}/create?mode=Overwrite", content=_unkeyed_rows(range(20)), headers=headers, timeout=60)
+        return httpx.post(f"{table}/insert?mode=append", content=_unkeyed_rows(range(10, 20)), headers=headers, timeout=60)
+
+    if detection_only:
+        answered = write()
+        assert answered is None or answered.status_code == 200, answered.text
+    elif writer == "stock":
+        with pytest.raises(OSError):  # noqa: PT011 — pylance reports the refused commit as of unknown outcome
+            write()
+    else:
+        answered = write()
+        assert answered is not None
+        assert (answered.status_code, answered.json().get("code")) == (503, 17), answered.text
 
     after = lance.dataset(namespace_client=_stock(race_catalog), table_id=table_id)
     if detection_only:
@@ -395,7 +467,7 @@ def test_a_seal_the_store_refuses_fails_the_commit_unless_git_declares_detection
         tags = _root_client().get_object_tagging(Bucket=bucket, Key=f"{root}/data/{added}")["TagSet"]
         assert (after.version, after.count_rows(), tags, hooked.refused) == (2, 20, [], [])
     else:
-        assert hooked.refused and all("unavailable" in refusal.lower() for refusal in hooked.refused), hooked.refused
+        assert writer != "stock" or (hooked.refused and all("unavailable" in refusal.lower() for refusal in hooked.refused)), hooked.refused
         assert (after.version, after.count_rows()) == (1, 10)
 
 

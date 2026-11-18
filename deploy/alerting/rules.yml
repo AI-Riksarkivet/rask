@@ -1179,8 +1179,9 @@ groups:
         annotations:
           summary: "Warehouse {{ $labels.lance_warehouse }}'s store no longer enforces the seal ({{ $labels.lance_seal }})"
           description: >-
-            A validate found this warehouse's store no longer refuses a put over a sealed file, and git requires the seal of
-            it: any write credential can replace a file a committed version names, with a 200. untaggable also fails every
+            The catalog's seal probe (at its start and every catalog.sealProbe.periodSeconds) or a validate found this
+            warehouse's store no longer refuses a put over a sealed file, and git requires the seal of it: any write
+            credential can replace a file a committed version names, with a 200. untaggable also fails every
             commit there with a 503. Restore the store's policy (ADR 0242 § What a platform S3 store must support), then
             validate the warehouse again (POST /management/v1/warehouses/{id}/validate).
 

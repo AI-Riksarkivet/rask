@@ -9,7 +9,7 @@
 (*   keyed    a door's write sent with an Idempotency-Key and sent again   *)
 (*            by its caller (api/idempotency.py begin, keyed_door,         *)
 (*            Converge; lakehouse/idempotency.py claim, renew, release,    *)
-(*            record_outcome, HeldKey; dataplane.landed_under_held_key).   *)
+(*            record_outcome, HeldKey; dataplane.landed_under_key).        *)
 (*            One actor stands for every keyed door that commits a        *)
 (*            version, each mapped to it in ADR 0240 §8:                   *)
 (*              /insert on a table declaring a primary key, a stamped      *)
@@ -45,6 +45,17 @@
 (*            managed_versions.stage, judge, finalize)                     *)
 (*   maint    maintenance's compaction, a stock commit that changes no row *)
 (*            (managed_versions._refuse_a_rewrite_that_changes_rows)       *)
+(*                                                                         *)
+(* THE SEAL (ADR 0242): every file a version names is sealed and recorded  *)
+(* (committed_files.seal_and_record). A stamped commit seals all of it     *)
+(* before its finalize; a stock commit seals its data files at the         *)
+(* judgement and the writer's transaction file once landed (versions.py);  *)
+(* Lance's own commit (the "lance" path) writes its fragments first and    *)
+(* seals them before the commit, and the transaction file Lance writes     *)
+(* inside its commit once landed (dataplane._land_rows, _write_blob). A    *)
+(* version whose writer died after it landed, its transaction file         *)
+(* unsealed, is found and finished by the commit reconciler                *)
+(* (commit_reconcile.finish_landed).                                       *)
 (* Every writer that lost its race takes the ref's commit turn, and every  *)
 (* finalize waits while another writer holds it (lakehouse/commit_turns.py *)
 (* TableTurns.take, wait, release; table_claims.DoorTable.finalize_version *)
@@ -67,6 +78,9 @@
 (*       wait), so one write is left to it. CommitPathLeaseInCommit.cfg.   *)
 (*   A3. A turn lapses at its hold whether its holder lives or not         *)
 (*       (commit_turns._kept, Turn.expires_at). CommitPathNoTurnLapse.cfg. *)
+(*   A4. The commit reconciler runs on its period and finishes every       *)
+(*       landed version it reads (the catalog-commit-reconcile timer).     *)
+(*       CommitPathNoReconciler.cfg.                                       *)
 (*                                                                         *)
 (* GUARDS (each a step of the design; Off names the ones a config removes, *)
 (* and each such config must fail):                                        *)
@@ -94,6 +108,21 @@
 (*   AppendJudged     an append to a table declaring a key is committed    *)
 (*                    by commit_stamped and judged against the version it  *)
 (*                    lands on, a nested key included.                     *)
+(*   KeyKeepsFirst    a key's record keeps, for its whole life, the lowest *)
+(*                    version any attempt under it planned a put on        *)
+(*                    (_Claimed.written_from, set by the renewal before    *)
+(*                    each put), and a takeover searches every version     *)
+(*                    after it; without it a takeover searched from the    *)
+(*                    lapsed claim's own claim, which a chain of takeovers *)
+(*                    moves past the first attempt's commit.               *)
+(*   ReleaseKeepsWritten  a released key whose record says an attempt may  *)
+(*                    have written is searched by the attempt claiming it  *)
+(*                    (idempotency.claim answers TakenOver); without it a  *)
+(*                    takeover refused before its search released the key *)
+(*                    as though nothing had been written.                  *)
+(*   SealBeforeLanding    every path that writes its data files before its *)
+(*                    commit seals and records them before the version     *)
+(*                    lands; without it they are sealed once it landed.    *)
 (*                                                                         *)
 (* NOT MODELLED: branches (each ref is a history of its own, judged the    *)
 (* same way), the announcement after a commit (CommitAnnounce.tla), the    *)
@@ -116,8 +145,9 @@ CONSTANTS Mix,        \* which writers: "retry", "rebody", "lane", "keys", "nest
           MaxTries,   \* how many times a stamped commit plans again after a lost race
           Off         \* the guards and assumptions a config removes
 
-Guards == {"KeyBindsBody", "KeyRenews", "RenewIsOwn", "RecordOwnClaim", "RefusalHoldsKey", "TakeoverCounts", "AppendJudged"}
-Assumptions == {"StoreCAS", "LeaseOutlastsCommit", "TurnLapses"}
+Guards == {"KeyBindsBody", "KeyRenews", "RenewIsOwn", "RecordOwnClaim", "RefusalHoldsKey", "TakeoverCounts", "AppendJudged",
+           "KeyKeepsFirst", "ReleaseKeepsWritten", "SealBeforeLanding"}
+Assumptions == {"StoreCAS", "LeaseOutlastsCommit", "TurnLapses", "Reconciles"}
 ASSUME Off \subseteq Guards \cup Assumptions
 On(g) == g \notin Off
 
@@ -149,15 +179,18 @@ Path(a) ==
     [] Kind(a) = "insert" -> (IF PKTable THEN "stamped" ELSE "lance")
     [] OTHER -> "stamped"
 \* The table holds key 1 before any writer starts, where a writer's harm needs it held.
-Seed == IF Mix = "nested" THEN <<[by |-> 0, op |-> "ins", k |-> 1, mark |-> FALSE, n |-> 1, path |-> "stamped"]>> ELSE <<>>
+Seed == IF Mix = "nested" THEN <<[by |-> 0, op |-> "ins", k |-> 1, mark |-> FALSE, n |-> 1, path |-> "stamped", ds |-> TRUE, ts |-> TRUE]>> ELSE <<>>
 
-\* The key's record; `first` is a ghost, the version the first recorded answer named.
-None == [st |-> "none", att |-> 0, body |-> 0, lapsed |-> FALSE, abody |-> 0, acnt |-> 0, aver |-> 0, first |-> 0]
+\* The key's record. `wfrom` is the first version a write under the key can have landed at, one past the lowest version an
+\* attempt under it planned a put on, 0 while none reached a put (idempotency._Claimed.written_from); `at` is the version
+\* the table was at when the attempt holding the claim claimed it, standing for the claim's own time, which a takeover
+\* searched from without KeyKeepsFirst. `first` is a ghost, the version the first recorded answer named.
+None == [st |-> "none", att |-> 0, body |-> 0, lapsed |-> FALSE, abody |-> 0, acnt |-> 0, aver |-> 0, first |-> 0, wfrom |-> 0, at |-> 0]
 
 VARIABLES log,      \* the table's history: one record per version, in order
           rec,      \* the key's record on the control root
           pc,       \* each writer's next step
-          plan,     \* the version each writer planned on
+          plan,     \* the version each writer planned on; between a takeover and its search, the first version it searches
           renewed,  \* whether a keyed attempt renewed its claim since it last planned
           tries,    \* lost races so far
           told,     \* whether a keyed attempt's caller was told 503 at the request deadline
@@ -214,34 +247,42 @@ Start(a) ==
   /\ pc' = [pc EXCEPT ![a] = IF Keyed(a) THEN "claim" ELSE "plan"]
   /\ UNCHANGED <<log, rec, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults>>
 
+\* Whether claiming the key now must search for a write an earlier attempt landed: once any attempt under the key reached
+\* a put (KeyKeepsFirst, ReleaseKeepsWritten). Without them: every takeover of a lapsed claim, and no claim of a released one.
+Searches ==
+  IF rec.st = "in"
+    THEN ~On("KeyKeepsFirst") \/ rec.wfrom # 0
+    ELSE On("ReleaseKeepsWritten") /\ rec.wfrom # 0
+
 \* idempotency.claim: a binding the record holds for another request is refused; a done key is replayed; a live claim
 \* answers 409; a lapsed one is taken over (TakenOver) and its commit looked for; a free or released key is taken.
 Claim(a) ==
   /\ pc[a] = "claim"
   /\ IF rec.st = "none"
-       THEN /\ rec' = [None EXCEPT !.st = "in", !.att = a, !.body = K(a)]
+       THEN /\ rec' = [None EXCEPT !.st = "in", !.att = a, !.body = K(a), !.at = Len(log)]
             /\ pc' = [pc EXCEPT ![a] = "plan"]
-            /\ UNCHANGED <<ans, abody, acnt, aver, turn>>
+            /\ UNCHANGED <<ans, abody, acnt, aver, turn, plan>>
      ELSE IF On("KeyBindsBody") /\ rec.body # K(a)
-       THEN /\ Finish(a, "reused") /\ UNCHANGED <<rec, abody, acnt, aver>>
+       THEN /\ Finish(a, "reused") /\ UNCHANGED <<rec, abody, acnt, aver, plan>>
      ELSE IF rec.st = "done"
        THEN /\ Finish(a, "ok")
             /\ abody' = [abody EXCEPT ![a] = rec.abody]
             /\ acnt' = [acnt EXCEPT ![a] = rec.acnt]
             /\ aver' = [aver EXCEPT ![a] = rec.aver]
-            /\ UNCHANGED rec
+            /\ UNCHANGED <<rec, plan>>
      ELSE IF rec.st = "in" /\ ~rec.lapsed
-       THEN /\ Finish(a, "conflict") /\ UNCHANGED <<rec, abody, acnt, aver>>
-     ELSE /\ rec' = [rec EXCEPT !.st = "in", !.att = a, !.lapsed = FALSE]
-          /\ pc' = [pc EXCEPT ![a] = IF rec.st = "in" THEN "scan" ELSE "plan"]
+       THEN /\ Finish(a, "conflict") /\ UNCHANGED <<rec, abody, acnt, aver, plan>>
+     ELSE /\ rec' = [rec EXCEPT !.st = "in", !.att = a, !.lapsed = FALSE, !.at = Len(log)]
+          /\ pc' = [pc EXCEPT ![a] = IF Searches THEN "scan" ELSE "plan"]
+          /\ plan' = [plan EXCEPT ![a] = IF On("KeyKeepsFirst") THEN rec.wfrom ELSE rec.at + 1]
           /\ UNCHANGED <<ans, abody, acnt, aver, turn>>
-  /\ UNCHANGED <<log, plan, renewed, tries, told, faults>>
+  /\ UNCHANGED <<log, renewed, tries, told, faults>>
 
-\* dataplane.landed_under_held_key, on every keyed door that commits a version: the commit carrying the key, answered as
-\* its write was, its answer recorded.
+\* dataplane.landed_under_key, on every keyed door that commits a version: the commit carrying the key among the versions
+\* after the one its search starts from, answered as its write was, its answer recorded.
 Scan(a) ==
   /\ pc[a] = "scan"
-  /\ LET hits == {i \in 1..Len(log) : log[i].mark} IN
+  /\ LET hits == {i \in 1..Len(log) : log[i].mark /\ i >= plan[a]} IN
      IF hits = {}
        THEN /\ pc' = [pc EXCEPT ![a] = "plan"]
             /\ UNCHANGED <<abody, acnt, aver>>
@@ -251,6 +292,13 @@ Scan(a) ==
             /\ acnt' = [acnt EXCEPT ![a] = IF On("TakeoverCounts") \/ log[i].path = "lance" THEN log[i].n ELSE 0]
             /\ aver' = [aver EXCEPT ![a] = i]
   /\ UNCHANGED <<log, rec, plan, renewed, tries, told, ans, turn, faults>>
+
+\* The door is refused between its takeover and its search (a turn wait refused, the table changed under its resolution):
+\* a 4xx, which gives the claim back as the attempt's own (keyed_door, idempotency.release).
+ScanRefused(a) ==
+  /\ pc[a] = "scan"
+  /\ Finish(a, "conflict") /\ ReleaseIfMine(a)
+  /\ UNCHANGED <<log, plan, renewed, tries, told, abody, acnt, aver, faults>>
 
 \* Plan on the latest version and judge the key against it (primary_keys.plan_new_keys, refuse_repeats_in_version,
 \* managed_versions.judge); a nested key on Lance's own append is judged nowhere unless AppendJudged.
@@ -273,15 +321,23 @@ Plan(a) ==
 Renew(a) ==
   /\ pc[a] = "renew" /\ Free(a)
   /\ IF rec.st = "in" /\ (rec.att = a \/ ~On("RenewIsOwn"))
-       THEN /\ rec' = [rec EXCEPT !.lapsed = FALSE]
+       THEN /\ rec' = [rec EXCEPT !.lapsed = FALSE, !.wfrom = IF rec.wfrom = 0 \/ plan[a] + 1 < rec.wfrom THEN plan[a] + 1 ELSE rec.wfrom]
             /\ renewed' = [renewed EXCEPT ![a] = TRUE]
             /\ pc' = [pc EXCEPT ![a] = "put"]
             /\ UNCHANGED <<ans, turn>>
        ELSE /\ Finish(a, "conflict") /\ UNCHANGED <<rec, renewed>>
   /\ UNCHANGED <<log, plan, tries, told, abody, acnt, aver, faults>>
 
+\* Lance's own commit writes its fragments before the commit and its transaction file inside it; a stock writer stages
+\* both, and its transaction file is sealed once landed, since it puts it again on each attempt of the commit.
+Lance(a) == Path(a) = "lance"
+Stock(a) == Kind(a) \in {"stock", "maint"}
+\* A landed version: `ds` whether its data files are sealed and recorded, `ts` whether its transaction file is.
 Commit(a) == [by |-> a, op |-> CASE Kind(a) = "delete" -> "del" [] Kind(a) = "maint" -> "rw" [] Replaces(a) -> "ow" [] OTHER -> "ins",
-              k |-> K(a), mark |-> Keyed(a), n |-> IF Kind(a) \in {"delete", "maint"} THEN 0 ELSE 1, path |-> Path(a)]
+              k |-> K(a), mark |-> Keyed(a), n |-> IF Kind(a) \in {"delete", "maint"} THEN 0 ELSE 1, path |-> Path(a),
+              ds |-> ~Lance(a) \/ On("SealBeforeLanding"), ts |-> ~Lance(a) /\ ~Stock(a)]
+\* A writer with something to seal once its version landed.
+SealsAfter(a) == Lance(a) \/ Stock(a)
 
 \* Lance refuses an append whose rebase crosses an Overwrite or a Restore (transaction.md § Append Compatibility).
 CrossesAReplace(a) == Commit(a).op = "ins" /\ \E i \in (plan[a] + 1)..Len(log) : log[i].op = "ow"
@@ -297,7 +353,9 @@ Put(a) ==
             /\ aver' = [aver EXCEPT ![a] = Len(log) + 1]
             /\ abody' = [abody EXCEPT ![a] = K(a)]
             /\ acnt' = [acnt EXCEPT ![a] = Commit(a).n]
-            /\ IF Keyed(a)
+            /\ IF SealsAfter(a)
+                 THEN /\ pc' = [pc EXCEPT ![a] = "seal"] /\ UNCHANGED <<ans, turn>>
+               ELSE IF Keyed(a)
                  THEN /\ pc' = [pc EXCEPT ![a] = "record"] /\ UNCHANGED <<ans, turn>>
                  ELSE Finish(a, "ok")
             /\ UNCHANGED <<plan, tries, rec, renewed>>
@@ -317,6 +375,16 @@ Put(a) ==
      ELSE /\ Finish(a, "conflict") /\ ReleaseIfMine(a) /\ UNCHANGED <<log, plan, tries, abody, acnt, aver, renewed>>
   /\ UNCHANGED <<told, faults>>
 
+\* committed_files.seal_and_record once landed: what the landed version names that only its landing let it seal, sealed
+\* and recorded; then the key's answer, or the writer's.
+SealLanded(a) ==
+  /\ pc[a] = "seal"
+  /\ log' = [log EXCEPT ![aver[a]].ds = TRUE, ![aver[a]].ts = TRUE]
+  /\ IF Keyed(a)
+       THEN /\ pc' = [pc EXCEPT ![a] = "record"] /\ UNCHANGED <<ans, turn>>
+       ELSE Finish(a, "ok")
+  /\ UNCHANGED <<rec, plan, renewed, tries, told, abody, acnt, aver, faults>>
+
 \* idempotency.record_outcome, then the answer: recorded only over the attempt's own claim, onto its binding; an attempt
 \* whose claim another took answers its own write and leaves the key's answer as it is.
 Record(a) ==
@@ -328,7 +396,7 @@ Record(a) ==
   /\ Finish(a, "ok")
   /\ UNCHANGED <<log, plan, renewed, tries, told, abody, acnt, aver, faults>>
 
-Step(a) == Start(a) \/ Claim(a) \/ Scan(a) \/ Plan(a) \/ Renew(a) \/ Put(a) \/ Record(a)
+Step(a) == Start(a) \/ Claim(a) \/ Scan(a) \/ ScanRefused(a) \/ Plan(a) \/ Renew(a) \/ Put(a) \/ SealLanded(a) \/ Record(a)
 
 ---------------------------------------------------------------------------
 \* The environment.
@@ -358,9 +426,21 @@ TurnLapse ==
   /\ turn' = 0
   /\ UNCHANGED <<log, rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, faults>>
 
-Next == (\E a \in Actors : Step(a) \/ Die(a) \/ Told(a)) \/ KeyLapse \/ TurnLapse
+\* The commit reconciler (A4, commit_reconcile.finish_landed): a landed version whose files are not all sealed and recorded
+\* is sealed and recorded, whoever wrote it, its writer alive or not. It changes only what no writer reads (a version's
+\* seal, which a writer's own seal of it makes again, the same write), so it commutes with every writer's step, and is let
+\* run once every writer has ended: the reconciler reads a version only once it is older than its grace.
+Reconcile ==
+  /\ On("Reconciles")
+  /\ \A a \in Actors : Ended(a)
+  /\ \E i \in 1..Len(log) :
+       /\ ~(log[i].ds /\ log[i].ts)
+       /\ log' = [log EXCEPT ![i].ds = TRUE, ![i].ts = TRUE]
+  /\ UNCHANGED <<rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults>>
 
-Spec == Init /\ [][Next]_vars /\ \A a \in Actors : WF_vars(Step(a)) /\ WF_vars(TurnLapse)
+Next == (\E a \in Actors : Step(a) \/ Die(a) \/ Told(a)) \/ KeyLapse \/ TurnLapse \/ Reconcile
+
+Spec == Init /\ [][Next]_vars /\ \A a \in Actors : WF_vars(Step(a)) /\ WF_vars(TurnLapse) /\ WF_vars(Reconcile)
 
 ---------------------------------------------------------------------------
 \* PROPERTIES
@@ -403,8 +483,16 @@ OneRowPerKey == PKTable => \A i \in 1..Len(log) : log[i].op = "ins" => log[i].k 
 \* Once failures stop, every writer is answered or gone, and no turn is held for ever.
 EveryWriterEnds == <>[](\A a \in Actors : Ended(a))
 
+\* No landed version names a data file that is not sealed and recorded: from the moment a version lands, no put replaces
+\* what it reads (ADR 0242).
+LandedDataSealed == \A i \in 1..Len(log) : log[i].ds
+
+\* Every file a landed version names is sealed and recorded in the end, its writer alive or not: the transaction file,
+\* which only the version's landing lets its writer seal, is finished by the reconciler when the writer died first.
+EveryFileSealed == <>[](\A i \in 1..Len(log) : log[i].ds /\ log[i].ts)
+
 TypeOK ==
-  /\ pc \in [Actors -> {"start", "claim", "scan", "plan", "renew", "put", "record", "done", "dead"}]
+  /\ pc \in [Actors -> {"start", "claim", "scan", "plan", "renew", "put", "seal", "record", "done", "dead"}]
   /\ ans \in [Actors -> {"", "ok", "refused", "reused", "conflict"}]
   /\ turn \in Actors \cup {0}
 =============================================================================

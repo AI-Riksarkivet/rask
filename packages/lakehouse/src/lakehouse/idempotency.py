@@ -26,7 +26,10 @@ what this request asks.
 
 A CLAIM IS RENEWED BEFORE THE WRITE IT GUARDS (:func:`renew`). A door runs on past its request's deadline, so a resend
 can take the key over from an attempt that is still running; the renewal, a conditional write of the attempt's own claim
-right before its write lands, is what keeps that attempt from landing it once the resend took the key (ADR 0240). The
+right before its write lands, is what keeps that attempt from landing it once the resend took the key (ADR 0240). It
+also records the version the write was planned on, which the record keeps for the key's life, so whoever claims the key
+after an unanswered attempt looks for that attempt's write among the versions since, however many attempts and
+releases came between (ADR 0240 §11). The
 claim a request holds is its :class:`HeldKey`, kept in the request's context (:func:`holding`), so every seam that lands a
 version for the request renews it and stamps its commit with it (:func:`held`) without the door passing it down: a keyed
 door cannot land its version unrenewed by forgetting to.
@@ -109,9 +112,13 @@ class _Claimed(BaseModel):
     attempt: str
     #: When that attempt claimed it, or last renewed its claim, on the store's clock: the lease runs from here.
     claimed_at: datetime
-    #: When that attempt first claimed it, on the store's clock, never moved by a renewal: whatever it wrote under the key
-    #: was planned after it, so a takeover looks for its write from here (:class:`TakenOver`).
-    since: datetime
+    #: The lowest version any attempt under the key planned a put on, set by the renewal right before each put
+    #: (:func:`renew`) and kept for the key's whole life: no takeover and no release moves it (ADR 0240 §11, KeyKeepsFirst,
+    #: ReleaseKeepsWritten). Every write under the key landed after it, so an attempt that claims the key looks for an
+    #: earlier attempt's write among the versions after it (:class:`TakenOver`). ``None`` while no attempt reached a put:
+    #: nothing under the key may have been written, and none can be by an attempt that no longer holds it, since its
+    #: renewal would find the claim another's.
+    written_from: int | None = None
 
 
 class _Answered(BaseModel):
@@ -177,16 +184,17 @@ class Replay(BaseModel):
 
 
 class TakenOver(BaseModel):
-    """This attempt holds the key, taken over from one that held it past its lease and never answered.
+    """This attempt holds the key, after attempts under it that never answered, one of which reached a put: one that
+    held the key past its lease, or gave it back refused, or any attempt before them.
 
-    That attempt may have written before it was lost, so a door whose operation is not safe to run twice looks for its
-    write before writing again; ``since`` is when that attempt first claimed the key, on the store's clock, which its
-    renewals do not move: its write was planned after it.
+    Such an attempt may have landed its write before it was lost, so a door whose operation is not safe to run twice
+    looks for that write before writing again, among the versions after ``written_from`` (:attr:`_Claimed.written_from`):
+    a search by the key's stamp on the commits, which no clock bounds.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    since: datetime
+    written_from: int
 
 
 class HeldKey(BaseModel):
@@ -207,23 +215,25 @@ class HeldKey(BaseModel):
     #: The canonical id of the object the key's operation acts on (:attr:`KeyBinding.target`): only a version of it is
     #: the key's write.
     target: str
-    #: Set when this attempt took the key over from one that lapsed unanswered: when that one first claimed it.
-    taken_over_since: datetime | None = None
+    #: Set when an earlier attempt under the key may have landed its write (:class:`TakenOver`): the version after which
+    #: that write is looked for.
+    written_from: int | None = None
 
     @property
     def mark(self) -> str:
         """What a commit landing the key's write carries, so a takeover can find it."""
         return f"{self.scope}/{self.key}"
 
-    def renew(self) -> None:
-        """:func:`renew` this attempt's claim.
+    def renew(self, planned_on: int | None) -> None:
+        """:func:`renew` this attempt's claim, right before a put planned on ``planned_on`` (``None`` for a write that lands
+        no version).
 
         Raises:
             KeyTakenOverError: The claim is another attempt's, released, answered, or gone.
             KeyRecordUnreadableError: The key's record cannot be read as one.
             records.RecordChangedError: The record kept changing across every round.
         """
-        renew(self.root_uri, self.storage_options, scope=self.scope, key=self.key, attempt=self.attempt)
+        renew(self.root_uri, self.storage_options, scope=self.scope, key=self.key, attempt=self.attempt, planned_on=planned_on)
 
 
 #: The claim the request being served holds, if it sent a key. A context variable, so each request's task and the
@@ -286,7 +296,9 @@ def claim(
 
     `scope` separates callers — a key is the CALLER's, so one string from two tenants is two different
     operations and must not collide. An attempt that held the key past ``lease`` without answering is taken over, and
-    so is a key an attempt gave back; whichever attempt finishes records the answer.
+    so is a key an attempt gave back; whichever attempt finishes records the answer. What the record says of the key's
+    earlier attempts (:attr:`_Claimed.written_from`) is carried onto the new claim, so a chain of takeovers, or a takeover
+    refused before its search and given back, never loses that one of them reached a put (ADR 0240 §11).
 
     Args:
         root_uri: The control root the records live under.
@@ -298,8 +310,8 @@ def claim(
         lease: How long an unanswered claim holds the key, on the store's clock.
 
     Returns:
-        ``None`` when this attempt holds the key, :class:`TakenOver` when it took the key over from an attempt whose lease
-        ran out unanswered, or the answer an earlier attempt recorded.
+        ``None`` when this attempt holds the key and no attempt under it reached a put, :class:`TakenOver` when it holds
+        the key after an unanswered attempt that did, or the answer an earlier attempt recorded.
 
     Raises:
         ValueError: The key or the scope is not one this module writes.
@@ -312,10 +324,10 @@ def claim(
     for _ in range(_ROUNDS):
         found = records.read_json_at(root_uri, storage_options, record_key)
         stored = found.stored
-        claimed = _Claimed(state="in_flight", binding=binding, attempt=attempt, claimed_at=found.at, since=found.at).model_dump(mode="json")
+        claimed = _Claimed(state="in_flight", binding=binding, attempt=attempt, claimed_at=found.at)
         if stored is None:
             try:
-                records.create_json(root_uri, storage_options, record_key, claimed)
+                records.create_json(root_uri, storage_options, record_key, claimed.model_dump(mode="json"))
             except records.RecordExistsError:
                 continue
             return None
@@ -331,12 +343,14 @@ def claim(
             return Replay(status=current.status, body=current.body)
         if current.state == "in_flight" and found.at - current.claimed_at < lease:
             raise InFlightError(f"idempotency key {key!r} is held by an attempt that has not finished")
+        written_from = current.written_from
         try:
-            records.replace_json(root_uri, storage_options, record_key, claimed, etag=stored.etag)
+            records.replace_json(
+                root_uri, storage_options, record_key, claimed.model_copy(update={"written_from": written_from}).model_dump(mode="json"), etag=stored.etag
+            )
         except records.RecordChangedError:
             continue
-        # A released key was given back before its attempt wrote anything; a lapsed one may have written.
-        return TakenOver(since=current.since) if current.state == "in_flight" else None
+        return None if written_from is None else TakenOver(written_from=written_from)
     raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
@@ -371,9 +385,12 @@ def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: 
     return False
 
 
-def renew(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str) -> None:
+def renew(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str, planned_on: int | None) -> None:
     """Renew the claim ``attempt`` holds, right before the commit it cannot take back: its lease starts again at the
-    store's clock, under the ETag of the read that found the claim its own.
+    store's clock, under the ETag of the read that found the claim its own. ``planned_on`` is the version the put that
+    follows was planned on (``None`` for a write that lands no version): the record keeps the lowest one any attempt under
+    the key named (:attr:`_Claimed.written_from`), so whoever claims the key after looks for the write among the versions
+    after it, and the renewal is the write that says one may have landed before the put that could land it.
 
     A request's door runs on past its deadline (:mod:`lakehouse.deadline`), as long as the key's lease and longer, so a
     resend can take the key over while the first attempt still runs. The resend then looks for the first attempt's
@@ -393,7 +410,8 @@ def renew(root_uri: str, storage_options: StorageOptions, *, scope: str, key: st
         current = _stored(stored, key) if stored is not None else None
         if stored is None or not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
             raise KeyTakenOverError(f"idempotency key {key!r} is no longer held by this attempt: another attempt under the key took it over")
-        renewed = current.model_copy(update={"claimed_at": found.at}).model_dump(mode="json")
+        written_from = current.written_from if planned_on is None else min(planned_on, current.written_from if current.written_from is not None else planned_on)
+        renewed = current.model_copy(update={"claimed_at": found.at, "written_from": written_from}).model_dump(mode="json")
         try:
             records.replace_json(root_uri, storage_options, record_key, renewed, etag=stored.etag)
         except records.RecordChangedError:

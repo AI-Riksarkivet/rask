@@ -1,13 +1,29 @@
-"""The files a version adds under its table's root, as the store holds them when the catalog commits it ([[LH-419]]).
+"""The files a version adds under its table's root, sealed and recorded as the store holds them ([[LH-419]], ADR 0242).
 
-Every catalog commit records them before its version is announced (``lakehouse.file_identities``), and
-maintenance's sweep reads each one again: ``version/create`` reads them before it judges a stock commit's files, a door's
-stamped commit (``dataplane.commit_stamped``) before its finalize, a keyed ``/insert`` Lance commits (``dataplane.land_keyed``)
-its data files before the commit and its transaction file just after (:func:`appended`, :func:`with_transaction_file`), and
-a write Lance commits in one call (the create door's, an unkeyed ``/insert``) just after it lands (:func:`record_landed`).
+ONE FUNCTION SEALS AND RECORDS (:func:`seal_and_record`), whatever path adds the files: it reads the warehouse's
+posture git declares (:func:`detection_only`), seals each file (``lakehouse.stored_objects.seal``), refuses a file the
+store does not hold, reads the identity it records, and records it; a refusal or a store that does not answer fails a
+commit that has not landed with the retryable 503, counted on ``catalog.commit.seal_failed``, and one that has landed is
+counted on ``catalog.committed_files.unrecorded`` and left to the reconciler. The function that seals and reads
+(:func:`_as_stored`) is this module's own, so no path seals a commit's files past the posture, the mapping or the count.
+
+WHEN EACH PATH SEALS, measured against what each path writes before its version lands (ADR 0242 § The order of effects):
+
+- ``version/create`` (a stock writer): every file the version names is sealed and read at the judgement, before the
+  finalize, and recorded once the commit is authorized; the writer's transaction file is required there and sealed and
+  recorded only once the version landed (:func:`seal_and_record_transaction`), since a stock writer that loses a race
+  puts it again under the same name.
+- a door's stamped commit (``dataplane.commit_stamped``): every file, its transaction file included, before the
+  finalize (:func:`added`).
+- a write Lance commits itself (``dataplane._land_rows`` for ``/insert``, ``dataplane._write_blob`` for ``/create``):
+  its fragments are written first, and their files sealed and recorded before the commit (:func:`appended`); the
+  transaction file Lance writes inside its commit, once the version landed (:func:`seal_and_record_transaction`).
+- a landed version whose files no commit sealed and recorded (its writer died between its landing and its last seal, or a
+  version made with no seal of its own: a branch's first, a disarm) is finished by the commit reconciler
+  (:func:`finish_landed`), counted on ``catalog.committed_files.finished``.
 
 What a version adds against the version it follows on the same ref, each a file a writer's vend may stage
-(``table_layout.WRITER_PUT_GLOBS``) and, once sealed here, never put over (ADR 0242): the data file of each fragment it holds anew (``data/*.lance``,
+(``table_layout.WRITER_PUT_GLOBS``) and, once sealed here, never put over: the data file of each fragment it holds anew (``data/*.lance``,
 ``lance_docs/lance/format/table/layout.md`` § Basic Layout), the blob sidecars beside it when the table has a blob column
 (``blob.md`` § Sidecar Resolution), each deletion file a fragment did not carry (``_deletions/``), the files of each index
 it adds (``_indices/<uuid>/``), and the transaction file its manifest names (``_transactions/<read version>-<uuid>.txn``,
@@ -25,14 +41,16 @@ from collections.abc import Callable, Iterator, Sequence
 from typing import Final
 
 import lance
+import pyarrow as pa
 import pyarrow.fs as pafs
+from botocore.exceptions import BotoCoreError, ClientError
 from lance.dataset import Transaction
-from lance_namespace import InvalidInputError, ServiceUnavailableError
+from lance_namespace import InternalError, InvalidInputError, LanceNamespaceError, ServiceUnavailableError
 from opentelemetry import metrics
 
 from catalog.core.config import get_settings
 from catalog.services import client_fragments
-from lakehouse import base_refs, file_identities, manifest_wire, stored_objects
+from lakehouse import base_refs, blobs, file_identities, manifest_wire, stored_objects
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
@@ -40,22 +58,125 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-#: Commits refused before their version landed because the store refused, or did not answer, a seal (ADR 0242 B4), by
-#: ``lance.seal_failure`` (``refused``, ``unavailable``).
-_seal_failed = metrics.get_meter("lance.catalog").create_counter(
+_meter = metrics.get_meter("lance.catalog")
+
+#: Commits whose seal the store refused or did not answer (ADR 0242 B4), by ``lance.seal_failure``: ``refused`` and
+#: ``unavailable`` were refused before their version landed (503); ``after_landing`` had landed, and its file waits for the
+#: reconciler.
+_seal_failed = _meter.create_counter(
     "catalog.commit.seal_failed",
     unit="{commit}",
-    description="Commits refused before their version landed because the object store refused, or did not answer, sealing a file they add.",
+    description="Commits whose seal of a file they add the object store refused or did not answer: before their version landed (refused 503), or after.",
 )
 
-#: Commits Lance made itself whose files the catalog could not record, so the sweep never reads them ([[LH-419]]).
-#: Added to at every such commit, zero included, so the series exists before the first miss and the alert's
-#: ``increase()`` sees that miss as a step (``CommittedFilesUnrecorded``).
-_unrecorded = metrics.get_meter("lance.catalog").create_counter(
+#: Landed versions some of whose files the catalog could not seal and record when they landed, so maintenance's sweep
+#: does not read them until the reconciler finishes them ([[LH-419]]). Added to at every landing, zero included, so the
+#: series exists before the first miss and the alert's ``increase()`` sees that miss as a step (``CommittedFilesUnrecorded``).
+_unrecorded = _meter.create_counter(
     "catalog.committed_files.unrecorded",
     unit="{commit}",
-    description="Commits a write door landed whose added files the catalog could not record, so maintenance never checks them.",
+    description="Landed versions some of whose files the catalog could not seal and record as they landed, so maintenance does not check them until the reconciler finishes them.",
 )
+
+#: Landed versions whose files the commit reconciler sealed and recorded because no commit had (:func:`finish_landed`).
+_finished = _meter.create_counter(
+    "catalog.committed_files.finished",
+    unit="{commit}",
+    description="Landed versions whose files the commit reconciler sealed and recorded because no commit had: one whose writer died between "
+    "its landing and its last seal, or one made with no seal of its own (a branch's first version, a disarm).",
+)
+
+#: Where a commit's files are recorded: the table's own record of them (``DoorTable.record_committed_files``).
+type Recorder = Callable[[file_identities.CommittedFiles], None]
+
+
+def create_series() -> None:
+    """Create each counter's series at 0 when the catalog starts, so its first count is an increase an alert can read."""
+    for counter in (_unrecorded, _finished):
+        counter.add(0)
+
+
+def seal_and_record(
+    paths: Sequence[str],
+    *,
+    table_location: str,
+    so: StorageOptions,
+    transaction_uuid: str,
+    record: Recorder | None,
+    landed: int | None = None,
+    unsealed: Sequence[str] = (),
+    adding_to: file_identities.CommittedFiles | None = None,
+) -> file_identities.CommittedFiles | None:
+    """Seal each file at ``paths`` under the table's root, read the identity the store holds for it, and record them,
+    with what ``adding_to`` already holds, through ``record``: the one call every path adding files to a version makes.
+
+    ``landed`` is the version, once it landed: a failure then fails nothing, since the write landed and an error would
+    have its caller write it again; it is logged at ERROR, counted (``catalog.committed_files.unrecorded``) and left for
+    the reconciler, and ``None`` is answered. Before the version lands, every failure raises. ``record`` is ``None`` for
+    ``version/create``, which records the files it is answered only once the commit is authorized. ``unsealed`` are paths
+    among ``paths`` the store must hold and that are left out of the record, for the caller to seal and record once the
+    version landed: a stock writer's transaction file, which it puts again under the same name on each attempt of one
+    commit (measured on pylance 13.0.0).
+
+    Raises:
+        FilesNotHeldError: The store holds no object at one of ``paths``.
+        ServiceUnavailableError: The store refused, or did not answer, a seal on a warehouse whose store must enforce it:
+            the commit has not landed, and a retry finds the store answering or the operator's grant in place.
+        OSError: The store refused, or could not be reached for, a read or the record.
+    """
+    try:
+        sealed = _as_stored(table_root(table_location), so, transaction_uuid, paths, where_granted=detection_only(table_location), unsealed=unsealed)
+        held = [] if adding_to is None else [file for file in adding_to.files if file.path not in {added.path for added in sealed.files}]
+        committed = sealed.model_copy(update={"files": [*held, *sealed.files]})
+        if record is not None:
+            record(committed)
+    except (stored_objects.SealRefusedError, stored_objects.SealUnavailableError) as exc:
+        refused = isinstance(exc, stored_objects.SealRefusedError)
+        _count_seal_failed(table_location, "after_landing" if landed is not None else "refused" if refused else "unavailable", exc)
+        if landed is not None:
+            _count_unrecorded(table_location, landed, f"{type(exc).__name__}: {exc}")
+            return None
+        if refused:
+            raise ServiceUnavailableError(
+                "the commit was not landed: the object store refused sealing a file it adds (s3:PutObjectTagging), which every "
+                "warehouse not declared detection-only requires; the store's operator grants it, then retry"
+            ) from exc
+        raise ServiceUnavailableError("the commit was not landed: the object store did not answer sealing a file it adds; retry") from exc
+    except (OSError, file_identities.FilesNotHeldError, LanceNamespaceError, BotoCoreError, ClientError) as exc:
+        if landed is None:
+            raise
+        _count_unrecorded(table_location, landed, f"{type(exc).__name__}: {exc}")
+        return None
+    if landed is not None:
+        _unrecorded.add(0)
+    return committed
+
+
+def _as_stored(
+    table_root: str, storage_options: StorageOptions, transaction_uuid: str, paths: Sequence[str], *, where_granted: bool, unsealed: Sequence[str]
+) -> file_identities.CommittedFiles:
+    """The files at ``paths`` under ``table_root`` (the store's own spelling of it), each sealed and then read as the
+    store holds it, less ``unsealed``, which are only required held.
+
+    THE SEAL COMES FIRST, so the bytes read are the bytes no put can replace: from the seal on, the store refuses every
+    session of the catalog's identity a put over the file (:func:`stored_objects.seal`), and the identity recorded is the
+    one the store keeps. EVERY PATH MUST BE HELD: a commit naming a file the store does not hold would leave a key a writer
+    could put afterwards, untagged and unrecorded, under a committed version.
+
+    Raises:
+        FilesNotHeldError: The store holds no object at one of ``paths``.
+        stored_objects.SealRefusedError: The store refused a seal, and ``where_granted`` is off.
+        stored_objects.SealUnavailableError: The store did not answer a seal.
+        OSError: The store refused or could not be reached for a read.
+    """
+    absent = set(stored_objects.seal(table_root, storage_options, [path for path in paths if path not in unsealed], where_granted=where_granted))
+    found = stored_objects.identities(table_root, storage_options, paths)
+    absent |= {path for path in paths if path not in found}
+    if absent:
+        raise file_identities.FilesNotHeldError(sorted(absent))
+    return file_identities.CommittedFiles(
+        transaction_uuid=transaction_uuid, files=[file_identities.CommittedFile(path=path, identity=found[path]) for path in paths if path not in unsealed]
+    )
 
 
 def added(
@@ -67,50 +188,85 @@ def added(
     so: StorageOptions,
     transaction_uuid: str,
     read_version: int,
+    record: Recorder | None,
     seal_transaction: bool = True,
 ) -> file_identities.CommittedFiles:
     """What ``after`` adds over ``before`` (``None`` for a table's first version) on ``branch`` (``None`` for main), the
-    version whose transaction ``transaction_uuid`` was planned on ``read_version``, each file sealed and every one the
-    version names held (ADR 0242). Without ``seal_transaction`` the transaction file is required and recorded and left for
-    the caller to seal once the version lands (:func:`seal_landed_transaction`): a stock writer's, which it puts again
-    under the same name on each attempt of the commit.
+    version whose transaction ``transaction_uuid`` was planned on ``read_version``, sealed and recorded through ``record``
+    before it lands (:func:`seal_and_record`), every file the version names held. Without ``seal_transaction`` the
+    transaction file is required and left for the caller to seal and record once the version lands
+    (:func:`seal_and_record_transaction`): a stock writer's, which it puts again under the same name on each attempt.
 
     Raises:
         FilesNotHeldError: The version names a file the store does not hold.
         InvalidInputError: The version's manifest names a transaction file other than its transaction's own.
-        ServiceUnavailableError: The store refused, or did not answer, a seal on a warehouse whose store must enforce it:
-            the commit has not landed, and a retry finds the store answering or the operator's grant in place.
+        ServiceUnavailableError: The store refused, or did not answer, a seal on a warehouse whose store must enforce it.
         OSError: The store refused, or could not be reached for, a read.
     """
-    root = table_root(table_location)
-    paths = added_paths(before, after, root=root, branch=branch, so=so)
+    paths = added_paths(before, after, root=table_root(table_location), branch=branch, so=so)
     planned = transaction_file(branch, read_version, transaction_uuid)
     if (named := _named_transaction(after, branch)) is not None and named != planned:
         raise InvalidInputError(f"commit refused: the manifest names transaction file {named!r}, and its transaction's own is {planned!r}")
     unsealed = [named] if named is not None and not seal_transaction else []
-    try:
-        return file_identities.as_stored(root, so, transaction_uuid, paths, where_granted=detection_only(table_location), unsealed=unsealed)
-    except stored_objects.SealRefusedError as exc:
-        _count_seal_failed(table_location, "refused", exc)
-        raise ServiceUnavailableError(
-            "the commit was not landed: the object store refused sealing a file it adds (s3:PutObjectTagging), which every "
-            "warehouse not declared detection-only requires; the store's operator grants it, then retry"
-        ) from exc
-    except stored_objects.SealUnavailableError as exc:
-        _count_seal_failed(table_location, "unavailable", exc)
-        raise ServiceUnavailableError("the commit was not landed: the object store did not answer sealing a file it adds; retry") from exc
+    committed = seal_and_record(paths, table_location=table_location, so=so, transaction_uuid=transaction_uuid, record=record, unsealed=unsealed)
+    if committed is None:
+        raise InternalError("the files of a commit that has not landed were answered as landed")
+    return committed
 
 
-def seal_landed_transaction(table_location: str, so: StorageOptions, committed: file_identities.CommittedFiles) -> None:
-    """Seal the transaction file of a stock commit whose version has landed, which :func:`added` left unsealed: the writer
-    puts it no more. A seal the store refuses or does not answer is logged at ERROR and counted, and the version stays
-    landed: no reader of it reads the file, since ``version/create`` admits only a manifest carrying its transaction
-    inline, and the commit's record keeps the file's identity, which maintenance's pass reads again."""
-    paths = [file.path for file in committed.files if f"/{TRANSACTIONS}/" in f"/{file.path}"]
+def seal_and_record_transaction(
+    record: Recorder, committed: file_identities.CommittedFiles, *, table_location: str, branch: str | None, so: StorageOptions, read_version: int, version: int
+) -> None:
+    """Seal and record, with ``committed``, the transaction file of the commit that landed as ``version``: the one file a
+    commit cannot seal before its version lands, since Lance writes it inside its own commit and a stock writer puts its
+    own again on each attempt. A failure is counted and left for the reconciler (:func:`seal_and_record`, ``landed``)."""
+    seal_and_record(
+        [transaction_file(branch, read_version, committed.transaction_uuid)],
+        table_location=table_location,
+        so=so,
+        transaction_uuid=committed.transaction_uuid,
+        record=record,
+        landed=version,
+        adding_to=committed,
+    )
+
+
+def finish_landed(
+    record: Recorder,
+    recorded: Callable[[str], file_identities.CommittedFiles | None],
+    before: lance.LanceDataset | None,
+    after: lance.LanceDataset,
+    *,
+    table_location: str,
+    branch: str | None,
+    so: StorageOptions,
+    transaction_uuid: str,
+) -> bool:
+    """Seal and record what the landed version ``after`` names over ``before`` and its commit's record (``recorded``, by
+    transaction uuid) lacks: what a writer that died between its landing and its last seal left, and the files of a version
+    made with no seal of its own. Whether it finished anything; counted on ``catalog.committed_files.finished``. Run by the
+    commit reconciler on every version it reads (``commit_reconcile.scan_ref``), on its period. A failure is counted as
+    :func:`seal_and_record` counts one after landing, and the next pass tries again.
+    """
     try:
-        stored_objects.seal(table_root(table_location), so, paths, where_granted=detection_only(table_location))
-    except (stored_objects.SealRefusedError, stored_objects.SealUnavailableError) as exc:
-        _count_seal_failed(table_location, "after_landing", exc)
+        paths = added_paths(before, after, root=table_root(table_location), branch=branch, so=so)
+        held = recorded(transaction_uuid)
+    except (OSError, ValueError, BotoCoreError, ClientError) as exc:
+        _count_unrecorded(table_location, int(after.version), f"{type(exc).__name__}: {exc}")
+        return False
+    missing = [path for path in paths if held is None or path not in {file.path for file in held.files}]
+    if not missing:
+        return False
+    if (
+        seal_and_record(
+            missing, table_location=table_location, so=so, transaction_uuid=transaction_uuid, record=record, landed=int(after.version), adding_to=held
+        )
+        is None
+    ):
+        return False
+    _finished.add(1)
+    log.warning("committed_files_finished", extra={"location": table_location, "version": int(after.version), "branch": branch, "files": missing[:20]})
+    return True
 
 
 #: The directory of a ref's transaction files (``lance_docs/lance/format/table/layout.md`` § Transaction Files).
@@ -193,47 +349,45 @@ def detection_only(table_location: str) -> bool:
     return table_location.removeprefix("s3://").partition("/")[0] in get_settings().seal_detection_only_buckets
 
 
-def _count_seal_failed(table_location: str, reason: str, exc: OSError) -> None:
+def _count_seal_failed(table_location: str, reason: str, exc: Exception) -> None:
     _seal_failed.add(1, {"lance.seal_failure": reason})
     log.error("commit_seal_failed", extra={"location": table_location, "reason": reason, "error": str(exc)[:300]})
 
 
 def appended(
     fragments: Sequence[lance.FragmentMetadata],
-    dataset: lance.LanceDataset,
+    schema: pa.Schema,
     *,
     table_location: str,
     branch: str | None,
     so: StorageOptions,
     transaction_uuid: str,
+    record: Recorder,
 ) -> file_identities.CommittedFiles:
-    """What ``fragments``, written for a transaction that has yet to land on ``dataset``'s ref (``branch``), add under the
-    table's root, sealed and read before their version lands: each data file and, on a table with a blob column, the
-    sidecars beside it. Lance writes the transaction's own file inside its commit (pylance 13.0.0), so
-    :func:`with_transaction_file` seals that one once the version names it.
+    """What ``fragments``, written for a transaction of a table of ``schema`` that has yet to land on its ref (``branch``),
+    add under the table's root, sealed and recorded before their version lands (:func:`seal_and_record`): each data file
+    and, where the schema holds a blob column, the sidecars beside it. Lance writes the transaction's own file inside its
+    commit (pylance 13.0.0), so :func:`seal_and_record_transaction` seals that one once the version names it.
 
     Raises:
-        OSError: The store refused, or could not be reached for, a seal or a read.
+        FilesNotHeldError: The store holds no object at a file the fragments name.
+        ServiceUnavailableError: The store refused, or did not answer, a seal on a warehouse whose store must enforce it.
+        OSError: The store refused, or could not be reached for, a read or the record.
     """
     root = table_root(table_location)
     ref = _ref_prefix(branch)
     data = [data_file.path for fragment in fragments for data_file in fragment.data_files() if data_file.base_id is None]
-    listed = [f"{ref}data/{name.removesuffix('.lance')}" for name in data] if client_fragments.blob_columns(dataset) else []
-    return file_identities.as_stored(root, so, transaction_uuid, [*(f"{ref}data/{name}" for name in data), *_listed(root, so, listed)])
-
-
-def with_transaction_file(
-    committed: file_identities.CommittedFiles, *, table_location: str, branch: str | None, so: StorageOptions, read_version: int
-) -> file_identities.CommittedFiles:
-    """``committed`` with the transaction file its commit wrote, sealed and read now that its version landed.
-
-    Raises:
-        OSError: The store refused, or could not be reached for, the seal or the read.
-    """
-    written = file_identities.as_stored(
-        table_root(table_location), so, committed.transaction_uuid, [transaction_file(branch, read_version, committed.transaction_uuid)]
+    listed = [f"{ref}data/{name.removesuffix('.lance')}" for name in data] if any(blobs.holds_blob(field) for field in schema) else []
+    committed = seal_and_record(
+        [*(f"{ref}data/{name}" for name in data), *_listed(root, so, listed)],
+        table_location=table_location,
+        so=so,
+        transaction_uuid=transaction_uuid,
+        record=record,
     )
-    return committed.model_copy(update={"files": [*committed.files, *written.files]})
+    if committed is None:
+        raise InternalError("the files of a write that has not landed were answered as landed")
+    return committed
 
 
 def table_root(table_location: str) -> str:
@@ -271,37 +425,6 @@ def written_by(transaction: Transaction, committed: file_identities.CommittedFil
 
 def _ref_prefix(branch: str | None) -> str:
     return "" if branch is None else f"{BRANCH_CONTAINER}/{branch}/"
-
-
-def record_landed(
-    record: Callable[[file_identities.CommittedFiles], None], after: lance.LanceDataset, *, table_location: str, branch: str | None, so: StorageOptions
-) -> Transaction | None:
-    """Record, through ``record``, what ``after`` added over the version before it: a version Lance committed itself.
-    Answers the version's transaction, which its author is recorded under (:mod:`catalog.services.commit_authors`), or
-    ``None`` when none could be read.
-
-    After the version lands, since the write and its commit are one call: a store failure here is logged at ERROR and
-    counted, and the door still answers its version, because the write landed and an error would have its caller retry
-    it. So is a version that names no transaction, which no record can be keyed by.
-    """
-    try:
-        transaction = after.read_transaction(after.version)
-    except OSError as exc:
-        _count_unrecorded(table_location, after.version, f"{type(exc).__name__}: {exc}")
-        return None
-    if transaction is None:
-        _count_unrecorded(table_location, after.version, "the version names no transaction")
-        return None
-    try:
-        before = None if branch is None and after.version == 1 else after.checkout_version(after.version - 1 if branch is None else (branch, after.version - 1))
-        record(
-            added(before, after, table_location=table_location, branch=branch, so=so, transaction_uuid=transaction.uuid, read_version=transaction.read_version)
-        )
-    except (OSError, file_identities.FilesNotHeldError, InvalidInputError, ServiceUnavailableError) as exc:
-        _count_unrecorded(table_location, after.version, f"{type(exc).__name__}: {exc}")
-        return transaction
-    _unrecorded.add(0)
-    return transaction
 
 
 def _count_unrecorded(table_location: str, version: int, reason: str) -> None:

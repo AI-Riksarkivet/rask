@@ -47,7 +47,7 @@ from lakehouse import control_prefixes, trash
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
-from lakehouse.record_store import delete_record
+from lakehouse.record_store import delete_record, get_record, put_record
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
 
@@ -220,6 +220,23 @@ def set_warehouse_sealed(control_root: str, storage_options: StorageOptions, war
         return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), lambda record: {**record, SEALED: sealed})
     except RecordMissingError:
         return None
+
+
+#: Where the seal the catalog's probe last measured of the estate's own warehouse is kept: it has no registry record, and
+#: a prefix beneath the registry's, which its listing does not descend into (:func:`read_warehouses`).
+_ESTATE_SEAL_PREFIX = f"{_REGISTRY_PREFIX}/estate-seal"
+
+
+def set_estate_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str, sealed: str) -> None:
+    """Record what the catalog's seal probe measured of the estate's own warehouse ``warehouse_id`` (ADR 0242)."""
+    put_record(control_root, storage_options, f"{_ESTATE_SEAL_PREFIX}/{warehouse_id}.json", {SEALED: sealed})
+
+
+def estate_sealed(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> str | None:
+    """What the catalog's seal probe last measured of the estate's own warehouse, ``None`` before its first probe."""
+    record = get_record(control_root, storage_options, f"{_ESTATE_SEAL_PREFIX}/{warehouse_id}.json", event="estate_seal_unreadable")
+    sealed = None if record is None else record.get(SEALED)
+    return sealed if isinstance(sealed, str) else None
 
 
 def set_warehouse_manager(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, manager: str | None) -> dict[str, str] | None:

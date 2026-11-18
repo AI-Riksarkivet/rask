@@ -8796,7 +8796,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "pass" | "fail" | "skip";
+            outcome: "pass" | "fail" | "skip" | "inconclusive";
         };
         /**
          * ProbeReport
@@ -8818,7 +8818,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "pass" | "fail" | "skip";
+            outcome: "pass" | "fail" | "skip" | "inconclusive";
             sealed?: components["schemas"]["Sealed"] | null;
         };
         ProblemDetails: {

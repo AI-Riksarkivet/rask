@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 from lakehouse import records
-from lakehouse.idempotency import PREFIX, InFlightError, KeyBinding, Replay, TakenOver, claim, reclaim, record_outcome, release
+from lakehouse.idempotency import PREFIX, InFlightError, KeyBinding, Replay, TakenOver, claim, reclaim, record_outcome, release, renew
 from lakehouse.storage_options import StorageOptions
 
 
@@ -42,11 +42,14 @@ CREATE = KeyBinding(endpoint="POST /v1/table/{id}/create", target="db$t", reques
 LIFETIME = timedelta(days=1)
 
 
-def _claimed_a_day_ago(root: str, monkeypatch: pytest.MonkeyPatch, *, attempt: str) -> None:
-    """``attempt`` claimed the key a day ago on the store's clock, and never finished."""
+def _claimed_a_day_ago(root: str, monkeypatch: pytest.MonkeyPatch, *, attempt: str, put_planned_on: int | None = None) -> None:
+    """``attempt`` claimed the key a day ago on the store's clock, renewed it before a put planned on ``put_planned_on``
+    when one is given, and never finished."""
     read = records.read_json_at
     monkeypatch.setattr(records, "read_json_at", lambda *args: read(*args).model_copy(update={"at": datetime.now(UTC) - LIFETIME}))
     claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt=attempt)
+    if put_planned_on is not None:
+        renew(root, SO, scope=SCOPE, key=KEY, attempt=attempt, planned_on=put_planned_on)
     monkeypatch.setattr(records, "read_json_at", read)
 
 
@@ -62,7 +65,7 @@ class TestAnAttemptStillRunningIsNotAReplay:
         """Two retries arriving after the lease both find the claim abandoned; the store lets one take the key over,
         and the other, whose write follows a read the first one's takeover outdated, finds the key held."""
         root = str(tmp_path)
-        _claimed_a_day_ago(root, monkeypatch, attempt="crashed")
+        _claimed_a_day_ago(root, monkeypatch, attempt="crashed", put_planned_on=3)
         read = records.read_json_at
         rival: list[object] = []
 
@@ -77,7 +80,7 @@ class TestAnAttemptStillRunningIsNotAReplay:
 
         with pytest.raises(InFlightError):
             claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="late")
-        assert [type(taken) for taken in rival] == [TakenOver], "the rival's takeover must run, alone, told it took over a lapsed attempt"
+        assert rival == [TakenOver(written_from=3)], "the rival's takeover must run, alone, told where the lapsed attempt's put may have landed"
 
     def test_reclaiming_does_not_lose_the_outcome_the_first_attempt_then_writes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The abandoned attempt may not be dead, only slow. Whichever finishes writes the outcome, and

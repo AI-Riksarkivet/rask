@@ -179,16 +179,31 @@ def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[
 
 
 class SealRefusedError(OSError):
-    """The store answered a seal (``PutObjectTagging``) with a refusal: the role holds no grant for it, or the store keeps
-    no object tags (a 4xx other than 404, or 501 NotImplemented). Another attempt is answered the same."""
+    """The store answered a seal (``PutObjectTagging``) with an explicit refusal: 403 AccessDenied, the role holding no
+    grant for it, or 501 NotImplemented, a store that keeps no object tags. Another attempt is answered the same."""
 
 
 class SealUnavailableError(OSError):
-    """The store did not answer a seal: a transport failure or a 5xx other than 501. Another attempt may be answered."""
+    """The store did not answer a seal with a verdict: a transport failure, a timeout, a throttling or any other answer
+    than :func:`refusal`'s, after the object client's own retries. Another attempt may be answered."""
 
 
+#: What a store answers a request a policy denies: S3's ``AccessDenied`` is a 403 (the S3 error-response reference's
+#: list of error codes); measured on RustFS 1.0.3, every put over a sealed key and a seal the role holds no
+#: ``s3:PutObjectTagging`` for answered 403 AccessDenied (ADR 0242 § The request table).
+_ACCESS_DENIED: Final = 403
 #: What a store that keeps no object tags answers ``PutObjectTagging``: S3's ``NotImplemented`` is a 501.
 _NOT_IMPLEMENTED: Final = 501
+
+
+def refusal(exc: BaseException) -> bool:
+    """Whether ``exc`` is the store's explicit refusal of a request: a 403, which a policy's Deny answers. Any other failure,
+    a throttling (429, 503 SlowDown), a timeout (408, RequestTimeout), a 5xx or a transport error, says nothing about
+    what the store's policy allows: it is inconclusive, never read as a refusal or as an admission (ADR 0242 § Found by
+    review, second round)."""
+    from botocore.exceptions import ClientError
+
+    return isinstance(exc, ClientError) and int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 0) == _ACCESS_DENIED
 
 
 def seal(uri: str, storage_options: StorageOptions, keys: Sequence[str], *, where_granted: bool = False) -> list[str]:
@@ -200,7 +215,10 @@ def seal(uri: str, storage_options: StorageOptions, keys: Sequence[str], *, wher
 
     ``where_granted`` is a warehouse git declares runs with detection only (ADR 0242 § The declared exception): a key the
     store refuses to tag is left untagged and logged, and the commit goes on, so a store that grants tagging later
-    enforces from its next commit with nothing rewritten. Otherwise a refusal fails the seal.
+    enforces from its next commit with nothing rewritten. Otherwise a refusal fails the seal. Only an explicit refusal
+    (403, or 501 from a store that keeps no tags) is one: any other answer is retried by the object client (adaptive, three
+    attempts, ``lakehouse.storage.client``) and then fails the seal as unavailable, whatever the declaration, so a
+    throttled or slow store is never taken for one that cannot tag.
 
     A seal replaces the object's tag set, which no writer of a Lance table sets, and sealing an object again is the same
     write: a commit recorded twice seals its files twice.
@@ -224,8 +242,8 @@ def seal(uri: str, storage_options: StorageOptions, keys: Sequence[str], *, wher
             status = int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 0)
             if status == 404:
                 return False
-            if status >= 500 and status != _NOT_IMPLEMENTED:
-                raise SealUnavailableError(f"the store failed sealing {bucket}/{full_key}: {exc}") from exc
+            if not refusal(exc) and status != _NOT_IMPLEMENTED:
+                raise SealUnavailableError(f"the store gave no verdict sealing {bucket}/{full_key}: {exc}") from exc
             if where_granted:
                 log.warning("seal_refused_detection_only", extra={"bucket": bucket, "key": full_key, "status": status})
                 return True

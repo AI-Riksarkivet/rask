@@ -55,8 +55,9 @@ BRANCH_STAGING_GLOB: Final = f"{BRANCH_CONTAINER}/*"
 #: A final manifest at any depth, in both naming schemes, which only the catalog writes: putting one commits a version.
 FINAL_MANIFEST_GLOB: Final = "*.manifest"
 
-#: The object tag the catalog puts on each file a commit adds before its version lands (``file_identities.as_stored``,
-#: ADR 0242), and the object-tag condition key the write tier's and the catalog's own policies refuse a put over it by:
+#: The object tag the catalog puts on each file a commit adds (the catalog's ``committed_files.seal_and_record``, ADR
+#: 0242: every data, deletion and index file before its version lands, its transaction file once landed), and the
+#: object-tag condition key the write tier's and the catalog's own policies refuse a put over it by:
 #: a put, a multipart upload's create, part and complete, and a copy onto a key holding this tag are refused by the store
 #: (measured on RustFS 1.0.3, 2026-11-17). No vended credential may put, replace or remove an object's tags.
 SEALED_TAG: Final = "rask-sealed"

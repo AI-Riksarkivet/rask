@@ -57,9 +57,13 @@ def _append(client: TestClient, ids: list[int]) -> httpx.Response:
 
 
 def _held(target: str, monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
-    """Hold the first call of ``target`` (``module:function``, a door's step after its claim) until released."""
+    """Hold the first call of ``target`` (``module:function`` or ``module:Class.method``, a door's step after its claim)
+    until released."""
     module_name, name = target.split(":")
-    module = importlib.import_module(module_name)
+    module: Any = importlib.import_module(module_name)
+    if "." in name:
+        owner, name = name.split(".")
+        module = getattr(module, owner)
     real = getattr(module, name)
     arrived, release = threading.Event(), threading.Event()
 
@@ -98,24 +102,33 @@ def _lapsed(monkeypatch: pytest.MonkeyPatch) -> Any:  # noqa: ANN401 — monkeyp
 
 
 def _interleave(
-    monkeypatch: pytest.MonkeyPatch, hold: str, send: Callable[[], httpx.Response], between: Callable[[], object]
+    monkeypatch: pytest.MonkeyPatch, hold: str, send: Callable[[], httpx.Response], between: Callable[[], object], *, resend_hold: str | None = None
 ) -> tuple[httpx.Response, httpx.Response, httpx.Response]:
-    """The first attempt held at ``hold``; the resend run whole past the lease; ``between``; the first released; a third
-    send. Each answer, in that order."""
+    """The first attempt held at ``hold``; the resend run past the lease, whole or, with ``resend_hold``, held there until
+    the first has answered; ``between``; the first released; a third send. Each answer, in that order."""
     arrived, release = _held(hold, monkeypatch)
-    first: dict[str, httpx.Response] = {}
-    thread = threading.Thread(target=lambda: first.update(answer=send()))
+    resend_arrived, resend_release = _held(resend_hold, monkeypatch) if resend_hold is not None else (threading.Event(), threading.Event())
+    answers: dict[str, httpx.Response] = {}
+    thread = threading.Thread(target=lambda: answers.update(first=send()))
     thread.start()
     assert arrived.wait(WAIT), "the first attempt never reached its write"
     context = _lapsed(monkeypatch)
     try:
-        resent = send()
+        if resend_hold is None:
+            answers["resent"] = send()
+        else:
+            resend = threading.Thread(target=lambda: answers.update(resent=send()))
+            resend.start()
+            assert resend_arrived.wait(WAIT), "the resend never reached the step it is held at"
     finally:
         context.__exit__(None, None, None)
     between()
     release.set()
     thread.join(WAIT)
-    return first["answer"], resent, send()
+    if resend_hold is not None:
+        resend_release.set()
+        resend.join(WAIT)
+    return answers["first"], answers["resent"], send()
 
 
 def _count(client: TestClient, name: str = TABLE) -> str:
@@ -137,6 +150,8 @@ class _Door(NamedTuple):
     between: Callable[[TestClient], object]
     first: tuple[int, int | None]
     holds: Callable[[TestClient], object]
+    #: Where the resend is held until the first attempt has answered; ``None`` runs it whole.
+    resend_hold: str | None = None
 
 
 def _keyed(client: TestClient, path: str, **kwargs: Any) -> httpx.Response:  # noqa: ANN401 — the request's own body
@@ -211,6 +226,18 @@ _DOORS = {
         first=(200, None),
         holds=_rows_and_version("4", 2),
     ),
+    # The interleaving RecordOwnClaim exists for: the resend holds the claim, its table created, and has not recorded its
+    # answer when the first attempt's ExistOk finds the table and answers 2. Recorded over the resend's claim, that answer
+    # would be the key's, and the resend's own true answer, 1, recorded nowhere.
+    "create-exist-ok-before-the-resend-records": _Door(
+        setup=lambda client: None,
+        hold="catalog.services.table_create:create_governed_table",
+        send=lambda client, _setup: _keyed(client, f"/v1/table/{TABLE}/create?mode=ExistOk", content=_rows([1, 2, 3]), headers=_ARROW),
+        between=lambda client: _append(client, [9]),
+        first=(200, None),
+        holds=_rows_and_version("4", 2),
+        resend_hold="catalog.api.idempotency:Converge.remember",
+    ),
     # The first attempt drops the table its name resolved to, which the resend dropped; the table created since stands.
     "drop": _Door(
         setup=lambda client: _create(client, [1, 2, 3]),
@@ -257,7 +284,7 @@ def test_a_keyed_door_resent_while_its_first_attempt_runs_acts_once(race_ns_clie
     client = race_ns_client
     _ok(client.post("/v1/namespace/lance_catalog$ns1/create", json={}))
     made = race.setup(client)
-    first, resent, again = _interleave(monkeypatch, race.hold, lambda: race.send(client, made), lambda: race.between(client))
+    first, resent, again = _interleave(monkeypatch, race.hold, lambda: race.send(client, made), lambda: race.between(client), resend_hold=race.resend_hold)
     assert resent.status_code == 200, resent.text
     assert (first.status_code, first.json().get("code")) == race.first, first.text
     assert (again.status_code, again.json()) == (200, resent.json()), "the key answers another attempt's write"

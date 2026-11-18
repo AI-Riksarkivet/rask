@@ -678,7 +678,7 @@ tests:
               lance_seal: "untaggable"
             exp_annotations:
               summary: "Warehouse wh-b's store no longer enforces the seal (untaggable)"
-              description: "A validate found this warehouse's store no longer refuses a put over a sealed file, and git requires the seal of it: any write credential can replace a file a committed version names, with a 200. untaggable also fails every commit there with a 503. Restore the store's policy (ADR 0242 § What a platform S3 store must support), then validate the warehouse again (POST /management/v1/warehouses/{id}/validate)."
+              description: "The catalog's seal probe (at its start and every catalog.sealProbe.periodSeconds) or a validate found this warehouse's store no longer refuses a put over a sealed file, and git requires the seal of it: any write credential can replace a file a committed version names, with a 200. untaggable also fails every commit there with a 503. Restore the store's policy (ADR 0242 § What a platform S3 store must support), then validate the warehouse again (POST /management/v1/warehouses/{id}/validate)."
 
   # One table refused on its daily passes. Every refusal's series exists at 0 from the worker's start, so the first
   # refused pass is an increase and pages; the next refused pass, a day later, holds the alert through its 25h window.

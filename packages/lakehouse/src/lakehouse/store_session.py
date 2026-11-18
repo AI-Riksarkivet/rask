@@ -37,7 +37,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, read_identity_token
 from lakehouse.governed.secrets import secret_store_configured
 from lakehouse.governed.store_credential import S3KeyPair, StoreCredentialUnavailableError
-from lakehouse.storage_options import DEFAULT_REGION, REGION, StorageOptions, object_client
+from lakehouse.storage_options import DEFAULT_REGION, REGION, StorageOptions, forget_credential, object_client
 
 
 if TYPE_CHECKING:
@@ -147,10 +147,15 @@ class SessionCache:
         return self._clock()
 
     def hold(self, identity: WebIdentity, key_pair: S3KeyPair, *, asked_at: float, lifetime_seconds: float) -> None:
-        """Hold ``key_pair`` for ``lifetime_seconds`` from ``asked_at``, a reading of `now`."""
+        """Hold ``key_pair`` for ``lifetime_seconds`` from ``asked_at``, a reading of `now`. The session it replaces signs
+        nothing more: the object clients built for it are let go (``storage_options.forget_credential``), so no client
+        keeps a replaced credential's secret in memory."""
         held = _Held(key_pair=key_pair, issued_at=asked_at, expires_at=asked_at + lifetime_seconds)
         with self._lock:
+            replaced = self._held.get(identity)
             self._held = {**self._held, identity: held}
+        if replaced is not None and replaced.key_pair != key_pair:
+            forget_credential(replaced.key_pair)
 
     def peek(self, identity: WebIdentity) -> S3KeyPair | None:
         """The session ``identity`` holds, unless it is within `EXPIRY_MARGIN_SECONDS` of expiring."""

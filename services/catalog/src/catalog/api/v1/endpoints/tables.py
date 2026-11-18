@@ -1851,7 +1851,7 @@ async def restore_table(
     # The event names the version THAT restore committed on the ref it restored, and the shared trailer reads
     # its schema off one pinned open (best-effort: a readback failure never fails the committed restore).
     landed = None
-    if converge.held is not None and converge.held.taken_over_since is not None:
+    if converge.held is not None and converge.held.written_from is not None:
         landed = await run_in_threadpool(lambda: dataplane.landed_under_key(table.open_unchecked(so, branch=body.branch), converge.held))
     if landed is not None:
         # The restore a lapsed attempt under the key landed and never answered is the key's answer (ADR 0240).

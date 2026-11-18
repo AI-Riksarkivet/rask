@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from botocore.exceptions import ClientError
 from pydantic import SecretStr
 
 from catalog.api.v1.endpoints import warehouses as endpoint
@@ -61,6 +62,15 @@ class _Vendor:
         raise AssertionError("the scope probe vends no reclaim")
 
 
+def _answered(status: int, code: str) -> ClientError:
+    """What boto3 raises for a store's ``status`` answer: only a 403 is the store refusing a write outside the prefix, and
+    only a 412 a conditional put (ADR 0242 § Found by review, second round)."""
+    return ClientError(
+        {"Error": {"Code": code}, "ResponseMetadata": {"RequestId": "", "HostId": "", "HTTPStatusCode": status, "HTTPHeaders": {}, "RetryAttempts": 0}},
+        "PutObject",
+    )
+
+
 class _Store:
     """An object store that either honours the credential's prefix or ignores it.
 
@@ -83,7 +93,7 @@ class _Store:
 
     def _check(self, key: str) -> None:
         if self._scoped_to is not None and not key.startswith(self._scoped_to):
-            raise PermissionError(f"AccessDenied: {key} is outside {self._scoped_to}")
+            raise _answered(403, "AccessDenied")
 
     def put_object(self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None) -> dict[str, Any]:  # noqa: N803 — boto3's own casing
         self.attempted.append(Key)
@@ -92,7 +102,7 @@ class _Store:
             if self._conditional == "rejects":
                 raise ValueError("NotImplemented: this store does not support IfNoneMatch")
             if self._conditional == "honours" and Key in self.keys:
-                raise FileExistsError("PreconditionFailed: the key already exists")
+                raise _answered(412, "PreconditionFailed")
         self.keys[Key] = Body
         return {}
 

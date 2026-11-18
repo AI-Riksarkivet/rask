@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Final, Literal
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
@@ -404,10 +405,11 @@ async def _require_a_conforming_store(
     """
     bucket = split_s3_uri(root_uri)[0]
     creator = role_session_name(author.subject if author is not None else ANONYMOUS_SUBJECT)
-    report = await _probe(settings, vendor, root_uri, session_name=creator)
+    report = await probe(settings, vendor, root_uri, session_name=creator)
     # The seal check's failure is the store's verdict when it measured one (`sealed`), judged below against the
-    # declaration; without one it learned nothing about the store, as every other failure outside the conformance checks.
-    failed = [c.name for c in report.checks if c.outcome == "fail" and not (c.name == SEAL_CHECK and report.sealed is not None)]
+    # declaration; without one it learned nothing about the store, as every other failure outside the conformance checks,
+    # and an inconclusive check, which learned nothing either (a timeout, a throttling, a 5xx), registers nothing: 503.
+    failed = [c.name for c in report.checks if c.outcome in ("fail", "inconclusive") and not (c.name == SEAL_CHECK and report.sealed is not None)]
     if report.sealed in ("unenforced", "untaggable") and bucket not in settings.seal_detection_only_buckets:
         # FAIL CLOSED (ADR 0242 B4): a store that does not refuse a put over a sealed file lets any write credential
         # replace what a committed version names, with a 200; only git may accept that, per warehouse.
@@ -431,8 +433,9 @@ async def _require_a_conforming_store(
     return report.sealed
 
 
-async def _probe(settings: Settings, vendor: CredentialVendor, root_uri: str, *, session_name: str) -> ProbeReport:
-    """The scope probe and the seal check against the store under ``root_uri``, reduced to one report."""
+async def probe(settings: Settings, vendor: CredentialVendor, root_uri: str, *, session_name: str) -> ProbeReport:
+    """The scope probe and the seal check against the store under ``root_uri``, reduced to one report: what registration,
+    validate and the catalog's own seal probe (``catalog.api.seal_probe``) each measure a store by."""
     probe = partial(_run_scope_probe, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=session_name)
     checks = await run_in_threadpool(probe)
     seal = partial(
@@ -1421,13 +1424,25 @@ async def validate_warehouse_credentials(
     require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     subject = token.subject if token is not None else ANONYMOUS_SUBJECT
-    report = await _probe(settings, vendor, str(record["root_uri"]), session_name=role_session_name(subject))
+    report = await probe(settings, vendor, str(record["root_uri"]), session_name=role_session_name(subject))
     if report.sealed is not None:
         # Recorded and served, so a store that stopped enforcing the seal since registration shows on the warehouse and
-        # pages (`WarehouseSealUnenforced`) from this validate on, whatever the declaration (ADR 0242 B4).
+        # pages (`WarehouseSealUnenforced`) from this validate on, whatever the declaration (ADR 0242 B4). A probe that was
+        # inconclusive measured nothing, and the record keeps the seal last measured.
         await run_in_threadpool(warehouses.set_warehouse_sealed, settings.registry_root, so, warehouse_id, report.sealed)
         seal_posture.observe(warehouse_id, report.sealed, required=str(record["bucket"]) not in settings.seal_detection_only_buckets)
     return report
+
+
+#: What a store answers a conditional put that lost to an object already there: S3's 412 PreconditionFailed, or 409
+#: ConditionalRequestConflict for one racing another conditional write of the key (the S3 error-response reference).
+_CONDITION_LOST: Final = frozenset({409, 412})
+
+
+def _precondition_failed(exc: BaseException) -> bool:
+    """Whether ``exc`` is the store refusing a conditional put because the key is taken: the only answer that proves it
+    honours ``If-None-Match``."""
+    return isinstance(exc, ClientError) and int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 0) in _CONDITION_LOST
 
 
 def _encryption_put_args(options: Mapping[str, str]) -> dict[str, Any]:
@@ -1488,19 +1503,25 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     access_key, secret_key, session_token = options.credential_in_clear()
     s3 = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.region)
 
-    def _step(name: str, fn: Callable[[], object], *, expect_refusal: bool = False) -> bool:
+    def _step(name: str, fn: Callable[[], object], *, refused_by: Callable[[BaseException], bool] | None = None, taken: str = "") -> bool:
+        """Run one write or read; with ``refused_by`` it is one the store must refuse, and only an answer ``refused_by``
+        reads as the store's explicit refusal passes: any other failure (a timeout, a throttling, a 5xx, after the client's
+        retries) is ``inconclusive``, which measured nothing, so a store that did not answer is never recorded as
+        enforcing what it was asked (ADR 0242 § Found by review, second round)."""
         try:
             fn()
         except Exception as exc:  # noqa: BLE001 — the store's refusal is the RESULT here, not an error
             detail = f"{type(exc).__name__}: {str(exc)[:120]}"
-            checks.append(ProbeCheck(name=name, outcome="pass" if expect_refusal else "fail", detail="" if expect_refusal else detail))
-            return expect_refusal
-        checks.append(
-            ProbeCheck(name=name, outcome="fail", detail="the store accepted a write OUTSIDE the credential's prefix")
-            if expect_refusal
-            else ProbeCheck(name=name, outcome="pass")
-        )
-        return not expect_refusal
+            if refused_by is None:
+                checks.append(ProbeCheck(name=name, outcome="fail", detail=detail))
+                return False
+            if refused_by(exc):
+                checks.append(ProbeCheck(name=name, outcome="pass"))
+                return True
+            checks.append(ProbeCheck(name=name, outcome="inconclusive", detail=f"inconclusive: the store neither refused nor took it: {detail}"))
+            return True
+        checks.append(ProbeCheck(name=name, outcome="fail", detail=taken) if refused_by is not None else ProbeCheck(name=name, outcome="pass"))
+        return refused_by is None
 
     wrote = _step("write_inside", lambda: s3.put_object(Bucket=bucket, Key=inside, Body=b"scope-probe"))
     if wrote:
@@ -1519,7 +1540,12 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         # write LANDED and left an object at the warehouse root. Cleaned below — but only in that case:
         # a correctly scoped credential is refused the delete too, and reporting that refusal as a
         # cleanup failure would raise a false alarm about the store that just passed.
-        scope_refused = _step(SCOPE_CHECK, lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"), expect_refusal=True)
+        scope_refused = _step(
+            SCOPE_CHECK,
+            lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"),
+            refused_by=stored_objects.refusal,
+            taken="the store accepted a write OUTSIDE the credential's prefix",
+        )
         # PUT-IF-NOT-EXISTS, the primitive Lance's commit protocol rests on
         # (`lance_docs/lance/format/table/transaction.md` § "Commit Protocol" -> "Storage Primitives"). Two conditional
         # puts at one key: the first must be ACCEPTED and the second REFUSED. A store that accepts
@@ -1529,7 +1555,12 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         # check rather than the first.
         reserved = _step(CAS_RESERVE, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"first", IfNoneMatch="*"))
         if reserved:
-            _step(CAS_CHECK, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"), expect_refusal=True)
+            _step(
+                CAS_CHECK,
+                lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"),
+                refused_by=_precondition_failed,
+                taken="the store accepted a second conditional put of one key",
+            )
         else:
             # The store refused the HEADER, not a racing writer. That is a real failure — recorded by
             # the step above — but it measures nothing about a second writer, so the claim stays
@@ -1549,6 +1580,10 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     return checks
 
 
+class _Inconclusive(Exception):
+    """A write of the seal check the store neither took nor refused with its explicit refusal."""
+
+
 def _run_seal_check(
     root_uri: str, *, vendor: CredentialVendor, store_endpoint: str, session_name: str, catalog_options: StorageOptions
 ) -> tuple[ProbeCheck, Sealed | None]:
@@ -1559,7 +1594,10 @@ def _run_seal_check(
     it under ``catalog_options``, its own identity, through the call every commit seals with
     (:func:`lakehouse.stored_objects.seal`); the credential then puts over it and begins a multipart upload of it. Both
     refused is ``enforced``; either taken is ``unenforced``, a store that keeps the tag and evaluates no
-    ``s3:ExistingObjectTag`` on a put; a seal refused is ``untaggable``. The probe file is removed under the catalog's
+    ``s3:ExistingObjectTag`` on a put; a seal refused is ``untaggable``. Only the store's explicit refusal (403
+    AccessDenied, which RustFS 1.0.3 answers a policy's Deny with, and the S3 error reference names a Deny's answer) counts
+    as one: any other answer to the seal or to either put, after the object client's retries, is ``inconclusive`` and
+    measures nothing, so a throttled or slow store is never recorded as enforcing or as untaggable. The probe file is removed under the catalog's
     identity, which a seal does not stop deleting.
     """
     bucket, prefix = split_s3_uri(root_uri.rstrip("/"))
@@ -1578,10 +1616,14 @@ def _run_seal_check(
     encrypted = _encryption_put_args(options.options)
 
     def refused(write: Callable[[], object]) -> bool:
+        """Whether the store refused ``write`` with its explicit refusal (403): a write it took is ``False``, and any other
+        failure (a timeout, a throttling, a 5xx, after the client's retries) says nothing about the seal."""
         try:
             write()
-        except Exception:  # noqa: BLE001 — the store's refusal is the result here
-            return True
+        except Exception as exc:
+            if stored_objects.refusal(exc):
+                return True
+            raise _Inconclusive(f"{type(exc).__name__}: {str(exc)[:160]}") from exc
         return False
 
     try:
@@ -1596,19 +1638,25 @@ def _run_seal_check(
         except stored_objects.SealRefusedError as exc:
             return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail=f"untaggable: the store refused the seal: {str(exc)[:160]}"), "untaggable"
         except stored_objects.SealUnavailableError as exc:
-            return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail=f"the store did not answer the seal: {str(exc)[:160]}"), None
+            return ProbeCheck(name=SEAL_CHECK, outcome="inconclusive", detail=f"inconclusive: the store gave the seal no verdict: {str(exc)[:160]}"), None
         if absent:
             return ProbeCheck(name=SEAL_CHECK, outcome="fail", detail="the probe file the store took was gone at the seal"), None
-        put = refused(lambda: writer.put_object(Bucket=bucket, Key=key, Body=b"over-a-sealed-file", **encrypted))
         upload: dict[str, Any] = {}
 
         def begin() -> None:
             upload.update(writer.create_multipart_upload(Bucket=bucket, Key=key, **encrypted))
 
-        multipart = refused(begin)
-        if upload.get("UploadId"):
-            with suppress(Exception):
-                writer.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload["UploadId"])
+        try:
+            put = refused(lambda: writer.put_object(Bucket=bucket, Key=key, Body=b"over-a-sealed-file", **encrypted))
+            multipart = refused(begin)
+        except _Inconclusive as exc:
+            return ProbeCheck(
+                name=SEAL_CHECK, outcome="inconclusive", detail=f"inconclusive: the store neither refused nor took a put over a sealed file: {exc}"
+            ), None
+        finally:
+            if upload.get("UploadId"):
+                with suppress(Exception):
+                    writer.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload["UploadId"])
     finally:
         with suppress(Exception):
             stored_objects.delete_object(f"s3://{bucket}", catalog_options, key)

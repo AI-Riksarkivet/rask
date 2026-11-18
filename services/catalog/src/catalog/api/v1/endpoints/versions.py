@@ -297,9 +297,21 @@ async def create_table_version(
         if created:
             await run_in_threadpool(managed_versions.forget_unlanded_author, table, staged, so)
         raise
-    # The writer's transaction file, which it put again on each attempt of this commit, is sealed now that the version
-    # landed (ADR 0242): every other file the version adds was sealed before it was judged.
-    await run_in_threadpool(committed_files.seal_landed_transaction, staged.table_location, so, verdict.files)
+    # The writer's transaction file, which it put again on each attempt of this commit, is sealed and recorded now that the
+    # version landed (ADR 0242): every other file the version adds was sealed before it was judged. A failure is counted and
+    # left to the commit reconciler, the version having landed.
+    await run_in_threadpool(
+        partial(
+            committed_files.seal_and_record_transaction,
+            table.record_committed_files,
+            verdict.files,
+            table_location=staged.table_location,
+            branch=staged.branch,
+            so=so,
+            read_version=staged.read_version,
+            version=staged.version,
+        )
+    )
     audit(
         AuditAction.COMMIT_VERSION,
         AuditOutcome.SUCCESS,

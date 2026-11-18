@@ -223,16 +223,27 @@ class TestARetriedAppendLandsOnce:
         counted = real_ns_client.post("/v1/table/lance_catalog$db$grown/count_rows", json={})
         assert (_version(real_ns_client, "lance_catalog$db$grown"), counted.text) == (before + 2, "6"), "a replayed append appended again"
 
+    @pytest.mark.parametrize("after", ["one-takeover", "a-chain-of-takeovers", "a-takeover-refused-before-its-search"])
     @pytest.mark.parametrize("door", ["insert-no-key", "insert-primary-key", "create-overwrite", "restore"])
     def test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
-        self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: str
+        self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: str, after: str
     ) -> None:
         """The answer of a keyed write can be lost after it committed (its pod ended, or a fault after the commit), and a
         resend past the claim's lease takes the key over. Run again, the write would land twice: its commit carries the
         key, so the takeover finds it there and answers with it (ADR 0240), at every door that lands a version: an append
         answers the rows it added, whatever operation committed them (an append to a table declaring a primary key commits
-        as Lance's merge, an ``Update``, ADR 0240 TakeoverCounts), a create the version, a restore the transaction."""
+        as Lance's merge, an ``Update``, ADR 0240 TakeoverCounts), a create the version, a restore the transaction.
+
+        However many attempts came between (ADR 0240 §11): ``a-chain-of-takeovers``, the takeover that found the write lost
+        its answer too, and a third send takes the key over from it (KeyKeepsFirst: the search starts at the first put the
+        key's record kept, where it started at that takeover's own claim and missed the write);
+        ``a-takeover-refused-before-its-search``, the takeover was refused 409 before it searched, which gave the key back,
+        and a third send claims the released key (ReleaseKeepsWritten: a released key whose record says a put may have
+        landed is searched, where it was taken as unwritten and the write landed again)."""
+        from lance_namespace import ConcurrentModificationError
+
         from catalog.api import idempotency as keyed_doors
+        from catalog.services import dataplane
         from lakehouse import idempotency
 
         metadata = {"lance-schema:unenforced-primary-key": "true"} if door == "insert-primary-key" else None
@@ -257,11 +268,22 @@ class TestARetriedAppendLandsOnce:
         async def lost(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("the pod ended before the answer was recorded")
 
+        def busy(*_args: object, **_kwargs: object) -> None:
+            raise ConcurrentModificationError("the table changed while the request was served; retry")
+
         with monkeypatch.context() as during:
             during.setattr(keyed_doors.Converge, "remember", lost)
             with pytest.raises(RuntimeError, match="the pod ended"):
                 send()
-        landed = real_ns_client.post(f"{table}/describe", json={"load_detailed_metadata": True}).json()
+            landed = real_ns_client.post(f"{table}/describe", json={"load_detailed_metadata": True}).json()
+            during.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
+            if after == "a-chain-of-takeovers":
+                with pytest.raises(RuntimeError, match="the pod ended"):
+                    send()
+            elif after == "a-takeover-refused-before-its-search":
+                during.setattr(dataplane, "landed_under_key", busy)
+                refused = send()
+                assert (refused.status_code, refused.json().get("code")) == (409, 14), refused.text
         monkeypatch.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
         again = send()
 

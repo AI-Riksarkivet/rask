@@ -4,7 +4,9 @@
 data file by its key) and ADR 0227 §9 measured across principals on RustFS 1.0.3; closing a zero-trust gap is
 pre-approved (CLAUDE.md § Four facts). Refines ADR 0157 and ADR 0184; changes the catalog's canned store policy, the
 commit path's file checks, the warehouse probe and the chart's `catalog.declared` values. § Found by review records the
-five problems an independent review found in its first version, each fixed.
+five problems an independent review found in its first version, each fixed; § Found by review, second round, the four a
+joint review of the merged keyed-commit and seal fixes found, each fixed, which closed the windows this ADR first left
+open (§ The order of effects).
 
 ## Context
 
@@ -60,9 +62,10 @@ catalog's canned policy calling STS `AssumeRole` with the session policy `build_
 ## Decision
 
 - **Every catalog commit seals the files it adds, and every file it names must be held.**
-  `lakehouse.file_identities.as_stored` puts the seal on each file (`lakehouse.stored_objects.seal`, `PutObjectTagging`,
-  sixteen at a time, under the catalog's own identity) and only then reads the ETag and size it records, so the bytes
-  recorded are bytes no put can replace; a path the store holds no object at fails the commit
+  `catalog.services.committed_files.seal_and_record`, the one call every path that adds files makes (§ Found by review,
+  second round, S1), puts the seal on each file (`lakehouse.stored_objects.seal`, `PutObjectTagging`, sixteen at a time,
+  under the catalog's own identity) and only then reads the ETag and size it records, so the bytes recorded are bytes no
+  put can replace; a path the store holds no object at fails the commit
   (`file_identities.FilesNotHeldError`, answered 400 InvalidInput at `version/create`). The files are a version's new
   data files and their blob sidecars, its new deletion files, an added index's files, and the transaction file its
   manifest names (`Manifest.transaction_file`, field 12, measured on pylance 13.0.0) under the table's root
@@ -79,11 +82,12 @@ catalog's canned policy calling STS `AssumeRole` with the session policy `build_
   (`read_transaction`, kept as `StagedVersion.transaction`, which the index rule reads instead of a second read) is the
   one finalized, committed and announced; Lance reads a version's transaction inline before it reads the file
   (`lance_docs/lance/format/table/transaction.md` § Inline Transaction Sections; measured: a zeroed `.txn` read back
-  unchanged). Stock pylance 13.0.0 inlines every transaction it writes (measured up to a 5,000-fragment append and a
-  delete over them, manifests of 0.3 and 1 MB). Sealing the writer's `.txn` file before reading it, the decision first
-  taken for B2, is no answer: a stock writer that loses a race puts its transaction file again under the same name and
-  commits on the next version (measured), so a seal before the version lands refuses its retry. That file is required
-  and recorded at the judgement and sealed once the version lands (`committed_files.seal_landed_transaction`).
+  unchanged). Stock pylance 13.0.0 inlines every transaction of at most 20 MiB (measured up to a 5,000-fragment append
+  and a delete over them, manifests of 0.3 and 1 MB; the limit, and the refusal past it, are § The supported client and
+  S2). Sealing the writer's `.txn` file before reading it, the decision first taken for B2, is no answer: a stock writer
+  that loses a race puts its transaction file again under the same name and commits on the next version (measured), so
+  a seal before the version lands refuses its retry. That file is required held at the judgement and sealed and recorded
+  once the version lands (`committed_files.seal_and_record_transaction`).
 - **The seal's Deny lives in the catalog identity's store policy alone** (`lance.objectStorePolicy.catalog`,
   `chart/templates/_helpers.tpl`), which grants `s3:PutObjectTagging` for the seal and denies `s3:PutObject` on `*/*`
   over a sealed key. Every vend is a session of that identity, and an explicit Deny in the identity's policy binds every
@@ -102,7 +106,11 @@ catalog's canned policy calling STS `AssumeRole` with the session policy `build_
   same credential puts over it and begins a multipart upload of it. It records `sealed` on the warehouse and serves it
   (`WarehouseResponse.sealed`, `ProbeReport.sealed`): `enforced` (both refused), `unenforced` (the store took the tag
   and either write), `untaggable` (the store refused the seal); none where no direct credential is vended, or where the
-  check could not reach the store (503 at registration). The probe file is deleted under the catalog's identity.
+  check learned nothing (503 at registration, the record left as it was at validate). Only the store's explicit refusal
+  counts as one (403 AccessDenied; 501 NotImplemented for a store that keeps no tags): any other answer, after the
+  object client's retries, is `inconclusive` (§ Found by review, second round, S3). The probe file is deleted under the
+  catalog's identity. The catalog probes every warehouse it serves, the estate's own included, at its start and on
+  `catalog.sealProbe.periodSeconds` (default 3600), through the catalog's timers (`catalog.api.seal_probe`).
 - **Fail closed, explicit in git otherwise.** A store not `enforced` is refused at registration (400 naming
   `sealed: <value>` and what the store must support) unless git declares the warehouse `seal: detection_only`
   (`catalog.declared.warehouses[].seal`; `catalog.declared.estateWarehouseSeal` for the estate's own warehouse, which
@@ -113,8 +121,9 @@ catalog's canned policy calling STS `AssumeRole` with the session policy `build_
   untagged where it refuses; ADR 0184's pass is the guard. Elsewhere a seal the store refuses or does not answer fails
   the commit before its version lands, 503 ServiceUnavailable (`catalog.commit.seal_failed`), for the writer to retry.
 - **The posture is exported and alerted**: `catalog.warehouse.seal` (`catalog.services.seal_posture`, one series per
-  warehouse, read off the registry at the catalog's start and updated by each registration and validate, attributes
-  `lance.warehouse`, `lance.seal`, `lance.seal_required`). `WarehouseSealUnenforced` (warning) fires while a warehouse
+  warehouse, the estate's own included, read off the registry at the catalog's start and updated by each registration,
+  validate and seal probe, and read again by a replica whose timer found the probe's window another replica's;
+  attributes `lance.warehouse`, `lance.seal`, `lance.seal_required`). `WarehouseSealUnenforced` (warning) fires while a warehouse
   git declares detection-only is not `enforced`; `WarehouseSealLost` (critical) while one git requires the seal of was
   found not `enforced` by a validate (`deploy/alerting/rules.yml`, cases in `rules_test.yml`).
 - **The maintain tier needs nothing new**: it puts nothing of a table (ADR 0197), so it is refused every put over a
@@ -166,11 +175,147 @@ credential the catalog vends), and each guard was removed again after the fix to
   `test_a_seal_the_store_refuses_fails_the_commit_unless_git_declares_detection_only` (on the lane with the catalog's
   tagging refused 403: the commit fails 503 and the table stays at its version; declared detection-only it lands with
   its file untagged), and by `tests/unit/test_a_warehouse_runs_unsealed_only_where_its_declaration_says.py`. The
-  one-call doors were not moved (§ The windows left open).
+  one-call doors were not moved then; the second round moved them (S4).
 - **B5. The Deny had no test of its own**: the lane passed with either copy removed. With one Deny left, the lane's
   vending user holds the catalog's canned policy as `helm template` renders it (`tests/integration/conftest.py`), and
   with the chart's Deny removed `test_a_vended_write_credential_cannot_put_over_any_file_a_commit_added` fails (every
   put, multipart create and copy onto a committed file 200), as do the B2 and B3 tests.
+
+## Found by review, second round, and fixed (2026-11-18)
+
+A joint review of the merged keyed-commit and seal fixes (ADR 0240 §10, this ADR's first round) would have blocked them
+for these, besides the two ADR 0240 §11 records. Each was reproduced first where it could be (the RustFS lane runs the
+pinned RustFS 1.0.3 with real vended credentials, `make lifecycle-rustfs-check`), and each guard was removed again after
+its fix to watch its test fail.
+
+- **S1. A keyed append answered 500 on a warehouse git declares detection-only** (REPRODUCED on RustFS, on the base:
+  with the catalog's tagging refused 403, a keyed `/insert` answered 500 on a detection-only warehouse and on a required
+  one alike, its files left behind; a keyed `/create` mode=Overwrite on a required one LANDED with 200; and so did an
+  unkeyed `/insert`, sealed only after its version, the failure there logged). `committed_files.appended` and
+  `with_transaction_file` called `file_identities.as_stored` directly, skipping what `added` did: the warehouse's
+  posture (`where_granted=detection_only(...)`), mapping a refusal to the retryable 503, and the counters; a failed
+  transaction-file seal after landing was only logged and never counted, so `CommittedFilesUnrecorded` stayed silent.
+  Guard: ONE function seals and records (`committed_files.seal_and_record`): it reads the posture, seals, refuses a file
+  the store does not hold, reads the identity, records it through the caller's recorder, maps a refusal or a store that
+  does not answer to 503 `catalog.commit.seal_failed` before the version lands, and counts
+  `catalog.committed_files.unrecorded` after (where it raises nothing). The function that seals and reads is private to
+  that module (`committed_files._as_stored`; `file_identities.as_stored` is gone), so no path can call it past the
+  posture, the mapping or the count; `added`, `appended`, `seal_and_record_transaction` and `finish_landed` all go
+  through it. Test `test_the_store_refuses_a_put_over_a_committed_file.py::test_a_seal_the_store_refuses_fails_the_commit_unless_git_declares_detection_only`,
+  its two postures crossed with four writers (a stock client, an `/insert`, a keyed `/insert`, a keyed `/create`
+  mode=Overwrite): on the base 4 of the 8 failed as above; now each required case answers 503 code 17 with the table
+  at its version, and each detection-only case lands untagged. With the data files' seal before landing removed from
+  `appended` the three required door cases land and fail.
+- **S2. `version/create` refused every stock commit whose transaction Lance did not inline, and this ADR said it refused
+  none.** Lance inlines a transaction into its manifest up to 20 MiB (`MAX_INLINE_TRANSACTION_BYTES`, read in the Lance
+  13 and 14 sources); measured on pylance 13.0.0 (2026-11-18), an append whose transaction properties held 20,967,424
+  bytes was inlined and one holding 20,975,616 was not. From the earlier measurements, about 100,000 fragments touched
+  by one delete or 330,000 appended in one commit reach it. Guard: the limit is stated, not silent
+  (`managed_versions.MAX_INLINE_TRANSACTION_BYTES`, `_require_an_inline_transaction`): the refusal, 400 InvalidInput
+  (code 13), names the transaction's size (read off the file the manifest names), the limit, and the remedy, to commit
+  in smaller steps. No second path for a non-inlined transaction was built (§ The supported client). Test
+  `test_the_store_refuses_a_put_over_a_committed_file.py::test_a_stock_commit_past_what_lance_inlines_is_refused_naming_its_size`,
+  4 KiB either side of the limit on the installed pylance, so a Lance that moves its threshold fails it; the earlier
+  refusal named neither the size nor the limit and fails it.
+- **S3. The probe recorded `enforced` where the store refused nothing, and `untaggable` on a transient answer**
+  (REASONED, and reproduced by injecting the answers). `_run_seal_check`'s `refused()` read ANY exception on the put
+  over the sealed file or the multipart begin as the store refusing it, so a 5xx after retries, a timeout or a
+  throttling recorded `enforced` and admitted a store that enforces nothing, with no alert; `stored_objects.seal` read
+  any 4xx but 404 as a refusal, so a 429 or a request timeout recorded `untaggable`; and validate wrote its result over
+  the record whatever it was, so a healthy warehouse could flip and page `WarehouseSealLost`. Guards: only the store's
+  explicit refusal counts (`stored_objects.refusal`: a 403, which RustFS 1.0.3 answers every policy Deny measured here
+  with, § The request table, and which the S3 error-response reference names `AccessDenied`; 501 NotImplemented for a
+  store keeping no tags); any other answer, after the object client's own retries (adaptive, three attempts,
+  `lakehouse.storage.client`), is `inconclusive` (`vend_probe.Outcome`): registration answers 503 and records nothing,
+  validate leaves the record as it was and reports the check `inconclusive`, and a commit's seal fails 503 as
+  `catalog.commit.seal_failed` `unavailable`, never "the store cannot tag". The same flaw sat in the scope and
+  conditional-put checks beside it (`_run_scope_probe`'s `_step` read any exception as the refusal it wanted), so a store
+  that did not answer the write outside the credential's prefix read as one enforcing scope: found while working, fixed
+  in the same change (a scope refusal is a 403, a conditional put's a 412 or 409, anything else `inconclusive`, and
+  `enforced` and `commit_safe` stay unknown for an inconclusive check). Tests:
+  `tests/integration/test_warehouses.py::test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe[store-answers-a-put-over-a-sealed-file-with-a-5xx]`
+  and `[store-throttles-the-seal]` (503 code 17, nothing registered; on the base the first registered `enforced`, the
+  second was refused 400 `untaggable`), and
+  `test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_measured` (an inconclusive tick and
+  validate leave each warehouse as last measured).
+  **The probe now runs on its own** (the review's second finding here): the estate's own warehouse, which has no
+  registration, was never probed and exported no seal status, and every other warehouse was probed again only when
+  someone ran validate, so `WarehouseSealLost` could not fire on its own. The catalog probes every warehouse it serves,
+  the estate's own included, at its start (`catalog.main.converge_at_boot`, after the incarnations converge, which no
+  readiness waits on: a store hiccup must not hold readiness) and on a period from the chart
+  (`catalog.sealProbe.periodSeconds`, default 3600, `LANCE_SEAL_PROBE_PERIOD_SECONDS`), through the timer seam
+  (`lakehouse.timers`, one replica a window; `catalog.api.seal_probe`), recording a registered warehouse's on its record
+  and the estate's on a record of its own (`_warehouses/estate-seal/<id>.json`, `warehouses.set_estate_sealed`), exporting
+  both, and counting a probe that learned nothing on `catalog.warehouse.seal_unprobed`. A replica whose timer found the
+  window another's reads the records again (`seal_posture.load_in_background`), so no replica's stale series outlives a
+  recovery. Test `test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_measured`: the estate and a
+  registered warehouse measured `enforced`, then `unenforced` once the store stops enforcing, each recorded and exported.
+- **S4. The windows this ADR left open could be closed, and one path had regressed.** The create and overwrite doors
+  wrote fragments and then committed (`_write_blob`), but sealed and recorded only once the version landed
+  (`_record_written`), so a crash after the put left every file of that version unsealed and unrecorded for good; a
+  keyed append to a table without a primary key sealed its transaction file after the put where its stamped form had
+  sealed it before; the unkeyed append was one Lance call sealing after landing; and nothing found what a crash left.
+  Guards: every path that writes its data files before its commit seals and records them BEFORE the version lands
+  (`_write_blob` and `dataplane._land_rows` through `committed_files.appended`), the unkeyed append moved to the same
+  split form (§ The cost, measured), and the one file a commit can seal only after landing, the transaction file Lance
+  writes inside its commit (and a stock writer puts again on each attempt), is sealed and recorded once landed
+  (`committed_files.seal_and_record_transaction`), a failure counted on `catalog.committed_files.unrecorded`. A landed
+  version whose record lacks a file it names is FOUND AND FINISHED by the commit reconciler, on its existing period, on
+  every version it reads past its grace (`commit_reconcile.scan_ref`'s `finish`, `commit_reconcile.finish_landed`,
+  `committed_files.finish_landed`), counted on `catalog.committed_files.finished`; it finishes as well the versions no
+  commit sealed (a branch's first version, a disarm, a version committed past every door). Model: ADR 0240 §11, invariant
+  `LandedDataSealed` and property `EveryFileSealed`, configs `CommitPathSealAfterLanding.cfg` and
+  `CommitPathNoReconciler.cfg`. Tests: S1's (the unkeyed and keyed doors on a required warehouse answer 503 with nothing
+  landed, where the unkeyed one landed with 200), and
+  `test_a_commit_whose_announcement_was_lost_is_announced_once.py`, which now has a write whose transaction file's
+  record the store refused once landed: it answers 200, the miss is counted, its data files are recorded already, and
+  the next tick records the transaction file, counted finished; with the reconciler's `finish` removed it fails.
+- **S5. The S3 client cache kept credentials past their use** (`storage_options.object_client`): its key held the
+  secret and session token in clear, and a rotated credential's client, with its expired secret, stayed in memory until
+  32 newer entries evicted it. Guard: the key names a credential by a BLAKE2b of its secret and token, a client is let go
+  when the store session replaces its credential (`store_session.SessionCache.hold` calls
+  `storage_options.forget_credential`) or when its credential expires (a vended one's `expires_at_millis`, the spec's
+  storage option, judged at every call), and the 32-client bound stays. Test
+  `packages/lakehouse/tests/test_a_store_client_signs_with_one_credential_and_outlives_it_never.py`: two credentials
+  sign each with its own client, no key holds a secret, a renewed session's predecessor's client is gone, and an expired
+  vend's is let go; on the base the key held both secrets in clear.
+
+## The order of effects, for every way a version lands
+
+What each path does, in order, and what is sealed and recorded before the version lands (B: before; A: after).
+
+| Way a version lands | Data, deletion, index files | Transaction file | Version lands by | After it lands |
+| --- | --- | --- | --- | --- |
+| A stock client's commit (`version/create`) | sealed and read at the judgement (B), recorded once authorized (B) | required held at the judgement; sealed and recorded once landed (A) | the backend's put-if-not-exists of the catalog's copy | the transaction file sealed and the record written again with it; a failure counted, the reconciler finishes it |
+| A door's stamped commit (merge-insert, update, delete, an `/insert` to a table declaring a key, restore, the column and metadata doors) | sealed and recorded before the finalize (B) | written by the detached commit, sealed and recorded before the finalize (B) | the backend's put-if-not-exists | nothing left to seal |
+| An `/insert` to a table declaring no key, keyed or not (`_land_rows`) | fragments written, sealed and recorded before the commit (B) | written by Lance inside its commit; sealed and recorded once landed (A) | Lance's own commit, which rebases (keyed: renewed before each put, ADR 0240) | as for a stock commit |
+| A `/create` (`Create`, `ExistOk` of a new name, `Overwrite`, keyed or not, `_write_blob`) | fragments written, sealed and recorded before the commit (B) | as above (A) | Lance's own commit (keyed: `land_keyed`) | as for a stock commit |
+| A version no commit sealed (a branch's first, a `Clone`; a disarm; a version committed past every door) | sealed and recorded by the reconciler (A) | sealed and recorded by the reconciler (A) | Lance, or a writer past every door | counted finished |
+
+## The cost, measured
+
+The unkeyed append moved to the split form (S4) at no cost that matters: Lance's `insert` is itself a fragment write and
+a commit, and the before-landing seal replaces the after-landing one, the same requests in another order. Measured
+2026-11-18 on the lane's RustFS 1.0.3 run as a process, the catalog app under `TestClient`, pylance 13.0.0, a table of
+1M rows (an `int64` and a `string` column), one-row appends, the first of each kind a warm-up, at a load average of 4 to
+5 on four cores shared with other agents; ADR 0240 §10's figures, taken before this change on the same shape, beside:
+
+| Store | Writers | Unkeyed (s) | Keyed (s) | Before (ADR 0240 §10, unkeyed / keyed) |
+| --- | --- | --- | --- | --- |
+| RustFS 1.0.3 | 1 | 0.127, 0.129, 0.129 | 0.217, 0.190, 0.189 | 0.118-0.169 / 0.207-0.272 |
+| RustFS 1.0.3 | 16, p50 | 0.930, 1.107, 1.379 | 1.118, 2.062, 2.009 | 1.300-1.784 / 1.255-2.431 |
+
+## The supported client
+
+The stock client's path is the spec's exactly (`DeclareTable`, the vended credential, its own Lance write,
+`CreateTableVersion`), and `version/create` admits a commit whose staged manifest carries its transaction inline. That
+rests on Lance's own writer: pylance 13.0.0 inlines every transaction of at most `MAX_INLINE_TRANSACTION_BYTES` (20 MiB,
+the Lance 13 and 14 sources; measured 2026-11-18, S2) and every commit it stages under that size was admitted in the
+measurements (a 5,000-fragment append, a delete over them, the operations of the stock-client suite). A larger
+transaction (a commit touching on the order of 100,000 fragments, or with megabytes of transaction properties) is
+refused 400 InvalidInput naming its size, the limit and the remedy, committing in smaller steps; a client other than
+Lance's own writer must inline its transaction as Lance does. The threshold is pinned by S2's test on the installed
+pylance, so an upgrade that moves it fails that test before it reaches a writer.
 
 ## The request table, after the change
 
@@ -253,26 +398,33 @@ every commit fails 503 until the operator grants the tagging.
   its version lands.
 - A vend whose session policy is past what a store takes answers 400 InvalidInput `SessionPolicyTooLong`, with
   `session_policy_characters`, `session_policy_limit` and `session_policy_names`.
-- A warehouse reads `sealed`; its validate reports it.
+- A warehouse reads `sealed`; its validate reports it. A check that learned nothing reports `inconclusive` (a new value
+  of a probe check's `outcome`, and of the report's), and leaves `sealed` as last measured; a registration whose probe
+  was inconclusive answers 503 with nothing registered.
+- The estate's own warehouse exports `catalog.warehouse.seal` too, measured at the catalog's start and every
+  `catalog.sealProbe.periodSeconds`.
+- An `/insert` (keyed or not) and a `/create` whose seal the store refuses, on a warehouse git requires the seal of,
+  answer 503 ServiceUnavailable (code 17) with nothing landed, where a keyed one answered 500 and an unkeyed one, or a
+  keyed `/create` mode=Overwrite, landed with 200; on a detection-only warehouse each lands untagged, where a keyed
+  `/insert` answered 500.
+- A stock commit whose transaction is over 20 MiB is refused 400 with its size, the limit and the remedy named.
 - Each file a commit adds carries the object tag `rask-sealed=true`; a copy of it (a deep clone's) carries the tag
   along, which seals the copy. Each commit costs one `PutObjectTagging` per file it adds, before the HEAD it already
   made.
 
 ## The windows left open
 
-- **A one-call write seals after its version lands.** The create door's `write_dataset` and an unkeyed `/insert` are
-  committed by Lance in one call, then sealed (`committed_files.record_landed`). Sealing before landing means moving the
-  create door's write and `insert_into_table`'s unkeyed branch to Lance's split write, which other work is reviewing
-  now, so it is not done here. The window runs from the version's manifest landing to its files' seals: one
-  `PutObjectTagging` round per sixteen files, after the version is readable. Inside it a holder of the table's write
-  vend that has learned a new file's name (Lance mints it at random; it is in no listing before the write, so the holder
-  must list `data/` or read the new manifest and race the seal) can put over it, and the record then reads the replaced
-  bytes as committed, so the pass does not find it. A seal that fails there is counted
-  (`catalog.committed_files.unrecorded`, `CommittedFilesUnrecorded`), the version already landed.
-- **The estate's own warehouse is not probed**: it has no registration. Every warehouse is on the estate's store
-  (`validated_ids` refuses another endpoint), so any registered warehouse's probe measures the same store and role; an
-  estate with none registered measures nothing, and its commits fail 503 where the store refuses tagging unless
-  `catalog.declared.estateWarehouseSeal` says `detection_only`.
+- **A transaction file is sealed after its version lands**, the one file a commit cannot seal before (Lance writes it
+  inside its own commit, and a stock writer puts its own again on each attempt; § The order of effects). The window runs
+  from the manifest landing to one `PutObjectTagging` round, and, where the writer died in it, to the commit
+  reconciler's first tick past its grace (`catalog.commitReconcile.graceSeconds` plus up to `periodSeconds`). Inside it
+  a holder of the table's write vend that learned the file's name can put over it, and the record then reads the
+  replaced bytes; no reader is changed by that, since every manifest `version/create` admits and every manifest Lance
+  writes under 20 MiB carries its transaction inline, which Lance reads first (`transaction.md` § Inline Transaction
+  Sections). A seal that fails there is counted (`catalog.committed_files.unrecorded`, `CommittedFilesUnrecorded`).
+- **The reconciler finishes only what its scan reads**: versions past their grace, after each ref's mark, on a table the
+  catalog holds a claim for, on a tick that found lineage's feed (`commit_reconcile.tick` reads nothing without it). A
+  version the scan never reads (its table's feed absent, or the version reclaimed first) stays counted unrecorded.
 - A file committed before this change carries no seal. The estate is pre-production, so no backfill is made.
 - A maintain-tier credential still deletes a committed file (cleanup is its job); the policies of ADR 0197 bound which
   tables it reaches.
@@ -281,16 +433,22 @@ every commit fails 503 until the operator grants the tagging.
 
 - **GitOps:** the Deny is rendered by the chart into the identity's policy and converged by the provisioning hook; the
   detection-only exception is a chart value per warehouse, rendered to the catalog's environment, never set at a door;
-  the alerts are rules in the repository. The seal itself is an object tag each commit writes.
+  the alerts are rules in the repository. The seal itself is an object tag each commit writes. The probe's period is a
+  chart value and the probe runs on the catalog's own timer and at its start, so the seal status the alert reads moves
+  with nothing run by hand; the reconciler that finishes a crash's leftovers runs on the period git already gives it.
 - **Cloud native:** the refusal is the platform store's own policy evaluation, stated above as a demand on its role
   policy and measured by the probe on each warehouse; rask bundles no proxy and no workaround in front of it.
 - **Lance-namespace/table-idiomatic:** the stock client's path is the spec's exactly (`DeclareTable`, vended
   credentials, its own Lance write, `CreateTableVersion`), no field and no call added; the seal rests on the format's
   rule that a committed file is never rewritten, and the files sealed are those the format says a version references.
 - **Zero trust:** the store, not the writer's cooperation, refuses a credential the write it was not granted; a
-  version cannot name a key a writer may fill later; the judged transaction is the committed one; a store that does not
-  enforce fails registration by default, and a gap that stays open is declared in git, served on the warehouse and
-  alerted, never silent.
+  version cannot name a key a writer may fill later; no landed version names a data file a write credential can put
+  over, and the one file sealed after landing is found and finished when its writer dies; the judged transaction is the
+  committed one; a store that does not enforce fails registration by default, a store that did not answer is never
+  recorded as one that refused, and a gap that stays open is declared in git, served on the warehouse and alerted,
+  never silent; no store client keeps a credential past its replacement or its expiry.
+- **Cloud native, the demand on the store (second round):** a policy Deny answered as 403 (S3's `AccessDenied`), and
+  `PutObjectTagging` answered 501 where tags are not kept; every other answer the catalog reads as no verdict.
 
 ## Not modelled
 

@@ -23,7 +23,9 @@ from typing import Final, Literal
 from pydantic import BaseModel, Field
 
 
-Outcome = Literal["pass", "fail", "skip"]
+#: ``inconclusive`` is a check that ran and learned nothing: the store answered neither a refusal nor an admission (a
+#: timeout, a throttling, a 5xx), so its verdict on the store is UNKNOWN, as a ``skip`` is, and a retry may learn it.
+Outcome = Literal["pass", "fail", "skip", "inconclusive"]
 
 #: The check whose result IS the security claim. The others describe reachability; only this one
 #: answers "does the store honour the scope", so only this one may set `enforced`.
@@ -48,7 +50,8 @@ ENCRYPTED_WRITE: Final = "encrypted_write"
 
 #: The check whose result IS the SEAL claim (ADR 0242), and the only one that may set `sealed`: a probe file a vended
 #: WRITE credential put, sealed by the catalog as a commit seals what it adds, then put over by the same credential, as
-#: one put and as a multipart upload's create. Its outcome is `pass` only when the store refused both.
+#: one put and as a multipart upload's create. Its outcome is `pass` only when the store refused both, each with its
+#: explicit refusal (403 AccessDenied); any other answer to either, or to the seal, is `inconclusive` and sets nothing.
 SEAL_CHECK: Final = "overwrite_of_a_sealed_file_refused"
 
 #: What the seal check measured of the warehouse's store (ADR 0242): it refused both overwrites (`enforced`), took the
@@ -98,12 +101,14 @@ def summarize_probe(checks: list[ProbeCheck], *, sealed: Sealed | None = None) -
     """
     by_name = {c.name: c for c in checks}
     scope = by_name.get(SCOPE_CHECK)
-    enforced = None if scope is None or scope.outcome == "skip" else scope.outcome == "pass"
+    enforced = None if scope is None or scope.outcome in ("skip", "inconclusive") else scope.outcome == "pass"
     cas = by_name.get(CAS_CHECK)
-    commit_safe = None if cas is None or cas.outcome == "skip" else cas.outcome == "pass"
+    commit_safe = None if cas is None or cas.outcome in ("skip", "inconclusive") else cas.outcome == "pass"
 
     if any(c.outcome == "fail" for c in checks):
         outcome: Outcome = "fail"
+    elif any(c.outcome == "inconclusive" for c in checks):
+        outcome = "inconclusive"
     elif all(c.outcome == "skip" for c in checks):
         outcome = "skip"
     else:
