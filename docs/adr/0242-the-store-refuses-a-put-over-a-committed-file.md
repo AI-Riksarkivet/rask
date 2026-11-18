@@ -7,7 +7,8 @@ commit path's file checks, the warehouse probe and the chart's `catalog.declared
 five problems an independent review found in its first version, each fixed; § Found by review, second round, the four a
 joint review of the merged keyed-commit and seal fixes found, each fixed, which closed the windows this ADR first left
 open (§ The order of effects); § Found by review, third round, the two a third review found blocking and the stock
-retry it asked to have measured.
+retry it asked to have measured; § Found by review, fourth round, the two a fourth review found blocking here, and a
+claim about the probe's order it found untrue.
 
 ## Context
 
@@ -127,7 +128,8 @@ catalog's canned policy calling STS `AssumeRole` with the session policy `build_
   warehouse, the estate's own included, read off the registry at the catalog's start and updated by each registration,
   validate and seal probe, and read again by a replica whose timer found the probe's window another replica's;
   attributes `lance.warehouse`, `lance.seal`, `lance.seal_required`), and beside it `catalog.warehouse.seal_measured`,
-  the time the seal was last measured conclusively, off the record. `WarehouseSealUnenforced` (warning) fires while a
+  the time the seal was last measured conclusively, off the record; a read of the registry replaces what the replica
+  exports with what the registry holds (§ Found by review, fourth round, C3). `WarehouseSealUnenforced` (warning) fires while a
   warehouse git declares detection-only is not `enforced`; `WarehouseSealLost` (critical) while one git requires the seal
   of was found not `enforced` by a validate or the probe; `WarehouseSealUnmeasured` (warning) while a warehouse's last
   conclusive measurement is older than two probe periods (`deploy/alerting/rules.yml`, cases in `rules_test.yml`).
@@ -311,11 +313,14 @@ A third independent review would have blocked the keyed-commit and seal work for
   lacks in the same pass, and the derived run id lands a repeat once. It reads every version after the held one again on
   each pass, calls `finish` on each (one read of each version's record and of the version before it) and counts an
   unauthored version after it again each pass, as a missing announcement's hold already did, until the finish succeeds
-  or a cleanup reclaims the version (the ref's listing then skips it). **A finish that fails for ever is visible**: every
-  failure, a store that refuses the seal or the record and a version whose transaction or predecessor cannot be read
-  alike, is counted on `catalog.committed_files.unrecorded` (`committed_files.count_unrecorded`; the read failures were
-  only logged before), once per pass, so `CommittedFilesUnrecorded` (`sum(increase(...[1h])) > 0`) fires within a pass
-  and stays firing for as long as it fails at the default period (`catalog.commitReconcile.periodSeconds`, 600).
+  or a cleanup reclaims the held version itself (the ref's listing then skips it). A cleanup that reclaims only the
+  version BEFORE it does not hold it: the finish then reads what the version added off its own transaction (§ Found by
+  review, fourth round, C1), so the hold ends with the next finish the store answers. **A finish that fails for ever is
+  visible**: every failure, a store that refuses the seal or the record and a version whose transaction, or whose
+  retained predecessor, cannot be read alike, is counted on `catalog.committed_files.unrecorded`
+  (`committed_files.count_unrecorded`), once per pass, so `CommittedFilesUnrecorded` (`sum(increase(...[1h])) > 0`)
+  fires within a pass and stays firing for as long as it fails at the default period
+  (`catalog.commitReconcile.periodSeconds`, 600). Every such failure is one that can heal (fourth round, C1).
 - **B2. The probe threw away a proven `unenforced`, and an inconclusive probe never paged** (REPRODUCED: a store that
   takes a put over the sealed file and answers the multipart begin over it with a 500, through `POST
   /management/v1/warehouses`: 503, nothing registered, where the put taken proves `unenforced`). `_run_seal_check` read
@@ -323,7 +328,8 @@ A third independent review would have blocked the keyed-commit and seal work for
   registration answered 503, and the periodic probe and validate kept the last record (typically `enforced`):
   `WarehouseSealLost` never fired. Guard: both writes are always asked, the multipart begin first (a put the store takes
   replaces the object and its tag, and a begin after it would measure an unsealed key), and the verdict is read off both
-  answers (`warehouses._seal_verdict`):
+  answers (`warehouses._seal_verdict`). The order was written here as load-bearing; it is not (§ Found by review,
+  fourth round):
 
   | A write over the sealed file taken | A write unanswered | Verdict |
   | --- | --- | --- |
@@ -360,6 +366,78 @@ A third independent review would have blocked the keyed-commit and seal work for
   which is the case the after-landing seal exists for. No new defect.
 - **`commit_authors`' module note named `committed_files.record_landed`, which no longer exists**: it now names the
   split commit and `committed_files.seal_and_record_transaction`.
+
+## Found by review, fourth round, and fixed (2026-11-18)
+
+A fourth independent review would have blocked the keyed-commit, reconciler and seal-probe work for three problems, two
+here and one in ADR 0240 §13. Each was reproduced first, and each guard removed again after its fix to watch its test fail.
+
+- **C1. After a cleanup, the reconciler's mark was held for ever** (REPRODUCED on pylance 13.0.0 with the real
+  functions: a local table at versions 1 to 6, `cleanup_old_versions(older_than=0, retain_versions=2)` leaving 5 and 6;
+  `commit_reconcile.finish_landed(5)` answered False, and three passes of `scan_ref(mark=2)` each answered mark 2, each
+  counting `catalog.committed_files.unrecorded`). `finish_landed` read what a version added against the version before it
+  (`handle.checkout_version(version - 1)`), and a cleanup always leaves the first version it retains without that one, so
+  once a cleanup reclaimed a version the mark had not reached, the first retained version after it failed its finish on
+  every pass, the mark never moved again, every pass read and finished every retained version after it again, and
+  `CommittedFilesUnrecorded` fired for ever with nothing to fix; a keep-last-N policy does this to any busy table. The
+  version before is read only to tell which files a version ADDED. Guard **FinishFromOwn**: the mark is held only for a
+  failure that can heal (the store refused or did not answer the seal, the record, the transaction's read, or the read
+  of the version before while the ref's listing names it); where the listing does not name the version before
+  (`scan_ref` hands `finish` `version - 1 in stamped`), what the version added is read off its own transaction
+  (`committed_files.added_by`, called from `commit_reconcile.finish_landed`). Measured on pylance 13.0.0, against the
+  files `added_paths` finds over the version before, on a table with stable row ids:
+
+  | Operation (what commits it) | Read off the transaction | Against the version before |
+  | --- | --- | --- |
+  | `Append` (an append) | every file of `fragments` | equal |
+  | `Overwrite` (an overwrite) | every file of `fragments` | equal |
+  | `Delete` (a delete) | the deletion file of each of `updated_fragments` | equal |
+  | `Update`, `rewrite_rows` (an update, a merge-insert) | every file of `new_fragments`, the deletion file of each of `updated_fragments` | equal |
+  | `Rewrite` (a compaction, with and without an index and a deletion) | every file of each group's `new_fragments`, each index of `rewritten_indices` (none with stable row ids) | equal |
+  | `CreateIndex` (a BTREE build, and a rebuild with `replace`) | the files of each of `new_indices` | equal |
+  | `Project`, `UpdateConfig` (a column dropped, a config set) | the transaction file alone | equal |
+  | `Merge` (`add_columns`) | every file the version names: the transaction does not tell its new data files from those its fragments held | a superset, 11 files against 5 |
+  | `Restore`; an `Update` in another mode, `DataReplacement`, an operation not listed | every file the version names | equal for the `Restore` measured; the others not measured |
+
+  Every file a retained version names is held, and a seal over a sealed file changes nothing, so where the transaction
+  does not tell, the version is finished all the same, at the cost of a seal per file it names; no kind is left
+  unfinishable, so none needed a series of its own. A version a cleanup removed itself is not in the listing and holds
+  nothing; one removed between the listing and its read holds the mark for that pass only. Model: ADR 0240 §13,
+  `MarkReachesHead`, `CommitPathFinishNeedsPredecessor.cfg`. Test
+  `test_a_commit_whose_announcement_was_lost_is_announced_once.py::test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once`,
+  extended: three writes whose transaction files' records the store refused once landed, then a cleanup keeping two; a
+  pass whose read of the first retained version's transaction the store does not answer holds the mark before it,
+  counted once; a pass whose read of the version before the head the store does not answer, while it is retained, holds
+  the mark before the head, counted once; the next pass moves the mark to the head, each retained version recorded with
+  its transaction file and counted finished once. With the transaction's reading removed (the version before always
+  read) the mark stays before the first retained version (3 where 5 is asserted); with either read failure answered as
+  finished and uncounted, as the review tried, the mark moves past it (6 where 3, and 6 where 5, are asserted).
+- **C3. A deleted warehouse kept exporting `seal_measured` on every other replica, so `WarehouseSealUnmeasured` fired
+  for ever** (REPRODUCED at module level: `observe("w", …)`, then `load` with `list_warehouses` answering `[]`, and
+  `catalog.warehouse.seal_measured` still named `w`). `seal_posture.forget` ran only on the replica that served the
+  delete, and `load`, what every other replica refreshes through, added and updated and never dropped. Guard: `load`
+  REPLACES what the process exports with exactly what the registry holds, every warehouse it lists and the estate's own
+  (`seal_posture.load`, `_postures` and `_never_measured` rebound together), inside its try, which takes the registry's
+  `ServiceUnavailableError` too (what `list_warehouses` raises where the store does not answer, which escaped it), so a
+  registry that does not answer leaves the series as they were. An ended record is no warehouse:
+  `warehouses.read_warehouses` leaves it out unless the converge asks (`ENDED_AT`), so `list_warehouses` skips it, and the
+  probe (`seal_probe.probe_all`, which reads that listing) neither probes nor exports one (read in the code, not tested).
+  The never-measured series does not depend on which replica's timer won the window: `load` exports a warehouse whose
+  record holds no conclusive measurement at 0 itself, where the probe runs on a period (`seal_probe_period_seconds`) and
+  serves the warehouse (`seal_posture.probe_serves`, the estate's own store, which `probe_all` asks too). Test
+  `tests/integration/test_warehouses.py::test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_measured`,
+  extended: a replica that never probed exports the estate's 0 off the records alone, and none with no period; a
+  warehouse on another store exports none; the warehouse deleted behind this replica's back is still exported after a
+  load the registry does not answer, and gone after the next. Removing each part fails it: the replace (merged into what
+  the process held), the never-measured export, the period condition, the store condition, the outage's catch.
+- **The probe's order was written as load-bearing, and is not.** `_run_seal_check` asks the multipart begin and then the
+  put, and the code and B2 above said a begin after a taken put would measure an unsealed key. True, and harmless: a put
+  the store takes is the proof of `unenforced` whatever the begin then answers (`_seal_verdict`), and a put it refuses
+  leaves the sealed object as it was for the begin, so either order gives every verdict the same. Measured: with the put
+  asked first, every case of `test_warehouses.py` passes. The comment says so now; no case pins an order nothing needs.
+- **History prose** in this work's tests, which CLAUDE.md bans in new code, was rewritten as what each test shows
+  (`test_a_commit_whose_announcement_was_lost_is_announced_once.py`, `test_a_retried_create_does_not_rewrite_the_table.py`,
+  `test_warehouses.py`, `test_the_store_refuses_a_put_over_a_committed_file.py`); the history stays here.
 
 ## The order of effects, for every way a version lands
 
@@ -491,6 +569,13 @@ every commit fails 503 until the operator grants the tagging.
   keyed `/create` mode=Overwrite, landed with 200; on a detection-only warehouse each lands untagged, where a keyed
   `/insert` answered 500.
 - A stock commit whose transaction is over 20 MiB is refused 400 with its size, the limit and the remedy named.
+- An operator sees `CommittedFilesUnrecorded` stop once a cleanup has reclaimed a version the reconciler had not reached:
+  the mark moves to the head on the next pass the store answers, where it stayed before the first retained version and
+  the alert fired for ever (fourth round, C1). A `Merge`'s finish past a reclaimed predecessor seals every file its
+  version names, counted on `catalog.committed_files.finished` like any finish.
+- A deleted warehouse's `catalog.warehouse.seal` and `seal_measured` series leave every replica at its next read of the
+  registry, and a warehouse never measured conclusively exports `seal_measured` 0 on every replica that has read the
+  records, where the probe runs on a period (fourth round, C3).
 - Each file a commit adds carries the object tag `rask-sealed=true`; a copy of it (a deep clone's) carries the tag
   along, which seals the copy. Each commit costs one `PutObjectTagging` per file it adds, before the HEAD it already
   made.
@@ -518,7 +603,9 @@ every commit fails 503 until the operator grants the tagging.
   that learned nothing exports `catalog.warehouse.seal_measured` 0 for it (`seal_posture.unmeasured`), so
   `WarehouseSealUnmeasured` fires for it as for a measurement that aged
   (`test_warehouses.py::test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_measured`). The series
-  is the probing replica's own: a replica that has not yet probed exports none.
+  is exported by every replica that has read the records (`seal_posture.load`, at its start and on each probe window
+  another replica won), where the probe runs on a period and serves the warehouse, so it does not depend on which
+  replica's timer won the window (§ Found by review, fourth round, C3).
 - A file committed before this change carries no seal. The estate is pre-production, so no backfill is made.
 - A maintain-tier credential still deletes a committed file (cleanup is its job); the policies of ADR 0197 bound which
   tables it reaches.

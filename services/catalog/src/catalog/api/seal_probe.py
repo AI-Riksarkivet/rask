@@ -33,7 +33,6 @@ from catalog.api.v1.endpoints.warehouses import probe
 from catalog.core.config import Settings
 from catalog.core.vending import role_session_name
 from catalog.services import seal_posture, warehouses
-from lakehouse.storage import split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -74,15 +73,10 @@ async def probe_all(app: FastAPI, settings: Settings) -> SealProbeTick:
     vendor = get_vendor(Tick(app, settings).request)
     so = settings.storage_options()
     records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
-    served = [(settings.estate_warehouse, settings.root, None)] + [
-        (str(record["id"]), str(record["root_uri"]), record)
-        for record in records
-        if not record.get("endpoint") or record.get("endpoint") == settings.s3_endpoint
-    ]
+    served = [(settings.estate_warehouse, settings.root, None)] + [(str(record["id"]), str(record["root_uri"]), record) for record in records]
     done = SealProbeTick()
     for warehouse_id, root_uri, record in served:
-        bucket = split_s3_uri(root_uri.rstrip("/"))[0] if root_uri.startswith("s3://") else ""
-        if not bucket:
+        if not (bucket := seal_posture.probe_serves(settings, root_uri, None if record is None else record.get("endpoint"))):
             continue
         try:
             report = await probe(settings, vendor, root_uri, session_name=role_session_name(PROBE_SUBJECT))

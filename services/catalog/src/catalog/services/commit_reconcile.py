@@ -245,7 +245,7 @@ def scan_ref(
     record_of: Callable[[str, int, str], commit_records.CommitAuthor | None],
     authenticates: bool,
     unannounced: Callable[[str], bool],
-    finish: Callable[[int, lance.LanceDataset], bool] = lambda _version, _handle: True,
+    finish: Callable[[int, lance.LanceDataset, bool], bool] = lambda _version, _handle, _before_retained: True,
 ) -> RefScan:
     """Every version of ``branch`` after ``mark``, older than ``grace`` and younger than ``horizon``, that the feed
     (``announced``) lacks.
@@ -270,12 +270,13 @@ def scan_ref(
     A version of an operation a door stamps and the feed announces nothing for (:data:`_AUTHORED_UNANNOUNCED`, a floor
     raise) is confirmed once its author is recorded, and counted otherwise, never announced.
 
-    ``finish`` is handed every version the pass reads, older than the grace, whoever made it: the catalog seals and records
-    there what the version names and no commit sealed and recorded (:func:`finish_landed`, ADR 0242 § The order of
-    effects), and it raises nothing. A finish that fails holds the mark before its version, as a missing announcement
-    does, so the next pass reads the version and finishes it (ADR 0242 § Found by review, third round, B1; the model's
-    ``FinishHoldsMark``, ``CommitPathFinishPassed.cfg``); what the pass finds after it is announced and counted as
-    before, and read again by the next pass.
+    ``finish`` is handed every version the pass reads, older than the grace, whoever made it, and whether the version
+    before it is in the ref's listing: the catalog seals and records there what the version names and no commit sealed
+    and recorded (:func:`finish_landed`, ADR 0242 § The order of effects), and it raises nothing. A finish that fails holds
+    the mark before its version, as a missing announcement does, so the next pass reads the version and finishes it (ADR
+    0242 § Found by review, third round, B1; the model's ``FinishHoldsMark``, ``CommitPathFinishPassed.cfg``); what the
+    pass finds after it is announced and counted as before, and read again by the next pass. A finish fails only for a
+    cause that can heal, so the mark moves once the store answers again.
 
     Raises:
         ReconcileReadError: The ref's ``_versions/`` could not be listed, or a retained version could not be read or is
@@ -297,7 +298,7 @@ def scan_ref(
             raise ReconcileReadError(f"version {version} of {location} on {branch or 'main'} has no manifest the store lists")
         if when >= before:
             break
-        if not finish(version, handle):
+        if not finish(version, handle, version - 1 in stamped):
             contiguous = False
         on_feed = when < after or (key, version) in announced
         try:
@@ -538,7 +539,15 @@ def reconcile_table(
 
 
 def finish_landed(
-    location: str, so: StorageOptions, control: str, control_so: StorageOptions, table_uuid: str, branch: str | None, version: int, handle: lance.LanceDataset
+    location: str,
+    so: StorageOptions,
+    control: str,
+    control_so: StorageOptions,
+    table_uuid: str,
+    branch: str | None,
+    version: int,
+    handle: lance.LanceDataset,
+    before_retained: bool,
 ) -> bool:
     """Seal and record what ``version`` of ``branch`` names that its commit's record lacks (:func:`committed_files.finish_landed`):
     the transaction file of a commit whose writer died between its landing and its seal, and every file of a version made
@@ -546,8 +555,14 @@ def finish_landed(
     ref's mark before it (:func:`scan_ref`); a version that names no transaction keys no record and is left, as the pass
     counts it.
 
-    The version before it is the one it was committed over: none for main's first version and for a branch's first, a
-    ``Clone`` whose data files are the parent's, named through a base.
+    ONLY A FAILURE THAT CAN HEAL ANSWERS ``False``: the store refused or did not answer the seal, the record, a read of the
+    version's transaction or of the version before it while that version is retained. What the version adds is read
+    against the version before it, the one it was committed over (none for main's first version and for a branch's first,
+    a ``Clone`` whose data files are the parent's, named through a base); where that one is not in the ref's listing
+    (``before_retained`` false: a cleanup reclaimed it, which leaves every first retained version without its predecessor,
+    and no pass can open it again) it is read off the version's own transaction (:func:`committed_files.added_by`), so a
+    cleanup never holds the mark for ever (ADR 0242 § Found by review, fourth round, C1; the model's ``FinishFromOwn``,
+    ``CommitPathFinishNeedsPredecessor.cfg``).
     """
     try:
         transaction = handle.read_transaction(version)
@@ -556,21 +571,24 @@ def finish_landed(
         return False
     if transaction is None:
         return True
+    root = committed_files.table_root(location)
     first = (branch is None and version == 1) or type(transaction.operation).__name__ in _UNANNOUNCED
-    try:
+
+    def added() -> list[str]:
+        if not first and not before_retained:
+            return committed_files.added_by(transaction, handle, root=root, branch=branch, so=so)
         before = None if first else handle.checkout_version(version - 1 if branch is None else (branch, version - 1))
-    except (OSError, ValueError) as exc:
-        committed_files.count_unrecorded(location, version, f"{type(exc).__name__}: {exc}")
-        return False
+        return committed_files.added_paths(before, handle, root=root, branch=branch, so=so)
+
     return committed_files.finish_landed(
         partial(file_identities.record, control, control_so, table_uuid),
         partial(file_identities.recorded, control, control_so, table_uuid),
-        before,
-        handle,
+        added,
         table_location=location,
         branch=branch,
         so=so,
         transaction_uuid=transaction.uuid,
+        version=version,
     )
 
 

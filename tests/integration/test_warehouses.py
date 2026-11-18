@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
-from lance_namespace import DescribeNamespaceRequest, LanceNamespace, ListNamespacesRequest, connect
+from lance_namespace import DescribeNamespaceRequest, LanceNamespace, ListNamespacesRequest, ServiceUnavailableError, connect
 from moto.server import ThreadedMotoServer
 from opentelemetry.metrics import CallbackOptions
 from pydantic import SecretStr
@@ -321,11 +321,10 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     The seal fails closed (ADR 0242): a store that takes a vended write credential's put over a sealed file, or keeps no
     tags, is refused unless git declares the warehouse detection-only, which registers it with what was measured. Only the
     store's explicit refusal (403) is one (ADR 0242 § Found by review, second round): a 5xx to the put over the sealed file,
-    or a throttling of the seal, measured nothing, and the create answers 503 with nothing registered, where it registered
-    a store that never refused the put as `enforced`, and refused a throttled one as `untaggable`. A put the store took
-    over the sealed file is the proof of `unenforced` whatever the multipart begin answered (ADR 0242 § Found by review,
-    third round, B2): a 500 to the begin left it refused 400 `sealed: unenforced`, where it answered 503 and kept the
-    warehouse's last record."""
+    or a throttling of the seal, measured nothing, and the create answers 503 with nothing registered: a store that never
+    refused the put is not `enforced`, and a throttled one is not `untaggable`. A put the store took over the sealed file
+    is the proof of `unenforced` whatever the multipart begin answered (ADR 0242 § Found by review, third round, B2): a
+    500 to the begin leaves it refused 400 `sealed: unenforced`."""
     vending = _VendingStore(honours_scope=honours_scope, honours_conditional_put=honours_conditional_put, seal=seal, **answers)
     monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending)
     monkeypatch.setattr(stored_objects, "object_client", lambda *a, **k: vending)
@@ -664,8 +663,8 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
     hand-run validate: the start measures them whatever became of the grant backfill before it, and a store that stops
     enforcing the seal is recorded `unenforced` on the next tick. A probe that
     learned nothing (the store answering a put over the sealed file with a 503) leaves each warehouse as last measured, at
-    the tick and at validate, which reports the check inconclusive; before, validate recorded whatever the probe answered,
-    and a store that refused nothing read as one that refused everything."""
+    the tick and at validate, which reports the check inconclusive, so a store that refused nothing never reads as one
+    that refused everything. A replica that did not probe exports what the records hold, a deleted warehouse included."""
     import asyncio
 
     import catalog.main as boot
@@ -708,6 +707,15 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
     vending.over_sealed = 503
     ticks = [asyncio.run(seal_probe.probe_all(client.app, settings))]
     assert measured_at()[settings.estate_warehouse] == 0.0 and measured_at()["wh-p"] > 0.0
+    # A replica whose timer never won the window exports the same off the records alone (ADR 0242 § Found by review,
+    # fourth round, C3).
+    monkeypatch.setattr(seal_posture, "_postures", {})
+    monkeypatch.setattr(seal_posture, "_never_measured", set())
+    seal_posture.load(settings)
+    assert measured_at()[settings.estate_warehouse] == 0.0 and measured_at()["wh-p"] > 0.0
+    # Where no probe runs on a period, nothing is owed a measurement, and nothing unmeasured is exported.
+    seal_posture.load(settings.model_copy(update={"seal_probe_period_seconds": 0.0}))
+    assert settings.estate_warehouse not in measured_at()
     vending.over_sealed = None
     asyncio.run(boot.converge_at_boot(client.app))
     assert measured() == {"estate": "enforced", "wh-p": "enforced", "estate-recorded": "enforced", "wh-p-recorded": "enforced"}
@@ -732,3 +740,22 @@ def test_the_catalog_probes_every_warehouse_it_serves_and_keeps_what_it_last_mea
     report = validated.json()
     assert (report["outcome"], report.get("sealed")) == ("inconclusive", None), report
     assert [check["outcome"] for check in report["checks"] if check["name"] == "overwrite_of_a_sealed_file_refused"] == ["inconclusive"], report
+
+    # The warehouse deleted on another replica, which this one sees only by a load: a registry that does not answer
+    # leaves every series as it was, and the next load drops the deleted warehouse's, so `WarehouseSealUnmeasured` does
+    # not page for it here two periods later (ADR 0242 § Found by review, fourth round, C3).
+    # A warehouse on another store, which the probe does not serve, is owed no measurement and exports none.
+    elsewhere = {key: value for key, value in (wh_svc.get_warehouse(control, StorageOptions(), "wh-p") or {}).items() if key not in {"sealed", "sealed_at"}}
+    wh_svc.put_warehouse(control, StorageOptions(), {**elsewhere, "id": "wh-elsewhere", "endpoint": "http://another-store:9000"})
+    wh_svc.delete_warehouse_record(control, StorageOptions(), "wh-p")
+
+    def unanswered_registry(*_args: Any) -> list[dict[str, str]]:
+        raise ServiceUnavailableError("the object store did not answer reading the registry")
+
+    with monkeypatch.context() as outage:
+        outage.setattr(wh_svc, "list_warehouses", unanswered_registry)
+        seal_posture.load(settings)
+    assert measured_at() == concluded
+    seal_posture.load(settings)
+    assert set(measured_at()) == {settings.estate_warehouse}
+    assert measured()["wh-p"] is None

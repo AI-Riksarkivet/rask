@@ -225,7 +225,14 @@ class TestARetriedAppendLandsOnce:
 
     @pytest.mark.parametrize(
         "after",
-        ["one-takeover", "a-chain-of-takeovers", "a-takeover-refused-before-its-search", "its-version-deleted-since", "its-version-deleted-as-it-is-searched"],
+        [
+            "one-takeover",
+            "a-chain-of-takeovers",
+            "a-takeover-refused-before-its-search",
+            "its-version-deleted-since",
+            "its-version-deleted-as-it-is-searched",
+            "a-later-version-deleted-since",
+        ],
     )
     @pytest.mark.parametrize("door", ["insert-no-key", "insert-primary-key", "create-overwrite", "restore"])
     def test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
@@ -246,11 +253,12 @@ class TestARetriedAppendLandsOnce:
 
         ``its-version-deleted-since`` (ADR 0240 §12, SearchWhole): another write lands after it and the owner deletes the
         version the write landed as (``version/delete``), inside the key's lifetime. The search cannot read that version,
-        so it cannot prove the write did not land: the resend is refused 409 InvalidTableState (19) and writes nothing,
-        where it found no stamp and landed the write a second time. ``its-version-deleted-as-it-is-searched``: the delete
-        lands between the listing of the window and the read of that version, so the listing still names it; the read fails,
-        the listing read again says the version is gone, and the resend is refused the same way, where the read's failure
-        answered as the store's."""
+        so it cannot prove the write did not land: the resend is refused 409 InvalidTableState (19) and writes nothing.
+        ``its-version-deleted-as-it-is-searched``: the delete lands between the listing of the window and the read of that
+        version, so the listing still names it; the read fails, the listing read again says the version is gone, and the
+        resend is refused the same way. ``a-later-version-deleted-since`` (ADR 0240 §13, StampBeforeGap): two writes land
+        after it and the owner deletes the first of them; the version the key's write landed as stands and carries its
+        stamp, so the resend answers it and the table is left as it was."""
         from lance_namespace import ConcurrentModificationError
 
         from catalog.api import idempotency as keyed_doors
@@ -295,9 +303,12 @@ class TestARetriedAppendLandsOnce:
                 during.setattr(dataplane, "landed_under_key", busy)
                 refused = send()
                 assert (refused.status_code, refused.json().get("code")) == (409, 14), refused.text
-        if after.startswith("its-version-deleted"):
-            assert real_ns_client.post(f"{table}/insert?mode=append", content=rows(9), headers=ARROW_STREAM).status_code == 200
-            deleted = real_ns_client.post(f"{table}/version/delete", json={"ranges": [{"start_version": before + 1, "end_version": before + 2}]})
+        later = (9, 10) if after == "a-later-version-deleted-since" else (9,)
+        if after.endswith("deleted-since") or after.endswith("searched"):
+            for row in later:
+                assert real_ns_client.post(f"{table}/insert?mode=append", content=rows(row), headers=ARROW_STREAM).status_code == 200
+            removed = before + len(later)
+            deleted = real_ns_client.post(f"{table}/version/delete", json={"ranges": [{"start_version": removed, "end_version": removed + 1}]})
             assert (deleted.status_code, deleted.json().get("deleted_count")) == (200, 1), deleted.text
         if after == "its-version-deleted-as-it-is-searched":
             listings = iter([{*range(1, before + 3)}])
@@ -316,9 +327,10 @@ class TestARetriedAppendLandsOnce:
             assert again.json() == {"num_inserted_rows": 2, "version": before + 1}
         elif door == "create-overwrite":
             assert again.json() == {"location": landed["location"], "version": before + 1}
+        appended = len(later) if after == "a-later-version-deleted-since" else 0
         counted = real_ns_client.post(f"{table}/count_rows", json={})
-        held = {"create-overwrite": "2", "restore": "3"}.get(door, "5")
-        assert (_version(real_ns_client, "lance_catalog$db$lost"), counted.text) == (before + 1, held), "the write ran again after its lease"
+        held = {"create-overwrite": 2, "restore": 3}.get(door, 5) + appended
+        assert (_version(real_ns_client, "lance_catalog$db$lost"), counted.text) == (before + 1 + appended, str(held)), "the write ran again after its lease"
 
     def test_the_key_names_one_append_on_one_ref(self, real_ns_client: TestClient) -> None:
         """The same key on another mode or another ref is another operation, refused rather than answered with this one."""

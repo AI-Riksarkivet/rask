@@ -280,7 +280,9 @@ async def insert_into_table(
         return InsertIntoTableResponse.model_validate(converge.replay.body)
     if converge.held is not None and converge.held.written_from is not None:
         landed = await run_in_threadpool(
-            lambda: dataplane.landed_under_key(table.open(so, branch=branch), converge.held, table_location=table.location, branch=branch, so=so)
+            lambda: dataplane.landed_under_key(
+                table.open(so, branch=branch), converge.held, table_location=table.location, branch=branch, so=so, replaces=insert_mode is InsertMode.OVERWRITE
+            )
         )
         if landed is not None:
             found = InsertIntoTableResponse(version=landed[0], num_inserted_rows=dataplane.inserted_rows(landed[1]))

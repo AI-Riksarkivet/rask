@@ -1086,9 +1086,11 @@ governing their data. The project-scoped surface is the console's project page, 
   door that lands a version looks for the key's stamp on the versions after it (`dataplane.landed_under_key`, no clock:
   one listing of the ref's `_versions/` and `read_transaction` of each version in the window, never `versions()`, which
   reads every manifest) and answers what it finds ([[LH-577]]); a takeover of an attempt that reached no put searches
-  nothing. A window holding a version no longer listed (a cleanup or `version/delete` removed it inside the key's
-  lifetime) is refused 409 InvalidTableState (19) and the write is never applied again under that key (ADR 0240 §12,
-  SearchWhole). An attempt whose key another took over answers 409 code 14 and lands nothing; one refused (4xx) after its
+  nothing. Every version of the window that stands is read, and one carrying the key's stamp is answered whatever else
+  is gone (ADR 0240 §13, StampBeforeGap); a window holding a version no longer listed (a cleanup or `version/delete`
+  removed it inside the key's lifetime) and no standing stamp is refused 409 InvalidTableState (19), its advice naming
+  the door (an append's rows, or a write that replaces every row since), and the write is never applied again under
+  that key (ADR 0240 §12, SearchWhole). An attempt whose key another took over answers 409 code 14 and lands nothing; one refused (4xx) after its
   key was taken over answers 409 code 14 too, not its refusal (`keyed_door`); and an answer is recorded only over the
   attempt's own claim (`idempotency.record_outcome`), so the key's answer is never replaced. The insert and the restore
   record their answer right after their commit, before the lineage emit. `specs/catalog/CommitPath.tla` models it; every
@@ -1217,7 +1219,9 @@ governing their data. The project-scoped surface is the console's project page, 
   version whose record lacks a file it names is finished by the commit reconciler (`commit_reconcile.finish_landed`,
   `catalog.committed_files.finished`; ADR 0242 § The order of effects), and a finish that fails holds the ref's mark
   before its version, counted on `catalog.committed_files.unrecorded` every pass, so the next pass tries again (ADR 0242
-  § Found by review, third round, B1). A seal the store refuses fails the
+  § Found by review, third round, B1). Only a failure that can heal fails a finish: where a cleanup reclaimed the version
+  before, what the version added is read off its own transaction (`committed_files.added_by`, ADR 0242 § Found by
+  review, fourth round, C1), never the version before, which no pass can open again. A seal the store refuses fails the
   commit 503 before its version lands, unless git declares the warehouse's bucket detection-only
   (`catalog.declared.warehouses[].seal`, `LANCE_SEAL_DETECTION_ONLY_BUCKETS`, `committed_files.detection_only`); the
   warehouse probe's seal check (`vend_probe.SEAL_CHECK`) refuses a store that does not enforce the seal at registration
@@ -1227,7 +1231,10 @@ governing their data. The project-scoped surface is the console's project page, 
   leaves a validated record as it was, and fails a commit's seal 503, never `untaggable`; but a write over the sealed
   file the store TOOK makes the check `unenforced` whatever the other write answered (`warehouses._seal_verdict`'s
   table). The record keeps when the seal was last measured (`sealed_at`), exported as `catalog.warehouse.seal_measured`,
-  and `WarehouseSealUnmeasured` fires on one older than two probe periods. The catalog probes every
+  and `WarehouseSealUnmeasured` fires on one older than two probe periods. Every read of the registry
+  (`seal_posture.load`, at the start and on each probe window another replica won) REPLACES what the replica exports
+  with what the registry holds, so a deleted warehouse's series leave every replica, and a served warehouse never
+  measured is exported at 0 by every replica (ADR 0242 § Found by review, fourth round, C3). The catalog probes every
   warehouse it serves, the estate's own included, at its start and on `catalog.sealProbe.periodSeconds`
   (`catalog.api.seal_probe`, the timer `catalog-seal-probe`), so the alert's signal moves on its own. A session policy past what a store counts (`vending.counted_length`:
   RustFS re-serialises a one-string `Resource` as a list) is refused 400 `SessionPolicyTooLong` naming each part's

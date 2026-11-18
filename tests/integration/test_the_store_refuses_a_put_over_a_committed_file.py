@@ -252,8 +252,8 @@ def test_the_transaction_judged_is_the_one_committed(race_catalog: RaceCatalog, 
     reads the files the version adds). A stock manifest carries its transaction inline, which the catalog reads from its
     own copy of the manifest and finalizes: the version lands carrying the transaction the writer staged, and once it has
     landed the ``.txn`` file is sealed (a put over it 403). A manifest without its inline transaction, whose transaction
-    Lance would read from that file, is refused 400 and the table stays at its version; before the fix it was admitted,
-    and version 2, judged as an Append, landed carrying the earlier Overwrite transaction."""
+    Lance would read from that file, is refused 400 and the table stays at its version: admitted, version 2, judged as an
+    Append, would land carrying the earlier Overwrite transaction put over the file."""
     table_id = ["lance_catalog", f"judged{int(inline)}", "t"]
     dataset = _created(race_catalog, table_id)
     bucket, _, root = dataset.uri.removeprefix("s3://").partition("/")
@@ -310,8 +310,8 @@ def test_a_stock_commit_past_what_lance_inlines_is_refused_naming_its_size(race_
     which the refusal names (the transaction's size, the 20 MiB Lance inlines, and to commit in smaller steps). Both sides
     of the limit are measured on the installed pylance, so a Lance that moves its threshold fails here: an append whose
     transaction properties hold 4 KiB less than 20 MiB stages its transaction inline and lands; one holding 4 KiB more
-    stages a manifest with no inline section and is refused, the table left at its version. Before, the refusal named
-    neither the size nor the limit."""
+    stages a manifest with no inline section and is refused, the table left at its version, the refusal naming the size
+    and the limit."""
     table_id = ["lance_catalog", f"inline{int(past)}", "t"]
     assert httpx.post(f"{race_catalog.url}/v1/namespace/{'$'.join(table_id[:-1])}/create", json={}, timeout=60).status_code == 200
     stock = _stock(race_catalog)

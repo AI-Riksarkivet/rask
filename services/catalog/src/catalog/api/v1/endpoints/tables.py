@@ -1856,7 +1856,7 @@ async def restore_table(
     if converge.held is not None and converge.held.written_from is not None:
         landed = await run_in_threadpool(
             lambda: dataplane.landed_under_key(
-                table.open_unchecked(so, branch=body.branch), converge.held, table_location=table.location, branch=body.branch, so=so
+                table.open_unchecked(so, branch=body.branch), converge.held, table_location=table.location, branch=body.branch, so=so, replaces=True
             )
         )
     if landed is not None:

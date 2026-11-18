@@ -58,6 +58,9 @@
 (* (commit_reconcile.finish_landed), which reads each ref's versions after *)
 (* its mark, oldest first; a finish that fails holds the mark before its   *)
 (* version, so the next pass tries it again (commit_reconcile.scan_ref).   *)
+(* A version whose predecessor a cleanup reclaimed is finished from what   *)
+(* its own transaction names (committed_files.added_by), so only a failure *)
+(* that can heal holds the mark.                                           *)
 (*                                                                         *)
 (* A version other than the head may be REMOVED while a key lives: a       *)
 (* cleanup (maintenance's pass, retain_versions with no age bound) or the  *)
@@ -141,12 +144,24 @@
 (*                    before its version (commit_reconcile.scan_ref's      *)
 (*                    contiguous), so the next pass finishes it; without   *)
 (*                    it the mark moves past the version for good.         *)
+(*   FinishFromOwn    a reconciler finish of a version whose predecessor   *)
+(*                    a cleanup reclaimed reads what the version added off *)
+(*                    its own transaction (commit_reconcile.finish_landed, *)
+(*                    committed_files.added_by); without it the finish     *)
+(*                    needs the version before, fails on every pass, and   *)
+(*                    holds the mark for ever.                             *)
 (*   SearchWhole      a takeover's search whose range (the versions after  *)
-(*                    written_from) holds a version no longer readable     *)
-(*                    refuses, 409 InvalidTableState, the key's write      *)
-(*                    perhaps landed in a version since removed            *)
+(*                    written_from) holds a version no longer readable,    *)
+(*                    and no readable version carrying the key, refuses,   *)
+(*                    409 InvalidTableState, the key's write perhaps       *)
+(*                    landed in a version since removed                    *)
 (*                    (dataplane.landed_under_key); without it the search  *)
 (*                    reads past the gap, finds nothing, and writes again. *)
+(*   StampBeforeGap   the search reads every version of its range that     *)
+(*                    stands and answers the one carrying the key before   *)
+(*                    it refuses for a removed one; without it a removed   *)
+(*                    version anywhere in the range refuses a key whose    *)
+(*                    write stands readable, on every later send.          *)
 (*                                                                         *)
 (* NOT MODELLED: branches (each ref is a history of its own, judged the    *)
 (* same way), the announcement after a commit (CommitAnnounce.tla), the    *)
@@ -164,20 +179,21 @@
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
-CONSTANTS Mix,        \* which writers: "retry", "rebody", "lane", "keys", "nested", "overwrite", "restore"
+CONSTANTS Mix,        \* which writers: "retry", "rebody", "lane", "keys", "nested", "overwrite", "restore", "gap"
           MaxFaults,  \* how many writers may die in one behaviour
           MaxTries,   \* how many times a stamped commit plans again after a lost race
           Off         \* the guards and assumptions a config removes
 
 Guards == {"KeyBindsBody", "KeyRenews", "RenewIsOwn", "RecordOwnClaim", "RefusalHoldsKey", "TakeoverCounts", "AppendJudged",
-           "KeyKeepsFirst", "ReleaseKeepsWritten", "SealBeforeLanding", "FinishHoldsMark", "SearchWhole"}
+           "KeyKeepsFirst", "ReleaseKeepsWritten", "SealBeforeLanding", "FinishHoldsMark", "FinishFromOwn", "SearchWhole",
+           "StampBeforeGap"}
 Assumptions == {"StoreCAS", "LeaseOutlastsCommit", "TurnLapses", "Reconciles"}
 ASSUME Off \subseteq Guards \cup Assumptions
 On(g) == g \notin Off
 
 \* The writers of each mix: their kind, the key value each writes (a keyed attempt's body), and its path.
 N == CASE Mix = "retry" -> 4 [] Mix = "rebody" -> 3 [] Mix = "lane" -> 4 [] Mix = "keys" -> 4 [] Mix = "nested" -> 2
-       [] Mix \in {"overwrite", "restore"} -> 3
+       [] Mix \in {"overwrite", "restore"} -> 3 [] Mix = "gap" -> 4
 Actors == 1..N
 Kind(a) ==
   CASE Mix = "retry" -> (IF a <= 3 THEN "keyed" ELSE "insert")
@@ -186,20 +202,23 @@ Kind(a) ==
     [] Mix = "keys" -> (CASE a = 1 -> "insert" [] a = 2 -> "stock" [] a = 3 -> "delete" [] OTHER -> "maint")
     [] Mix = "nested" -> (IF a = 1 THEN "nested" ELSE "delete")
     [] Mix \in {"overwrite", "restore"} -> (IF a <= 2 THEN "keyed" ELSE "insert")
+    \* A keyed append sent twice to a table declaring no key, beside a compaction and an unkeyed append: enough versions
+    \* after the key's write for a removed one to stand between it and the head.
+    [] Mix = "gap" -> (CASE a <= 2 -> "keyed" [] a = 3 -> "maint" [] OTHER -> "insert")
 K(a) ==
   CASE Mix \in {"retry", "overwrite", "restore"} -> (IF Kind(a) = "keyed" THEN 1 ELSE 2)
     [] Mix = "rebody" -> (IF a = 2 THEN 2 ELSE 1)
     [] OTHER -> 1
 Keyed(a) == Kind(a) = "keyed"
 \* Whether the table declares a primary key, so that its rows are a set judged at every commit.
-PKTable == Mix \notin {"lane", "overwrite", "restore"}
+PKTable == Mix \notin {"lane", "overwrite", "restore", "gap"}
 \* A keyed write that replaces the table's rows: an Overwrite (create mode=Overwrite) or a Restore.
 Replaces(a) == Keyed(a) /\ Mix \in {"overwrite", "restore"}
 \* How a writer's commit lands: "stamped" finalizes exactly the slot after its plan; "lance" is Lance's own commit, which
 \* rebases onto whatever landed since (an append across an Overwrite or a Restore is refused).
 Path(a) ==
   CASE Kind(a) = "nested" -> (IF On("AppendJudged") THEN "stamped" ELSE "lance")
-    [] Kind(a) = "keyed" -> (IF Mix \in {"lane", "overwrite"} THEN "lance" ELSE "stamped")
+    [] Kind(a) = "keyed" -> (IF Mix \in {"lane", "overwrite", "gap"} THEN "lance" ELSE "stamped")
     [] Kind(a) = "insert" -> (IF PKTable THEN "stamped" ELSE "lance")
     [] OTHER -> "stamped"
 \* The table holds key 1 before any writer starts, where a writer's harm needs it held.
@@ -223,7 +242,8 @@ VARIABLES log,      \* the table's history: one record per version, in order
           tries,    \* lost races so far
           told,     \* whether a keyed attempt's caller was told 503 at the request deadline
           ans,      \* what each writer was answered: "", "ok", "refused" (400, its key value held), "reused"
-                    \* (400, the Idempotency-Key bound to another request), "conflict" (409)
+                    \* (400, the Idempotency-Key bound to another request), "conflict" (409), "gone" (409, the key's
+                    \* write may be in a version its search could not read)
           abody, acnt, aver,  \* an "ok" answer's body, row count and version
           turn,     \* the writer holding the ref's commit turn, 0 for none
           faults,
@@ -317,12 +337,17 @@ Range(a) == {i \in 1..Len(log) : i >= plan[a]}
 \* Whether a version of that range is no longer readable: the search cannot prove the key's write did not land there.
 Unwhole(a) == \E i \in Range(a) : log[i].gone
 
+\* The versions of that range that stand and carry the key's stamp.
+Hits(a) == {i \in Range(a) : log[i].mark /\ ~log[i].gone}
+\* Whether the search refuses for a removed version: with StampBeforeGap only where no standing version carries the key.
+RefusesGap(a) == On("SearchWhole") /\ Unwhole(a) /\ (Hits(a) = {} \/ ~On("StampBeforeGap"))
+
 \* dataplane.landed_under_key, on every keyed door that commits a version: the commit carrying the key among the versions
 \* after the one its search starts from, answered as its write was, its answer recorded. A removed version is not read.
 Scan(a) ==
   /\ pc[a] = "scan"
-  /\ ~(On("SearchWhole") /\ Unwhole(a))
-  /\ LET hits == {i \in Range(a) : log[i].mark /\ ~log[i].gone} IN
+  /\ ~RefusesGap(a)
+  /\ LET hits == Hits(a) IN
      IF hits = {}
        THEN /\ pc' = [pc EXCEPT ![a] = "plan"]
             /\ UNCHANGED <<abody, acnt, aver>>
@@ -340,12 +365,13 @@ ScanRefused(a) ==
   /\ Finish(a, "conflict") /\ ReleaseIfMine(a)
   /\ UNCHANGED <<log, plan, renewed, tries, told, abody, acnt, aver, faults>>
 
-\* SearchWhole: a search whose range holds a removed version refuses, non-retryable (409 InvalidTableState), and never
-\* writes; the refusal is a 4xx after the claim, which gives the claim back, its written_from kept, so every later send
-\* under the key searches the same range and is refused the same way.
+\* SearchWhole: a search whose range holds a removed version, and no standing one carrying the key (StampBeforeGap),
+\* refuses, non-retryable (409 InvalidTableState), and never writes; the refusal is a 4xx after the claim, which gives
+\* the claim back, its written_from kept, so every later send under the key searches the same range and is refused the
+\* same way.
 ScanUnwhole(a) ==
-  /\ pc[a] = "scan" /\ On("SearchWhole") /\ Unwhole(a)
-  /\ Finish(a, "conflict") /\ ReleaseIfMine(a)
+  /\ pc[a] = "scan" /\ RefusesGap(a)
+  /\ Finish(a, "gone") /\ ReleaseIfMine(a)
   /\ UNCHANGED <<log, plan, renewed, tries, told, abody, acnt, aver, faults>>
 
 \* Plan on the latest version and judge the key against it (primary_keys.plan_new_keys, refuse_repeats_in_version,
@@ -483,9 +509,14 @@ TurnLapse ==
 \* older than its grace.
 Reconciling == On("Reconciles") /\ (\A a \in Actors : Ended(a)) /\ rmark < Len(log)
 AfterMark == log[rmark + 1]
+\* The version after the mark stands and the one before it was reclaimed: the first version a cleanup retained.
+PredecessorReclaimed == ~AfterMark.gone /\ rmark > 0 /\ log[rmark].gone
 
+\* A finish of a version whose predecessor was reclaimed reads what it added off its own transaction (FinishFromOwn);
+\* without, it needs the version before, which no pass can open again, so no finish of it succeeds.
 ReconcileFinish ==
   /\ Reconciling
+  /\ ~(PredecessorReclaimed /\ ~On("FinishFromOwn"))
   /\ log' = IF AfterMark.gone THEN log ELSE [log EXCEPT ![rmark + 1].ds = TRUE, ![rmark + 1].ts = TRUE]
   /\ rmark' = rmark + 1
   /\ UNCHANGED <<rec, pc, plan, renewed, tries, told, ans, abody, acnt, aver, turn, faults, rfails, removals>>
@@ -534,7 +565,11 @@ AnsweredWriteLanded ==
 Heard(a) == ans[a] # "" /\ ~told[a]
 
 \* A write answered failure (400 or 409) is not in the history.
-RefusedWriteAbsent == \A a \in Actors : Heard(a) /\ ans[a] \in {"refused", "reused", "conflict"} => \A i \in 1..Len(log) : log[i].by # a
+RefusedWriteAbsent == \A a \in Actors : Heard(a) /\ ans[a] \in {"refused", "reused", "conflict", "gone"} => \A i \in 1..Len(log) : log[i].by # a
+
+\* A keyed request is refused for a version its search could not read only while no standing version holds the write
+\* its key names: a write the table still holds is answered, never refused for a gap elsewhere in the range.
+GoneIsTrue == \A a \in Actors : Keyed(a) /\ ans[a] = "gone" => ~\E i \in 1..Len(log) : log[i].mark /\ ~log[i].gone
 
 \* A keyed request is refused for a key value its table holds only while the write its Idempotency-Key names is not in
 \* the history: a resend is never told that its own landed write is another row holding its key.
@@ -565,8 +600,12 @@ LandedDataSealed == \A i \in 1..Len(log) : log[i].ds
 \* reconciler when the writer died first.
 EveryFileSealed == <>[](\A i \in 1..Len(log) : log[i].gone \/ (log[i].ds /\ log[i].ts))
 
+\* Once failures stop, the reconciler's mark reaches the head, a cleanup in the behaviour included: no finish that cannot
+\* heal holds it.
+MarkReachesHead == <>[](rmark = Len(log))
+
 TypeOK ==
   /\ pc \in [Actors -> {"start", "claim", "scan", "plan", "renew", "put", "seal", "record", "done", "dead"}]
-  /\ ans \in [Actors -> {"", "ok", "refused", "reused", "conflict"}]
+  /\ ans \in [Actors -> {"", "ok", "refused", "reused", "conflict", "gone"}]
   /\ turn \in Actors \cup {0}
 =============================================================================

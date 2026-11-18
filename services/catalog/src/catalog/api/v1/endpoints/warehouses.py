@@ -1728,8 +1728,9 @@ def _run_seal_check(
         def begin() -> None:
             upload.update(writer.create_multipart_upload(Bucket=bucket, Key=key, **encrypted))
 
-        # The multipart begin first: it leaves the sealed object as it is, where a put the store takes replaces the object
-        # and its tag, and a begin after it would measure an unsealed key.
+        # The order changes no verdict: a put the store takes is the proof whatever the begin answers (it replaces the
+        # object and its tag, so a begin after it measures an unsealed key, read only as one more write taken), and a put
+        # it refuses leaves the sealed object as it was for the begin.
         try:
             answers = {
                 "CreateMultipartUpload": answer(begin),

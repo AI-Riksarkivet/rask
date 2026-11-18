@@ -19,8 +19,9 @@ probe, and the record keeps what it measured (``sealed``) and when (``sealed_at`
 
 Read from the registry at the catalog's start (:func:`load`), the estate's own warehouse from the record the catalog's
 seal probe keeps for it, updated by every registration, validate and seal probe in this process (:func:`observe`), and
-read again by a replica whose timer found the probe's window another replica's (:func:`load_in_background`), so a restart
-keeps the series and every replica reports what the last probe measured, which no stale series of its own outlives.
+read again by a replica whose timer found the probe's window another replica's (:func:`load_in_background`). A load
+replaces what the process exports with what the registry holds, so a restart keeps the series and every replica reports
+what the last probe measured, which no stale series of its own outlives, a deleted warehouse's included.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import threading
 from datetime import datetime
 from typing import Any, Final
 
+from lance_namespace import LanceNamespaceError
 from opentelemetry import metrics
 from pydantic import BaseModel, ConfigDict
 
@@ -123,24 +125,47 @@ def forget(warehouse_id: str) -> None:
     _never_measured.discard(warehouse_id)
 
 
+def probe_serves(settings: Settings, root_uri: str, endpoint: str | None) -> str:
+    """The bucket of a warehouse at ``root_uri`` behind ``endpoint`` that the catalog's seal probe serves: one on the
+    estate's own store (no endpoint of its own, or the estate's) under an ``s3://`` root; ``""`` for one it does not."""
+    if (endpoint and endpoint != settings.s3_endpoint) or not root_uri.startswith("s3://"):
+        return ""
+    return split_s3_uri(root_uri.rstrip("/"))[0]
+
+
 def load(settings: Settings) -> None:
-    """Every registered warehouse's measured seal, read off the registry: run at the catalog's start. A registry that does
-    not answer is logged and leaves the series to the next registration or validate."""
+    """What this process exports REPLACED by exactly what the registry holds: every warehouse it lists (an ended record is
+    none, :func:`warehouses.list_warehouses`) and the estate's own, each with the seal its record keeps. Run at the
+    catalog's start, and by a replica whose timer found the seal probe's window another replica's
+    (:func:`load_in_background`), so a warehouse deleted on another replica stops exporting here too and pages no
+    ``WarehouseSealUnmeasured`` (ADR 0242 § Found by review, fourth round, C3). Where the probe runs on a period, a
+    warehouse it serves whose record holds no conclusive measurement is exported as measured at 0, as the probe that
+    learned nothing exports it (:func:`unmeasured`), so the alert does not depend on which replica's timer won the window.
+    A registry that does not answer is logged and leaves the series as they were.
+    """
+    global _postures, _never_measured
     _register()
+    so = settings.storage_options()
     try:
-        records = warehouses.list_warehouses(settings.registry_root, settings.storage_options())
-    except (OSError, ValueError) as exc:
+        records = warehouses.list_warehouses(settings.registry_root, so)
+        estate = warehouses.estate_seal(settings.registry_root, so, settings.estate_warehouse)
+    except (OSError, ValueError, LanceNamespaceError) as exc:
         log.warning("seal_posture_unread", extra={"error": str(exc)[:300]})
         return
     detection_only = settings.seal_detection_only_buckets
-    for record in records:
-        observe(str(record["id"]), record, required=record.get("bucket") not in detection_only)
-    try:
-        estate = warehouses.estate_seal(settings.registry_root, settings.storage_options(), settings.estate_warehouse)
-    except (OSError, ValueError) as exc:
-        log.warning("seal_posture_unread", extra={"error": str(exc)[:300]})
-        return
-    observe(settings.estate_warehouse, estate, required=split_s3_uri(settings.root.rstrip("/"))[0] not in detection_only)
+    served = [
+        (str(record["id"]), record, str(record.get("bucket")), probe_serves(settings, str(record["root_uri"]), record.get("endpoint"))) for record in records
+    ]
+    estate_bucket = probe_serves(settings, settings.root, None)
+    postures: dict[str, _Posture] = {}
+    never: set[str] = set()
+    for warehouse_id, record, bucket, probed in [*served, (settings.estate_warehouse, estate, estate_bucket, estate_bucket)]:
+        if record is not None and isinstance(sealed := record.get(warehouses.SEALED), str):
+            postures[warehouse_id] = _Posture(sealed=sealed, required=bucket not in detection_only, at=warehouses.sealed_at(record))
+        if (warehouse_id not in postures or postures[warehouse_id].at is None) and settings.seal_probe_period_seconds and probed:
+            never.add(warehouse_id)
+    # Rebound, not changed in place: an export reading them meanwhile reads the whole of one or the other.
+    _postures, _never_measured = postures, never
 
 
 def load_in_background(settings: Settings) -> None:

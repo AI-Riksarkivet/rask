@@ -896,7 +896,12 @@ def create_table(
             # A key taken over from an attempt lost unanswered: the write it landed is the key's answer, never landed again
             # (ADR 0240).
             landed = landed_under_key(
-                lance.dataset(existing, storage_options=so.in_clear() or None, session=shared_lance_session()), key, table_location=existing, branch=None, so=so
+                lance.dataset(existing, storage_options=so.in_clear() or None, session=shared_lance_session()),
+                key,
+                table_location=existing,
+                branch=None,
+                so=so,
+                replaces=True,
             )
             if landed is not None:
                 return CreateTableResponse(location=existing, version=landed[0])
@@ -3032,66 +3037,79 @@ def delete_from_table(
 
 
 def landed_under_key(
-    dataset: lance.LanceDataset, key: idempotency.HeldKey | None, *, table_location: str, branch: str | None, so: StorageOptions
+    dataset: lance.LanceDataset,
+    key: idempotency.HeldKey | None,
+    *,
+    table_location: str,
+    branch: str | None,
+    so: StorageOptions,
+    replaces: bool,
 ) -> tuple[int, Transaction] | None:
     """The version, and its transaction, that an earlier attempt under ``key`` landed on ``dataset``'s ref (``branch`` of
     the table at ``table_location``); ``None`` when the request holds no key, no attempt under it reached a put, or none
-    landed.
+    landed. ``replaces`` is whether the keyed write replaces the table's rows (an overwrite, a restore), which the
+    refusal's advice names.
 
     For a key claimed after an attempt that renewed its claim before a put and never answered ([[LH-577]], ADR 0240): it
     may have landed its write and been lost before it recorded its answer, and the write run again would land twice. Every
     keyed write's commit carries the key (:data:`IDEMPOTENCY_KEY_PROPERTY`), and every put under the key was planned on
     ``key.written_from`` or after, so the versions after it up to the ref's head are read, newest first, for the key's
-    stamp: the ref's ``_versions/`` is listed once and each of those versions' transactions read alone
+    stamp: the ref's ``_versions/`` is listed once and each listed version's transaction read alone
     (``read_transaction``), so the search costs the window's versions and not the table's history (ADR 0240 §12, B4;
     measured on pylance 13.0.0, a local root of 3,001 versions: ``versions()`` 7.5 s, which read every manifest, against
-    one listing and three reads of 5 to 15 ms each). No clock bounds it.
+    one listing and three reads of 5 to 15 ms each). No clock bounds it. A transaction is read off the manifest's inline
+    copy, which every manifest the catalog admits carries, so a version whose transaction file a reclaim removed while
+    its manifest stands still answers (measured on pylance 13.0.0, a 2.0 and a 2.2 table).
 
-    THE WINDOW MUST BE WHOLE. A cleanup (a policy keeping ``retain_versions`` with no age bound) or the owner tier's
-    ``version/delete`` can remove a version inside the key's lifetime, and a write landed there would be found nowhere:
-    a version after ``written_from`` that the listing no longer names cannot be proved not to hold the key's write, so the
-    search refuses rather than let the write land again (ADR 0240 §12, B3; the model's ``SearchWhole``,
+    A GAP REFUSES ONLY WHERE NO STAMP STANDS. A cleanup (a policy keeping ``retain_versions`` with no age bound) or the
+    owner tier's ``version/delete`` can remove a version inside the key's lifetime, and a write landed there would be
+    found nowhere. Every version of the window the listing names is read, a read failing because the version went since
+    the listing (Lance raises OSError "was not found", measured on pylance 13.0.0; the listing read again says so) being
+    one more the search could not read: a version carrying the key's stamp is answered, wherever a gap stands (ADR 0240
+    §13, the model's ``StampBeforeGap``, ``CommitPathGapRefused.cfg``); with none found, a gap means the write may have
+    landed in a version since removed, so the search refuses rather than let it land again (§12, ``SearchWhole``,
     ``CommitPathSearchUnwhole.cfg``).
 
     Raises:
-        InvalidTableStateError: A version of the window is gone (409, code 19): the key's write may have landed in it, and
-            the catalog applies it under this key never again; every later send under the key is refused the same way.
-        OSError: The store refused, or could not be reached for, the listing or a read.
+        InvalidTableStateError: No version of the window that stands carries the key's stamp, and one is gone (409, code
+            19): the key's write may have landed in it, and the catalog applies it under this key never again; every later
+            send under the key is refused the same way.
+        OSError: The store refused, or could not be reached for, the listing, or a read of a version it still lists.
     """
     if key is None or key.written_from is None:
         return None
     ref_root = branch_layout.ref_root(table_location, recorded_branch(branch))
     listed = _listed_versions(ref_root, so)
     window = range(key.written_from + 1, max(listed, default=key.written_from) + 1)
-    _require_whole_window(key, window, listed)
-    for version in reversed(window):
+    gone = [version for version in window if version not in listed]
+    for version in reversed([version for version in window if version in listed]):
         try:
             transaction = dataset.read_transaction(version)
         except OSError:
-            # A version listed above and removed before this read is as gone as one never listed (Lance raises OSError
-            # "was not found", measured on pylance 13.0.0): the listing read again says which it was, and any other
-            # failure is the store's.
-            _require_whole_window(key, window, _listed_versions(ref_root, so))
-            raise
+            if version in _listed_versions(ref_root, so):
+                raise
+            gone.append(version)
+            continue
         if transaction is not None and (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) == key.mark:
             return version, transaction
+    if gone:
+        raise _window_gone(key, sorted(gone), replaces=replaces)
     return None
 
 
-def _require_whole_window(key: idempotency.HeldKey, window: range, listed: set[int]) -> None:
-    """Refuse a key's search when a version of its ``window`` is not among the ref's ``listed`` versions.
-
-    Raises:
-        InvalidTableStateError: A version of the window is gone (409, code 19).
-    """
-    if not (gone := [version for version in window if version not in listed]):
-        return
+def _window_gone(key: idempotency.HeldKey, gone: list[int], *, replaces: bool) -> InvalidTableStateError:
+    """The refusal of a key's search that found no stamp where versions of its window are ``gone`` (409, code 19)."""
     named = ", ".join(str(version) for version in gone[:20]) + (f" and {len(gone) - 20} more" if len(gone) > 20 else "")
-    raise InvalidTableStateError(
+    advice = (
+        "read the table: the write replaces its rows, so sent again under a new key it also replaces every row written since"
+        if replaces
+        else "read the table and send the rows under a new key if they are missing"
+    )
+    return InvalidTableStateError(
         f"the write under this Idempotency-Key may have landed in a version since removed: version {named} of the table, "
-        f"committed after the key's first write was planned on version {key.written_from}, is no longer readable, so the "
-        "catalog cannot tell whether the write landed and does not apply it again; read the table and send the write "
-        "under a new key if it is missing"
+        f"committed after the latest write under the key was planned on version {key.written_from}, is no longer readable, "
+        f"and no version that stands carries the key, so the catalog cannot tell whether the write landed and does not apply "
+        f"it again; {advice}"
     )
 
 

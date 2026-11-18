@@ -20,7 +20,8 @@ WHEN EACH PATH SEALS, measured against what each path writes before its version 
   transaction file Lance writes inside its commit, once the version landed (:func:`seal_and_record_transaction`).
 - a landed version whose files no commit sealed and recorded (its writer died between its landing and its last seal, or a
   version made with no seal of its own: a branch's first, a disarm) is finished by the commit reconciler
-  (:func:`finish_landed`), counted on ``catalog.committed_files.finished``.
+  (:func:`finish_landed`), counted on ``catalog.committed_files.finished``; what it adds is read against the version
+  before it, or off its own transaction where a cleanup reclaimed that one (:func:`added_by`).
 
 What a version adds against the version it follows on the same ref, each a file a writer's vend may stage
 (``table_layout.WRITER_PUT_GLOBS``) and, once sealed here, never put over: the data file of each fragment it holds anew (``data/*.lance``,
@@ -45,6 +46,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 from botocore.exceptions import BotoCoreError, ClientError
 from lance.dataset import Transaction
+from lance.fragment import DeletionFile
 from lance_namespace import InternalError, InvalidInputError, LanceNamespaceError, ServiceUnavailableError
 from opentelemetry import metrics
 
@@ -234,42 +236,39 @@ def seal_and_record_transaction(
 def finish_landed(
     record: Recorder,
     recorded: Callable[[str], file_identities.CommittedFiles | None],
-    before: lance.LanceDataset | None,
-    after: lance.LanceDataset,
+    added: Callable[[], list[str]],
     *,
     table_location: str,
     branch: str | None,
     so: StorageOptions,
     transaction_uuid: str,
+    version: int,
 ) -> bool:
-    """Seal and record what the landed version ``after`` names over ``before`` and its commit's record (``recorded``, by
-    transaction uuid) lacks: what a writer that died between its landing and its last seal left, and the files of a version
-    made with no seal of its own; one it finished is counted on ``catalog.committed_files.finished``. Run by the commit
-    reconciler on every version it reads (``commit_reconcile.scan_ref``), on its period.
+    """Seal and record what the landed ``version`` adds (``added``: :func:`added_paths` against the version before it, or
+    :func:`added_by` where a cleanup reclaimed that one) and its commit's record (``recorded``, by transaction uuid) lacks:
+    what a writer that died between its landing and its last seal left, and the files of a version made with no seal of
+    its own; one it finished is counted on ``catalog.committed_files.finished``. Run by the commit reconciler on every
+    version it reads (``commit_reconcile.scan_ref``), on its period.
 
     Whether every file the version names is now sealed and recorded: ``False`` is a failure, counted as
     :func:`seal_and_record` counts one after landing (``catalog.committed_files.unrecorded``), and the reconciler holds the
-    ref's mark before the version, so its next pass finishes it (ADR 0242 § Found by review, third round, B1). A finish
-    that fails on every pass is counted on every pass, which ``CommittedFilesUnrecorded`` reads.
+    ref's mark before the version, so its next pass finishes it (ADR 0242 § Found by review, third round, B1). Every such
+    failure can heal (the store refused or did not answer), so a finish that fails on every pass is a store that keeps
+    failing, counted on every pass, which ``CommittedFilesUnrecorded`` reads.
     """
     try:
-        paths = added_paths(before, after, root=table_root(table_location), branch=branch, so=so)
+        paths = added()
         held = recorded(transaction_uuid)
     except (OSError, ValueError, BotoCoreError, ClientError) as exc:
-        count_unrecorded(table_location, int(after.version), f"{type(exc).__name__}: {exc}")
+        count_unrecorded(table_location, version, f"{type(exc).__name__}: {exc}")
         return False
     missing = [path for path in paths if held is None or path not in {file.path for file in held.files}]
     if not missing:
         return True
-    if (
-        seal_and_record(
-            missing, table_location=table_location, so=so, transaction_uuid=transaction_uuid, record=record, landed=int(after.version), adding_to=held
-        )
-        is None
-    ):
+    if seal_and_record(missing, table_location=table_location, so=so, transaction_uuid=transaction_uuid, record=record, landed=version, adding_to=held) is None:
         return False
     _finished.add(1)
-    log.warning("committed_files_finished", extra={"location": table_location, "version": int(after.version), "branch": branch, "files": missing[:20]})
+    log.warning("committed_files_finished", extra={"location": table_location, "version": version, "branch": branch, "files": missing[:20]})
     return True
 
 
@@ -301,14 +300,60 @@ def added_paths(before: lance.LanceDataset | None, after: lance.LanceDataset, *,
     lineage column (2048), a fragment tree's objects under ``_bt/`` (4096), managed blobs under ``_blobs/`` (16384), and a
     MemWAL, which ``version/create`` refuses by its index.
     """
+    return _paths(after, list(_data_files(before, after)), list(_deletion_files(before, after)), list(_indices(before, after)), root=root, branch=branch, so=so)
+
+
+def added_by(transaction: Transaction, after: lance.LanceDataset, *, root: str, branch: str | None, so: StorageOptions) -> list[str]:
+    """What the landed version ``after`` adds under ``root``, read off its own ``transaction``: what the commit reconciler
+    finishes a version from once a cleanup reclaimed the version before it (ADR 0242 § Found by review, fourth round, C1),
+    which :func:`added_paths` would need and no pass can open again.
+
+    Measured on pylance 13.0.0 against :func:`added_paths` over the version before, on a table with stable row ids: an
+    ``Append`` and an ``Overwrite`` add every file of their ``fragments``; a ``Delete`` the deletion file of each of its
+    ``updated_fragments``; an ``Update`` in ``rewrite_rows`` mode (an update, a merge-insert) every file of its
+    ``new_fragments`` and the deletion file of each of its ``updated_fragments``; a ``Rewrite`` (a compaction) every file
+    of each group's ``new_fragments`` and each index it rewrote (none on a table with stable row ids); a ``CreateIndex``
+    the files of each of its ``new_indices``; a ``Project`` and an ``UpdateConfig`` nothing but the transaction file. The
+    transaction names no way to tell the files a ``Merge`` (``add_columns``) adds from those its fragments held, nor a
+    ``Restore``'s, which are an earlier version's, nor an ``Update`` in another mode's or a ``DataReplacement``'s, nor any
+    operation this list does not name: for those every file the version names is answered. Each is held, a retained
+    version naming it, and sealing a sealed file again changes nothing, so the version is finished all the same, at the
+    cost of a seal per file it names.
+    """
+    operation = transaction.operation
+    new: list[lance.FragmentMetadata] = []
+    touched: list[lance.FragmentMetadata] = []
+    indices: list[str] = []
+    if isinstance(operation, (lance.LanceOperation.Append, lance.LanceOperation.Overwrite)):
+        new = list(operation.fragments)
+    elif isinstance(operation, lance.LanceOperation.Delete):
+        touched = list(operation.updated_fragments)
+    elif isinstance(operation, lance.LanceOperation.Update) and operation.update_mode == "rewrite_rows":
+        new, touched = list(operation.new_fragments), list(operation.updated_fragments)
+    elif isinstance(operation, lance.LanceOperation.Rewrite):
+        new = [fragment for group in operation.groups for fragment in group.new_fragments]
+        indices = [str(rewritten.new_id) for rewritten in operation.rewritten_indices or []]
+    elif isinstance(operation, lance.LanceOperation.CreateIndex):
+        indices = [str(index.uuid) for index in operation.new_indices if index.base_id is None]
+    elif not isinstance(operation, (lance.LanceOperation.Project, lance.LanceOperation.UpdateConfig)):
+        return added_paths(None, after, root=root, branch=branch, so=so)
+    data = [data_file.path for fragment in new for data_file in fragment.files if data_file.base_id is None]
+    deletions = [path for fragment in [*new, *touched] if (path := _deletion_of(fragment.id, fragment.deletion_file)) is not None]
+    return _paths(after, data, deletions, indices, root=root, branch=branch, so=so)
+
+
+def _paths(
+    after: lance.LanceDataset, data: list[str], deletions: list[str], indices: list[str], *, root: str, branch: str | None, so: StorageOptions
+) -> list[str]:
+    """The paths under ``root`` of a version's new ``data`` files (and the blob sidecars beside them), its new
+    ``deletions``, the files of its new ``indices`` and the transaction file its manifest names."""
     ref = _ref_prefix(branch)
-    data = list(_data_files(before, after))
     listed = [f"{ref}data/{name.removesuffix('.lance')}" for name in data] if client_fragments.blob_columns(after) else []
-    listed += [f"{ref}_indices/{uuid}" for uuid in _indices(before, after)]
+    listed += [f"{ref}_indices/{uuid}" for uuid in indices]
     named = _named_transaction(after, branch)
     return [
         *(f"{ref}data/{name}" for name in data),
-        *(f"{ref}{path}" for path in _deletion_files(before, after)),
+        *(f"{ref}{path}" for path in deletions),
         *_listed(root, so, listed),
         *([named] if named is not None else []),
     ]
@@ -452,10 +497,13 @@ def _deletion_files(before: lance.LanceDataset | None, after: lance.LanceDataset
 
 
 def _deletion_path(fragment: lance.LanceFragment) -> str | None:
-    deletion = fragment.metadata.deletion_file
+    return _deletion_of(fragment.fragment_id, fragment.metadata.deletion_file)
+
+
+def _deletion_of(fragment_id: int, deletion: DeletionFile | None) -> str | None:
     if deletion is None or deletion.base_id is not None:
         return None
-    return deletion.path(fragment.fragment_id)
+    return deletion.path(fragment_id)
 
 
 def _indices(before: lance.LanceDataset | None, after: lance.LanceDataset) -> Iterator[str]:

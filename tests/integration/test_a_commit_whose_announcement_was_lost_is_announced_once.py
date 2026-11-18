@@ -419,8 +419,8 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
 
                 # A write through a door whose transaction file the store would not let the catalog record once the version
                 # landed (ADR 0242 § The order of effects): its data files were sealed and recorded before it landed, the
-                # write answers 200, the miss is logged at ERROR and counted, and the next tick seals and records the file,
-                # counted as finished. Before, the miss was only logged, and no tick ever recorded it.
+                # write answers 200, the miss is logged at ERROR and counted, and a later tick seals and records the file,
+                # counted as finished.
                 real_files = file_identities.record
                 uuid_of_late = catalog.post("/v1/table/lance_catalog$db$late/describe", json={}).json()["properties"]["rask.uuid"]
 
@@ -437,16 +437,17 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 landed = late.read_transaction(late.version)
                 assert landed is not None
 
-                def recorded_paths() -> list[str]:
-                    held = file_identities.recorded(control, control_so, uuid_of_late, landed.uuid)
+                def recorded_paths(transaction: Any = landed) -> list[str]:  # noqa: ANN401 — a lance Transaction
+                    held = file_identities.recorded(control, control_so, uuid_of_late, transaction.uuid)
                     return sorted(file.path for file in held.files) if held is not None else []
 
-                own = f"_transactions/{landed.read_version}-{landed.uuid}.txn"
+                def own_file(transaction: Any) -> str:  # noqa: ANN401 — a lance Transaction
+                    return f"_transactions/{transaction.read_version}-{transaction.uuid}.txn"
+
                 data = [f"data/{late.get_fragments()[-1].data_files()[0].path}"]
                 assert recorded_paths() == data, "the data files are recorded before the version lands, and the transaction file is not"
                 # The first tick's finish is refused by the same store (ADR 0242 § Found by review, third round, B1): it is
-                # counted, and the tick holds the ref's mark before the version, so a later tick finishes it. Before, the
-                # mark moved past the version and no tick read it again: the file stayed unrecorded for good.
+                # counted, and the tick holds the ref's mark before the version, so a later tick finishes it.
                 finished_before, unrecorded_before = len(finished.added), len(files_unrecorded.added)
                 monkeypatch.setattr(file_identities, "record", refused_once_landed)
                 reconcile()
@@ -455,13 +456,70 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 assert 1 in [amount for amount, _ in files_unrecorded.added[unrecorded_before:]], "the refused finish is counted"
                 reconcile()
                 reconcile()
-                assert recorded_paths() == sorted([*data, own])
+                assert recorded_paths() == sorted([*data, own_file(landed)])
                 assert [amount for amount, _ in finished.added[finished_before:]] == [1], "a later tick finished the one version a landing left"
+
+                # Three more writes whose transaction files the store would not let the catalog record once they landed, and
+                # then a cleanup keeping the last two versions (ADR 0242 § Found by review, fourth round, C1): the first
+                # retained version has no version before it any pass can open, so its finish reads what it added off its own
+                # transaction, and the mark reaches the head. Only a failure that can heal holds the mark: its transaction
+                # unread once, and the version before the head unread once while it is retained, each counted.
+                def mark_of_late() -> int:
+                    return commit_records.read_marks(control, control_so, uuid_of_late).refs[""]
+
+                head_before = mark_of_late()
+                monkeypatch.setattr(file_identities, "record", refused_once_landed)
+                for start in (3, 4, 5):
+                    assert catalog.post("/v1/table/lance_catalog$db$late/insert", content=_rows(start, start + 1), headers=_ARROW).status_code == 200
+                monkeypatch.setattr(file_identities, "record", real_files)
+                late = lance.dataset(late.uri)
+                late.cleanup_old_versions(older_than=timedelta(0), retain_versions=2)
+                first_kept, head = sorted(int(entry["version"]) for entry in late.versions())
+                assert (first_kept, head) == (head_before + 2, head_before + 3)
+                kept = {version: late.read_transaction(version) for version in (first_kept, head)}
+                assert all(recorded_paths(transaction) and own_file(transaction) not in recorded_paths(transaction) for transaction in kept.values())
+
+                def failing_once(method: str, version: int, call: int) -> None:
+                    real = getattr(lance.LanceDataset, method)
+                    asked = []
+
+                    def fails(dataset: lance.LanceDataset, *args: Any) -> Any:  # noqa: ANN401 — the method's own answer
+                        if args[0] == version and str(dataset.uri).rstrip("/").endswith(location_of_late):
+                            asked.append(version)
+                            if len(asked) == call:
+                                raise OSError("the store did not answer")
+                        return real(dataset, *args)
+
+                    monkeypatch.setattr(lance.LanceDataset, method, fails)
+
+                location_of_late = str(late.uri).rstrip("/").rsplit("/", 1)[-1]
+                finished_before, unrecorded_before = len(finished.added), len(files_unrecorded.added)
+                failing_once("read_transaction", first_kept, call=1)
+                reconcile()
+                assert (mark_of_late(), [amount for amount, _ in files_unrecorded.added[unrecorded_before:]].count(1)) == (head_before, 1), (
+                    "a transaction the store did not read holds the mark, counted"
+                )
+                # A version's own open in the pass is its first checkout, the next version's read of the version before it
+                # its second.
+                failing_once("checkout_version", first_kept, call=2)
+                unrecorded_before = len(files_unrecorded.added)
+                reconcile()
+                assert (mark_of_late(), [amount for amount, _ in files_unrecorded.added[unrecorded_before:]].count(1)) == (first_kept, 1), (
+                    "the version before the head unread while retained holds the mark before the head, counted"
+                )
+                monkeypatch.setattr(lance.LanceDataset, "checkout_version", real_checkout)
+                monkeypatch.setattr(lance.LanceDataset, "read_transaction", real_read)
+                unrecorded_before = len(files_unrecorded.added)
+                reconcile()
+                assert mark_of_late() == head, "the mark reaches the head after the cleanup"
+                assert [amount for amount, _ in files_unrecorded.added[unrecorded_before:]].count(1) == 0
+                assert all(own_file(transaction) in recorded_paths(transaction) for transaction in kept.values())
+                assert [amount for amount, _ in finished.added[finished_before:]] == [1, 1], "each retained version finished once"
 
     assert [amount for amount, _ in counted.added] == [1, 1, 1, 1, 1]
     # The create, both inserts the catalog recorded, the refused one, the registered table's insert, and the late table's
-    # create and two inserts.
-    assert [amount for amount, _ in unrecorded.added] == [0, 0, 1, 0, 0, 0, 0, 0]
+    # create and five inserts.
+    assert [amount for amount, _ in unrecorded.added] == [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
     assert [dict(attributes or {}) for _, attributes in counted.added] == [
         {"lance.catalog.operation": "create_table"},
         {"lance.catalog.operation": "insert"},
