@@ -221,15 +221,7 @@ def test_read_object_tuples_refuses_to_return_a_truncated_set() -> None:
             )
 
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.read_object_tuples(
-                _client(_EndlessClient()),
-                "table:t",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
+        asyncio.run(fga.read_object_tuples(_client(_EndlessClient()), "table:t"))
 
 
 # --------------------------------------------------------------------------- #

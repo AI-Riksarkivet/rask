@@ -37,7 +37,7 @@ from lance_namespace import (
 from unfiled_announcer import unfiled
 
 from catalog.core.config import Settings
-from catalog.services import warehouses
+from catalog.services import projects, warehouses
 from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.naming import UUID_PROPERTY
@@ -129,8 +129,10 @@ def _seed(
     bucket: str = "acme-bkt",
     protected: bool = False,
 ) -> dict[str, str]:
-    """Write a warehouse record straight into the registry."""
+    """Write a warehouse record straight into the registry, in a project whose record stands, as a create writes it."""
     so = settings.storage_options()
+    if projects.get_project_record(settings.registry_root, so, project) is None:
+        projects.put_project(settings.registry_root, so, {"id": project, "created_at": "t", "created_by": "seed"})
     record = {
         "id": warehouse_id,
         "bucket": bucket,

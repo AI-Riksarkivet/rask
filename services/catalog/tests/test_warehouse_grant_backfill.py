@@ -79,14 +79,14 @@ async def test_a_record_without_a_project_is_REPORTED_not_guessed(monkeypatch) -
     """
     _stub_client(monkeypatch)
 
-    async def _grant(_c, _s, *, warehouse_id: str, project: str, actor: str, incarnation: str | None) -> int:
+    async def _grant(_c, _s, *, warehouse_id: str, project: str, actor: str, incarnation: str, project_incarnation: str) -> int:
         return 2
 
     monkeypatch.setattr(warehouse_grant_backfill.fga_deps, "converge_warehouse_grants", _grant)
     monkeypatch.setattr(
         warehouse_grant_backfill.warehouses,
         "list_warehouses",
-        lambda *a, **k: [{"id": "orphan"}, {"id": "wh1", "project": "acme"}],
+        lambda *a, **k: [{"id": "orphan"}, {"id": "wh1", "project": "acme", "incarnation": "w1", "project_incarnation": "a1"}],
     )
     seen, written, failures = await warehouse_grant_backfill.backfill(
         _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
@@ -102,7 +102,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
     _stub_client(monkeypatch)
     calls: list[str] = []
 
-    async def _flaky(_c, _s, *, warehouse_id: str, project: str, actor: str, incarnation: str | None) -> int:
+    async def _flaky(_c, _s, *, warehouse_id: str, project: str, actor: str, incarnation: str, project_incarnation: str) -> int:
         calls.append(warehouse_id)
         if warehouse_id == "boom":
             raise RuntimeError("openfga said no")
@@ -112,7 +112,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
     monkeypatch.setattr(
         warehouse_grant_backfill.warehouses,
         "list_warehouses",
-        lambda *a, **k: [{"id": "a", "project": "p"}, {"id": "boom", "project": "p"}, {"id": "z", "project": "p"}],
+        lambda *a, **k: [{"id": w, "project": "p", "incarnation": f"{w}1", "project_incarnation": "p1"} for w in ("a", "boom", "z")],
     )
     seen, written, failures = await warehouse_grant_backfill.backfill(
         _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])

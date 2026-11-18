@@ -83,7 +83,7 @@ from catalog.schemas import (
 )
 from catalog.services import clone_endings, dataplane, incarnations, native, seal_posture, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, RecordGone
-from catalog.services.control_records import INCARNATION, ProtectionChange, with_protection
+from catalog.services.control_records import INCARNATION, PROJECT_INCARNATION, ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, SEAL_CHECK, ProbeCheck, ProbeReport, Sealed, summarize_probe
 from lakehouse import base_registry, clone_sources, data_directories, location_claims, stored_objects, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
@@ -151,21 +151,37 @@ async def create_warehouse(
     makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is, and the catalog converges
     it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
 
-    The warehouse's birth names its project, so it is written under a fence of the project opened before the gate (ADR
-    0241): a project deleted while the bucket is provisioned and probed, and made again under its id by another tenant,
-    holds no warehouse its old admin was making; the create is answered 409.
+    The warehouse's birth names its project, so it is written under a fence of the project opened between the gate's two
+    askings (ADR 0241): a caller refused writes nothing, and a project deleted while the bucket is provisioned and
+    probed, and made again under its id by another tenant, holds no warehouse its old admin was making; the create is
+    answered 409. Its record and its bucket's claim name the project incarnation the fence read, so one a create held
+    across that delete wrote is no warehouse of the tenant made again (ADR 0241 §8 B3).
     """
     ids = validated_ids(settings, body)
     _warehouse_id, project, _bucket = ids
-    await fga_deps.require_project_exists(settings, project)
-    async with fga_deps.door_fence(client, settings, f"project:{project}", token) as door:
+    project_record = await fga_deps.require_project_exists(settings, project)
+
+    async def gate() -> None:
         await fga_deps.require_can_create_warehouse(client, settings, token, project=project)
         # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
         if body.protected is not None:
             await _require_project_admin(client, settings, token, project=project)
+
+    async with fga_deps.door_fence(client, settings, f"project:{project}", token, gate=gate) as (door, _):
         fences = await fga_deps.require_fence(door, settings)
+        made_in = fences[0].incarnation if fences else incarnations.require_incarnation(project_record, f"project:{project}")
         record = await establish_warehouse(
-            request, settings, body, ids, client=client, control=control, vendor=vendor, author=author_of(token), owner=token, fences=fences
+            request,
+            settings,
+            body,
+            ids,
+            client=client,
+            control=control,
+            vendor=vendor,
+            author=author_of(token),
+            owner=token,
+            fences=fences,
+            project_incarnation=made_in,
         )
     return WarehouseResponse.model_validate(record)
 
@@ -207,6 +223,7 @@ async def establish_warehouse(
     vendor: CredentialVendor,
     author: Author | None,
     owner: Caller | None,
+    project_incarnation: str,
     fences: Sequence[fga.Fence] = (),
 ) -> dict[str, str]:
     """Make the warehouse ``body`` names, or converge the one that stands onto it; the record as written.
@@ -217,23 +234,27 @@ async def establish_warehouse(
     credential scope or a conditional put (400) and one it cannot reach (503), so no such warehouse becomes routable
     ([[LH-481]]). ``ids`` are ``body``'s (:func:`validated_ids`), in a project its caller found in the registry.
     ``owner`` is the caller granted ``owner`` on it, none for a declared warehouse, whose project's admins own it
-    through the project. ``fences`` are the create door's on the project, opened before its gate; a declared warehouse's
-    converge opens its own.
+    through the project. ``fences`` are the create door's on the project, opened between its gate's two askings; a
+    declared warehouse's converge opens its own. ``project_incarnation`` is the incarnation of the project the create was
+    decided on, which the record and the bucket's claim name (ADR 0241 §8 B3).
 
     Raises:
-        NamespaceAlreadyExistsError: The id or the bucket belongs to another project.
+        NamespaceAlreadyExistsError: The id or the bucket belongs to another project, or to an earlier incarnation of it.
         PermissionDeniedError: Git declares the warehouse and ``author`` is not the declaration.
         InvalidInputError: The bucket is reserved, or its store failed the probe.
         ServiceUnavailableError: The store or its STS could not be probed.
     """
     warehouse_id, project, bucket = ids
-    existing = await _claim_the_bucket(settings, body, ids, author=author, owner=owner)
+    existing = await _claim_the_bucket(settings, body, ids, author=author, owner=owner, project_incarnation=project_incarnation)
     root_uri = f"s3://{bucket}"
     await run_in_threadpool(warehouses.provision_bucket, bucket, settings.storage_options())
     sealed = await _require_a_conforming_store(settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
     actor = author.actor if author is not None else None
     protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
-    record = _record_for(body, existing, warehouse_id=warehouse_id, project=project, bucket=bucket, protection=protection, sealed=sealed)
+    record = {
+        **_record_for(body, existing, warehouse_id=warehouse_id, project=project, bucket=bucket, protection=protection, sealed=sealed),
+        PROJECT_INCARNATION: project_incarnation,
+    }
     # The project the gate was asked of still stands before its record names it (ADR 0241): one deleted while the bucket
     # was provisioned and probed is answered 409 with no record written under its id.
     if fences and client is not None and not await fga.fences_stand(client, fences):
@@ -249,7 +270,13 @@ async def establish_warehouse(
         await fga_deps.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project, incarnation=record[INCARNATION], fences=fences)
     elif author is not None:
         await fga_deps.converge_warehouse_grants(
-            client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject, incarnation=record.get(INCARNATION)
+            client,
+            settings,
+            warehouse_id=warehouse_id,
+            project=project,
+            actor=author.subject,
+            incarnation=record[INCARNATION],
+            project_incarnation=project_incarnation,
         )
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
     await emit_control(
@@ -266,7 +293,7 @@ async def establish_warehouse(
 
 
 async def _claim_the_bucket(
-    settings: Settings, body: CreateWarehouseRequest, ids: WarehouseIds, *, author: Author | None, owner: Caller | None
+    settings: Settings, body: CreateWarehouseRequest, ids: WarehouseIds, *, author: Author | None, owner: Caller | None, project_incarnation: str
 ) -> dict[str, str] | None:
     """Refuse a create that would take another project's warehouse id or bucket, or that anyone but the declaration
     makes over a warehouse git declares, then claim the bucket for the project.
@@ -292,6 +319,12 @@ async def _claim_the_bucket(
     existing = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
     if existing is not None and existing.get("project") != project:
         raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project")
+    # A record of an earlier incarnation of the project: a create that raced that incarnation's delete left it, and it is
+    # no warehouse of this tenant; the converge tick ends it, and its id is free then (ADR 0241 §8 B3).
+    if existing is not None and existing.get(PROJECT_INCARNATION) != project_incarnation:
+        raise NamespaceAlreadyExistsError(
+            f"warehouse {warehouse_id!r} is held by a record an earlier incarnation of project {project!r} left; it is released shortly"
+        )
     # Only the declaration changes a warehouse git declares ([[XC-213]]): a door's create is refused whoever makes it,
     # a stack that authenticates nobody included. Judged on the read the guard above made, so the create reads its
     # record once.
@@ -331,7 +364,17 @@ async def _claim_the_bucket(
     #
     # The scan stays because it answers a different question cheaply and with a listing already in hand;
     # this arbitrates the one case it structurally cannot see.
-    await run_in_threadpool(partial(warehouses.claim_bucket, settings.registry_root, so, bucket=bucket, project=project, warehouse_id=warehouse_id))
+    await run_in_threadpool(
+        partial(
+            warehouses.claim_bucket,
+            settings.registry_root,
+            so,
+            bucket=bucket,
+            project=project,
+            project_incarnation=project_incarnation,
+            warehouse_id=warehouse_id,
+        )
+    )
     return existing
 
 
@@ -481,6 +524,8 @@ async def _write_record(
             # The pre-flight guard (`_claim_the_bucket`) already refuses this for the ordinary case; reaching it here
             # means the record moved projects mid-request, and the answer is the same either way.
             raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project") from None
+        except warehouses.WarehouseOfADeadTenant:
+            raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is held by a record an earlier incarnation of its project left") from None
         except RecordMissingError:
             # Raced a concurrent delete: retryable, never a blind re-create — code 14 → 409 so the
             # caller retries into a clean create, on the sequential path as on the lost mint race.
@@ -689,6 +734,11 @@ async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token
         await _require_project_admin(client, settings, token, project=record["project"])
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
+    # A record an earlier incarnation of the project left is no warehouse of the tenant administering it now, which may
+    # neither change nor purge what a dead tenant made (ADR 0241 §8 B3); the converge tick ends it.
+    standing = await run_in_threadpool(incarnations.project_incarnation, settings.registry_root, settings.storage_options(), record["project"])
+    if standing != incarnations.require_project_incarnation(record, f"warehouse:{warehouse_id}"):
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     return record
 
 
@@ -1093,8 +1143,7 @@ async def delete_warehouse(
     project = record["project"]
     # Every record names an incarnation once the catalog converged it (`incarnations.converge`); with authorization on, one
     # that does not yet is refused, so no delete runs on an id whose incarnation is still being given (ADR 0241).
-    if settings.fga_enabled:
-        incarnations.require_incarnation(record, f"warehouse:{warehouse_id}")
+    incarnation = incarnations.require_incarnation(record, f"warehouse:{warehouse_id}")
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
     # state, so it runs strictly after the gate above.
     fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)
@@ -1170,6 +1219,7 @@ async def delete_warehouse(
             actor=f"user:{token.subject}" if token else None,
             extra={
                 "project": project,
+                "incarnation": incarnation,
                 "bucket": bucket,
                 "namespaces_dropped": [fga.canonical_object_id(namespace) for subtree in subtrees for namespace in subtree.namespaces],
                 "bucket_purged": purge_bucket,
@@ -1232,7 +1282,7 @@ async def delete_warehouse(
                 # Its incarnation ended before its record goes (ADR 0241, `fga.end_incarnation`): retired, so no door opens a fence
                 # on it from here, then drained of every tuple on it and every namespace edge naming it, with the tickets of the
                 # doors that were writing, so nothing decided on it outlives the delete onto a warehouse made again under the id.
-                revoked += len(await fga_deps.end_incarnation(client, settings, f"warehouse:{warehouse_id}", record.get(INCARNATION), token=token))
+                revoked += len(await fga_deps.end_incarnation(client, settings, f"warehouse:{warehouse_id}", incarnation, token=token))
                 # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
                 # fail, it keeps the warehouse for the re-issue that finishes them.
                 purged = 0

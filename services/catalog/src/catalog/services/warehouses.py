@@ -30,6 +30,7 @@ from catalog.core.identifiers import warehouse_of, with_minted_uuid
 from catalog.services import native
 from catalog.services.control_records import (
     INCARNATION,
+    PROJECT_INCARNATION,
     BucketClaimRecord,
     DeleteMode,
     ProtectionChange,
@@ -137,9 +138,14 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
     if this appears in a production path again, that test names it. Do not reach for it in service or
     endpoint code; there is a conditional door for every real mutation.
 
-    The caller stamps ``created_at`` (kept out of here so unit tests stay deterministic).
+    The caller stamps ``created_at`` (kept out of here so unit tests stay deterministic). The record is written as its
+    create writes it (ADR 0241): one naming no incarnation is given a fresh one, and one naming no incarnation of its
+    project names the one its project's record names, where that record stands.
     """
-    write_json(control_root, storage_options, _warehouse_key(record["id"]), record)
+    seeded = {INCARNATION: new_incarnation(), **record}
+    if PROJECT_INCARNATION not in seeded and (project := read_json(control_root, storage_options, f"{control_prefixes.PROJECTS}/{record.get('project')}.json")):
+        seeded[PROJECT_INCARNATION] = str(project.get(INCARNATION, ""))
+    write_json(control_root, storage_options, _warehouse_key(record["id"]), seeded)
 
 
 #: The fields an idempotent re-create OWNS. Everything else on the live record belongs to the
@@ -168,6 +174,12 @@ class WarehouseProjectConflict(Exception):
     (it produces the better error, earlier, for the ordinary case); this is the one that cannot be
     raced.
     """
+
+
+class WarehouseOfADeadTenant(Exception):
+    """The live record names the caller's project id at another incarnation of it: a create that raced that project's
+    delete left it (ADR 0241 §8 B3), and it is no warehouse of the tenant holding the id now. Raised from inside the
+    conditional write, as :class:`WarehouseProjectConflict` is; the converge tick ends the record."""
 
 
 def set_warehouse_protection(
@@ -273,6 +285,8 @@ def upsert_warehouse(
     def merge(live: dict[str, str]) -> dict[str, str]:
         if live.get("project") != project:
             raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
+        if live.get(PROJECT_INCARNATION) != record.get(PROJECT_INCARNATION):
+            raise WarehouseOfADeadTenant(f"warehouse {record['id']!r} was made under an earlier incarnation of project {project!r}")
         if DELETE_MODE in record:
             live = {k: v for k, v in live.items() if k != TRASH_GRACE_DAYS}
         merged = {**live, **{k: v for k, v in record.items() if k in _CALLER_OWNED}}
@@ -281,8 +295,11 @@ def upsert_warehouse(
         # A record written before the lifecycle feature has no status, and absent means live.
         merged.setdefault("status", "active")
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
-        # The incarnation is the original create's (ADR 0241); a record written before incarnations takes the request's.
-        merged[INCARNATION] = live.get(INCARNATION) or record.get(INCARNATION) or new_incarnation()
+        # The incarnation is the original create's (ADR 0241), which every record carries from its mint (§8 B5).
+        if not live.get(INCARNATION):
+            raise InternalError(
+                f"warehouse {record['id']!r}'s record names no incarnation; every create mints one, so this record was not written by this catalog"
+            )
         if protection is not None:
             merged = with_protection(merged, protection)
         # THE THIRD REQUEST FIELD, and it must be one: `merged` takes only `_CALLER_OWNED` keys from
@@ -407,8 +424,10 @@ def bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: 
     return {str(k): str(v) for k, v in validated_or_refuse(record, BucketClaimRecord, event="bucket_claim_malformed", path=key).items()}
 
 
-def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, warehouse_id: str) -> None:
-    """Record that ``project`` owns ``bucket``, or refuse because another project already does.
+def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_incarnation: str, warehouse_id: str) -> None:
+    """Record that ``project``, at ``project_incarnation``, owns ``bucket``, or refuse because another project already
+    does, or another incarnation of it (ADR 0241 §8 B3): a tenant made again under a deleted project's id does not
+    register a bucket that still holds the bytes of the one before.
 
     [[LH-053]] THE LISTING SCAN CANNOT CLOSE THIS AND A BETTER SCAN WOULD NOT EITHER. `create_warehouse`
     reads the warehouse listing, checks it for a rival claim, provisions a bucket over the network and
@@ -427,7 +446,7 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
     legitimate pair. It is also what keeps `create_warehouse`'s partial-failure retry idempotent.
     """
     key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
-    payload = {"bucket": bucket, "project": project, "warehouse_id": warehouse_id}
+    payload = {"bucket": bucket, "project": project, PROJECT_INCARNATION: project_incarnation, "warehouse_id": warehouse_id}
     try:
         create_json(control_root, storage_options, key, payload)
     except RecordExistsError:
@@ -437,7 +456,7 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
         # a tenant that is not there.
         existing = read_json(control_root, storage_options, key)
         parsed = validated_or_refuse(existing, BucketClaimRecord, event="bucket_claim_malformed", path=key) if existing is not None else None
-        if parsed is not None and parsed.get("project") == project:
+        if parsed is not None and parsed.get("project") == project and parsed.get(PROJECT_INCARNATION) == project_incarnation:
             return  # this project already owns the bucket — a second warehouse, or a retry
         raise NamespaceAlreadyExistsError(f"bucket {bucket!r} is already registered to another project's warehouse") from None
 

@@ -62,7 +62,6 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
 from catalog.services import dataplane, incarnations, native, object_uuids, table_claims, warehouses
 from catalog.services import projects as project_registry
-from catalog.services.control_records import INCARNATION
 from catalog.services.table_claims import ResolvedTable
 from lakehouse import object_records, protection, trash
 from lakehouse.governed import fga
@@ -1456,12 +1455,13 @@ async def _identifiers_given(request: Request) -> list[list[str]]:
 PARENT_FENCE: Final = "parent_fence"
 
 
-async def parent_fence(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep) -> AsyncIterator[None]:
-    """Open a fence on the warehouse a namespace created directly in it names (:func:`door_fence`, ADR 0241), BEFORE the
-    router's gate asks ``can_create_namespace`` there, and keep it for the door on ``request.state``: the namespace's
-    ``parent`` edge names the warehouse, an id a later warehouse may hold again, so it is written on the incarnation the
-    gate was asked of or nowhere. Every other request passes through. A router dependency, listed before
-    :func:`authorize`; its ticket is taken back when the request is done.
+async def parent_fence(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> AsyncIterator[None]:
+    """Open a fence on the warehouse a namespace created directly in it names (ADR 0241), AFTER the router's gate asked
+    ``can_create_namespace`` there with no write (:func:`authorize`), ask the gate again on the incarnation the fence
+    read, and keep the fence for the door on ``request.state``: the namespace's ``parent`` edge names the warehouse, an
+    id a later warehouse may hold again, so it is written on the incarnation the gate was asked of or nowhere. Every
+    other request passes through. A router dependency, listed after :func:`authorize`, so a caller refused writes
+    nothing; its ticket is taken back when the request is done.
     """
     path: str = request.scope["path"]
     object_id = request.path_params.get("id")
@@ -1469,7 +1469,9 @@ async def parent_fence(request: Request, settings: SettingsDep, token: CurrentTo
     if len(segments) != 2 or _suffix(path, "namespace", str(object_id)) != "create":
         yield
         return
-    async with door_fence(injected, settings, f"warehouse:{segments[0]}", token) as door:
+    async with _opened(injected, settings, f"warehouse:{segments[0]}", token) as door:
+        if door.fence is not None:
+            await _decide(request, settings, token, injected, resolver)
         setattr(request.state, PARENT_FENCE, door)
         yield
 
@@ -2074,7 +2076,7 @@ async def require_namespace_unprotected(settings: Settings, namespace: GovernedO
     require_not_protected(guard or {}, kind="namespace", obj_id=fga.canonical_object_id(namespace.segments), force=False)
 
 
-async def require_project_exists(settings: Settings, project: str) -> None:
+async def require_project_exists(settings: Settings, project: str) -> dict[str, str]:
     """Refuse an operation naming a project the registry does not know.
 
     Existence is a LAYER-3 invariant (`open_hierarchy_lifecycle.md`): it comes from the project
@@ -2094,6 +2096,7 @@ async def require_project_exists(settings: Settings, project: str) -> None:
             f"(project > warehouse > namespace > table) — create it first: POST /management/v1/projects "
             f'with {{"id": "{project}"}}.'
         )
+    return record
 
 
 def project_admin_for(token: Caller | None, named: str | None) -> str | None:
@@ -2167,14 +2170,11 @@ async def _bear_or_assert(
     try:
         if await fga.bear(client, obj, incarnation, seed, fences=fences, actor=actor, origin=origin):  # noqa: TID251
             return bool(seed)
-        own = await fga.open_fence(client, obj, actor=actor, origin="fence")
-        if own is None or own.incarnation != incarnation:
-            if own is not None:
-                await fga.close_fences(client, [own], actor=actor, origin="fence")
-            raise fga.IncarnationEnded(f"{obj} is not the incarnation its record names: it is being deleted")
-        return await fga.commit_fenced(client, [own, *fences], writes=seed, actor=actor, origin=origin)
+        async with fga.fenced(client, obj, actor=actor, origin=_FENCE, incarnation=incarnation) as own:
+            if own is None:
+                raise fga.IncarnationEnded(f"{obj} is not the incarnation its record names: it is being deleted")
+            return await fga.commit_fenced(client, [own, *fences], writes=seed, actor=actor, origin=origin)
     except fga.IncarnationEnded as exc:
-        await fga.close_fences(client, fences, actor=actor, origin="fence")
         raise ConcurrentModificationError(f"{obj} is being deleted, or what it belongs to is; make it again once that delete has finished") from exc
 
 
@@ -2195,33 +2195,47 @@ class DoorFence(NamedTuple):
 
 
 @asynccontextmanager
-async def door_fence(client: OpenFgaClient | None, settings: Settings, obj: str, token: Caller | None) -> AsyncGenerator[DoorFence]:
-    """Open a fence on ``obj`` for a door's write (:func:`fga.open_fence`), BEFORE the door asks its caller's authority,
-    and take its ticket back when the door is done, whatever it wrote: the authority was then asked of the incarnation
-    the fence names, and the door's Write lands on that incarnation or nowhere (ADR 0241). :func:`require_fence` answers
-    an object no incarnation stands for, after the gate, so a caller who may not act learns nothing from it.
-    """
+async def _opened(client: OpenFgaClient | None, settings: Settings, obj: str, token: Caller | None) -> AsyncGenerator[DoorFence]:
+    """A fence on ``obj`` where a write on it must go under one (:func:`fga.fenced`), its ticket taken back when the
+    block ends; a door that is not fenced passes through with none."""
     authz = wired(settings, client)
     if authz is None or obj.partition(":")[0] not in fga.INCARNATED_TYPES or obj == settings.fga_default_warehouse_object:
         yield DoorFence(obj=obj, client=authz, fence=None, required=False)
         return
-    actor = token.subject if token is not None else "system:catalog"
-    fence = await fga.open_fence(authz, obj, actor=actor, origin=_FENCE)
-    try:
+    async with fga.fenced(authz, obj, actor=token.subject if token is not None else "system:catalog", origin=_FENCE) as fence:
         yield DoorFence(obj=obj, client=authz, fence=fence, required=True)
-    finally:
-        if fence is not None:
-            await fga.close_fences(authz, [fence], actor=actor, origin=_FENCE)
+
+
+@asynccontextmanager
+async def door_fence[T](
+    client: OpenFgaClient | None, settings: Settings, obj: str, token: Caller | None, *, gate: Callable[[], Awaitable[T]]
+) -> AsyncGenerator[tuple[DoorFence, T]]:
+    """Ask ``gate``, the door's check of its caller's authority, with NO write; then open a fence on ``obj`` for the
+    door's write (:func:`fga.fenced`) and ask ``gate`` again, on the incarnation the fence read; yield the fence and the
+    gate's last answer, and take the ticket back when the door is done, whatever it wrote (ADR 0241).
+
+    In that order because each half needs it: a caller the object authorizes for nothing is refused having written
+    nothing, so it cannot write on, slow or wedge another tenant's object; and the second answer was given while the
+    fence stood, so the door's Write lands on the incarnation its caller's authority holds on, or nowhere.
+    :func:`require_fence` answers an object no incarnation stands for, after the gate, so a caller who may not act learns
+    nothing from it.
+    """
+    answer = await gate()
+    async with _opened(client, settings, obj, token) as door:
+        if door.fence is not None:
+            answer = await gate()
+        yield door, answer
 
 
 async def require_fence(door: DoorFence, settings: Settings) -> list[fga.Fence]:
     """The fences a door's write goes under: none where none is required, else the one it opened.
 
     Raises:
-        SettlingError: The object's record stands and no incarnation of it is born yet (a create still running, or a
-            record the catalog's convergence has not reached): asked again shortly, it is answered (409 with
-            ``Retry-After``).
+        SettlingError: The object's record stands and its incarnation is not born yet (a create still running, or one
+            that died before its birth, which the catalog's convergence bears): asked again shortly, it is answered (409
+            with ``Retry-After``).
         TableNotFoundError: No record names the object, or its delete has begun.
+        InternalError: The record names no incarnation: no create of this catalog wrote it (ADR 0241 §8 B5).
     """
     if not door.required:
         return []
@@ -2233,9 +2247,10 @@ async def require_fence(door: DoorFence, settings: Settings) -> list[fga.Fence]:
         record = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, object_id)
     else:
         record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, object_id)
-    incarnation = record.get(INCARNATION) if record is not None else None
-    retired = incarnation is not None and door.client is not None and fga.marker(door.obj, incarnation) in await fga.read_object_tuples(door.client, door.obj)
-    if record is None or retired:
+    if record is None:
+        raise TableNotFoundError(f"{kind} not found: {object_id}")
+    incarnation = incarnations.require_incarnation(record, door.obj)
+    if door.client is not None and await fga.is_born(door.client, door.obj, incarnation):
         raise TableNotFoundError(f"{kind} not found: {object_id}")
     raise incarnations.establishing(door.obj)
 
@@ -2687,9 +2702,7 @@ async def revoke_removed_object(client: OpenFgaClient | None, settings: Settings
 NAMING: Final[dict[str, tuple[str, ...]]] = {"project": ("role", "warehouse"), "warehouse": ("namespace",)}
 
 
-async def end_incarnation(
-    client: OpenFgaClient | None, settings: Settings, obj: str, incarnation: str | None, *, token: Caller | None
-) -> list[fga.ClientTuple]:
+async def end_incarnation(client: OpenFgaClient | None, settings: Settings, obj: str, incarnation: str, *, token: Caller | None) -> list[fga.ClientTuple]:
     """End the incarnation of the project or warehouse ``obj`` its delete is ending (:func:`fga.end_incarnation`, ADR
     0241): retire it, then revoke what stands on it and what names it until a read finds nothing; the tuples revoked.
     Empty when FGA is off; a 503 when it is on with no client wired."""
@@ -2697,6 +2710,19 @@ async def end_incarnation(
         return []
     actor = token.subject if token is not None else "system:catalog"
     removed = await fga.end_incarnation(client, obj, incarnation, naming=NAMING[obj.partition(":")[0]], actor=actor, origin="lifecycle_delete")  # noqa: TID251
+    # The trail leaves the `revision` relation's tuples out, so the retirement is its own row: which incarnation of the id
+    # ended, by whom, and how many tuples went with it.
+    audit(
+        AuditAction.ACCESS_REVOKE,
+        AuditOutcome.SUCCESS,
+        subject=actor,
+        resource=obj,
+        grantee="*",
+        relation=fga.REVISION,
+        incarnation=incarnation,
+        removed=len(removed),
+        reason="incarnation_retired",
+    )
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
     return removed
@@ -2732,12 +2758,14 @@ async def revoke_ghost_object(
     return len(revoked)
 
 
-async def write_registry_edge(client: OpenFgaClient | None, settings: Settings, edge: fga.ClientTuple, *, incarnation: str, token: Caller | None) -> None:
+async def write_registry_edge(
+    client: OpenFgaClient | None, settings: Settings, edge: fga.ClientTuple, *, incarnation: str, project_incarnation: str, token: Caller | None
+) -> None:
     """Write ``edge``, a warehouse's tenancy edge its registry record justifies, under the ``registry_rebuild`` origin
-    ([[LH-061]]): no person granted it, it was reconstructed from the record. Written under a fence of the warehouse, of
-    the incarnation the record names, and of the project the edge names (ADR 0241), so a rebuild that read a record whose
-    warehouse or project is deleted meanwhile writes its edge nowhere. A no-op when FGA is off; a 503 when it is on with
-    no client wired.
+    ([[LH-061]]): no person granted it, it was reconstructed from the record. Written under a fence of the warehouse and
+    one of the project the edge names, each of the incarnation the record names (ADR 0241), so a rebuild that read a
+    record whose warehouse or project is deleted meanwhile, or a record a dead tenant's create left, writes its edge
+    nowhere. A no-op when FGA is off; a 503 when it is on with no client wired.
 
     Raises:
         fga.IncarnationEnded: The warehouse's or the project's incarnation was retired, or is not the record's.
@@ -2745,17 +2773,13 @@ async def write_registry_edge(client: OpenFgaClient | None, settings: Settings, 
     if (client := wired(settings, client)) is None:
         return
     actor = token.subject if token is not None else "system:catalog"
-    fences: list[fga.Fence] = []
-    try:
-        for obj in (str(edge.object), str(edge.user)):
-            if (fence := await fga.open_fence(client, obj, actor=actor, origin=_FENCE)) is None:
-                raise fga.IncarnationEnded(f"{obj} has no incarnation standing")
-            fences.append(fence)
-        if fences[0].incarnation != incarnation:
-            raise fga.IncarnationEnded(f"{edge.object} is not the incarnation its record names")
-        await fga.commit_fenced(client, fences, writes=[edge], actor=actor, origin="registry_rebuild")
-    finally:
-        await fga.close_fences(client, fences, actor=actor, origin=_FENCE)
+    async with (
+        fga.fenced(client, str(edge.object), actor=actor, origin=_FENCE, incarnation=incarnation) as own,
+        fga.fenced(client, str(edge.user), actor=actor, origin=_FENCE, incarnation=project_incarnation) as project,
+    ):
+        if own is None or project is None:
+            raise fga.IncarnationEnded(f"{edge.object} or {edge.user} is not the incarnation its record names")
+        await fga.commit_fenced(client, [own, project], writes=[edge], actor=actor, origin="registry_rebuild")
 
 
 async def revoke_expired_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> list[fga.ClientTuple]:
@@ -3305,16 +3329,18 @@ async def converge_warehouse_grants(
     warehouse_id: str,
     project: str,
     actor: str,
-    incarnation: str | None,
+    incarnation: str,
+    project_incarnation: str,
 ) -> int:
     """Converge one EXISTING warehouse's grants: assert :func:`cascade_tuples` under ``incarnation``, the one its record
-    names (bearing it, where its birth never landed), and under a fence of its project, and take back the maintenance
-    rung from each of the release's own accounts it no longer declares. Returns the number of tuples written plus those
-    revoked.
+    names (bearing it, where its birth never landed), and under a fence of ``project_incarnation``, the incarnation of
+    its project the record names, and take back the maintenance rung from each of the release's own accounts it no
+    longer declares. Returns the number of tuples written plus those revoked.
 
     A write for an incarnation whose delete has retired it lands nowhere (ADR 0241), so a converge that read the record
-    before the warehouse was deleted never writes its tenancy edge onto a warehouse made again under the id, nor onto
-    a project made again under its project's id.
+    before the warehouse was deleted never writes its tenancy edge onto a warehouse made again under the id; and a record
+    naming a project incarnation that no longer stands is refused and reported (:func:`incarnations.report_orphan`), so
+    no edge from a dead tenant's record reaches a project made again under its project's id.
 
     Why this is needed at all, given creates already seed: the grants are written ONCE, at create, from
     a config value that CHANGES (``LANCE_FGA_MAINTAINERS``), so every warehouse that predates a change is
@@ -3326,19 +3352,20 @@ async def converge_warehouse_grants(
     a backfill that silently wrote nothing is indistinguishable from one that had nothing to do.
 
     Raises:
-        InvalidInputError: The record names no incarnation, so no write on the warehouse can be fenced.
-        ConcurrentModificationError: The incarnation was retired: the warehouse is being deleted.
+        ConcurrentModificationError: The incarnation was retired (the warehouse is being deleted), or the project
+            incarnation the record names no longer stands (the record is an orphan of a dead tenant).
     """
     if (client := wired(settings, client)) is None:
         return 0
     obj = f"warehouse:{warehouse_id}"
-    if incarnation is None:
-        raise incarnations.establishing(obj)
     tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
-    fence = await fga.open_fence(client, f"project:{project}", actor=actor, origin=_FENCE)
-    if fence is None:
-        raise ConcurrentModificationError(f"warehouse {warehouse_id!r} names project {project!r}, which no incarnation stands for")
-    await _bear_or_assert(client, obj, incarnation, tuples, fences=[fence], actor=actor, origin="warehouse_grant_backfill")
+    async with fga.fenced(client, f"project:{project}", actor=actor, origin=_FENCE, incarnation=project_incarnation) as fence:
+        if fence is None:
+            # The record names a project incarnation that no longer stands: a create that raced its project's delete left
+            # it, and its tenancy edge would give the dead tenant's warehouse to whoever holds the id now (ADR 0241 §8 B3).
+            incarnations.report_orphan(obj, project=project, project_incarnation=project_incarnation)
+            raise ConcurrentModificationError(f"warehouse {warehouse_id!r} was made under an incarnation of project {project!r} that no longer stands")
+        await _bear_or_assert(client, obj, incarnation, tuples, fences=[fence], actor=actor, origin="warehouse_grant_backfill")
     own = own_users(settings)
     revoked = await fga.revoke_undeclared(  # noqa: TID251 — the converge's revoking site
         client, tuples, obj=f"warehouse:{warehouse_id}", relation="maintenance", own=own, actor=actor, origin="warehouse_grant_backfill"

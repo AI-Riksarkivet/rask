@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
-from functools import lru_cache
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
+from functools import lru_cache, partial
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -209,23 +210,59 @@ async def list_namespace_access(id: str, client: FgaClientDep, settings: Setting
     return await _access_list(client, settings, token, resolver, "namespace", id)
 
 
-async def warehouse_fence(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> AsyncIterator[fga_deps.DoorFence]:
-    """A fence on ``warehouse:<id>`` (``fga_deps.door_fence``, ADR 0241), a dependency listed before the grant or revoke
-    door's gate, so the gate asks its caller's authority of the incarnation the door's Write is fenced by."""
-    async with fga_deps.door_fence(client, settings, f"warehouse:{id}", token) as door:
+@asynccontextmanager
+async def _gated_fence(
+    fga_type: str, *, revoking: bool, id: str, request: Request, client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver
+) -> AsyncGenerator[fga_deps.DoorFence]:
+    """The door's gate (:func:`fga_deps.require_grant_authority`) asked with no write, then a fence on ``<fga_type>:<id>``
+    opened and the gate asked again on the incarnation it read (``fga_deps.door_fence``, ADR 0241), yielded to the door
+    and taken back when it is done."""
+    gate = partial(
+        fga_deps.require_grant_authority, request, client, settings, token, resolver, fga_type=fga_type, segments=parse_identifier(id), revoking=revoking
+    )
+    async with fga_deps.door_fence(client, settings, f"{fga_type}:{id}", token, gate=gate) as (door, _):
         yield door
 
 
-async def project_fence(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> AsyncIterator[fga_deps.DoorFence]:
-    """A fence on ``project:<id>``, as :func:`warehouse_fence` opens one."""
-    async with fga_deps.door_fence(client, settings, f"project:{id}", token) as door:
+async def warehouse_grant_fence(
+    id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep
+) -> AsyncIterator[fga_deps.DoorFence]:
+    """A warehouse grant's gate as the router gates a table's or a namespace's: ``can_grant_<rung>`` read from the body,
+    and no grant that raises the caller's own access ([[LH-555]]); then its fence (:func:`_gated_fence`)."""
+    async with _gated_fence("warehouse", revoking=False, id=id, request=request, client=client, settings=settings, token=token, resolver=resolver) as door:
         yield door
 
 
-#: The fence a grant or revoke door opened before its gate, the same one the gate's dependency list opened (FastAPI
-#: resolves a dependency once per request).
-WarehouseFence = Annotated[fga_deps.DoorFence, Depends(warehouse_fence)]
-ProjectFence = Annotated[fga_deps.DoorFence, Depends(project_fence)]
+async def warehouse_revoke_fence(
+    id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep
+) -> AsyncIterator[fga_deps.DoorFence]:
+    """A warehouse revoke's gate, ``can_revoke_grant``, stricter than any grant ([[LH-555]]); then its fence."""
+    async with _gated_fence("warehouse", revoking=True, id=id, request=request, client=client, settings=settings, token=token, resolver=resolver) as door:
+        yield door
+
+
+async def project_grant_fence(
+    id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep
+) -> AsyncIterator[fga_deps.DoorFence]:
+    """A project grant's gate as a warehouse's is gated: ``can_grant_<rung>`` read from the body, and no grant that raises
+    the caller's own access ([[LH-563]]); then its fence."""
+    async with _gated_fence("project", revoking=False, id=id, request=request, client=client, settings=settings, token=token, resolver=resolver) as door:
+        yield door
+
+
+async def project_revoke_fence(
+    id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep
+) -> AsyncIterator[fga_deps.DoorFence]:
+    """A project revoke's gate, ``can_revoke_grant``, its security admin's ([[LH-563]]); then its fence."""
+    async with _gated_fence("project", revoking=True, id=id, request=request, client=client, settings=settings, token=token, resolver=resolver) as door:
+        yield door
+
+
+#: The fence a grant or revoke door's write goes under, opened between the two askings of its gate.
+WarehouseGrantFence = Annotated[fga_deps.DoorFence, Depends(warehouse_grant_fence)]
+WarehouseRevokeFence = Annotated[fga_deps.DoorFence, Depends(warehouse_revoke_fence)]
+ProjectGrantFence = Annotated[fga_deps.DoorFence, Depends(project_grant_fence)]
+ProjectRevokeFence = Annotated[fga_deps.DoorFence, Depends(project_revoke_fence)]
 
 
 async def require_warehouse_review(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
@@ -235,32 +272,10 @@ async def require_warehouse_review(id: str, client: FgaClientDep, settings: Sett
     await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=f"warehouse:{id}")
 
 
-async def require_warehouse_grant(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
-    """Gate a warehouse grant as the router gates a table's or a namespace's: ``can_grant_<rung>`` read from the body, and
-    no grant that raises the caller's own access ([[LH-555]])."""
-    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=False)
-
-
-async def require_warehouse_revoke(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
-    """Gate a warehouse revoke on ``can_revoke_grant``, stricter than any grant ([[LH-555]])."""
-    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=True)
-
-
 async def require_project_review(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
     """Gate a project's access listing on ``can_read_assignments``, which its security admin holds ([[LH-563]]). A route
     dependency, since the router leaves every project route to its handler."""
     await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=f"project:{id}")
-
-
-async def require_project_grant(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
-    """Gate a project grant as a warehouse's is gated: ``can_grant_<rung>`` read from the body, and no grant that raises
-    the caller's own access ([[LH-563]])."""
-    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=False)
-
-
-async def require_project_revoke(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
-    """Gate a project revoke on ``can_revoke_grant``, its security admin's ([[LH-563]])."""
-    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=True)
 
 
 @warehouse_router.post("/{id}/access/list", dependencies=[Depends(require_warehouse_review)])
@@ -561,7 +576,7 @@ async def grant_namespace_access(
     return await _access_mutate(client, announcer, settings, token, resolver, "namespace", id, body, grant=True)
 
 
-@warehouse_router.post("/{id}/access/grant", dependencies=[Depends(warehouse_fence), Depends(require_warehouse_grant)])
+@warehouse_router.post("/{id}/access/grant")
 async def grant_warehouse_access(
     id: str,
     client: FgaClientDep,
@@ -570,14 +585,14 @@ async def grant_warehouse_access(
     resolver: ResolverDep,
     token: CurrentToken,
     body: AccessGrantRequest,
-    door: WarehouseFence,
+    door: WarehouseGrantFence,
 ) -> AccessGrantResponse:
-    """Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]]), under the
-    fence opened before the gate (ADR 0241)."""
+    """Grant a base rung on the warehouse to a subject, gated by :func:`warehouse_grant_fence` ([[LH-555]]), under the
+    fence opened between the gate's two askings (ADR 0241)."""
     return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=True, door=door)
 
 
-@warehouse_router.post("/{id}/access/revoke", dependencies=[Depends(warehouse_fence), Depends(require_warehouse_revoke)])
+@warehouse_router.post("/{id}/access/revoke")
 async def revoke_warehouse_access(
     id: str,
     client: FgaClientDep,
@@ -586,14 +601,14 @@ async def revoke_warehouse_access(
     resolver: ResolverDep,
     token: CurrentToken,
     body: AccessGrantRequest,
-    door: WarehouseFence,
+    door: WarehouseRevokeFence,
 ) -> AccessGrantResponse:
-    """Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]]), under
-    the fence opened before the gate (ADR 0241)."""
+    """Revoke a base rung on the warehouse from a subject, gated by :func:`warehouse_revoke_fence` ([[LH-555]]), under
+    the fence opened between the gate's two askings (ADR 0241)."""
     return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=False, door=door)
 
 
-@project_router.post("/{id}/access/grant", dependencies=[Depends(project_fence), Depends(require_project_grant)])
+@project_router.post("/{id}/access/grant")
 async def grant_project_access(
     id: str,
     client: FgaClientDep,
@@ -602,10 +617,10 @@ async def grant_project_access(
     resolver: ResolverDep,
     token: CurrentToken,
     body: AccessGrantRequest,
-    door: ProjectFence,
+    door: ProjectGrantFence,
 ) -> AccessGrantResponse:
-    """Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]), under the fence
-    opened before the gate (ADR 0241).
+    """Grant a rung on the project to a subject, gated by :func:`project_grant_fence` ([[LH-563]]), under the fence
+    opened between the gate's two askings (ADR 0241).
 
     The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
     nothing beyond them. Who belongs to the project is the members door's.
@@ -619,7 +634,7 @@ async def grant_project_access(
         resolver: The request's name resolver.
         token: The verified caller.
         body: The subject and the rung.
-        door: The fence on the project, opened before the gate.
+        door: The fence on the project, opened between the gate's two askings.
 
     Returns:
         The tuple granted.
@@ -634,7 +649,7 @@ async def grant_project_access(
     return await _access_mutate(client, announcer, settings, token, resolver, "project", id, body, grant=True, door=door)
 
 
-@project_router.post("/{id}/access/revoke", dependencies=[Depends(project_fence), Depends(require_project_revoke)])
+@project_router.post("/{id}/access/revoke")
 async def revoke_project_access(
     id: str,
     client: FgaClientDep,
@@ -643,11 +658,11 @@ async def revoke_project_access(
     resolver: ResolverDep,
     token: CurrentToken,
     body: AccessGrantRequest,
-    door: ProjectFence,
+    door: ProjectRevokeFence,
 ) -> AccessGrantResponse:
-    """Revoke a rung on the project from a subject, gated by :func:`require_project_revoke` ([[LH-563]]), under the fence
-    opened before the gate (ADR 0241): a revoke decided on a project deleted meanwhile takes nothing from one made again
-    under its id.
+    """Revoke a rung on the project from a subject, gated by :func:`project_revoke_fence` ([[LH-563]]), under the fence
+    opened between the gate's two askings (ADR 0241): a revoke decided on a project deleted meanwhile takes nothing from
+    one made again under its id.
     \f
 
     Args:
@@ -658,7 +673,7 @@ async def revoke_project_access(
         resolver: The request's name resolver.
         token: The verified caller.
         body: The subject and the rung.
-        door: The fence on the project, opened before the gate.
+        door: The fence on the project, opened between the gate's two askings.
 
     Returns:
         The tuple revoked.
@@ -843,7 +858,7 @@ async def _set_managed_access(
     )
     fences = await fga_deps.require_fence(door, settings) if door is not None else None
     async with announcer.announcing(door="managed_access_set", target=obj, announcements=[told]) as filing:
-        already = any(t.object == obj and t.relation == "managed_access" for t in await fga.read_object_tuples(client, obj))
+        already = await fga.holds(client, tup)
         if fences is not None:
             try:
                 await fga.commit_fenced(client, fences, writes=[tup] if enabled else [], deletes=[] if enabled else [tup], actor=actor, origin="grant_api")
@@ -903,10 +918,10 @@ async def set_warehouse_managed_access(
     """
     segments = parse_identifier(id)
     obj = f"warehouse:{fga.canonical_object_id(segments)}"
-    # The flag is a tuple on the warehouse, an id a later warehouse may hold again: it is set under a fence opened
-    # before the gate (ADR 0241), so a setting decided on a warehouse deleted meanwhile lands on none made again.
-    async with fga_deps.door_fence(client, settings, obj, token) as door:
-        await fga_deps.require_relation(client, settings, token, relation="can_set_managed_access", obj=obj)
+    # The flag is a tuple on the warehouse, an id a later warehouse may hold again: it is set under a fence opened between
+    # the gate's two askings (ADR 0241), so a setting decided on a warehouse deleted meanwhile lands on none made again.
+    gate = partial(fga_deps.require_relation, client, settings, token, relation="can_set_managed_access", obj=obj)
+    async with fga_deps.door_fence(client, settings, obj, token, gate=gate) as (door, _):
         return await _set_managed_access(client, announcer, settings, token, resolver, "warehouse", id, body.enabled, door=door)
 
 

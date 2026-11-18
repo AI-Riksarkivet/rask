@@ -34,8 +34,8 @@ import logging
 import time
 import unicodedata
 import uuid
-from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
-from contextlib import suppress
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Iterable, Sequence
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -54,6 +54,7 @@ from openfga_sdk.client.models import (
     ClientTuple,
     ClientWriteRequest,
     ClientWriteRequestOnDuplicateWrites,
+    ClientWriteRequestOnMissingDeletes,
     ConflictOptions,
 )
 from openfga_sdk.client.models.list_users_request import ClientListUsersRequest
@@ -146,11 +147,6 @@ class _UnansweredBatchItems(Exception):
 
 # Every exception class the read/write paths fail CLOSED on (→ 503), never propagate.
 _FAIL_CLOSED: tuple[type[BaseException], ...] = (ApiException, _UnansweredBatchItems, *_TRANSIENT_NETWORK)
-
-# Reading every tuple on one object (revoke-on-delete) is paginated; bound the page loop so a
-# pathological store / continuation-token bug can't spin forever. One object's grants are few, so
-# this ceiling is never reached in practice.
-_MAX_REVOKE_PAGES = 100
 
 # Parent types that declare a `child` relation in the model, and therefore take the inverse edge
 # `grant_on_create` writes for upward visibility. Deliberately a whitelist keyed on the PARENT's type:
@@ -1826,14 +1822,7 @@ async def expand_tree(
             tupleset_relation = str(ttu.get("tupleset") or "").rpartition("#")[2]
             if not tupleset_relation:
                 return
-            edges = await read_object_tuples(
-                client,
-                target,
-                retry_attempts=retry_attempts,
-                retry_backoff_seconds=retry_backoff_seconds,
-                retry_max_backoff_seconds=retry_max_backoff_seconds,
-            )
-            parents = [t.user for t in edges if t.relation == tupleset_relation]
+            parents = [t.user for t in await read_relation(client, target, tupleset_relation)]
             expanded: list[dict[str, Any]] = []
             for parent in parents:
                 for computed_relation in ttu.get("computed") or []:
@@ -1927,57 +1916,105 @@ async def read_changes(
     )
 
 
-async def read_object_tuples(
+class StoredTuple(NamedTuple):
+    """A tuple as the store holds it, with the time the store wrote it (what a Read answers beside each key)."""
+
+    tuple: ClientTuple
+    written: datetime | None
+
+
+def _stored(item: Any) -> StoredTuple:
+    key = item.key
+    stamp = getattr(item, "timestamp", None)
+    # The condition rides the tuple back out. Dropping it makes a time-boxed grant read as permanent everywhere
+    # downstream: the revoke-on-delete path would then try to delete a tuple it has mis-described, and the UI would show
+    # an expiring grant as forever.
+    return StoredTuple(
+        ClientTuple(user=key.user, relation=key.relation, object=key.object, condition=getattr(key, "condition", None)),
+        stamp if isinstance(stamp, datetime) else None,
+    )
+
+
+async def _read_page(
     client: OpenFgaClient,
-    obj: str,
+    tuple_key: ReadRequestTupleKey,
     *,
+    page_size: int | None,
+    continuation_token: str | None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
-) -> list[ClientTuple]:
-    """Return EVERY tuple whose object is ``obj`` (e.g. all grants on ``table:db1$t``), or raise.
+) -> tuple[list[StoredTuple], str | None]:
+    """One page of the OpenFGA Read API matching ``tuple_key``, each tuple with the time it was written, and the next
+    page's token; an outage raises ``ServiceUnavailableError``, never an empty page."""
 
-    Paginated under the hood so the COMPLETE set comes back, not just the first page — the
-    revoke-on-delete caller must see every stale grant to remove it. Read-only/idempotent, so it
-    gets the same bounded retry + fail-closed treatment as :func:`check` (outage → 503).
-
-    A read that reaches the page ceiling with a continuation token still outstanding is NOT returned
-    (SKG-04): the answer would be a short list indistinguishable from a complete one, and its only
-    caller that mutates — :func:`revoke_object_tuples` — deletes exactly what it is handed, so a
-    silently-shortened read is a revoke that leaves live grants behind and reports success. The return
-    type therefore means "all of them" and nothing else; incompleteness leaves as the same
-    ``ServiceUnavailableError`` every other unanswerable read raises.
-    """
-
-    async def _do_read() -> list[ClientTuple]:
-        collected: list[ClientTuple] = []
-        token: str | None = None
-        for _ in range(_MAX_REVOKE_PAGES):
-            options = _fresh_read_options(continuation_token=token) if token else _fresh_read_options()
-            response = await client.read(ReadRequestTupleKey(object=obj), options=options)
-            for t in response.tuples or []:
-                key = t.key
-                collected.append(ClientTuple(user=key.user, relation=key.relation, object=key.object, condition=getattr(key, "condition", None)))
-            token = response.continuation_token or None
-            if not token:
-                break
-        else:
-            # Hit the page ceiling with a token still outstanding → a PARTIAL set, which this function
-            # may not return. Raised rather than logged: for one object the ceiling is unreachable in
-            # practice, so reaching it means either a pathological store or a continuation-token bug,
-            # and both are states in which handing back "the grants on this object" is a lie.
-            log.error("openfga_read_truncated", extra={"object": obj, "max_pages": _MAX_REVOKE_PAGES})
-            raise ServiceUnavailableError(f"tuple listing for {obj} exceeded {_MAX_REVOKE_PAGES} pages — refusing to answer with a partial set")
-        return collected
+    async def _do_read_page() -> tuple[list[StoredTuple], str | None]:
+        # Built INSIDE the retry closure: the SDK pops page_size/continuation_token out of the options
+        # dict it is handed, so a shared dict would silently lose the pagination on the second attempt.
+        options = _fresh_read_options()
+        if page_size is not None:
+            options["page_size"] = page_size
+        if continuation_token:
+            options["continuation_token"] = continuation_token
+        response = await client.read(tuple_key, options=options)
+        return [_stored(t) for t in response.tuples or []], response.continuation_token or None
 
     return await _guarded(
-        _do_read,
+        _do_read_page,
         event="openfga_read_unavailable",
-        extra={"object": obj},
+        extra={"object": tuple_key.object, "user": tuple_key.user},
         attempts=retry_attempts,
         backoff=retry_backoff_seconds,
         max_backoff=retry_max_backoff_seconds,
     )
+
+
+async def read_all(client: OpenFgaClient, *, obj: str, user: str | None = None, relation: str | None = None) -> list[StoredTuple]:
+    """EVERY tuple matching the filter (:func:`read_tuples`' filters), paged by the server to the end; an outage raises.
+
+    No page ceiling: a ceiling turns an object's size into an outage, which is what it did (ADR 0241 §8 B1: at 100 pages
+    of 50, every fenced door on a warehouse holding 5,100 namespaces answered 503 for good). What bounds a read is the
+    request it serves, and a server that hands back a cursor it handed back before is refused, so a cursor bug cannot
+    spin it. A partial set is never returned: the answer means "all of them" or an error.
+    """
+    tuple_key = ReadRequestTupleKey(user=user, relation=relation, object=obj)
+    found: list[StoredTuple] = []
+    token: str | None = None
+    seen: set[str] = set()
+    while True:
+        page, token = await _read_page(client, tuple_key, page_size=READ_PAGE_SIZE, continuation_token=token)
+        found.extend(page)
+        if not token:
+            return found
+        if token in seen:
+            log.error("openfga_read_cursor_repeated", extra={"object": obj, "user": user, "relation": relation})
+            raise ServiceUnavailableError(f"the tuple read of {obj} was handed a cursor it already followed; refusing to answer with a partial set")
+        seen.add(token)
+
+
+async def read_object_tuples(client: OpenFgaClient, obj: str) -> list[ClientTuple]:
+    """Return EVERY tuple whose object is ``obj`` (e.g. all grants on ``table:db1$t``), or raise (:func:`read_all`).
+
+    Its callers that mutate (:func:`revoke_object_tuples`, a delete's drain) delete exactly what they are handed, so a
+    silently-shortened read would be a revoke that leaves live grants behind and reports success (SKG-04): the answer is
+    all of them or ``ServiceUnavailableError``, as every other unanswerable read raises. A door that needs one tuple, or
+    one relation, reads that and no more (:func:`holds`, :func:`read_relation`): this read grows with the object's use.
+    """
+    return [stored.tuple for stored in await read_all(client, obj=obj)]
+
+
+async def read_relation(client: OpenFgaClient, obj: str, relation: str) -> list[ClientTuple]:
+    """Every tuple of ``relation`` on ``obj``, filtered by the server, so its cost is that relation's size alone."""
+    return [stored.tuple for stored in await read_all(client, obj=obj, relation=relation)]
+
+
+async def holds(client: OpenFgaClient, t: ClientTuple) -> bool:
+    """Whether the store holds ``t`` now: one Read naming its user, relation and object, whose cost does not grow with
+    what else stands on the object."""
+    page, _ = await _read_page(
+        client, ReadRequestTupleKey(user=str(t.user), relation=str(t.relation), object=str(t.object)), page_size=1, continuation_token=None
+    )
+    return any(_key(stored.tuple) == _key(t) for stored in page)
 
 
 async def read_tuples(
@@ -2005,39 +2042,16 @@ async def read_tuples(
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`
     (outage → ``ServiceUnavailableError`` → 503, never an empty page that reads as "no grants").
     """
-    tuple_key = ReadRequestTupleKey(user=user, relation=relation, object=obj)  # the SDK omits it when every field is None
-
-    async def _do_read_page() -> tuple[list[ClientTuple], str | None]:
-        # Built INSIDE the retry closure: the SDK pops page_size/continuation_token out of the options
-        # dict it is handed, so a shared dict would silently lose the pagination on the second attempt.
-        options = _fresh_read_options()
-        if page_size is not None:
-            options["page_size"] = page_size
-        if continuation_token:
-            options["continuation_token"] = continuation_token
-        response = await client.read(tuple_key, options=options)
-        # The condition rides the tuple back out. Dropping it (as this did) makes a time-boxed grant
-        # read as permanent everywhere downstream — the revoke-on-delete path would then try to delete
-        # a tuple it has mis-described, and the UI would show an expiring grant as forever.
-        page = [
-            ClientTuple(
-                user=t.key.user,
-                relation=t.key.relation,
-                object=t.key.object,
-                condition=getattr(t.key, "condition", None),
-            )
-            for t in response.tuples or []
-        ]
-        return page, response.continuation_token or None
-
-    return await _guarded(
-        _do_read_page,
-        event="openfga_read_unavailable",
-        extra={"object": obj, "user": user},
-        attempts=retry_attempts,
-        backoff=retry_backoff_seconds,
-        max_backoff=retry_max_backoff_seconds,
+    page, token = await _read_page(
+        client,
+        ReadRequestTupleKey(user=user, relation=relation, object=obj),  # the SDK omits it when every field is None
+        page_size=page_size,
+        continuation_token=continuation_token,
+        retry_attempts=retry_attempts,
+        retry_backoff_seconds=retry_backoff_seconds,
+        retry_max_backoff_seconds=retry_max_backoff_seconds,
     )
+    return [stored.tuple for stored in page], token
 
 
 # --------------------------------------------------------------------------- #
@@ -2387,19 +2401,28 @@ async def revoke_undeclared(
 
 #: The relation a project or warehouse keeps its incarnation in (ADR 0241), and each subject it holds, all bookkeeping:
 #: the marker ``revision:<incarnation>``, written by its birth and never revoked; its token ``revision:<incarnation>.<n>``,
-#: which stands while the incarnation does and which each change to who administers a project moves (ADR 0213); a
-#: writer's ticket ``revision:ticket-<hex>`` (:func:`open_fence`); the drift repair's token ``revision:repair-<hex>``
-#: (:func:`revoke_ghost`); and a declared grant's evidence ``revision:git-<hex>`` (:func:`write_evidenced`).
+#: which stands while the incarnation does and which each change to who administers a project moves (ADR 0213); the drift
+#: repair's token ``revision:repair-<hex>`` (:func:`revoke_ghost`); and a declared grant's evidence ``revision:git-<hex>``
+#: (:func:`write_evidenced`), each deleted by the Write or the settlement that consumes it. It holds a marker per
+#: incarnation ever born under the id and one token, so reading it costs nothing that grows with the object's use.
 REVISION: Final = "revision"
+#: The relation a door's fence ticket is kept in (:func:`fenced`): ``<project or warehouse> ticket fence:<hex>``, a tuple
+#: on an object of its own that names the project or warehouse as its subject. Off the object, so nothing that reads the
+#: object (its grants, its incarnation, a listing, a check) reads a ticket, and a ticket a dead request left slows no door
+#: (ADR 0241 §8 B1, B2); the object's delete and the converge tick's sweep read its tickets by subject.
+TICKET: Final = "ticket"
+#: The type of a ticket's object, which nothing but its ticket names.
+FENCE_TYPE: Final = "fence"
 #: Relations that hold bookkeeping rather than a grant: no permission reads them, a scan counting an object's grants
 #: leaves them out, and no revoke of an object's grants takes them.
-BOOKKEEPING_RELATIONS: Final = frozenset({REVISION})
+BOOKKEEPING_RELATIONS: Final = frozenset({REVISION, TICKET})
 #: The types named in OpenFGA by an id a later object may hold again, whose grants are therefore fenced by incarnation.
 INCARNATED_TYPES: Final = frozenset({"project", "warehouse"})
-_TICKET: Final = "ticket-"
 _REPAIR: Final = "repair-"
 _EVIDENCE: Final = "git-"
-#: The tuples OpenFGA takes in one Write, writes and deletes together (its default ``maxTuplesPerWrite``).
+#: The tuples OpenFGA takes in one Write, writes and deletes together: its ``maxTuplesPerWrite``, 100 by default in the
+#: pinned v1.18.3 (``--max-tuples-per-write``; measured 2026-11-18 on the memory datastore: a Write of 100 deletes
+#: commits, one of 101 is refused 400 ``exceeded_entity_limit``).
 TUPLES_PER_WRITE: Final = 100
 #: How many times a fenced Write reads again when the tuples it writes or deletes changed under it (another writer of the
 #: same tuple). Writers of different tuples never meet: each deletes only its own ticket.
@@ -2415,8 +2438,8 @@ def _revision_id(t: ClientTuple) -> str | None:
 
 
 def is_ticket(t: ClientTuple) -> bool:
-    """Whether ``t`` is a writer's fence ticket (:func:`open_fence`)."""
-    return (_revision_id(t) or "").startswith(_TICKET)
+    """Whether ``t`` is a door's fence ticket (:func:`fenced`)."""
+    return t.relation == TICKET
 
 
 def is_repair_token(t: ClientTuple) -> bool:
@@ -2448,8 +2471,8 @@ def marker(obj: str, incarnation: str) -> ClientTuple:
 
 def standing_incarnation(tuples: Iterable[ClientTuple], obj: str) -> Incarnation | None:
     """The token among ``obj``'s ``tuples``, or ``None`` when none stands: the object was never born, or its delete
-    retired it. A token's subject is ``revision:<incarnation>.<n>``; a marker carries no count, and a ticket, a repair
-    token and an evidence carry a ``-`` no incarnation does (``control_records.new_incarnation`` is hex)."""
+    retired it. A token's subject is ``revision:<incarnation>.<n>``; a marker carries no count, and a repair token and an
+    evidence carry a ``-`` no incarnation does (``control_records.new_incarnation`` is hex)."""
     for t in tuples:
         if t.object == obj and (subject := _revision_id(t)) is not None and "-" not in subject:
             incarnation, _, number = subject.rpartition(".")
@@ -2459,8 +2482,14 @@ def standing_incarnation(tuples: Iterable[ClientTuple], obj: str) -> Incarnation
 
 
 async def read_incarnation(client: OpenFgaClient, obj: str) -> Incarnation | None:
-    """The token standing on ``obj`` now (:func:`standing_incarnation`); an outage raises, never ``None``."""
-    return standing_incarnation(await read_object_tuples(client, obj), obj)
+    """The token standing on ``obj`` now (:func:`standing_incarnation`), read from its ``revision`` relation alone; an
+    outage raises, never ``None``. The ONE read of an incarnation."""
+    return standing_incarnation(await read_relation(client, obj, REVISION), obj)
+
+
+async def is_born(client: OpenFgaClient, obj: str, incarnation: str) -> bool:
+    """Whether ``incarnation`` of ``obj`` was born (its marker stands): by its birth, or by its delete's mark."""
+    return await holds(client, marker(obj, incarnation))
 
 
 def _key(t: ClientTuple) -> tuple[str, str, str]:
@@ -2479,6 +2508,61 @@ def _present(tuples: Iterable[ClientTuple], held: Iterable[ClientTuple]) -> list
     return [t for t in tuples if _key(t) in standing]
 
 
+async def _held(client: OpenFgaClient, tuples: Iterable[ClientTuple]) -> list[ClientTuple]:
+    """Those of ``tuples`` the store holds now, each asked on its own (:func:`holds`)."""
+    return [t for t in tuples if await holds(client, t)]
+
+
+async def delete_absent_ignored(client: OpenFgaClient, tuples: list[ClientTuple]) -> None:
+    """Delete ``tuples`` in Writes of at most :data:`TUPLES_PER_WRITE`, each taking a tuple already absent as deleted.
+
+    For bookkeeping only (tickets): it cannot tell what it removed, so no grant goes through it. ``on_missing_deletes``
+    ``IGNORE`` is what the pinned server takes (measured 2026-11-18, v1.18.3, memory datastore: a Write deleting one
+    standing and one absent ticket commits and removes the standing one).
+
+    Raises:
+        ServiceUnavailableError: OpenFGA gave no answer.
+    """
+    conflict = {"conflict": ConflictOptions(on_missing_deletes=ClientWriteRequestOnMissingDeletes.IGNORE)}
+    for start in range(0, len(tuples), TUPLES_PER_WRITE):
+        batch = tuples[start : start + TUPLES_PER_WRITE]
+
+        async def _do_delete(batch: list[ClientTuple] = batch) -> None:
+            # The same cast as `write_tuples`: the SDK's `options` annotation omits the ConflictOptions it reads.
+            await client.write(ClientWriteRequest(deletes=batch), options=cast("dict[str, Any]", conflict))
+
+        await _guarded(
+            _do_delete,
+            event="openfga_write_unavailable",
+            attempts=DEFAULT_RETRY_ATTEMPTS,
+            backoff=DEFAULT_RETRY_BACKOFF_SECONDS,
+            max_backoff=DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+        )
+
+
+async def read_tickets(client: OpenFgaClient, obj: str) -> list[StoredTuple]:
+    """Every fence ticket naming ``obj``, each with the time the store wrote it."""
+    return await read_all(client, obj=f"{FENCE_TYPE}:", user=obj, relation=TICKET)
+
+
+async def sweep_tickets(client: OpenFgaClient, obj: str, *, older_than: datetime) -> int:
+    """Delete each ticket naming ``obj`` the store wrote before ``older_than``; how many went.
+
+    A request's ticket is deleted by the Write that makes its change, or taken back when its door ends (:func:`fenced`),
+    so one standing past a request's run was left by a request that died, or by a take-back OpenFGA did not answer, and
+    fences nothing: deleting it refuses no request that still runs. Judged on the time the store returns with each tuple,
+    so no clock but the store's decides it.
+
+    Raises:
+        ServiceUnavailableError: OpenFGA gave no answer.
+    """
+    stale = [stored.tuple for stored in await read_tickets(client, obj) if stored.written is not None and stored.written < older_than]
+    await delete_absent_ignored(client, stale)
+    if stale:
+        log.info("fence_tickets_swept", extra={"object": obj, "swept": len(stale)})
+    return len(stale)
+
+
 class IncarnationEnded(Exception):
     """The incarnation a fenced write was decided on no longer stands on its object: the object was deleted, and may
     have been made again under its id, so nothing decided on the old one is written."""
@@ -2486,57 +2570,52 @@ class IncarnationEnded(Exception):
 
 class Fence(NamedTuple):
     """What a door's write on or naming a project or warehouse is fenced by (ADR 0241): the incarnation standing when it
-    read, before it asked its caller's authority, and the ticket it wrote before that read."""
+    read, and the ticket it wrote before that read."""
 
     obj: str
     incarnation: str
     ticket: ClientTuple
 
 
-async def open_fence(client: OpenFgaClient, obj: str, *, actor: str, origin: TupleOrigin) -> Fence | None:
-    """Write a ticket of this request's own on ``obj``, then read the incarnation standing there; ``None``, with the
-    ticket taken back, where none stands (never born, or retired by a delete).
+@asynccontextmanager
+async def fenced(client: OpenFgaClient, obj: str, *, actor: str, origin: TupleOrigin, incarnation: str | None = None) -> AsyncGenerator[Fence | None]:
+    """Write a ticket of this request's own naming ``obj``, read the incarnation standing there, and yield the fence;
+    ``None`` where none stands (never born, or retired by a delete) or where it is not ``incarnation``. The ticket is
+    taken back when the block ends, whatever it did. The ONE way a fence is opened (ADR 0241).
 
-    Opened BEFORE the caller's authority is asked, so the authority was asked of the incarnation the fence names, and
-    consumed by the one Write that changes what the door decided (:func:`commit_fenced`), which commits only while the
-    ticket stands. A delete retires the token first and then deletes every ticket it reads (:func:`end_incarnation`): a
-    ticket written before the retire is read by the delete and its write refused, and one written after it reads no
-    token. Each request deletes its own ticket and nobody else's, so writers of different tuples never refuse each other:
-    measured on the pinned OpenFGA 1.18.3 (memory datastore, 2026-11-17), a Write deleting a ticket and writing a grant
-    commits, the same Write again is refused 400 ``write_failed_due_to_invalid_input``, and a Write that deletes and
-    writes one tuple is refused 400 ``cannot_allow_duplicate_tuples_in_one_request``, so a condition on the token that
-    does not move it is no Write OpenFGA takes.
+    Opened after the caller's authority was first asked and before it is asked again (``fga_deps.door_fence``): a caller
+    who may not act writes nothing, and the second answer was given on the incarnation the fence names. The Write that
+    changes what the door decided (:func:`commit_fenced`) deletes the ticket and commits only while it stands. A delete
+    retires the token first and then deletes every ticket it reads (:func:`end_incarnation`): a ticket written before the
+    retire is read by the delete and its write refused, and one written after it reads no token. Each request deletes
+    its own ticket and nobody else's, so writers of different tuples never refuse each other: measured on the pinned
+    OpenFGA 1.18.3 (memory datastore, 2026-11-17), a Write deleting a ticket and writing a grant commits, the same Write
+    again is refused 400 ``write_failed_due_to_invalid_input``, and a Write that deletes and writes one tuple is refused
+    400 ``cannot_allow_duplicate_tuples_in_one_request``, so a condition on the token that does not move it is no Write
+    OpenFGA takes. A ticket a dead request leaves is swept by the converge tick (:func:`sweep_tickets`).
 
     Raises:
         ServiceUnavailableError: OpenFGA gave no answer.
     """
-    ticket = _bookkeeping(obj, _TICKET)
+    ticket = ClientTuple(user=obj, relation=TICKET, object=f"{FENCE_TYPE}:{uuid.uuid4().hex}")
     await write_tuples(client, [ticket], actor=actor, origin=origin)
     try:
         current = await read_incarnation(client, obj)
-    except ServiceUnavailableError:
-        await close_fences(client, [Fence(obj, "", ticket)], actor=actor, origin=origin)
-        raise
-    if current is None:
-        await close_fences(client, [Fence(obj, "", ticket)], actor=actor, origin=origin)
-        return None
-    return Fence(obj, current.incarnation, ticket)
-
-
-async def close_fences(client: OpenFgaClient, fences: Iterable[Fence], *, actor: str, origin: TupleOrigin) -> None:
-    """Delete each fence's ticket where it still stands: the door wrote nothing under it. Never raised: a ticket left
-    behind confers nothing, and a delete of its object deletes it."""
-    tickets = [f.ticket for f in fences]
-    try:
-        await delete_tuples(client, tickets, actor=actor, origin=origin)
-    except ServiceUnavailableError:
-        log.warning("fence_ticket_left", extra={"objects": sorted({str(t.object) for t in tickets})})
+        stands = current is not None and incarnation in (None, current.incarnation)
+        yield Fence(obj, current.incarnation, ticket) if stands and current is not None else None
+    finally:
+        try:
+            await delete_absent_ignored(client, [ticket])
+        except ServiceUnavailableError:
+            # Left, it fences nothing and confers nothing; the converge tick sweeps it past the bound.
+            log.warning("fence_ticket_left", extra={"object": obj})
 
 
 async def fences_stand(client: OpenFgaClient, fences: Iterable[Fence]) -> bool:
-    """Whether every fence's ticket still stands: none of their objects' deletes has drained since it was opened."""
+    """Whether every fence's ticket still stands: none of their objects' deletes has drained since it was opened. One
+    exact read per fence."""
     for fence in fences:
-        if not _present([fence.ticket], await read_object_tuples(client, fence.obj)):
+        if not await holds(client, fence.ticket):
             return False
     return True
 
@@ -2553,13 +2632,14 @@ async def commit_fenced(
     origin: TupleOrigin,
 ) -> bool:
     """Write those of ``writes`` absent and delete those of ``deletes`` standing, in ONE Write that deletes each fence's
-    ticket and writes ``evidence``; whether it changed anything (``False``: nothing to change, and the tickets are taken
-    back). The ONE helper every write on or naming a project or warehouse goes through (ADR 0241).
+    ticket and writes ``evidence``; whether it changed anything (``False``: nothing to change). The ONE helper every
+    write on or naming a project or warehouse goes through (ADR 0241).
 
     The Write commits only while every ticket stands, so only while no delete of a fenced object has drained since the
     fence was opened: a grant decided on an incarnation is written on that incarnation or nowhere, and a revoke decided
     on it takes nothing of a later one. A refusal with the tickets standing is another writer of the same tuple, and
-    the change is judged again on a fresh read. ``fresh`` says every write names an object the request minted (a
+    the change is judged again on a fresh read. What it reads is each tuple it changes, by its key (:func:`holds`), so
+    its cost does not grow with the object's use. ``fresh`` says every write names an object the request minted (a
     namespace's uuid), so none stands and nothing is read before the Write.
 
     Raises:
@@ -2568,17 +2648,16 @@ async def commit_fenced(
         ServiceUnavailableError: OpenFGA gave no answer, so whether the Write committed is unknown.
     """
     writes, deletes, evidence = list(writes), list(deletes), list(evidence)
-    objects = dict.fromkeys(str(t.object) for t in [*writes, *deletes])
     for _ in range(FENCED_ATTEMPTS):
-        held = [] if fresh else [t for obj in objects for t in await read_object_tuples(client, obj)]
+        held = [] if fresh else await _held(client, [*writes, *deletes])
         missing, standing = _absent(writes, held), _present(deletes, held)
         if not missing and not standing:
-            await close_fences(client, fences, actor=actor, origin=origin)
             return False
         if await commit_unless_changed(client, deletes=[*standing, *(f.ticket for f in fences)], writes=[*missing, *evidence], actor=actor, origin=origin):
             return True
         if not await fences_stand(client, fences):
             raise IncarnationEnded(f"{', '.join(sorted({f.obj for f in fences}))} is not the object this change was decided on: it was deleted")
+    objects = dict.fromkeys(str(t.object) for t in [*writes, *deletes])
     raise ConcurrentModificationError(f"the tuples on {', '.join(objects)} changed under every attempt of this change; retry")
 
 
@@ -2601,7 +2680,7 @@ async def bear(
     token gone and revokes nothing (:func:`revoke_ghost`), so a ghost tuple equal to the seed, which the birth leaves
     standing as the seed, is not taken from it. ``fences`` are those of the objects ``tuples`` name (a warehouse's
     project): the birth commits only while each stands. ``False`` says the marker stands; the caller writes what it
-    still lacks under a fence of ``obj``, and ``fences`` are left open for that write.
+    still lacks under a fence of ``obj``. It reads ``obj``'s ``revision`` relation and each of ``tuples`` by its key.
 
     Raises:
         IncarnationEnded: A fence's ticket is gone: an object the birth names was deleted while it ran.
@@ -2611,11 +2690,11 @@ async def bear(
     fences = list(fences)
     born = marker(obj, incarnation)
     for _ in range(FENCED_ATTEMPTS):
-        held = await read_object_tuples(client, obj)
-        if _present([born], held):
+        revisions = await read_relation(client, obj, REVISION)
+        if _present([born], revisions):
             return False
-        repairs = [t for t in held if is_repair_token(t)]
-        writes = [born, Incarnation(incarnation, 0).token(obj), *_absent(tuples, held)]
+        repairs = [t for t in revisions if is_repair_token(t)]
+        writes = [born, Incarnation(incarnation, 0).token(obj), *_absent(tuples, await _held(client, tuples))]
         if await commit_unless_changed(client, deletes=[*repairs, *(f.ticket for f in fences)], writes=writes, actor=actor, origin=origin):
             return True
         if not await fences_stand(client, fences):
@@ -2625,14 +2704,14 @@ async def bear(
 
 async def retire_tokens(client: OpenFgaClient, obj: str, *, actor: str, origin: TupleOrigin, attempts: int = 5) -> None:
     """Delete every token standing on ``obj``, each deletion one Write that commits only on the token as read, until
-    none stands: from then on no door opens a fence on it (:func:`open_fence`). The retire of :func:`end_incarnation`.
+    none stands: from then on no door opens a fence on it (:func:`fenced`). The retire of :func:`end_incarnation`.
 
     Raises:
         ConcurrentModificationError: An administration change moved the token under every attempt.
         ServiceUnavailableError: OpenFGA gave no answer.
     """
     for _ in range(attempts):
-        tokens = [t for t in await read_object_tuples(client, obj) if standing_incarnation([t], obj) is not None]
+        tokens = [t for t in await read_relation(client, obj, REVISION) if standing_incarnation([t], obj) is not None]
         if not tokens:
             return
         for token in tokens:
@@ -2643,7 +2722,7 @@ async def retire_tokens(client: OpenFgaClient, obj: str, *, actor: str, origin: 
 async def end_incarnation(
     client: OpenFgaClient,
     obj: str,
-    incarnation: str | None,
+    incarnation: str,
     *,
     naming: Collection[str] = (),
     actor: str,
@@ -2654,26 +2733,27 @@ async def end_incarnation(
 
     In this order (``specs/catalog/Grants.tla``): mark ``incarnation`` born, so a birth stalled across the delete commits
     nothing (:func:`bear`); retire every token standing, each deletion one Write that commits only on the token as read,
-    so no door opens a fence on it from here (:func:`open_fence`); then drain: read what stands on ``obj`` and, by
-    subject, on each type of ``naming`` (a role's project edge, a warehouse's tenancy edge, a namespace's parent edge),
-    delete every ticket read and revoke every tuple read, and read again. A writer whose ticket was read commits, if at
-    all, before its ticket's deletion, so the second read finds whatever it wrote, and a third finds nothing: a ticket
-    written after the retire reads no token, and its writer writes nothing.
+    so no door opens a fence on it from here (:func:`fenced`); then drain: read what stands on ``obj``, by subject on
+    each type of ``naming`` (a role's project edge, a warehouse's tenancy edge, a namespace's parent edge) and the
+    tickets naming it, delete every ticket read (in Writes of :data:`TUPLES_PER_WRITE`) and revoke every tuple read, and
+    read again. A writer whose ticket was read commits, if at all, before its ticket's deletion, so the second read finds
+    whatever it wrote, and a third finds nothing: a ticket written after the retire reads no token, and its writer writes
+    nothing. Every read pages to the end with no ceiling (:func:`read_all`), so an object's size slows its delete and never
+    refuses it; a delete cut off by its request's deadline is asked again and finishes.
 
     Raises:
         ConcurrentModificationError: The token moved under every attempt to retire it, or a read after the second still
             found grants: a writer outside the fence wrote on ``obj``; asking the delete again finishes it.
         ServiceUnavailableError: OpenFGA gave no answer.
     """
-    if incarnation is not None:
-        await write_tuples(client, [marker(obj, incarnation)], actor=actor, origin=origin)
+    await write_tuples(client, [marker(obj, incarnation)], actor=actor, origin=origin)
     await retire_tokens(client, obj, actor=actor, origin=origin, attempts=attempts)
     revoked: list[ClientTuple] = []
     for read in range(DRAIN_READS):
         held = await read_object_tuples(client, obj)
         named = [t for kind in naming for t in await read_subject_tuples(client, obj, kind)]
+        await delete_absent_ignored(client, [stored.tuple for stored in await read_tickets(client, obj)])
         grants = [t for t in held if t.relation not in BOOKKEEPING_RELATIONS]
-        await delete_tuples(client, [t for t in held if is_ticket(t)], actor=actor, origin=origin)
         if read and not grants and not named:
             return revoked
         revoked += await revoke_read_tuples(client, obj, grants, actor=actor, origin=origin)
@@ -2722,7 +2802,7 @@ async def write_evidenced(client: OpenFgaClient, fences: list[Fence], t: ClientT
     """Write ``t`` where it is absent, with ``proof`` in the same Write and under ``fences``; whether it did.
 
     ``proof`` stands afterwards exactly when this Write committed, so whoever recorded an intent naming it before the
-    Write can tell, after any crash, whether ``t`` is its own (:func:`evidence_stands`).
+    Write can tell, after any crash, whether ``t`` is its own (:func:`holds` on ``proof``).
 
     Raises:
         IncarnationEnded: A fence's ticket is gone.
@@ -2730,14 +2810,9 @@ async def write_evidenced(client: OpenFgaClient, fences: list[Fence], t: ClientT
     """
     if fences:
         return await commit_fenced(client, fences, writes=[t], evidence=[proof], actor=actor, origin=origin)
-    if _present([t], await read_object_tuples(client, str(t.object))):
+    if await holds(client, t):
         return False
     return await commit_unless_changed(client, deletes=[], writes=[t, proof], actor=actor, origin=origin)
-
-
-async def evidence_stands(client: OpenFgaClient, proof: ClientTuple) -> bool:
-    """Whether ``proof`` stands: the evidenced Write that names it committed."""
-    return bool(_present([proof], await read_object_tuples(client, str(proof.object))))
 
 
 #: One census reads at most this many pages of this many tuples: governance tuples are written at admin frequency, so
@@ -2905,16 +2980,7 @@ def names_someone(user: str) -> bool:
     return user.startswith("user:") or "#" in user
 
 
-async def revoke_object_tuples(
-    client: OpenFgaClient,
-    obj: str,
-    *,
-    actor: str,
-    origin: TupleOrigin,
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
-) -> list[ClientTuple]:
+async def revoke_object_tuples(client: OpenFgaClient, obj: str, *, actor: str, origin: TupleOrigin) -> list[ClientTuple]:
     """Delete EVERY tuple on ``obj`` — the revoke-on-delete cleanup. Returns WHAT the server removed.
 
     **The tuples, not a count, and the difference is who gets told.** Every destructive door in the
@@ -2934,14 +3000,7 @@ async def revoke_object_tuples(
     revokes each object in it through the catalog's ``fga_deps.end_removed_subtree``, which finds them by
     those ``child`` edges. An outage part-way raises :class:`RevokeInterrupted` naming the tuples removed.
     """
-    tuples = await read_object_tuples(
-        client,
-        obj,
-        retry_attempts=retry_attempts,
-        retry_backoff_seconds=retry_backoff_seconds,
-        retry_max_backoff_seconds=retry_max_backoff_seconds,
-    )
-    return await revoke_read_tuples(client, obj, tuples, actor=actor, origin=origin)
+    return await revoke_read_tuples(client, obj, await read_object_tuples(client, obj), actor=actor, origin=origin)
 
 
 async def revoke_read_tuples(client: OpenFgaClient, obj: str, tuples: list[ClientTuple], *, actor: str, origin: TupleOrigin) -> list[ClientTuple]:

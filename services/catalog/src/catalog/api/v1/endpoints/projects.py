@@ -82,7 +82,7 @@ from catalog.schemas import (
 from catalog.services import incarnations, object_labels, role_grants, roles, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
-from catalog.services.control_records import GIT, INCARNATION, MANAGED_BY, ProtectionChange
+from catalog.services.control_records import GIT, INCARNATION, MANAGED_BY, PROJECT_INCARNATION, ProtectionChange
 from lakehouse import maintenance_policies, protection
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
@@ -197,9 +197,17 @@ async def _load_tenants(settings: Settings) -> dict[str, Tenant]:
     reconciler reports them as drift; a listing that hid them would make the drift undiagnosable), and never
     protected, since protection lives on the record."""
     so = settings.storage_options()
-    grouped = _group_by_project(await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so))
+    projects = await run_in_threadpool(project_registry.list_projects, settings.registry_root, so)
+    standing = {str(record["id"]): record.get(INCARNATION) for record in projects}
+    # A warehouse record an earlier incarnation of a standing project left is no warehouse of that tenant (ADR 0241 §8 B3).
+    owned = [
+        r
+        for r in await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
+        if str(r.get("project")) not in standing or r.get(PROJECT_INCARNATION) == standing[str(r.get("project"))]
+    ]
+    grouped = _group_by_project(owned)
     tenants = {project: Tenant(project=project, warehouses=held) for project, held in grouped.items()}
-    for record in await run_in_threadpool(project_registry.list_projects, settings.registry_root, so):
+    for record in projects:
         project = str(record["id"])
         tenants[project] = Tenant(project=project, record=record, warehouses=grouped.get(project, []))
     return tenants
@@ -546,6 +554,11 @@ async def protect_project(settings: Settings, control: ControlEmitter, project_i
     )
 
 
+def _warehouses_of(records: list[dict[str, str]], project_id: str, project: dict[str, str]) -> list[str]:
+    """The ids of the warehouses among ``records`` made in the incarnation of ``project_id`` its record ``project`` names."""
+    return sorted(str(r["id"]) for r in records if r.get("project") == project_id and r.get(PROJECT_INCARNATION) == project.get(INCARNATION))
+
+
 async def _start_delete(project_id: str, record: dict[str, str], settings: Settings, token: CurrentToken, *, force: bool) -> None:
     """Judge a delete's start, its protection and the project's emptiness, and record it on the project's record.
 
@@ -561,7 +574,7 @@ async def _start_delete(project_id: str, record: dict[str, str], settings: Setti
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
     # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
     # read may be one of this project's own ([[LH-572]]).
-    held = sorted(str(r["id"]) for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.get("project") == project_id)
+    held = _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), project_id, record)
     if held:
         raise NamespaceNotEmptyError(
             f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "
@@ -637,11 +650,8 @@ async def delete_project(
     obj = f"project:{project_id}"
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = fga_deps.wired(settings, client)
+    incarnation = incarnations.require_incarnation(record, obj)
     if record.get(project_registry.DELETING_BY) is None:
-        # Every record names an incarnation once the catalog converged it (`incarnations.converge`); with authorization on,
-        # one that does not yet is refused, so no delete runs on an id whose incarnation is still being given.
-        if authz is not None:
-            incarnations.require_incarnation(record, obj)
         await _start_delete(project_id, record, settings, token, force=force)
     # The incarnation as the record names it once the delete is recorded, which no later write changes.
     record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, so, project_id) or record
@@ -650,7 +660,7 @@ async def delete_project(
     grants = announcing.grant_changes(
         await fga.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
     )
-    deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=obj, actor=actor)
+    deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=obj, actor=actor, extra={"incarnation": incarnation})
     deleted = Announcement(evidence=RecordGone(key=project_registry.record_key(project_id)), message=ControlMessage(event=deleted_event))
     async with announcer.announcing(door="delete_project", target=obj, announcements=[deleted, *grants.values()]) as filing:
         removed: list[fga.ClientTuple] = []
@@ -661,12 +671,11 @@ async def delete_project(
         # then drained: every tuple on it and every tuple naming it (a role's `project` edge, a warehouse's tenancy edge)
         # revoked, with the tickets of the doors that were writing, until a read finds nothing. No grant, role or
         # warehouse decided on it reaches a project made again under the id.
-        removed = await fga_deps.end_incarnation(authz, settings, obj, record.get(INCARNATION), token=token)
+        removed = await fga_deps.end_incarnation(authz, settings, obj, incarnation, token=token)
         # A warehouse whose create was decided on this project before the drain, and whose record stands, holds no
         # tenancy edge to it now; the project is not deleted under it: the warehouse is deleted first, then this asked again.
-        if late := sorted(
-            str(r["id"]) for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.get("project") == project_id
-        ):
+        # A record an earlier incarnation left is not this one's, and the converge tick ends it.
+        if late := _warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), project_id, record):
             raise NamespaceNotEmptyError(
                 f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete ran; delete each, then delete the project again"
             )

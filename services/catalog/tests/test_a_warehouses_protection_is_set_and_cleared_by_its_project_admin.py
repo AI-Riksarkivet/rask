@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from catalog.core.config import get_settings
-from catalog.services import warehouses
+from catalog.services import projects, warehouses
 
 
 PROJECT, WAREHOUSE = "acme", "wh-acme"
@@ -38,11 +38,14 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
     settings = get_settings()
+    project = projects.get_project(settings.registry_root, settings.storage_options(), PROJECT)
+    assert project is not None
     record = {
         "id": WAREHOUSE,
         "bucket": WAREHOUSE,
         "root_uri": settings.root,
         "project": PROJECT,
+        "project_incarnation": project["incarnation"],
         "status": "active",
         "created_at": datetime.now(UTC).isoformat(),
     }

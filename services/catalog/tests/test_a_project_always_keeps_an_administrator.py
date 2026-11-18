@@ -68,22 +68,22 @@ def acme(request: pytest.FixtureRequest, governed_catalog: Any) -> Any:  # noqa:
     indirect=["acme"],
 )
 def test_two_admins_revoking_each_other_at_once_leave_the_project_one_admin(acme: Any, pair: tuple[str, str], monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401
-    # Both revokes read the project's tuples before either writes: the overlap the live trials hit.
-    read = fga.read_object_tuples
+    # Both revokes read the project's administration before either writes: the overlap the live trials hit.
+    read = fga.read_relation
     meeting = asyncio.Barrier(2)
     first_reads: list[str] = []
 
-    async def read_together(client: Any, obj: str, **kwargs: Any) -> Any:  # noqa: ANN401 — fga.read_object_tuples' signature
-        tuples = await read(client, obj, **kwargs)
-        if len(first_reads) < 2:
+    async def read_together(client: Any, obj: str, relation: str) -> Any:  # noqa: ANN401 — fga.read_relation's signature
+        tuples = await read(client, obj, relation)
+        if relation == "admin" and len(first_reads) < 2:
             first_reads.append(obj)
             await asyncio.wait_for(meeting.wait(), timeout=10)
         return tuples
 
-    monkeypatch.setattr(fga, "read_object_tuples", read_together)
+    monkeypatch.setattr(fga, "read_relation", read_together)
     with ThreadPoolExecutor(max_workers=2) as pool:
         answers = list(pool.map(lambda revoke: _revoke(acme, revoke[0], f"dex~{revoke[1]}", "admin"), [pair, pair[::-1]]))
-    monkeypatch.setattr(fga, "read_object_tuples", read)
+    monkeypatch.setattr(fga, "read_relation", read)
 
     survivor = pair[0] if answers[0].status_code == 200 else pair[1]
     assert sorted((a.status_code, a.json().get("code")) for a in answers) == [(200, None), (409, CONCURRENT_MODIFICATION)], [a.text for a in answers]

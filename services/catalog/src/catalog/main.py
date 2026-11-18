@@ -94,14 +94,20 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
 
 
 async def converge_at_boot(app: FastAPI) -> None:
-    """Converge every project's and warehouse's incarnation (``incarnations.converge``, ADR 0241), then run the
-    warehouse-grant backfill, which writes under them, reporting rather than raising. See its call site for why."""
+    """Converge every project's and warehouse's incarnation and end what a dead request or tenant left
+    (``incarnations.converge``, ADR 0241), then run the warehouse-grant backfill, which writes under them, reporting
+    rather than raising. See its call site for why."""
     from catalog.services import incarnations
     from catalog.services.warehouse_grant_backfill import backfill
 
     settings: Settings = app.state.settings
     try:
-        await incarnations.converge(settings.registry_root, settings.storage_options(), getattr(app.state, "fga", None) if settings.fga_enabled else None)
+        await incarnations.converge(
+            settings.registry_root,
+            settings.storage_options(),
+            getattr(app.state, "fga", None) if settings.fga_enabled else None,
+            bound=incarnations.ticket_bound(settings.request_deadline_seconds),
+        )
         seen, written, failures = await backfill(settings)
     except asyncio.CancelledError:
         raise

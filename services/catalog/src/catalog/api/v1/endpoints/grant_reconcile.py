@@ -25,8 +25,7 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep, namespace_for_ta
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GhostRevokeRequest, GhostRevokeResponse, GrantCensusResponse, TenancyRebuildRequest, TenancyRebuildResponse
-from catalog.services import grant_reconcile, table_claims, warehouses
-from catalog.services.control_records import INCARNATION
+from catalog.services import grant_reconcile, incarnations, table_claims, warehouses
 from lakehouse import location_claims
 from lakehouse.governed import fga
 
@@ -112,14 +111,15 @@ async def rebuild_warehouse_tenancy(body: TenancyRebuildRequest, settings: Setti
             case str() as reason:
                 answer.unjustified[warehouse_id] = reason
             case edge:
-                if not (incarnation := (record or {}).get(INCARNATION)):
-                    answer.unjustified[warehouse_id] = f"the warehouse record {warehouse_id!r} names no incarnation yet: the catalog converges it"
-                    continue
+                obj = f"warehouse:{warehouse_id}"
+                incarnation = incarnations.require_incarnation(record or {}, obj)
+                project_incarnation = incarnations.require_project_incarnation(record or {}, obj)
                 try:
-                    await fga_deps.write_registry_edge(client, settings, edge, incarnation=str(incarnation), token=token)
+                    await fga_deps.write_registry_edge(client, settings, edge, incarnation=incarnation, project_incarnation=project_incarnation, token=token)
                 except fga.IncarnationEnded:
                     answer.unjustified[warehouse_id] = (
-                        f"warehouse {warehouse_id!r} or its project names an incarnation no token stands for: one of them is being deleted"
+                        f"warehouse {warehouse_id!r} or its project names an incarnation no token stands for: one of them is being deleted, "
+                        "or the record is one a create of an earlier incarnation of its project left"
                     )
                     continue
                 answer.written.append(f"{edge.user} {edge.relation} {edge.object}")

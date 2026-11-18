@@ -6,6 +6,29 @@ One entry per change to `model.fga` that a store holding tuples has to know abou
 whether the change writes new tuples into a store. When both are `FALSE`, deploying the model is the whole migration:
 `write_model.py` writes it, and every tuple in the store keeps its name and is read by the new model as it stands.
 
+## 2026-11-18: a door's ticket is a `fence` object naming the project or warehouse
+
+```text
+MODIFIES_TUPLES: FALSE
+ADDS_TUPLES:     TRUE
+```
+
+ADR 0241 §8 (B1, B2).
+
+- **Added:** `type fence` with `define ticket: [project, warehouse]`, bookkeeping no permission reads. A door's fence ticket
+  is `<project or warehouse> ticket fence:<hex>`, written after the door asked its caller's authority, deleted by the
+  Write that makes its change, taken back when the door ends and swept by the converge tick once older than a request
+  runs. Off the object, so nothing that reads a project or warehouse (its grants, its incarnation, a listing) reads a
+  ticket, and a ticket a dead request left slows no door.
+- **No longer written:** `revision:ticket-<hex>` under `project#revision` and `warehouse#revision`. A store holding some
+  is test data (the estate is pre-production); none confers anything, and an object's delete still revokes nothing of
+  the `revision` relation.
+
+**Stored projects and warehouses.** A record naming no incarnation is no longer given one at boot: every create mints
+one, so such a record was written by no create of this catalog and is an internal error where its incarnation is relied
+on. An estate whose records predate incarnations is re-created from git: the declared projects and warehouses converge
+from the chart, and door-made ones are made again (ADR 0241 §8 B5).
+
 ## 2026-11-17: a door's ticket, the repair's token and git's evidence are kept in `revision`; the estate keeps one too
 
 ```text

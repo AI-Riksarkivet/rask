@@ -54,8 +54,16 @@ type role
     define can_read: can_list_roles from project
 
 # An incarnation of a project or warehouse id, and a count of the grants on it (ADR 0241). It confers nothing: it is
-# the subject of `project#revision` and `warehouse#revision`.
+# the subject of `project#revision`, `warehouse#revision` and `estate#revision`.
 type revision
+
+# BOOKKEEPING, NOT A RUNG: a door's fence ticket on a project or warehouse (ADR 0241), `<object> ticket fence:<hex>`,
+# written after the door asked its caller's authority and before it reads the object's incarnation, deleted by the Write
+# that makes its change, taken back when the door ends, and swept by the converge tick once older than a request runs.
+# Kept on an object of its own so nothing that reads the project or warehouse reads a ticket. No permission reads it.
+type fence
+  relations
+    define ticket: [project, warehouse]
 
 # A project = a tenant. Holds its warehouses and its roles.
 type project
@@ -63,9 +71,9 @@ type project
     # BOOKKEEPING, NOT A RUNG: no permission reads it. A project's id may be held again by another tenant once it is
     # deleted, and its tuples name the id, so each incarnation is told apart here: `revision:<incarnation>`, written by
     # its birth and never revoked, and the token `revision:<incarnation>.<n>`, which stands while the incarnation does.
-    # A door writing on or naming the project writes a ticket of its own here (`revision:ticket-<hex>`) before it reads
-    # the token, and deletes it in the Write that makes its change; the project's delete retires the token and deletes
-    # every ticket it reads, so a change decided on a deleted incarnation lands nowhere (ADR 0241). An admin removal
+    # A door writing on or naming the project writes a ticket of its own naming it (`fence#ticket`) before it reads the
+    # token, and deletes it in the Write that makes its change; the project's delete retires the token and deletes every
+    # ticket naming it, so a change decided on a deleted incarnation lands nowhere (ADR 0241). An admin removal
     # moves the token, so two overlapping ones cannot both pass the last-admin guard ([[LH-434]]). The drift repair's
     # token (`revision:repair-<hex>`) and a declared grant's evidence (`revision:git-<hex>`) are kept here too.
     define revision: [revision]

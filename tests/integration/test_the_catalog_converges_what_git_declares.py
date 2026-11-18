@@ -14,6 +14,8 @@ import logging
 import threading
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
+from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -28,7 +30,7 @@ from catalog import main as boot
 from catalog.api import declaration_converge, fga_deps
 from catalog.api.ticks import Tick
 from catalog.api.v1.endpoints import warehouses as warehouse_doors
-from catalog.services import declaration, projects, warehouses
+from catalog.services import declaration, incarnations, projects, warehouses
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.records import mutate_json
@@ -463,30 +465,51 @@ def test_a_grant_removed_from_git_is_revoked_and_one_made_at_a_door_stands(estat
     assert held == {"reader"}
 
 
-def test_an_estate_stored_before_incarnations_converges_at_boot_with_nothing_posted_again(estate: Estate) -> None:
-    """An upgrade starts with every project and warehouse record naming no incarnation and no `revision` in OpenFGA (ADR
-    0241, `GrantsUpgradeUnconverged`): its doors answer such a record as one still being established, and the catalog's
-    boot converges each, so grants, the last-admin guard and the declared grants all work with nothing POSTed again."""
-    _declared_acme(estate)
-    settings, alice = estate.client.app.state.settings, estate.bearer("alice")
-    for key in (projects.record_key("acme"), warehouses.record_key("acme")):
-        mutate_json(settings.registry_root, settings.storage_options(), key, lambda record: {k: v for k, v in record.items() if k != "incarnation"})
-    estate.store.delete(*(t for t in estate.store.tuples() if t[1] == "revision"))
-    members = "/management/v1/projects/acme/members"
+@pytest.mark.parametrize("converged_by", ["boot", "tick"])
+def test_an_incarnation_whose_birth_never_landed_is_born_by_the_catalog_and_a_record_naming_none_is_refused(
+    estate: Estate, monkeypatch: pytest.MonkeyPatch, converged_by: str
+) -> None:
+    """A create can die between its record and its birth (ADR 0241 §8 B5, `GrantsUnbornUnconverged`): the catalog bears
+    it at boot and on every converge tick, its marker and token with no seed of its own, so the create asked again writes
+    its creator's admin under a fence and the doors work, with no hand-run step. A record naming no incarnation was
+    written by no create of this catalog: it is an internal error where the incarnation is relied on and in the
+    convergence, never repaired."""
+    estate.store.write((fga.user_object(f"{IDP}~alice"), "admin", ROOT))
+    alice, members = estate.bearer("alice"), "/management/v1/projects/acme/members"
+    real_bear = fga.bear
 
-    before = estate.client.put(members, json={"user": f"{IDP}~bob", "relation": "member"}, headers=alice)
-    assert (before.status_code, before.json()["code"], before.headers.get("retry-after")) == (409, 14, "5"), before.text
+    async def _birth_lost(*_args: Any, **_kwargs: Any) -> bool:  # noqa: ANN401 — bear's own arguments
+        raise ServiceUnavailableError("authorization service unavailable")
+
+    monkeypatch.setattr(fga, "bear", _birth_lost)
+    assert estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=alice).status_code == 503
+    monkeypatch.setattr(fga, "bear", real_bear)
+    settings = estate.client.app.state.settings
+    record = projects.get_project(settings.registry_root, settings.storage_options(), "acme")
+    assert record is not None
+    incarnation = record["incarnation"]
+    born = {(f"revision:{incarnation}", "revision", "project:acme"), (f"revision:{incarnation}.0", "revision", "project:acme")}
+    assert not born & estate.store.tuples()
 
     app = cast(FastAPI, estate.client.app)
     assert estate.client.portal is not None
-    estate.client.portal.call(boot.converge_at_boot, app)
-    estate.declare(projects=[_project("acme")], warehouses=[_warehouse("acme", "acme")], grants=[_grant("warehouse:acme", "reader")])
-    ticked = estate.tick()
-
+    if converged_by == "boot":
+        estate.client.portal.call(boot.converge_at_boot, app)
+    else:
+        assert estate.tick().failed == []
+    held = estate.store.tuples()
+    assert born <= held and (fga.user_object(f"{IDP}~alice"), "admin", "project:acme") not in held, "the convergence bore no birth, or a seed"
+    remade = estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=alice)
     granted = estate.client.put(members, json={"user": f"{IDP}~bob", "relation": "member"}, headers=alice)
     last = estate.client.request("DELETE", members, json={"user": f"{IDP}~alice", "relation": "admin"}, headers=alice)
-    assert (granted.status_code, last.status_code, last.json()["code"], ticked.failed) == (200, 409, 14, []), (granted.text, last.text)
-    assert (fga.user_object(PIPELINE), "reader", "warehouse:acme") in estate.store.tuples()
+    assert (remade.status_code, granted.status_code, last.status_code, last.json()["code"]) == (200, 200, 409, 14), (remade.text, granted.text, last.text)
+
+    mutate_json(
+        settings.registry_root, settings.storage_options(), projects.record_key("acme"), lambda record: {k: v for k, v in record.items() if k != "incarnation"}
+    )
+    refused = estate.client.delete("/management/v1/projects/acme", headers=alice)
+    assert (refused.status_code, refused.json()["code"]) == (500, 18), refused.text
+    assert [failed for failed in estate.tick().failed if failed.startswith("project:acme")], "a record naming no incarnation converged silently"
 
 
 class _Gate:
@@ -551,6 +574,98 @@ def test_a_warehouse_made_across_a_delete_lands_in_no_tenant_made_again_under_th
     assert (answered, planted, (fga.user_object(f"{IDP}~alice"), "owner", "warehouse:wh-a") in held) == ([409], False, False)
     if deleted == "its-project":
         assert estate.record("wh-a") is None, "alice's warehouse is recorded in the project erin made"
+
+
+def test_a_warehouse_record_a_create_held_across_its_projects_delete_wrote_reaches_no_tenant_made_again_and_is_ended(
+    estate: Estate, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """alice's create of ``wh-a`` is held between its last fence check and its record write while acme is deleted and
+    erin makes acme again (ADR 0241 §8 B3, `GrantsChildUnnamed`). Released, the record lands naming acme; its birth is
+    refused (409). The record names the incarnation alice's fence read, so the boot backfill and the convergence refuse
+    it: erin's acme holds no tenancy edge to it and her admins nothing on it, her project lists no such warehouse and her
+    re-POST of the id is refused. Past the bound the converge tick ends the record and frees the id; its bucket's claim
+    names alice's incarnation and is kept, so erin takes the id with a bucket of her own and not alice's."""
+    for person in ("alice", "erin"):
+        estate.store.write((fga.user_object(f"{IDP}~{person}"), "admin", ROOT))
+    alice, erin = estate.bearer("alice"), estate.bearer("erin")
+    assert estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=alice).status_code == 200
+    made = {"id": "wh-a", "project": "acme", "bucket": "wh-a-bucket"}
+    arrived, release = threading.Event(), threading.Event()
+    real_record = warehouses.create_warehouse_record
+
+    def _record(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — create_warehouse_record's own arguments
+        arrived.set()
+        assert release.wait(30), "the held record write was never released"
+        real_record(*args, **kwargs)
+
+    monkeypatch.setattr(warehouses, "create_warehouse_record", _record)
+    answered: list[int] = []
+    making = threading.Thread(target=lambda: answered.append(estate.client.post("/management/v1/warehouses", json=made, headers=alice).status_code))
+    making.start()
+    assert arrived.wait(30), "alice's create never reached its record write"
+    steps = [
+        estate.client.delete("/management/v1/projects/acme", headers=alice),
+        estate.client.post("/management/v1/projects", json={"id": "acme"}, headers=erin),
+    ]
+    release.set()
+    making.join(30)
+    monkeypatch.setattr(warehouses, "create_warehouse_record", real_record)
+    assert ([step.status_code for step in steps], answered) == ([200, 200], [409]), [step.text for step in steps]
+    assert estate.record("wh-a") is not None, "the held create wrote no record: the window was not held open"
+
+    app = cast(FastAPI, estate.client.app)
+    assert estate.client.portal is not None
+    estate.client.portal.call(boot.converge_at_boot, app)
+    ticked = estate.tick()
+    held = estate.store.tuples()
+    assert ("project:acme", "project", "warehouse:wh-a") not in held, "the backfill gave alice's warehouse to erin's acme"
+    assert not [t for t in held if t[2] == "warehouse:wh-a"], f"tuples stand on a dead tenant's warehouse: {[t for t in held if t[2] == 'warehouse:wh-a']}"
+    listed = estate.client.get("/management/v1/projects/acme", headers=erin).json()
+    assert ([w["id"] for w in listed.get("warehouses", [])], ticked.failed) == ([], []), listed
+    assert estate.client.post("/management/v1/warehouses", json={**made, "bucket": "wh-e-bucket"}, headers=erin).status_code == 409
+
+    settings = estate.client.app.state.settings
+    ended = estate.client.portal.call(partial(incarnations.converge, settings.registry_root, settings.storage_options(), app.state.fga, bound=timedelta(0)))
+    assert (ended.orphans, ended.ended, estate.record("wh-a")) == (["warehouse:wh-a"], ["warehouse:wh-a"], None), ended
+    assert estate.client.post("/management/v1/warehouses", json=made, headers=erin).status_code == 409, "erin took the bucket alice's warehouse claimed"
+    taken = estate.client.post("/management/v1/warehouses", json={**made, "bucket": "wh-e-bucket"}, headers=erin)
+    assert taken.status_code == 200, taken.text
+
+
+def test_a_namespace_made_in_a_warehouse_across_its_delete_lands_in_no_warehouse_made_again_under_the_id(
+    estate: Estate, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """alice's namespace ``wh-a$sales`` is created and held before its seed while ``wh-a`` is deleted with what it holds
+    and erin makes ``wh-a`` again in a project of hers (ADR 0241 §8 B4, G9b): its ``parent`` edge names the warehouse,
+    and is written under the fence its request opened there, so it lands in no warehouse made again under the id."""
+    for person in ("alice", "erin"):
+        estate.store.write((fga.user_object(f"{IDP}~{person}"), "admin", ROOT))
+    alice, erin = estate.bearer("alice"), estate.bearer("erin")
+    for project, by in (("acme", alice), ("beta", erin)):
+        assert estate.client.post("/management/v1/projects", json={"id": project}, headers=by).status_code == 200
+    made = estate.client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "bucket": "wh-a-bucket"}, headers=alice)
+    assert made.status_code == 200, made.text
+    gate, real_seed = _Gate(), fga_deps.seed_ownership
+
+    async def _seed(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — seed_ownership's own arguments
+        await gate.hold()
+        await real_seed(*args, **kwargs)
+
+    monkeypatch.setattr(fga_deps, "seed_ownership", _seed)
+    answered: list[int] = []
+    making = threading.Thread(target=lambda: answered.append(estate.client.post("/v1/namespace/wh-a$sales/create", json={}, headers=alice).status_code))
+    making.start()
+    assert gate.arrived.wait(30), "alice's namespace never reached its seed"
+    steps = [
+        estate.client.delete("/management/v1/warehouses/wh-a", params={"cascade": "true"}, headers=alice),
+        estate.client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "beta", "bucket": "wh-b-bucket"}, headers=erin),
+    ]
+    gate.release.set()
+    making.join(30)
+
+    assert [step.status_code for step in steps] == [200, 200], [step.text for step in steps]
+    edges = [t for t in estate.store.tuples() if "warehouse:wh-a" in (t[0], t[2]) and t[1] in ("parent", "child")]
+    assert (answered, edges) == ([409], []), f"the namespace door answered {answered}, and erin's warehouse holds {edges}"
 
 
 def _released_acme(estate: Estate) -> dict[str, str]:

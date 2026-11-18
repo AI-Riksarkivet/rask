@@ -20,6 +20,7 @@ import json
 import logging
 
 import pyarrow.fs as pafs
+from lance_namespace import InternalError
 
 from catalog.services.control_records import (
     INCARNATION,
@@ -63,9 +64,10 @@ def put_project(control_root: str, storage_options: StorageOptions, record: dict
     :func:`create_project_record`, conditional on absence (F1).
 
     What is left is fixture setup, which has no concurrency to lose to. Do not reach for it in service
-    or endpoint code; there is a conditional door for every real mutation.
+    or endpoint code; there is a conditional door for every real mutation. The record is written as its create writes
+    it: one naming no incarnation is given a fresh one, as :func:`create_project_record` gives it (ADR 0241).
     """
-    write_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
+    write_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", {INCARNATION: new_incarnation(), **record})
 
 
 #: The fields an idempotent re-POST OWNS. Everything else belongs to the record's own lifecycle and
@@ -102,8 +104,11 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
         # Identity fields belong to the ORIGINAL create; a re-POST never resets a tenant's age or author.
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
         merged["created_by"] = live.get("created_by") or record.get("created_by", "")
-        # The incarnation is the original create's (ADR 0241); a record written before incarnations takes the request's.
-        merged[INCARNATION] = live.get(INCARNATION) or record.get(INCARNATION) or new_incarnation()
+        # The incarnation is the original create's (ADR 0241), which every record carries from its mint (§8 B5).
+        if not live.get(INCARNATION):
+            raise InternalError(
+                f"project {record['id']!r}'s record names no incarnation; every create mints one, so this record was not written by this catalog"
+            )
         return merged
 
     return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", merge)
@@ -208,16 +213,12 @@ def delete_project_record(control_root: str, storage_options: StorageOptions, pr
         return
 
 
-def list_projects(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every readable project record (unordered) but those being deleted, which are no tenant (:func:`get_project`). An
-    absent registry prefix yields ``[]``.
-
-    One corrupt or unreadable record is SKIPPED with a warning (mirroring ``list_warehouses``):
-    the listing feeds the tenant gallery and the existence guard, and a single bad object voiding
-    it would turn one tenant's registry corruption into an every-tenant outage.
-    """
+def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+    """Every readable project record (unordered), those being deleted included, and the path of each that is there and
+    cannot be read as one. An absent registry prefix yields nothing."""
     fs, base = fs_and_base(control_root, storage_options)
     out: list[dict[str, str]] = []
+    unreadable: list[str] = []
     for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_PROJECTS_PREFIX}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
@@ -226,7 +227,21 @@ def list_projects(control_root: str, storage_options: StorageOptions) -> list[di
                 record = json.loads(stream.readall().decode("utf-8"))
         except Exception as exc:
             log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
+            unreadable.append(info.path)
             continue
-        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None and not valid.get(DELETING_BY):
+        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None:
             out.append(valid)
-    return out
+        else:
+            unreadable.append(info.path)
+    return out, unreadable
+
+
+def list_projects(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+    """Every readable project record (unordered) but those being deleted, which are no tenant (:func:`get_project`). An
+    absent registry prefix yields ``[]``.
+
+    One corrupt or unreadable record is SKIPPED with a warning (mirroring ``list_warehouses``):
+    the listing feeds the tenant gallery and the existence guard, and a single bad object voiding
+    it would turn one tenant's registry corruption into an every-tenant outage.
+    """
+    return [record for record in read_projects(control_root, storage_options)[0] if not record.get(DELETING_BY)]

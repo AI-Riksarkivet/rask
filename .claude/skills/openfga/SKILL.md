@@ -146,17 +146,26 @@ warehouse, a project, a classification label and a transaction keep their ids.
 
 **A project's and a warehouse's id is reused once it is deleted, so a write on or naming it is fenced by its incarnation**
 (ADR 0241, `specs/catalog/Grants.tla`): `revision` on `project`, `warehouse` and `estate` is bookkeeping holding the marker
-`revision:<incarnation>` (never revoked), the token `revision:<incarnation>.<n>`, a door's ticket `revision:ticket-<hex>`,
-the drift repair's token `revision:repair-<hex>` and a declared grant's evidence `revision:git-<hex>`; the audit trail
-leaves them out. Open a fence BEFORE asking the caller's authority (`fga_deps.door_fence`, or the router's `parent_fence`
-for a namespace created in a warehouse) and write or revoke through `fga.commit_fenced` (or `project_admins.confer` /
-`withdraw(fences=)` for an administration change), never `fga.write_tuples` / `delete_tuples`; this covers a tuple naming
-the object as SUBJECT too (a warehouse's tenancy edge, a role's `project` edge). A Write cannot require a tuple without
-deleting it (a Write that deletes and writes one tuple is refused `cannot_allow_duplicate_tuples_in_one_request`, measured
-on 1.18.3), so each writer deletes its own ticket and grants never refuse each other. A delete ends the incarnation with
-`fga.end_incarnation` (mark born, retire, drain until a read finds nothing). A test seeding a project or warehouse
-straight to the store must seed its marker and token too, or its doors answer 409 with `Retry-After` (being established);
-`tests/integration/openfga_grants.Grants` answers every project and warehouse as born.
+`revision:<incarnation>` (never revoked), the token `revision:<incarnation>.<n>`, the drift repair's token
+`revision:repair-<hex>` and a declared grant's evidence `revision:git-<hex>`; a door's ticket is `<object> ticket
+fence:<hex>` on `type fence` (§8 B1, B2), off the object, so no read of the object reads it. The audit trail leaves both
+relations out, and a delete writes the retirement as its own row. A door asks its gate with NO write first, then opens a
+fence (`fga_deps.door_fence(gate=)`, the context manager `fga.fenced` underneath, the ONE way a fence is opened, which takes
+its ticket back on every exit), then asks its gate again on the incarnation the fence read, and writes or revokes through
+`fga.commit_fenced` (or `project_admins.confer` / `withdraw(fences=)`), never `fga.write_tuples` / `delete_tuples`; a
+namespace created in a warehouse gets this from the router's `parent_fence`, listed after `authorize`. This covers a tuple
+naming the object as SUBJECT too (a warehouse's tenancy edge, a role's `project` edge). A Write cannot require a tuple
+without deleting it (a Write that deletes and writes one tuple is refused `cannot_allow_duplicate_tuples_in_one_request`,
+measured on 1.18.3), so each writer deletes its own ticket and grants never refuse each other. **Read what you need and
+no more:** an incarnation through `fga.read_incarnation` (the `revision` relation, filtered on the server), one tuple
+through `fga.holds` (its key), one relation through `fga.read_relation`; `fga.read_object_tuples` grows with the object's
+use and is for a listing or a delete. Every read pages to the end with no ceiling (`fga.read_all`); OpenFGA 1.18.3 takes
+at most 100 tuples in one Write (`fga.TUPLES_PER_WRITE`, refused 400 `exceeded_entity_limit` past it). A delete ends the
+incarnation with `fga.end_incarnation` (mark born, retire, drain until a read finds nothing, tickets deleted in Writes of
+100 with `on_missing_deletes: IGNORE`); the converge tick sweeps a ticket older than the request deadline plus five
+minutes (`fga.sweep_tickets`). A test seeding a project or warehouse straight to the store must seed its marker and token
+too, or its doors answer 409 with `Retry-After` (being established); `tests/integration/openfga_grants.Grants` answers
+every project and warehouse as born.
 
 ### Testing
 | File | Description |

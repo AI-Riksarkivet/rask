@@ -17,7 +17,8 @@ A declaration that cannot be read converges nothing and releases nothing.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from functools import partial
 
 from fastapi import Request
@@ -146,9 +147,18 @@ class _Converger:
                 delete_profile=declared.delete_profile or DeleteProfile(mode=DeleteMode.ESTATE),
             )
             ids = warehouse_doors.validated_ids(self._settings, body)
-            await fga_deps.require_project_exists(self._settings, declared.project)
+            project = await fga_deps.require_project_exists(self._settings, declared.project)
             record = await warehouse_doors.establish_warehouse(
-                self._request, self._settings, body, ids, client=self._client, control=self._control, vendor=self._vendor, author=DECLARATION, owner=None
+                self._request,
+                self._settings,
+                body,
+                ids,
+                client=self._client,
+                control=self._control,
+                vendor=self._vendor,
+                author=DECLARATION,
+                owner=None,
+                project_incarnation=incarnations.require_incarnation(project, f"project:{declared.project}"),
             )
             if record.get(MANAGED_BY) != GIT:
                 await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, declared.id, manager=GIT)
@@ -200,10 +210,9 @@ class _Converger:
             await self._attempt(f"settle:{pending.object}#{pending.relation}", partial(self._settle, self._client, pending))
         wanted = self._wanted(declared)
         recorded = {record.grant: record for record in await run_in_threadpool(declaration.ledger, self._root, self._so) if record.evidence is None}
-        held = {obj: await _held(self._client, obj) for obj in sorted({grant.object for grant in wanted | set(recorded)})}
         ungranted: set[str] = set()
         for grant in sorted(wanted, key=_order):
-            if (grant.user, grant.relation) in held[grant.object]:
+            if await fga.holds(self._client, grant.client_tuple):
                 continue
             if not await self._attempt(f"grant:{grant.object}#{grant.relation}", partial(self._grant, self._client, grant)):
                 ungranted.add(grant.object)
@@ -223,7 +232,7 @@ class _Converger:
     async def _settle(self, client: OpenFgaClient, record: declaration.GrantRecord) -> None:
         """Settle an intent a tick left: the declaration's where its evidence stands, forgotten where it does not."""
         proof = fga.ClientTuple(user=str(record.evidence), relation=fga.REVISION, object=record.object)
-        if await fga.evidence_stands(client, proof):
+        if await fga.holds(client, proof):
             await run_in_threadpool(declaration.settle_grant, self._root, self._so, record)
             await fga.delete_tuples(client, [proof], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
         else:
@@ -266,10 +275,9 @@ class _Converger:
     async def _grant(self, client: OpenFgaClient, grant: GrantTuple) -> None:
         if (stands := await self._stands(grant.object)) is None:
             raise LookupError(f"{grant.object} has no registry record, so no grant on it is written")
-        fences = await self._fences(client, grant.object, stands)
-        try:
+        async with self._fenced(client, grant.object, stands) as fences:
             # Read again right before the intent: a tuple somebody made at a door since the tick's first read is theirs.
-            if (grant.user, grant.relation) in await _held(client, grant.object):
+            if await fga.holds(client, grant.client_tuple):
                 return
             proof = fga.evidence(grant.object)
             if not await run_in_threadpool(
@@ -291,8 +299,6 @@ class _Converger:
                 await self._settle(client, record)
                 await filing.send(told)
             self.tick.grants_written += 1
-        finally:
-            await fga.close_fences(client, fences, actor=DECLARATION.subject, origin="fence")
 
     async def _revoke(self, client: OpenFgaClient, record: declaration.GrantRecord) -> None:
         grant = record.grant
@@ -300,8 +306,7 @@ class _Converger:
             # Its object's delete revoked the tuple with everything else on it.
             await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
             return
-        fences = await self._fences(client, grant.object, stands)
-        try:
+        async with self._fenced(client, grant.object, stands) as fences:
             if stands.incarnation != record.incarnation:
                 # Written on an incarnation since deleted, whose delete revoked it: what stands now is another's.
                 await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
@@ -318,31 +323,30 @@ class _Converger:
                 await filing.send(told)
             await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
             self.tick.grants_revoked += 1
-        finally:
-            await fga.close_fences(client, fences, actor=DECLARATION.subject, origin="fence")
 
     @staticmethod
-    async def _fences(client: OpenFgaClient, obj: str, stands: _Standing) -> list[fga.Fence]:
-        """A fence on ``obj`` of the incarnation its record names (ADR 0241); none on the estate's own objects.
+    @asynccontextmanager
+    async def _fenced(client: OpenFgaClient, obj: str, stands: _Standing) -> AsyncGenerator[list[fga.Fence]]:
+        """A fence on ``obj`` of the incarnation its record names (``fga.fenced``, ADR 0241), its ticket taken back when
+        the block ends; none on the estate's own objects.
 
         Raises:
             fga.IncarnationEnded: No incarnation stands, or another than the record's: its delete has begun.
         """
         if stands.incarnation is None:
-            return []
-        fence = await fga.open_fence(client, obj, actor=DECLARATION.subject, origin="fence")
-        if fence is None or fence.incarnation != stands.incarnation:
-            if fence is not None:
-                await fga.close_fences(client, [fence], actor=DECLARATION.subject, origin="fence")
-            raise fga.IncarnationEnded(f"{obj} is not the incarnation its record names: it is being deleted, or still being established")
-        return [fence]
+            yield []
+            return
+        async with fga.fenced(client, obj, actor=DECLARATION.subject, origin="fence", incarnation=stands.incarnation) as fence:
+            if fence is None:
+                raise fga.IncarnationEnded(f"{obj} is not the incarnation its record names: it is being deleted, or still being established")
+            yield [fence]
 
     async def _stands(self, obj: str) -> _Standing | None:
         """What a grant on ``obj`` is written under: ``None`` where no record names it, no incarnation for the estate's own
         objects, which no record names and nothing deletes, and the record's for a project or warehouse.
 
         Raises:
-            SettlingError: The record names no incarnation yet: the catalog converges it (``incarnations.converge``).
+            InternalError: The record names no incarnation: no create of this catalog wrote it.
         """
         if obj in self._estate_objects:
             return _Standing(incarnation=None)
@@ -360,11 +364,6 @@ class _Standing(BaseModel):
     """An object a declared grant is written on: the incarnation it is written under, ``None`` for an estate object."""
 
     incarnation: str | None
-
-
-async def _held(client: OpenFgaClient, obj: str) -> set[tuple[str, str]]:
-    """Each ``(user, relation)`` the store holds on ``obj``."""
-    return {(held.user, held.relation) for held in await fga.read_object_tuples(client, obj)}
 
 
 def _order(grant: GrantTuple) -> tuple[str, str, str]:
@@ -387,22 +386,30 @@ def _spec_drifted(record: dict[str, str], declared: DeclaredWarehouse) -> bool:
 
 
 async def tick(ctx: Tick) -> ConvergeTick:
-    """Converge every project's and warehouse's incarnation (``incarnations.converge``, ADR 0241), then the estate's
-    tenants onto the mounted declaration; a deployment that mounts none converges only the incarnations."""
+    """Converge every project's and warehouse's incarnation and end what a dead request or tenant left
+    (``incarnations.converge``, ADR 0241), then the estate's tenants onto the mounted declaration; a deployment that
+    mounts none converges only the incarnations. What the incarnations' convergence could not converge is reported among
+    the tick's failures."""
     request, settings = ctx.request, ctx.settings
-    await incarnations.converge(settings.registry_root, settings.storage_options(), fga_deps.wired(settings, get_fga_client(request)))
+    incarnated = await incarnations.converge(
+        settings.registry_root,
+        settings.storage_options(),
+        fga_deps.wired(settings, get_fga_client(request)),
+        bound=incarnations.ticket_bound(settings.request_deadline_seconds),
+    )
     if not settings.declaration_file:
-        return ConvergeTick(skipped=True)
+        return ConvergeTick(skipped=True, failed=incarnated.failed)
     try:
         declared = await run_in_threadpool(declaration.load, settings.declaration_file)
     except declaration.DeclarationUnreadableError:
         log.error("declaration_unreadable", extra={"path": settings.declaration_file}, exc_info=True)
         _failed.add(1, {"lance.catalog.object": "declaration"})
-        return ConvergeTick(failed=["declaration"])
+        return ConvergeTick(failed=["declaration", *incarnated.failed])
     client = get_fga_client(request)
     # A door's announcer, for a change no caller made: the tick's scope carries no originator and no bearer.
     announcer = get_announcer(request, settings, client, Resolver(request, settings), ctx.control, ObjectUuids(request, settings))
     converged = await _Converger(request, settings, client=client, control=ctx.control, announcer=announcer, vendor=get_vendor(request)).run(declared)
+    converged.failed += incarnated.failed
     if converged.converged or converged.released or converged.grants_written or converged.grants_revoked or converged.failed:
         log.info("declaration_converged", extra=converged.model_dump())
     return converged

@@ -1,9 +1,12 @@
-# 0241. Authorization state is modelled in TLA+ beside the objects it governs; three defects found and fixed, then nine a review found (2026-11-17)
+# 0241. Authorization state is modelled in TLA+ beside the objects it governs; three defects found and fixed, then nine a review found, then five a second review found (2026-11-18)
 
 **Status:** accepted; the catalog's sixth model (ADR 0221, ADR 0227, ADR 0229, ADR 0233). It describes the Python
 catalog as it runs, before it is ported (ADR 0217 §5). Three findings were confirmed against the running catalog and a
 real OpenFGA, and each is fixed, model first (§5). An independent review of that fix found it incomplete; its nine
-findings are fixed here, model first (§7), and §7's fence replaces §5's token as what a grant is fenced by.
+findings are fixed here, model first (§7), and §7's fence replaces §5's token as what a grant is fenced by. A second
+independent review of §7 found five more; each is fixed, model first (§8): a fence reads only what it needs, a caller is
+asked its authority before it writes anything, no ticket outlives its request, a record naming a parent names the
+parent's incarnation, and the convergence no longer repairs records stored before incarnations.
 
 ## Context
 
@@ -35,10 +38,13 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
      then its revoke (`grant_reconcile.revoke_ghost_grants`). Any create, grant and delete may die between two steps,
      and a dead delete is issued again. Since §7: every writer on or naming the object (a grant, a revoke, a warehouse's
      tenancy edge, a role's edge) opens a ticket of its own, reads the token, is authorized and commits deleting its
-     ticket (`fga.open_fence`, `fga.commit_fenced`); the delete retires and then drains until a read finds nothing
-     (`fga.end_incarnation`); the repair writes a token a birth deletes (`fga.revoke_ghost`); a record stored before
-     incarnations is given one and born by the catalog's convergence (`incarnations.converge`); and a token shared by
-     every grant is a config of its own (`GrantsSharedToken`).
+     ticket (`fga.fenced`, `fga.commit_fenced`); the delete retires and then drains until a read finds nothing
+     (`fga.end_incarnation`); the repair writes a token a birth deletes (`fga.revoke_ghost`); a record whose birth never
+     landed is born by the catalog's convergence (`incarnations.converge`); and a token shared by every grant is a config
+     of its own (`GrantsSharedToken`). Since §8: a writer asks its gate before its ticket and again after its read
+     (`Intruders`, a caller the container authorizes for nothing), the convergence sweeps a dead writer's ticket, and with
+     `Child` the edge writer is a warehouse's create, which writes its registry record (naming the project incarnation its
+     fence read) between its last fence check and its birth, beside the boot backfill and the end of an orphan record.
    - **table**: one name, its tables keyed by a minted uuid (`fga.table_object`): a create seeds the owner
      (`fga_deps.seed_ownership`), a purge revokes, a recoverable drop keeps the grants for the undrop, the undrop
      admitted before the deadline registers later, the trash release judges the name free and revokes past
@@ -48,21 +54,28 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
      and the same tuple granted at a door at any point between; since §7 the tick may die between any two of its steps
      and records an intent its evidence settles.
 
-2. **What the gate proves** (`make tla-check`; measured 2026-11-17 on two workers at load 4, after §7):
-   - `Grants.cfg` (container: two incarnations, a door grant, the drift repair, any door dying): 140,619 states, 4.0 s.
-   - `GrantsContention.cfg` (two grants beside the delete): 40,154 states, 2.7 s.
-   - `GrantsEdges.cfg` (a tuple naming the container as subject beside the delete, any door dying): 10,213 states, 2.7 s.
-   - `GrantsRevoke.cfg` (a grant and its revoke beside the delete, any door dying): 377,819 states, 12.1 s.
-   - `GrantsRepair.cfg` (a ghost equal to the next seed, the repair, any door dying): 6,259 states, 2.5 s.
-   - `GrantsUpgrade.cfg` (a record stored before incarnations, a grant and a delete, any door dying; with the temporal
-     property `EveryRecordBorn`): 7,762 states, 4.1 s.
+2. **What the gate proves** (`make tla-check`; measured 2026-11-18 on two workers at load 2, after §8):
+   - `Grants.cfg` (container: two incarnations, a door grant, the drift repair, any door dying; with `DeadTicketsSwept`):
+     102,275 states, 9.1 s.
+   - `GrantsContention.cfg` (two grants beside the delete): 23,930 states, 3.7 s; `GrantsContentionDies.cfg` (two grants
+     beside the delete over three incarnations, any door dying): 1,642,378 states, 33.2 s.
+   - `GrantsEdges.cfg` (a tuple naming the container as subject beside the delete, any door dying): 6,565 states, 2.0 s.
+   - `GrantsRevoke.cfg` (a grant and its revoke beside the delete, any door dying): 248,524 states, 5.5 s;
+     `GrantsRevokeEdges.cfg` (a grant, its revoke and an edge beside the delete): 600,335 states, 10.9 s.
+   - `GrantsRepair.cfg` (a ghost equal to the next seed, the repair, any door dying): 6,259 states, 1.9 s;
+     `GrantsRepairGrant.cfg` (the same with a door grant): 318,650 states, 6.7 s.
+   - `GrantsIntruder.cfg` (a caller authorized for nothing beside a granter and the delete, any door dying; with
+     `DeadTicketsSwept`): 13,130 states, 3.2 s.
+   - `GrantsChild.cfg` (a warehouse's create, its record, the backfill and the end of an orphan beside the project's
+     delete and re-creation, any door dying): 8,440 states, 2.2 s.
+   - `GrantsUnborn.cfg` (a create dying between its record and its birth, a grant and a delete; with `EveryRecordBorn`):
+     6,565 states, 1.7 s.
    - `GrantsTable.cfg` (table: purge, recoverable drop, undrop, release, a late grant, a revoke and a reader): 440
-     states, 1.7 s.
-   - `GrantsConverge.cfg` (the tick dying between any two steps): 33 states, 1.3 s.
-   - `GrantsWide.cfg`, ON DEMAND (three incarnations, a grant and an edge beside the delete, any door dying): 2,049,597
-     states, 85 s. Wider configs (two grants, an edge, a revoke, a ghost and the repair at three incarnations) did not
-     finish in 25 minutes and are not claimed.
-   - Each guard removed (§3, §5, §7): its config fails in under 3 s.
+     states, 0.9 s.
+   - `GrantsConverge.cfg` (the tick dying between any two steps): 33 states, 1.1 s.
+   - ON DEMAND: `GrantsWide.cfg` (three incarnations, a grant and an edge beside the delete, any door dying) and
+     `GrantsRevokeEdgesDies.cfg` (a grant, its revoke and an edge, any door dying: 11,352,899 states, about 5 minutes).
+   - Each guard removed (§3, §5, §7, §8): its config fails in under 3 s.
 
    The properties, each a claim the code and its ADRs make:
    - `NoLeakAcrossIncarnations` (*no access leaks across objects*): every tuple on a project or warehouse whose record
@@ -79,6 +92,9 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
      after it, and nothing decided after it is allowed (A3).
    - `GitRevokesOnlyItsOwn` (*git's grants and door grants do not fight*): the converge revokes only a tuple its own
      write created.
+   - Since §8: `OnlyAuthorizedWrites` (a caller the incarnation authorizes for nothing writes no ticket and no tuple on
+     it) and `DeadTicketsSwept` (temporal: no ticket of a dead request stands for ever on an id a record names, under
+     weak fairness of the sweep); `NoLeakAcrossIncarnations` now covers the tenancy edge a backfill writes from a record.
    - Since §7: `NoNarrowAcrossIncarnations` (no tuple of one incarnation removed by a revoke decided on another),
      `GrantRefusedOnlyByDelete` (a grant is refused only where a delete retired or drained while it ran),
      `DrainBounded` (the delete's re-read finds something at most once) and `EveryRecordBorn` (temporal: every record
@@ -190,6 +206,19 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
      records the `revision` relation's tuples (marker, token, tickets, the repair's token, evidence), which grant nothing.
    - `estate#revision` exists (bookkeeping), and a declared grant's ledger record carries the incarnation it was written
      on and, while unsettled, the evidence it waits for.
+   - Since §8: a caller with no right on a project or warehouse is answered at a fenced door exactly as before (403, or
+     404 where the door hides the object) and has written nothing; a caller with the right is asked twice, before its
+     fence and on the incarnation it read, so a fenced write costs two Checks. A project or warehouse whose incarnation is
+     not born yet is refused 403/404 to whoever holds no right on it, and 409 with `Retry-After: 5` to one who does. A
+     record naming no incarnation is answered 500 (code 18) at the deletes, the declaration's grants, the tenancy rebuild
+     and the backfill, and is reported among a converge tick's failures, where it was 409 and repaired. A warehouse's
+     record and its bucket's claim, and a role's record, carry `project_incarnation`; a record a dead tenant's create
+     left is listed under no project made again under the id, its delete door answers it 404, a re-create of its id is
+     refused 409 (code 2) until the converge tick ends it, and its bucket is refused (409, code 2) to every other project
+     and to the project made again. `project_deleted` and `warehouse_deleted` carry the `incarnation` they ended, and the
+     audit trail holds an `access_revoke` row with relation `revision` and `reason: incarnation_retired` per delete. A
+     door's ticket is a `fence:<hex>` object (`type fence`) naming the project or warehouse, so the estate admin's tuple
+     browser shows tickets under `fence:` and none on the project or warehouse.
 
 7. **Nine more findings, by an independent review of the fix above, each FIXED here, model first** (2026-11-17). The
    container part gained the writers, the revokes, the edges, the repair's token, the drain, the contention case and the
@@ -237,7 +266,8 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
      the review on the door side; `EveryRecordBorn`, `GrantsUpgradeUnconverged`, a temporal property under weak fairness of
      the catalog's convergence). Fix, G12 **BootConverge**: at boot and on every converge tick, before the declaration is
      read, the catalog gives every project and warehouse record naming no incarnation one, by a write conditional on the
-     record that a delete's mark refuses, and bears every incarnation unborn with no seed of its own, every tuple standing
+     record that a delete's mark refuses (§8 B5 deletes this half: a record naming none is an internal error), and bears
+     every incarnation unborn with no seed of its own, every tuple standing
      on the id kept (`services/catalog/src/catalog/services/incarnations.py`, `converge`; `main.converge_at_boot`,
      `declaration_converge.tick`). A door that finds a record standing and no incarnation born answers 409 with
      `Retry-After: 5` (`lakehouse.ns_errors.SettlingError`, `fga_deps.require_fence`), never 404; a delete refuses such a
@@ -311,29 +341,226 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
    tuple editor (`access_admin`): its gate is on the root, so nothing it writes was decided on an incarnation; the
    offboarding door (`subject_tuples`) and a role's ending (`role_grants.end_role`): they act on a principal or on a role's
    uuid, not on a decision about a project; `revoke_undeclared` of the release's own accounts on a warehouse
-   (`converge_warehouse_grants`): the release's settings decide it, the same for every incarnation; the warehouse's
-   managed-access flag (`access._set_managed_access`) is NOT fenced yet (see What is not modelled).
+   (`converge_warehouse_grants`): the release's settings decide it, the same for every incarnation. The warehouse's
+   managed-access flag (`access._set_managed_access`) is fenced: its set door opens a fence on the warehouse between its
+   gate's two askings and writes through `fga.commit_fenced`.
 
-   **What an install and an upgrade from git do.** An install: the chart starts the catalog; every project and warehouse
-   is made at a door or by the declaration's converge, each minted with an incarnation and born in one Write with its
-   seed. An upgrade: the new catalog starts with records naming no incarnation and no `revision` tuples; at boot, in the
-   background, before the warehouse grant backfill, `incarnations.converge` gives each record an incarnation (one
-   conditional record write) and bears it (one Write: marker and token, every standing tuple kept), then the backfill
-   writes the warehouses' cascade tuples under fences; until a record is reached its doors answer 409 with `Retry-After`.
-   The converge tick (every `catalog.declarationConverge.periodSeconds`, 60 s by default) runs the same convergence first,
-   so a record whose create died before its birth is born within one tick, with no seed of its own: its creator's admin is
-   written when the create is asked again. Nothing is POSTed again and no hand-run step exists.
+   **What an install and an upgrade from git do** (as §8 B5 leaves it). An install: the chart starts the catalog; every
+   project and warehouse is made at a door or by the declaration's converge, each minted with an incarnation and born in
+   one Write with its seed. An upgrade from a catalog that already minted incarnations changes nothing in the store. An
+   estate whose records predate incarnations is re-created from git: the declared projects and warehouses converge from
+   the chart, and door-made ones are made again; such a record is an internal error where its incarnation is relied on,
+   and the convergence reports it and repairs nothing. The converge tick (every `catalog.declarationConverge.periodSeconds`,
+   60 s by default) runs the convergence first, so a record whose create died before its birth is born within one tick,
+   with no seed of its own: its creator's admin is written when the create is asked again; and it sweeps the tickets and
+   ends the orphan records §8 names. No hand-run step exists.
+
+8. **Five more findings, by a second independent review of §7, each FIXED here, model first** (2026-11-18). §7 holds
+   for doors that finish (a delete is not blocked by new tickets and no grant outlives it, on the memory datastore and
+   on Postgres); the review found what it costs, who could write it, what a request that does not finish leaves behind,
+   and one window. The model gained intruders, the double ask, the sweep, a warehouse's record under its project as a
+   second container level with its backfill and its end, and lost the record stored before incarnations (B5). Each test
+   below failed on the code before this section, or, where the code before could not run it, fails with its guard
+   removed; every guard-removal run is recorded with it.
+
+   - **B1, a fence read every tuple on its object, and refused 503 once the object held more than 5,000** (REPRODUCED;
+     a regression §7 introduced). `fga.open_fence` read the incarnation with `read_object_tuples`, 50 tuples a page and
+     an outage at 100 pages, and every top-level namespace stores a `child` edge on its warehouse and every member a
+     tuple on its project, so one namespace create directly in a warehouse cost what the warehouse's namespaces cost to
+     read, and the same read stood in front of every fenced door's gate and of the delete's drain. Fix, G18 **NarrowReads**:
+     a fence reads exactly what it needs. The incarnation is read from the `revision` relation alone, filtered on the
+     server (`fga.read_incarnation` → `fga.read_relation`, the ONE read of an incarnation; it holds a marker per
+     incarnation ever born under the id and one token); a fence's ticket is read back by its key (`fga.fences_stand` →
+     `fga.holds`); `commit_fenced`, `bear`, the declaration's reads and `project_admins` read each tuple they change by
+     its key, or the one relation they judge (`admin`, `revision`); and tickets live off the object (B2). The delete's
+     drain, which must read everything, pages to the end with no ceiling (`fga.read_all`: a ceiling turned size into an
+     outage; a server handing back a cursor it handed back before is refused instead), bounded by its request, and a
+     delete cut off is asked again and finishes. Test:
+     `tests/integration/test_a_fence_reads_nothing_that_grows_with_its_object.py::test_a_namespace_is_made_in_a_warehouse_holding_more_namespaces_than_a_read_once_took`
+     (5,100 child edges); with the whole-object read and the page ceiling put back, it fails (and so does its sibling).
+
+     The cost of one namespace create directly in a warehouse against its sibling count, p50 of 11, on the pinned
+     OpenFGA 1.18.3 (measured 2026-11-18, the reviewer's own script for the code before, `scratchpad/measure_after.py`
+     after; the fence's steps alone as the reviewer measured them, and after with the two Checks of B2 added; Postgres
+     16 local):
+
+     | siblings | memory before | memory after | memory after, both asks | Postgres before | Postgres after | Postgres after, both asks |
+     | -------- | ------------- | ------------ | ----------------------- | --------------- | -------------- | ------------------------- |
+     | 0        | 9.7 ms        | 11.6 ms      | 16.4 ms                 | 20.7 ms         | 14.6 ms        | 21.7 ms                   |
+     | 1,000    | 109.8 ms      | 11.7 ms      | 23.9 ms                 | 121.4 ms        | 14.7 ms        | 21.0 ms                   |
+     | 4,990    | 513.1 ms      |              |                         | 726.7 ms        |                |                           |
+     | 5,100    | 503 for good  |              |                         | 503 for good    |                |                           |
+     | 10,000   | (503)         | 25.3 ms      | 31.6 ms                 | (503)           | 19.7 ms        | 24.5 ms                   |
+
+     The fence's reads no longer grow with siblings. What is left on the memory datastore at 10,000 is the datastore's
+     own scan (its Read filters every tuple of the store in memory, whatever the filter), which Postgres's index does
+     not pay.
+
+   - **B2, a caller with no right on an object wrote on it before the gate, and a ticket a request left was never
+     removed** (REPRODUCED against the catalog and OpenFGA). The doors opened the fence (a Write) before they asked the
+     caller's authority, so a caller refused 403 on project acme had written its ticket there and paid a paginated read
+     of another tenant's object; `close_fences` swallowed an outage, a process could die mid-request, and
+     `_bear_or_assert` took its fences back only on one error, so `converge_warehouse_grants` left a project ticket at
+     every boot backfill that met an OpenFGA hiccup; nothing swept tickets on a live object; and with B1 every ticket
+     left slowed every door on its object, past 5,100 wedged it, and the delete removed them one Write each. That broke
+     zero trust: an unprivileged caller could write on, slow and wedge another tenant's object. Fixes:
+     - G14 **AuthorizeFirst** and G15 **Recheck** (`GrantsIntruderFenced` fails `OnlyAuthorizedWrites`, "only a caller
+       the object's incarnation authorizes writes on it"; `GrantsNoRecheck` fails `NoLeakAcrossIncarnations`): a door
+       asks its gate with no write, then opens its fence, then asks its gate again on the incarnation the fence read
+       (`fga_deps.door_fence(gate=)`, the members door, the access doors' `*_grant_fence` / `*_revoke_fence`
+       dependencies, the role doors, the warehouse create, the warehouse managed-access door; `fga_deps.parent_fence`,
+       now listed AFTER `authorize` on the router and asking `_decide` again once its fence is open). The second ask is
+       what the model's property needs: the authority must hold on the incarnation the write commits to. Test:
+       `services/catalog/tests/test_a_caller_refused_at_a_fenced_door_writes_nothing_and_no_ticket_outlives_its_request.py::test_a_caller_the_project_authorizes_for_nothing_is_refused_having_written_nothing_there`
+       (members grant and revoke, the access grant, the role create; the store's changelog holds no change by the
+       refused request); with the first ask removed, all four fail.
+     - G16 **Sweeps** (`GrantsTicketsLeft`, temporal `DeadTicketsSwept`: no ticket of a dead request stands for ever on
+       an id a record names). A ticket is `<object> ticket fence:<hex>`, a tuple on an object of its own (`type fence`,
+       `define ticket: [project, warehouse]`, bookkeeping no permission reads), so nothing that reads the project or
+       warehouse reads it. The ONE way a fence is opened is the context manager `fga.fenced` (§7's `open_fence` and
+       `close_fences` are gone), which takes the ticket back
+       on every exit (`delete_absent_ignored`, one Write, an outage logged `fence_ticket_left`); every opener uses it
+       (`door_fence`, `parent_fence`, `_bear_or_assert`, `write_registry_edge`, `converge_warehouse_grants`, the
+       declaration's `_fenced`). What a dead process or an unanswered take-back leaves, the converge tick sweeps
+       (`incarnations.converge` → `fga.sweep_tickets`): at boot and on every tick it deletes, in Writes of 100, each
+       ticket naming a project or warehouse a record names that the store wrote more than the bound ago, the bound being
+       the request deadline plus five minutes (`incarnations.ticket_bound`, 10 minutes at the default 300 s deadline),
+       judged on the timestamp the store returns with each tuple against the catalog's clock. A door still running past
+       the bound (a door runs on past its deadline, `lakehouse.deadline`) has its ticket deleted and its write refused
+       409: narrower, never wider. Tests: `…::test_no_ticket_outlives_the_request_that_wrote_it`
+       (`its-write-failed`: a door whose commit OpenFGA did not answer took its ticket back, with the take-back moved
+       out of `finally` it fails; `its-process-died`: a ticket a dead process left stands within the bound and is swept
+       past it, with the sweep removed it fails).
+     - G8's batch: the drain deletes the tickets it read in Writes of `TUPLES_PER_WRITE` (100, OpenFGA 1.18.3's
+       `maxTuplesPerWrite`: measured 2026-11-18, a Write of 100 commits and one of 101 is refused 400
+       `exceeded_entity_limit`) with `on_missing_deletes: IGNORE` (measured: a Write deleting a standing and an absent
+       ticket commits and removes the standing one), so a delete no longer pays a round trip per ticket. Test:
+       `tests/integration/test_a_fence_reads_nothing_that_grows_with_its_object.py::test_tickets_requests_left_on_a_project_slow_no_grant_and_its_delete_drains_them`
+       (5,100 tickets left on a project: a member grant commits, the delete revokes it and leaves no ticket); on the
+       code before both answered 503.
+
+     A project holding tickets requests left: its whole read (a members listing), a member grant, and its delete (p50
+     of 5 for the read and the grant, one delete; the grant without the Checks, as the reviewer measured it):
+
+     | tickets left | memory before: read / grant / delete | memory after | Postgres before | Postgres after |
+     | ------------ | ------------------------------------ | ------------ | --------------- | -------------- |
+     | 0            | 2 / 13 / 21 ms                       | 1.8 / 13.4 / 39 ms | 3 / 32 / 38 ms | 2.9 / 18.4 / 46 ms |
+     | 1,000        | 103 / 215 / 2,239 ms                 | 1.9 / 16.6 / 225 ms | 119 / 214 / 3,207 ms | 2.2 / 16.9 / 331 ms |
+     | 4,900        | 533 / 877 / 13,739 ms                |              | 750 / 1,462 / 16,620 ms |        |
+     | 5,100        | 503 / 503 / 503                      |              | 503 / 503 / 503 |                |
+     | 10,000       | (503)                                | 3.1 / 32.0 / 2,640 ms | (503) | 2.4 / 27.6 / 4,734 ms |
+
+     A planted ticket no longer reaches a read or a grant of its object (the memory datastore's own scan is what grows
+     at 10,000); the delete reads the tickets it must delete and removes them 100 a Write, and leaves none.
+
+     A member grant for distinct people on one project, p50 (p95), none refused in any run:
+
+     | concurrency | memory before | memory after | memory after, both asks | Postgres before | Postgres after | Postgres after, both asks |
+     | ----------- | ------------- | ------------ | ----------------------- | --------------- | -------------- | ------------------------- |
+     | 1           | 13.7 (16.9) ms | 13.7 (16.9) ms | 18.5 (20.0) ms      | 16.6 (19.0) ms  | 23.8 (30.2) ms | 22.5 (28.5) ms            |
+     | 16          | 229.5 (260.4) ms | 173.0 (188.4) ms | 157.5 (230.7) ms  | 229.4 (306.0) ms | 157.1 (215.7) ms | 165.0 (212.7) ms        |
+
+     The machine was shared with other work (load 4 to 10 on 4 cores) during every run; differences under a few
+     milliseconds are noise.
+
+   - **B3, a warehouse record left by a create that raced its project's delete was taken over by the next tenant under
+     the project's id** (the takeover REPRODUCED against the catalog and OpenFGA with the window held). The create's last
+     fence check was followed by its record write; a record landing after the project's delete re-read the registry
+     survived, naming project acme with an unborn incarnation; the convergence bore it with an empty seed, and the boot
+     backfill opened a fence on whichever incarnation of `project:acme` stood and wrote `project:acme project
+     warehouse:wh-a`: the new tenant's admins owned a warehouse, its name, bucket and catalog row, another tenant's admin
+     made. §7 called the leftover record harmless; it was the leak class the fence exists to close. Fix, G17
+     **NamesIncarnation** (`GrantsChild` holds; `GrantsChildUnnamed`, the record naming the project's id and no
+     incarnation, fails `NoLeakAcrossIncarnations`): a record that names a parent which can be deleted and made again
+     names the incarnation of the parent it was made under (`control_records.PROJECT_INCARNATION`): a warehouse's
+     record and its bucket's claim, taken from the fence the create held (`warehouses.establish_warehouse`,
+     `claim_bucket`), and a role's record (`roles.create_role_record`, from the role create's fence). Every reader that
+     would write an edge or act from such a record refuses one whose project incarnation is not the one standing:
+     `converge_warehouse_grants` (its fence is opened on the record's project incarnation, `fga.fenced(incarnation=)`,
+     and an orphan is reported and refused 409), `incarnations.converge` (bears no orphan), the tenancy rebuild
+     (`write_registry_edge`), the warehouse's re-create and upsert (`_claim_the_bucket`, `upsert_warehouse`'s
+     `WarehouseOfADeadTenant`: 409), the delete door's gate (`administered_warehouse`: 404 to the live tenant, which may
+     neither change nor purge what a dead tenant made), the project's listing and its delete's emptiness checks (an orphan
+     is no warehouse of the live incarnation), and the role listing and gates (`roles.list_roles` / `find_role`
+     `incarnation=`). Each orphan is reported each time it is found (`catalog.incarnations.orphans`, the log
+     `record_of_a_dead_tenant` naming the record). The converge tick ends it once it is older than the same bound as
+     G16 and unborn: its registry record goes and its id is free; a role's record is stamped ended. **What it never
+     touches:** a warehouse's bucket, its bytes and its catalog row stay, and so does its bucket's claim, which names the
+     dead incarnation, so no tenant registers that bucket over what it may hold (logged
+     `warehouse_of_a_dead_tenant_ended` naming the bucket); an orphan that is born, which may hold grants a door made, is
+     reported and kept; with authorization off, where no birth tells whether a door made anything in it, an orphan is
+     only reported; and nothing is ended while a project record cannot be read. Test (the window held: alice's
+     create between its last fence check and its record write while acme is deleted and erin makes it again):
+     `tests/integration/test_the_catalog_converges_what_git_declares.py::test_a_warehouse_record_a_create_held_across_its_projects_delete_wrote_reaches_no_tenant_made_again_and_is_ended`;
+     with the convergence's check removed it fails (the orphan is born, its tuples stand), and with the backfill's fence
+     opened on whichever incarnation stands it fails (the edge is written onto erin's acme).
+
+     The role record §7 left (a create dying after the project's delete revoked its edge): harmless as §7 said (no
+     edge, no assignee), but not "ended at its door": its door answers 404, since its gate needs the project edge. Its
+     record names the incarnation it was made in, so the listing of the project made again does not list it and its name
+     is the new tenant's to take once the converge tick ends it past the bound. Test: the parametrized
+     `services/catalog/tests/test_a_grant_on_a_deleted_project_reaches_no_project_made_again_under_its_id.py::test_a_role_made_across_its_projects_delete_is_made_in_no_project_made_again_under_the_id`
+     (`and-dying-after-its-record`: the create held between its edge and its record across the delete and the
+     re-creation, then dying once its record is written); with the listing's incarnation filter removed it fails.
+
+   - **B5, the convergence's "give a record an incarnation" was a migration shim that ran for ever** (CLAUDE.md: no
+     migration shims, no dual read paths; the estate is pre-production and current state is test data). Every create
+     mints an incarnation with its record, so only a record stored before incarnations ever reached it. Deleted:
+     `incarnations._with_incarnation` and `_give`, and the merges' "a record written before incarnations takes the
+     request's" (`projects.upsert_project`, `warehouses.upsert_warehouse`). A record naming no incarnation (or a
+     warehouse naming no project incarnation) is a typed internal error naming it (`incarnations.require_incarnation`,
+     `require_project_incarnation`, `InternalError`, 500 code 18, logged `record_without_incarnation`) wherever its
+     incarnation is relied on: the deletes, the declaration's grants, `require_fence`, the backfill, the tenancy
+     rebuild, the convergence (which reports it among the tick's failures). It is never a 409 and never repaired. Kept,
+     because it is a real invariant: a create can die between its record and its birth, so an UNBORN incarnation is born
+     by the convergence at boot and on every tick with no seed of its own (G12, `GrantsUnborn` holds,
+     `GrantsUnbornUnconverged` fails temporal `EveryRecordBorn`), and the create asked again writes its creator's admin.
+     **An estate whose records predate incarnations is re-created from git:** the declared projects and warehouses
+     converge from the chart (`catalog.declared`), and door-made ones are made again, as the repository's rule says.
+     Test, rewritten from the one that pinned the upgrade:
+     `…::test_an_incarnation_whose_birth_never_landed_is_born_by_the_catalog_and_a_record_naming_none_is_refused`
+     (`boot`, `tick`); with the convergence's birth removed both fail.
+
+   - **B4, two guards had no test that reliably failed without them.** G8, the drain's read again: with it removed the
+     64-grants-beside-the-delete case failed in 2 of 4 runs. Now
+     `services/catalog/tests/test_a_grant_on_a_deleted_project_reaches_no_project_made_again_under_its_id.py::test_a_grant_committing_between_the_drains_first_read_and_its_ticket_deletion_outlives_no_delete`
+     holds bob's grant between its ticket and its commit and the delete between its drain's first read and its deletion
+     of the tickets it read, releases the grant, then the delete: with the read again removed it fails, every run. G9b,
+     a namespace seeded under its warehouse's fence: with `fences=()` in `seed_ownership` every test passed. Now
+     `…/test_the_catalog_converges_what_git_declares.py::test_a_namespace_made_in_a_warehouse_across_its_delete_lands_in_no_warehouse_made_again_under_the_id`
+     holds alice's namespace before its seed while `wh-a` is deleted with what it holds and erin makes `wh-a` again: with
+     the fence removed from the seed it fails.
+
+   - **The model's coverage.** `GrantsWide` was narrowed until it finished. Added, each in the gate: two grants beside
+     the delete with deaths over three incarnations (`GrantsContentionDies`), a grant, its revoke and an edge beside the
+     delete (`GrantsRevokeEdges`, no deaths), the drift repair with a ghost and a granter (`GrantsRepairGrant`), an
+     intruder beside a granter with deaths (`GrantsIntruder`, with `DeadTicketsSwept`), and the child record
+     (`GrantsChild`). On demand: the revoke with edges and deaths (`GrantsRevokeEdgesDies`, 11,352,899 states, about 5
+     minutes) and `GrantsWide`. Unchecked, and why it cannot change a verdict: revokers with edges and deaths at three
+     incarnations, and the repair with every writer: each writer's steps touch only its own ticket and its own tuple, and
+     the delete's drain reads them all, so a third incarnation adds a state no two-incarnation trace lacks a twin of
+     (every leak trace the gate's failing configs report needs two incarnations).
+
+   - **The audit trail.** The trail leaves the `revision` relation's tuples out, so an incarnation's retirement was
+     recorded nowhere. Now `fga_deps.end_incarnation` writes its own row (`access_revoke`, relation `revision`, the
+     `incarnation`, `reason: incarnation_retired`, the count revoked) for both deletes, and `project_deleted` and
+     `warehouse_deleted` carry the incarnation in their `extra`.
+
+   Each fix meets the four facts: GitOps (B3's sweep and B2's ticket sweep run in the catalog's existing converge loop
+   and end only what is the catalog's own bookkeeping, a dead request's ticket and a dead tenant's unborn record; B5
+   re-creates from git rather than repairing state), cloud native (nothing new runs; the bound is derived from a setting
+   the release already declares), Lance-namespace/table-idiomatic (untouched), zero trust (B2: an unauthorized caller
+   writes nothing and a death leaves access narrower; B3: nothing a dead tenant made reaches a live one; B1: no tenant's
+   size refuses another's door).
 
 ## What is not modelled
 
 - The last-admin guard (ADR 0213), which moves the token in its own CAS; only administration removals move it now.
-- A role's record left by a create that dies between its edge and its record after the project's delete revoked the
-  edge: the record confers nothing (no edge, no assignee) and is listed under the next project made under the id until
-  ended at its door. The record is the registry's and no fence reaches it.
-- A warehouse's record written, and its birth refused, when its project is deleted in the one record write between the
-  create's last fence check and its birth: the record names the project and stands with no tuple; the project's delete
-  refuses while it stands, and once that delete has finished the record is listed under a project made again under the
-  id. The same window and harm as the role's record above, narrower, and reported here rather than closed.
+- A ticket on an id no record names (a request that read no token and died before taking its ticket back, after its
+  object's delete finished): the sweep visits the ids records name, so it stands until a record names the id again. It
+  confers nothing and no read but a delete's or the sweep's reads it (§8 B2).
+- Time: the sweep's bound (the request deadline plus five minutes) is modelled as "only a dead request's ticket, and an
+  orphan whose create no longer runs"; a door running past the bound is refused, narrower.
 - Materialized views created directly in a warehouse (their parent edge names the warehouse) are not fenced as a
   namespace there is: no door creates one directly in a warehouse today.
 - The warehouse's managed-access flag is fenced at its set door; its describe door reads only.
@@ -358,5 +585,11 @@ tenant (`projects.py`, the maintenance policy's comment; [[LH-562]]).
   step (G12), and a reconcile revokes only a tuple its own Write created, whatever step a tick died at (G13).
 - Cloud native, since §7: nothing new runs; the convergence is a step of the catalog's existing boot loop and converge
   timer.
+- Zero trust, since §8: a caller the object authorizes for nothing writes nothing on it (G14); no ticket outlives the
+  request that wrote it past the bound (G16); no tenant's size refuses another's door (G18); nothing a dead tenant's
+  create left reaches a live tenant, and the sweep ends only bookkeeping and unborn records, keeping every byte (G17).
+- GitOps, since §8: a record without an incarnation is re-created from git, never repaired at runtime (B5).
+- The model change of §8 (`type fence`, `ticket: [project, warehouse]`) is recorded in the same CHANGELOG, and
+  `model.fga.yaml` holds that a ticket grants nothing.
 - The model change (`revision` on `warehouse`, `admin_revision` renamed `revision` on `project`) is recorded in
   `packages/lakehouse/src/lakehouse/governed/auth/CHANGELOG.md`; `model.fga.yaml` holds that a revision grants nothing.

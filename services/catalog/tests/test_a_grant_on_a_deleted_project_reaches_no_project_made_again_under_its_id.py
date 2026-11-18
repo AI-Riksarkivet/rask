@@ -20,12 +20,16 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Callable
+from datetime import timedelta
+from functools import partial
 from typing import Any
 
 import pytest
+from lance_namespace import ServiceUnavailableError
 
 from catalog.api.v1.endpoints import roles as role_doors
-from catalog.services import announcement_intents
+from catalog.services import announcement_intents, incarnations
+from catalog.services import projects as project_records
 from catalog.services import roles as role_records
 from lakehouse.governed import fga
 
@@ -122,12 +126,22 @@ def test_a_change_held_across_its_projects_delete_reaches_no_project_made_again_
     assert _holds(catalog, opens) is not granting, f"the door answered {answered}, and erin's project {'holds' if granting else 'lost'} bob's {rung}"
 
 
-@pytest.mark.parametrize("held", ["before-its-edge", "between-its-edge-and-its-record"])
+@pytest.mark.parametrize("held", ["before-its-edge", "between-its-edge-and-its-record", "and-dying-after-its-record"])
 def test_a_role_made_across_its_projects_delete_is_made_in_no_project_made_again_under_the_id(acme: Any, monkeypatch: pytest.MonkeyPatch, held: str) -> None:  # noqa: ANN401 — the fixture's GovernedCatalog
     """Held before its `project` edge is written, the role's create finds its fence drained (`GrantsEdgeUnfenced`); held
     between the edge and its record, the delete's drain revokes the edge, which names the project as subject
-    (`GrantsDeleteMissesEdges`), and the create, finding its edge gone once its record is written, ends the record."""
-    catalog, gate = acme, _Gate()
+    (`GrantsDeleteMissesEdges`), and the create, finding its edge gone once its record is written, ends the record. A
+    create that dies after writing its record leaves it standing; the record names the incarnation alice's fence read,
+    so erin's project lists no such role, and the converge tick ends it once it is past the bound (ADR 0241 §8 B3)."""
+    catalog, gate, dying = acme, _Gate(), threading.Event()
+    real_holds = fga.holds
+
+    async def _holds(*args: Any, **kwargs: Any) -> bool:  # noqa: ANN401 — holds's own arguments
+        if dying.is_set():
+            raise ServiceUnavailableError("the process died here")
+        return await real_holds(*args, **kwargs)
+
+    monkeypatch.setattr(fga, "holds", _holds)
     if held == "before-its-edge":
         real_mint = role_doors._mint_role
 
@@ -139,9 +153,12 @@ def test_a_role_made_across_its_projects_delete_is_made_in_no_project_made_again
     else:
         real_record = role_records.create_role_record
 
-        def _record(*args: Any) -> None:  # noqa: ANN401 — create_role_record's own arguments
+        def _record(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — create_role_record's own arguments
+            first = not gate.arrived.is_set()
             gate.hold()
-            real_record(*args)
+            real_record(*args, **kwargs)
+            if held == "and-dying-after-its-record" and first:
+                dying.set()
 
         monkeypatch.setattr(role_records, "create_role_record", _record)
     roles = f"/management/v1/projects/{PROJECT}/roles"
@@ -151,11 +168,54 @@ def test_a_role_made_across_its_projects_delete_is_made_in_no_project_made_again
     gate.release.set()
     making.join(WAIT)
 
+    dying.clear()
     listed = catalog.client.get(roles, headers=catalog.bearer(ERIN))
     assert (made, listed.status_code) == ((200, 200), 200), listed.text
     edges = [t for t in catalog.store.tuples() if t[0] == f"project:{PROJECT}" and t[1] == "project" and t[2].startswith("role:")]
-    assert answered == [409], f"the role door answered {answered}"
+    assert answered == [503 if held == "and-dying-after-its-record" else 409], f"the role door answered {answered}"
     assert (listed.json()["roles"], edges) == ([], []), "erin's project holds alice's role"
+    if held == "and-dying-after-its-record":
+        settings = catalog.client.app.state.settings
+        so, standing = settings.storage_options(), project_records.get_project(settings.registry_root, settings.storage_options(), PROJECT)
+        assert standing is not None and role_records.orphan_roles(settings.registry_root, so, PROJECT, incarnation=standing["incarnation"]), (
+            "no record was left"
+        )
+        converge = partial(incarnations.converge, settings.registry_root, so, catalog.client.app.state.fga, bound=timedelta(0))
+        ended = catalog.client.portal.call(converge)
+        retaken = catalog.client.post(roles, json={"name": "analysts"}, headers=catalog.bearer(ERIN))
+        assert (len(ended.ended), retaken.status_code) == (1, 201), retaken.text
+
+
+def test_a_grant_committing_between_the_drains_first_read_and_its_ticket_deletion_outlives_no_delete(acme: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the fixture's GovernedCatalog
+    """bob's grant is held between its ticket and its commit, and the delete between its drain's first read and its
+    deletion of the tickets that read found (ADR 0241 §8 B4, `GrantsDrainOnce`): the grant commits while its ticket
+    stands, after the read the delete revokes from, so only the drain's read again finds it."""
+    catalog, granting, draining = acme, _Gate(), _Gate()
+    real_commit, real_tickets = fga.commit_fenced, fga.read_tickets
+
+    async def _commit(*args: Any, **kwargs: Any) -> bool:  # noqa: ANN401 — commit_fenced's own arguments
+        await asyncio.to_thread(granting.hold)
+        return await real_commit(*args, **kwargs)
+
+    async def _tickets(*args: Any, **kwargs: Any) -> list[fga.StoredTuple]:  # noqa: ANN401 — read_tickets's own arguments
+        read = await real_tickets(*args, **kwargs)
+        await asyncio.to_thread(draining.hold)
+        return read
+
+    monkeypatch.setattr(fga, "commit_fenced", _commit)
+    monkeypatch.setattr(fga, "read_tickets", _tickets)
+    granted_in, granted = _in_thread(lambda: _change(catalog, "members-member"))
+    assert granting.arrived.wait(WAIT), "the grant never reached its commit"
+    deleting, deleted = _in_thread(lambda: catalog.client.delete(f"/management/v1/projects/{PROJECT}", headers=catalog.bearer(ALICE)).status_code)
+    assert draining.arrived.wait(WAIT), "the delete never reached its drain's first read"
+    granting.release.set()
+    granted_in.join(WAIT)
+    draining.release.set()
+    deleting.join(WAIT)
+    remade = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ERIN))
+
+    assert (granted, deleted, remade.status_code) == ([200], [200], 200), remade.text
+    assert not _holds(catalog, "member"), "bob's grant, committed after the drain's first read, holds on erin's project"
 
 
 def test_a_grant_run_whole_while_the_delete_is_held_before_its_retire_outlives_no_delete(acme: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the fixture's GovernedCatalog

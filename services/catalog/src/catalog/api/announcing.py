@@ -287,7 +287,7 @@ class Announcer:
                 found = await self._read(lambda root, so: records.read_json(root, so, key))
                 return found is not None and evidence.holds(found[0])
             case RoleEnded(project=project, role=role):
-                return await self._absent(lambda root, so: roles.find_role(root, so, project, role))
+                return await self._absent(lambda root, so: roles.find_role(root, so, project, role, incarnation=None))
             case TagGone(location=location, tag=tag):
                 try:
                     return not await run_in_threadpool(_tag_stands, location, self._settings.storage_options(plane="data"), tag)

@@ -2,7 +2,7 @@
 
 Each grant on a project or warehouse is fenced by the incarnation it read before its caller's authority was asked: it
 writes a ticket of its own, reads the incarnation's token, and commits in one Write that deletes its ticket
-(``fga.open_fence``, ``fga.commit_fenced``). Writers of different tuples share no tuple, so none is refused by another.
+(``fga.fenced``, ``fga.commit_fenced``). Writers of different tuples share no tuple, so none is refused by another.
 The delete retires the token and drains (``fga.end_incarnation``): it deletes every ticket it reads and revokes what it
 read, and reads again until a read finds nothing, so a grant committing between its read and its deletion of that
 grant's ticket is revoked too, and none lands once it answered.
@@ -29,15 +29,15 @@ PROJECT = "project:acme"
 
 async def _grant(client: Any, person: int) -> bool | str:  # noqa: ANN401 — the SDK's client
     """One door's grant of ``member`` to person ``person``: True written, or why not."""
-    fence = await fga.open_fence(client, PROJECT, actor="test", origin="fence")
-    if fence is None:
-        return "no incarnation stands"
-    try:
-        return await fga.commit_fenced(
-            client, [fence], writes=[fga.ClientTuple(user=f"user:p{person}", relation="member", object=PROJECT)], actor="test", origin="grant_api"
-        )
-    except fga.IncarnationEnded:
-        return "deleted while it ran"
+    async with fga.fenced(client, PROJECT, actor="test", origin="fence") as fence:
+        if fence is None:
+            return "no incarnation stands"
+        try:
+            return await fga.commit_fenced(
+                client, [fence], writes=[fga.ClientTuple(user=f"user:p{person}", relation="member", object=PROJECT)], actor="test", origin="grant_api"
+            )
+        except fga.IncarnationEnded:
+            return "deleted while it ran"
 
 
 @pytest.mark.parametrize(

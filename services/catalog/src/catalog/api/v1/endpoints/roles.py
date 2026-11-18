@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, status
@@ -42,7 +43,7 @@ from catalog.api.security import CurrentToken, current_subject
 from catalog.api.v1.endpoints.members import ProjectId
 from catalog.core.identifiers import require_names
 from catalog.schemas import AssigneeRequest, Role, RoleCreateRequest, RoleDeleted, RoleList, RoleRecord
-from catalog.services import project_admins, role_grants, roles
+from catalog.services import incarnations, project_admins, role_grants, roles
 from catalog.services import projects as project_registry
 from lakehouse.control_emit import emit_control
 from lakehouse.governed import fga
@@ -62,28 +63,34 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/management/v1/projects", tags=["roles"])
 
 
-async def _project_gate(*, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, relation: str) -> OpenFgaClient:
-    """The client, once the caller holds ``relation`` on an existing ``project_id``; else the missing project's 404."""
+async def _project_gate(*, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, relation: str) -> tuple[OpenFgaClient, str]:
+    """The client and the incarnation of ``project_id`` its record names, once the caller holds ``relation`` on the
+    existing project; else the missing project's 404."""
     try:
         await fga_deps.require_relation(client, settings, token, relation=relation, obj=f"project:{project_id}")
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
-    if await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project_id) is None:
+    if (record := await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project_id)) is None:
         raise TableNotFoundError(f"project not found: {project_id}")
-    return fga_deps.require_fga(settings, client, feature="roles")
+    return fga_deps.require_fga(settings, client, feature="roles"), incarnations.require_incarnation(record, f"project:{project_id}")
 
 
 async def _role_gate(
     *, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, role_id: uuid.UUID, relation: str
 ) -> tuple[OpenFgaClient, RoleRecord]:
-    """The client and the role, once the caller holds ``relation`` on standing role ``role_id`` of ``project_id``; else
-    the missing role's 404."""
+    """The client and the role, once the caller holds ``relation`` on standing role ``role_id`` of the incarnation of
+    ``project_id`` that stands; else the missing role's 404. A role a create left across an earlier incarnation's delete
+    is no role of this one (ADR 0241 §8 B3)."""
     missing = TableNotFoundError(f"role not found: {role_id}")
     try:
         await fga_deps.require_relation(client, settings, token, relation=relation, obj=roles.role_object(role_id))
     except PermissionDeniedError as exc:
         raise missing from exc
-    if (role := await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), project_id, role_id)) is None:
+    so = settings.storage_options()
+    if (project := await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)) is None:
+        raise missing
+    incarnation = incarnations.require_incarnation(project, f"project:{project_id}")
+    if (role := await run_in_threadpool(partial(roles.find_role, settings.registry_root, so, project_id, role_id, incarnation=incarnation))) is None:
         raise missing
     return fga_deps.require_fga(settings, client, feature="roles"), role
 
@@ -108,10 +115,12 @@ async def create_role(
     died between the two names a uuid no record holds, which grants nothing. The role starts with no assignee: filling
     it is the security admins' (``can_manage_assignees``), a different authority from minting it.
 
-    The edge names the project, so it is written under a fence of the project opened before the gate (ADR 0241): a role
-    decided on a project deleted meanwhile is made in no project made again under the id. The project's delete revokes
-    every edge naming it and then ends every role its registry lists; a record written after that listing finds its
-    edge gone, and is taken back here.
+    The edge names the project, so it is written under a fence of the project opened between the gate's two askings (ADR
+    0241): a caller refused writes nothing, and a role decided on a project deleted meanwhile is made in no project made
+    again under the id. Its record names the incarnation the fence read, so a record a create left across the project's
+    delete is listed under no project made again under the id, and the converge tick ends it. The project's delete
+    revokes every edge naming it and then ends every role its registry lists; a record written after that listing finds
+    its edge gone, and is taken back here.
     \f
 
     Raises:
@@ -122,10 +131,10 @@ async def create_role(
         ConcurrentModificationError: The project was deleted while the role was made.
     """
     require_names([body.name])
-    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token) as door:
-        wired = await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_create_role")
+    gate = partial(_project_gate, client=client, settings=settings, token=token, project_id=project_id, relation="can_create_role")
+    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token, gate=gate) as (door, (wired, incarnation)):
         fences = await fga_deps.require_fence(door, settings)
-        record = await _mint_role(wired, settings, project_id, body, fences, actor=current_subject(token))
+        record = await _mint_role(wired, settings, project_id, body, fences, project_incarnation=incarnation, actor=current_subject(token))
     obj = roles.role_object(record.id)
     actor = current_subject(token)
     audit(AuditAction.ROLE_CREATE, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, name=record.name)
@@ -140,8 +149,11 @@ async def create_role(
     return Role(**record.model_dump(), assignees=[])
 
 
-async def _mint_role(wired: OpenFgaClient, settings: Settings, project_id: str, body: RoleCreateRequest, fences: list[fga.Fence], *, actor: str) -> RoleRecord:
-    """The role's ``project`` edge under ``fences``, then its record, then the edge read again; the record."""
+async def _mint_role(
+    wired: OpenFgaClient, settings: Settings, project_id: str, body: RoleCreateRequest, fences: list[fga.Fence], *, project_incarnation: str, actor: str
+) -> RoleRecord:
+    """The role's ``project`` edge under ``fences``, then its record naming ``project_incarnation`` (the fence's, where one
+    was opened), then the edge read again; the record."""
     record = RoleRecord(id=uuid.uuid4(), project=project_id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
     edge = fga.ClientTuple(user=f"project:{project_id}", relation="project", object=roles.role_object(record.id))
     try:
@@ -149,15 +161,16 @@ async def _mint_role(wired: OpenFgaClient, settings: Settings, project_id: str, 
     except fga.IncarnationEnded as exc:
         raise ConcurrentModificationError(f"project {project_id!r} was deleted while this role was made; nothing was made") from exc
     so = settings.storage_options()
+    made_in = fences[0].incarnation if fences else project_incarnation
     try:
-        await run_in_threadpool(roles.create_role_record, settings.registry_root, so, record)
+        await run_in_threadpool(partial(roles.create_role_record, settings.registry_root, so, record, project_incarnation=made_in))
     except RecordExistsError:
         await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
         raise NamespaceAlreadyExistsError(f"project {project_id!r} already holds a role named {body.name!r}") from None
     except BaseException:
         await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
         raise
-    if edge not in await fga.read_object_tuples(wired, edge.object):
+    if not await fga.holds(wired, edge):
         # The project's delete revoked the edge after it committed and before this record was listed: the role is ended
         # here, as the delete would have ended it.
         await run_in_threadpool(roles.end_role_record, settings.registry_root, so, record)
@@ -167,9 +180,10 @@ async def _mint_role(wired: OpenFgaClient, settings: Settings, project_id: str, 
 
 @router.get("/{project_id}/roles")
 async def list_roles(project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> RoleList:
-    """The project's standing roles, ordered by name, gated on ``can_list_roles``; a role's assignees are its own read."""
-    await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_list_roles")
-    records = await run_in_threadpool(roles.list_roles, settings.registry_root, settings.storage_options(), project_id)
+    """The project's standing roles, ordered by name, gated on ``can_list_roles``; a role's assignees are its own read. A
+    role made in an earlier incarnation of the project is no role of it (ADR 0241 §8 B3)."""
+    _, incarnation = await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_list_roles")
+    records = await run_in_threadpool(partial(roles.list_roles, settings.registry_root, settings.storage_options(), project_id, incarnation=incarnation))
     return RoleList(roles=[Role(**record.model_dump()) for record in records])
 
 
@@ -224,7 +238,15 @@ async def _assignee(*, settings: Settings, role: RoleRecord, raw: str) -> str:
     nested_id = nested.removeprefix("role:")
     if nested_id == str(role.id):
         raise InvalidInputError(f"role {role.name!r} cannot be its own assignee")
-    if await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), role.project, nested_id) is None:
+    project = await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), role.project)
+    incarnation = incarnations.require_incarnation(project, f"project:{role.project}") if project is not None else None
+    if (
+        incarnation is None
+        or await run_in_threadpool(
+            partial(roles.find_role, settings.registry_root, settings.storage_options(), role.project, nested_id, incarnation=incarnation)
+        )
+        is None
+    ):
         raise InvalidInputError(f"{raw!r} is not a role of project {role.project!r}")
     return user
 
@@ -257,8 +279,8 @@ async def assign_role(
     the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
 
     The assignment is one Write (:func:`project_admins.confer`), judged on the read that found whether ``admin`` reaches
-    the role, under a fence of the role's project opened before the gate (ADR 0241): an assignment decided on a project
-    deleted meanwhile lands in no project made again under its id.
+    the role, under a fence of the role's project opened between the gate's two askings (ADR 0241): a caller refused
+    writes nothing, and an assignment decided on a project deleted meanwhile lands in no project made again under its id.
     \f
 
     Raises:
@@ -267,8 +289,8 @@ async def assign_role(
         PermissionDeniedError: The assignment would raise the caller's own access.
         ConcurrentModificationError: The project was deleted while the assignment ran.
     """
-    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token) as door:
-        wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    gate = partial(_role_gate, client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token, gate=gate) as (door, (wired, role)):
         fences = await fga_deps.require_fence(door, settings)
         return await _assign(wired, announcer, settings, token, project_id, role, body, fences)
 
@@ -325,8 +347,8 @@ async def unassign_role(
         ConcurrentModificationError: The removal would leave the project nobody administers, or the project was deleted
             while it ran.
     """
-    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token) as door:
-        wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    gate = partial(_role_gate, client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    async with fga_deps.door_fence(client, settings, f"project:{project_id}", token, gate=gate) as (door, (wired, role)):
         fences = await fga_deps.require_fence(door, settings)
         return await _unassign(wired, announcer, settings, token, project_id, role, body, fences)
 

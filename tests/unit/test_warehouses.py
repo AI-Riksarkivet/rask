@@ -8,6 +8,8 @@ mocked. The gate is driven through the real ``require_can_create_warehouse`` res
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -231,13 +233,12 @@ class _FakeStore:
         self.tuples.update([born, *((t.user, t.relation, t.object) for t in tuples)])
         return True
 
-    async def open_fence(self, _client: object, obj: str, **_kw: object) -> fga_module.Fence | None:
+    @contextlib.asynccontextmanager
+    async def fenced(self, _client: object, obj: str, *, incarnation: str | None = None, **_kw: object) -> AsyncGenerator[fga_module.Fence | None]:
         """A door's fence on a born project or warehouse (ADR 0241): its ticket confers nothing and is not kept here."""
         born = next((u.removeprefix("revision:") for u, rel, o in self.tuples if o == obj and rel == "revision"), None)
-        return None if born is None else fga_module.Fence(obj, born, fga_module.ClientTuple(user="revision:ticket-t", relation="revision", object=obj))
-
-    async def close_fences(self, *_a: object, **_kw: object) -> None:
-        return None
+        stands = born is not None and incarnation in (None, born)
+        yield fga_module.Fence(obj, str(born), fga_module.ClientTuple(user=obj, relation="ticket", object="fence:t")) if stands else None
 
     async def fences_stand(self, *_a: object, **_kw: object) -> bool:
         return True
@@ -251,8 +252,7 @@ class _FakeStore:
         monkeypatch.setattr(fga_module, "check", self.check)
         monkeypatch.setattr(fga_module, "write_tuples", self.write)
         monkeypatch.setattr(fga_module, "bear", self.bear)
-        monkeypatch.setattr(fga_module, "open_fence", self.open_fence)
-        monkeypatch.setattr(fga_module, "close_fences", self.close_fences)
+        monkeypatch.setattr(fga_module, "fenced", self.fenced)
         monkeypatch.setattr(fga_module, "fences_stand", self.fences_stand)
         monkeypatch.setattr(fga_module, "list_users", self.list_users)
 
@@ -355,12 +355,13 @@ def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_
     first = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-wh", project="acme"))
     assert first.id == "acme-wh"
     assert ("user:dex~alice", "owner", "warehouse:acme-wh") in store.tuples
-    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
+    # Asked with no write, and again on the incarnation the create's fence read (ADR 0241 §8 B2).
+    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")] * 2
 
     store.checks.clear()
     second = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-two", project="acme"))
     assert second.id == "acme-two"
-    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
+    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")] * 2
 
 
 def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

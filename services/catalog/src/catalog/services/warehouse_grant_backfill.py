@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from catalog.api import fga_deps
 from catalog.core.config import get_settings
-from catalog.services import warehouses
+from catalog.services import incarnations, warehouses
 from lakehouse.governed.auth_lifespan import build_fga_client
 
 
@@ -96,8 +96,15 @@ async def _reconcile(client: OpenFgaClient, settings: Settings) -> tuple[int, in
             log.warning("warehouse_grant_backfill_no_project", extra={"warehouse": warehouse_id})
             continue
         try:
+            obj = f"warehouse:{warehouse_id}"
             written += await fga_deps.converge_warehouse_grants(
-                client, settings, warehouse_id=warehouse_id, project=project, actor=ACTOR, incarnation=record.get("incarnation")
+                client,
+                settings,
+                warehouse_id=warehouse_id,
+                project=project,
+                actor=ACTOR,
+                incarnation=incarnations.require_incarnation(record, obj),
+                project_incarnation=incarnations.require_project_incarnation(record, obj),
             )
         except Exception as exc:
             # One unreachable warehouse must not abandon the rest — but it MUST be reported, and the

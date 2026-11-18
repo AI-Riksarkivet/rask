@@ -9,9 +9,8 @@
 (*                                                                         *)
 (* PART "container": one project or warehouse id, named in OpenFGA by the  *)
 (* id itself (`project:<id>`, `warehouse:<id>`), deleted and created again *)
-(* by another tenant (incarnations 1..MaxInc; Legacy is the one a record   *)
-(* stored before incarnations is given). OpenFGA holds a tuple once per    *)
-(* (kind, subject); each tuple carries, as a history variable the code     *)
+(* by another tenant (incarnations 1..MaxInc). OpenFGA holds a tuple once  *)
+(* per (kind, subject); each tuple carries, as a history variable the code *)
 (* never sees, the incarnation its writer was authorized on (0: a ghost,   *)
 (* which nobody decided on and which the drift repair revokes).            *)
 (*   Mint     the registry record minted with a fresh incarnation          *)
@@ -20,10 +19,13 @@
 (*            token and its seed, deleting any repair token standing       *)
 (*            (fga.bear); born already, the seed is written under a fence  *)
 (*            (fga_deps._bear_or_assert). Resume: a re-POST                *)
-(*   Writer   a door's write on or naming the container, each through ONE  *)
-(*            helper (fga.open_fence, fga.commit_fenced): it writes a      *)
-(*            ticket of its own, reads the token, asks the authority, and  *)
-(*            commits in one Write that deletes its ticket.                *)
+(*   Writer   a door's write on or naming the container, through ONE       *)
+(*            context manager (fga_deps.door_fence, fga.fenced): it asks   *)
+(*            its caller's authority with no write (Gate), writes a ticket *)
+(*            of its own, reads the token, asks the authority again on the *)
+(*            incarnation it read (Check), and commits in one Write that   *)
+(*            deletes its ticket (fga.commit_fenced); the ticket is taken  *)
+(*            back on every exit.                                          *)
 (*              Granters: a member, admin, decider or rung grant on it     *)
 (*              (members.grant_member, access._access_mutate, the          *)
 (*              declaration's grant, the tenancy rebuild).                 *)
@@ -36,19 +38,29 @@
 (*              Revokers: a revoke of a granter's tuple (the access        *)
 (*              door's revoke, members.revoke_member,                      *)
 (*              project_admins.withdraw).                                  *)
+(*              Intruders: a caller the object authorizes for nothing.     *)
+(*   Child    with Child, the edge writer is a warehouse's create: between *)
+(*            its last fence check and its birth it writes its registry    *)
+(*            record, naming the project and the incarnation its fence     *)
+(*            read (warehouses.establish_warehouse). The boot backfill     *)
+(*            (fga_deps.converge_warehouse_grants) writes its tenancy edge *)
+(*            from the record under a fence of the incarnation standing,   *)
+(*            and the converge tick ends a record whose project            *)
+(*            incarnation no longer stands (incarnations.converge).        *)
 (*   Delete   projects.delete_project / warehouses.delete_warehouse: marks *)
 (*            its incarnation born, retires its token, then drains         *)
 (*            (fga.end_incarnation): reads what stands on it and what      *)
 (*            names it, deletes the tickets it read, revokes what it read, *)
-(*            and reads again until a read finds nothing; the record last  *)
+(*            and reads again until a read finds nothing; refused while a  *)
+(*            child record of its incarnation stands; the record last      *)
 (*   Repair   the drift repair's ghost revoke (grant_reconcile.            *)
 (*            revoke_ghost_grants, fga.revoke_ghost): writes a repair      *)
 (*            token, reads, judges the record absent, and revokes what it  *)
 (*            read in one Write that deletes its token                     *)
-(*   Boot     the catalog's convergence of incarnations at boot and on     *)
-(*            each converge tick (incarnations.converge): a record naming  *)
-(*            none is given one, and a record whose birth never landed is  *)
-(*            born, with no seed of its own                                *)
+(*   Boot     the catalog's convergence at boot and on each converge tick  *)
+(*            (incarnations.converge): a record whose birth never landed   *)
+(*            is born, with no seed of its own, and the ticket of a        *)
+(*            request that died is swept once older than the bound        *)
 (*                                                                         *)
 (* PART "table": one table name, its tables keyed by a minted uuid         *)
 (* (fga.table_object, ADR 0173): a create seeds the uuid's owner, a purge  *)
@@ -90,12 +102,24 @@
 (*      NoLeakAcrossIncarnations).                                         *)
 (*   G11 FenceRevokes: a revoke is fenced as a grant is                    *)
 (*      (GrantsRevokeUnfenced, NoNarrowAcrossIncarnations).                *)
-(*   G12 BootConverge: a record naming no incarnation, or unborn, is born  *)
-(*      by the catalog (GrantsUpgradeUnconverged, EveryRecordBorn).        *)
+(*   G12 BootConverge: a record whose birth never landed is born by the    *)
+(*      catalog (GrantsUnbornUnconverged, EveryRecordBorn).                *)
 (*   G13 Intents: the converge records an intent, writes the tuple with    *)
 (*      evidence of its own in one Write, and settles the intent by the    *)
 (*      evidence, so a tick dying between two steps never records a door's *)
 (*      tuple git's (GrantsConvergeDies, GitRevokesOnlyItsOwn).            *)
+(*   G14 AuthorizeFirst: a writer asks its caller's authority before it    *)
+(*      writes its ticket, so a caller the object authorizes for nothing   *)
+(*      writes nothing on it (GrantsIntruderFenced, OnlyAuthorizedWrites). *)
+(*   G15 Recheck: the authority is asked again once the fence is open, of  *)
+(*      the incarnation the fence read (GrantsNoRecheck,                   *)
+(*      NoLeakAcrossIncarnations).                                         *)
+(*   G16 Sweeps: the converge tick deletes the ticket of a request that    *)
+(*      died (GrantsTicketsLeft, temporal DeadTicketsSwept).               *)
+(*   G17 NamesIncarnation: a child record names the incarnation of the     *)
+(*      project it was made under, and nothing writes an edge from a       *)
+(*      record whose project incarnation does not stand (GrantsChild-      *)
+(*      Unnamed, NoLeakAcrossIncarnations).                                *)
 (* THE ASSUMPTIONS, each removed by a config that must fail:               *)
 (*   A1 UuidKeyed: a table's tuples name its uuid, never its name          *)
 (*      (GrantsTableByName, TableNoLeak).                                  *)
@@ -108,7 +132,9 @@
 (* NOT MODELLED: the last-admin guard (ADR 0213, the token every           *)
 (* administration change moves in its own Write); principals and labels;  *)
 (* a grant's answer (an OpenFGA timeout leaves the write's outcome         *)
-(* unknown, which here is a write that commits or not).                   *)
+(* unknown, which here is a write that commits or not); time (the sweep's *)
+(* bound exceeds a request's run, so it takes only a dead request's        *)
+(* ticket and an orphan whose create no longer runs).                      *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -118,9 +144,10 @@ CONSTANTS Parts,          \* which parts this config checks: a subset of {"conta
           Edges,          \* writers of a tuple naming the container as subject
           Revokers,       \* door revokes of the tuple RevTarget's grant made
           RevTarget,      \* the granter whose tuple the revokers revoke
+          Intruders,      \* callers the container authorizes for nothing, at a grant door
+          Child,          \* the edge writer is a warehouse's create, which writes a record under the project
           Ghost,          \* the id starts with a ghost tuple equal to a new incarnation's seed
           Repairing,      \* the drift repair runs beside the doors
-          Upgrade,        \* the id starts with a record stored before incarnations, and its tuples
           Deaths,         \* a door may stop between its steps and never take the next
           ConvDeaths,     \* the converge tick may stop between its steps
           Fence,          \* G1
@@ -136,18 +163,20 @@ CONSTANTS Parts,          \* which parts this config checks: a subset of {"conta
           FenceRevokes,   \* G11
           BootConverge,   \* G12
           Intents,        \* G13
+          AuthorizeFirst, \* G14
+          Recheck,        \* G15
+          Sweeps,         \* G16
+          NamesIncarnation, \* G17
           UuidKeyed,      \* A1
           UndropSettles,  \* A2
           FreshReads      \* A3
 
 Incs == 1 .. MaxInc
-Legacy == MaxInc + 1
-AllIncs == Incs \cup {Legacy}
-Writers == Granters \cup Edges \cup Revokers
+Writers == Granters \cup Edges \cup Revokers \cup Intruders
 On(part) == part \in Parts
 
 \* ---------------------------------------------------------------- container
-VARIABLES rec,     \* the registry record: whether it stands, its incarnation (0: none), whether a delete started on it
+VARIABLES rec,     \* the registry record: whether it stands, its incarnation, whether a delete started on it
           nextInc, \* the incarnation the next mint takes
           tup,     \* the tuples on and naming the container: [k: "seed", "grant" or "edge", g, for: the incarnation decided on]
           tokens,  \* the incarnations whose token stands
@@ -155,7 +184,7 @@ VARIABLES rec,     \* the registry record: whether it stands, its incarnation (0
           born,    \* the incarnations whose `revision` marker stands
           tickets, \* the writers whose ticket stands
           cpc,     \* each incarnation's create: "idle", "minted", "done", "dead"
-          wpc,     \* each writer: "idle", "open", "read", "checked", "done", "dead"
+          wpc,     \* each writer: "idle", "gated", "open", "read", "checked", "fenced", "recorded", "done", "dead"
           wu,      \* the incarnation whose token a writer read
           wv,      \* the token's count it read
           wauth,   \* the incarnation whose seed authorized it
@@ -170,7 +199,8 @@ VARIABLES rec,     \* the registry record: whether it stands, its incarnation (0
           rpc,     \* the repair: "idle", "a", "b", "c", "done"
           rsnap,   \* what it read to revoke
           rok,     \* whether its judgement found no record
-          rtok     \* whether its token stands
+          rtok,    \* whether its token stands
+          crec     \* the child's record: whether it stands, the project incarnation it names (0: none), the one its create was authorized on
 
 \* -------------------------------------------------------------------- table
 VARIABLES live,    \* the uuid the name holds (0: none)
@@ -199,7 +229,7 @@ VARIABLES declared, \* git declares the tuple: "not yet", "yes", "dropped"
           wrong     \* the converge revoked a tuple a door created
 
 cvars == <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed,
-           dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+           dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
 tvars == <<live, tnext, ttup, trashed, tphase, upc, uu, relpc, ru, tgpc, tgfor, everHeld, revoked, bad>>
 vvars == <<declared, held, first, recorded, intent, ev, cvpc, doorpc, wrong>>
 vars == <<cvars, tvars, vvars>>
@@ -210,16 +240,17 @@ Seed(i) == [k |-> "seed", g |-> "none", for |-> i]
 Id(t) == <<t.k, t.g>>
 Ids(S) == {Id(t) : t \in S}
 NoRecord == [exists |-> FALSE, inc |-> 0, deleting |-> FALSE]
+NoChild == [exists |-> FALSE, pinc |-> 0, made |-> 0]
 
 Init ==
-  /\ rec = IF Upgrade THEN [exists |-> TRUE, inc |-> 0, deleting |-> FALSE] ELSE NoRecord
+  /\ rec = NoRecord
   /\ nextInc = 1
-  /\ tup = IF Upgrade THEN {Seed(Legacy)} ELSE IF Ghost THEN {Seed(0)} ELSE {}
+  /\ tup = IF Ghost THEN {Seed(0)} ELSE {}
   /\ tokens = {} /\ tokver = 0 /\ born = {} /\ tickets = {}
   /\ cpc = [i \in Incs |-> "idle"] /\ wpc = [w \in Writers |-> "idle"] /\ wu = [w \in Writers |-> 0]
   /\ wv = [w \in Writers |-> 0] /\ wauth = [w \in Writers |-> 0] /\ refused = {} /\ dsince = {} /\ narrowed = FALSE
   /\ dstep = 0 /\ du = 0 /\ dsnap = {} /\ dtick = {} /\ drounds = 0
-  /\ rpc = "idle" /\ rsnap = {} /\ rok = FALSE /\ rtok = FALSE
+  /\ rpc = "idle" /\ rsnap = {} /\ rok = FALSE /\ rtok = FALSE /\ crec = NoChild
   /\ live = 0 /\ tnext = 1 /\ ttup = {} /\ trashed = {} /\ tphase = "grace" /\ upc = "idle" /\ uu = 0 /\ relpc = "idle" /\ ru = 0
   /\ tgpc = "idle" /\ tgfor = 0 /\ everHeld = FALSE /\ revoked = FALSE /\ bad = FALSE
   /\ declared = "not yet" /\ held = FALSE /\ first = "none" /\ recorded = FALSE /\ intent = FALSE /\ ev = FALSE
@@ -237,7 +268,7 @@ WithSeed(i) == {t \in tup : Id(t) # Id(Seed(i))} \cup {Seed(i)}
 Mint(i) ==
   /\ On("container") /\ cpc[i] = "idle" /\ ~rec.exists /\ nextInc = i
   /\ rec' = [exists |-> TRUE, inc |-> i, deleting |-> FALSE] /\ nextInc' = i + 1 /\ cpc' = [cpc EXCEPT ![i] = "minted"]
-  /\ UNCHANGED <<tup, tokens, tokver, born, tickets, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<tup, tokens, tokver, born, tickets, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
 
 \* The birth: one Write of the marker, the token and the seed, deleting the repair's token where it read one, which the
 \* store refuses whole once the marker stands. Born already (by the boot convergence), the seed is written under the
@@ -251,33 +282,52 @@ Bear(i) ==
        ELSE /\ born' = born \cup {i} /\ tokens' = tokens \cup {i} /\ tup' = WithSeed(i)
             /\ rtok' = (rtok /\ ~RepairToken)
             /\ cpc' = [cpc EXCEPT ![i] = "done"]
-  /\ UNCHANGED <<rec, nextInc, tokver, tickets, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok>>
+  /\ UNCHANGED <<rec, nextInc, tokver, tickets, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, crec>>
 
 \* A re-POST of a record whose create died: it reads the record standing and bears it again.
 Resume(i) ==
   /\ On("container") /\ cpc[i] = "dead" /\ rec.exists /\ rec.inc = i /\ ~rec.deleting
   /\ cpc' = [cpc EXCEPT ![i] = "minted"]
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
 
 CreateDies(i) ==
   /\ On("container") /\ Deaths /\ cpc[i] = "minted"
   /\ cpc' = [cpc EXCEPT ![i] = "dead"]
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
 
 \* Whether a writer's write is fenced at all: a grant by G1, an edge by G9, a revoke by G11.
 Fenced(w) == IF w \in Revokers THEN FenceRevokes ELSE IF w \in Edges THEN FenceEdges ELSE Fence
 WriterTuple(w) == [k |-> IF w \in Edges THEN "edge" ELSE "grant", g |-> w, for |-> wauth[w]]
 Target == <<"grant", RevTarget>>
+\* A warehouse's create: the edge writer when Child is on.
+IsChild(w) == Child /\ w \in Edges
+\* The authority, asked of OpenFGA: a seed standing on the container authorizes every caller but an intruder.
+Authorized(w) == w \notin Intruders /\ \E t \in tup : t.k = "seed"
+\* The incarnation a seed standing authorizes as: a ghost equal to the seed (a person's admin an earlier incarnation
+\* left) authorizes as the incarnation whose token the writer read.
+AuthorizedOn(w, t) == IF t.for = 0 THEN wu[w] ELSE t.for
+\* The state a writer opens its fence from.
+Opening == IF AuthorizeFirst THEN "gated" ELSE "idle"
 
-\* The ticket first, written before the token is read; an unfenced writer writes none.
+\* G14: the authority asked first, with no write: a caller refused writes nothing on the container. A ghost authorizes
+\* as the incarnation the writer will read, so here only a seed of an incarnation names one.
+WGate(w) ==
+  /\ On("container") /\ AuthorizeFirst /\ wpc[w] = "idle"
+  /\ IF Authorized(w)
+       THEN /\ \E t \in tup : t.k = "seed" /\ wauth' = [wauth EXCEPT ![w] = t.for]
+            /\ wpc' = [wpc EXCEPT ![w] = "gated"]
+       ELSE /\ wpc' = [wpc EXCEPT ![w] = "done"] /\ UNCHANGED wauth
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wu, wv, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
+
+\* The ticket next, written before the token is read; an unfenced writer writes none.
 WOpen(w) ==
-  /\ On("container") /\ wpc[w] = "idle"
+  /\ On("container") /\ wpc[w] = Opening
   /\ tickets' = IF Fenced(w) /\ Tickets THEN tickets \cup {w} ELSE tickets
   /\ wpc' = [wpc EXCEPT ![w] = "open"]
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, cpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, cpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
 
-\* The token read before the authority is asked; none standing, the door refuses (being established, or deleted) and
-\* deletes its ticket.
+\* The token read before the authority is asked again; none standing, the door refuses (being established, or deleted)
+\* and deletes its ticket.
 WRead(w) ==
   /\ On("container") /\ wpc[w] = "open"
   /\ IF ~Fenced(w)
@@ -287,17 +337,36 @@ WRead(w) ==
          ELSE /\ \E u \in tokens : wu' = [wu EXCEPT ![w] = u]
               /\ wv' = [wv EXCEPT ![w] = tokver]
               /\ wpc' = [wpc EXCEPT ![w] = "read"] /\ UNCHANGED tickets
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, cpc, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, cpc, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
 
-\* The authority, asked of OpenFGA: a seed standing on the container. A ghost equal to the seed (a person's admin an
-\* earlier incarnation left) authorizes as the incarnation whose token the writer read.
+\* The authority asked (again, with G14) on what stands once the fence is open; refused, the writer deletes its ticket.
+\* With G14 and without G15 it is not asked again, and the gate's answer stands.
 WCheck(w) ==
   /\ On("container") /\ wpc[w] = "read"
-  /\ IF \E t \in tup : t.k = "seed"
-       THEN /\ \E t \in tup : t.k = "seed" /\ wauth' = [wauth EXCEPT ![w] = IF t.for = 0 THEN wu[w] ELSE t.for]
-            /\ wpc' = [wpc EXCEPT ![w] = "checked"] /\ UNCHANGED tickets
-       ELSE /\ wpc' = [wpc EXCEPT ![w] = "done"] /\ tickets' = tickets \ {w} /\ UNCHANGED wauth
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, cpc, wu, wv, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ IF AuthorizeFirst /\ ~Recheck
+       THEN /\ wpc' = [wpc EXCEPT ![w] = "checked"] /\ UNCHANGED <<tickets, wauth>>
+       ELSE IF Authorized(w)
+         THEN /\ \E t \in tup : t.k = "seed" /\ wauth' = [wauth EXCEPT ![w] = AuthorizedOn(w, t)]
+              /\ wpc' = [wpc EXCEPT ![w] = "checked"] /\ UNCHANGED tickets
+         ELSE /\ wpc' = [wpc EXCEPT ![w] = "done"] /\ tickets' = tickets \ {w} /\ UNCHANGED wauth
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, cpc, wu, wv, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
+
+\* A warehouse's create checks its fence still stands, then writes its record: two steps, so a delete and a re-creation
+\* of its project can run between them (the window ADR 0241 §8 B3 holds open in its test).
+WFenceCheck(w) ==
+  /\ On("container") /\ IsChild(w) /\ wpc[w] = "checked"
+  /\ wpc' = [wpc EXCEPT ![w] = IF ~Fenced(w) \/ ~Tickets \/ w \in tickets THEN "fenced" ELSE "done"]
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
+
+\* Its record names the project's id and, with G17, the incarnation its fence read; a record already standing under
+\* the id refuses it.
+WRecord(w) ==
+  /\ On("container") /\ IsChild(w) /\ wpc[w] = "fenced"
+  /\ IF crec.exists
+       THEN /\ wpc' = [wpc EXCEPT ![w] = "done"] /\ tickets' = tickets \ {w} /\ UNCHANGED crec
+       ELSE /\ crec' = [exists |-> TRUE, pinc |-> IF NamesIncarnation THEN wu[w] ELSE 0, made |-> wauth[w]]
+            /\ wpc' = [wpc EXCEPT ![w] = "recorded"] /\ UNCHANGED tickets
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, cpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
 
 \* The write: with tickets, one Write deleting the writer's own ticket; without, one moving the token it read.
 Commits(w) ==
@@ -306,7 +375,7 @@ Commits(w) ==
   ELSE wu[w] \in tokens /\ tokver = wv[w]
 
 WWrite(w) ==
-  /\ On("container") /\ wpc[w] = "checked"
+  /\ On("container") /\ wpc[w] = IF IsChild(w) THEN "recorded" ELSE "checked"
   /\ IF Commits(w)
        THEN /\ IF w \in Revokers
                  THEN /\ tup' = {t \in tup : Id(t) # Target}
@@ -319,12 +388,41 @@ WWrite(w) ==
        ELSE /\ refused' = IF w \in dsince THEN refused ELSE refused \cup {w}
             /\ UNCHANGED <<tup, narrowed, tickets, tokver>>
   /\ wpc' = [wpc EXCEPT ![w] = "done"]
-  /\ UNCHANGED <<rec, nextInc, tokens, born, cpc, wu, wv, wauth, dsince, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<rec, nextInc, tokens, born, cpc, wu, wv, wauth, dsince, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
 
+\* A death between two steps: whatever the writer wrote stays, its ticket among it.
 WDies(w) ==
-  /\ On("container") /\ Deaths /\ wpc[w] \in {"open", "read", "checked"}
+  /\ On("container") /\ Deaths /\ wpc[w] \in {"gated", "open", "read", "checked", "fenced", "recorded"}
   /\ wpc' = [wpc EXCEPT ![w] = "dead"]
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
+
+\* G16: the converge tick deletes a ticket older than the bound, which only a request that died leaves, on an id a
+\* record names (incarnations.converge, fga.sweep_tickets).
+SweepTicket(w) ==
+  /\ On("container") /\ Sweeps /\ rec.exists /\ w \in tickets /\ wpc[w] = "dead"
+  /\ tickets' = tickets \ {w}
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
+
+\* The child record's project incarnation is the one standing: a record of the live tenant.
+ChildOfLive == crec.exists /\ rec.exists /\ crec.pinc = rec.inc
+
+\* The boot backfill of a child record's tenancy edge (fga_deps.converge_warehouse_grants, and the convergence bearing an
+\* unborn warehouse): under a fence of the project incarnation standing, the edge the record justifies. It was decided
+\* on the incarnation the create was authorized on. With G17 it writes only from a record of the live tenant.
+Backfill ==
+  /\ On("container") /\ Child /\ crec.exists /\ tokens # {} /\ (NamesIncarnation => ChildOfLive)
+  /\ LET e == CHOOSE x \in Edges : TRUE
+         edge == [k |-> "edge", g |-> e, for |-> crec.made]
+     IN tup' = IF Id(edge) \in Ids(tup) THEN tup ELSE tup \cup {edge}
+  /\ UNCHANGED <<rec, nextInc, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
+
+\* G17's sweep: the converge tick ends a child record whose project incarnation no longer stands, once its create no
+\* longer runs, releasing its name; nothing stands under it.
+ChildEnd ==
+  /\ On("container") /\ Child /\ Sweeps /\ NamesIncarnation /\ crec.exists /\ ~ChildOfLive
+  /\ \A e \in Edges : wpc[e] \notin {"gated", "open", "read", "checked", "fenced", "recorded"}
+  /\ crec' = NoChild
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
 
 \* The delete's steps, in its order. "settle" reads again: finding something, it goes back to delete the tickets it
 \* found and revoke what it found; finding nothing, or with Drain off, it goes on.
@@ -335,39 +433,44 @@ DeadStep == NSteps + 1
 StepAt(s) == CHOOSE n \in 1 .. NSteps : Steps[n] = s
 \* What a read of the container finds: what stands on it, and, by subject, what names it.
 Seen(S) == IF ReadsSubjects THEN S ELSE {t \in S : t.k # "edge"}
+\* A child record the project's delete counts as its own: by the incarnation it names with G17, by the id without.
+ChildOf(i) == crec.exists /\ (NamesIncarnation => crec.pinc = i)
 
 DeleteStart ==
   /\ On("container") /\ dstep \in {0, DeadStep} /\ rec.exists
   /\ rec' = [rec EXCEPT !.deleting = TRUE] /\ du' = rec.inc /\ dstep' = 1 /\ drounds' = 0
-  /\ UNCHANGED <<nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dsnap, dtick, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dsnap, dtick, rpc, rsnap, rok, rtok, crec>>
 
+\* The record goes last, and not while a child record of its incarnation stands (the delete's late re-read, refused
+\* 409 and asked again).
 DeleteStep ==
   /\ On("container") /\ dstep \in 1 .. NSteps
   /\ LET s == Steps[dstep]
          again == s = "settle" /\ Drain /\ Seen(tup) # {}
+         blocked == s = "record" /\ ChildOf(du)
      IN /\ born' = IF s = "born" /\ BornKept /\ du # 0 THEN born \cup {du} ELSE born
         /\ tokens' = IF s = "retire" THEN {} ELSE tokens
         /\ dsnap' = IF s = "read" \/ again THEN Seen(tup) ELSE dsnap
         /\ dtick' = IF s = "read" \/ again THEN tickets ELSE dtick
         /\ tickets' = IF s = "untick" THEN tickets \ dtick ELSE tickets
         /\ tup' = IF s = "revoke" THEN {t \in tup : Id(t) \notin Ids(dsnap)} ELSE tup
-        /\ rec' = IF s = "record" THEN NoRecord ELSE rec
+        /\ rec' = IF s = "record" /\ ~blocked THEN NoRecord ELSE rec
         /\ drounds' = IF again THEN drounds + 1 ELSE drounds
-        /\ dsince' = IF s \in {"retire", "untick"} THEN dsince \cup {w \in Writers : wpc[w] \in {"open", "read", "checked"}} ELSE dsince
-        /\ dstep' = IF again THEN StepAt("untick") ELSE IF s = "record" THEN 0 ELSE dstep + 1
-  /\ UNCHANGED <<nextInc, tokver, cpc, wpc, wu, wv, wauth, refused, narrowed, du, rpc, rsnap, rok, rtok>>
+        /\ dsince' = IF s \in {"retire", "untick"} THEN dsince \cup {w \in Writers : wpc[w] \in {"gated", "open", "read", "checked", "fenced", "recorded"}} ELSE dsince
+        /\ dstep' = IF again THEN StepAt("untick") ELSE IF blocked THEN DeadStep ELSE IF s = "record" THEN 0 ELSE dstep + 1
+  /\ UNCHANGED <<nextInc, tokver, cpc, wpc, wu, wv, wauth, refused, narrowed, du, rpc, rsnap, rok, rtok, crec>>
 
 DeleteDies ==
   /\ On("container") /\ Deaths /\ dstep \in 1 .. NSteps
   /\ dstep' = DeadStep
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok, crec>>
 
 \* The ghost revoke: its token, then its judgement and its read in the code's order, then the revoke of what it read,
 \* which with G6 commits only while its token stands (no birth since).
 RepairStart ==
   /\ On("container") /\ Repairing /\ rpc = "idle"
   /\ rtok' = RepairToken /\ rpc' = "a"
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rsnap, rok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rsnap, rok, crec>>
 
 RepairStep ==
   /\ On("container") /\ rpc \in {"a", "b"}
@@ -376,32 +479,27 @@ RepairStep ==
      IN /\ rok' = IF judge THEN ~rec.exists ELSE rok
         /\ rsnap' = IF read THEN tup ELSE rsnap
         /\ rpc' = IF judge /\ rec.exists THEN "done" ELSE IF rpc = "a" THEN "b" ELSE "c"
-  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rtok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rtok, crec>>
 
 RepairRevoke ==
   /\ On("container") /\ rpc = "c" /\ rok
   /\ IF ~RepairToken \/ rtok THEN tup' = {t \in tup : Id(t) \notin Ids(rsnap)} ELSE UNCHANGED tup
   /\ rtok' = FALSE /\ rpc' = "done"
-  /\ UNCHANGED <<rec, nextInc, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rsnap, rok>>
+  /\ UNCHANGED <<rec, nextInc, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rsnap, rok, crec>>
 
-\* The catalog's convergence of incarnations: a record naming none is given one by a conditional record write that a
-\* delete's mark refuses, and a record whose birth never landed is born with no seed of its own (its birth Write is
-\* refused once the marker stands).
-GiveIncarnation ==
-  /\ On("container") /\ BootConverge /\ rec.exists /\ rec.inc = 0 /\ ~rec.deleting
-  /\ rec' = [rec EXCEPT !.inc = Legacy]
-  /\ UNCHANGED <<nextInc, tup, tokens, tokver, born, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, rtok>>
-
+\* The catalog's convergence: a record whose birth never landed (its create died between its record and its birth) is
+\* born with no seed of its own; its birth Write is refused once the marker stands. Every record names an incarnation:
+\* a create mints it with the record (B5, no record without one is converged).
 BootBear ==
-  /\ On("container") /\ BootConverge /\ rec.exists /\ rec.inc # 0 /\ ~rec.deleting /\ rec.inc \notin born
+  /\ On("container") /\ BootConverge /\ rec.exists /\ ~rec.deleting /\ rec.inc \notin born
   /\ born' = born \cup {rec.inc} /\ tokens' = tokens \cup {rec.inc} /\ rtok' = (rtok /\ ~RepairToken)
-  /\ UNCHANGED <<rec, nextInc, tup, tokver, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok>>
+  /\ UNCHANGED <<rec, nextInc, tup, tokver, tickets, cpc, wpc, wu, wv, wauth, refused, dsince, narrowed, dstep, du, dsnap, dtick, drounds, rpc, rsnap, rok, crec>>
 
 ContainerNext ==
   \/ \E i \in Incs : Mint(i) \/ Bear(i) \/ Resume(i) \/ CreateDies(i)
-  \/ \E w \in Writers : WOpen(w) \/ WRead(w) \/ WCheck(w) \/ WWrite(w) \/ WDies(w)
+  \/ \E w \in Writers : WGate(w) \/ WOpen(w) \/ WRead(w) \/ WCheck(w) \/ WFenceCheck(w) \/ WRecord(w) \/ WWrite(w) \/ WDies(w) \/ SweepTicket(w)
   \/ DeleteStart \/ DeleteStep \/ DeleteDies \/ RepairStart \/ RepairStep \/ RepairRevoke
-  \/ GiveIncarnation \/ BootBear
+  \/ BootBear \/ Backfill \/ ChildEnd
 
 \* -------------------------------------------------------------------- table
 
@@ -546,31 +644,38 @@ ConvergeNext ==
   GitDeclares \/ GitDrops \/ ConvRead \/ ConvRecord \/ ConvWriteRecorded \/ ConvIntent \/ ConvWriteEvidenced
     \/ ConvSettle \/ ConvDies \/ ConvRevoke \/ DoorGrants
 
+
 Next ==
   \/ ContainerNext /\ UNCHANGED <<tvars, vvars>>
   \/ TableNext /\ UNCHANGED <<cvars, vvars>>
   \/ ConvergeNext /\ UNCHANGED <<cvars, tvars>>
 
-\* The boot convergence runs on every tick until nothing is left for it to do.
-Spec == Init /\ [][Next]_vars /\ WF_vars(GiveIncarnation /\ UNCHANGED <<tvars, vvars>>) /\ WF_vars(BootBear /\ UNCHANGED <<tvars, vvars>>)
+\* The convergence runs on every tick until nothing is left for it to do: it bears what is unborn and sweeps what a dead
+\* request left.
+Spec ==
+  /\ Init /\ [][Next]_vars
+  /\ WF_vars(BootBear /\ UNCHANGED <<tvars, vvars>>)
+  /\ \A w \in Writers : WF_vars(SweepTicket(w) /\ UNCHANGED <<tvars, vvars>>)
 
 \* ------------------------------------------------------------------ properties
 
-\* No access leaks across objects: every tuple on or naming a container whose record names an incarnation was decided on
-\* that incarnation (or is a ghost nobody decided on, the drift repair's), so nothing a deleted project or warehouse held,
+\* No access leaks across objects: every tuple on or naming a container whose record stands was decided on that
+\* incarnation (or is a ghost nobody decided on, the drift repair's), so nothing a deleted project or warehouse held,
 \* or a door was writing on or under it, authorizes on one made again under its id: no grant, no warehouse planted in
-\* it, no role of it.
-NoLeakAcrossIncarnations == rec.inc # 0 => \A t \in tup : t.for \in {0, rec.inc}
+\* it, no role of it, and no tenancy edge a converge writes from a record a dead tenant's create left.
+NoLeakAcrossIncarnations == rec.exists => \A t \in tup : t.for \in {0, rec.inc}
 
 \* Its narrowing twin: no tuple of one incarnation is removed by a revoke decided on another.
 NoNarrowAcrossIncarnations == ~narrowed
 
-\* No missing owner: a container whose record stands and whose own create bore it (or whose record predates
-\* incarnations) holds its seed whatever else ran. One whose create died before its birth is born by the boot
-\* convergence with no seed, and holds it once its create is asked again (Resume).
-OwnedWhileLive ==
-  (Live /\ rec.inc # 0 /\ rec.inc \in tokens /\ (rec.inc = Legacy \/ (rec.inc \in Incs /\ cpc[rec.inc] = "done")))
-    => Seed(rec.inc) \in tup
+\* Only a caller the object's incarnation authorizes writes on it: a caller refused at the gate leaves no ticket and no
+\* tuple, so an unprivileged caller cannot write on, slow or wedge another tenant's object.
+OnlyAuthorizedWrites == \A w \in Intruders : w \notin tickets /\ w \notin {t.g : t \in tup}
+
+\* No missing owner: a container whose record stands and whose own create bore it holds its seed whatever else ran. One
+\* whose create died before its birth is born by the boot convergence with no seed, and holds it once its create is
+\* asked again (Resume).
+OwnedWhileLive == (Live /\ rec.inc \in tokens /\ cpc[rec.inc] = "done") => Seed(rec.inc) \in tup
 
 \* Grants do not exclude grants: a writer is refused only where a delete retired or drained while it ran.
 GrantRefusedOnlyByDelete == refused = {}
@@ -579,9 +684,11 @@ GrantRefusedOnlyByDelete == refused = {}
 \* finds something, since no fenced writer commits once its ticket is gone.
 DrainBounded == drounds <= 1
 
-\* Every record is born: one naming no incarnation, or whose birth never landed, is given one and born with no hand-run
-\* step, unless its delete has begun.
-EveryRecordBorn == Live ~> (~Live \/ (rec.inc # 0 /\ rec.inc \in born))
+\* Every record is born: one whose birth never landed is born with no hand-run step, unless its delete has begun.
+EveryRecordBorn == Live ~> (~Live \/ rec.inc \in born)
+
+\* No ticket of a dead request stands for ever on an id a record names: the converge tick sweeps it.
+DeadTicketsSwept == \A w \in Writers : (w \in tickets /\ wpc[w] = "dead") ~> (w \notin tickets \/ ~rec.exists)
 
 \* No access leaks across tables: a tuple on the table a name holds was decided on that table.
 TableNoLeak == live # 0 => \A t \in ttup : t.obj = Key(live) => t.for = live
@@ -596,6 +703,6 @@ NoAccessAfterRevoke == ~bad
 GitRevokesOnlyItsOwn == ~wrong
 
 TypeOK ==
-  /\ rec.inc \in 0 .. Legacy /\ tokens \subseteq AllIncs /\ born \subseteq AllIncs /\ tickets \subseteq Writers
-  /\ dstep \in 0 .. DeadStep /\ live \in 0 .. MaxUuid /\ held \in BOOLEAN
+  /\ rec.inc \in 0 .. MaxInc /\ tokens \subseteq Incs /\ born \subseteq Incs /\ tickets \subseteq Writers
+  /\ dstep \in 0 .. DeadStep /\ live \in 0 .. MaxUuid /\ held \in BOOLEAN /\ crec.pinc \in 0 .. MaxInc
 =============================================================================

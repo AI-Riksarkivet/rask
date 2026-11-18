@@ -26,7 +26,7 @@ from typing import Final
 
 import pyarrow.fs as pafs
 from lance_namespace import InternalError
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from catalog.schemas import RoleRecord
 from lakehouse import control_prefixes
@@ -44,8 +44,11 @@ ASSIGNEE: Final = "assignee"
 
 
 class StoredRole(RoleRecord):
-    """A role's record as the store keeps it: ``ended_at`` is set once the role is ended."""
+    """A role's record as the store keeps it: ``ended_at`` is set once the role is ended, and ``project_incarnation``
+    names the incarnation of the project it was made in (ADR 0241 §8 B3), so a role a create left across its project's
+    delete is listed under no project made again under the id."""
 
+    project_incarnation: str = Field(min_length=1)
     ended_at: datetime | None = None
 
 
@@ -63,13 +66,15 @@ def _key(project: str, name: str) -> str:
     return f"{_ROLES_PREFIX}/{project}/{blake2s(name.encode('utf-8')).hexdigest()}.json"
 
 
-def create_role_record(control_root: str, storage_options: StorageOptions, record: RoleRecord) -> None:
-    """Write ``record`` iff no standing role of its project holds its name.
+def create_role_record(control_root: str, storage_options: StorageOptions, record: RoleRecord, *, project_incarnation: str) -> None:
+    """Write ``record``, made in ``project_incarnation`` of its project, iff no standing role of its project holds its
+    name.
 
     Raises:
         lakehouse.records.RecordExistsError: A standing role holds the name, or another create took it first.
     """
-    key, body = _key(record.project, record.name), StoredRole(**record.model_dump()).model_dump(mode="json")
+    key = _key(record.project, record.name)
+    body = StoredRole(**record.model_dump(), project_incarnation=project_incarnation).model_dump(mode="json")
     try:
         create_json(control_root, storage_options, key, body)
         return
@@ -84,16 +89,16 @@ def create_role_record(control_root: str, storage_options: StorageOptions, recor
         raise RecordExistsError(key) from exc
 
 
-def _read_roles(control_root: str, storage_options: StorageOptions, project: str) -> tuple[list[RoleRecord], list[str]]:
-    """Every standing role of ``project``, ordered by name, and the path of each record that is there and cannot be read
-    as one. A record deleted since the listing named it is no record.
+def _read_roles(control_root: str, storage_options: StorageOptions, project: str) -> tuple[list[StoredRole], list[str]]:
+    """Every standing role of ``project``, of any incarnation of it, ordered by name, and the path of each record that is
+    there and cannot be read as one. A record deleted since the listing named it is no record.
 
     Raises:
         ServiceUnavailableError: The store did not answer a record's read: one skipped as unreadable would read as a
             corrupt record, which no retry mends ([[LH-572]]).
     """
     fs, base = fs_and_base(control_root, storage_options)
-    found: list[RoleRecord] = []
+    found: list[StoredRole] = []
     unreadable: list[str] = []
     for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_ROLES_PREFIX}/{project}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
@@ -110,19 +115,31 @@ def _read_roles(control_root: str, storage_options: StorageOptions, project: str
             unreadable.append(info.path)
             continue
         if stored.ended_at is None:
-            found.append(RoleRecord(**stored.model_dump(exclude={"ended_at"})))
+            found.append(stored)
     return sorted(found, key=lambda role: role.name), unreadable
 
 
-def list_roles(control_root: str, storage_options: StorageOptions, project: str) -> list[RoleRecord]:
-    """Every standing role of ``project``, ordered by name. An unreadable record is skipped and logged, so one bad object
-    does not void the project's roles; a caller ending them all asks :func:`every_role`."""
-    return _read_roles(control_root, storage_options, project)[0]
+def _role(stored: StoredRole) -> RoleRecord:
+    return RoleRecord(**stored.model_dump(exclude={"ended_at", "project_incarnation"}))
+
+
+def list_roles(control_root: str, storage_options: StorageOptions, project: str, *, incarnation: str) -> list[RoleRecord]:
+    """Every standing role of ``incarnation`` of ``project``, ordered by name: a role another incarnation's create left is
+    no role of this one. An unreadable record is skipped and logged, so one bad object does not void the project's roles;
+    a caller ending them all asks :func:`every_role`."""
+    return [_role(stored) for stored in _read_roles(control_root, storage_options, project)[0] if stored.project_incarnation == incarnation]
+
+
+def orphan_roles(control_root: str, storage_options: StorageOptions, project: str, *, incarnation: str) -> list[StoredRole]:
+    """Every standing role of ``project`` made in an incarnation of it other than ``incarnation``, the one standing: what
+    a create that raced an earlier incarnation's delete left."""
+    return [stored for stored in _read_roles(control_root, storage_options, project)[0] if stored.project_incarnation != incarnation]
 
 
 def every_role(control_root: str, storage_options: StorageOptions, project: str) -> list[RoleRecord]:
-    """Every standing role of ``project``, read whole, for a caller ending them all: a record that cannot be read may be
-    one of the roles it must end, so it is refused rather than left standing with its grants ([[LH-572]]).
+    """Every standing role of ``project``, of any incarnation of it, read whole, for a caller ending them all: a record
+    that cannot be read may be one of the roles it must end, so it is refused rather than left standing with its grants
+    ([[LH-572]]).
 
     Raises:
         ServiceUnavailableError: The store did not answer a record's read.
@@ -134,12 +151,14 @@ def every_role(control_root: str, storage_options: StorageOptions, project: str)
             f"{len(unreadable)} role record(s) of project {project!r} cannot be read as one ({', '.join(sorted(unreadable))}), so its "
             "roles cannot all be ended. Refusing rather than leaving a role standing with its grants."
         )
-    return roles
+    return [_role(stored) for stored in roles]
 
 
-def find_role(control_root: str, storage_options: StorageOptions, project: str, role_id: uuid.UUID | str) -> RoleRecord | None:
-    """The standing role ``role_id`` of ``project``, or ``None`` when the project holds none of that id."""
-    return next((role for role in list_roles(control_root, storage_options, project) if str(role.id) == str(role_id)), None)
+def find_role(control_root: str, storage_options: StorageOptions, project: str, role_id: uuid.UUID | str, *, incarnation: str | None) -> RoleRecord | None:
+    """The standing role ``role_id`` of ``incarnation`` of ``project`` (of any incarnation for ``None``: whether it stands
+    at all), or ``None`` when it holds none of that id."""
+    found = (stored for stored in _read_roles(control_root, storage_options, project)[0] if str(stored.id) == str(role_id))
+    return next((_role(stored) for stored in found if incarnation in (None, stored.project_incarnation)), None)
 
 
 #: How many times an ending reads the record: once, and once more after another write moved it.

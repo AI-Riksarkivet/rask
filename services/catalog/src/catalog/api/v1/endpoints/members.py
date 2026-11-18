@@ -21,6 +21,7 @@ not there is a no-op, not a 404".
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Path, status
@@ -113,10 +114,10 @@ async def grant_member(
     on the second call. An ``admin`` is granted through :func:`project_admins.confer`, which asks nothing of the
     caller beyond the gate here.
 
-    The grant is written under a fence of the project, opened before the authority is asked (ADR 0241,
-    ``fga_deps.door_fence``): a project deleted meanwhile, and one made again under its id by another tenant, is not the
-    project the grant was decided on, and the grant lands on neither. Grants for different people never refuse each
-    other: each deletes only its own ticket.
+    The authority is asked first, with no write, then again under a fence of the project (ADR 0241,
+    ``fga_deps.door_fence``): a caller refused has written nothing, and a project deleted meanwhile, and one made again
+    under its id by another tenant, is not the project the grant was decided on, and the grant lands on neither. Grants
+    for different people never refuse each other: each deletes only its own ticket.
     \f
 
     Raises:
@@ -128,8 +129,8 @@ async def grant_member(
     """
     obj = f"project:{project_id}"
     wired = _client_or_conflict(client, settings)
-    async with fga_deps.door_fence(wired, settings, obj, token) as door:
-        await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    gate = partial(fga_deps.require_relation, client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    async with fga_deps.door_fence(wired, settings, obj, token, gate=gate) as (door, _):
         fences = await fga_deps.require_fence(door, settings)
         return await _grant(wired, announcer, settings, token, project_id, payload, fences)
 
@@ -143,11 +144,10 @@ async def _grant(
     actor = token.subject if token else "system:catalog"
     await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
 
-    existing = await fga.read_object_tuples(wired, obj)
     tup = fga.ClientTuple(user=user, relation=payload.relation, object=obj)
-    if any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
+    if await fga.holds(wired, tup):
         audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
-        return MemberList(members=_direct_grants(existing, obj))
+        return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
     # TELL THE PERSON, filed before the write so a door failing after it still does ([[LH-576]]). Only a grant that
     # changes the store is announced: a re-grant is a no-op there, and an announcement of an unchanged state would put a
     # row in someone's inbox for something that did not happen.
@@ -194,8 +194,8 @@ async def revoke_member(
     """
     obj = f"project:{project_id}"
     wired = _client_or_conflict(client, settings)
-    async with fga_deps.door_fence(wired, settings, obj, token) as door:
-        await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    gate = partial(fga_deps.require_relation, client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    async with fga_deps.door_fence(wired, settings, obj, token, gate=gate) as (door, _):
         fences = await fga_deps.require_fence(door, settings)
         try:
             return await _revoke(wired, announcer, token, project_id, payload, fences)
@@ -212,10 +212,8 @@ async def _revoke(
     actor = token.subject if token else "system:catalog"
 
     tup = fga.ClientTuple(user=user, relation=payload.relation, object=obj)
-    if payload.relation not in ADMINISTRATIVE:
-        existing = await fga.read_object_tuples(wired, obj)
-        if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
-            return MemberList(members=_direct_grants(existing, obj))
+    if payload.relation not in ADMINISTRATIVE and not await fga.holds(wired, tup):
+        return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
     # THE SHARPER HALF. After this the subject can no longer see the project, so no visibility-gated
     # feed could ever tell them — which is precisely why the control lane runs no visibility check and
     # why being NAMED is the targeting. Unannounced, losing tenant access is discovered as a 403 in the

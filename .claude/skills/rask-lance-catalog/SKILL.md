@@ -549,30 +549,45 @@ A table or namespace is named in OpenFGA by its uuid; a project and a warehouse 
 - **Birth.** A create bears the incarnation in one Write with its seed (`fga.bear`, through `fga_deps.seed_project_admin`
   / `seed_warehouse` / `converge_warehouse_grants`), which commits only while the marker is absent and deletes any drift
   repair's token it finds.
-- **Every record is born, with no hand-run step** (`catalog.services.incarnations.converge`, at boot in
-  `main.converge_at_boot` and first thing on every converge tick): a record naming no incarnation is given one
-  (conditional on the record, refused once a delete marked it), and an unborn incarnation is born with no seed of its
-  own. A door finding a record standing and nothing born answers 409 with `Retry-After: 5`
-  (`lakehouse.ns_errors.SettlingError`), never 404; the deletes refuse such a record while authorization is on.
-- **Every write on or naming the object is fenced** (`fga.open_fence`, `fga.commit_fenced`): the door writes a ticket of
-  its own, reads the token, asks its caller's authority, and commits in ONE Write that deletes its ticket
-  (`fga_deps.door_fence` + `require_fence` in the members door, the access door's `project_fence` / `warehouse_fence`
-  dependencies listed before the gate, the role doors, the warehouse create's birth, the warehouse managed-access door;
-  `fga_deps.parent_fence`, a router dependency before `authorize`, for a namespace created directly in a warehouse; the
-  declaration and the tenancy rebuild open their own). Revokes too. A grant is refused (409) only by the object's delete.
-- **Delete.** `fga.end_incarnation` (via `fga_deps.end_incarnation`): mark born, retire the token (`retire_tokens`), then
-  drain what stands on the object and what names it (`NAMING`: a role's edge and a warehouse's tenancy edge for a project,
-  a namespace's parent edge for a warehouse), deleting every ticket it read, until a read finds nothing. A project's
-  delete then refuses (409) while a warehouse made in it meanwhile stands, and ends every role its registry lists; a role
-  whose record lands after that listing finds its edge gone and ends itself.
+- **Every record names an incarnation, and every incarnation is born, with no hand-run step**
+  (`catalog.services.incarnations.converge`, at boot in `main.converge_at_boot` and first thing on every converge tick):
+  an unborn incarnation (a create that died between its record and its birth) is born with no seed of its own, and the
+  create asked again writes its creator's admin. A record naming NO incarnation was written by no create of this catalog:
+  it is an `InternalError` naming it (`incarnations.require_incarnation`, 500 code 18) wherever the incarnation is relied
+  on, never a 409 and never repaired (§8 B5: an estate whose records predate incarnations is re-created from git).
+- **A record naming a parent that can be deleted and made again names the parent's incarnation**
+  (`control_records.PROJECT_INCARNATION`, §8 B3): a warehouse's record and its bucket's claim, and a role's record, each
+  from the fence its create held. A record whose project incarnation no longer stands is a dead tenant's orphan: the
+  backfill, the convergence, the tenancy rebuild, the re-create (409), the delete door's gate (404), the project's
+  listing and emptiness checks and the role listing and gates all refuse or skip it, it is reported
+  (`catalog.incarnations.orphans`, `record_of_a_dead_tenant`), and the converge tick ends it once older than the request
+  deadline plus five minutes and unborn: its record goes, its bucket, bytes and claim stay.
+- **Every write on or naming the object is fenced, after its gate** (`fga_deps.door_fence(gate=)`, `fga.fenced`,
+  `fga.commit_fenced`): the door asks its gate with no write, writes a ticket naming the object (`fence:<hex>`), reads the
+  token, asks its gate again on that incarnation, and commits in ONE Write that deletes its ticket; the ticket is taken
+  back on every exit, and the converge tick sweeps one a dead request left (`fga.sweep_tickets`). The members door, the
+  access doors' `*_grant_fence` / `*_revoke_fence` dependencies, the role doors, the warehouse create, the warehouse
+  managed-access door; `fga_deps.parent_fence`, a router dependency AFTER `authorize`, for a namespace created directly in
+  a warehouse; the declaration and the tenancy rebuild open their own. Revokes too. A grant is refused (409) only by the
+  object's delete. A fence reads the `revision` relation and each tuple it changes by its key, never the whole object
+  (§8 B1).
+- **Delete.** `fga.end_incarnation` (via `fga_deps.end_incarnation`, which audits the retirement with its incarnation):
+  mark born, retire the token (`retire_tokens`), then drain what stands on the object, what names it (`NAMING`: a role's
+  edge and a warehouse's tenancy edge for a project, a namespace's parent edge for a warehouse) and its tickets, deleting
+  every ticket it read in Writes of 100, until a read finds nothing; every read pages with no ceiling. A project's delete
+  then refuses (409) while a warehouse made in its incarnation meanwhile stands, and ends every role its registry lists; a
+  role whose record lands after that listing finds its edge gone and ends itself.
 - **Drift repair.** `fga.revoke_ghost`: a repair token, the read, the judgement, and ONE Write revoking what was read and
   deleting the token, which a birth since has deleted.
 
 Model: `specs/catalog/Grants.tla` (configs `Grants*.cfg`, every guard removed by one that must fail). Pinned by
 `services/catalog/tests/test_a_grant_on_a_deleted_project_reaches_no_project_made_again_under_its_id.py`,
 `test_a_ghost_revoke_takes_nothing_a_project_made_after_its_judgement_holds.py`,
-`tests/integration/test_grants_on_one_project_never_refuse_each_other.py` and, in
-`tests/integration/test_the_catalog_converges_what_git_declares.py`, the upgrade and the warehouse-across-a-delete tests.
+`tests/integration/test_grants_on_one_project_never_refuse_each_other.py`,
+`tests/integration/test_a_fence_reads_nothing_that_grows_with_its_object.py`,
+`services/catalog/tests/test_a_caller_refused_at_a_fenced_door_writes_nothing_and_no_ticket_outlives_its_request.py` and,
+in `tests/integration/test_the_catalog_converges_what_git_declares.py`, the unborn-incarnation, warehouse-across-a-delete,
+warehouse-record-of-a-dead-tenant and namespace-across-a-warehouse-delete tests.
 
 ## The declaration: the catalog converges what git declares ([[XC-213]], ADR 0206)
 

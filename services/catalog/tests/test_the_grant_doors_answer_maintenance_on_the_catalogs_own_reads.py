@@ -58,7 +58,15 @@ def test_the_tenancy_rebuild_writes_the_edge_a_warehouses_record_names_and_none_
     warehouses.put_warehouse(
         settings.registry_root,
         settings.storage_options(),
-        {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "2026-11-08T00:00:00Z", "incarnation": "i1"},
+        {
+            "id": "wh-a",
+            "bucket": "bkt-a",
+            "root_uri": "s3://bkt-a",
+            "project": "acme",
+            "created_at": "2026-11-08T00:00:00Z",
+            "incarnation": "i1",
+            "project_incarnation": "p1",
+        },
     )
 
     rebuilt = catalog.client.post("/management/v1/grants/tenancy/rebuild", json={"warehouses": ["wh-a", "wh-gone"]}, headers=catalog.bearer("mx"))

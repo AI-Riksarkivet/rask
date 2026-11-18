@@ -11,8 +11,10 @@ Every door that changes a project's ``admin`` tuples or who is in a role goes th
 ([[LH-557]]) and the declaration converge. A removal judges the administration it read and commits in one Write that
 moves the project's token (``revision``, ADR 0241), which the store refuses whole once another removal moved it, so no
 two of them, each judged on its own read, both commit. A grant removes nobody and moves no token, so grants never
-refuse each other. Both commit under the fences their door opened before it asked its caller's authority
-(``fga.open_fence``), so neither lands on a project made again under the id once the one it was decided on is deleted.
+refuse each other. Both commit under the fences their door opened between the two askings of its caller's authority
+(``fga.fenced``), so neither lands on a project made again under the id once the one it was decided on is deleted.
+Each reads the relations it judges and nothing else (a project's ``admin`` and ``revision``, a role's ``assignee`` and
+``project``), so what it costs does not grow with the project's members.
 """
 
 from __future__ import annotations
@@ -119,12 +121,13 @@ class Administration(BaseModel):
 
 
 async def _on(client: OpenFgaClient, obj: str, relation: str) -> set[str]:
-    return {t.user for t in await fga.read_object_tuples(client, obj) if t.object == obj and t.relation == relation}
+    return {t.user for t in await fga.read_relation(client, obj, relation)}
 
 
 async def administration(client: OpenFgaClient, project: str) -> Administration:
-    """Read ``project``'s administration: its own tuples first, then each role its ``admin`` reaches, each once."""
-    tuples = await fga.read_object_tuples(client, project)
+    """Read ``project``'s administration: its ``admin`` and ``revision`` tuples first, then each role its ``admin``
+    reaches, each once."""
+    tuples = [*await fga.read_relation(client, project, ADMIN), *await fga.read_relation(client, project, fga.REVISION)]
     assignees: dict[str, frozenset[str]] = {}
     pending = [role for t in tuples if t.object == project and t.relation == ADMIN and (role := _role_of(t.user)) is not None]
     while pending:
@@ -169,9 +172,8 @@ def touched(scope: dict[str, Administration], targets: list[fga.ClientTuple]) ->
 
 
 async def _held(client: OpenFgaClient, targets: list[fga.ClientTuple]) -> list[fga.ClientTuple]:
-    """Those of ``targets`` the store holds now."""
-    held = {obj: await fga.read_object_tuples(client, obj) for obj in dict.fromkeys(t.object for t in targets)}
-    return [t for t in targets if any(h.user == t.user and h.relation == t.relation and h.object == t.object for h in held[t.object])]
+    """Those of ``targets`` the store holds now, each read by its key."""
+    return [t for t in targets if await fga.holds(client, t)]
 
 
 def _revisions(scope: dict[str, Administration]) -> tuple[list[fga.ClientTuple], list[fga.ClientTuple]]:
@@ -275,7 +277,6 @@ async def withdraw(
             await permit(touched(scope, targets))
         held = await _held(client, targets)
         if not held:
-            await fga.close_fences(client, fences, actor=actor, origin=origin)
             return []
         if not _fits(scope, held, fences):
             if fences:

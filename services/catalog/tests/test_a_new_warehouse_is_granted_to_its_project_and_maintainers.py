@@ -89,7 +89,7 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     async def _repair() -> None:
         async with fga.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
             await fga_deps.converge_warehouse_grants(
-                store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill", incarnation="i1"
+                store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill", incarnation="i1", project_incarnation="p1"
             )
 
     asyncio.run(_repair())

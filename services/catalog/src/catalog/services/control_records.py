@@ -35,6 +35,10 @@ log = logging.getLogger(__name__)
 #: every merge, and what each write of a tuple on its id is fenced by, since another tenant may hold the id once it is
 #: deleted.
 INCARNATION: Final = "incarnation"
+#: The field of a record that names a project (a warehouse's, a role's, a bucket's claim) naming the incarnation of the
+#: project it was made under (ADR 0241 §8 B3): the project's id may be held again by another tenant, so a record naming
+#: only the id would be the next tenant's the moment a create that raced the project's delete wrote it.
+PROJECT_INCARNATION: Final = "project_incarnation"
 
 
 def new_incarnation() -> str:
@@ -132,6 +136,9 @@ class BucketClaimRecord(_Record):
 
     bucket: str = Field(min_length=1)
     project: str = Field(min_length=1)
+    #: The incarnation of the project that claimed it (:data:`PROJECT_INCARNATION`): a tenant made again under the
+    #: project's id is another claimant.
+    project_incarnation: str = Field(min_length=1)
     warehouse_id: str = Field(min_length=1)
 
 

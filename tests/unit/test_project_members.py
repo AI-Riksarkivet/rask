@@ -12,7 +12,8 @@ Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+import contextlib
+from collections.abc import AsyncGenerator, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -51,11 +52,12 @@ class _Harness:
         async def fake_read(_c: object, _obj: str, **_kw: object) -> list[SimpleNamespace]:
             return list(self.existing)
 
-        async def fake_open(_c: object, obj: str, **_kw: object) -> members.fga.Fence:
-            return members.fga.Fence(obj, "i1", members.fga.ClientTuple(user="revision:ticket-t", relation="revision", object=obj))
+        @contextlib.asynccontextmanager
+        async def fake_fenced(_c: object, obj: str, **_kw: object) -> AsyncGenerator[members.fga.Fence]:
+            yield members.fga.Fence(obj, "i1", members.fga.ClientTuple(user=obj, relation="ticket", object="fence:t"))
 
-        async def fake_close(*_a: object, **_kw: object) -> None:
-            return None
+        async def fake_holds(_c: object, t: Any) -> bool:  # noqa: ANN401 — a ClientTuple
+            return any((e.user, e.relation, e.object) == (t.user, t.relation, t.object) for e in self.existing)
 
         async def fake_write(_c: object, _fences: object, *, writes: Sequence[Any] = (), **_kw: object) -> bool:
             self.written.extend(writes)
@@ -64,8 +66,8 @@ class _Harness:
 
         monkeypatch.setattr(fga_deps, "require_relation", fake_require)
         monkeypatch.setattr(members.fga, "read_object_tuples", fake_read)
-        monkeypatch.setattr(members.fga, "open_fence", fake_open)
-        monkeypatch.setattr(members.fga, "close_fences", fake_close)
+        monkeypatch.setattr(members.fga, "fenced", fake_fenced)
+        monkeypatch.setattr(members.fga, "holds", fake_holds)
         monkeypatch.setattr(members.fga, "commit_fenced", fake_write)
 
 

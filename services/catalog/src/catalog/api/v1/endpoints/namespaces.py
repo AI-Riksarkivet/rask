@@ -122,8 +122,8 @@ def _collect_descendants(ns: LanceNamespace, segments: list[str]) -> list[tuple[
             break
     else:
         # Hit the ceiling with a token still outstanding → a PARTIAL enumeration. Surface it (a partial
-        # descendant list makes the cascade revoke silently incomplete → orphan grants), mirroring
-        # fga.read_object_tuples' openfga_read_truncated warning. In practice unreachable at this ceiling.
+        # descendant list makes the cascade revoke silently incomplete → orphan grants). In practice unreachable at this
+        # ceiling.
         log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "tables"})
     token = None
     for _ in range(_MAX_LIST_PAGES):
