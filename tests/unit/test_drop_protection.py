@@ -324,19 +324,39 @@ def test_expired_selects_only_past_deadlines_and_never_deletes(tmp_path: Any) ->
     assert trash.read({"expires_at": "2000-01-01T00:00:00"}, at="a record of this test's").past_deadline(), "a stamp written without an offset is read as UTC"
 
 
-def test_a_record_that_is_no_trash_record_still_keeps_its_object_and_is_refused_by_name(tmp_path: Any) -> None:
-    """A record whose name is not text cannot be acted on. The tolerant read answers that none is readable, the presence
-    check that one is filed (so its object is not taken for gone), and the read a door decides from refuses it."""
+def test_a_record_that_is_no_trash_record_is_refused_by_its_key_and_never_read_as_absent(tmp_path: Any) -> None:
+    """A record whose name is not text cannot be acted on. Every read a caller decides from refuses it by the key it is
+    filed under, so its object is never taken for gone (a location's claim is handed on only when no record keeps it);
+    the listing that feeds a report leaves it out and says so."""
     from lakehouse import trash
-    from lakehouse.storage_options import StorageOptions
     from tests import seeding
 
     root, options, uuid = str(tmp_path), StorageOptions(), "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a55"
     seeding.put_trash(root, options, {"id": ["not", "text"], "uuid": uuid, "location": "s3://bucket/t"})
+    refused: list[str] = []
 
-    assert (trash.get(root, options, uuid), trash.keeps(root, options, uuid), trash.list_all(root, options)) == (None, True, [])
-    with pytest.raises(trash.UnreadableTrashRecordError, match="cannot be read"):
-        trash.every_record(root, options)
+    for read in (lambda: trash.get(root, options, uuid), lambda: trash.every_record(root, options), lambda: trash.named(root, options, "w$t")):
+        with pytest.raises(trash.UnreadableTrashRecordError) as raised:
+            read()
+        refused.append(str(raised.value))
+
+    assert all(trash.key(uuid) in message for message in refused), refused
+    assert (trash.keeps(root, options, uuid), trash.list_all(root, options)) == (True, [])
+
+
+def test_a_record_is_read_whatever_its_bookkeeping_holds(tmp_path: Any) -> None:
+    """Who dropped it and why the purge last declined it decide nothing, so a record that holds neither as written is
+    still the record of its object: read as dropped by nobody known and never refused."""
+    from lakehouse import trash
+    from tests import seeding
+
+    root, options, uuid = str(tmp_path), StorageOptions(), "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a56"
+    seeding.put_trash(root, options, {"id": "w$t", "uuid": uuid, "location": "s3://bucket/t/", "dropped_by": None, "last_refusal": "once", "attempts": True})
+
+    record = trash.get(root, options, uuid)
+
+    assert record is not None
+    assert (record.id, record.location, record.dropped_by, record.last_refusal, record.attempts) == ("w$t", "s3://bucket/t", "anonymous", None, None)
 
 
 def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:

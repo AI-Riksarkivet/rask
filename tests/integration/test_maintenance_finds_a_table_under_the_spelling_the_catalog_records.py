@@ -186,7 +186,7 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
         estate.root,
         estate.key,
         dropped.model_copy(
-            update={"expires_at": (datetime.now(UTC) - timedelta(days=29)).isoformat(), trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=28)).isoformat()}
+            update={"expires_at": (datetime.now(UTC) - timedelta(days=29)).isoformat(), "released_at": (datetime.now(UTC) - timedelta(days=28)).isoformat()}
         ),
     )
     # A table created since under the dropped table's name, which the purge of the dropped one must leave as it is.

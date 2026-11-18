@@ -52,9 +52,6 @@ _TRASH_PREFIX = control_prefixes.TRASH
 #: What a trash record keeps: a dropped table, or a namespace a recoverable cascade dropped.
 type TrashKind = Literal["table", "namespace"]
 
-#: The field stamping when a record's grants were released past its deadline (:func:`mark_released`).
-RELEASED_AT = "released_at"
-
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "trash_record"
 
@@ -83,8 +80,10 @@ class TrashRecord(BaseModel):
     READ TOLERANTLY WHERE A WRONG VALUE HAS A SAFE READING, and refused where it has none. A record reaches the store
     through the drop door, and maintenance must still judge one that did not: a deadline that is missing or does not
     parse is "not yet" (:attr:`deadline`), a kind that is not ``namespace`` is a table, a residue mark that is not
-    ``true`` is no mark. A record that is no JSON object, or whose name, uuid or location is not text, cannot be acted
-    on at all and is unreadable (:class:`UnreadableTrashRecordError`).
+    ``true`` is no mark, and the bookkeeping no decision reads (who dropped it, why the purge last declined it) is read
+    as unknown. What a door acts on has no safe reading when it is wrong: a record whose name or location is not text,
+    or whose kept properties are not a map of text, is unreadable (:class:`UnreadableTrashRecordError`), and so is one
+    that is no JSON object.
     """
 
     model_config = ConfigDict(frozen=True, extra="allow")
@@ -135,12 +134,33 @@ class TrashRecord(BaseModel):
     def _without_a_trailing_slash(cls, value: str) -> str:
         return value.rstrip("/")
 
-    @field_validator("expires_at", "dropped_at", "released_at", mode="before")
+    @field_validator("expires_at", "released_at", mode="before")
     @classmethod
-    def _text_or_nothing(cls, value: object, info: Any) -> object:  # noqa: ANN401 — pydantic's ValidationInfo
-        if isinstance(value, str):
-            return value
-        return "" if info.field_name == "dropped_at" else None
+    def _text_or_nothing(cls, value: object) -> object:
+        return value if isinstance(value, str) else None
+
+    @field_validator("dropped_at", mode="before")
+    @classmethod
+    def _text_or_unknown(cls, value: object) -> object:
+        return value if isinstance(value, str) else ""
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _a_name_or_none_given(cls, value: object) -> object:
+        return "" if value is None else value
+
+    @field_validator("dropped_by", mode="before")
+    @classmethod
+    def _someone_or_nobody_known(cls, value: object) -> object:
+        return value if isinstance(value, str) and value else "anonymous"
+
+    @field_validator("last_refusal", mode="before")
+    @classmethod
+    def _a_refusal_or_nothing(cls, value: object) -> object:
+        try:
+            return Refusal.model_validate(value) if value is not None else None
+        except ValidationError:
+            return None
 
     @field_validator("residue", mode="before")
     @classmethod
@@ -164,15 +184,13 @@ class TrashRecord(BaseModel):
 
     @property
     def deadline(self) -> datetime | None:
-        """The record's deadline, or ``None`` when its ``expires_at`` is missing or does not parse, which is logged: an
-        undated record is a bug in whatever wrote it, and "we do not know when this expires" reads as "not yet"."""
+        """The record's deadline, or ``None`` when its ``expires_at`` is missing or does not parse: an undated record is
+        a bug in whatever wrote it, and "we do not know when this expires" reads as "not yet". :func:`read` says so once."""
         if self.expires_at is None:
-            log.warning("trash_record_undated", extra={"id": self.id})
             return None
         try:
             deadline = datetime.fromisoformat(self.expires_at)
         except ValueError:
-            log.warning("trash_record_bad_deadline", extra={"id": self.id, "expires_at": self.expires_at})
             return None
         return deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=UTC)
 
@@ -207,9 +225,22 @@ def read(raw: Mapping[str, Any], *, at: str) -> TrashRecord:
         UnreadableTrashRecordError: It is no trash record.
     """
     try:
-        return TrashRecord.model_validate(raw)
+        record = TrashRecord.model_validate(raw)
     except ValidationError as exc:
         raise UnreadableTrashRecordError(f"the trash record at {at} cannot be read: {exc.error_count()} field(s) are not what a record holds") from exc
+    if record.deadline is None:
+        log.warning(
+            "trash_record_undated" if record.expires_at is None else "trash_record_bad_deadline", extra={"id": record.id, "expires_at": record.expires_at}
+        )
+    return record
+
+
+def _key_of(raw: Mapping[str, Any]) -> str:
+    """The key a listed record is filed under, by the uuid and kind it states; its name where it states no uuid."""
+    uuid = raw.get("uuid")
+    if isinstance(uuid, str) and uuid:
+        return key(uuid, kind="namespace" if raw.get("kind") == "namespace" else "table")
+    return f"{_TRASH_PREFIX} (a record naming {raw.get('id')!r} and no uuid)"
 
 
 def make_record(
@@ -261,10 +292,18 @@ def mark_released(control_root: str, storage_options: StorageOptions, uuid: str,
 
     Conditional (:func:`records.mutate_json`), so a concurrent :func:`note_refusal` survives and ``expires_at`` never
     moves. ``False`` when the record is gone, a purge or an undrop having cleared it since it was read.
+
+    Raises:
+        UnreadableTrashRecordError: The record filed there is none, so nothing about it is stamped.
     """
-    at = (now or datetime.now(UTC)).isoformat()
+    at, filed = (now or datetime.now(UTC)).isoformat(), key(uuid, kind=kind)
+
+    def _released(raw: dict[str, Any]) -> dict[str, Any]:
+        record = read(raw, at=filed)
+        return record.model_copy(update={"released_at": record.released_at or at}).stored()
+
     try:
-        mutate_json(control_root, storage_options, key(uuid, kind=kind), lambda record: {**record, RELEASED_AT: record.get(RELEASED_AT) or at})
+        mutate_json(control_root, storage_options, filed, _released)
     except RecordMissingError:
         return False
     return True
@@ -292,18 +331,24 @@ def keeps(control_root: str, storage_options: StorageOptions, uuid: str, *, kind
 
 
 def get(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> TrashRecord | None:
-    """The trash record of the ``kind`` object ``uuid`` names, or ``None`` when none is filed or the one there cannot be
-    read, which is logged with its key (:func:`keeps` says whether one is there at all)."""
+    """The trash record of the ``kind`` object ``uuid`` names, or ``None`` when none is filed.
+
+    Every caller decides from the answer (whether a location's claim is still held, what an undrop restores), so a
+    record that is filed and cannot be read raises: read as absent, its object would be taken for gone.
+
+    Raises:
+        UnreadableTrashRecordError: A record is filed there and is none: not JSON, not an object, or not a trash record.
+        OSError: The store failed the read.
+    """
     at = key(uuid, kind=kind)
     try:
         raw = read_record(control_root, storage_options, at)
-        return read(raw, at=at) if raw is not None else None
-    except ValueError:
-        log.warning(f"{_EVENT}_malformed", extra={"key": at})
-        return None
+    except ValueError as exc:
+        raise UnreadableTrashRecordError(f"the trash record at {at} cannot be read: {exc}") from exc
+    return read(raw, at=at) if raw is not None else None
 
 
-def named(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> list[TrashRecord]:
+def named(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: TrashKind = "table") -> list[TrashRecord]:
     """Every trashed ``kind`` object that was dropped while ``canonical_id`` named it, oldest drop first.
 
     A door is addressed by name (ADR 0173 §9), and a name is free again once its object is dropped, so a name can lead
@@ -376,25 +421,20 @@ def note_refusal(
     reported refusal into an error on the reclamation path. ``_purge_one``'s contract — "never raises;
     every failure is a refusal" — is what this must not break.
     """
-    at = (now or datetime.now(UTC)).isoformat()
+    at, filed = (now or datetime.now(UTC)).isoformat(), key(uuid, kind=kind)
 
-    def _mutate(record: dict[str, Any]) -> dict[str, Any]:
+    def _refused(raw: dict[str, Any]) -> dict[str, Any]:
         # A pure function of what was READ, because `mutate_json` may call it more than once — carrying
         # a count in from an earlier read is exactly the staleness the conditional write exists to stop.
-        attempts = record.get("attempts")
-        return {
-            **record,
-            "attempts": (attempts if isinstance(attempts, int) else 0) + 1,
-            "last_refusal": {"at": at, "reason": reason},
-        }
+        record = read(raw, at=filed)
+        return record.model_copy(update={"attempts": (record.attempts or 0) + 1, "last_refusal": Refusal(at=at, reason=reason)}).stored()
 
     try:
-        updated = mutate_json(control_root, storage_options, key(uuid, kind=kind), _mutate)
-    except (RecordMissingError, RecordChangedError) as exc:
+        updated = mutate_json(control_root, storage_options, filed, _refused)
+    except (RecordMissingError, RecordChangedError, UnreadableTrashRecordError) as exc:
         log.warning("trash_refusal_not_recorded", extra={"kind": kind, "uuid": uuid, "reason": str(exc)})
         return None
-    count = updated.get("attempts")
-    return count if isinstance(count, int) else None
+    return read(updated, at=filed).attempts
 
 
 def list_all(control_root: str, storage_options: StorageOptions) -> list[TrashRecord]:
@@ -404,9 +444,9 @@ def list_all(control_root: str, storage_options: StorageOptions) -> list[TrashRe
     found: list[TrashRecord] = []
     for raw in list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT):
         try:
-            found.append(read(raw, at=_TRASH_PREFIX))
+            found.append(read(raw, at=_key_of(raw)))
         except UnreadableTrashRecordError:
-            log.warning(f"{_EVENT}_malformed", extra={"id": raw.get("id"), "uuid": raw.get("uuid")})
+            log.warning(f"{_EVENT}_malformed", extra={"key": _key_of(raw)})
     return found
 
 
@@ -421,7 +461,7 @@ def every_record(control_root: str, storage_options: StorageOptions) -> list[Tra
         OSError: The store could not be listed, or a record read.
         ValueError: A record is not a JSON object, or not a record (:class:`UnreadableTrashRecordError`).
     """
-    return [read(raw, at=_TRASH_PREFIX) for raw in list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT, strict=True)]
+    return [read(raw, at=_key_of(raw)) for raw in list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT, strict=True)]
 
 
 def expired(records: list[TrashRecord], *, now: datetime | None = None) -> list[TrashRecord]:

@@ -36,7 +36,7 @@ from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.outage import store_refusal
 from lakehouse.storage_options import StorageOptions
-from lakehouse.trash import TrashRecord
+from lakehouse.trash import TrashKind, TrashRecord
 
 
 log = logging.getLogger(__name__)
@@ -323,7 +323,7 @@ class Resolver:
         uuid = await self.namespace_uuid(segments)
         return None if uuid is None else fga.namespace_object(uuid)
 
-    async def trashed(self, kind: str, segments: list[str]) -> list[TrashRecord]:
+    async def trashed(self, kind: TrashKind, segments: list[str]) -> list[TrashRecord]:
         """The trash records of every ``kind`` object dropped under the name ``segments``, oldest drop first (ADR 0173 §9).
 
         A trash door stays addressed by name, and several dropped objects may have held it: the request's ``?uuid=``
@@ -347,11 +347,11 @@ class Resolver:
             return []
         return [record for record in await self.trashed("table", segments[:-1]) if record.uuid == segments[-1]]
 
-    def admit_trashed(self, kind: str, segments: list[str], records: list[TrashRecord]) -> None:
+    def admit_trashed(self, kind: TrashKind, segments: list[str], records: list[TrashRecord]) -> None:
         """Record which of :meth:`trashed` the request's authorization let its caller act on."""
         self._admitted[(kind, tuple(segments))] = records
 
-    async def admitted_trash(self, kind: str, segments: list[str]) -> list[TrashRecord]:
+    async def admitted_trash(self, kind: TrashKind, segments: list[str]) -> list[TrashRecord]:
         """The trashed objects under the name ``segments`` that this request's caller may act on.
 
         Those the router's authorization admitted, or every one where authorization is off. A request authorization

@@ -656,7 +656,13 @@ def holder_stands(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -
 
 
 def kept_in_trash(store: ClaimStore, claim: LocationClaim) -> bool:
-    """Whether ``claim`` is kept for the trashed table its uuid names, which a recoverable drop left at this location."""
+    """Whether ``claim`` is kept for the trashed table its uuid names, which a recoverable drop left at this location.
+
+    Raises:
+        lakehouse.trash.UnreadableTrashRecordError: A record is filed for the uuid and cannot be read, so whether it
+            keeps the location is unknown.
+        OSError: The store failed the read.
+    """
     record = trash.get(store.control_root, store.storage_options, claim.uuid) if claim.uuid is not None else None
     return record is not None and decoded_path(record.location) == claim.location
 

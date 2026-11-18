@@ -53,7 +53,7 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
         "lance_catalog$team$orders", uuid=str(uuid4()), location=location, dropped_by="user:alice", grace_days=7, now=datetime.now(UTC) - timedelta(days=30)
     )
     # Released, as the catalog's release door leaves a record the purge may act on.
-    trash.put(control_root, StorageOptions(), record.model_copy(update={trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=1)).isoformat()}))
+    trash.put(control_root, StorageOptions(), record.model_copy(update={"released_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()}))
     ns.register_table(RegisterTableRequest(id=["lance_catalog", "team", "renamed"], location=location.rstrip("/").rsplit("/", 1)[-1]))
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),

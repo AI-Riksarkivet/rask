@@ -227,7 +227,7 @@ def _expired(estate: _Estate, table: str) -> None:
     trash.put(
         estate.root,
         estate.key,
-        dropped.model_copy(update={"expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(), trash.RELEASED_AT: datetime.now(UTC).isoformat()}),
+        dropped.model_copy(update={"expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(), "released_at": datetime.now(UTC).isoformat()}),
     )
 
 

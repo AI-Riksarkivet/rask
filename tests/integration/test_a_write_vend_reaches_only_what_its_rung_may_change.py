@@ -409,6 +409,17 @@ def test_a_trash_door_refuses_what_is_not_the_trashs_to_end(
     ), refused.text
 
 
+def test_a_trash_door_answers_a_record_it_cannot_read_as_a_fault_and_never_as_absent(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A record filed for the uuid that is no trash record is not "no such trashed table": answered 404, maintenance would
+    take its object for undropped or ended. The door answers a fault of its own, whose cause stays in its log."""
+    uuid = _past_its_deadline(estate, monkeypatch)
+    estate.s3.put_object(Bucket=estate.bucket, Key=trash.key(uuid), Body=json.dumps({**_record(estate, uuid).stored(), "id": ["no", "text"]}).encode())
+
+    answer = estate.client.post(f"/management/v1/trash/table/{uuid}/credentials")
+
+    assert (answer.status_code, answer.headers["content-type"], answer.json()["code"]) == (500, "application/problem+json", ErrorCode.INTERNAL), answer.text
+
+
 def test_a_reclaim_session_deletes_its_tables_bytes_and_nothing_else(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
     """[[XC-084]] A released record is vended a session that deletes its table's bytes, and reaches nothing on
     the control root (neither its own record, which the catalog alone writes and judges on, nor a record kept under its

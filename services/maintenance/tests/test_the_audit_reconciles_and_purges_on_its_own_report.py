@@ -255,7 +255,7 @@ def test_the_audit_queues_what_neither_a_schedule_nor_the_queue_holds(tmp_path: 
     trashed_uuid, trashed_at = tables["trashed"]
     namespace_uuid = str(uuid4())
     released = trash.make_record("db$released", uuid=tables["released"][0], location=tables["released"][1], dropped_by=None, grace_days=7)
-    released = released.model_copy(update={trash.RELEASED_AT: datetime.now(UTC).isoformat()})
+    released = released.model_copy(update={"released_at": datetime.now(UTC).isoformat()})
     undated = trash.make_record("db$undated", uuid=tables["undated"][0], location=tables["undated"][1], dropped_by=None, grace_days=7)
     undated = undated.model_copy(update={"expires_at": None})
     for record in (

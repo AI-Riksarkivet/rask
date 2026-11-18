@@ -35,7 +35,8 @@ from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.governed.fga import user_object
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.queue import Task, TaskQueue
-from maintenance.services.trash_task import run_trash_task
+from maintenance.services.trash_task import TrashUnreadableError, run_trash_task
+from tests import seeding
 from tests.integration.catalog_and_maintenance import TwoServices, audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import principal_key
@@ -251,3 +252,21 @@ def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_rec
     assert released is not None and released.is_released, f"the task did not release its record: {released}"
     assert waiting is not None and not waiting.is_released, "the task released a record it does not name"
     assert (len(queue.held), queue.queued) == (1, []), "a released record held or queued anything more"
+
+
+def test_a_trash_task_whose_record_cannot_be_read_is_tried_again_and_passes_no_table(estate: _Estate) -> None:
+    """A record filed for the task's uuid that is no trash record is not a record an undrop cleared: the task raises to be
+    tried again, and queues no pass of a table it would otherwise take for restored."""
+    bronze = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
+    dropped = estate.create_table(f"{bronze}$dropped")
+    estate.post(f"/v1/table/{bronze}$dropped/drop")
+    filed = estate.record(dropped)
+    assert filed is not None
+    settings = catalog_settings()
+    seeding.put_trash(settings.registry_root, settings.storage_options(), {**filed.stored(), "id": ["no", "text"]})
+    queue = _RecordingQueue()
+
+    with pytest.raises(TrashUnreadableError, match="cannot be read"):
+        asyncio.run(run_trash_task(Task(kind="trash", uuid=dropped), settings=maintenance_settings(), queue=cast(TaskQueue, queue)))
+
+    assert (queue.held, queue.queued) == ([], [])

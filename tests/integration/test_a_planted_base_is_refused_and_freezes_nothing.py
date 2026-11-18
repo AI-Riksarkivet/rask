@@ -543,7 +543,7 @@ def test_a_trashed_source_a_clone_reads_is_vended_no_session_to_delete_its_bytes
     assert estate.client.post("/v1/table/lance_catalog$db$bronze%20tier/drop", json={}).status_code == 200
     (record,) = trash.named(estate.root, estate.key, "lance_catalog$db$bronze tier", kind="table")
     past = datetime.now(UTC) - timedelta(days=1)
-    trash.put(estate.root, estate.key, record.model_copy(update={"expires_at": past.isoformat(), trash.RELEASED_AT: past.isoformat()}))
+    trash.put(estate.root, estate.key, record.model_copy(update={"expires_at": past.isoformat(), "released_at": past.isoformat()}))
 
     refused = estate.client.post(f"/management/v1/trash/table/{record.uuid}/credentials", json={})
 
@@ -1213,7 +1213,7 @@ def _purge_expired(estate: _Estate, table: str, location: str) -> None:
         table, uuid=str(filed.uuid), location=location, dropped_by="user:alice", grace_days=1, now=datetime.now(UTC) - timedelta(days=30)
     )
     # Released, as the catalog's release door leaves a record the purge may act on.
-    trash.put(estate.root, estate.key, record.model_copy(update={trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=1)).isoformat()}))
+    trash.put(estate.root, estate.key, record.model_copy(update={"released_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()}))
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
         counts=dict.fromkeys(CATEGORIES, 0),

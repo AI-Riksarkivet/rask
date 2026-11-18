@@ -33,7 +33,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final
 
-from lance_namespace import NamespaceNotFoundError, TableNotFoundError
+from lance_namespace import InternalError, NamespaceNotFoundError, TableNotFoundError
 
 from catalog.core.config import CatalogStore
 from catalog.core.vending import ReclaimScope
@@ -46,7 +46,7 @@ from lakehouse.data_directories import directories_to_end, directory_uri
 from lakehouse.location_claims import LocationClaim
 from lakehouse.stored_objects import list_under
 from lakehouse.table_paths import objects_at
-from lakehouse.trash import TrashKind, TrashRecord
+from lakehouse.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
 
 
 #: Why a record past its deadline is neither purged nor ended before its release.
@@ -62,8 +62,12 @@ def read_record(settings: CatalogStore, kind: TrashKind, uuid: str) -> TrashReco
     Raises:
         TableNotFoundError: No trashed table holds that uuid.
         NamespaceNotFoundError: No trashed namespace holds that uuid.
+        InternalError: A record is filed for that uuid and cannot be read, so it is not answered as absent.
     """
-    record = trash.get(settings.registry_root, settings.storage_options(), uuid, kind=kind)
+    try:
+        record = trash.get(settings.registry_root, settings.storage_options(), uuid, kind=kind)
+    except UnreadableTrashRecordError as exc:
+        raise InternalError(str(exc)) from exc
     if record is not None:
         return record
     if kind == "namespace":

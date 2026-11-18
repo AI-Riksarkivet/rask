@@ -44,6 +44,7 @@ from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
+from lakehouse.trash import TrashKind
 from tests.bus_double import BusDouble
 from tests.integration.openfga_grants import Options, TupleStore, act_as
 
@@ -135,7 +136,7 @@ class _Tenant:
     def delete_warehouse(self) -> httpx.Response:
         return self.client.delete(f"/management/v1/warehouses/{self.warehouse}", params={"cascade": "true", "purge_bucket": "true"})
 
-    def trashed(self, objects: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    def trashed(self, objects: list[tuple[TrashKind, str]]) -> list[tuple[TrashKind, str]]:
         """Those of ``(kind, id)`` the trash still holds a record dropped under that name for."""
         settings = get_settings()
         return [(kind, name) for kind, name in objects if trash.named(settings.registry_root, settings.storage_options(), name, kind=kind)]
@@ -266,7 +267,12 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
     tenant.create_table("acme-wh$gold$g")
     tenant.drop("table", "acme-wh$gold$g")
     tenant.drop("namespace", "acme-wh$gold")
-    trash_held = [("table", "acme-wh$bronze$trashed"), ("table", "acme-wh$silver$s"), ("namespace", "acme-wh$silver"), ("table", "acme-wh$gold$g")]
+    trash_held: list[tuple[TrashKind, str]] = [
+        ("table", "acme-wh$bronze$trashed"),
+        ("table", "acme-wh$silver$s"),
+        ("namespace", "acme-wh$silver"),
+        ("table", "acme-wh$gold$g"),
+    ]
     tables = ["acme-wh$bronze$a", "acme-wh$bronze$b", "acme-wh$bronze$inner$c", "acme-wh$bronze$trashed", "acme-wh$silver$s", "acme-wh$gold$g"]
     governed = [
         f"warehouse:{tenant.warehouse}",
@@ -344,7 +350,7 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
     tenant.create_namespace("acme-wh$bronze$inner")
     tenant.create_table("acme-wh$bronze$inner$d")
     tenant.drop("namespace", "acme-wh$bronze$inner", {"behavior": "Cascade"})
-    trash_held = [("table", "acme-wh$bronze$inner$d"), ("namespace", "acme-wh$bronze$inner")]
+    trash_held: list[tuple[TrashKind, str]] = [("table", "acme-wh$bronze$inner$d"), ("namespace", "acme-wh$bronze$inner")]
     kept = [f"{kind}:{name}" for kind, name in trash_held]
     governed = [f"warehouse:{tenant.warehouse}", "namespace:acme-wh$bronze", "namespace:acme-wh$silver", *(f"table:{table}" for table in tables)]
     assert tenant.trashed(trash_held) == trash_held and len(tenant.store.naming(tenant.fga(kept))) == len(kept), (

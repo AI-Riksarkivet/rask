@@ -137,7 +137,7 @@ def reclaim(rustfs_store: ThrowawayStore) -> _Reclaim:
     past = datetime.now(UTC) - timedelta(days=2)
     # Released, as the catalog's release door leaves a record: the purge takes only released records (`purge.due_from`).
     record = trash.make_record(f"lance_catalog$ns${name}", uuid=table_uuid, location=location, dropped_by=None, grace_days=1, now=past)
-    trash.put(control_root, own, record.model_copy(update={trash.RELEASED_AT: (datetime.now(UTC) - timedelta(minutes=1)).isoformat()}))
+    trash.put(control_root, own, record.model_copy(update={"released_at": (datetime.now(UTC) - timedelta(minutes=1)).isoformat()}))
     for key in (
         record_key("_protection", "table", table_uuid),
         f"_file_identities/{table_uuid}/txn.json",

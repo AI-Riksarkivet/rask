@@ -38,7 +38,10 @@ async def run_trash_task(task: Task, *, settings: MaintenanceSettings, queue: Ta
     """
     now = now or datetime.now(UTC)
     options = settings.storage_options()
-    record = await run_in_threadpool(trash.get, settings.resolved_control_root, options, task.uuid, kind=task.trashed)
+    try:
+        record = await run_in_threadpool(trash.get, settings.resolved_control_root, options, task.uuid, kind=task.trashed)
+    except trash.UnreadableTrashRecordError as exc:
+        raise TrashUnreadableError(str(exc)) from exc
     if record is None:
         await _pass_a_restored_table(task, settings=settings, queue=queue)
         return

@@ -73,7 +73,7 @@ from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import store_refusal
 from lakehouse.route_path import route_path
 from lakehouse.storage_options import StorageOptions
-from lakehouse.trash import TrashRecord
+from lakehouse.trash import TrashKind, TrashRecord
 
 
 log = logging.getLogger(__name__)
@@ -1680,7 +1680,9 @@ async def _trashed_at_or_above(resolver: Resolver, fga_type: str, segments: list
     """
     objects: list[str] = []
     for depth in range(1, len(segments) + 1):
-        kind = fga_type if depth == len(segments) else "namespace"
+        if depth == len(segments) and fga_type not in ("table", "namespace"):
+            continue  # the trash keeps tables and namespaces, so no other type was trashed under its own name
+        kind: TrashKind = "namespace" if depth < len(segments) or fga_type == "namespace" else "table"
         trashed = {uuid for record in await resolver.trashed(kind, segments[:depth]) if (uuid := record.uuid) is not None}
         objects += [fga.object_of(kind, uuid) for uuid in sorted(trashed)]
     return objects

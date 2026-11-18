@@ -179,7 +179,7 @@ class _Estate:
             namespace_uuid=namespace_uuid,
         )
         if released:
-            record = record.model_copy(update={trash.RELEASED_AT: (_NOW - timedelta(days=1)).isoformat()})
+            record = record.model_copy(update={"released_at": (_NOW - timedelta(days=1)).isoformat()})
         if record.uuid is None:
             seeding.put_trash(self.control_root, StorageOptions(), record.stored())
         else:
