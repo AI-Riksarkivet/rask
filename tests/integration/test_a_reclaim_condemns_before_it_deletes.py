@@ -132,7 +132,7 @@ class _Estate(BaseModel):
         from catalog.core.config import get_settings
 
         settings = get_settings()
-        entries, _etag = condemned_versions.read(settings.registry_root, settings.storage_options(), self.task.uuid)
+        entries, _etag = condemned_versions.read(settings.registry_root, settings.storage_options(), self.task.location)
         return sorted(((entry.ref, entry.version, entry.state) for entry in entries), key=lambda found: (found[0] or "", found[1]))
 
     def licence_on(self, name: str) -> datetime | None:
@@ -140,7 +140,7 @@ class _Estate(BaseModel):
         from catalog.core.config import get_settings
 
         settings = get_settings()
-        return condemned_versions.licensed_under(settings.registry_root, settings.storage_options(), table_uuid=self.task.uuid, name=name)
+        return condemned_versions.licensed_under(settings.registry_root, settings.storage_options(), location=self.task.location, name=name)
 
     def s3(self) -> Any:  # noqa: ANN401 — a boto3 S3 client
         return boto3.client(
@@ -387,16 +387,24 @@ def test_a_door_that_read_the_record_before_a_batch_condemned_keeps_its_version(
 
 @pytest.mark.parametrize("payload_bytes", [_SIDECAR])
 def test_a_version_whose_deletes_the_store_refused_stays_condemned_until_the_next_reclaim_finishes_it(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
-    """KeepAfterDelete, GCOnlyGone, and a dead batch finished by the next: the pass's cleanup has its data files and
-    manifests refused (its vend expired), so versions 1 and 2 stand over deleted files. Their entries stand: a tag on
+    """KeepAfterDelete, GCOnlyGone, TakeOver, and a dead batch finished by the next: the pass's cleanup has its data files
+    and manifests refused (its vend expired), so versions 1 and 2 stand over deleted files. Their entries stand: a tag on
     version 1 is refused, and so it is after another reclaim of the table rewrote the record (a branch's), which drops only
-    entries whose manifests are gone. The next pass, below its threshold, finishes them, and the record is left empty."""
+    entries whose manifests are gone. A second pass refused alike takes their entries over, so the record still holds one
+    entry per version. The next pass, below its threshold, finishes them, and the record is left empty."""
     _ok(estate.catalog.post(f"/v1/table/{T}/branches/create", json={"name": "b", "from_version": 3}))
     estate.written(2, branch="b")
-    with estate.proxy.answering_expired(lambda request: request.deletes("/_versions/") or request.deletes(".lance") or request.deletes(".blob")):
+
+    def refused_deletes(request: StoreRequest) -> bool:
+        return request.deletes("/_versions/") or request.deletes(".lance") or request.deletes(".blob")
+
+    with estate.proxy.answering_expired(refused_deletes):
         estate.passed()
     assert {1, 2} <= set(estate.versions()), "the reclaim removed the versions whole, so nothing stands half removed"
     assert {(None, 1, "g"), (None, 2, "g")} <= set(estate.condemned()), estate.condemned()
+    with estate.proxy.answering_expired(refused_deletes):
+        estate.passed()
+    assert [entry for entry in estate.condemned() if entry[0] is None] == [(None, 1, "g"), (None, 2, "g")], estate.condemned()
     refused = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "kept", "version": 1})
     assert (refused.status_code, refused.json().get("code")) == (409, 19), refused.text
 
@@ -637,7 +645,14 @@ def test_an_erasures_fork_point_stays_condemned_while_a_branch_keeps_it(estate: 
 
         def _batch(versions: list[int]) -> condemned_versions.Verdict:
             run = condemned_versions.Batch(
-                settings.registry_root, so, table_uuid=estate.task.uuid, location=estate.task.location, dataset=main, ref=ref, listed_on=listed_on
+                settings.registry_root,
+                so,
+                table_uuid=estate.task.uuid,
+                location=estate.task.location,
+                dataset=main,
+                ref=ref,
+                listed_on=listed_on,
+                registered=lambda: estate.task.uuid,
             )
             run.condemn(versions, forks=True)
             run.read_pins()
@@ -854,6 +869,43 @@ def test_a_batch_names_the_incarnation_its_versions_were_listed_on(estate: _Esta
     assert estate.versions("b") == [4, 5], "the next pass did not reclaim b made again by its own listing"
 
 
+@pytest.mark.parametrize("left", ["half-removed", "promoted"])
+def test_a_table_registered_again_at_its_location_reads_the_condemned_versions_its_bytes_carry(
+    estate: _Estate, monkeypatch: pytest.MonkeyPatch, left: str
+) -> None:
+    """RecordKept, LocationKeyed (ADR 0246 §16): the condemned record is the location's, so a deregister leaves it and the
+    table registered again at its location (another uuid) reads it at every door. Half-removed: a pass's manifest deletes
+    are refused, so versions 1 and 2 stand over deleted data files; after the deregister and the register a tag on version
+    1 is refused (409, code 19), as it was before. Promoted: a reclaim (``maintenance/run``, retain 1) is promoted and
+    paused before its cleanup; the new registration's hold answers 200 naming 1 and 2 condemned, and every version it did
+    not name stands whole once the cleanup goes on. A record ended with the registration would let the tag land on a
+    version whose data is gone; one read by the registration's uuid would promise what the cleanup then deletes."""
+    estate, table = _registered(estate), f"{NS}$r"
+    if left == "half-removed":
+        with estate.proxy.answering_expired(_a_manifest_delete):
+            estate.passed()
+        assert ({1, 2} <= set(estate.versions()), isinstance(estate.reads(1), str)) == (True, True), "nothing stands half removed"
+        _ok(estate.catalog.post(f"/v1/table/{table}/deregister", json={}))
+        _ok(estate.catalog.post(f"/v1/table/{table}/register", json={"location": "reg"}))
+        tagged = estate.catalog.post(f"/v1/table/{table}/tags/create", json={"tag": "kept", "version": 1})
+        assert (tagged.status_code, tagged.json().get("code")) == (409, 19), f"a tag answered {tagged.status_code} on version 1, which reads {estate.reads(1)}"
+        return
+    step = _Pause(monkeypatch, condemned_versions.Batch, "promote", after=True)
+    running = _Running(lambda: estate.catalog.post(f"/management/v1/table/{table}/maintenance/run", json={"retain_versions": 1}))
+    assert step.reached.wait(WAIT), "the reclaim never promoted"
+    _ok(estate.catalog.post(f"/v1/table/{table}/deregister", json={}))
+    _ok(estate.catalog.post(f"/v1/table/{table}/register", json={"location": "reg"}))
+    held = _ok(estate.catalog.post(f"/management/v1/table/{table}/policy/set", json={"cleanup_enabled": False}))
+    named = {entry["version"] for entry in held.get("condemned", [])}
+    step.let_go()
+    running.joined()
+
+    kept = {1, 2, 3} - named
+    assert (named, all(isinstance(estate.reads(version), list) for version in kept)) == ({1, 2}, True), (
+        f"the hold named {sorted(named)} condemned; r now holds {estate.versions()}"
+    )
+
+
 def test_a_pass_deletes_only_under_a_vend_the_store_refuses_by_its_licences_end(estate: _Estate) -> None:
     """C (ADR 0246 §14): a batch's licence ends at its instant, after which its name may mean another incarnation, so a
     pass deletes a batch's versions only under a vend whose stamped expiry, the clocks' margin added, is no later
@@ -959,8 +1011,8 @@ def _planted_record(estate: _Estate, entries: list[condemned_versions.Entry]) ->
     from lakehouse import records
 
     settings = get_settings()
-    body = condemned_versions.Record(uuid=estate.task.uuid, location=estate.task.location, entries=entries).model_dump(mode="json")
-    records.create_json(settings.registry_root, settings.storage_options(), condemned_versions.record_key(estate.task.uuid), body)
+    body = condemned_versions.Record(location=estate.task.location, entries=entries).model_dump(mode="json")
+    records.create_json(settings.registry_root, settings.storage_options(), condemned_versions.record_key(estate.task.location), body)
 
 
 def test_a_policy_door_names_at_most_its_bound_and_what_it_could_not_read(estate: _Estate) -> None:
@@ -971,7 +1023,7 @@ def test_a_policy_door_names_at_most_its_bound_and_what_it_could_not_read(estate
     from catalog.core.config import get_settings
 
     _planted_record(estate, [condemned_versions.Entry(ref_id=condemned_versions.MAIN, version=1000 + n, batch="dead", state="c") for n in range(120)])
-    malformed = "_condemned/table-" + "f" * 24 + ".json"
+    malformed = "_condemned/" + "f" * 64 + ".json"
     estate.s3().put_object(Bucket=estate.bucket, Key=malformed, Body=b"{not a record")
     answered = _ok(estate.catalog.post(f"/management/v1/namespace/{NS}/policy/set", json={"retain_versions": 1}))
     assert (len(answered["condemned"]), answered["condemned_beyond"], answered["condemned_unread"]) == (100, 20, [malformed]), answered
@@ -980,7 +1032,7 @@ def test_a_policy_door_names_at_most_its_bound_and_what_it_could_not_read(estate
     estate.passed()
     estate.passed()
     settings = get_settings()
-    recorded = condemned_versions.recorded(settings.registry_root, settings.storage_options(), estate.task.uuid)
+    recorded = condemned_versions.recorded(settings.registry_root, settings.storage_options(), estate.task.location)
     assert (estate.versions(), recorded) == ([3], False), "a record whose last entry went still stands"
 
 

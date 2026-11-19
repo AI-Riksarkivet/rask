@@ -433,44 +433,36 @@ class DoorTable:
         return self._claims
 
     def pin_whole(self, dataset: lance.LanceDataset, branch: str | None, version: int) -> condemned_versions.Pinned:
-        """Pin ``version`` of ``branch``, then refuse it where the table's condemned versions name it
+        """Pin ``version`` of ``branch``, then refuse it where the condemned versions of the table's location name it
         (:func:`lakehouse.condemned_versions.pin_whole`), under the catalog's own credential.
 
         Raises:
             ValueError: Lance refused the pin (no such version).
             CondemnedVersionError: The version is condemned.
             OSError: The store did not answer.
-            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
         return condemned_versions.pin_whole(
-            self._claims.control_root, self._claims.storage_options, table_uuid=self._resolved.require_uuid(), dataset=dataset, ref=branch, version=version
+            self._claims.control_root, self._claims.storage_options, location=self.location, dataset=dataset, ref=branch, version=version
         )
 
     def licensed_under(self, name: str) -> datetime | None:
-        """The instant the last live reclaim licence under the free branch name ``name`` ends
-        (:func:`lakehouse.condemned_versions.licensed_under`); ``None`` where none, or for a table whose claim records no
-        uuid, which no reclaim reaches.
+        """The instant the last live reclaim licence under the free branch name ``name`` ends, whichever registration of
+        the table's location it was granted under (:func:`lakehouse.condemned_versions.licensed_under`); ``None`` where
+        none.
 
         Raises:
             OSError: The store did not answer, or the record does not parse.
         """
-        if self._resolved.uuid is None:
-            return None
-        return condemned_versions.licensed_under(self._claims.control_root, self._claims.storage_options, table_uuid=self._resolved.uuid, name=name)
+        return condemned_versions.licensed_under(self._claims.control_root, self._claims.storage_options, location=self.location, name=name)
 
     def condemned(self, dataset: lance.LanceDataset, branch: str | None) -> set[int]:
-        """The versions of ``branch`` (main for ``None``) the table's condemned versions name
-        (:func:`lakehouse.condemned_versions.condemned`); none for a table whose claim records no uuid, which no reclaim
-        reaches.
+        """The versions of ``branch`` (main for ``None``) the condemned versions of the table's location name
+        (:func:`lakehouse.condemned_versions.condemned`), whichever registration condemned them.
 
         Raises:
             OSError: The store did not answer, or the record does not parse.
         """
-        if self._resolved.uuid is None:
-            return set()
-        return condemned_versions.condemned(
-            self._claims.control_root, self._claims.storage_options, table_uuid=self._resolved.uuid, dataset=dataset, ref=branch
-        )
+        return condemned_versions.condemned(self._claims.control_root, self._claims.storage_options, location=self.location, dataset=dataset, ref=branch)
 
     def history_write[T](self, work: history_fences.HistoryWork, write: Callable[[], T], *, judge: Callable[[Hold], None] | None = None) -> T:
         """``write`` while the table's history is held for ``work``, once ``judge`` passed under the hold and the hold is

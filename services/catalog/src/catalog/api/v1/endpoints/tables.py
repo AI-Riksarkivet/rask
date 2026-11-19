@@ -100,7 +100,7 @@ from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, commit_reconcile, dataplane, native, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from lakehouse import base_registry, location_claims, object_records, protection, trash
+from lakehouse import base_registry, condemned_versions, location_claims, object_records, protection, trash
 from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent, ControlAction
@@ -1016,6 +1016,9 @@ async def _drop(
         # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
         # table registered at this location. The location's claim goes too ([[LH-204]]), and the clone's ending last.
         await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, uuid=table_uuid))
+        # The condemned versions are the bytes' (ADR 0246 §16), and the bytes are gone; ended before the claim, so no
+        # table registered at the location afterwards reads a record of versions it does not hold.
+        await run_in_threadpool(condemned_versions.end, settings.registry_root, settings.storage_options(), location)
         await run_in_threadpool(partial(location_claims.release, claims, location, canonical, uuid=table_uuid))
         if ending is not None:
             await run_in_threadpool(clone_endings.clear_ending, claims, ending)
@@ -1081,7 +1084,8 @@ async def deregister_table(
     detached_event = _table_event(token, gone, action="table_deregistered", table_uuid=table_uuid, name=canonical, extra={}, named_by=known)
     async with announcer.announcing(door="deregister_table", target=fga.table_object(table_uuid), announcements=[detached, detached_event]) as filing:
         response = await _detach(ns, settings, table, segments=segments)
-        # The table leaves governance, so what was kept for it under its uuid goes.
+        # The table leaves governance, so what was kept for it under its uuid goes. Its condemned versions are its
+        # bytes', which stay: the next registration at the location reads them (ADR 0246 §16).
         await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
         # Record the detach as lineage — asymmetric with drop (which deletes data), deregister only detaches, so without
         # this marker the feed reads it as a still-live, never-touched table. Versionless (no data was written), sent

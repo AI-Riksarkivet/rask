@@ -220,8 +220,8 @@ def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(
     asked = {
         "forgets-its-records": ("s3:DeleteObject", f"{file_identities.records_of(mine)}/txn.json"),
         "records-no-file": ("s3:PutObject", f"{file_identities.records_of(mine)}/txn.json"),
-        "reads-no-condemned-versions": ("s3:GetObject", condemned_versions.record_key(mine)),
-        "writes-no-condemned-versions": ("s3:PutObject", condemned_versions.record_key(mine)),
+        "reads-no-condemned-versions": ("s3:GetObject", condemned_versions.record_key(estate.location)),
+        "writes-no-condemned-versions": ("s3:PutObject", condemned_versions.record_key(estate.location)),
         "reads-no-ref-writers-hold": ("s3:GetObject", f"{fence}/refs-{token}.json"),
         "holds-no-fence": ("s3:PutObject", f"{fence}/reclaim-{token}.json"),
         "forgets-no-other-records": ("s3:DeleteObject", f"{file_identities.records_of(other)}/txn.json"),

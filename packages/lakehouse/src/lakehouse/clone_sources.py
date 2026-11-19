@@ -185,7 +185,7 @@ def take(source: CloneSource, *, clone_location: str, control_root: str, storage
         try:
             pinned.append(
                 condemned_versions.pin_whole(
-                    control_root, storage_options, table_uuid=source.table_uuid, dataset=dataset, ref=source.branch, version=source.version
+                    control_root, storage_options, location=source.location, dataset=dataset, ref=source.branch, version=source.version
                 )
             )
         except condemned_versions.CondemnedVersionError as exc:

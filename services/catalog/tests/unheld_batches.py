@@ -27,7 +27,9 @@ def unheld(control_root: str, table_uuid: str, uri: str) -> Callable[[str | None
 
         def batch(versions: list[int]) -> Verdict:
             main = lance.dataset(uri)
-            run = condemned_versions.Batch(control_root, StorageOptions(), table_uuid=table_uuid, location=uri, dataset=main, ref=ref, listed_on=listed_on)
+            run = condemned_versions.Batch(
+                control_root, StorageOptions(), table_uuid=table_uuid, location=uri, dataset=main, ref=ref, listed_on=listed_on, registered=lambda: table_uuid
+            )
             run.condemn(versions, forks=True)
             run.read_pins()
             return run.promote(None)

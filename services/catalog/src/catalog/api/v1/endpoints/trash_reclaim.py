@@ -145,7 +145,8 @@ async def end_trash(
         if (reason := await run_in_threadpool(judged) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
             raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
         revoked = await fga_deps.revoke_removed_object(client, settings, fga.object_of(kind, uuid), token=token)
-        await run_in_threadpool(partial(trash.end, settings.registry_root, settings.storage_options(), record, kind=kind, uuid=uuid))
+        # Refused above while any object stands at the place: the bytes are gone, and their condemned versions with them.
+        await run_in_threadpool(partial(trash.end, settings.registry_root, settings.storage_options(), record, kind=kind, uuid=uuid, bytes_gone=True))
     except Exception as failed:
         _audited(AuditAction.TRASH_END, AuditOutcome.FAILURE, token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
         raise

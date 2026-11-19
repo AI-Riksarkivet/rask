@@ -180,7 +180,7 @@ def test_the_purge_deletes_a_trashed_tables_bytes_under_its_reclaim_session(recl
     def _ended(_request: httpx.Request) -> httpx.Response:
         record = trash.get(f"s3://{reclaim.control}", parent, reclaim.uuid)
         assert record is not None
-        trash.end(f"s3://{reclaim.control}", parent, record, kind="table", uuid=reclaim.uuid)
+        trash.end(f"s3://{reclaim.control}", parent, record, kind="table", uuid=reclaim.uuid, bytes_gone=True)
         return httpx.Response(200, json={"tuples_revoked": 0})
 
     with respx.mock() as door:

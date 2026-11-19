@@ -112,7 +112,7 @@ def end_door(control_root: str, storage_options: StorageOptions) -> Callable[[ht
     def _end(_request: httpx.Request, kind: str, uuid: str) -> httpx.Response:
         if (record := trash.get(control_root, storage_options, uuid, kind=_kind(kind))) is None:
             return _no_record(_kind(kind), uuid)
-        trash.end(control_root, storage_options, record, kind=_kind(kind), uuid=uuid)
+        trash.end(control_root, storage_options, record, kind=_kind(kind), uuid=uuid, bytes_gone=True)
         return httpx.Response(200, json={"tuples_revoked": 0})
 
     return _end

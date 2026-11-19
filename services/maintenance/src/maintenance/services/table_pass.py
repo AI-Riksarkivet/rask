@@ -413,7 +413,8 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     policy = _expiry_policy(uri, plan, settings=settings, opened=opened)
     directories = _data_directories(uri, uuid=named.owners.table_uuid, readings=readings, settings=settings, options=options, opened=opened)
     now = readings.context.now
-    recorded = partial(condemned_versions.recorded, settings.resolved_control_root, options, named.owners.table_uuid)
+    # The table's condemned versions are filed by its root, which every branch's dataset lies beneath (ADR 0246 §16).
+    recorded = partial(condemned_versions.recorded, settings.resolved_control_root, options, readings.table_ids.location_of(table) or uri)
     probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now, opened=opened, recorded=recorded)
     condemn = partial(credentials.condemn, table, settings, branch=ref, listed_on=listed_on)
     target = ExpiryTarget(uri=uri, storage_options=options, table_id=table, data_directories=directories, now=now, ref=ref, victims=probe.victims)

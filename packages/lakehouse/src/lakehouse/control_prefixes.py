@@ -45,8 +45,8 @@ CONTRACTS: Final = "_contracts"
 LABEL_DEFINITIONS: Final = "_label_definitions"
 LABELS: Final = "_labels"
 TABLE_INPUTS: Final = "_table_inputs"
-#: A table's condemned versions, keyed by its uuid: what a reclaim may be deleting, which every ref door refuses
-#: (``lakehouse.condemned_versions``, ADR 0246).
+#: A table's condemned versions, keyed by its location (the bytes, not the registration): what a reclaim may be
+#: deleting, which every ref door refuses (``lakehouse.condemned_versions``, ADR 0246).
 CONDEMNED: Final = "_condemned"
 ROLES: Final = "_roles"
 PRINCIPALS: Final = "_principals"

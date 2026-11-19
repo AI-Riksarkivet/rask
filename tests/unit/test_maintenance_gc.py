@@ -147,7 +147,14 @@ def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) 
 
     def condemn(versions: list[int]) -> condemned_versions.Verdict:
         run = condemned_versions.Batch(
-            str(tmp_path / "control"), StorageOptions(), table_uuid="clone", location=clone, dataset=lance.dataset(clone), ref=None, listed_on="clone"
+            str(tmp_path / "control"),
+            StorageOptions(),
+            table_uuid="clone",
+            location=clone,
+            dataset=lance.dataset(clone),
+            ref=None,
+            listed_on="clone",
+            registered=lambda: "clone",
         )
         run.condemn(versions)
         run.read_pins()

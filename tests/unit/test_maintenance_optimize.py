@@ -30,7 +30,9 @@ def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: i
     policy = ExpiryPolicy(older_than=older_than, retain_versions=retain_versions)
 
     def condemn(versions: list[int]) -> Verdict:
-        run = condemned_versions.Batch(f"{uri}-control", StorageOptions(), table_uuid="t", location=uri, dataset=lance.dataset(uri), ref=None, listed_on="t")
+        run = condemned_versions.Batch(
+            f"{uri}-control", StorageOptions(), table_uuid="t", location=uri, dataset=lance.dataset(uri), ref=None, listed_on="t", registered=lambda: "t"
+        )
         run.condemn(versions)
         run.read_pins()
         return run.promote(None)

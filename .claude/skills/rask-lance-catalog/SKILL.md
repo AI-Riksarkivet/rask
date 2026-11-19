@@ -919,7 +919,8 @@ governing their data. The project-scoped surface is the console's project page, 
   never reading it as unprotected. A rename moves no record and no grant, only its data directories' claims (and, into
   another namespace, its parent edge); a table created later under a dropped name holds a new uuid and inherits nothing,
   even where an ending was lost. Every door that ends an object (drop, deregister, a cascade, the trash purge) ends that
-  list through `object_records.end_object_records`, under the uuids it read before the object went. The hold, due,
+  list through `object_records.end_object_records`, under the uuids it read before the object went. A table's condemned
+  versions are not on that list: they are filed by its location and end only with its bytes (ADR 0246 §16). The hold, due,
   erasure and project-policy listings name each table as it is named now (`table_claims.names_now`: its location's
   claim's holder while the claim carries the record's uuid) and filter it under that name; a record whose table is gone
   names no table and is listed to no one, since the name it kept may belong to a new table now. A door resolves its
@@ -1028,23 +1029,32 @@ governing their data. The project-scoped surface is the console's project page, 
   message schedules, which nats-server older than 2.12 drops without a word. A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
   **What a reclaim may delete is modelled** (`specs/maintenance/Reclaim.tla`, ADR 0246): a reclaim CONDEMNS before it
   deletes and every ref door PINS before it reads, with no lease, renewal or clock in the argument. (1) **One record per
-  table** (`lakehouse.condemned_versions`, `_condemned/table-<digest>.json`, written only by the catalog under the ETag
-  it read): each entry names a version by its ref's IDENTITY (main, or one branch incarnation's uuid,
-  `version_retention.branch_identity`), its batch and its state, `c` condemned or `g` past its batch's pin and policy
-  reads. An entry is dropped only once its manifest is gone or its ref no longer stands, or by its own batch before it
-  deleted anything. (2) **Every reclaim goes through ONE batch function** (`condemned_versions.Batch` +
+  table ROOT** (`lakehouse.condemned_versions`, `_condemned/<sha256 of the decoded location>.json`, keyed as the location's
+  claim is, written only by the catalog under the ETag it read): THE RECORD BELONGS TO THE BYTES, NOT TO THE CATALOG
+  OBJECT (ADR 0246 §16), so a deregister leaves it (`object_records` does not end it), a register at the location reads
+  it, and it ends only with the bytes (`condemned_versions.end`: a destructive drop, a namespace cascade's destroy, a
+  warehouse purge's detach, the trash's end with `bytes_gone`). Each entry names a version by its ref's IDENTITY (main: a
+  number at the location, whoever registered it; a branch: one incarnation's uuid, `version_retention.branch_identity`),
+  the batch holding it and its state, `c` condemned or `g` past a batch's pin and policy reads; at most ONE entry per
+  version (TakeOver: a batch condemning a version an entry names takes it over). An entry is dropped only once its
+  manifest is gone or its ref no longer stands, or by the batch holding it before anything was deleted under it.
+  (2) **Every reclaim goes through ONE batch function** (`condemned_versions.Batch` +
   `condemned_versions.reclaim`; a pass through the catalog door `maintenance/condemn`, rung `can_vend_maintain`, the
   catalog's `maintenance/run`, an erasure's verification and release in process, `catalog.services.reclaims`): the
-  reclaimer reads its ref's identity (`condemned_versions.identity_of`: the table's uuid for main, the branch's
+  reclaimer reads its ref's identity (`condemned_versions.identity_of`: the registration's uuid for main, the branch's
   incarnation) BEFORE it opens the handle it lists its victims on and names it with every batch (`listed_on`), and a
-  batch of a ref that is now another incarnation is refused 409 code 14, nothing condemned (ListedOn,
-  `ReclaimListedElsewhere.cfg`); then at most 16 versions (`BATCH`) condemned with whatever a dead batch or `version/delete` left on the ref, the table's tags and
-  pins read (a version one names is excluded unless ANOTHER batch's entry names it `g`; a pin older than
+  batch of a ref that is now another incarnation, or whose registration no longer holds the location (read at the
+  condemn, `condemned_versions.registration_at`), is refused 409 code 14, nothing condemned (ListedOn: who may condemn,
+  apart from what an entry names; `ReclaimListedElsewhere.cfg`); then at most 16 versions (`BATCH`) condemned with whatever a dead batch or `version/delete` left on the ref, the table's tags and
+  pins read (a version one names is excluded unless an entry names it `g`; a pin older than
   `PIN_LIFETIME`, a day, is swept as a dead door's), the governing policy read level by level on the chain the table's
   claim names THEN (`reclaims.Governance.held_by`; a hold at any level keeps everything, a record that cannot be read
-  too; an erasure's batch reads no hold), then one conditional write promoting its own entries to `g` with the licence's
-  instant `licensed_until` (`LICENCE`, 17 minutes; or removing them under a hold) and deleting the pins on another
-  batch's `g` versions; a branch's batch then reads the branches and licenses nothing where its incarnation went. The
+  too; an erasure's batch reads no hold), then one conditional write under the take-over rule (`Batch.promote`): a `c`
+  entry it still holds is set `g` with the licence's instant `licensed_until` (`LICENCE`, 17 minutes), or removed where
+  its version is excluded or, under a hold, where the batch wrote it; a `c` entry another batch took over since is left
+  to that batch; a `g` entry is never set back or removed, and is taken over with the later of its instant and the
+  batch's; the batch deletes exactly what this write set `g`. It then deletes the pins on another batch's `g` versions;
+  a branch's batch then reads the branches and licenses nothing where its incarnation went. The
   reclaimer runs `cleanup_old_versions(versions=..., error_if_tagged_old_versions=False)` on what it licensed, under a
   credential minted before it asked whose stamped expiry plus `CLOCK_MARGIN` is no later than `licensed_until`
   (`condemned_versions.covers`; a pass's first batch, asked before its vend, is asked again): Lance deletes by NUMBER
@@ -1496,7 +1506,9 @@ governing their data. The project-scoped surface is the console's project page, 
 - **`version/delete` condemns, and deletes nothing** (the spec's `BatchDeleteTableVersions` "deletes version tracking
   records, NOT the actual table data"; ADR 0246, `maintenance.delete_versions`, `condemned_versions.condemn_named`).
   The door refuses any range that reaches the current version (400; ranges are end-exclusive) and judges every range
-  first; then, in a batch's order, it writes the versions into the table's condemned record under a batch id of its own,
+  first; then, in a batch's order, it writes the versions no entry names yet into the table's condemned record under a
+  batch id of its own (one an entry already names stays as it is, one entry per version; `deleted_count` counts those
+  it wrote),
   THEN reads the tags, the pins and the branches cut from the ref, and where one names a version it takes its entries
   back and answers 409 naming it (a pin as "a request in flight"); a version a registered clone reads is refused like any
   tagged one (ADR 0198 §1). Condemned, a version leaves `version/list`, every ref door refuses it (409, code 19), and the
@@ -1506,8 +1518,8 @@ governing their data. The project-scoped surface is the console's project page, 
   pass through `maintenance/condemn`, `maintenance/run`, an erasure's verification and its release) asks the catalog for
   each batch of at most 16 versions, naming the identity of the ref it listed them on, read before it opened the handle it
   listed on (ListedOn: a ref that is now another incarnation is refused 409 code 14, nothing condemned): it condemns them
-  in the table's record (`_condemned/table-<digest>.json`, one per
-  table, standing only while it has entries: its last entry's rewrite deletes it under the ETag read), reads the tags and
+  in the table's record (`_condemned/<digest of the location>.json`, one per
+  table root, the bytes' and not the registration's, standing only while it has entries: its last entry's rewrite deletes it under the ETag read), reads the tags and
   pins, reads the governing policy level by level (an erasure's batch reads none: which of an erasure and a hold wins is
   the owner's open question, §14 of the ADR), promotes its entries `g` with `licensed_until` (`LICENCE`, 17 minutes,
   from now), and answers what the reclaimer may delete. The reclaimer runs `cleanup_old_versions(versions=...,

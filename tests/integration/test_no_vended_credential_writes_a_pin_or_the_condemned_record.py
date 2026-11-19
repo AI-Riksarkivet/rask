@@ -91,13 +91,13 @@ def test_a_vended_credential_neither_plants_nor_lifts_a_pin_or_an_entry(tier: st
     vend, _credentials = _vended(tier, bucket, table_uuid)
     pin = f"{table_uuid}/_refs/tags/{condemned_versions.pin_name()}.json"
     store.put_object(Bucket=bucket, Key=pin, Body=b'{"version": 1}')
-    record = condemned_versions.record_key(table_uuid)
+    record = condemned_versions.record_key(f"s3://{bucket}/{table_uuid}")
     hold = f"{history_fences.fence_directory(table_uuid)}/refs-{'0' * 32}.json"
 
     answers = {
         "put a pin": _answer(lambda: vend.put_object(Bucket=bucket, Key=f"{table_uuid}/_refs/tags/{condemned_versions.pin_name()}.json", Body=b"{}")),
         "delete the catalog's pin": _answer(lambda: vend.delete_object(Bucket=bucket, Key=pin)),
-        "put the condemned versions": _answer(lambda: vend.put_object(Bucket=bucket, Key=record, Body=b'{"uuid": "x", "location": "x", "entries": []}')),
+        "put the condemned versions": _answer(lambda: vend.put_object(Bucket=bucket, Key=record, Body=b'{"location": "x", "entries": []}')),
         "delete the condemned versions": _answer(lambda: vend.delete_object(Bucket=bucket, Key=record)),
         "put a hold of the history fence": _answer(lambda: vend.put_object(Bucket=bucket, Key=hold, Body=b"{}")),
     }

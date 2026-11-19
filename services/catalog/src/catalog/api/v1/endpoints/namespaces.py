@@ -68,7 +68,7 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves
-from lakehouse import base_registry, clone_sources, location_claims, protection, trash
+from lakehouse import base_registry, clone_sources, condemned_versions, location_claims, protection, trash
 from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import emit_control
 from lakehouse.control_events import CatalogControlEvent, ControlUuids
@@ -815,6 +815,8 @@ async def _destroy_listed_table(
     # table's bytes can take longer to go than a fence stands, and the same name registered at the location once the
     # fence has lapsed holds the claim under a uuid of its own.
     await run_in_threadpool(partial(base_registry.forget_base_record, registry, fenced.location, uuid=item.uuid))
+    # The condemned versions go with the bytes they describe (ADR 0246 §16), before the claim.
+    await run_in_threadpool(condemned_versions.end, claims.control_root, claims.storage_options, fenced.location)
     await run_in_threadpool(partial(location_claims.release, claims, fenced.location, canonical, uuid=item.uuid))
     if filed:
         await run_in_threadpool(clone_endings.clear_ending, claims, filed[0])

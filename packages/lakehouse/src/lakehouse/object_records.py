@@ -12,6 +12,9 @@ Not listed, each for its own reason:
   rather than ending it.
 - Grants live in OpenFGA; the catalog's ``fga_deps`` revokes them.
 - Location claims and base records are keyed by the table's location, and the claim records the uuid.
+- A table's condemned versions (:mod:`lakehouse.condemned_versions`) are keyed by its location too: they describe bytes
+  that outlive a deregister, half-removed versions among them, so they end only with the bytes
+  (:func:`lakehouse.condemned_versions.end`, ADR 0246 §16).
 - A clone's ending (:mod:`lakehouse.clone_endings`) is keyed by its location too, and is filed BY the ending of the
   object, to outlive it until the clone's holds are released: ending it here would end it before its work is done.
 - A due record and an erasure obligation each end on their own terms: the sweep clears a due record no table holds,
@@ -37,7 +40,6 @@ OBJECT_RECORD_PREFIXES: Final = (
     commit_records.MARKS_PREFIX,
     control_prefixes.LABELS,
     control_prefixes.CONTRACTS,
-    control_prefixes.CONDEMNED,
 )
 
 

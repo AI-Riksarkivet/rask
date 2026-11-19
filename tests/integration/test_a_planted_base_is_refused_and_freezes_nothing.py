@@ -1043,7 +1043,7 @@ def test_a_trashed_clone_whose_end_cannot_delete_its_tag_keeps_its_location(esta
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
 
     with pytest.raises(OSError, match="did not answer the delete"):
-        trash.end(estate.root, estate.key, record, kind="table", uuid=str(trash.object_uuid(record)))
+        trash.end(estate.root, estate.key, record, kind="table", uuid=str(trash.object_uuid(record)), bytes_gone=True)
 
     held = location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), clone)
     assert held is not None and held.table == "lance_catalog$db$silver", "the clone's location was freed with its tag still standing"

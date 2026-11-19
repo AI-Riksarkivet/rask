@@ -88,7 +88,7 @@ from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, RecordGone
 from catalog.services.control_records import PROJECT_UUID, STATE, UUID, DeleteAsked, ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, SEAL_CHECK, ProbeCheck, ProbeReport, Sealed, summarize_probe
-from lakehouse import base_registry, clone_sources, data_directories, location_claims, stored_objects, trash
+from lakehouse import base_registry, clone_sources, condemned_versions, data_directories, location_claims, stored_objects, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
@@ -1102,6 +1102,9 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     # door: a tag that cannot be deleted leaves the location held, and no clone registered there can hold its name.
     if purge:
         await run_in_threadpool(partial(base_registry.forget_base_record, registry, fenced.location, uuid=table_uuid))
+        # The bucket's purge takes the bytes, and their condemned versions go with them (ADR 0246 §16); without one the
+        # bytes stay, and so does the record, for whatever registers at the location next.
+        await run_in_threadpool(condemned_versions.end, settings.registry_root, settings.storage_options(), fenced.location)
     else:
         await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, uuid=table_uuid))
     # Released under the uuid the cascade listed the table by, as well as under its fence: a purge's directory delete
@@ -1160,7 +1163,7 @@ async def _forget_trashed(settings: Settings, entry: dict[str, Any], *, purge: b
     if purge and (location := trash.location_of(entry)):
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
         await run_in_threadpool(partial(data_directories.delete_table_directories, registry, location, uuid=uuid, storage_options=so))
-    await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=trash.kind_of(entry), uuid=uuid))
+    await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=trash.kind_of(entry), uuid=uuid, bytes_gone=purge))
 
 
 def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]], record: dict[str, str], warehouse_id: str) -> None:

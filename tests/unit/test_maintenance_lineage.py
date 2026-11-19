@@ -337,7 +337,14 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
 
         def condemn(versions: list[int]) -> Verdict:
             run = condemned_versions.Batch(
-                str(tmp_path / "control"), StorageOptions(), table_uuid=uri, location=uri, dataset=lance.dataset(uri), ref=None, listed_on=uri
+                str(tmp_path / "control"),
+                StorageOptions(),
+                table_uuid=uri,
+                location=uri,
+                dataset=lance.dataset(uri),
+                ref=None,
+                listed_on=uri,
+                registered=lambda: uri,
             )
             run.condemn(versions)
             run.read_pins()

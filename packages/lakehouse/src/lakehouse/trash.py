@@ -36,7 +36,7 @@ from typing import Any, Final, Literal
 
 import pyarrow.fs as pafs
 
-from lakehouse import control_prefixes, location_claims, object_records, warehouse_records
+from lakehouse import condemned_versions, control_prefixes, location_claims, object_records, warehouse_records
 from lakehouse.base_registry import BaseRegistry, forget_base_record
 from lakehouse.governed.tenancy import UUID
 from lakehouse.namespace_fences import NamespaceFence, NamespaceWork
@@ -248,9 +248,11 @@ def clear(control_root: str, storage_options: StorageOptions, uuid: str, *, kind
     return delete_record(control_root, storage_options, key(uuid, kind=kind))
 
 
-def end(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, kind: TrashKind, uuid: str) -> None:
+def end(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, kind: TrashKind, uuid: str, bytes_gone: bool) -> None:
     """End what the trashed object ``uuid`` names kept for an undrop besides its grants: the records it holds under its
     uuid (:func:`lakehouse.object_records.end_object_records`), a table's base record and claim, then ``record`` itself.
+    A table whose bytes are gone (``bytes_gone``) loses its location's condemned versions too
+    (:func:`lakehouse.condemned_versions.end`); one whose bytes stay keeps them for whatever registers there next.
 
     The record goes last: it is all that still names what the object holds, so a failure before it is cleared leaves it
     for the next attempt to end. Every step is idempotent. The base record is forgotten with its data directories'
@@ -263,6 +265,8 @@ def end(control_root: str, storage_options: StorageOptions, record: dict[str, An
     """
     object_records.end_object_records(control_root, storage_options, kind, uuid)
     if location := location_of(record):
+        if bytes_gone and kind == "table":
+            condemned_versions.end(control_root, storage_options, location)
         # The base record first: forgetting it deletes the tag a clone holds on each source, and one the store will not
         # delete must leave the location held, or a clone registered there next would hold a tag of the same name.
         forget_base_record(BaseRegistry(control_root=control_root, storage_options=storage_options), location, uuid=uuid)

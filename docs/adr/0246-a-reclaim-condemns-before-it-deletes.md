@@ -8,7 +8,9 @@ and what was measured after; §14 says what an independent review of that code f
 model first: a licence to delete ends at a stated instant, since Lance deletes by number under a branch's name, so the
 clock §4 called gone is back for branches (assumption C). It carries a second open question for the owner (§14, V7, Q5). §15 fixes
 the defect §14 found and left (a batch is asked for one incarnation of its ref, ListedOn), and records what the model gate
-and the RustFS lane cost and how they were brought within what a person can wait for.
+and the RustFS lane cost and how they were brought within what a person can wait for. §16 fixes what a second review
+found: the record belongs to the bytes (filed by the table's location, kept across a deregister and read by the next
+registration there), and holds one entry per version.
 
 ## Context
 
@@ -792,6 +794,124 @@ RustFS 1.0.3: the default lane 348 s, all passed; the full lane 1,082 s, the slo
 
 **Net tests**: +2 collected (the ListedOn test's branch and main cases on moto; two more on the lane), none removed.
 
+### 16. The record belongs to the bytes, and holds one entry per version (2026-11-19)
+
+**What a second review found**, each reproduced on moto first:
+
+1. **A deregister threw the record away while the bytes stayed.** The record was filed by the table's uuid and ended
+   with it (`object_records.end_object_records` listed `_condemned`). A pass whose manifest deletes the store refused
+   left versions 1 and 2 standing over deleted data files, named `g`; the table was deregistered and registered again at
+   its location (a new uuid, an empty record), and a tag on version 1 answered 200 on a version whose data was gone. The
+   same deletion dropped every branch licence, so NameGuard admitted a branch name a licensed cleanup still held.
+2. **A licensed cleanup of main outlived the registration it was granted under.** A `maintenance/run` promoted versions
+   1 and 2 and paused before its cleanup; the table was deregistered and registered again; the new registration's hold
+   read its own uuid's record, named nothing condemned and answered 200; the cleanup then deleted the versions the hold
+   promised.
+3. **The record grew without bound.** `Batch.condemn` kept every earlier batch's entries for versions still standing
+   and added its own beside them: four passes over two stuck versions left 2, 4, 6 and 8 entries, and `reclaim` asking a
+   batch again (its credential not covered) doubled it too. `version/delete` added an entry beside one already naming its
+   version.
+
+**The rule: the record belongs to the bytes, not to the catalog object.** It is filed by the table's root, the location
+Lance's cleanup deletes under, keyed as the location's claim is (`_condemned/<sha256 of the decoded path>.json`,
+`condemned_versions.record_key(location)`). A deregister leaves it; a register at the location reads the record already
+there; it ends only when the bytes do (`condemned_versions.end`: a destructive drop after its delete, a namespace
+cascade's destroy, a warehouse delete's detach under `?purge_bucket=true`, and the trash's end, `trash.end(...,
+bytes_gone=True)` at the end door and at a purging warehouse delete), and an entry still drops only once its manifest
+is gone. Every door reads the record of the location it acts on: the ref doors (`pin_whole`, `condemned()`, through
+`DoorTable.pin_whole`/`condemned`, a clone's source tag, the erasure release's recreate points), NameGuard
+(`licensed_under`, the branch create and the release's recreate), the policy doors' `condemned` answers
+(`reclaims.condemned_versions_of(location=...)`, each record named by the claim its location holds now, a claim that
+cannot be read named in `condemned_unread`), `version/delete`, the pass (its probe, `recorded`, by the table's root),
+`maintenance/run` and the erasure's cleanups (the batch, `Batch(location=...)`).
+
+**What an entry names.** For MAIN, the version number at the location, whoever registered it: main's versions are the
+same bytes across a deregister and a register, so a registration made later sees them condemned, its hold names them,
+and its ref doors refuse them. For a BRANCH, one incarnation of the branch (as ListedOn has it), since a branch made
+again under the name holds other bytes at the same numbers.
+
+**Who may condemn is another question.** ListedOn stays the rule for it: a batch condemns only while the registration it
+was asked for still holds the location (`Batch(registered=...)`, `condemned_versions.registration_at` reading the
+location's claim at the condemn) and, for a branch, while the incarnation it listed stands; `version/delete` likewise.
+A batch asked for a registration gone is refused 409 code 14, nothing condemned. That a batch may write the record is
+decided by the registration it was asked for; what its entries mean is decided by the bytes.
+
+**One entry per (ref incarnation, version), the take-over rule** (`Batch.condemn`, `Batch.promote`). A batch condemning a
+version an entry already names takes that entry over (its batch id) instead of adding one; the others it writes `c`. At
+its promotion, for each entry naming one of its versions:
+
+- `c` and still this batch's (it wrote or took it over at its condemn and no batch took it over since, so the entry
+  stood from before this batch's pin read): set `g` under this batch with its licence; removed instead where its version
+  is excluded (a pin or a tag), or, under a hold, where this batch wrote it or its version is excluded. One it took over
+  and nothing names stays `c` under a hold, condemned as its writer left it (a `version/delete`'s among them);
+- `c` and another batch's (that batch condemned it after this one's pin read, which never saw the pins it may have to
+  keep): left to that batch, neither promoted nor removed;
+- `g` under another batch's live licence, or under one that has passed: never set back to `c` and never removed by a
+  batch; not excluded and not under a hold, taken over, its licence set to the later of the instant it carries and this
+  batch's, so no reclaimer a licence was granted to loses it while its credential lives (NameGuard and GCAfterLicence
+  read the later instant).
+
+The batch deletes exactly what its promotion set `g` (the verdict's `versions`), so an entry another batch removed after
+this batch condemned is never deleted under. `version/delete` writes entries only for versions no entry names yet
+(`deleted_count` counts those) and takes back, when a tag or pin names one, only the entries still its own; one a batch
+took over meanwhile is that batch's, whose own pin read excludes it.
+
+**The model first** (`specs/maintenance/Reclaim.tla`). New: `Reregister` (door `reregister`: a deregister and a register
+at the location, main's registration 1 then 2), the registration a reclaimer read (`rreg`) and the versions its batch
+wrote (`rnew`), each entry's record (`u`) and its licence as the set of batches live on it (`l`); `RCondemn` takes
+over, `RPromote` applies the rule above and sets what the cleanup deletes; `RLevel` reads the policy as unknown, and so
+held, for a batch whose registration went; ListedOn refuses a batch whose registration went. Three guards, each with a
+config that fails without it:
+
+| Guard | Config | Fails | Trace |
+| --- | --- | --- | --- |
+| `RecordKept`: a deregister leaves the record | `ReclaimRecordEnded.cfg` | `HalfOnlyCondemned`, 754 states | a reclaim's deletes refused part-way, the table registered again, no entry naming the half-removed versions |
+| `LocationKeyed`: a door reads the location's record | `ReclaimHoldReadsAnotherRecord.cfg` | `RetentionKept`, 188 states | promoted, registered again, the new registration's hold reads its own empty record and promises what the cleanup deletes |
+| `TakeOver`: one entry per version | `ReclaimEntryPerBatch.cfg` | `OneEntryPerVersion`, 22 states | a dead batch's entries, and the next batch's beside them |
+
+A new invariant, `OneEntryPerVersion`, is checked by every gate config, and two new gate configs hold:
+`ReclaimReregister.cfg` (a tag and the table's hold beside one reclaim delivered again and again, the registration made
+again, one fault; 10,116 states, 3 s) and `ReclaimBranchesReregister.cfg` (branch b's reclaim, delete, create and writer
+with the registration made again; 432,299 states, 18 s). The first take-over drafted, which promoted every entry naming
+its versions whoever held it, failed `ReclaimTwo.cfg` (`RefsWhole`): a batch promoted an entry another batch had written
+after its own pin read, over a door's pin that read saw nothing of; the rule above is the one that holds. `make tla-check`
+over Reclaim: every gate config holds or fails as its first line says (`specs/README.md`, measured 2026-11-19), the
+largest `ReclaimTwo.cfg` at 582,524 states and 22 s, `ReclaimTwoRefs.cfg` 503,028 and 21 s (both under the 30 s bound,
+over the 20 s the gate had reached). The on-demand configs were not run after this change.
+
+**Zero trust.** The record stays on the control root, outside every table's prefix: no vended table credential reaches
+it (`test_no_vended_credential_writes_a_pin_or_the_condemned_record.py`, `test_a_write_vend_reaches_only_what_its_rung_may_change.py`,
+the key now the location's), and the prefix `_condemned/` is unchanged, so the chart's records list
+(`chart/templates/_helpers.tpl`), the control-root backup and maintenance's canned policy (which lists the control root
+and reads none of it, `recorded`) need no change. A registrant learns from the record only about the bytes its
+registration covers: a record names versions at the one location the registration holds.
+
+**What else was checked, and found.** Of what `end_object_records` ends at a deregister, the commit records, the marks
+and the committed-file records describe commits rather than what may be deleted, and the register door stamps its own;
+the maintenance policy is the table's, a hold included, and ends with the object, which is the catalog object's
+governance, not the bytes', a product question this change does not decide. The history fence and the commit turn are
+leases keyed by uuid: a registration made again holds its own, so a release holding RELEASE under the old uuid does not
+exclude the new registration's ref doors; not reproduced, and recorded here rather than fixed. A table dropped with purge
+and created again under its name while a licensed cleanup of main is paused loses nothing: the catalog places a table
+it makes at `<root>/<uuid>` (ADR 0173 §5), so the new table is another location and another record, and the paused
+cleanup's handle names the old path, whose bytes the purge removed. An erasure release pins only where a branch comes
+back from main (`_pinned_recreate_points`, steps whose `parent` is `None`): a branch recreated from another recreated
+branch names that branch's fork version, which on pylance 13.0.0 is a manifest copy under `tree/<parent>/_versions/` with
+no files of its own (measured 2026-11-19: once the parent was written, `cleanup_old_versions(versions=[fork])` through
+the parent's handle removed that manifest and its transaction file, 672 bytes, and main's version still read whole), so
+a reclaim of the recreated parent between the two creates leaves no half-removed version, and the child's create fails
+on the missing manifest and the next tick fails again: a release that cannot finish, not a lost version; not reproduced
+through the release, and recorded here.
+
+**Tests** (`tests/integration/test_a_reclaim_condemns_before_it_deletes.py`): `test_a_table_registered_again_at_its_location_reads_the_condemned_versions_its_bytes_carry`
+(half-removed, promoted) is new, and
+`test_a_version_whose_deletes_the_store_refused_stays_condemned_until_the_next_reclaim_finishes_it` gains a second
+refused pass that must leave one entry per version. Red on moto with each guard removed: the deregister ending the
+record (both cases fail: the tag answers 200 over deleted data, the hold names nothing), the hold reading another record
+than the location's (the promoted case fails: nothing named, versions 1 and 2 deleted), and no take-over (the extended
+test fails: two entries per version). **Net tests**: +2 collected (the new test's two cases on moto; two more on the
+lane), one extended, none removed.
+
 ## The four facts
 
 - **GitOps**: met; no new chart value.
@@ -809,8 +929,9 @@ RustFS 1.0.3: the default lane 348 s, all passed; the full lane 1,082 s, the slo
 Staged manifests and committed-file records; a drop,
 undrop and purge; the erasure's scheduling and notices beyond `CondemnedErasure.tla`'s overrides; the release taking a
 dead door's pin on a residual; two tags on one version; a branch whose own versions name its fork's files; a hold lifted;
-batches larger than the model's versions; Q2; main's identity changing (a table registered again at its location is
-another uuid, §15: checked by the code and its test, and here main's identity never changes).
+batches larger than the model's versions; Q2; a table's registration changing more than once (§16 models one
+deregister and register at the location); a table dropped and made again under its name, which the catalog places at
+another location (another record).
 
 ## Appendix: the measurement scripts
 

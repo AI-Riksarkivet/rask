@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from functools import partial
 from typing import Final
 
 import lance
@@ -123,14 +124,22 @@ def batch(
 
     Raises:
         TableBranchNotFoundError: ``ref`` is a branch the table does not have (code 22).
-        ConcurrentModificationError: ``ref`` is now another incarnation than ``listed_on`` (code 14, ListedOn): the
-            reclaimer lists its versions again and asks again; nothing was condemned.
+        ConcurrentModificationError: ``ref`` is now another incarnation than ``listed_on``, or another registration than
+            the one ``governance`` names holds the location (code 14, ListedOn): the reclaimer lists its versions again
+            and asks again; nothing was condemned.
         ServiceUnavailableError: The store did not answer, the record does not parse, or every rewrite of it lost to
             another writer (contention among batches, never a conflict the caller made); nothing is licensed (503).
     """
     try:
         run = condemned_versions.Batch(
-            control_root, storage_options, table_uuid=governance.table_uuid, location=governance.location, dataset=main, ref=ref, listed_on=listed_on
+            control_root,
+            storage_options,
+            table_uuid=governance.table_uuid,
+            location=governance.location,
+            dataset=main,
+            ref=ref,
+            listed_on=listed_on,
+            registered=partial(condemned_versions.registration_at, governance.claims, governance.location),
         )
         run.condemn(versions, forks=forks)
         run.read_pins()
@@ -241,21 +250,22 @@ def condemned_versions_of(
     storage_options: StorageOptions,
     claims: location_claims.ClaimStore,
     *,
-    table_uuid: str | None = None,
+    location: str | None = None,
     within: Callable[[list[str]], bool] | None = None,
 ) -> Found:
-    """Every condemned version of the table ``table_uuid`` (one read of its record), or of every table whose name now
-    ``within`` takes (one listing of the records standing, then a read of each, each record's table named by its
-    location's claim; a gone table's left out): what a policy's answer does not promise (ADR 0246). A record stands only
-    while its table has a reclaim in flight or stuck, so a door reads those and no other. What cannot be read is named in
-    :attr:`Found.unread`, never raised: the door's write has landed.
+    """Every condemned version of the table at ``location`` (one read of its record, whichever registration of the
+    location wrote it: main's versions there are the same bytes under every one), or of every table whose name now
+    ``within`` takes (one listing of the records standing, then a read of each, each record's table named by the claim
+    its location holds now; a location no table holds left out): what a policy's answer does not promise (ADR 0246). A
+    record stands only while its table has a reclaim in flight or stuck, so a door reads those and no other. What cannot
+    be read is named in :attr:`Found.unread`, never raised: the door's write has landed.
     """
-    if table_uuid is not None:
+    if location is not None:
         try:
-            found, _etag = condemned_versions.read_record(registry_root, storage_options, table_uuid)
+            found, _etag = condemned_versions.read_record(registry_root, storage_options, location)
         except OSError as exc:
-            log.warning("condemned_record_unread", extra={"table_uuid": table_uuid, "error": str(exc)[:300]})
-            return Found(unread=[condemned_versions.record_key(table_uuid)])
+            log.warning("condemned_record_unread", extra={"location": location, "error": str(exc)[:300]})
+            return Found(unread=[condemned_versions.record_key(location)])
         standing = condemned_versions.Standing(records=[found] if found is not None else [])
     else:
         try:
@@ -264,13 +274,21 @@ def condemned_versions_of(
             log.warning("condemned_records_unlisted", extra={"error": str(exc)[:300]})
             return Found(unread=["the listing of the condemned records"])
     named: set[tuple[str, str | None, str | None, int]] = set()
+    unread = list(standing.unread)
     for record in standing.records:
-        if not record.entries or (name := table_claims.current_name(claims, record.location, record.uuid)) is None:
+        if not record.entries:
             continue
-        if within is not None and not within(name.split(CATALOG_DELIMITER)):
+        try:
+            # The table holding the location now, whichever registration it is.
+            held = location_claims.holder(claims, record.location)
+        except Exception as exc:  # noqa: BLE001 — a claim that cannot be read may name a table beneath the door: named, not raised
+            log.warning("condemned_record_claim_unread", extra={"location": record.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
+            unread.append(condemned_versions.record_key(record.location))
             continue
-        named.update((name, entry.ref, None if entry.ref is None else entry.ref_id, entry.version) for entry in record.entries)
-    return Found(named=sorted(named, key=_ordered), unread=standing.unread)
+        if held is None or (within is not None and not within(held.table.split(CATALOG_DELIMITER))):
+            continue
+        named.update((held.table, entry.ref, None if entry.ref is None else entry.ref_id, entry.version) for entry in record.entries)
+    return Found(named=sorted(named, key=_ordered), unread=unread)
 
 
 def _ordered(found: tuple[str, str | None, str | None, int]) -> tuple[str, str, str, int]:

@@ -24,7 +24,7 @@ models (2026-11-18): small constants, a gate a person can wait for. So:
 
 ## Every config
 
-Measured 2026-11-18 and 2026-11-19: the gate configs by one `make tla-check` (`TLC_WORKERS=2`, 810 s in all), the on-demand ones by one `make tla-check-full` (`TLC_TIMEOUT=30m`), stopped before it reached every one: "not run" is a config that run did not reach, "not finished" one that ran past its 30 minutes. Neither holds nor fails.
+Measured 2026-11-18 and 2026-11-19: the gate configs by one `make tla-check` (`TLC_WORKERS=2`, 810 s in all), the on-demand ones by one `make tla-check-full` (`TLC_TIMEOUT=30m`), stopped before it reached every one: "not run" is a config that run did not reach, "not finished" one that ran past its 30 minutes. Neither holds nor fails. The `maintenance/Reclaim*` rows are one `scripts/tla_check.sh Reclaim` (`TLC_WORKERS=2`) of 2026-11-19, after the model gained the registration made again at the location and one entry per version (ADR 0246 §16); its on-demand configs have not been run since.
 
 | Config | Run | Verdict | Distinct states | Seconds |
 | --- | --- | --- | --- | --- |
@@ -227,52 +227,57 @@ Measured 2026-11-18 and 2026-11-19: the gate configs by one `make tla-check` (`T
 | `lineage/EventPathBusForgets.cfg` | gate | fails NoLoss as expected | 54 | 1 s |
 | `lineage/EventPathBusLimit.cfg` | gate | fails NoLoss as expected | 999 | 1 s |
 | `lineage/EventPathPair.cfg` | gate | holds | 738,589 | 14 s |
-| `maintenance/Reclaim.cfg` | gate | holds | 149,943 | 5 s |
-| `maintenance/ReclaimBranchReuse.cfg` | gate | fails DeletesCondemned as expected | 6,147 | 2 s |
-| `maintenance/ReclaimBranchReuseHold.cfg` | gate | fails RetentionKept as expected | 45,060 | 3 s |
-| `maintenance/ReclaimBranchReuseTag.cfg` | gate | fails RefsWhole as expected | 50,265 | 3 s |
-| `maintenance/ReclaimBranches.cfg` | gate | holds | 289,358 | 8 s |
-| `maintenance/ReclaimBranchesTag.cfg` | gate | holds | 59,687 | 3 s |
+| `maintenance/Reclaim.cfg` | gate | holds | 100,584 | 7 s |
+| `maintenance/ReclaimBranchReuse.cfg` | gate | fails DeletesCondemned as expected | 5,741 | 3 s |
+| `maintenance/ReclaimBranchReuseHold.cfg` | gate | fails RetentionKept as expected | 45,501 | 5 s |
+| `maintenance/ReclaimBranchReuseTag.cfg` | gate | fails RefsWhole as expected | 52,990 | 5 s |
+| `maintenance/ReclaimBranches.cfg` | gate | holds | 181,065 | 9 s |
+| `maintenance/ReclaimBranchesReregister.cfg` | gate | holds | 432,299 | 18 s |
+| `maintenance/ReclaimBranchesTag.cfg` | gate | holds | 37,043 | 3 s |
 | `maintenance/ReclaimBranchesWide.cfg` | on demand | not run |  |  |
-| `maintenance/ReclaimCredentialOutlivesLicence.cfg` | gate | fails DeletesCondemned as expected | 8,530 | 2 s |
-| `maintenance/ReclaimDoorReadsFirst.cfg` | gate | fails RefsWhole as expected | 1,551 | 1 s |
-| `maintenance/ReclaimEntryDropped.cfg` | gate | fails HalfOnlyCondemned as expected | 355 | 1 s |
-| `maintenance/ReclaimFork.cfg` | gate | holds | 232,014 | 7 s |
-| `maintenance/ReclaimForkEntryDropped.cfg` | gate | fails HalfOnlyCondemned as expected | 182 | 1 s |
+| `maintenance/ReclaimCredentialOutlivesLicence.cfg` | gate | fails DeletesCondemned as expected | 7,870 | 3 s |
+| `maintenance/ReclaimDoorReadsFirst.cfg` | gate | fails RefsWhole as expected | 1,552 | 2 s |
+| `maintenance/ReclaimEntryDropped.cfg` | gate | fails HalfOnlyCondemned as expected | 344 | 1 s |
+| `maintenance/ReclaimEntryPerBatch.cfg` | gate | fails OneEntryPerVersion as expected | 22 | 1 s |
+| `maintenance/ReclaimFork.cfg` | gate | holds | 136,898 | 7 s |
+| `maintenance/ReclaimForkEntryDropped.cfg` | gate | fails HalfOnlyCondemned as expected | 163 | 2 s |
 | `maintenance/ReclaimForkWide.cfg` | on demand | not run |  |  |
-| `maintenance/ReclaimGoAny.cfg` | gate | fails RefsWhole as expected | 8,998 | 2 s |
-| `maintenance/ReclaimHoldReadsFirst.cfg` | gate | fails RetentionKept as expected | 127 | 1 s |
-| `maintenance/ReclaimLicenceCollected.cfg` | gate | fails DeletesCondemned as expected | 9,255 | 1 s |
-| `maintenance/ReclaimListedElsewhere.cfg` | gate | fails CondemnsAsListed as expected | 938 | 1 s |
-| `maintenance/ReclaimLive.cfg` | gate | holds | 3,899 | 3 s |
-| `maintenance/ReclaimLiveDeadPin.cfg` | gate | holds | 3,502 | 2 s |
-| `maintenance/ReclaimLiveNoUnpin.cfg` | gate | fails temporal as expected | 3,181 | 2 s |
-| `maintenance/ReclaimLiveRestore.cfg` | gate | holds | 58,101 | 8 s |
+| `maintenance/ReclaimGoAny.cfg` | gate | fails RefsWhole as expected | 8,233 | 3 s |
+| `maintenance/ReclaimHoldReadsAnotherRecord.cfg` | gate | fails RetentionKept as expected | 188 | 1 s |
+| `maintenance/ReclaimHoldReadsFirst.cfg` | gate | fails RetentionKept as expected | 114 | 2 s |
+| `maintenance/ReclaimLicenceCollected.cfg` | gate | fails DeletesCondemned as expected | 9,831 | 2 s |
+| `maintenance/ReclaimListedElsewhere.cfg` | gate | fails CondemnsAsListed as expected | 1,105 | 2 s |
+| `maintenance/ReclaimLive.cfg` | gate | holds | 3,402 | 4 s |
+| `maintenance/ReclaimLiveDeadPin.cfg` | gate | holds | 2,528 | 2 s |
+| `maintenance/ReclaimLiveNoUnpin.cfg` | gate | fails temporal as expected | 2,357 | 3 s |
+| `maintenance/ReclaimLiveRestore.cfg` | gate | holds | 46,216 | 11 s |
 | `maintenance/ReclaimLiveWide.cfg` | on demand | not run |  |  |
-| `maintenance/ReclaimNamedEntries.cfg` | gate | fails DeletesCondemned as expected | 22,863 | 2 s |
-| `maintenance/ReclaimNoCondemn.cfg` | gate | fails RefsWhole as expected | 2,534 | 1 s |
-| `maintenance/ReclaimNoExplicitPins.cfg` | gate | fails RefsWhole as expected | 1,386 | 1 s |
-| `maintenance/ReclaimPinSweepLive.cfg` | gate | fails RefsWhole as expected | 4,003 | 1 s |
-| `maintenance/ReclaimPolicies.cfg` | gate | holds | 168,224 | 6 s |
-| `maintenance/ReclaimPolicyBeforeCondemn.cfg` | gate | fails RetentionKept as expected | 65 | 1 s |
-| `maintenance/ReclaimPromotedOnAGoneBranch.cfg` | gate | fails DeletesCondemned as expected | 7,167 | 2 s |
-| `maintenance/ReclaimRelease.cfg` | gate | holds | 89,301 | 3 s |
-| `maintenance/ReclaimReleaseSwept.cfg` | gate | fails RefsWhole as expected | 36,727 | 3 s |
-| `maintenance/ReclaimReleaseUnpinned.cfg` | gate | fails RefsWhole as expected | 10,414 | 1 s |
+| `maintenance/ReclaimNamedEntries.cfg` | gate | fails DeletesCondemned as expected | 22,512 | 3 s |
+| `maintenance/ReclaimNoCondemn.cfg` | gate | fails RefsWhole as expected | 2,582 | 2 s |
+| `maintenance/ReclaimNoExplicitPins.cfg` | gate | fails RefsWhole as expected | 1,458 | 1 s |
+| `maintenance/ReclaimPinSweepLive.cfg` | gate | fails RefsWhole as expected | 4,117 | 2 s |
+| `maintenance/ReclaimPolicies.cfg` | gate | holds | 134,786 | 10 s |
+| `maintenance/ReclaimPolicyBeforeCondemn.cfg` | gate | fails RetentionKept as expected | 65 | 2 s |
+| `maintenance/ReclaimPromotedOnAGoneBranch.cfg` | gate | fails DeletesCondemned as expected | 7,109 | 2 s |
+| `maintenance/ReclaimRecordEnded.cfg` | gate | fails HalfOnlyCondemned as expected | 754 | 2 s |
+| `maintenance/ReclaimRelease.cfg` | gate | holds | 49,073 | 3 s |
+| `maintenance/ReclaimReleaseSwept.cfg` | gate | fails RefsWhole as expected | 28,944 | 3 s |
+| `maintenance/ReclaimReleaseUnpinned.cfg` | gate | fails RefsWhole as expected | 10,272 | 2 s |
 | `maintenance/ReclaimReleaseWide.cfg` | on demand | not run |  |  |
-| `maintenance/ReclaimReleaseWriter.cfg` | gate | holds | 368,101 | 12 s |
-| `maintenance/ReclaimRollbackAfterDelete.cfg` | gate | fails HalfOnlyCondemned as expected | 306 | 1 s |
-| `maintenance/ReclaimSweep.cfg` | gate | holds | 207,462 | 6 s |
-| `maintenance/ReclaimTagsFirst.cfg` | gate | holds | 52,723 | 3 s |
-| `maintenance/ReclaimTwo.cfg` | gate | holds | 426,270 | 12 s |
-| `maintenance/ReclaimTwoFaults.cfg` | on demand | holds | 3,550,974 | 206 s |
-| `maintenance/ReclaimTwoRefs.cfg` | gate | holds | 429,952 | 15 s |
+| `maintenance/ReclaimReleaseWriter.cfg` | gate | holds | 126,337 | 6 s |
+| `maintenance/ReclaimReregister.cfg` | gate | holds | 10,116 | 3 s |
+| `maintenance/ReclaimRollbackAfterDelete.cfg` | gate | fails HalfOnlyCondemned as expected | 357 | 1 s |
+| `maintenance/ReclaimSweep.cfg` | gate | holds | 146,432 | 7 s |
+| `maintenance/ReclaimTagsFirst.cfg` | gate | holds | 38,942 | 3 s |
+| `maintenance/ReclaimTwo.cfg` | gate | holds | 582,524 | 22 s |
+| `maintenance/ReclaimTwoFaults.cfg` | on demand | not run |  |  |
+| `maintenance/ReclaimTwoRefs.cfg` | gate | holds | 503,028 | 21 s |
 | `maintenance/ReclaimTwoRefsWide.cfg` | on demand | not run |  |  |
-| `maintenance/ReclaimTwoWide.cfg` | on demand | holds | 11,699,903 | 495 s |
+| `maintenance/ReclaimTwoWide.cfg` | on demand | not run |  |  |
 | `maintenance/ReclaimVDeleteReadsFirst.cfg` | gate | fails VDeleteSparesTags as expected | 32 | 1 s |
 | `maintenance/ReclaimWide.cfg` | on demand | not run |  |  |
-| `maintenance/ReclaimWriter.cfg` | gate | holds | 137,345 | 4 s |
-| `maintenance/ReclaimWriterOutlivesAge.cfg` | gate | fails InFlightKept as expected | 71 | 1 s |
+| `maintenance/ReclaimWriter.cfg` | gate | holds | 93,144 | 4 s |
+| `maintenance/ReclaimWriterOutlivesAge.cfg` | gate | fails InFlightKept as expected | 145 | 2 s |
 | `maintenance/WorkQueue.cfg` | gate | holds | 212,664 | 3 s |
 | `maintenance/WorkQueueAckFirst.cfg` | gate | fails HeldUnlessBackstopped as expected | 702 | 1 s |
 | `maintenance/WorkQueueDueLimit.cfg` | gate | fails ACommitIsCovered as expected | 47 | 2 s |

@@ -8,32 +8,45 @@ stops part-way leaves versions standing over deleted files. And it reads a table
 (measured on pylance 13.0.0: a tag written after that read names a version it then deletes, ADR 0246 §5), an order
 ``lance_docs/`` does not promise.
 
-THE RECORD (:class:`Record`). One per table on the control root (:func:`record_key`), written only by the catalog, each
-write conditional on the ETag it read (:func:`_rewrite`). An entry names a version by the IDENTITY of its ref (main, or
-one incarnation of a branch: the uuid Lance lists last in its ``branch_identifier``, so a branch deleted and made again
-under its name is another ref), the version's number, the batch that wrote it and its state: ``c`` condemned, or ``g``,
-its batch passed its pin read and its policy read and may have begun deleting. Every ref door refuses a version an entry
-names. An entry is dropped only once its manifest is gone or its ref's identity no longer stands (GCOnlyGone), or by its
-own batch before that batch deleted anything (a pinned version, or a hold): condemned is final while the manifest stands,
-and the next reclaim finishes it.
+THE RECORD (:class:`Record`). One per table root on the control root (:func:`record_key`), written only by the catalog,
+each write conditional on the ETag it read (:func:`_rewrite`). An entry names a version by the IDENTITY of its ref (main,
+or one incarnation of a branch: the uuid Lance lists last in its ``branch_identifier``, so a branch deleted and made
+again under its name is another ref), the version's number, the batch that holds it and its state: ``c`` condemned, or
+``g``, a batch passed its pin read and its policy read and may have begun deleting. Every ref door refuses a version an
+entry names. An entry is dropped only once its manifest is gone or its ref's identity no longer stands (GCOnlyGone), or
+by the batch holding it before anything was deleted under it (a pinned version, or a hold): condemned is final while the
+manifest stands, and the next reclaim finishes it.
+
+THE RECORD BELONGS TO THE BYTES, NOT TO THE CATALOG OBJECT (RecordKept, LocationKeyed; ADR 0246 §16). It is filed by the
+table's root, the location Lance's cleanup deletes under, keyed as that location's claim is, so a deregister leaves it
+(the versions it names, half-removed ones among them, stay where they are), a register at the location reads the record
+already there, and it ends only when the bytes do (:func:`end`: a drop's purge, a warehouse's, the trash's). Every door
+reads the record of the location it acts on. An entry of main names a version NUMBER at the location, whoever registered
+it, since main's versions are the same bytes across a deregister and a register; a branch's names one incarnation.
+
+ONE ENTRY PER VERSION (TakeOver). A batch condemning a version an entry already names takes that entry over (its batch
+id) instead of adding one, so the record holds as many entries as versions stand condemned, however many reclaims pass
+over a stuck one. What the batch then does with it is :meth:`Batch.promote`'s rule.
 
 A RECLAIM BATCH (:class:`Batch`, at most :data:`BATCH` versions; every reclaim in the estate goes through it, a pass,
 the catalog's ``maintenance/run``, an erasure's verification and its release). A reclaimer reads its ref's identity
 (:func:`identity_of`) before it opens the handle it lists the versions it asks for on, and names it with every batch; a
-batch of a ref that is now another incarnation is refused, nothing condemned (ListedOn, :class:`ListedElsewhereError`),
-since the numbers listed on one incarnation of a branch name other versions on the next:
+batch of a ref that is now another incarnation, or whose registration no longer holds the location, is refused, nothing
+condemned (ListedOn, :class:`ListedElsewhereError`): that is who may condemn, a question apart from what an entry names.
 
-1. :meth:`Batch.condemn` (CondemnFirst) writes the batch's entries, ``c``: the versions asked for, and every standing
-   version of the ref an entry already names, which a dead batch or ``version/delete`` left;
+1. :meth:`Batch.condemn` (CondemnFirst) writes the batch's entries, ``c``, and takes over every entry already naming one
+   of its versions: the versions asked for, and every standing version of the ref an entry already names, which a dead
+   batch or ``version/delete`` left;
 2. :meth:`Batch.read_pins` (ExplicitPins) lists the table's tags, user tags and pins (:data:`PIN_PREFIX`): a version one
-   names is excluded, unless an entry of ANOTHER batch names it ``g`` (GoOnly). A pin older than :data:`PIN_LIFETIME` is
-   a dead door's, and is deleted first (A3');
+   names is excluded, unless an entry names it ``g`` (GoOnly: another batch's promotion, whose pin read came first). A
+   pin older than :data:`PIN_LIFETIME` is a dead door's, and is deleted first (A3');
 3. the caller reads the policy that governs the table, level by level (PolicyAfterCondemn);
-4. :meth:`Batch.promote`: under a hold its own entries are removed (nothing was deleted under them); else one conditional
-   write removes its own entries of excluded versions and sets the rest ``g``, and the pins standing on another batch's
-   ``g`` versions are deleted (GoUnpins: a door that pinned one of those after that batch's pin read reads its entry and
-   refuses, so the pin protects nothing, and Lance keeps every tagged version, so leaving it would keep a half-removed
-   version so for good).
+4. :meth:`Batch.promote`: under a hold the ``c`` entries it wrote, or holds for an excluded version, are removed
+   (nothing was deleted under them); else one conditional write removes its own ``c`` entries of excluded versions and
+   sets the rest it holds, and every ``g`` one of its versions, ``g`` under its licence, and the pins standing on another
+   batch's ``g`` versions are deleted (GoUnpins: a door that pinned one of those after that batch's pin read reads its
+   entry and refuses, so the pin protects nothing, and Lance keeps every tagged version, so leaving it would keep a
+   half-removed version so for good).
 
 The reclaimer then runs ``cleanup_old_versions(versions=..., error_if_tagged_old_versions=False)`` on what
 :meth:`Batch.promote` answered (:func:`reclaim`): with the default, a pin written between the batch's pin read and
@@ -83,8 +96,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from opentelemetry import metrics
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, ValidationError
 
-from lakehouse import control_prefixes, records, stored_objects
-from lakehouse.record_store import record_key as object_record_key
+from lakehouse import control_prefixes, location_claims, record_store, records, stored_objects
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 from lakehouse.version_retention import branch_identity, recorded_branch
 
@@ -154,31 +166,32 @@ def is_door_pin(name: str) -> bool:
 
 
 class Entry(BaseModel):
-    """One condemned version."""
+    """One condemned version: the record holds at most one per ``(ref_id, version)``."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    #: The identity of the version's ref: :data:`MAIN`, or the uuid of one incarnation of a branch.
+    #: The identity of the version's ref: :data:`MAIN`, or the uuid of one incarnation of a branch. Main's entry names the
+    #: version's number at the table's location, whichever registration holds it.
     ref_id: str
     #: The branch's name when it was condemned, ``None`` for main: where a reader opens it.
     ref: str | None = None
     version: int
-    #: The batch that wrote it, ``vd-<hex>`` for a ``version/delete``.
+    #: The batch that holds it, the last to write or take it over; ``vd-<hex>`` for a ``version/delete``'s.
     batch: str
     state: Literal["c", "g"]
-    #: For ``g``, the instant (the catalog's clock) after which the reclaimer its batch licensed can no longer delete:
-    #: its credential was minted before the batch was asked and lives at most :data:`CREDENTIAL_LIFETIME`.
+    #: For ``g``, the instant (the catalog's clock) after which no reclaimer a batch licensed on it can delete any more:
+    #: each credential was minted before its batch was asked and lives at most :data:`CREDENTIAL_LIFETIME`, and a batch
+    #: taking the entry over keeps the later of its own instant and the one there.
     licensed_until: datetime | None = None
 
 
 class Record(BaseModel):
-    """A table's condemned versions."""
+    """The condemned versions of the table whose root is :attr:`location`."""
 
     model_config = ConfigDict(extra="forbid")
 
-    #: The table's uuid: a record naming another is no record of this table's.
-    uuid: str
-    #: The table's location, as its claim is keyed: where a policy door finds the name it holds now.
+    #: The table's root, as its claim is keyed: what the record is filed by, and where a policy door finds the name that
+    #: holds it now.
     location: str
     entries: list[Entry] = Field(default_factory=list)
 
@@ -210,28 +223,30 @@ class Verdict(BaseModel):
     licensed_until: datetime | None = None
 
 
-def record_key(table_uuid: str) -> str:
-    """The key, on the control root, of the table ``table_uuid``'s condemned versions: one of the records its uuid holds,
-    which end with it (``lakehouse.object_records``)."""
-    return object_record_key(control_prefixes.CONDEMNED, "table", table_uuid)
+def record_key(location: str) -> str:
+    """The key, on the control root, of the condemned versions of the table whose root is ``location``: filed by the
+    bytes, as the location's claim is (the SHA-256 of the path it decodes to, in either spelling,
+    :func:`lakehouse.location_claims.claim_digest`), never by the uuid of the registration that holds them now. On the
+    control root, which no vended table credential reaches, so no writer of the table can change or remove it."""
+    return f"{control_prefixes.CONDEMNED}/{location_claims.claim_digest(location)}.json"
 
 
-def read(control_root: str, storage_options: StorageOptions, table_uuid: str) -> tuple[list[Entry], str | None]:
-    """The table's entries and the ETag they were read under (:func:`read_record`)."""
-    stored, etag = read_record(control_root, storage_options, table_uuid)
+def read(control_root: str, storage_options: StorageOptions, location: str) -> tuple[list[Entry], str | None]:
+    """The entries of the table at ``location`` and the ETag they were read under (:func:`read_record`)."""
+    stored, etag = read_record(control_root, storage_options, location)
     return ([] if stored is None else stored.entries), etag
 
 
-def read_record(control_root: str, storage_options: StorageOptions, table_uuid: str) -> tuple[Record | None, str | None]:
-    """The table's record and the ETag it was read under, both ``None`` for no record.
+def read_record(control_root: str, storage_options: StorageOptions, location: str) -> tuple[Record | None, str | None]:
+    """The record of the table at ``location`` and the ETag it was read under, both ``None`` for no record.
 
     Raises:
-        OSError: The store did not answer, or the record does not parse as this table's: fail closed, since only the
+        OSError: The store did not answer, or the record does not parse as this location's: fail closed, since only the
             catalog writes it and an entry it cannot read may name a half-removed version.
     """
     from botocore.exceptions import BotoCoreError, ClientError
 
-    key = record_key(table_uuid)
+    key = record_key(location)
     try:
         stored = records.read_json_at(control_root, storage_options, key).stored
         if stored is None:
@@ -241,19 +256,31 @@ def read_record(control_root: str, storage_options: StorageOptions, table_uuid: 
         raise OSError(f"the store did not answer reading {key}: {exc}") from exc
     except (ValueError, ValidationError) as exc:
         raise OSError(f"{key} does not parse as a table's condemned versions: {exc}"[:600]) from exc
-    if parsed.uuid != table_uuid:
-        raise OSError(f"{key} names table {parsed.uuid!r}, not {table_uuid!r}")
+    if location_claims.claim_digest(parsed.location) != location_claims.claim_digest(location):
+        raise OSError(f"{key} names the table at {parsed.location!r}, not {location!r}")
     return parsed, stored.etag
 
 
-def recorded(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
-    """Whether the table's record stands, from one listing of its key alone, which a session that may list the control
-    root and read none of it (maintenance's own) can ask: a record stands only while it names a condemned version.
+def end(control_root: str, storage_options: StorageOptions, location: str) -> bool:
+    """End the record of the table at ``location``, once its bytes are gone (a drop's purge, a warehouse's, the
+    trash's): whether one stood. Never by a deregister, which leaves the bytes, half-removed versions among them, for the
+    next registration at the location to read. Idempotent.
+
+    Raises:
+        OSError: The store refused the delete.
+    """
+    return record_store.delete_record(control_root, storage_options, record_key(location))
+
+
+def recorded(control_root: str, storage_options: StorageOptions, location: str) -> bool:
+    """Whether the record of the table at ``location`` stands, from one listing of its key alone, which a session that
+    may list the control root and read none of it (maintenance's own) can ask: a record stands only while it names a
+    condemned version.
 
     Raises:
         OSError: The store did not answer.
     """
-    key = record_key(table_uuid)
+    key = record_key(location)
     if not on_s3(control_root):
         return os.path.exists(os.path.join(control_root.removeprefix("file://").rstrip("/"), key))
     from botocore.exceptions import BotoCoreError, ClientError
@@ -302,7 +329,7 @@ def every_record(control_root: str, storage_options: StorageOptions) -> Standing
     return found
 
 
-def _rewrite(control_root: str, storage_options: StorageOptions, table_uuid: str, location: str, change: Callable[[list[Entry]], list[Entry]]) -> list[Entry]:
+def _rewrite(control_root: str, storage_options: StorageOptions, location: str, change: Callable[[list[Entry]], list[Entry]]) -> list[Entry]:
     """Apply ``change`` to the entries as read and write them back under the ETag read (create-if-absent for none); the
     entries the landed write holds. ``change`` may run once per attempt, on the record as each attempt read it.
 
@@ -313,13 +340,13 @@ def _rewrite(control_root: str, storage_options: StorageOptions, table_uuid: str
         OSError: The store did not answer, or the record does not parse.
         records.RecordChangedError: Every attempt lost to another writer.
     """
-    key = record_key(table_uuid)
+    key = record_key(location)
     for _ in range(_ATTEMPTS):
-        entries, etag = read(control_root, storage_options, table_uuid)
+        entries, etag = read(control_root, storage_options, location)
         changed = change(list(entries))
         if changed == entries and (changed or etag is None):
             return entries
-        body = Record(uuid=table_uuid, location=location, entries=changed).model_dump(mode="json")
+        body = Record(location=location, entries=changed).model_dump(mode="json")
         try:
             if etag is None:
                 records.create_json(control_root, storage_options, key, body)
@@ -341,9 +368,10 @@ def _refs(dataset: lance.LanceDataset) -> dict[str | None, str]:
 
 def identity_of(dataset: lance.LanceDataset, ref: str | None, *, table_uuid: str) -> str:
     """The identity of ``ref`` as it stands now, which a reclaimer reads BEFORE it opens the handle it lists its victims on
-    and names with every batch it asks for (ListedOn): ``table_uuid`` for main, whose identity is its table's (a table
-    dropped and made again at its location, or registered there again, is another uuid), and for a branch the uuid of
-    its incarnation, from one listing of the branches through ``dataset``, a handle of the table.
+    and names with every batch it asks for (ListedOn): ``table_uuid`` for main, the registration that holds the location
+    (a table deregistered and registered again there is another uuid, which may condemn only once a reclaimer has read
+    it), and for a branch the uuid of its incarnation, from one listing of the branches through ``dataset``, a handle of
+    the table.
 
     Raises:
         RefGoneError: The branch does not stand.
@@ -371,6 +399,38 @@ def _require_listed_on(listed_on: str, standing: str, ref: str | None) -> None:
         )
 
 
+def registration_at(claims: location_claims.ClaimStore, location: str) -> str | None:
+    """The uuid of the registration that holds ``location`` now, by its claim; ``None`` where none does: what a batch and
+    ``version/delete`` read at their condemn (:class:`Batch`'s ``registered``).
+
+    Raises:
+        OSError: The claim could not be read, or does not parse: whether a registration stands is unknown.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    try:
+        held = location_claims.holder(claims, location)
+    except (ClientError, BotoCoreError, ValueError) as exc:
+        raise OSError(f"the claim on {location} could not be read: {exc}"[:600]) from exc
+    return None if held is None else held.uuid
+
+
+def _require_registered(registered: Callable[[], str | None], table_uuid: str) -> None:
+    """Refuse a batch asked for the registration ``table_uuid`` once ``registered`` reads another, or none (ListedOn, read
+    at the condemn): who may condemn is the registration a reclaimer read, a question apart from what an entry names,
+    which for main is a number at the location whoever holds it (``ReclaimReregister.cfg``).
+
+    Raises:
+        ListedElsewhereError: Another registration holds the location, or none does.
+        OSError: The registration could not be read.
+    """
+    if (now := registered()) != table_uuid:
+        raise ListedElsewhereError(
+            f"the batch was asked for registration {table_uuid!r} of the table's location, which {'no registration' if now is None else repr(now)} "
+            "holds now: list the versions again"
+        )
+
+
 def _forks(dataset: lance.LanceDataset) -> set[tuple[str | None, int]]:
     """``(ref, version)`` of every version a standing branch is cut from, whose manifest Lance keeps for it."""
     return {
@@ -386,14 +446,15 @@ def _versions_of(dataset: lance.LanceDataset, ref: str | None) -> set[int]:
     return {int(entry["version"]) for entry in handle.versions()}
 
 
-def condemned(control_root: str, storage_options: StorageOptions, *, table_uuid: str, dataset: lance.LanceDataset, ref: str | None) -> set[int]:
-    """The versions of ``ref`` (main for ``None``) as it stands now that an entry names: every ref door refuses them, and
-    ``list versions`` leaves them out. One read of the record, and one listing of the branches for a branch.
+def condemned(control_root: str, storage_options: StorageOptions, *, location: str, dataset: lance.LanceDataset, ref: str | None) -> set[int]:
+    """The versions of ``ref`` (main for ``None``) of the table at ``location`` as it stands now that an entry names: every
+    ref door refuses them, and ``list versions`` leaves them out. One read of the location's record, whichever
+    registration wrote it, and one listing of the branches for a branch.
 
     Raises:
         OSError: The store did not answer, or the record does not parse: whether a version is condemned is unknown.
     """
-    entries, _etag = read(control_root, storage_options, table_uuid)
+    entries, _etag = read(control_root, storage_options, location)
     if not entries:
         return set()
     ref = recorded_branch(ref)
@@ -401,9 +462,10 @@ def condemned(control_root: str, storage_options: StorageOptions, *, table_uuid:
     return {entry.version for entry in entries if identity is not None and entry.ref_id == identity}
 
 
-def licensed_under(control_root: str, storage_options: StorageOptions, *, table_uuid: str, name: str, now: datetime | None = None) -> datetime | None:
-    """The latest instant a live licence names a version under the branch name ``name``, ``None`` where none does: asked
-    by a create that read the name free, so every such licence is a deleted incarnation's (NameGuard, ADR 0246).
+def licensed_under(control_root: str, storage_options: StorageOptions, *, location: str, name: str, now: datetime | None = None) -> datetime | None:
+    """The latest instant a live licence names a version under the branch name ``name`` of the table at ``location``,
+    ``None`` where none does: asked by a create that read the name free, so every such licence is a deleted
+    incarnation's (NameGuard, ADR 0246), granted under whichever registration held the location.
 
     A licence names numbers under a path, and Lance's cleanup deletes by number under the path a branch's name holds when
     it runs (measured on pylance 13.0.0: a cleanup through a handle of a deleted incarnation removed the versions 3 and 4
@@ -412,7 +474,7 @@ def licensed_under(control_root: str, storage_options: StorageOptions, *, table_
     Raises:
         OSError: The store did not answer, or the record does not parse.
     """
-    entries, _etag = read(control_root, storage_options, table_uuid)
+    entries, _etag = read(control_root, storage_options, location)
     now = now or datetime.now(UTC)
     return max((until for entry in entries if entry.ref == name and (until := _live_until(entry, now)) is not None), default=None)
 
@@ -483,9 +545,9 @@ class Pinned(BaseModel):
             raise TimeoutError(f"the door ran {DOOR_DEADLINE} past its pin, which a reclaim may have taken for a dead door's")
 
 
-def pin_whole(control_root: str, storage_options: StorageOptions, *, table_uuid: str, dataset: lance.LanceDataset, ref: str | None, version: int) -> Pinned:
-    """PinFirst: pin ``version`` of ``ref``, then read the record and refuse it where an entry names it; the pin, which the
-    door deletes once it has acted (:func:`unpin`). A refused door's pin is deleted here.
+def pin_whole(control_root: str, storage_options: StorageOptions, *, location: str, dataset: lance.LanceDataset, ref: str | None, version: int) -> Pinned:
+    """PinFirst: pin ``version`` of ``ref``, then read the record of the table at ``location`` and refuse it where an entry
+    names it; the pin, which the door deletes once it has acted (:func:`unpin`). A refused door's pin is deleted here.
 
     Raises:
         ValueError: Lance refused the pin (no such version).
@@ -494,7 +556,7 @@ def pin_whole(control_root: str, storage_options: StorageOptions, *, table_uuid:
     """
     pinned = Pinned(name=pin(dataset, ref, version), at=time.monotonic())
     try:
-        if version in condemned(control_root, storage_options, table_uuid=table_uuid, dataset=dataset, ref=ref):
+        if version in condemned(control_root, storage_options, location=location, dataset=dataset, ref=ref):
             raise CondemnedVersionError(f"version {version} of {recorded_branch(ref) or MAIN} is condemned: a reclaim may be deleting it")
     except BaseException:
         unpin(dataset, pinned.name)
@@ -507,12 +569,15 @@ def pin_whole(control_root: str, storage_options: StorageOptions, *, table_uuid:
 
 class Batch:
     """One reclaim batch of one ref of one table, run by the catalog: :meth:`condemn`, :meth:`read_pins`, the caller's
-    read of the governing policy, then :meth:`promote`. ``dataset`` is a handle of the table's main.
+    read of the governing policy, then :meth:`promote`. ``dataset`` is a handle of the table's main, ``location`` its
+    root, whose record the batch writes.
 
-    ``listed_on`` is the identity of the ref its reclaimer read before it opened the handle it listed the versions asked
-    on (:func:`identity_of`). The ref's identity is read here, as the one its entries are keyed by, and the batch is
-    refused where it is another (ListedOn): the reclaimer listed one incarnation and its numbers would condemn the
-    versions of another.
+    ``table_uuid`` is the registration the batch was asked for, and ``listed_on`` the identity of the ref its reclaimer
+    read before it opened the handle it listed the versions asked on (:func:`identity_of`). The ref's identity is read
+    here, as the one its entries are keyed by, and the batch is refused where it is another (ListedOn): the reclaimer
+    listed one incarnation and its numbers would condemn the versions of another. :meth:`condemn` refuses it too once
+    ``registered`` (the registration holding the location now, :func:`registration_at`) reads another: who may condemn
+    is the registration read, whatever an entry names.
 
     Raises:
         RefGoneError: The branch does not stand.
@@ -529,13 +594,17 @@ class Batch:
         dataset: lance.LanceDataset,
         ref: str | None,
         listed_on: str,
+        registered: Callable[[], str | None],
     ) -> None:
         self._root, self._options, self._uuid, self._location, self._dataset = control_root, storage_options, table_uuid, location, dataset
+        self._registered = registered
         self._ref = recorded_branch(ref)
         self.id = uuid.uuid4().hex
         self._chosen: set[int] = set()
+        self._created: set[int] = set()
         self._excluded: set[int] = set()
         self._licensed: set[int] = set()
+        self._promoted: set[int] = set()
         self._forks: set[int] = set()
         identity = _refs(dataset).get(self._ref)
         if identity is None:
@@ -543,16 +612,24 @@ class Batch:
         _require_listed_on(listed_on, table_uuid if self._ref is None else identity, self._ref)
         self._identity = identity
 
+    def _mine(self, entry: Entry) -> bool:
+        return entry.ref_id == self._identity and entry.version in self._chosen
+
     def condemn(self, versions: Iterable[int], *, forks: bool = False) -> None:
-        """Step 1 (CondemnFirst): this batch's entries written ``c``, for ``versions`` that stand below the ref's head and
-        every standing version of the ref an entry already names; in the same write, every entry whose manifest is gone or
-        whose ref no longer stands dropped (GCOnlyGone). A version a standing branch is cut from is condemned only where
-        ``forks`` asks for it: an erasure's fork cleanup, which takes the files only that version names.
+        """Step 1 (CondemnFirst): the batch's versions condemned, ``versions`` that stand below the ref's head and every
+        standing version of the ref an entry already names: an entry naming one is taken over (its batch id set to this
+        batch's, its state and licence kept) and the others written ``c``, so the record holds one entry per version
+        (TakeOver). In the same write, every entry whose manifest is gone or whose ref no longer stands is dropped
+        (GCOnlyGone). A version a standing branch is cut from is condemned only where ``forks`` asks for it: an erasure's
+        fork cleanup, which takes the files only that version names. Refused, nothing written, once the registration the
+        batch was asked for no longer holds the location (ListedOn).
 
         Raises:
-            OSError: The store did not answer, or the record does not parse.
+            ListedElsewhereError: Another registration holds the location, or none does.
+            OSError: The store did not answer, or the record or the claim does not parse.
             records.RecordChangedError: Every attempt lost to another writer.
         """
+        _require_registered(self._registered, self._uuid)
         names = {identity: name for name, identity in _refs(self._dataset).items()}
         listed: dict[str, set[int]] = {}
 
@@ -573,23 +650,27 @@ class Batch:
             kept = [entry for entry in entries if entry.version in stands(entry.ref_id) or (entry.ref_id not in names and _live_until(entry, now) is not None)]
             # A version a standing branch is cut from keeps its manifest whatever a cleanup is asked (an erasure's fork
             # cleanup took its files), so it is finished only once no branch is cut from it.
-            finish = {entry.version for entry in kept if entry.ref_id == self._identity and entry.version not in self._forks}
-            self._chosen = asked | finish
-            mine = [Entry(ref_id=self._identity, ref=self._ref, version=version, batch=self.id, state="c") for version in sorted(self._chosen)]
-            return kept + mine
+            held = {entry.version for entry in kept if entry.ref_id == self._identity}
+            self._chosen = asked | (held - self._forks)
+            self._created = self._chosen - held
+            taken = [entry.model_copy(update={"batch": self.id}) if self._mine(entry) else entry for entry in kept]
+            mine = [Entry(ref_id=self._identity, ref=self._ref, version=version, batch=self.id, state="c") for version in sorted(self._created)]
+            return taken + mine
 
-        _rewrite(self._root, self._options, self._uuid, self._location, change)
+        _rewrite(self._root, self._options, self._location, change)
 
     def read_pins(self, *, now: datetime | None = None) -> None:
         """Step 2 (ExplicitPins): the table's tags read, each dead door's pin deleted first (A3'); a chosen version a tag
-        or a pin names is excluded, unless another batch's entry names it ``g`` (GoOnly).
+        or a pin names is excluded, unless an entry names it ``g`` (GoOnly): another batch's promotion set it after that
+        batch's own pin read, so a door that pinned it since read its entry and refused. This batch's own entries are
+        ``c`` until its promotion; a ``g`` one it took over at its condemn was set by the batch before it.
 
         Raises:
             OSError: The store did not answer.
         """
         now = now or datetime.now(UTC)
-        entries, _etag = read(self._root, self._options, self._uuid)
-        self._licensed = {entry.version for entry in entries if entry.ref_id == self._identity and entry.state == "g" and entry.batch != self.id}
+        entries, _etag = read(self._root, self._options, self._location)
+        self._licensed = {entry.version for entry in entries if entry.ref_id == self._identity and entry.state == "g"}
         named: set[int] = set()
         for name, tag in self._dataset.tags.list().items():
             if recorded_branch(tag.get("branch")) != self._ref:
@@ -605,10 +686,21 @@ class Batch:
         self._excluded = (self._chosen & named) - self._licensed
 
     def promote(self, held_by: str | None) -> Verdict:
-        """Step 4: under a hold, this batch's own entries removed and nothing licensed; else, in one conditional write,
-        its own entries of excluded versions removed and the rest set ``g`` with the licence's instant
-        (:data:`LICENCE` from now), then the pins on another batch's ``g`` versions deleted (GoUnpins). The verdict names
-        what the reclaimer may delete, and until when.
+        """Step 4, in one conditional write. THE TAKE-OVER RULE, for an entry naming one of the batch's versions:
+
+        - ``c`` and still this batch's (it wrote or took it over at its condemn, and no batch took it over since, so it
+          stood from before this batch's pin read): set ``g`` under this batch with the licence's instant
+          (:data:`LICENCE` from now); removed instead where its version is excluded, or, under a hold, where this batch
+          wrote it or its version is excluded (nothing was deleted under it). One it took over and nothing names stays
+          ``c`` under a hold, condemned as its writer left it.
+        - ``c`` and another batch's (that batch condemned it since, after this one's pin read, which never saw the pins
+          it may have to keep): left to that batch, neither promoted nor removed.
+        - ``g``, whoever's, its licence live or passed: never set back to ``c`` and never removed. Not excluded and not
+          under a hold, it is taken over: its batch id set to this one and its licence to the later of the instant it
+          carries and this batch's, so no reclaimer a licence was granted to loses it while its credential lives.
+
+        The verdict names what this write set ``g`` (the reclaimer deletes exactly those), and until when; then the pins
+        on another batch's ``g`` versions are deleted (GoUnpins).
 
         A batch of a branch then reads the branches (StandsAfterGo): where its incarnation no longer holds the name, it
         licenses nothing. A create under the name reads the name free, then the record (:func:`licensed_under`); so the
@@ -620,19 +712,33 @@ class Batch:
             records.RecordChangedError: Every attempt lost to another writer.
         """
         if held_by is not None:
-            left = _rewrite(self._root, self._options, self._uuid, self._location, lambda entries: [entry for entry in entries if entry.batch != self.id])
+            kept_back = self._created | self._excluded
+
+            def released(entries: list[Entry]) -> list[Entry]:
+                return [entry for entry in entries if not (self._mine(entry) and entry.batch == self.id and entry.state == "c" and entry.version in kept_back)]
+
+            left = _rewrite(self._root, self._options, self._location, released)
             return Verdict(held_by=held_by, standing=self._standing(left))
         until = datetime.now(UTC) + LICENCE
 
         def change(entries: list[Entry]) -> list[Entry]:
-            return [
-                entry.model_copy(update={"state": "g", "licensed_until": until}) if entry.batch == self.id else entry
-                for entry in entries
-                if not (entry.batch == self.id and entry.version in self._excluded)
-            ]
+            promoted: set[int] = set()
+            out: list[Entry] = []
+            for entry in entries:
+                if not self._mine(entry) or (entry.batch != self.id and entry.state != "g"):
+                    out.append(entry)
+                elif entry.version in self._excluded:
+                    if not (entry.batch == self.id and entry.state == "c"):
+                        out.append(entry)
+                else:
+                    carried = entry.licensed_until if entry.state == "g" and entry.licensed_until is not None else until
+                    out.append(entry.model_copy(update={"batch": self.id, "state": "g", "licensed_until": max(carried, until)}))
+                    promoted.add(entry.version)
+            self._promoted = promoted
+            return out
 
-        left = _rewrite(self._root, self._options, self._uuid, self._location, change)
-        go = sorted(entry.version for entry in left if entry.batch == self.id)
+        left = _rewrite(self._root, self._options, self._location, change)
+        go = sorted(self._promoted)
         if go and self._ref is not None and _refs(self._dataset).get(self._ref) != self._identity:
             log.warning("reclaim_branch_gone_after_promotion", extra={"table_uuid": self._uuid, "ref": self._ref, "versions": go[:20]})
             return Verdict(standing=self._standing(left))
@@ -660,47 +766,53 @@ def condemn_named(
     listed_on: str,
     versions: Sequence[int],
     refuse_pinned: Callable[[list[int]], None],
+    registered: Callable[[], str | None],
 ) -> list[int]:
-    """``version/delete``: condemn ``versions`` of ``ref`` that stand below its head, under a batch id of its own; the
-    versions condemned. Nothing is deleted: the next reclaim of the ref finishes them unless a hold keeps them.
-    ``listed_on`` is the ref's identity as the door read it before it opened the handle it judged the request on, and
-    the delete is refused where the ref is now another (ListedOn), as a batch is.
+    """``version/delete``: condemn ``versions`` of ``ref`` that stand below its head and no entry names yet, under a batch
+    id of its own; the versions it condemned (one an entry already names stays as it is: condemned, and one entry per
+    version). Nothing is deleted: the next reclaim of the ref finishes them unless a hold keeps them. ``listed_on`` is the
+    ref's identity as the door read it before it opened the handle it judged the request on, and the delete is refused
+    where the ref is now another, or ``registered`` reads another registration than ``table_uuid`` holding the location
+    (ListedOn), as a batch is.
 
     In a batch's order (VDeleteCondemnsFirst, ``ReclaimVDeleteReadsFirst.cfg``): the entries are written, THEN
     ``refuse_pinned`` reads the tags, the pins and the branches cut from the ref and raises where one names a version
-    condemned, and its entries are then removed (nothing was deleted under them). A tag door pins, then reads the record,
-    so of the two at least one sees the other: a version a caller's tag names is never left condemned.
+    asked for, and the entries it wrote and still holds are then removed (nothing was deleted under them; one a batch took
+    over since is that batch's, whose own pin read excludes it). A tag door pins, then reads the record, so of the two at
+    least one sees the other.
 
     Raises:
         RefGoneError: The branch does not stand.
-        ListedElsewhereError: ``listed_on`` is not the ref's identity now.
-        OSError: The store did not answer, or the record does not parse.
+        ListedElsewhereError: ``listed_on`` is not the ref's identity now, or the registration no longer holds the location.
+        OSError: The store did not answer, or the record or the claim does not parse.
         records.RecordChangedError: Every attempt lost to another writer.
-        Exception: Whatever ``refuse_pinned`` raises; nothing stays condemned.
+        Exception: Whatever ``refuse_pinned`` raises; nothing it condemned stays its own.
     """
     ref = recorded_branch(ref)
     found = _refs(dataset).get(ref)
     if found is None:
         raise RefGoneError(f"branch {ref!r} not found")
     _require_listed_on(listed_on, table_uuid if ref is None else found, ref)
+    _require_registered(registered, table_uuid)
     identity: str = found
     stands = _versions_of(dataset, ref)
     head = max(stands, default=0)
     named = sorted({version for version in versions if version in stands and version < head})
     batch = f"vd-{uuid.uuid4().hex}"
-    _rewrite(
-        control_root,
-        storage_options,
-        table_uuid,
-        location,
-        lambda entries: entries + [Entry(ref_id=identity, ref=ref, version=version, batch=batch, state="c") for version in named],
-    )
+    wrote: list[int] = []
+
+    def change(entries: list[Entry]) -> list[Entry]:
+        held = {entry.version for entry in entries if entry.ref_id == identity}
+        wrote[:] = [version for version in named if version not in held]
+        return entries + [Entry(ref_id=identity, ref=ref, version=version, batch=batch, state="c") for version in wrote]
+
+    _rewrite(control_root, storage_options, location, change)
     try:
         refuse_pinned(named)
     except BaseException:
-        _rewrite(control_root, storage_options, table_uuid, location, lambda entries: [entry for entry in entries if entry.batch != batch])
+        _rewrite(control_root, storage_options, location, lambda entries: [entry for entry in entries if entry.batch != batch])
         raise
-    return named
+    return list(wrote)
 
 
 # ---------------------------------------------------------------- the reclaim

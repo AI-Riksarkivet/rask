@@ -129,13 +129,13 @@ async def _set(settings: Settings, kind: PolicyKind, key: str, compose: Callable
         raise ConcurrentModificationError(f"the {kind} policy kept changing while it was set; set it again") from exc
 
 
-def _condemned_under(settings: Settings, *, table_uuid: str | None = None, within: Callable[[list[str]], bool] | None = None) -> CondemnedBeneath:
-    """The versions already condemned of the table ``table_uuid``, or of every table whose name now ``within`` takes,
-    read AFTER the door's write (HoldWritesFirst, ADR 0246): what its answer does not promise, the first
-    :data:`reclaims.CONDEMNED_SHOWN` named and the rest counted. A record that cannot be read is named in the answer, never
-    a refusal: the policy stands as written."""
+def _condemned_under(settings: Settings, *, location: str | None = None, within: Callable[[list[str]], bool] | None = None) -> CondemnedBeneath:
+    """The versions already condemned of the table at ``location`` (whichever registration of it condemned them), or of
+    every table whose name now ``within`` takes, read AFTER the door's write (HoldWritesFirst, ADR 0246): what its answer
+    does not promise, the first :data:`reclaims.CONDEMNED_SHOWN` named and the rest counted. A record that cannot be read
+    is named in the answer, never a refusal: the policy stands as written."""
     found = reclaims.condemned_versions_of(
-        settings.registry_root, settings.storage_options(), table_claims.claim_store(settings), table_uuid=table_uuid, within=within
+        settings.registry_root, settings.storage_options(), table_claims.claim_store(settings), location=location, within=within
     )
     return CondemnedBeneath(
         condemned=[
@@ -218,7 +218,7 @@ async def set_table_policy(
     record = await _set(
         settings, "table", table_uuid, lambda stored: {**_record("table", canonical, body, stored, uuid=table_uuid), "location": str(table.location)}
     )
-    condemned = await run_in_threadpool(partial(_condemned_under, settings, table_uuid=table_uuid))
+    condemned = await run_in_threadpool(partial(_condemned_under, settings, location=str(table.location)))
     log.info("maintenance_policy_set", extra={"kind": "table", "id": canonical})
     await emit_control(
         control,
@@ -244,7 +244,7 @@ async def delete_table_policy(id: str, table: ResolvedTableDep, settings: Settin
     """Remove the table's maintenance policy (idempotent) — owner-gated by the router. The table is then governed by its
     nearest namespace's, else its project's, policy; the answer names its versions already condemned."""
     uuid = table.require_uuid()
-    condemned = partial(_condemned_under, settings, table_uuid=uuid)
+    condemned = partial(_condemned_under, settings, location=str(table.location))
     return await _delete(settings, control, token, "table", key=uuid, canonical=fga.canonical_object_id(table.segments), condemned=condemned)
 
 

@@ -675,7 +675,7 @@ def _recreate(dataset: _Dataset, record: ReleaseRecord, *, control_root: str, st
     for step in record.plan:
         if step.branch in present:
             continue
-        if (until := condemned_versions.licensed_under(control_root, storage_options, table_uuid=record.table_uuid, name=step.branch)) is not None:
+        if (until := condemned_versions.licensed_under(control_root, storage_options, location=record.location, name=step.branch)) is not None:
             raise RuntimeError(f"branch {step.branch!r} comes back once a reclaim's licence under its name ends at {until.isoformat()}")
         dataset.create_branch(step.branch, reference=(step.parent, step.version))
         present.add(step.branch)
@@ -703,7 +703,7 @@ def _pinned_recreate_points(dataset: _Dataset, record: ReleaseRecord, *, control
     try:
         for version in sorted({step.version for step in record.plan if step.parent is None}):
             condemned_versions.pin(handle, None, version, name=condemned_versions.release_pin_name(record.release_id, version))
-        condemned = condemned_versions.condemned(control_root, storage_options, table_uuid=record.table_uuid, dataset=handle, ref=None)
+        condemned = condemned_versions.condemned(control_root, storage_options, location=record.location, dataset=handle, ref=None)
         if hit := sorted(condemned & {step.version for step in record.plan if step.parent is None}):
             raise RuntimeError(f"main's versions {hit}, where the release makes its branches again, are condemned: a reclaim may be deleting them")
     except BaseException:
