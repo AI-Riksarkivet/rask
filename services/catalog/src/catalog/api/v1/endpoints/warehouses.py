@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Final, Literal, NamedTuple
@@ -974,9 +974,10 @@ class _NamespaceSubtree(BaseModel):
         return [*self.descendants, *own]
 
 
-async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, held: list[str], *, force: bool) -> list[_NamespaceSubtree]:
-    """Every namespace ``held`` directly in the warehouse with its subtree, enumerated and held to its protection before
-    anything is removed.
+async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, held: list[str], *, force: bool, judge: bool) -> list[_NamespaceSubtree]:
+    """Every namespace ``held`` directly in the warehouse with its subtree, enumerated and, with ``judge`` (a delete short
+    of its point of no return), held to its protection before anything is removed. A delete resumed past its stamp judged
+    the protection before it, with the force its stamp records, and is refused by nothing now (ADR 0245, fourth review).
 
     ALL OF THEM FIRST, so a refusal changes nothing: a protected table in the last namespace must not be found
     after the first namespace is gone. The walker and the protection pre-flight are the namespace door's, so a
@@ -999,9 +1000,22 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, held: list[s
             continue
         descendants = await namespaces_api._identify(ns, settings, listed)  # noqa: SLF001 — one walker, deliberately
         subtrees.append(_NamespaceSubtree(segments=segments, uuid=namespace.uuid, descendants=descendants))
-    doomed = [item for subtree in subtrees for item in subtree.guarded]
-    await namespaces_api._require_descendants_unprotected(settings, doomed, force=force)  # noqa: SLF001 — one protection pre-flight, deliberately
+    if judge:
+        doomed = [item for subtree in subtrees for item in subtree.guarded]
+        await namespaces_api._require_descendants_unprotected(settings, doomed, force=force)  # noqa: SLF001 — one protection pre-flight, deliberately
     return subtrees
+
+
+def _refuse_unless_resuming(resuming: tenancy.Stamp | None, refusal: Exception) -> None:
+    """Raise ``refusal`` for a delete short of its point of no return; for one resumed past it, which is refused by nothing,
+    answer that it is not finished yet (503), so asking again, or the converge tick, finishes it once what stood is gone.
+
+    Raises:
+        Exception: ``refusal``, or the unfinished delete's 503.
+    """
+    if resuming is None:
+        raise refusal
+    raise ServiceUnavailableError(f"the delete past its point of no return cannot finish yet ({refusal}); it is finished when asked again") from refusal
 
 
 async def _require_tables_unfenced(ns: LanceNamespace, settings: Settings, subtrees: list[_NamespaceSubtree]) -> None:
@@ -1182,9 +1196,9 @@ def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]],
 
     ``NamespaceNotEmptyError`` (409) is the refusal: the container still holds something that is not this
     warehouse's to destroy. The reserved case is ``InvalidInputError`` (400), matching create's own wording
-    for the same bucket. Both run BEFORE any irreversible step, so a refusal costs nothing. Whether the bucket's claim
-    is this warehouse's is not judged here: the purge takes the claim itself before it deletes a byte
-    (``warehouses.take_for_purge``), and a claim it cannot take keeps every byte.
+    for the same bucket. Both run BEFORE the mark, as an early refusal of a fresh delete, so a refusal costs nothing.
+    They are not what keeps a sibling's bytes: a sibling made after this read is judged again under the claim the purge
+    stamps past the point of no return, which stands the purge down (:meth:`_Purge.judge_under_claim`).
     """
     bucket = record["bucket"]
     if bucket in settings.reserved_bucket_set:
@@ -1259,16 +1273,21 @@ async def delete_warehouse(
        re-issue, and the claim is released only once no record names the bucket.
     7. **Bytes only on ``?purge_bucket=true``, and only under a claim the purge itself holds** (ADR 0241 §10 Q1). A
        catalog entry is recoverable, a customer's bucket is not, so the two never share a default; a record-less bucket
-       is reported by the reconciler, not lost. A purge that would take bytes this warehouse does not solely own — a
-       bucket a same-project sibling still claims, or reserved platform storage — refuses BEFORE the cascade
-       (:func:`_require_bucket_purgeable`). Before its first delete the purge takes the bucket's claim for itself
-       (``warehouses.take_for_purge``: stamped ``purging`` under the read's ETag, where it names this warehouse's
-       project at its creation), which refuses every create on the bucket (409) until it ends; the bytes are deleted
-       while the claim read again is still its stamp (``warehouses.purge_bucket``), and the claim is released last
-       (``warehouses.end_purge``). A purge that dies leaves the stamp, and only this delete asked again resumes it. A
-       claim released, absent or naming anyone else keeps every byte: the record goes, and the answer's ``bytes_kept``
-       says why. Audited ``bucket_purge``: ``allow`` once the claim is taken and before the first delete, then
-       ``success``, or ``failure`` naming the ``stage`` it reached.
+       is reported by the reconciler, not lost. A fresh delete whose purge would take bytes this warehouse does not
+       solely own — a bucket a same-project sibling names, reserved platform storage, a table a clone outside reads — is
+       refused BEFORE its mark (:func:`_require_bucket_purgeable`, :func:`_require_no_outside_clones`), an early
+       refusal that costs nothing. Past the point of no return the purge takes the bucket's claim for itself
+       (``warehouses.take_for_purge``: stamped ``purging`` under the read's ETag by the delete's own name, the run that
+       passed its stamp, where it names this warehouse's project at its creation), which refuses every create on the
+       bucket (409) until it ends. UNDER that claim it reads again the warehouses naming the bucket and the clones
+       outside, and where another warehouse names it, a clone reads it, or the claim is released, another tenant's or
+       another purge's, the purge STANDS DOWN: its stamp given back, the delete finished keeping every byte, the
+       answer's ``bytes_kept`` and the audit row saying why (ADR 0245, fourth review). Otherwise the bytes are deleted
+       while the claim read again is still its stamp (``warehouses.purge_bucket``), the record ends naming the delete
+       and its purge done, and the claim is released last (``warehouses.end_purge``); a delete that dies between the
+       two leaves the claim to the converge tick (``tenancy_converge._finish_purge``). Audited ``bucket_purge``:
+       ``allow`` once the claim is taken and before the first delete, then ``success`` (with ``bytes_kept`` where it
+       stood down), or ``failure`` naming the ``stage`` it reached.
 
     Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
     reaches its bucket.
@@ -1277,28 +1296,27 @@ async def delete_warehouse(
     ``can_purge_dead_tenant_warehouse`` on the estate reaches it with ``?purge_bucket=true``, the bucket in the
     warehouse's place.
 
-    **The point of no return** (ADR 0245, reviews T2, T3 and S1). Every check that can refuse with nothing changed runs
-    before the mark, judged on one read of the record that the mark is then written under (its ETag; a record changed
-    since is refused 409, nothing changed): the protection (step 3; judged again by a delete taking over a mark short of
-    its point of no return, ``tenancy.judges``), the emptiness (step 4), the purge's guards (step 7), the warehouse's
-    namespace fence taken for the drop (409 while another holds it), the subtree's protection, the trash it cannot
-    account for and the clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is
-    written beneath it (a declare or a commit is refused 409). The namespaces are read again after the mark
-    (`ChildrenBeforeMark`): one made in between refuses 409 without ``cascade``, or is held to the subtree's checks with
-    it; a listed table another request has fenced refuses 409; and the purge takes the bucket's claim, which another
-    purge holding refuses 409 with no byte touched. From the mark to the stamp is one span (``tenancy.marked``): ANY
-    failure in it, such a refusal or a store not answering, PUTS THE RECORD BACK live (the claim given back as it stood),
-    and one whose put-back fails too answers 503 saying the warehouse is left marked (the converge tick puts it back past
-    its bound). Then the POINT OF NO RETURN is stamped on the record, with the ``cascade`` and ``purge_bucket`` the delete
-    was asked, before the first irreversible step (the trash's end, a table's detach, a grant's revoke): past it NOTHING
-    puts the warehouse back (ADR 0245, third review); the delete finishes, or its answer is ``partial`` (503), a guard's
-    refusal there included, and the same delete asked again, or the converge tick, finishes it as the stamp records it
-    was asked (:func:`remove_warehouse`). A step past the
-    mark acts on this creation's own objects: its trash is the records filed under its own creation
-    (``warehouses.trash_owned_by``), its cascade writes only under the warehouse's namespace fence, which a delete made
-    of a warehouse made again under the id takes from it, and its end is the record's one removal, conditional on a read
-    that found this delete's own mark (``tenancy.end``): a delete taken over answers 409, and one whose creation ended and
-    the id names another answers 404, ending nothing of the warehouse that holds the id now.
+    **The point of no return** (ADR 0245). PAST ITS STAMP, A DELETE NEVER REFUSES. Every check that can refuse with
+    nothing changed runs before the mark, judged on one read of the record that the mark is then written under (its
+    ETag; a record changed since is refused 409, nothing changed): the protection (step 3; judged again by a delete
+    taking over a mark short of its point of no return, ``tenancy.judges``), the emptiness (step 4), the purge's early
+    refusals (step 7), the warehouse's namespace fence taken for the drop (409 while another holds it), the subtree's
+    protection with the caller's ``force``, and the trash it cannot account for. Then the MARK: no door resolves the
+    warehouse from here, and nothing is written beneath it (a declare or a commit is refused 409). The namespaces are
+    read again after the mark (`ChildrenBeforeMark`): one made in between refuses 409 without ``cascade``, or is held to
+    the subtree's checks with it; and a listed table another request has fenced refuses 409. From the mark to the stamp
+    is one span (``tenancy.marked``) that touches nothing the delete would have to give back, the bucket's claim
+    included: ANY failure in it PUTS THE RECORD BACK live, and one whose put-back fails too answers 503 saying the
+    warehouse is left marked (the converge tick puts it back past its bound). Then the POINT OF NO RETURN is stamped on
+    the record, written once by the first run past it: that run, and the ``cascade``, ``purge_bucket`` and ``force`` it
+    was asked. Past it NOTHING puts the warehouse back and nothing refuses it: the delete finishes, or its answer is
+    ``partial`` (503) for any failure, and the same delete asked again, whatever it passes, or the converge tick,
+    finishes it exactly as stamped, judging no check (:func:`remove_warehouse`). A step past the mark acts on this
+    creation's own objects: its trash is the records filed under its own creation (``warehouses.trash_owned_by``), its
+    cascade writes only under the warehouse's namespace fence, which a delete made of a warehouse made again under the
+    id takes from it, and its end is the record's one removal, conditional on a read that found this delete's own mark
+    (``tenancy.end``): a delete taken over answers 409, and one whose creation ended and the id names another answers
+    404, ending nothing of the warehouse that holds the id now.
     """
     if addressed.record is None:
         if not purge_bucket:
@@ -1329,8 +1347,9 @@ async def remove_warehouse(
 
     ``finishing`` is the converge tick's: the delete run its listing found past its point of no return, which the record
     read here must still carry, so the tick finishes that delete and never begins one (``tenancy.judged``). A record past
-    its point of no return is finished as its stamp records the delete was asked (``tenancy.asked_of``): the ``cascade``
-    and ``purge_bucket`` a delete asked again, or the tick, passes are not read, and the answer says what was done.
+    its point of no return is finished as its stamp records the delete was asked (``tenancy.stamp_of``): the ``cascade``,
+    ``purge_bucket`` and ``force`` a delete asked again, or the tick, passes are not read, no check is judged, and the
+    answer says what was done.
 
     Raises:
         tenancy.NothingToFinish: ``finishing`` names a run the record no longer carries past its point of no return.
@@ -1341,28 +1360,28 @@ async def remove_warehouse(
     record = judged.record
     project = record["project"]
     obj = _object_of(record)
+    bucket = record["bucket"]
     narrowed: str | None = None
-    if not tenancy.judges(record):
-        # Past a point of no return: finished as the delete that passed it was asked, never wider.
-        asked = tenancy.asked_of(record)
-        if purge_bucket and not asked.purge_bucket:
-            narrowed = f"the delete that passed its point of no return was not asked to purge bucket {record['bucket']!r}, so this one purges no byte"
-        cascade, purge_bucket = asked.cascade, asked.purge_bucket
-    # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
-    # state, so it runs strictly after the gate above. Judged again over a mark short of its point of no return: taking it
-    # over is a new delete (``ChecksTakeOver``); a delete past one was judged when it passed it.
-    if tenancy.judges(record):
+    # PAST ITS STAMP, A DELETE NEVER REFUSES (ADR 0245, fourth review). Everything a delete may be refused for is judged
+    # before its stamp, which records what was asked; a delete resuming one past it runs exactly as stamped, whatever its
+    # own caller passes (the converge tick passes nothing), and judges no check: a step is done, retried (``partial``), or,
+    # for the purge alone, stood down.
+    resuming = tenancy.stamp_of(record)
+    if resuming is not None:
+        if purge_bucket and not resuming.asked.purge_bucket:
+            narrowed = f"the delete that passed its point of no return was not asked to purge bucket {bucket!r}, so this one purges no byte"
+        cascade, purge_bucket, force = resuming.asked.cascade, resuming.asked.purge_bucket, resuming.asked.force
+    else:
+        # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection state, so it
+        # runs strictly after the gate above. Judged again over a mark short of its point of no return: taking it over is
+        # a new delete (``ChecksTakeOver``).
         fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)
 
-    # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
-    holder = warehouses.purge_holder("warehouse", warehouse_id, record[UUID])
-    # A purge of this warehouse that died left its stamp, and may have deleted the bucket: one that is gone holds nothing to
-    # list, and a connection to it cannot be built.
-    claim = await run_in_threadpool(partial(warehouses.bucket_claim, settings.registry_root, so, bucket=record["bucket"])) if purge_bucket else None
-    its_own = _claim_is_its_own(claim, record, holder)
-    resumed = its_own and claim is not None and claim.get(warehouses.PURGING) == holder
+    # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes. A
+    # purge past its stamp may have deleted the bucket before it died: one that is gone holds nothing to list, and a
+    # connection to it cannot be built.
     in_estate_store = names_the_estate_store(record.get("endpoint"), estate=settings.s3_endpoint) and (
-        not resumed or await run_in_threadpool(warehouses.bucket_exists, record["bucket"], so)
+        resuming is None or not purge_bucket or await run_in_threadpool(warehouses.bucket_exists, bucket, so)
     )
     ns_conn = (
         fenced(
@@ -1375,17 +1394,19 @@ async def remove_warehouse(
     )
     held = await _namespaces_in(ns_conn, warehouse_id) if ns_conn is not None else []
     if held and not cascade:
-        raise NamespaceNotEmptyError(
-            f"warehouse '{warehouse_id}' still holds {len(held)} namespace(s): {', '.join(held)}. "
-            f"Drop them first, or pass ?cascade=true to drop exactly those with the warehouse."
+        _refuse_unless_resuming(
+            resuming,
+            NamespaceNotEmptyError(
+                f"warehouse '{warehouse_id}' still holds {len(held)} namespace(s): {', '.join(held)}. "
+                f"Drop them first, or pass ?cascade=true to drop exactly those with the warehouse."
+            ),
         )
 
-    bucket = record["bucket"]
-    if purge_bucket:
-        # The registry-wide read happens ONLY on the destructive path: the guard needs every claim on this
-        # bucket, and a plain (recoverable) delete has no reason to pay for it. It runs here, before the
-        # mark and the cascade, so a refusal still costs nothing — the bottom-up rule applies to the bytes too. Read whole:
-        # a record that cannot be read may be a sibling's claim on this bucket ([[LH-572]]).
+    if resuming is None and purge_bucket:
+        # The registry-wide read happens ONLY on the destructive path, and here only as an early refusal of a fresh
+        # delete, which costs nothing: whether another warehouse names the bucket is judged again under the claim the
+        # purge stamps past the point of no return, which no create on the bucket passes (`Purge.judge_under_claim`).
+        # Read whole: a record that cannot be read may be a sibling's claim on this bucket ([[LH-572]]).
         records = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
         _require_bucket_purgeable(settings, records, record, warehouse_id)
 
@@ -1393,8 +1414,9 @@ async def remove_warehouse(
     # ESTATE's client, so for a record naming another store the one would sign toward that host with the
     # estate's key and the other would delete the estate's same-named bucket. Asked for, either is refused here,
     # before the first step lands, so the caller gets the refusal and not a report of a cascade that listed
-    # nothing. A plain delete touches no store and stays open: it is how such a record is retired.
-    if cascade or purge_bucket:
+    # nothing. A plain delete touches no store and stays open: it is how such a record is retired. A delete past its
+    # stamp passed this before it, and a record being deleted is changed by no door.
+    if resuming is None and (cascade or purge_bucket):
         require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     # G4 (ADR 0233): the warehouse's namespace fence held for a drop from before its trash is read until its record is gone.
@@ -1405,10 +1427,10 @@ async def remove_warehouse(
     async with holding_to_confirm(settings.registry_root, so, [warehouse_id], NamespaceWork.DROP) as fence:
         # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
         # this warehouse's namespaces and report a clean delete having removed nothing.
-        subtrees = await _cascade_subtrees(ns_conn, settings, held, force=force) if ns_conn is not None else []
+        subtrees = await _cascade_subtrees(ns_conn, settings, held, force=force, judge=resuming is None) if ns_conn is not None else []
         # The warehouse's own trash: the records its own creation filed.
         trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, record)
-        if purge_bucket:
+        if resuming is None and purge_bucket:
             await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
         purge = _Purge(
             subject=f"user:{token.subject}" if token else None,
@@ -1421,77 +1443,83 @@ async def remove_warehouse(
         )
         async with tenancy.marked(settings, delete, judged, by=current_subject(token)) as marking:
             # Marked `deleting` (`MarksFirst`): a namespace made after the mark is refused by its door, and one made before
-            # it is in this second read. Nothing irreversible is done yet, so a refusal here, or any failure before the
-            # stamp, puts the warehouse back live. Every step that can still refuse runs here, before the stamp
-            # (`NoReturnFinal`): past it nothing puts the warehouse back, and the delete only finishes.
-            try:
-                if ns_conn is not None and (late := sorted(set(await _namespaces_in(ns_conn, warehouse_id)) - set(held))):
-                    if not cascade:
-                        raise NamespaceNotEmptyError(
+            # it is in this second read. Nothing irreversible is done yet, and nothing here touches the bucket's claim, so a
+            # refusal here, or any failure before the stamp, puts the warehouse back live with nothing of it changed
+            # (`ClaimAfterStamp`). Every step that can still refuse runs here, before the stamp (`NoReturnFinal`).
+            if ns_conn is not None and (late := sorted(set(await _namespaces_in(ns_conn, warehouse_id)) - set(held))):
+                if not cascade:
+                    _refuse_unless_resuming(
+                        resuming,
+                        NamespaceNotEmptyError(
                             f"warehouse '{warehouse_id}' acquired namespace(s) {', '.join(late)} while its delete began; drop them, or pass ?cascade=true"
-                        )
-                    acquired = await _cascade_subtrees(ns_conn, settings, late, force=force)
-                    if purge_bucket:
-                        await _require_no_outside_clones(ns_conn, settings, subtrees=acquired, trashed=[])
-                    subtrees = [*subtrees, *acquired]
-                # A table another request is acting on (its claim fenced: a drop or a rename that began before the mark)
-                # refuses here, where the refusal still leaves the warehouse live; one that fences after this read is met
-                # by the detach past the stamp, which answers `partial`, and asking again finishes once it is done.
-                if ns_conn is not None:
-                    await _require_tables_unfenced(ns_conn, settings, subtrees)
-                # The purge's claim is taken before the stamp too (ADR 0241 §10 Q1): a claim another purge holds refuses
-                # with no byte touched, and the warehouse is put back live with the claim as it stood.
-                if purge_bucket:
-                    await purge.take(settings, holder)
-                # The point of no return: past it the delete finishes, or the same delete asked again, or the converge
-                # tick as the stamp records it was asked, does.
-                await marking.pass_no_return(DeleteAsked(cascade=cascade, purge_bucket=purge_bucket))
-            except BaseException as exc:
-                # A delete short of its stamp gives back the claim it took; one resuming a stamped delete keeps it, for the
-                # purge that delete began.
-                if not marking.stamped and tenancy.judges(record):
-                    purge.failed(exc)
-                    await purge.give_back(settings)
-                raise
-        # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
-        # What the delete announces is filed before it changes anything, so a delete that fails part-way still announces what
-        # it did once the store shows it ([[LH-576]]): a deregister marker per table it means to detach, landed once the
-        # table's name names it no longer, and `warehouse_deleted`, landed once the warehouse's record is gone.
-        detached: dict[tuple[str, ...], Announcement] = {}
-        for subtree in subtrees:
-            for item in subtree.descendants:
-                if item.kind == "table":
-                    detached[tuple(item.segments)] = Announcement(
-                        evidence=NameResolves(segments=item.segments, uuid=item.uuid, held=False),
-                        message=announcer.marker(
-                            item.segments,
-                            author=token.subject if token is not None else None,
-                            operation=DEREGISTER_TABLE,
-                            uuids=await uuids.table(item.segments, uuid=item.uuid),
                         ),
                     )
-        planned = CatalogControlEvent(
-            action="warehouse_deleted",
-            object_type="warehouse",
-            object_id=f"warehouse:{warehouse_id}",
-            actor=f"user:{token.subject}" if token else None,
-            extra={
-                "project": project,
-                UUID: record[UUID],
-                "bucket": bucket,
-                "namespaces_dropped": [fga.canonical_object_id(namespace) for subtree in subtrees for namespace in subtree.namespaces],
-                "bucket_purged": purge_bucket,
-                "objects_purged": 0,
-            },
-        )
-        deleted = Announcement(evidence=RecordGone(key=warehouses.record_key(warehouse_id)), message=ControlMessage(event=planned))
-        async with announcer.announcing(door="delete_warehouse", target=f"warehouse:{warehouse_id}", announcements=[*detached.values(), deleted]) as filing:
-            namespaces_dropped: list[str] = []
-            tables_removed: list[str] = []
-            trash_ended: list[str] = []
-            revoked = 0
-            bucket_purged = False
+                acquired = await _cascade_subtrees(ns_conn, settings, late, force=force, judge=resuming is None)
+                if resuming is None and purge_bucket:
+                    await _require_no_outside_clones(ns_conn, settings, subtrees=acquired, trashed=[])
+                subtrees = [*subtrees, *acquired]
+            # A table another request is acting on (its claim fenced: a drop or a rename that began before the mark)
+            # refuses a fresh delete here, where the refusal still leaves the warehouse live; one that fences after this
+            # read, or meets a delete resumed past its stamp, is met by the detach, which answers `partial`, and asking
+            # again finishes once it is done.
+            if ns_conn is not None and resuming is None:
+                await _require_tables_unfenced(ns_conn, settings, subtrees)
+            # The point of no return, recording what was asked: past it the delete finishes, or the same delete asked
+            # again, or the converge tick, does, exactly as stamped (`ForceRecorded`).
+            stamp = await marking.pass_no_return(DeleteAsked(cascade=cascade, purge_bucket=purge_bucket, force=force))
+        namespaces_dropped: list[str] = []
+        tables_removed: list[str] = []
+        trash_ended: list[str] = []
+        revoked = 0
+        bucket_purged = False
+        purged = 0
+        # PAST THE STAMP EVERY FAILURE IS `partial` (Decision 3's partial-failure honesty): the claim's take, the
+        # announcements' building and filing, and every step after them. The error is deliberately NOT swallowed
+        # (fail-closed; every primitive is idempotent, so the recovery path is to re-issue the same call, which the converge
+        # tick also does), but what DID land is recorded here or it is lost.
+        async with AsyncExitStack() as stack:
             try:
+                if purge_bucket:
+                    # The purge's claim, taken past the stamp under the name of the delete that passed it (its run), so
+                    # every request or tick finishing this delete purges under one stamp and no put-back ever meets it
+                    # (`ClaimAfterStamp`). Under it, what may stand the purge down is judged again (`SiblingUnderClaim`).
+                    await purge.take(settings, warehouses.purge_holder("warehouse", warehouse_id, record[UUID], run=stamp.run))
+                    await purge.judge_under_claim(settings, record, ns_conn, subtrees=subtrees, trashed=trashed)
+                # What the delete announces is filed before it changes anything, so a delete that fails part-way still
+                # announces what it did once the store shows it ([[LH-576]]): a deregister marker per table it means to
+                # detach, landed once the table's name names it no longer, and `warehouse_deleted`, landed once the
+                # warehouse's record is gone.
+                detached: dict[tuple[str, ...], Announcement] = {}
+                for subtree in subtrees:
+                    for item in subtree.descendants:
+                        if item.kind == "table":
+                            detached[tuple(item.segments)] = Announcement(
+                                evidence=NameResolves(segments=item.segments, uuid=item.uuid, held=False),
+                                message=announcer.marker(
+                                    item.segments,
+                                    author=token.subject if token is not None else None,
+                                    operation=DEREGISTER_TABLE,
+                                    uuids=await uuids.table(item.segments, uuid=item.uuid),
+                                ),
+                            )
+                planned = CatalogControlEvent(
+                    action="warehouse_deleted",
+                    object_type="warehouse",
+                    object_id=f"warehouse:{warehouse_id}",
+                    actor=f"user:{token.subject}" if token else None,
+                    extra={
+                        "project": project,
+                        UUID: record[UUID],
+                        "bucket": bucket,
+                        "namespaces_dropped": [fga.canonical_object_id(namespace) for subtree in subtrees for namespace in subtree.namespaces],
+                        "bucket_purged": purge.hold is not None,
+                        "objects_purged": 0,
+                    },
+                )
+                deleted = Announcement(evidence=RecordGone(key=warehouses.record_key(warehouse_id)), message=ControlMessage(event=planned))
+                filing = await stack.enter_async_context(
+                    announcer.announcing(door="delete_warehouse", target=f"warehouse:{warehouse_id}", announcements=[*detached.values(), deleted])
+                )
                 for entry in trashed:
                     kind, canonical = str(entry.get("kind") or "table"), str(entry.get("id") or "")
                     # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
@@ -1549,7 +1577,9 @@ async def remove_warehouse(
                 # may have been filed under the warehouse since its read. The record goes only while the hold still stands; a
                 # lapsed one refuses here (409), the record kept for the re-issue, which reads the trash again.
                 await run_in_threadpool(fence.confirm)
-                await tenancy.end(settings, delete)
+                # Ended naming the delete by its stamp and whether its purge was done, which the converge tick releases a
+                # claim this delete stamped by, should the release below not land (`FinishChecksEnd`).
+                await tenancy.end(settings, delete, stamp.ended(bucket_purged=bucket_purged if purge_bucket else None))
                 purge.stage = "record_deleted"
                 await purge.release(settings)
             except (tenancy.DeleteGone, tenancy.DeleteTakenOver) as exc:
@@ -1558,18 +1588,10 @@ async def remove_warehouse(
                 purge.failed(exc)
                 raise
             except Exception as exc:
-                # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: past the point of no
-                # return a step CAN still fail (an OpenFGA outage on the revoke, a registry blip, a lapsed fence) — and the
-                # caller then gets a problem body that says nothing about what is already gone. The error is deliberately
-                # NOT swallowed (fail-closed; every primitive is idempotent, so the recovery path is to re-issue the same
-                # call), but what DID land is recorded here or it is lost.
                 if isinstance(exc, fga.RevokeInterrupted):
                     # The object whose revoke the outage stopped lost these before it.
                     revoked += len(exc.removed)
                 purge.failed(exc)
-                # Past the point of no return nothing puts the warehouse back (ADR 0245, third review): a guard's refusal
-                # here, like a failure of the store or of OpenFGA, is answered as partial, and the same delete asked again,
-                # or the converge tick, finishes it. Every guard that can refuse with nothing changed ran before the stamp.
                 log.error(
                     "warehouse_delete_partial",
                     extra={
@@ -1639,16 +1661,17 @@ async def remove_warehouse(
 
 
 #: How far a bucket's purge got, as its audit rows name it: the claim taken for the purge, the bytes deleted, the record
-#: removed, the claim released.
-type PurgeStage = Literal["claim_taken", "bytes_deleted", "record_deleted", "claim_released"]
+#: removed, the claim released; or the purge stood down, its bytes kept.
+type PurgeStage = Literal["claim_taken", "bytes_deleted", "record_deleted", "claim_released", "stood_down"]
 
 
 class _Purge(BaseModel):
     """One bucket purge by the delete door: the claim it holds, how far it got, and its audit trail (ADR 0241 §10 Q1, Q5).
 
     Destruction is audited before it starts and when it ends: ``bucket_purge`` ``allow`` once the purge holds the claim
-    and before its first delete, so the trail holds the intent even if the process dies, then ``success``, or ``failure``
-    naming the ``stage`` it reached whenever it held the claim and did not finish."""
+    and before its first delete, so the trail holds the intent even if the process dies, then ``success`` (naming
+    ``bytes_kept`` where the purge stood down), or ``failure`` naming the ``stage`` it reached whenever it held the claim
+    and did not finish."""
 
     subject: str | None
     resource: str
@@ -1659,7 +1682,7 @@ class _Purge(BaseModel):
     hold: warehouses.PurgeHold | None = None
     stage: PurgeStage | None = None
     objects: int = 0
-    #: Why ``?purge_bucket=true`` deleted no byte: the claim was not this purge's to take.
+    #: Why ``?purge_bucket=true`` deleted no byte: the purge stood down.
     bytes_kept: str | None = None
 
     def _audit(self, outcome: AuditOutcome, **fields: object) -> None:
@@ -1675,25 +1698,65 @@ class _Purge(BaseModel):
             **fields,
         )
 
+    def _keep(self, why: str) -> None:
+        self.bytes_kept = self.bytes_kept or why
+        self.stage = "stood_down"
+        log.warning("warehouse_purge_kept_bytes", extra={"resource": self.resource, "bucket": self.bucket, "why": why})
+
     async def take(self, settings: Settings, holder: str) -> None:
-        """Take the bucket's claim for this purge (``warehouses.take_for_purge``); where it cannot, keep every byte."""
-        self.hold = await run_in_threadpool(
-            partial(
-                warehouses.take_for_purge,
-                settings.registry_root,
-                settings.storage_options(),
-                bucket=self.bucket,
-                project=self.project,
-                project_uuid=self.project_uuid,
-                holder=holder,
+        """Take the bucket's claim for this purge (``warehouses.take_for_purge``); where it cannot, stand down, keeping
+        every byte: the claim is released, absent, another tenant's, or another purge's."""
+        try:
+            self.hold = await run_in_threadpool(
+                partial(
+                    warehouses.take_for_purge,
+                    settings.registry_root,
+                    settings.storage_options(),
+                    bucket=self.bucket,
+                    project=self.project,
+                    project_uuid=self.project_uuid,
+                    holder=holder,
+                )
             )
-        )
+        except warehouses.PurgeHeldByAnother:
+            self._keep(f"the claim on bucket {self.bucket!r} is held by another purge, so no byte of it is this delete's to purge")
+            return
         if self.hold is None:
-            self.bytes_kept = f"the claim on bucket {self.bucket!r} is released, absent or another tenant's, so no byte of it is this delete's to purge"
-            log.warning("warehouse_purge_kept_bytes", extra={"resource": self.resource, "bucket": self.bucket})
+            self._keep(f"the claim on bucket {self.bucket!r} is released, absent or another tenant's, so no byte of it is this delete's to purge")
             return
         self.stage = "claim_taken"
         self._audit(AuditOutcome.ALLOW, stage=self.stage)
+
+    async def judge_under_claim(
+        self, settings: Settings, record: dict[str, str], ns: LanceNamespace | None, *, subtrees: list[_NamespaceSubtree], trashed: list[dict[str, Any]]
+    ) -> None:
+        """Under the claim this purge stamped, which every create on the bucket is refused by, judge again what makes the
+        bytes not this warehouse's alone, and stand down where any does (``Grants.tla`` U22): another warehouse's record
+        names the bucket, in whatever state, or a clone outside the warehouse reads a table in it. Standing down gives the
+        stamp back under the read that finds it this purge's own, and the delete finishes keeping every byte.
+
+        Raises:
+            InternalError: A warehouse record cannot be read, so whether one names the bucket is unknown (the delete answers
+                ``partial``, and finishes when asked again).
+            ServiceUnavailableError: A table's tags could not be listed.
+        """
+        if self.hold is None:
+            return
+        so = settings.storage_options()
+        records = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
+        why: str | None = None
+        if any(r.get("bucket") == self.bucket and r.get("id") != record["id"] for r in records):
+            why = f"bucket {self.bucket!r} backs another warehouse, whose data the purge would destroy"
+        else:
+            try:
+                await _require_no_outside_clones(ns, settings, subtrees=subtrees, trashed=trashed)
+            except InvalidTableStateError as exc:
+                why = str(exc)
+        if why is None:
+            return
+        await run_in_threadpool(partial(warehouses.end_purge, settings.registry_root, so, self.hold, released=None))
+        self.hold = None
+        self._keep(why)
 
     async def delete_bytes(self, request: Request, settings: Settings) -> int:
         """Delete the bucket's bytes under the claim this purge holds; none where it holds none. The process's connections
@@ -1710,11 +1773,6 @@ class _Purge(BaseModel):
             await run_in_threadpool(partial(warehouses.end_purge, settings.registry_root, settings.storage_options(), self.hold, released="bucket_purged"))
             self.stage = "claim_released"
 
-    async def give_back(self, settings: Settings) -> None:
-        """Give back unstamped the claim this purge took, where it deleted nothing under it: a guard's refusal leaves nothing."""
-        if self.hold is not None and self.stage == "claim_taken":
-            await run_in_threadpool(partial(warehouses.end_purge, settings.registry_root, settings.storage_options(), self.hold, released=None))
-
     def failed(self, exc: BaseException) -> None:
         if self.hold is not None:
             self._audit(AuditOutcome.FAILURE, stage=self.stage, objects_purged=self.objects, error=type(exc).__name__)
@@ -1726,17 +1784,6 @@ class _Purge(BaseModel):
             objects_purged=self.objects,
             **({"bytes_kept": self.bytes_kept} if self.bytes_kept else {}),
         )
-
-
-def _claim_is_its_own(claim: dict[str, str] | None, record: dict[str, str], holder: str) -> bool:
-    """Whether ``claim``, the claim on ``record``'s bucket, stands naming its project at its creation, unstamped or stamped
-    by this purge's ``holder``."""
-    return (
-        claim is not None
-        and claim.get("project") == record["project"]
-        and made_under(claim, record[PROJECT_UUID])
-        and claim.get(warehouses.PURGING) in (None, holder)
-    )
 
 
 async def _purge_a_dead_claim(request: Request, settings: Settings, token: Caller | None, claim: dict[str, str]) -> DeleteWarehouseResponse:

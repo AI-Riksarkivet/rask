@@ -225,6 +225,134 @@ the ETag of the read that found it. The sweep for the same classes found two mor
 converging its grants without resolving again (it now does), and a project create's announcement evidence matched any
 record at the key (it now names the creation, live).
 
+## Found by the fourth review, and fixed (2026-11-19)
+
+A fourth independent review found three blocking defects (W1 to W3), each reproduced against the catalog with a real
+OpenFGA and moto S3 (`tests/integration/test_review_tenancy_four.py` on the review branch, three failing on `193145d`;
+folded into `tests/integration/test_a_delete_ends_only_the_creation_it_marked.py`). The third review's fix had moved the
+purge's claim BEFORE the stamp so that a claim another purge held could still refuse with the warehouse put back; that
+made the claim something a put-back could meet, and left two refusals past the stamp untouched.
+
+- **W1: a forced cascade that failed past its stamp was never finished.** The stamp recorded `cascade` and
+  `purge_bucket` but not `force`; a resume judged the subtree's protection with its OWN caller's `force`, and the
+  tick's finisher passes none. A `cascade=true&force=true` delete over a protected namespace that failed past its stamp
+  was refused 409 on every tick and every re-ask without `force`, `deleting` and absent at its doors for good
+  (`StampedEnds`, broken in the code). The model's container part judged protection only before the stamp, so it
+  could not show this.
+- **W2: a purge deleted the bucket of a live sibling made during the delete.** `_require_bucket_purgeable` read the
+  registry once, before the mark; the claim was stamped `purging` later; `claim_bucket` refreshes a same-creation claim
+  without refusing, so a same-project create on the bucket landing between them was live, with tables, when the purge
+  deleted every object and the bucket.
+- **W3: a claim taken before the stamp survived a put-back.** A delete that died, or whose give-back failed, between the
+  claim's take and the stamp left the warehouse `live` with its claim stamped `purging` by the delete (nothing gives such
+  a claim back: `tenancy.put_back_stale` and `tenancy_converge._settle_mark` act on the record alone). Every create on
+  the bucket then answered 409; a later plain delete removed the record keeping the bytes; `_finish_purge` released any
+  `warehouse:` stamp once its record was gone, as `bucket_purged`, and another project's create took a bucket still
+  holding the old tenant's bytes. The model's `Claim` was a refusal point with no claim state, so it could not show this.
+
+### The one rule: past its stamp, a delete never refuses
+
+Everything a delete may be refused for is judged before its stamp, and what was asked is recorded IN the stamp and never
+read from a later caller. Past the stamp a step is done, retried (the door answers `partial`, 503, and a re-ask or the
+tick finishes it), or, for the purge alone, stood down.
+
+| The record | A delete reading it | Refused by | Put back by | Finished by |
+| --- | --- | --- | --- | --- |
+| `live` | a fresh delete: judges every check on this read, with its own caller's flags | protection (unless `force`), emptiness (unless `cascade`), the subtree's protection (unless `force`), the purge's early refusals (a sibling's record, reserved storage, a clone outside), a fenced table, the warehouse's namespace fence | — | its own steps |
+| `deleting`, no stamp | a new delete taking the mark over: judged on every check again (`ChecksTakeOver`) | as `live` | the delete whose run holds the mark, on any failure before the stamp; the tick, once that run no longer runs (`TickSettlesMarks`) | — |
+| `deleting`, stamped | a resume: runs exactly as stamped, whatever its caller passes, and judges no check | nothing (a failure answers `partial`, 503) | never (`NoReturnFinal`) | the door asked again, or the tick (`FreshFinish`) |
+
+**What the stamp records** (`no_return` and `delete_asked` on the record, `control_records.DeleteAsked`), written once,
+by the first run past it, and kept by every delete that takes the mark over: the run that passed it (`no_return`), which
+names the delete from then on whichever request or tick finishes it, and `cascade`, `purge_bucket` and `force`. A
+project's delete records `force` the same way. The ended-creation record (`_ended/<kind>/<uuid>.json`,
+`control_records.EndedCreation`) names the delete that ended it the same way (`no_return`, `asked`) and, for a warehouse
+asked to purge, whether its purge was done (`bucket_purged`: `true`, or `false` where it stood down). That is the record
+that lets the tick tell a stamp to release from one to give back (below).
+
+**The bucket's claim** (`warehouses/bucket-claims/<bucket>.json`):
+
+| State | Means | Moved to it by | Moved out of it by |
+| --- | --- | --- | --- |
+| held, unstamped | the project's creation it names owns the bucket | a create (`claim_bucket`: written once, or its `claimed_at` refreshed by a create of the same creation) | a purge's stamp; the tick's release of a dead creation's claim (`_claim`) |
+| held, stamped `purging` by `warehouse:<id>@<uuid>#<run>` | the warehouse's delete past its stamp, `<run>` the run that passed it, is purging; every create on the bucket is refused (409) | the delete, past its stamp (`_Purge.take`); nothing before the stamp touches the claim (`ClaimAfterStamp`) | the delete: given back unstamped where it stands down (`judge_under_claim`), or released once its record is gone; the tick (`_finish_purge`) once the record is gone: released as purged only where the ended creation names `<run>` with its purge asked and done, else given back (`FinishChecksEnd`) |
+| held, stamped `bucket:<name>@<uuid>` or `catalog:<name>@<uuid>` | the estate owner's purge of a dead claim, or the tick's removal of what an unborn create wrote | `_purge_a_dead_claim`, `_claim` | the same purge, finished or asked again |
+| released | no tenant owns the bucket | a purge's release (`bucket_purged`), the tick's (`claimed_by_a_dead_creation`) | a create, under the read's ETag |
+
+**The stand-down.** Under the claim it stamped, which no create on the bucket passes, the purge reads again every
+warehouse record naming the bucket (`warehouses.every_warehouse`, whole) and the clones outside the warehouse. Where
+another warehouse names the bucket, in any state, a clone outside reads a table in it, or the claim is released, another
+tenant's or another purge's, the purge stands down: its stamp given back under the read that finds it its own, the delete
+finished keeping every byte, `bucket_purged: false` and `bytes_kept` naming why in the answer, and the `bucket_purge`
+audit row's `success` carrying the same `bytes_kept` at `stage: stood_down`. A purge never refuses a stamped delete and
+never deletes a bucket another warehouse names. The checks before the mark (`_require_bucket_purgeable`,
+`_require_no_outside_clones`) stay as an early refusal of a fresh delete; a resume does not run them. A create's last
+read of its claim (`require_claim_held`) comes after its record, so a sibling either wrote its record before the purge's
+stamp, and is found by the read under it, or is refused at that read.
+
+**Partial everywhere past the stamp.** The purge's take, the building and filing of the announcements (`uuids.table`,
+`announcer.announcing`), and every step after them are inside the one block that answers `partial`; a project's delete
+does the same for its read of whom its revoke reaches and its filing.
+
+| Problem | Guard | Where (file, function) | Must-fail config | Test | Guard removed |
+| --- | --- | --- | --- | --- | --- |
+| W1 | U21 ForceRecorded: the stamp records `force`; a resume judges no protection | `services/catalog/src/catalog/services/control_records.py` `DeleteAsked`; `services/catalog/src/catalog/services/tenancy.py` `pass_no_return`, `stamp_of`; `services/catalog/src/catalog/api/v1/endpoints/warehouses.py` `remove_warehouse`, `_cascade_subtrees(judge=)` | `GrantsForceUnrecorded` (temporal `StampedEnds`) | `::test_a_forced_cascade_failing_past_its_stamp_is_finished_by_the_tick_as_stamped` | the resume's caller force and protection judgement restored: 1 failed |
+| W2 | U22 SiblingUnderClaim: the warehouses naming the bucket read again under the stamped claim, and the purge stands down | `warehouses.py` `_Purge.judge_under_claim` | `GrantsSiblingOutsideClaim` (`PurgeSparesSiblings`) | `::test_a_purge_destroys_no_bucket_a_sibling_made_meanwhile_backs` | the read under the claim removed: 1 failed |
+| W3 | U23 ClaimAfterStamp: nothing before the stamp touches the claim; U24 FinishChecksEnd: the tick releases a run's stamp as purged only where the ended creation names that run with its purge done | `warehouses.py` `remove_warehouse` (the take after `pass_no_return`, the give-back deleted); `services/catalog/src/catalog/services/warehouses.py` `purge_holder`, `PurgeStamp`; `services/catalog/src/catalog/services/tenancy_converge.py` `_finish_purge` | `GrantsClaimBeforeStamp` (`NoStampWhileLive`); `GrantsFinishAnyStamp` (`ReleasedOnlyPurged`, U23 and U24 removed together) | `::test_a_purge_put_back_before_its_stamp_leaves_no_claim_stamped` | the take moved back before the stamp with its give-back: 1 failed; U24 alone is masked by U23 in the code as in the model, and is held by the model alone (`GrantsFinishChecksEnd` removes U23 only and holds) |
+| the purge refusing past its stamp | the stand-down: a claim another purge holds keeps the bytes and the delete finishes | `warehouses.py` `_Purge.take`; `warehouses.PurgeHeldByAnother` | `GrantsPurge` (`StampedEnds` with a rival stamp) | `::test_a_purge_whose_claim_another_purge_holds_finishes_the_delete_and_keeps_the_bytes` (the third review's `test_a_purge_refused_at_its_claim_leaves_its_warehouse_live_and_the_tick_ends_nothing`, rewritten for the rule) | the take raising again: 1 failed |
+
+Each guard was removed in the code with its test run and the file restored (measured 2026-11-19); each must-fail config
+fails without it.
+
+**Checked with them, and fixed.** Two classes the review could not confirm:
+
+- A door's write into a project creation's keyspace landing after that creation ended was left to the tick's sweep,
+  which holds an ended creation only until a sweep past its bound found nothing; a door is not cancelled at its
+  deadline, so a write landing later was never ended. The label define now, finding the creation ended (no record names
+  it: `tenancy.creation_ended`), ends that dead creation's definitions itself; a role's create revokes the edge it wrote
+  beside ending its record; a role assignment answered 404 takes its tuple back (on a role its project's delete ended,
+  nothing else would). Tests: `::test_a_label_define_held_across_its_projects_end_leaves_the_next_creations_definition`
+  (extended: the dead keyspace is empty with no tick), `::test_a_role_assignment_held_across_its_projects_end_takes_back_what_it_wrote`;
+  each failed with its undo removed. The role create's edge undo has no test of its own.
+- A project re-POST answered 409 because a delete marked the project between its seed and its flip left its filing
+  standing (the block raised), and once that delete was put back live the filing's evidence (the same creation, live)
+  held again, so a later finish would announce `project_created` for a request answered 409. The lost create now leaves
+  the block normally, settling its filing, and answers after it. Test:
+  `::test_a_project_re_post_answered_409_while_a_delete_marks_it_leaves_nothing_to_announce` (failed on the code before).
+  A re-POST in that window that newly granted its admin announces no `grant_added` for that grant, which stands if the
+  delete is put back; its retry re-asserts the tuple and announces nothing either.
+
+### The model's purge part
+
+`Grants.tla` gains a fourth part, `purge`: one warehouse's delete asked to purge its bucket, over a namespace that may
+be protected and a delete asked with force or not; the user's delete asked again as new runs with any flags and dying
+anywhere; the tick putting back an unstamped mark, finishing a stamped one with no force of its own, and settling a
+claim a run stamped whose record is gone; a sibling warehouse of the same project made on the bucket (claim, record,
+claim read again, live with bytes); a rival purge stamping the claim for a while. The claim has state (held or released,
+and the run whose purge stamped it). Invariants `PurgeSparesSiblings`, `NoStampWhileLive`, `ReleasedOnlyPurged`;
+liveness `StampedEnds` (extended to the warehouse) and `PurgeStampClears`. The container part's late refusal step,
+which stood for the purge's claim, now stands for the guards still read after the mark (a namespace made meanwhile
+without `cascade`, a fenced table), as U19 holds them before the stamp.
+
+`Grants.tla` is 1,284 lines after this change, with 56 configs. One run of `scripts/tla_check.sh Grants` (TLC two
+workers, 2026-11-19, the host shared with an offline suite run): every config not on demand holds or fails as it says,
+the container gate `Grants` holding at 118,659 distinct states in 1,016 s as before. The purge part's configs:
+
+| Config | Result |
+| --- | --- |
+| `GrantsPurge` (the gate: one run of the user's delete, the tick's resume, a protected namespace and force, a sibling, a rival stamp; every invariant, `StampedEnds`, `PurgeStampClears`) | holds, 5,508 distinct states, 10 s |
+| `GrantsPurgeAskedAgain` (the user's delete asked twice with any flags; invariants) | holds, 252,690, 7 s |
+| `GrantsPurgeAskedAgainLiveness` (the same with liveness; on demand) | not run |
+| `GrantsFinishChecksEnd` (U23 removed, U24 kept; `ReleasedOnlyPurged`) | holds, 1,823 |
+| `GrantsForceUnrecorded` (U21) | fails, temporal (`StampedEnds`) |
+| `GrantsSiblingOutsideClaim` (U22) | fails, `PurgeSparesSiblings` |
+| `GrantsClaimBeforeStamp` (U23) | fails, `NoStampWhileLive` |
+| `GrantsFinishAnyStamp` (U23 and U24) | fails, `ReleasedOnlyPurged` |
+
+The model leaves out: the create's other writes into the bucket before its record (each a `require_claim_held` read,
+modelled as the one read after the record), the tick's own purge of a dead claim (the rival stands for it), and a
+second creation of the warehouse id.
+
 ## The guarantees, the guard holding each, and the configs
 
 Each guard is removed in a config that must fail. The guards this change introduced (U1 to U10) were also removed

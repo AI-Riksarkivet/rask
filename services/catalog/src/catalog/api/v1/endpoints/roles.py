@@ -184,6 +184,8 @@ async def _mint_role(wired: OpenFgaClient, settings: Settings, project: Tenant, 
     try:
         await tenancy.require_still(settings, project)
     except TableNotFoundError:
+        # The edge too: the tick's sweep of the dead project's object reaches it only while it keeps the ended creation.
+        await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251 — the undo of this door's own write
         await run_in_threadpool(roles.end_role_record, settings.registry_root, so, record)
         raise
     return record
@@ -315,7 +317,14 @@ async def _assign(gated: _Gated, announcer: Announcer, settings: Settings, token
     permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
     async with announcer.announcing(door="role_assign", target=obj, announcements=[told]) as filing:
         written = await project_admins.confer(wired, tup, actor=actor, origin="grant_api", permit=permit)
-        await tenancy.require_still(settings, project)
+        try:
+            await tenancy.require_still(settings, project)
+        except TableNotFoundError:
+            # Answered as deleted, so the assignment is taken back: on a role its project's delete ended, nothing sweeps a
+            # tuple written after that delete's revoke (fourth review), and on one put back the caller was told it failed.
+            if written:
+                await fga.delete_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251 — the undo of this door's own write
+            raise
         if written:
             audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project.id, grantee=user)
             await filing.send(told)

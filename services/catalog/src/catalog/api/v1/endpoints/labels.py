@@ -316,9 +316,16 @@ async def define_label(
         defined, changed = await run_in_threadpool(object_labels.define, settings.registry_root, settings.storage_options(), asked)
     except records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"label {asked.name!r} kept changing; define it again") from exc
-    # Filed under the creation it was decided on; one that ended meanwhile is answered as deleted (ADR 0245, third review),
-    # and what this wrote in its keyspace is the converge tick's to sweep.
-    await tenancy.require_still(settings, project)
+    # Filed under the creation it was decided on; one that ended meanwhile is answered as deleted (ADR 0245, third review).
+    # A define landing after its project's creation ended takes back what it wrote in that dead keyspace, which no other
+    # creation reads: the converge tick sweeps it only while it keeps the ended creation, which it forgets past its bound
+    # (fourth review). One landing while the creation is only marked leaves it to the delete, or to the tick's sweep.
+    try:
+        await tenancy.require_still(settings, project)
+    except TableNotFoundError:
+        if await tenancy.creation_ended(settings, project):
+            await run_in_threadpool(partial(object_labels.end_definitions, settings.registry_root, settings.storage_options(), project_uuid=str(project.uuid)))
+        raise
     if not changed:
         return defined
     await emit_control(

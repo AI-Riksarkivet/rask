@@ -255,9 +255,28 @@ def validated(record: object, model: type[_Record], *, event: str, path: str) ->
         return None
 
 
+class DeleteAsked(BaseModel):
+    """What a delete was asked to do, as its point of no return keeps it (ADR 0245, fourth review): written once, by the
+    delete that passed the stamp, and never read from a later caller. A delete asked again over the stamp, or the converge
+    tick, finishes exactly this: it purges a bucket only where the delete that passed the stamp was asked to, and the
+    ``force`` that turned the protection it judged before the stamp is kept with it, though past the stamp no protection
+    is judged again."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cascade: bool = False
+    purge_bucket: bool = False
+    force: bool = False
+
+
 class EndedCreation(BaseModel):
     """A project's or a warehouse's creation its delete ended (ADR 0245): kept until the converge tick has swept what a
-    write racing the delete left on its object, then forgotten."""
+    write racing the delete left on its object, then forgotten.
+
+    A creation a delete ended names the delete by the run that passed its point of no return (``no_return``) and what it
+    was asked, and a warehouse's whether its bucket's purge was done: the converge tick releases a bucket's claim stamped
+    ``purging`` by that run, once the record is gone, as purged only where this says the purge was done
+    (``tenancy_converge._finish_purge``)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -267,6 +286,22 @@ class EndedCreation(BaseModel):
     ended_at: str
     #: Set by the first sweep that found nothing on the object; the sweep past the converge tick's bound forgets it.
     swept_at: str | None = None
+    #: The run that passed the delete's point of no return; ``None`` for a creation that never went live (its create ended).
+    no_return: str | None = None
+    asked: DeleteAsked | None = None
+    #: For a warehouse whose delete was asked to purge its bucket: whether every byte of it went (``False``: the purge
+    #: stood down and kept them). ``None`` where no purge was asked.
+    bucket_purged: bool | None = None
+
+
+class EndedBy(BaseModel):
+    """The delete that ends a creation, as its ended-creation record names it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    no_return: str
+    asked: DeleteAsked
+    bucket_purged: bool | None = None
 
 
 def ended_key(kind: tenancy.Kind, uuid: str) -> str:
@@ -274,12 +309,28 @@ def ended_key(kind: tenancy.Kind, uuid: str) -> str:
     return f"{control_prefixes.ENDED}/{kind}/{uuid}.json"
 
 
-def end_creation(root_uri: str, storage_options: StorageOptions, kind: tenancy.Kind, object_id: str, uuid: str, *, now: datetime) -> None:
-    """Keep creation ``uuid`` of ``object_id`` as ended, before its registry record is removed, so the converge tick
-    sweeps its object whatever wrote on it after the delete read it. Unconditional: the key is the uuid's, which no other
-    creation names. Blocking."""
-    ended = EndedCreation(kind=kind, id=object_id, uuid=uuid, ended_at=now.isoformat())
+def end_creation(
+    root_uri: str, storage_options: StorageOptions, kind: tenancy.Kind, object_id: str, uuid: str, *, now: datetime, by: EndedBy | None = None
+) -> None:
+    """Keep creation ``uuid`` of ``object_id`` as ended, by the delete ``by`` names where a delete ended it, before its
+    registry record is removed, so the converge tick sweeps its object whatever wrote on it after the delete read it.
+    Unconditional: the key is the uuid's, which no other creation names. Blocking."""
+    ended = EndedCreation(kind=kind, id=object_id, uuid=uuid, ended_at=now.isoformat(), **(by.model_dump() if by is not None else {}))
     write_json(root_uri, storage_options, ended_key(kind, ended.uuid), ended.model_dump(mode="json", exclude_none=True))
+
+
+def ended_creation(root_uri: str, storage_options: StorageOptions, kind: tenancy.Kind, uuid: str) -> EndedCreation | None:
+    """The ended creation ``uuid`` of a ``kind``, as kept; ``None`` where none is kept (never ended, or forgotten).
+
+    Raises:
+        ServiceUnavailableError: It is there and cannot be read as one.
+    """
+    key = ended_key(kind, uuid)
+    try:
+        stored = read_json(root_uri, storage_options, key)
+        return None if stored is None else EndedCreation.model_validate(stored)
+    except ValueError as exc:
+        raise ServiceUnavailableError(f"ended creation {key!r} could not be read as one") from exc
 
 
 def read_ended(root_uri: str, storage_options: StorageOptions) -> tuple[list[EndedCreation], list[str]]:
@@ -336,16 +387,6 @@ DELETE_ASKED: Final = "delete_asked"
 DELETE_FIELDS: Final = (DELETING_BY, DELETE_RUN, MARKED_AT, NO_RETURN, DELETE_ASKED)
 
 
-class DeleteAsked(BaseModel):
-    """What a warehouse's delete was asked to do past its point of no return, as its stamp keeps it: a delete the converge
-    tick finishes does exactly this, so it purges a bucket only where the delete that passed the stamp was asked to."""
-
-    model_config = ConfigDict(frozen=True)
-
-    cascade: bool = False
-    purge_bucket: bool = False
-
-
 class NotTheCreation(Exception):
     """The record a change was asked of is not the creation the caller holds: gone, another creation's, or in a state the
     change does not act on."""
@@ -400,12 +441,14 @@ def end_record(
     *,
     now: datetime,
     run: str | None = None,
+    by: EndedBy | None = None,
     states: frozenset[str] = frozenset({tenancy.DELETING}),
 ) -> bool:
     """End creation ``uuid`` of ``object_id``, whose record is at ``key``: kept under ``_ended/`` for the tick's sweep, then
     its record removed by ONE DeleteObject under the ETag of a read that found it in one of ``states`` (marked
-    ``deleting`` by the delete ``run`` where one is named; ``creating``, for a create abandoning its own record or the
-    converge tick ending one a dead create left), which frees its id. Whether this call removed it. Blocking.
+    ``deleting`` by the delete ``run`` where one is named, which ``by`` names as the ended creation keeps it; ``creating``,
+    for a create abandoning its own record or the converge tick ending one a dead create left), which frees its id.
+    Whether this call removed it. Blocking.
 
     The creation is kept first, so one whose removal fails is still swept once it goes; the sweep leaves a creation whose
     record still stands (``tenancy_converge``), so keeping one that this call then does not remove is harmless."""
@@ -413,5 +456,5 @@ def end_record(
     def ends(record: dict[str, Any]) -> bool:
         return record.get(UUID) == uuid and record.get(STATE) in states and (run is None or record.get(DELETE_RUN) == run)
 
-    end_creation(root_uri, storage_options, kind, object_id, uuid, now=now)
+    end_creation(root_uri, storage_options, kind, object_id, uuid, now=now, by=by)
     return remove_json(root_uri, storage_options, key, ends) is not None

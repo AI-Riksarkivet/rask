@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Collection
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, NoReturn
@@ -85,7 +86,7 @@ from catalog.schemas import (
 from catalog.services import object_labels, role_grants, roles, tenancy, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
-from catalog.services.control_records import DELETING_BY, GIT, MANAGED_BY, STATE, UUID, ProtectionChange
+from catalog.services.control_records import DELETING_BY, GIT, MANAGED_BY, STATE, UUID, DeleteAsked, ProtectionChange
 from lakehouse import maintenance_policies, protection
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
@@ -366,27 +367,31 @@ async def establish_project(
     async with filed as filing:
         granted = await fga_deps.seed_project_admin(client, settings, author.subject if author is not None else None, project=record, admin=admin)
         flipped = await run_in_threadpool(project_registry.set_live, settings.registry_root, so, project_id, record[UUID])
-        if flipped is None or flipped.get(STATE) != LIVE:
-            # The creation this create wrote on ended under it (or another tenant made the id again): it is lost, as a
-            # create that lost the race for its id is (ADR 0245, third review). It announces nothing, takes back the grant
-            # it wrote on the creation that ended, and answers what stands.
-            await _lost_creation(settings, client, project_id, record)
-        record = flipped
-        log.info("project_created", extra={"project": project_id, "existing": existing is not None})
-        await filing.send(created)
-        if granted and admin is not None and admin_granted is not None:
-            audit(
-                AuditAction.ACCESS_GRANT,
-                AuditOutcome.SUCCESS,
-                subject=actor,
-                resource=obj,
-                project=project_id,
-                grantee=fga.user_object(admin),
-                relation="admin",
-                reason="project_created",
-            )
-            await filing.send(admin_granted)
-    return record
+        live = flipped is not None and flipped.get(STATE) == LIVE
+        if flipped is not None and live:
+            record = flipped
+            log.info("project_created", extra={"project": project_id, "existing": existing is not None})
+            await filing.send(created)
+            if granted and admin is not None and admin_granted is not None:
+                audit(
+                    AuditAction.ACCESS_GRANT,
+                    AuditOutcome.SUCCESS,
+                    subject=actor,
+                    resource=obj,
+                    project=project_id,
+                    grantee=fga.user_object(admin),
+                    relation="admin",
+                    reason="project_created",
+                )
+                await filing.send(admin_granted)
+    if live:
+        return record
+    # The creation this create wrote on ended under it, or is being deleted (or another tenant made the id again): it is
+    # lost, as a create that lost the race for its id is (ADR 0245, third review). It announces nothing, and its filing is
+    # settled by the block's own end: one left standing would be sent by a later finish once its evidence holds, as it does
+    # for a project whose delete is put back live, announcing a create this request answered 409 (fourth review). It takes
+    # back the grant it wrote on a creation that ended, and answers what stands.
+    return await _lost_creation(settings, client, project_id, record)
 
 
 async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: dict[str, str]) -> set[str] | None:
@@ -779,27 +784,31 @@ async def remove_project(
             raise NamespaceNotEmptyError(
                 f"project '{project_id}' acquired warehouse(s) {', '.join(late)} while its delete began; delete each, then the project"
             )
-        await marking.pass_no_return()
+        stamp = await marking.pass_no_return(DeleteAsked(force=force))
     actor = f"user:{token.subject}" if token is not None else None
-    # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
-    grants = announcing.grant_changes(
-        await fga.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
+    # Past the point of no return a delete never refuses (ADR 0245, fourth review): whatever fails from here, the read of
+    # whom the revoke reaches and the filing of its announcements included, leaves the project marked, absent to every
+    # door, and the same delete asked again, or the converge tick, finishes it. Every step is idempotent and acts on this
+    # creation alone.
+    unfinished = PartiallyApplied(
+        f"project {project_id!r} is past its point of no return and was PARTIALLY deleted; re-issue this call to finish it.",
+        problem_extra={"project": project_id, "partial": True},
     )
-    deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=target, actor=actor, extra={UUID: record[UUID]})
-    deleted = Announcement(evidence=RecordGone(key=project_registry.record_key(project_id)), message=ControlMessage(event=deleted_event))
-    async with announcer.announcing(door="delete_project", target=target, announcements=[deleted, *grants.values()]) as filing:
+    async with AsyncExitStack() as stack:
         try:
-            removed = await _end_the_creation(delete, record, settings, token, authz, announcer)
+            # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
+            grants = announcing.grant_changes(
+                await fga.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
+            )
+            deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=target, actor=actor, extra={UUID: record[UUID]})
+            deleted = Announcement(evidence=RecordGone(key=project_registry.record_key(project_id)), message=ControlMessage(event=deleted_event))
+            filing = await stack.enter_async_context(announcer.announcing(door="delete_project", target=target, announcements=[deleted, *grants.values()]))
+            removed = await _end_the_creation(delete, record, settings, token, authz, announcer, stamp=stamp)
         except (tenancy.DeleteGone, tenancy.DeleteTakenOver):
             raise
         except Exception as exc:
-            # Past the point of no return the project stays marked, absent to every door, and the same delete asked
-            # again finishes it: every step is idempotent and acts on this creation alone.
-            raise PartiallyApplied(
-                f"project {project_id!r} is past its point of no return and was PARTIALLY deleted; re-issue this call to finish it.",
-                problem_extra={"project": project_id, "partial": True},
-            ) from exc
-        log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})
+            raise unfinished from exc
+        log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": stamp.asked.force})
         if authz is not None:
             # Mirrors create_project's grant audit, and only when the revoke really ran: an FGA-off stack must
             # not fabricate a compliance record for a revocation that never happened. The revoke is
@@ -826,7 +835,14 @@ async def remove_project(
 
 
 async def _end_the_creation(
-    delete: tenancy.DeleteRun, record: dict[str, str], settings: Settings, token: CurrentToken, authz: OpenFgaClient | None, announcer: Announcer
+    delete: tenancy.DeleteRun,
+    record: dict[str, str],
+    settings: Settings,
+    token: CurrentToken,
+    authz: OpenFgaClient | None,
+    announcer: Announcer,
+    *,
+    stamp: tenancy.Stamp,
 ) -> list[fga.ClientTuple]:
     """A delete's irreversible steps, past its point of no return, each acting on the creation it marked alone (its uuid's
     tuples, the roles, policy and label definitions naming its uuid, each removed under the ETag of a read that found it
@@ -859,5 +875,5 @@ async def _end_the_creation(
     # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object lay in a
     # warehouse of it, and each ended its labels as it went.
     await run_in_threadpool(partial(object_labels.end_definitions, settings.registry_root, so, project_uuid=project_uuid))
-    await tenancy.end(settings, delete)
+    await tenancy.end(settings, delete, stamp.ended())
     return removed

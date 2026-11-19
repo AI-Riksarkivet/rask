@@ -23,7 +23,8 @@ hand-run:
 - A bucket claim of a dead creation that no record names is released where the bucket holds only what a create writes
   (``warehouses.written_by_others``), once the tick, holding the claim, has removed exactly that and found the bucket
   empty; anything else keeps the claim, reported as ``bucket:<name>``, which the estate owner's purge reaches by its
-  bucket (ADR 0241 §10 Q2). A claim a warehouse delete's purge stamped whose record is gone is released.
+  bucket (ADR 0241 §10 Q2). A claim a warehouse delete's purge stamped whose record is gone is released as purged where
+  the ended creation names the stamping run with its purge done, and given back otherwise.
 
 Every listing is tolerant: one record that cannot be read is named among the failures and stops nothing but what it
 could decide (ADR 0241 §10 Q3).
@@ -298,7 +299,7 @@ class _Convergence:
         for itself (the same ``purging`` stamp a purge takes), removes exactly those objects, lists again, and releases
         only if the bucket is empty. Anything else in it keeps the claim, reported as ``bucket:<name>``.
 
-        A claim a warehouse delete's purge stamped whose record is gone is released: the record goes only after the bytes."""
+        A claim a warehouse delete's purge stamped whose record is gone is settled by :meth:`_finish_purge`."""
         bucket, project = claim["bucket"], claim["project"]
         project_uuid = claim[PROJECT_UUID]
         holder = warehouses.purge_holder("catalog", bucket, project_uuid)
@@ -355,17 +356,34 @@ class _Convergence:
         self.done.released.append(bucket)
 
     async def _finish_purge(self, bucket: str, stamp: str, stored: list[dict[str, Any]]) -> None:
-        """Release a claim a warehouse delete's purge stamped once that warehouse's record is gone: the delete removes its
-        record only after the bytes, so a purge that died between its record and its claim's release left nothing of the
-        warehouse in the bucket. A purge whose record stands is the delete's to resume; any other stamp is left as it is."""
-        kind, _, rest = stamp.partition(":")
-        warehouse_id, _, uuid = rest.rpartition("@")
-        if kind != "warehouse" or any(r["id"] == warehouse_id and r.get(UUID) == uuid for r in stored):
+        """Settle a claim a warehouse delete's purge stamped once that warehouse's record is gone (``Grants.tla`` U24).
+
+        The stamp names the warehouse's creation and the run that passed its delete's point of no return; the creation's
+        ended record names the run that ended it and whether its purge was done. Where both name the same run and the
+        purge was done, the bytes went before the record (the delete removes its record only after them), and the claim is
+        released as purged: that delete died between its record and the claim's release. Any other such stamp is stale,
+        and given back under the read that finds it so, never released as purged: the bucket may still hold the bytes. A
+        stamp whose record stands is the delete's to resume; a stamp of another kind is left as it is."""
+        parsed = warehouses.PurgeStamp.of(stamp)
+        if parsed.kind != "warehouse" or any(r["id"] == parsed.name and r.get(UUID) == parsed.uuid for r in stored):
             return
+        ended = await run_in_threadpool(partial(control_records.ended_creation, self._root, self._so, WAREHOUSE, parsed.uuid))
+        done = (
+            ended is not None
+            and parsed.run is not None
+            and ended.no_return == parsed.run
+            and ended.asked is not None
+            and ended.asked.purge_bucket
+            and ended.bucket_purged is True
+        )
         hold = warehouses.PurgeHold(bucket=bucket, holder=stamp)
-        if await run_in_threadpool(partial(warehouses.end_purge, self._root, self._so, hold, released="bucket_purged")):
+        if not await run_in_threadpool(partial(warehouses.end_purge, self._root, self._so, hold, released="bucket_purged" if done else None)):
+            return
+        if done:
             log.warning("bucket_purge_finished", extra={"bucket": bucket, "holder": stamp})
             self.done.released.append(bucket)
+        else:
+            log.error("bucket_purge_stamp_stale", extra={"bucket": bucket, "holder": stamp, "ended": ended.model_dump() if ended is not None else None})
 
     async def _policies(self, live: dict[str, str]) -> None:
         """Report and end each project policy a creation that is not live set (a set racing its project's delete). It is

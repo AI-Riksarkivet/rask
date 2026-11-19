@@ -590,22 +590,30 @@ written for a dead creation can never apply to a live one, because no create min
   each other. A namespace created in a
   warehouse resolves the warehouse again once seeded (`fga_deps.seed_ownership`), and one deleted meanwhile has the
   namespace taken back (`seed_ownership_or_compensate`) and answers 404.
-- **Delete, and its point of no return** (`catalog.services.tenancy.DeleteRun`, reviews T2, T3, S1). Every check that
-  can refuse with nothing changed (protection, emptiness, the purge's guards, the namespace fence, the subtree's
-  protection, the trash it cannot account for, the clones outside) runs on ONE read of the record, unless that record is
+- **Delete, and its point of no return** (`catalog.services.tenancy.DeleteRun`, reviews T2, T3, S1, and the fourth's
+  ONE RULE: past its stamp a delete never refuses). Every check that can refuse with nothing changed (protection,
+  emptiness, the purge's early refusals, the namespace fence, the subtree's protection with the caller's `force`, the
+  trash it cannot account for, the clones outside) runs on ONE read of the record, unless that record is
   past a point of no return (`tenancy.judges`: taking over a mark short of one is a NEW delete, judged on every check and
   on the caller's own authorization) → the span `tenancy.marked` (the mark: `deleting`, `deleting_by`, `delete_run`,
   `marked_at`, under that read's ETag, 409 where it changed; the children read AFTER it, a project's warehouses in every
-  state, a warehouse's late namespaces, a cascade's tables another request has fenced, a purge's bucket claim taken
-  (`warehouses.take_for_purge`); the point of no return, `Marking.pass_no_return`: `no_return`, and `delete_asked` written
-  ONCE, at the first stamp). ANY failure inside the span puts the record back live, and only the delete whose run holds
+  state, a warehouse's late namespaces, a cascade's tables another request has fenced; nothing in the span touches the
+  bucket's claim; the point of no return, `Marking.pass_no_return`: `no_return`, the run that passed it, and
+  `delete_asked` (`cascade`, `purge_bucket`, `force`), written ONCE by the first run past it and kept by every delete
+  that takes the mark over, `tenancy.stamp_of`). ANY failure inside the span puts the record back live, and only the delete whose run holds
   the mark puts it back (`tenancy.put_back`); one whose put-back fails too answers 503 `MarkLeft` (`marked_for_deletion`,
-  `cleared_by`). PAST `no_return` NOTHING PUTS THE RECORD BACK (ADR 0245, third review): a refusal there is answered
-  `partial`, and a delete asked again over a stamped mark finishes it as `delete_asked` records (`tenancy.asked_of`),
-  whatever its own caller asks → revoke what stands on the creation and names it (`fga_deps.end_object`, the
+  `cleared_by`). PAST `no_return` NOTHING PUTS THE RECORD BACK AND NOTHING REFUSES IT (ADR 0245, third and fourth
+  reviews): any failure is answered `partial`, and a delete asked again over a stamped mark, or the tick, finishes it as
+  `delete_asked` records, whatever its own caller asks, judging no check (no protection, `_cascade_subtrees(judge=False)`)
+  → a warehouse's purge takes the bucket's claim stamped `purging` by `warehouse:<id>@<uuid>#<no_return run>`, reads the
+  warehouses naming the bucket and the clones outside again UNDER it, and STANDS DOWN where another warehouse names it,
+  a clone reads it, or the claim is released or another's (`_Purge.judge_under_claim`: its stamp given back, the delete
+  finished keeping the bytes, `bytes_kept` and the audit row saying why) → revoke what stands on the creation and names it (`fga_deps.end_object`, the
   naming types from the model, THE ONE WAY an object is revoked) and its companions OF THIS CREATION (its roles, policy
   and label definitions, each filed in its creation's keyspace; the trash by `warehouse_uuid`) → end (`tenancy.end`, one removal
-  under a read finding this run's mark: another run took it over, 409; the id names another creation, 404). There is
+  under a read finding this run's mark: another run took it over, 409; the id names another creation, 404; its
+  `_ended/` record names the delete by `no_return` and `asked`, and a warehouse's whether its purge was done,
+  `bucket_purged`) → the claim released. There is
   no re-read between steps (`require_own` is deleted: the model finds no property it holds, ADR 0245 S4). Past
   `no_return` a failure answers `partial` (503) and the same delete asked again finishes it. A warehouse marked
   `deleting` refuses every door changing what lies beneath it (409, `dependencies.require_active_warehouse(changing=)`).
@@ -618,7 +626,11 @@ written for a dead creation can never apply to a live one, because no create min
   past its stamp (`tenancy.judged`, else `NothingToFinish`), the mark is taken over under that read's ETag, and the
   steps run as `delete_asked` says, so the tick never begins a delete (`put_back`, `deleted` in its result); sweeps each
   ended creation's object, and a project creation's label definitions, and forgets it once a sweep past the bound found
-  nothing; ends a role and a project policy naming a project creation that is not live. Two replicas' ticks at once
+  nothing; ends a role and a project policy naming a project creation that is not live; and settles a claim a warehouse
+  delete's run stamped once its record is gone (`_finish_purge`): released as purged only where the ended creation names
+  that run with its purge asked and done, given back otherwise. A door writing in a project creation's keyspace that
+  finds the creation ended takes its own write back (a label define, a role's edge, a role assignment), since the sweep
+  forgets an ended creation past its bound. Two replicas' ticks at once
   settle each mark once: every write is conditional, and a finish another holds is no failure.
 - **A refusal names what the caller sent** (second review S2): `fga_deps.on_tenant` asks its gate with the object AND
   its label `<kind>:<id>`, and the refusal names the label; a creation's uuid belongs to the audit row and the events.
@@ -638,7 +650,8 @@ written for a dead creation can never apply to a live one, because no create min
   those objects, lists again and releases it only on an empty bucket (§10 Q6a); holding anything else, it is reported as
   `bucket:<name>`, and the estate owner purges it: `DELETE /management/v1/warehouses/<bucket>?purge_bucket=true`, gated on
   `estate#can_purge_dead_tenant_warehouse`. **Bytes are deleted only under a claim the purger holds** (§10 Q1): every
-  purge first takes the claim (`warehouses.take_for_purge`, stamped `purging` under the read's ETag), deletes through ONE
+  purge first takes the claim (`warehouses.take_for_purge`, stamped `purging` under the read's ETag; another purge's
+  stamp raises `PurgeHeldByAnother`, which a warehouse delete past its stamp stands down for), deletes through ONE
   function, `warehouses.purge_bucket`, and releases through ONE function, `warehouses.end_purge`; a stamped claim refuses
   every create on the bucket (409, code 14). Audited `bucket_purge` (`allow` with `stage: claim_taken` before the first
   delete, then `success` or `failure` naming its `stage`). A create asks `warehouses.require_claim_held` before each

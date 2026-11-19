@@ -2815,16 +2815,21 @@ export interface paths {
          *        re-issue, and the claim is released only once no record names the bucket.
          *     7. **Bytes only on ``?purge_bucket=true``, and only under a claim the purge itself holds** (ADR 0241 §10 Q1). A
          *        catalog entry is recoverable, a customer's bucket is not, so the two never share a default; a record-less bucket
-         *        is reported by the reconciler, not lost. A purge that would take bytes this warehouse does not solely own — a
-         *        bucket a same-project sibling still claims, or reserved platform storage — refuses BEFORE the cascade
-         *        (:func:`_require_bucket_purgeable`). Before its first delete the purge takes the bucket's claim for itself
-         *        (``warehouses.take_for_purge``: stamped ``purging`` under the read's ETag, where it names this warehouse's
-         *        project at its creation), which refuses every create on the bucket (409) until it ends; the bytes are deleted
-         *        while the claim read again is still its stamp (``warehouses.purge_bucket``), and the claim is released last
-         *        (``warehouses.end_purge``). A purge that dies leaves the stamp, and only this delete asked again resumes it. A
-         *        claim released, absent or naming anyone else keeps every byte: the record goes, and the answer's ``bytes_kept``
-         *        says why. Audited ``bucket_purge``: ``allow`` once the claim is taken and before the first delete, then
-         *        ``success``, or ``failure`` naming the ``stage`` it reached.
+         *        is reported by the reconciler, not lost. A fresh delete whose purge would take bytes this warehouse does not
+         *        solely own — a bucket a same-project sibling names, reserved platform storage, a table a clone outside reads — is
+         *        refused BEFORE its mark (:func:`_require_bucket_purgeable`, :func:`_require_no_outside_clones`), an early
+         *        refusal that costs nothing. Past the point of no return the purge takes the bucket's claim for itself
+         *        (``warehouses.take_for_purge``: stamped ``purging`` under the read's ETag by the delete's own name, the run that
+         *        passed its stamp, where it names this warehouse's project at its creation), which refuses every create on the
+         *        bucket (409) until it ends. UNDER that claim it reads again the warehouses naming the bucket and the clones
+         *        outside, and where another warehouse names it, a clone reads it, or the claim is released, another tenant's or
+         *        another purge's, the purge STANDS DOWN: its stamp given back, the delete finished keeping every byte, the
+         *        answer's ``bytes_kept`` and the audit row saying why (ADR 0245, fourth review). Otherwise the bytes are deleted
+         *        while the claim read again is still its stamp (``warehouses.purge_bucket``), the record ends naming the delete
+         *        and its purge done, and the claim is released last (``warehouses.end_purge``); a delete that dies between the
+         *        two leaves the claim to the converge tick (``tenancy_converge._finish_purge``). Audited ``bucket_purge``:
+         *        ``allow`` once the claim is taken and before the first delete, then ``success`` (with ``bytes_kept`` where it
+         *        stood down), or ``failure`` naming the ``stage`` it reached.
          *
          *     Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
          *     reaches its bucket.
@@ -2833,28 +2838,27 @@ export interface paths {
          *     ``can_purge_dead_tenant_warehouse`` on the estate reaches it with ``?purge_bucket=true``, the bucket in the
          *     warehouse's place.
          *
-         *     **The point of no return** (ADR 0245, reviews T2, T3 and S1). Every check that can refuse with nothing changed runs
-         *     before the mark, judged on one read of the record that the mark is then written under (its ETag; a record changed
-         *     since is refused 409, nothing changed): the protection (step 3; judged again by a delete taking over a mark short of
-         *     its point of no return, ``tenancy.judges``), the emptiness (step 4), the purge's guards (step 7), the warehouse's
-         *     namespace fence taken for the drop (409 while another holds it), the subtree's protection, the trash it cannot
-         *     account for and the clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is
-         *     written beneath it (a declare or a commit is refused 409). The namespaces are read again after the mark
-         *     (`ChildrenBeforeMark`): one made in between refuses 409 without ``cascade``, or is held to the subtree's checks with
-         *     it; a listed table another request has fenced refuses 409; and the purge takes the bucket's claim, which another
-         *     purge holding refuses 409 with no byte touched. From the mark to the stamp is one span (``tenancy.marked``): ANY
-         *     failure in it, such a refusal or a store not answering, PUTS THE RECORD BACK live (the claim given back as it stood),
-         *     and one whose put-back fails too answers 503 saying the warehouse is left marked (the converge tick puts it back past
-         *     its bound). Then the POINT OF NO RETURN is stamped on the record, with the ``cascade`` and ``purge_bucket`` the delete
-         *     was asked, before the first irreversible step (the trash's end, a table's detach, a grant's revoke): past it NOTHING
-         *     puts the warehouse back (ADR 0245, third review); the delete finishes, or its answer is ``partial`` (503), a guard's
-         *     refusal there included, and the same delete asked again, or the converge tick, finishes it as the stamp records it
-         *     was asked (:func:`remove_warehouse`). A step past the
-         *     mark acts on this creation's own objects: its trash is the records filed under its own creation
-         *     (``warehouses.trash_owned_by``), its cascade writes only under the warehouse's namespace fence, which a delete made
-         *     of a warehouse made again under the id takes from it, and its end is the record's one removal, conditional on a read
-         *     that found this delete's own mark (``tenancy.end``): a delete taken over answers 409, and one whose creation ended and
-         *     the id names another answers 404, ending nothing of the warehouse that holds the id now.
+         *     **The point of no return** (ADR 0245). PAST ITS STAMP, A DELETE NEVER REFUSES. Every check that can refuse with
+         *     nothing changed runs before the mark, judged on one read of the record that the mark is then written under (its
+         *     ETag; a record changed since is refused 409, nothing changed): the protection (step 3; judged again by a delete
+         *     taking over a mark short of its point of no return, ``tenancy.judges``), the emptiness (step 4), the purge's early
+         *     refusals (step 7), the warehouse's namespace fence taken for the drop (409 while another holds it), the subtree's
+         *     protection with the caller's ``force``, and the trash it cannot account for. Then the MARK: no door resolves the
+         *     warehouse from here, and nothing is written beneath it (a declare or a commit is refused 409). The namespaces are
+         *     read again after the mark (`ChildrenBeforeMark`): one made in between refuses 409 without ``cascade``, or is held to
+         *     the subtree's checks with it; and a listed table another request has fenced refuses 409. From the mark to the stamp
+         *     is one span (``tenancy.marked``) that touches nothing the delete would have to give back, the bucket's claim
+         *     included: ANY failure in it PUTS THE RECORD BACK live, and one whose put-back fails too answers 503 saying the
+         *     warehouse is left marked (the converge tick puts it back past its bound). Then the POINT OF NO RETURN is stamped on
+         *     the record, written once by the first run past it: that run, and the ``cascade``, ``purge_bucket`` and ``force`` it
+         *     was asked. Past it NOTHING puts the warehouse back and nothing refuses it: the delete finishes, or its answer is
+         *     ``partial`` (503) for any failure, and the same delete asked again, whatever it passes, or the converge tick,
+         *     finishes it exactly as stamped, judging no check (:func:`remove_warehouse`). A step past the mark acts on this
+         *     creation's own objects: its trash is the records filed under its own creation (``warehouses.trash_owned_by``), its
+         *     cascade writes only under the warehouse's namespace fence, which a delete made of a warehouse made again under the
+         *     id takes from it, and its end is the record's one removal, conditional on a read that found this delete's own mark
+         *     (``tenancy.end``): a delete taken over answers 409, and one whose creation ended and the id names another answers
+         *     404, ending nothing of the warehouse that holds the id now.
          */
         delete: operations["delete_warehouse_management_v1_warehouses__warehouse_id__delete"];
         options?: never;

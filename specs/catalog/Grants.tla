@@ -4,7 +4,7 @@
 (* 0245): the tuples OpenFGA holds, a second store the object store's      *)
 (* conditional writes do not arbitrate, written and revoked by the         *)
 (* catalog's doors beside the registry records and tables they are about.  *)
-(* Three parts, each checked by configs of its own (Parts); a part a       *)
+(* Four parts, each checked by configs of its own (Parts); a part a        *)
 (* config leaves out stays at its initial state.                           *)
 (*                                                                         *)
 (* PART "container": one project id, deleted and created again by another  *)
@@ -48,8 +48,9 @@
 (*            stands; its other steps act on its creation's own objects.   *)
 (*            A failure before its stamp puts the record back, by the     *)
 (*            delete whose run holds the mark; past the stamp nothing     *)
-(*            puts it back, and every step that can refuse (the purge's   *)
-(*            claim among them) runs before it. Dying, it is asked again, *)
+(*            puts it back, and every step that can refuse (a guard read  *)
+(*            after the mark among them) runs before it. Dying, it is     *)
+(*            asked again,                                                 *)
 (*            and the tick puts back or finishes a mark whose run no      *)
 (*            longer runs: it lists the registry, then finishes only on a *)
 (*            fresh read still carrying the listed run past its stamp;   *)
@@ -64,6 +65,26 @@
 (* release revokes them past the deadline (trash_reclaim.release_trash),   *)
 (* and a late grant decided on one table lands after it is gone. A reader  *)
 (* decides on what OpenFGA answers (fga.check).                            *)
+(*                                                                         *)
+(* PART "purge": one warehouse's delete asked to purge its bucket, over a  *)
+(* namespace in it that may be protected (asked with force or not), beside *)
+(* a sibling warehouse of the same project made on the same bucket, and a  *)
+(* rival purge stamping the bucket's claim (ADR 0245, fourth review). The  *)
+(* claim has state: whether it stands or is released, and the run whose   *)
+(* purge stamped it `purging`. The delete judges what may refuse it before *)
+(* its mark (the protection with its caller's force, a sibling read from   *)
+(* the registry), marks, stamps its point of no return recording what it  *)
+(* was asked (force and purge), then takes the claim stamped by the run    *)
+(* that passed the stamp, reads the registry again under that stamp (a     *)
+(* create on a stamped claim is refused), and STANDS DOWN where a sibling *)
+(* names the bucket or the claim is released or another's: its stamp     *)
+(* given back, the delete finished keeping the bytes. Then the namespace,  *)
+(* the bytes, the record (its ended-creation record naming the run and    *)
+(* whether its purge was done), the claim released. The user's delete may *)
+(* be asked again (new runs, any flags) and die anywhere; the tick puts    *)
+(* back an unstamped mark, finishes a stamped one with no force of its     *)
+(* own, and settles a claim a run stamped whose record is gone            *)
+(* (tenancy_converge._finish_purge).                                       *)
 (*                                                                         *)
 (* PART "converge": one tuple git may declare (declaration_converge.       *)
 (* _Converger._grant / _revoke) beside the same tuple granted at a door,   *)
@@ -130,10 +151,29 @@
 (*      record from going live; GrantsTickFinishLive removes both         *)
 (*      (TickBeginsNoDelete).                                              *)
 (*   U19 NoReturnFinal: past its stamp a record is never put back: every   *)
-(*      step that can refuse (the purge's claim) runs before the stamp     *)
+(*      step that can refuse (a guard read after the mark) runs before it  *)
 (*      (GrantsPutBackPastStamp, temporal StampedEnds).                    *)
 (*   U20 PutsBackOwnMark: only the delete whose run holds the mark puts    *)
 (*      it back (GrantsPutBackTakenOver, PutBackOnlyItsOwn).               *)
+(*   U21 ForceRecorded: the stamp records the force the delete was asked,  *)
+(*      and a resumed delete judges no protection; without it a resume    *)
+(*      judges the subtree's protection with its own caller's force, and  *)
+(*      the tick's has none (GrantsForceUnrecorded, temporal StampedEnds). *)
+(*   U22 SiblingUnderClaim: the purge reads the warehouses naming its      *)
+(*      bucket again under the claim it stamped, and stands down where    *)
+(*      another does; without it the registry is read once, before the    *)
+(*      mark (GrantsSiblingOutsideClaim, PurgeSparesSiblings).             *)
+(*   U23 ClaimAfterStamp: nothing before the stamp touches the claim, so  *)
+(*      no put-back meets one; without it the claim is taken before the   *)
+(*      stamp and given back by the span's failure, which may fail too    *)
+(*      (GrantsClaimBeforeStamp, NoStampWhileLive).                        *)
+(*   U24 FinishChecksEnd: the tick releases a claim a run stamped, its     *)
+(*      record gone, as purged only where the ended creation names that   *)
+(*      run with its purge done, and gives any other such stamp back;     *)
+(*      without it any such stamp is released as purged. Masked by U23,   *)
+(*      under which no stamp outlives its delete undone: GrantsFinish-     *)
+(*      AnyStamp removes both and fails, GrantsFinishChecksEnd removes U23 *)
+(*      alone and holds (ReleasedOnlyPurged).                              *)
 (*   G5 OwnOnly, G13 Intents: the converge part.                           *)
 (*   G14 AuthorizeFirst: a door asks its gate before it writes             *)
 (*      (GrantsIntruderWrites, OnlyAuthorizedWrites).                      *)
@@ -202,6 +242,14 @@ CONSTANTS Parts,          \* which parts this config checks: a subset of {"conta
           FreshFinish,    \* U18
           NoReturnFinal,  \* U19
           PutsBackOwnMark, \* U20
+          MaxRuns,        \* the purge part: how many times the user asks the warehouse's delete
+          PForce,         \* the purge part: its namespace may be protected, and a delete asked with force
+          Sibling,        \* the purge part: a sibling warehouse of its project is made on its bucket
+          Rival,          \* the purge part: another purge may stamp the bucket's claim
+          ForceRecorded,  \* U21
+          SiblingUnderClaim, \* U22
+          ClaimAfterStamp, \* U23
+          FinishChecksEnd, \* U24
           OwnOnly,        \* G5
           Intents,        \* G13
           AuthorizeFirst, \* G14
@@ -270,6 +318,28 @@ VARIABLES live,    \* the uuid the name holds (0: none)
           revoked, \* whether a revoke of it answered
           bad      \* whether a reader was allowed by it after that
 
+\* -------------------------------------------------------------------- purge
+VARIABLES wr,      \* the warehouse's record: st ("live", "deleting", "absent"), by (the run whose mark it carries, 0 none),
+                   \* nr (the run that passed its point of no return, 0 none: the delete's identity past it, kept by every
+                   \* delete that takes the mark over), and what that delete was asked, as its stamp records it (force, purge)
+          prot,    \* the namespace in the warehouse is protected
+          nsl,     \* that namespace stands
+          sib,     \* the sibling warehouse's record on the bucket: "none", "creating", "live"
+          spc,     \* the sibling's create: "idle", "claimed", "recorded", "checked", "done"
+          cl,      \* the bucket's claim: st ("held", "released") and the purge stamping it (0 none, a run, or RivalRun)
+          wbytes,  \* the warehouse's bytes stand in the bucket
+          sbytes,  \* bytes the sibling wrote stand in the bucket
+          endrec,  \* the ended-creation record: has, the run past the point of no return, whether its purge was done
+          pstep,   \* each delete's next step, an index into PSteps (0: idle or answered)
+          prun,    \* each delete's run, the mark it writes
+          pask,    \* what each delete's caller asked: force, purge
+          phold,   \* the stamp each delete holds the claim under (0: none)
+          pread,   \* the record each delete read when it began, which its mark is conditional on
+          nrun,    \* the run the user's next delete mints
+          rpc,     \* the rival purge: "idle", "stamped", "done"
+          sibPurged,    \* a purge deleted bytes a sibling warehouse wrote
+          falseRelease  \* a claim was released as purged while the warehouse's bytes stood
+
 \* ----------------------------------------------------------------- converge
 VARIABLES declared, \* git declares the tuple: "not yet", "yes", "dropped"
           vinc,     \* the creation of its object the id names now
@@ -286,7 +356,8 @@ cvars == <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narr
            crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 tvars == <<live, tnext, ttup, trashed, tphase, upc, uu, relpc, ru, tgpc, tgfor, everHeld, revoked, bad>>
 vvars == <<declared, vinc, held, first, recorded, intent, ev, cvpc, doorpc, wrong>>
-vars == <<cvars, tvars, vvars>>
+pvars == <<wr, prot, nsl, sib, spc, cl, wbytes, sbytes, endrec, pstep, prun, pask, phold, pread, nrun, rpc, sibPurged, falseRelease>>
+vars == <<cvars, tvars, vvars, pvars>>
 
 MaxUuid == 2
 
@@ -296,6 +367,14 @@ NoClaim == [held |-> FALSE, w |-> "none", purging |-> FALSE]
 \* The child uuid another tenant's claim names: a child the model's project is not the parent of.
 Other == "other"
 NoPurge == [pc |-> "idle", w |-> "none"]
+\* The purge part's deletes: the user's, asked again as new runs, and the converge tick's finish.
+User == "user"
+TickDel == "tick"
+PActors == {User, TickDel}
+\* The tick's run, and the stamp a rival purge writes: neither is a run of the user's delete.
+TickRun == MaxRuns + 1
+RivalRun == MaxRuns + 2
+LiveWr == [st |-> "live", by |-> 0, nr |-> 0, force |-> FALSE, purge |-> FALSE]
 Seed(i) == [obj |-> i, k |-> "seed", g |-> "creator", for |-> i]
 CSeed(e, p) == [obj |-> e, for |-> p]
 
@@ -312,6 +391,11 @@ Init ==
   /\ tgpc = "idle" /\ tgfor = 0 /\ everHeld = FALSE /\ revoked = FALSE /\ bad = FALSE
   /\ declared = "not yet" /\ vinc = 1 /\ held = FALSE /\ first = "none" /\ recorded = 0 /\ intent = FALSE /\ ev = FALSE
   /\ cvpc = "idle" /\ doorpc = "idle" /\ wrong = FALSE
+  /\ wr = LiveWr /\ prot \in (IF PForce THEN BOOLEAN ELSE {FALSE}) /\ nsl = TRUE /\ sib = "none" /\ spc = "idle"
+  /\ cl = [st |-> "held", stamp |-> 0] /\ wbytes = TRUE /\ sbytes = FALSE /\ endrec = [has |-> FALSE, run |-> 0, purged |-> FALSE]
+  /\ pstep = [a \in PActors |-> 0] /\ prun = [a \in PActors |-> 0] /\ pask = [a \in PActors |-> [force |-> FALSE, purge |-> FALSE]]
+  /\ phold = [a \in PActors |-> 0] /\ pread = [a \in PActors |-> LiveWr] /\ nrun = 1 /\ rpc = "idle"
+  /\ sibPurged = FALSE /\ falseRelease = FALSE
 
 Live == prec.st = "live"
 \* What a door resolves: only a live record, with U3.
@@ -325,10 +409,10 @@ Resolves(u) == prec.u = u /\ Resolvable
 \* "noreturn" the delete is irreversible: a refusal no longer puts the record back. Without U17 the end reads its mark
 \* ("endread") and removes the record by its key in a later write ("end").
 Ending == IF ConditionalEnd THEN <<"end">> ELSE <<"endread", "end">>
-\* A step past the mark whose guard may refuse with nothing of it done (a purge's claim another purge holds,
-\* warehouses.take_for_purge): with U19 before the stamp, without it after (the code before the third review).
-Claim == IF Refusals THEN <<"claim">> ELSE <<>>
-Stamp == IF NoReturnFinal THEN Claim \o <<"noreturn">> ELSE <<"noreturn">> \o Claim
+\* A step past the mark whose guard may refuse with nothing of it done (a namespace made in between without cascade, a
+\* table another request has fenced): with U19 before the stamp, without it after (the code before the third review).
+Late == IF Refusals THEN <<"late">> ELSE <<>>
+Stamp == IF NoReturnFinal THEN Late \o <<"noreturn">> ELSE <<"noreturn">> \o Late
 DSteps ==
   (IF ~MarksFirst THEN <<"check", "children", "mark">>
    ELSE IF RevertsRefusal THEN <<"check", "mark", "children">>
@@ -635,8 +719,8 @@ DStep(d) ==
                    IF Child /\ ~Cascade /\ Selected(d) /\ crec.st \in Counted
                      THEN Refuse(d) /\ UNCHANGED <<dsince, ended, tup, crec, ctup, cended, foreignEnd>>
                      ELSE Advance(d) /\ UNCHANGED <<prec, stuck, unforced, dsince, ended, tup, crec, ctup, cended, foreignEnd>>
-              [] s = "claim" ->
-                   \* The purge's claim, which another purge may hold: refused with nothing of this step done.
+              [] s = "late" ->
+                   \* A guard read after the mark: refused with nothing of this step done.
                    \/ Advance(d) /\ UNCHANGED <<prec, stuck, unforced, dsince, ended, tup, crec, ctup, cended, foreignEnd>>
                    \/ Refuse(d) /\ UNCHANGED <<dsince, ended, tup, crec, ctup, cended, foreignEnd>>
               [] s = "noreturn" ->
@@ -891,10 +975,176 @@ ConvergeNext ==
     \/ ConvSettle \/ ConvDies \/ ConvRevoke \/ DoorGrants
 
 
+
+\* -------------------------------------------------------------------- purge
+
+\* A warehouse delete's steps (remove_warehouse): the checks a fresh delete is refused by, the mark, the point of no
+\* return, then with U23 the claim taken for the purge (without it, before the stamp: the code before the fourth review),
+\* with U22 the registry read again under that claim, then the namespace, the bytes, the record and the claim's release.
+PTake == IF ClaimAfterStamp THEN <<"stamp", "take">> ELSE <<"take", "stamp">>
+PSteps == <<"check", "mark">> \o PTake \o (IF SiblingUnderClaim THEN <<"reread">> ELSE <<>>) \o <<"cascade", "purge", "end", "release">>
+PN == Len(PSteps)
+PRunning(a) == pstep[a] \in 1 .. PN
+PMarked(a) == wr.st = "deleting" /\ wr.by = prun[a]
+\* A delete resuming one past its point of no return: it judges no check, and runs as the stamp records it was asked.
+Resumed(a) == pread[a].nr > 0
+\* Whether it purges: as the stamp records once stamped, else as its caller asked.
+PPurges(a) == IF wr.nr > 0 THEN wr.purge ELSE pask[a].purge
+\* The stamp it takes the claim under: the run past the point of no return, or, short of it, its own run.
+PId(a) == IF wr.nr > 0 THEN wr.nr ELSE prun[a]
+PMarkerGone == ~\E a \in PActors : PRunning(a) /\ prun[a] = wr.by
+PutBackWr == [wr EXCEPT !.st = "live", !.by = 0]
+EndedWr == [LiveWr EXCEPT !.st = "absent"]
+
+PBegin(a, run, ask) ==
+  /\ pstep' = [pstep EXCEPT ![a] = 1] /\ prun' = [prun EXCEPT ![a] = run] /\ pask' = [pask EXCEPT ![a] = ask]
+  /\ pread' = [pread EXCEPT ![a] = wr] /\ phold' = [phold EXCEPT ![a] = 0]
+  /\ UNCHANGED <<wr, prot, nsl, sib, spc, cl, wbytes, sbytes, endrec, rpc, sibPurged, falseRelease>>
+
+\* The user asks the delete, again whatever ran before, with any flags: each request a run of its own.
+PUserStart ==
+  /\ On("purge") /\ pstep[User] = 0 /\ nrun <= MaxRuns /\ wr.st \in {"live", "deleting"}
+  /\ \E f \in (IF PForce THEN BOOLEAN ELSE {FALSE}), p \in BOOLEAN : PBegin(User, nrun, [force |-> f, purge |-> p])
+  /\ nrun' = nrun + 1
+
+\* The tick finishes a stamped mark whose run no longer runs, asked nothing by any caller.
+PTickStart ==
+  /\ On("purge") /\ pstep[TickDel] = 0 /\ wr.st = "deleting" /\ wr.nr > 0 /\ PMarkerGone
+  /\ PBegin(TickDel, TickRun, [force |-> FALSE, purge |-> FALSE])
+  /\ UNCHANGED nrun
+
+\* The tick puts back a mark with no stamp whose run no longer runs; the claim is not the record's to touch.
+PTickPutBack ==
+  /\ On("purge") /\ wr.st = "deleting" /\ wr.nr = 0 /\ PMarkerGone
+  /\ wr' = PutBackWr
+  /\ UNCHANGED <<prot, nsl, sib, spc, cl, wbytes, sbytes, endrec, pstep, prun, pask, phold, pread, nrun, rpc, sibPurged, falseRelease>>
+
+PStep(a) ==
+  /\ On("purge") /\ PRunning(a)
+  /\ LET s == PSteps[pstep[a]]
+         adv == pstep' = [pstep EXCEPT ![a] = pstep[a] + 1]
+         halt == pstep' = [pstep EXCEPT ![a] = 0]
+     IN CASE s = "check" ->
+               \* A fresh delete's refusals, nothing changed: the subtree's protection with its caller's force, and a
+               \* purge over a bucket a sibling's record names (_require_bucket_purgeable, read before the mark).
+               /\ IF ~Resumed(a) /\ ((prot /\ nsl /\ ~pask[a].force) \/ (pask[a].purge /\ sib # "none")) THEN halt ELSE adv
+               /\ UNCHANGED <<wr, cl, nsl, wbytes, sbytes, endrec, phold, sibPurged, falseRelease>>
+          [] s = "mark" ->
+               \* Under the ETag of the read it judged (tenancy.mark); a resume takes the mark over the same way.
+               /\ IF wr = pread[a] THEN wr' = [wr EXCEPT !.st = "deleting", !.by = prun[a]] /\ adv ELSE halt /\ UNCHANGED wr
+               /\ UNCHANGED <<cl, nsl, wbytes, sbytes, endrec, phold, sibPurged, falseRelease>>
+          [] s = "stamp" ->
+               \* Written once, by the first delete past it: its run, and what it was asked (force with U21).
+               /\ IF PMarked(a)
+                    THEN /\ wr' = IF wr.nr > 0 THEN wr
+                                  ELSE [wr EXCEPT !.nr = prun[a], !.force = (ForceRecorded /\ pask[a].force), !.purge = pask[a].purge]
+                         /\ adv
+                    ELSE halt /\ UNCHANGED wr
+               /\ UNCHANGED <<cl, nsl, wbytes, sbytes, endrec, phold, sibPurged, falseRelease>>
+          [] s = "take" ->
+               \* warehouses.take_for_purge: the claim stamped `purging` by this delete, where it stands unstamped or
+               \* stamped by this delete already. Past the stamp a claim released or another's stands the purge down;
+               \* short of it (U23 off) another's stamp refuses, and the record is put back.
+               /\ IF ~PPurges(a) THEN adv /\ UNCHANGED <<wr, cl, phold>>
+                  ELSE IF cl.st = "held" /\ cl.stamp \in {0, PId(a)}
+                    THEN cl' = [cl EXCEPT !.stamp = PId(a)] /\ phold' = [phold EXCEPT ![a] = PId(a)] /\ adv /\ UNCHANGED wr
+                  ELSE IF wr.nr = 0 /\ cl.st = "held"
+                    THEN halt /\ wr' = (IF PMarked(a) THEN PutBackWr ELSE wr) /\ UNCHANGED <<cl, phold>>
+                  ELSE adv /\ UNCHANGED <<wr, cl, phold>>
+               /\ UNCHANGED <<nsl, wbytes, sbytes, endrec, sibPurged, falseRelease>>
+          [] s = "reread" ->
+               \* U22: under the stamped claim, the warehouses naming the bucket read again; another stands it down,
+               \* the stamp given back under the read that found it its own.
+               /\ IF phold[a] # 0 /\ sib # "none"
+                    THEN /\ cl' = (IF cl.stamp = phold[a] THEN [cl EXCEPT !.stamp = 0] ELSE cl)
+                         /\ phold' = [phold EXCEPT ![a] = 0]
+                    ELSE UNCHANGED <<cl, phold>>
+               /\ adv
+               /\ UNCHANGED <<wr, nsl, wbytes, sbytes, endrec, sibPurged, falseRelease>>
+          [] s = "cascade" ->
+               \* Without U21 a resumed delete judges the subtree's protection with its own caller's force: refused past
+               \* the stamp, answered partial, the record left marked.
+               /\ IF Resumed(a) /\ ~ForceRecorded /\ prot /\ nsl /\ ~pask[a].force THEN halt /\ UNCHANGED nsl ELSE nsl' = FALSE /\ adv
+               /\ UNCHANGED <<wr, cl, wbytes, sbytes, endrec, phold, sibPurged, falseRelease>>
+          [] s = "purge" ->
+               \* Every byte in the bucket, only while the claim is still stamped its own (warehouses.purge_bucket).
+               /\ IF phold[a] = 0 THEN adv /\ UNCHANGED <<wbytes, sbytes, sibPurged>>
+                  ELSE IF cl.st = "held" /\ cl.stamp = phold[a]
+                    THEN wbytes' = FALSE /\ sbytes' = FALSE /\ sibPurged' = (sibPurged \/ sbytes) /\ adv
+                  ELSE halt /\ UNCHANGED <<wbytes, sbytes, sibPurged>>
+               /\ UNCHANGED <<wr, cl, nsl, endrec, phold, falseRelease>>
+          [] s = "end" ->
+               \* Kept as ended with the run past its stamp and whether its purge was done, then the record removed
+               \* under the read that found its own mark (tenancy.end).
+               /\ IF PMarked(a)
+                    THEN endrec' = [has |-> TRUE, run |-> wr.nr, purged |-> phold[a] # 0] /\ wr' = EndedWr /\ adv
+                    ELSE halt /\ UNCHANGED <<wr, endrec>>
+               /\ UNCHANGED <<cl, nsl, wbytes, sbytes, phold, sibPurged, falseRelease>>
+          [] s = "release" ->
+               /\ IF phold[a] # 0 /\ cl.st = "held" /\ cl.stamp = phold[a]
+                    THEN cl' = [st |-> "released", stamp |-> 0] /\ falseRelease' = (falseRelease \/ wbytes)
+                    ELSE UNCHANGED <<cl, falseRelease>>
+               /\ halt
+               /\ UNCHANGED <<wr, nsl, wbytes, sbytes, endrec, phold, sibPurged>>
+  /\ UNCHANGED <<prot, sib, spc, prun, pask, pread, nrun, rpc>>
+
+\* The user's request fails or dies anywhere. Short of its stamp a failure puts the record back (tenancy.marked) and
+\* gives back a claim it took, which may fail too; a death leaves the mark for the tick. Past the stamp it answers
+\* partial and nothing goes back. The tick's finish runs to its answer (its next run retries).
+PStop ==
+  /\ On("purge") /\ Deaths /\ PRunning(User)
+  /\ pstep' = [pstep EXCEPT ![User] = 0]
+  /\ IF PMarked(User) /\ wr.nr = 0
+       THEN \/ wr' = PutBackWr /\ cl' = (IF phold[User] # 0 /\ cl.stamp = phold[User] THEN [cl EXCEPT !.stamp = 0] ELSE cl)
+            \/ wr' = PutBackWr /\ UNCHANGED cl
+            \/ UNCHANGED <<wr, cl>>
+       ELSE UNCHANGED <<wr, cl>>
+  /\ UNCHANGED <<prot, nsl, sib, spc, wbytes, sbytes, endrec, prun, pask, phold, pread, nrun, rpc, sibPurged, falseRelease>>
+
+\* A sibling warehouse of the same project made on the bucket (establish_warehouse): its claim (refused while stamped
+\* `purging`, a released one taken), its record `creating`, the claim read again before its writes into the bucket
+\* (warehouses.require_claim_held), then live with bytes of its own.
+SibStep ==
+  /\ On("purge") /\ Sibling /\ spc # "done"
+  /\ CASE spc = "idle" ->
+            IF cl.stamp # 0 THEN spc' = "done" /\ UNCHANGED <<cl, sib, sbytes>>
+            ELSE cl' = [st |-> "held", stamp |-> 0] /\ spc' = "claimed" /\ UNCHANGED <<sib, sbytes>>
+       [] spc = "claimed" -> sib' = "creating" /\ spc' = "recorded" /\ UNCHANGED <<cl, sbytes>>
+       [] spc = "recorded" -> spc' = (IF cl.st = "held" /\ cl.stamp = 0 THEN "checked" ELSE "done") /\ UNCHANGED <<cl, sib, sbytes>>
+       [] spc = "checked" -> sib' = "live" /\ sbytes' = TRUE /\ spc' = "done" /\ UNCHANGED cl
+  /\ UNCHANGED <<wr, prot, nsl, wbytes, endrec, pstep, prun, pask, phold, pread, nrun, rpc, sibPurged, falseRelease>>
+
+\* Another purge holds the claim for a while (the estate owner's, or the tick's own).
+RivalStamp ==
+  /\ On("purge") /\ Rival /\ rpc = "idle" /\ cl.st = "held" /\ cl.stamp = 0
+  /\ cl' = [cl EXCEPT !.stamp = RivalRun] /\ rpc' = "stamped"
+  /\ UNCHANGED <<wr, prot, nsl, sib, spc, wbytes, sbytes, endrec, pstep, prun, pask, phold, pread, nrun, sibPurged, falseRelease>>
+
+RivalEnd ==
+  /\ On("purge") /\ rpc = "stamped"
+  /\ cl' = (IF cl.stamp = RivalRun THEN [cl EXCEPT !.stamp = 0] ELSE cl) /\ rpc' = "done"
+  /\ UNCHANGED <<wr, prot, nsl, sib, spc, wbytes, sbytes, endrec, pstep, prun, pask, phold, pread, nrun, sibPurged, falseRelease>>
+
+\* U24: the tick settles a claim a run of the warehouse's delete stamped once its record is gone
+\* (tenancy_converge._finish_purge): released as purged where the ended creation names that run with its purge done,
+\* else given back; without U24 released as purged whatever ended it.
+PTickFinishPurge ==
+  /\ On("purge") /\ cl.st = "held" /\ cl.stamp \in 1 .. MaxRuns /\ wr.st = "absent"
+  /\ IF ~FinishChecksEnd \/ (endrec.has /\ endrec.run = cl.stamp /\ endrec.purged)
+       THEN cl' = [st |-> "released", stamp |-> 0] /\ falseRelease' = (falseRelease \/ wbytes)
+       ELSE cl' = [cl EXCEPT !.stamp = 0] /\ UNCHANGED falseRelease
+  /\ UNCHANGED <<wr, prot, nsl, sib, spc, wbytes, sbytes, endrec, pstep, prun, pask, phold, pread, nrun, rpc, sibPurged>>
+
+PurgeNext ==
+  \/ PUserStart \/ PTickStart \/ PTickPutBack \/ PStop \/ PTickFinishPurge
+  \/ \E a \in PActors : PStep(a)
+  \/ SibStep \/ RivalStamp \/ RivalEnd
+
 Next ==
-  \/ ContainerNext /\ UNCHANGED <<tvars, vvars>>
-  \/ TableNext /\ UNCHANGED <<cvars, vvars>>
-  \/ ConvergeNext /\ UNCHANGED <<cvars, tvars>>
+  \/ ContainerNext /\ UNCHANGED <<tvars, vvars, pvars>>
+  \/ TableNext /\ UNCHANGED <<cvars, vvars, pvars>>
+  \/ ConvergeNext /\ UNCHANGED <<cvars, tvars, pvars>>
+  \/ PurgeNext /\ UNCHANGED <<cvars, tvars, vvars>>
 
 \* A request ends, by its steps or its death (the tick's bound is longer than a request runs); the tick runs on every
 \* period until nothing is left for it; the estate owner purges what the tick reports and keeps because its bucket holds
@@ -903,24 +1153,31 @@ Next ==
 \* infinitely often (strong fairness).
 Spec ==
   /\ Init /\ [][Next]_vars
-  /\ \A i \in Incs : WF_vars((CSeedStep(i) \/ CLive(i)) /\ UNCHANGED <<tvars, vvars>>)
-  /\ \A e \in Edges : WF_vars((EGate(e) \/ EStep(e)) /\ UNCHANGED <<tvars, vvars>>)
-  /\ WF_vars(TickFinish /\ UNCHANGED <<tvars, vvars>>)
-  /\ SF_vars(TickFinishChild /\ UNCHANGED <<tvars, vvars>>)
-  /\ SF_vars(TickEndChild /\ UNCHANGED <<tvars, vvars>>)
-  /\ WF_vars(Sweep /\ UNCHANGED <<tvars, vvars>>)
+  /\ \A i \in Incs : WF_vars((CSeedStep(i) \/ CLive(i)) /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ \A e \in Edges : WF_vars((EGate(e) \/ EStep(e)) /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ WF_vars(TickFinish /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ SF_vars(TickFinishChild /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ SF_vars(TickEndChild /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ WF_vars(Sweep /\ UNCHANGED <<tvars, vvars, pvars>>)
   \* A delete's request runs its steps to an answer; the tick, judging each mark on every period, settles one a
   \* delete asked again may hold for a while (strong fairness).
-  /\ \A d \in Deleters : WF_vars(DStep(d) /\ UNCHANGED <<tvars, vvars>>)
-  /\ SF_vars(TickPutBack /\ UNCHANGED <<tvars, vvars>>)
-  /\ SF_vars(TickList /\ UNCHANGED <<tvars, vvars>>)
-  /\ WF_vars(TickFinishDelete /\ UNCHANGED <<tvars, vvars>>)
-  /\ WF_vars(ClaimEnd /\ UNCHANGED <<tvars, vvars>>)
-  /\ SF_vars(PurgeTake /\ foreign /\ UNCHANGED <<tvars, vvars>>)
-  /\ WF_vars(PurgeDelete /\ UNCHANGED <<tvars, vvars>>)
+  /\ \A d \in Deleters : WF_vars(DStep(d) /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ SF_vars(TickPutBack /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ SF_vars(TickList /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ WF_vars(TickFinishDelete /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ WF_vars(ClaimEnd /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ SF_vars(PurgeTake /\ foreign /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ WF_vars(PurgeDelete /\ UNCHANGED <<tvars, vvars, pvars>>)
   \* The declaration's converge runs on every period: a declarer's steps, and the converge part's tick.
-  /\ \A w \in Declarers : WF_vars((WResolve(w) \/ WGate(w) \/ WWrite(w) \/ WAnswer(w)) /\ UNCHANGED <<tvars, vvars>>)
-  /\ WF_vars((ConvRead \/ ConvIntent \/ ConvWriteEvidenced \/ ConvSettle) /\ UNCHANGED <<cvars, tvars>>)
+  /\ \A w \in Declarers : WF_vars((WResolve(w) \/ WGate(w) \/ WWrite(w) \/ WAnswer(w)) /\ UNCHANGED <<tvars, vvars, pvars>>)
+  /\ WF_vars((ConvRead \/ ConvIntent \/ ConvWriteEvidenced \/ ConvSettle) /\ UNCHANGED <<cvars, tvars, pvars>>)
+  \* The purge part: a delete's request runs its steps to an answer; the tick, judging the record on every period,
+  \* finishes or puts back a mark a delete asked again may hold for a while, and settles a stamp left behind.
+  /\ \A a \in PActors : WF_vars(PStep(a) /\ UNCHANGED <<cvars, tvars, vvars>>)
+  /\ SF_vars(PTickStart /\ UNCHANGED <<cvars, tvars, vvars>>)
+  /\ SF_vars(PTickPutBack /\ UNCHANGED <<cvars, tvars, vvars>>)
+  /\ WF_vars(PTickFinishPurge /\ UNCHANGED <<cvars, tvars, vvars>>)
+  /\ WF_vars(RivalEnd /\ UNCHANGED <<cvars, tvars, vvars>>)
 
 \* ------------------------------------------------------------------ properties
 
@@ -964,8 +1221,22 @@ PutBackOnlyItsOwn == ~erased
 \* The tick never begins a delete: it ends only a creation a delete marked past its point of no return.
 TickBeginsNoDelete == ~unasked
 
-\* A point of no return is one: a creation stamped past it is ended in the end, never put back live.
-StampedEnds == \A i \in Incs : (prec.u = i /\ prec.nr) ~> (prec.u # i \/ prec.st = "absent")
+\* A point of no return is one: a creation stamped past it is ended in the end, never put back live; in the purge part
+\* with a forced cascade over a protected namespace, a sibling made meanwhile and a rival stamp.
+StampedEnds == /\ \A i \in Incs : (prec.u = i /\ prec.nr) ~> (prec.u # i \/ prec.st = "absent")
+               /\ (wr.nr > 0) ~> (wr.st = "absent")
+
+\* No purge takes a bucket another warehouse names: no byte a sibling wrote is deleted.
+PurgeSparesSiblings == ~sibPurged
+
+\* No claim is stamped `purging` by the warehouse's delete while the warehouse is live and unmarked.
+NoStampWhileLive == cl.stamp \in 1 .. MaxRuns => wr.st # "live"
+
+\* A claim is released as purged only after its bytes went.
+ReleasedOnlyPurged == ~falseRelease
+
+\* A stamp the warehouse's delete wrote on the claim is cleared in the end: released, or given back.
+PurgeStampClears == (cl.stamp \in 1 .. MaxRuns) ~> (cl.stamp \notin 1 .. MaxRuns)
 
 \* Nothing stays `deleting`: a mark is put back live, or its creation ended, with no hand-run step.
 DeletingSettles == (prec.st = "deleting") ~> (prec.st \in {"live", "absent"})

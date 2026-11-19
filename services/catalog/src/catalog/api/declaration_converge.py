@@ -395,8 +395,8 @@ def finisher(ctx: Tick) -> tenancy_converge.Finisher:
     record, which must still carry the run the listing found past its stamp (``finishing``), and takes the mark over
     under that read's ETag: a record finished, taken over, or another creation's since the listing is left as it is,
     so the tick never begins a delete. The steps left are run as the stamp records the delete was asked
-    (``tenancy.asked_of``): bytes are purged only where the delete that passed the stamp was asked to, under the claim
-    its purge took (ADR 0241 §10)."""
+    (``tenancy.stamp_of``), its ``force`` included, whatever this passes: bytes are purged only where the delete that
+    passed the stamp was asked to, under the claim stamped by that delete's name (ADR 0241 §10, ADR 0245 fourth review)."""
     request, settings = ctx.request, ctx.settings
     client = get_fga_client(request)
     announcer = get_announcer(request, settings, client, Resolver(request, settings), ctx.control, ObjectUuids(request, settings))

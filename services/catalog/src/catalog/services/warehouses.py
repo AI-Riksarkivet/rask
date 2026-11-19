@@ -645,10 +645,34 @@ class PurgeHold(BaseModel):
     holder: str
 
 
-def purge_holder(kind: str, name: str, uuid: str) -> str:
+def purge_holder(kind: str, name: str, uuid: str, *, run: str | None = None) -> str:
     """The stamp a purge writes on the claim it holds: what it purges for (``warehouse``, ``bucket`` or the tick's
-    ``catalog``), its name and the creation's uuid, so only a purge of the same object resumes one that died."""
-    return f"{kind}:{name}@{uuid}"
+    ``catalog``), its name and the creation's uuid, and for a warehouse's delete the run that passed its point of no
+    return (``#<run>``), which names that delete whichever request or tick finishes it: only a purge of the same object
+    by the same delete resumes one that died (:class:`PurgeStamp`)."""
+    return f"{kind}:{name}@{uuid}" + (f"#{run}" if run is not None else "")
+
+
+class PurgeStamp(BaseModel):
+    """A claim's ``purging`` stamp read back (:func:`purge_holder`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    name: str
+    uuid: str
+    run: str | None
+
+    @classmethod
+    def of(cls, stamp: str) -> PurgeStamp:
+        kind, _, rest = stamp.partition(":")
+        named, _, run = rest.partition("#")
+        name, _, uuid = named.rpartition("@")
+        return cls(kind=kind, name=name, uuid=uuid, run=run or None)
+
+
+class PurgeHeldByAnother(ConcurrentModificationError):
+    """The claim a purge would take is stamped by another purge (409, code 14)."""
 
 
 def take_for_purge(control_root: str, storage_options: StorageOptions, *, bucket: str, project: str, project_uuid: str | None, holder: str) -> PurgeHold | None:
@@ -660,7 +684,8 @@ def take_for_purge(control_root: str, storage_options: StorageOptions, *, bucket
     (:func:`claim_bucket`) and every release but the purge's own (:func:`end_purge`).
 
     Raises:
-        ConcurrentModificationError: Another purge holds the claim (409, code 14).
+        PurgeHeldByAnother: Another purge holds the claim.
+        ConcurrentModificationError: The claim kept changing under the take.
     """
     key = _claim_key(bucket)
     for _attempt in range(_CLAIM_ATTEMPTS):
@@ -672,7 +697,7 @@ def take_for_purge(control_root: str, storage_options: StorageOptions, *, bucket
             return None
         if stamp := claim.get(PURGING):
             if stamp != holder:
-                raise ConcurrentModificationError(f"bucket {bucket!r} is being purged by {stamp}; ask again once that purge has ended")
+                raise PurgeHeldByAnother(f"bucket {bucket!r} is being purged by {stamp}; ask again once that purge has ended")
             return PurgeHold(bucket=bucket, holder=holder)
         try:
             replace_json(control_root, storage_options, key, {**claim, PURGING: holder, PURGING_AT: datetime.now(UTC).isoformat()}, etag=etag)

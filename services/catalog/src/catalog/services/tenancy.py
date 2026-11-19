@@ -34,6 +34,7 @@ from catalog.services.control_records import (
     MARKED_AT,
     NO_RETURN,
     DeleteAsked,
+    EndedBy,
     NotTheCreation,
     change_creation,
     end_record,
@@ -147,6 +148,13 @@ async def require_still(settings: Settings, tenant: Tenant) -> None:
         raise TableNotFoundError(f"{tenant.kind} not found: {tenant.id} (it was deleted while this request ran)")
 
 
+async def creation_ended(settings: Settings, tenant: Tenant) -> bool:
+    """Whether no record names ``tenant``'s creation now, in any state: its delete ended it. A creation's uuid is never
+    minted again, so once none does none ever will, and what a door wrote under it is the door's to take back."""
+    stored = await run_in_threadpool(read_creation, settings.registry_root, settings.storage_options(), key_of(tenant.kind, tenant.id))
+    return stored is None or stored.record.get(UUID) != tenant.uuid
+
+
 def key_of(kind: Kind, object_id: str) -> str:
     """Where the record of ``kind`` ``object_id`` lives on the control root."""
     return projects.record_key(object_id) if kind == PROJECT else warehouses.record_key(object_id)
@@ -244,6 +252,26 @@ def asked_of(record: dict[str, Any]) -> DeleteAsked:
     return DeleteAsked.model_validate(record.get(DELETE_ASKED) or {})
 
 
+class Stamp(BaseModel):
+    """A delete's point of no return as its record carries it: the run that passed it, which names the delete from then on
+    whichever request or tick finishes it, and what that run was asked."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run: str
+    asked: DeleteAsked
+
+    def ended(self, *, bucket_purged: bool | None = None) -> EndedBy:
+        """The delete as the record of the creation it ends names it."""
+        return EndedBy(no_return=self.run, asked=self.asked, bucket_purged=bucket_purged)
+
+
+def stamp_of(record: dict[str, Any]) -> Stamp | None:
+    """``record``'s point of no return; ``None`` where no delete passed one on it."""
+    run = record.get(NO_RETURN)
+    return Stamp(run=str(run), asked=asked_of(record)) if run else None
+
+
 async def _lost(settings: Settings, delete: DeleteRun) -> DeleteGone | DeleteTakenOver:
     """Why a write of ``delete`` conditional on its own mark did not land: the creation went (404), or its mark is no
     longer this run's (409: another delete took it over, or the converge tick settled it once the run passed its bound),
@@ -262,12 +290,16 @@ class Marking:
 
     def __init__(self, settings: Settings, delete: DeleteRun) -> None:
         self._settings, self._delete = settings, delete
-        self.stamped = False
+        self.stamp: Stamp | None = None
 
-    async def pass_no_return(self, asked: DeleteAsked | None = None) -> None:
-        """Stamp the delete's point of no return, the span's last step (:func:`pass_no_return`)."""
-        await pass_no_return(self._settings, self._delete, asked)
-        self.stamped = True
+    @property
+    def stamped(self) -> bool:
+        return self.stamp is not None
+
+    async def pass_no_return(self, asked: DeleteAsked | None = None) -> Stamp:
+        """Stamp the delete's point of no return, the span's last step (:func:`pass_no_return`); the stamp as it stands."""
+        self.stamp = await pass_no_return(self._settings, self._delete, asked)
+        return self.stamp
 
 
 @asynccontextmanager
@@ -329,13 +361,14 @@ async def mark(settings: Settings, delete: DeleteRun, read: Stored, *, by: str) 
     return marked
 
 
-async def pass_no_return(settings: Settings, delete: DeleteRun, asked: DeleteAsked | None = None) -> None:
+async def pass_no_return(settings: Settings, delete: DeleteRun, asked: DeleteAsked | None = None) -> Stamp:
     """Stamp ``delete``'s point of no return on its record, right before its first irreversible step, under the ETag of a
     read that found its own mark: past it nothing puts the record back (:func:`put_back`), and a failure leaves it marked
-    for the same delete asked again, or the converge tick, to finish as ``asked``. What was asked is written once, at the
-    first stamp: a delete taking over a stamped mark finishes it as that stamp records (:func:`asked_of`), whatever its
-    own caller asked, so a resumed delete never widens what the delete that passed the stamp was authorized and judged
-    for.
+    for the same delete asked again, or the converge tick, to finish as ``asked``. The stamp is written once, by the first
+    run past it, naming that run and what it was asked: a delete taking over a stamped mark keeps both (:func:`asked_of`),
+    whatever its own caller asked, so a resumed delete never widens or narrows what the delete that passed the stamp was
+    authorized and judged for, and every run finishing it purges under the one name (``Grants.tla`` U21, U23). The stamp
+    as it stands.
 
     Raises:
         DeleteGone: The id no longer names the creation.
@@ -345,12 +378,14 @@ async def pass_no_return(settings: Settings, delete: DeleteRun, asked: DeleteAsk
     def stamp(record: dict[str, Any]) -> dict[str, Any]:
         if record.get(DELETE_RUN) != delete.run:
             raise NotTheCreation(f"{delete.key} is marked by another delete")
-        stamped = record.get(DELETE_ASKED) if NO_RETURN in record else None
-        return {**record, NO_RETURN: delete.run, DELETE_ASKED: stamped or (asked or DeleteAsked()).model_dump()}
+        if NO_RETURN in record:
+            return record
+        return {**record, NO_RETURN: delete.run, DELETE_ASKED: (asked or DeleteAsked()).model_dump()}
 
     change = partial(change_creation, settings.registry_root, settings.storage_options(), delete.key, delete.uuid, stamp, states=frozenset({DELETING}))
-    if await run_in_threadpool(change) is None:
+    if (stamped := await run_in_threadpool(change)) is None or (passed := stamp_of(stamped)) is None:
         raise await _lost(settings, delete)
+    return passed
 
 
 def _back_live(record: dict[str, Any]) -> dict[str, Any]:
@@ -400,9 +435,9 @@ def marked_before(record: dict[str, Any], older_than: datetime) -> bool:
         return True
 
 
-async def end(settings: Settings, delete: DeleteRun) -> None:
-    """End ``delete``'s creation: kept under ``_ended/``, and its record removed under the ETag of a read that found this
-    run's mark (``control_records.end_record``), which frees its id.
+async def end(settings: Settings, delete: DeleteRun, by: EndedBy) -> None:
+    """End ``delete``'s creation: kept under ``_ended/`` naming the delete ``by`` names, and its record removed under the
+    ETag of a read that found this run's mark (``control_records.end_record``), which frees its id.
 
     Raises:
         DeleteGone: The id no longer names the creation.
@@ -417,6 +452,7 @@ async def end(settings: Settings, delete: DeleteRun) -> None:
         delete.id,
         delete.uuid,
         run=delete.run,
+        by=by,
         now=datetime.now(UTC),
     )
     if not await run_in_threadpool(ending):
