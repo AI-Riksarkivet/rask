@@ -52,7 +52,7 @@ import logging
 from collections.abc import Awaitable, Callable, Collection
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
@@ -271,6 +271,33 @@ async def create_project(
     return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, record))
 
 
+async def _lost_creation(settings: Settings, client: OpenFgaClient | None, project_id: str, record: dict[str, str]) -> NoReturn:
+    """Answer a create (or a re-POST) whose flip found its creation neither creating nor live: it announces nothing and
+    answers what stands (ADR 0245, third review).
+
+    A creation still standing is being deleted, and its delete decides what its tuples become. One no record names any
+    more ended under the create, so what the create wrote on it (its admin's grant, landing after the delete's revoke) is
+    taken back now, the whole object revoked as the converge tick's sweep of an ended creation revokes it (a uuid is
+    never minted again, so nothing else can hold it); one this cannot take back the sweep takes.
+
+    Raises:
+        NamespaceAlreadyExistsError: Another creation of the id stands now: the create lost the id, as one that lost the race
+            for it does.
+        ConcurrentModificationError: The creation is being deleted, or no creation of the id stands; make it again.
+    """
+    standing = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, settings.storage_options(), project_id)
+    log.warning("project_creation_lost", extra={"project": project_id, "uuid": record[UUID], "standing": standing.get(UUID) if standing else None})
+    if standing is not None and standing.get(UUID) == record[UUID]:
+        raise ConcurrentModificationError(f"project {project_id!r} is being deleted; create it once its delete has finished")
+    try:
+        await fga_deps.end_object(client, settings, tenancy.object_of_record(PROJECT, record), token=None)
+    except ServiceUnavailableError:
+        log.warning("lost_creation_grant_left", extra={"project": project_id, "uuid": record[UUID]})
+    if standing is not None:
+        raise NamespaceAlreadyExistsError(f"project {project_id!r} was deleted and made again while this request ran; nothing was made by this one")
+    raise ConcurrentModificationError(f"project {project_id!r} was deleted while it was made; make it again")
+
+
 async def establish_project(
     settings: Settings, client: OpenFgaClient | None, announcer: Announcer, *, project_id: str, admin: str | None, author: Author | None
 ) -> dict[str, str]:
@@ -305,7 +332,9 @@ async def establish_project(
     uuid = existing[UUID] if existing else new_uuid()
     obj = tenancy.object_of_record(PROJECT, {UUID: uuid})
     created = Announcement(
-        evidence=RecordHeld(key=project_registry.record_key(project_id)),
+        # Landed only where the record holds THIS creation live: a record the id names for another creation is no
+        # evidence of this one, and a create whose creation ended under it announces nothing.
+        evidence=RecordHeld(key=project_registry.record_key(project_id), fields={UUID: uuid, STATE: LIVE}),
         message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=target, actor=actor, extra={UUID: uuid})),
     )
     # `seed_project_admin` writes the admin's grant exactly when authorization is on and an admin is named.
@@ -336,9 +365,13 @@ async def establish_project(
     filed = announcer.announcing(door="create_project", target=target, announcements=[created, *([admin_granted] if admin_granted is not None else [])])
     async with filed as filing:
         granted = await fga_deps.seed_project_admin(client, settings, author.subject if author is not None else None, project=record, admin=admin)
-        record = await run_in_threadpool(project_registry.set_live, settings.registry_root, so, project_id, record[UUID]) or record
-        if record.get(STATE) != LIVE:
-            raise ConcurrentModificationError(f"project {project_id!r} was deleted while it was made; make it again")
+        flipped = await run_in_threadpool(project_registry.set_live, settings.registry_root, so, project_id, record[UUID])
+        if flipped is None or flipped.get(STATE) != LIVE:
+            # The creation this create wrote on ended under it (or another tenant made the id again): it is lost, as a
+            # create that lost the race for its id is (ADR 0245, third review). It announces nothing, takes back the grant
+            # it wrote on the creation that ended, and answers what stands.
+            await _lost_creation(settings, client, project_id, record)
+        record = flipped
         log.info("project_created", extra={"project": project_id, "existing": existing is not None})
         await filing.send(created)
         if granted and admin is not None and admin_granted is not None:
@@ -704,13 +737,35 @@ async def delete_project(
         InternalError: A warehouse record is there and cannot be read as one, and nothing was deleted.
         PartiallyApplied: A step past the point of no return failed; the same delete asked again finishes it.
     """
+    return await remove_project(project_id, record, settings, token, client, announcer, force=force)
+
+
+async def remove_project(
+    project_id: str,
+    record: dict[str, str],
+    settings: Settings,
+    token: CurrentToken,
+    client: OpenFgaClient | None,
+    announcer: Announcer,
+    *,
+    force: bool,
+    finishing: str | None = None,
+) -> DeleteProjectResponse:
+    """The delete of project ``project_id`` whose record ``record`` is, once its caller is authorized (:func:`delete_project`).
+
+    ``finishing`` is the converge tick's: the delete run its listing found past its point of no return, which the record
+    read here must still carry, so the tick finishes that delete and never begins one (``tenancy.judged``).
+
+    Raises:
+        tenancy.NothingToFinish: ``finishing`` names a run the record no longer carries past its point of no return.
+    """
     so = settings.storage_options()
     target = f"project:{project_id}"
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = fga_deps.wired(settings, client)
     obj = tenancy.object_of_record(PROJECT, record)
     delete = tenancy.DeleteRun.of(PROJECT, record)
-    judged = await tenancy.judged(settings, delete)
+    judged = await tenancy.judged(settings, delete, finishing=finishing)
     # Judged again over a mark short of its point of no return: taking it over is a new delete (``ChecksTakeOver``).
     if tenancy.judges(judged.record):
         await _require_deletable(project_id, judged.record, settings, force=force)
@@ -783,7 +838,7 @@ async def _end_the_creation(
     """
     so = settings.storage_options()
     actor = f"user:{token.subject}" if token is not None else None
-    project_id, project_uuid = delete.id, delete.uuid
+    project_uuid = delete.uuid
     # Tuples FIRST, record last. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully described and
     # re-deletable; the opposite order would strand grants on a project no API can name any more — privilege that nothing
     # in the product can see, let alone clear. Every tuple on its creation and every tuple naming it (a role's `project`
@@ -792,17 +847,17 @@ async def _end_the_creation(
     removed = await fga_deps.end_object(authz, settings, tenancy.object_of_record(PROJECT, record), token=token)
     # Each role made under this creation is ended as its own delete door ends it, with authorization off too, so no record
     # outlives its project; a role of a creation made again under the id is that tenant's.
-    for role in await run_in_threadpool(partial(roles.every_role, settings.registry_root, so, project_id, project_uuid=project_uuid)):
+    for role in await run_in_threadpool(partial(roles.every_role, settings.registry_root, so, project_uuid=project_uuid)):
         ending = await announcing.role_ending(authz, role, actor=actor, reason="project_deleted")
         async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
             ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
             await ending.send(ending_filed, ended, actor=actor, reason="project_deleted")
     # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant.
-    # The record names the creation that set it (ADR 0241 §9 P2, ADR 0245), so one another creation set is not this
-    # delete's to end, and governs no bucket the next tenant claims whether or not it stands.
-    await run_in_threadpool(partial(maintenance_policies.end_project_policy, settings.registry_root, so, project_id, project_uuid=project_uuid))
+    # Every record of a project is filed under its creation's uuid (ADR 0245, third review), so this delete ends its own
+    # creation's keyspace and reaches nothing another creation of the id holds.
+    await run_in_threadpool(partial(maintenance_policies.end_project_policy, settings.registry_root, so, project_uuid=project_uuid))
     # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object lay in a
     # warehouse of it, and each ended its labels as it went.
-    await run_in_threadpool(partial(object_labels.end_definitions, settings.registry_root, so, project_id, project_uuid=project_uuid))
+    await run_in_threadpool(partial(object_labels.end_definitions, settings.registry_root, so, project_uuid=project_uuid))
     await tenancy.end(settings, delete)
     return removed

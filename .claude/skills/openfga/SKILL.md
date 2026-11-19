@@ -146,7 +146,8 @@ warehouse, a project, a classification label and a transaction keep their ids.
 
 **A project and a warehouse are named by their creation's uuid, never by their id** (ADR 0245, `specs/catalog/Grants.tla`):
 an id is reused once its object is deleted, so each create mints a uuid, the registry record names it (`uuid`, and
-`project_uuid` on every record belonging to a project), and OpenFGA names the object `project:<uuid>` /
+`project_uuid` on every record belonging to a project, which a project's own records, its policy, roles and label
+definitions, are filed under), and OpenFGA names the object `project:<uuid>` /
 `warehouse:<uuid>`, as tables and namespaces are named by theirs. `lakehouse.governed.tenancy.object_of` is the ONE
 builder (a ruff banned-api rule admits it only at the resolver `catalog.services.tenancy` and maintenance's rebuild),
 and every OpenFGA Write refuses a tuple naming a project or warehouse by anything a create could take as an id
@@ -163,7 +164,10 @@ only a caller the gate admits learns that an id is missing. The gate is asked wi
 S2: a refusal naming `project:<uuid>` told the ids apart and leaked the creation; `_require`, `_require_any`'s
 `labels`, `_require_rung`'s and `require_grant_authority`'s `label`); a creation's uuid is the audit row's and the
 events'. Both rosters compare the whole problem body. EVERY door writing a tuple on a creation resolves again
-after its Write through ONE helper, `tenancy.require_still` (review T4, T6; both rosters are tests that walk the router).
+after its Write through ONE helper, `tenancy.require_still` (review T4, T6; both rosters are tests that walk the router),
+and so do the create paths the declaration shares: a project create whose flip finds its creation gone answers what
+stands (409) and revokes what it wrote on the ended creation (`projects._lost_creation`), and a warehouse create
+resolves again after converging its grants (third review).
 The estate admin's tools take `project:<id>` / `warehouse:<id>` and resolve them to the creation (a write: live; a
 question: any standing record), take a standing creation's uuid, answer 400 for anything else shaped like a tenancy
 object, and name the id beside the uuid (`name`, `user_name`, `names`). A listing that asks OpenFGA maps objects back

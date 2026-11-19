@@ -10,11 +10,11 @@ the bucket by the maintenance sweep on every tick (it has no catalog client by d
 * table policy — keyed by the table's ``uuid`` (ADR 0173 §8, [[LH-523]]), so a rename keeps it and a table
   created later under the same name holds none of it;
 * namespace policy — keyed by the namespace's ``uuid``, governing every table under the namespace;
-* project policy (#84) — the tenant-wide default, keyed by the project id: instead of a uuid it carries
-  ``buckets`` (the project's active warehouse buckets, resolved from the warehouse registry at set time),
-  matched at the bucket level, and ``project_uuid``, the creation of the project that set it (ADR 0241 §9 P2, ADR 0245):
-  a project's id may be held again by another tenant once it is deleted, so a record an earlier creation left governs
-  only a bucket whose claim names that creation, never one the tenant holding the id now claimed.
+* project policy (#84) — the tenant-wide default, keyed by ``project_uuid``, the creation of the project that set it
+  (ADR 0245, third review): a project's id may be held again by another tenant once it is deleted, so a record is filed
+  in its creation's keyspace, and a set decided on one creation lands in that creation's alone and never reaches the
+  next. It carries ``buckets`` (the project's active warehouse buckets, resolved from the warehouse registry at set
+  time), matched at the bucket level, and the project's id under ``id``, for display.
 
 A table or namespace record also keeps the object's name under ``id``, as it was when the policy was set, for
 display. Resolution order (:func:`resolve_policy`): a table policy wins over the nearest namespace policy wins
@@ -47,7 +47,7 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse import control_prefixes, records, stored_objects, warehouse_records
-from lakehouse.governed.tenancy import PROJECT_UUID, made_under
+from lakehouse.governed.tenancy import PROJECT_UUID
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, read_record, record_key
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, on_s3
@@ -62,13 +62,10 @@ PREFIX: Final = control_prefixes.POLICIES
 _EVENT = "maintenance_policy"
 
 
-#: The kinds whose records are keyed by the object's uuid; a project's is keyed by its id.
-_UUID_KEYED_KINDS: Final = frozenset({"table", "namespace"})
-
-
 def policy_key(record: dict[str, Any]) -> str:
-    """What a record is stored under: its object's ``uuid`` for a table or namespace, its ``id`` for a project."""
-    return str(record["uuid"] if record.get("kind") in _UUID_KEYED_KINDS else record["id"])
+    """What a record is stored under: its object's ``uuid`` for a table or namespace, the uuid of the project's creation
+    that set it (``project_uuid``) for a project."""
+    return str(record[PROJECT_UUID] if record.get("kind") == "project" else record["uuid"])
 
 
 def put_policy(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
@@ -131,13 +128,11 @@ def delete_policy(control_root: str, storage_options: StorageOptions, kind: str,
     return delete_record(control_root, storage_options, record_key(PREFIX, kind, key))
 
 
-def end_project_policy(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> bool:
-    """Remove project ``project``'s policy where it names the creation ``project_uuid`` that set it, under the ETag of the
-    read that found it so (``records.remove_json``): a removal decided on one creation of the project never removes a
-    policy the tenant holding the id now set (ADR 0245, second review S3). Whether one was removed."""
-    return (
-        records.remove_json(control_root, storage_options, record_key(PREFIX, "project", project), lambda record: made_under(record, project_uuid)) is not None
-    )
+def end_project_policy(control_root: str, storage_options: StorageOptions, *, project_uuid: str) -> bool:
+    """Remove the policy the creation ``project_uuid`` of a project set, once that creation ends: its key is that
+    creation's, so the removal reaches no policy another creation of the id set (ADR 0245, third review). Whether one was
+    removed."""
+    return delete_record(control_root, storage_options, record_key(PREFIX, "project", project_uuid))
 
 
 def list_policies(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
@@ -258,9 +253,9 @@ def governing_policy(
     any of those levels holds it (:func:`_held`). The precedence is :func:`resolve_policy`'s, which a caller may hand the
     one record this returns; the project level differs only where several project records name one bucket, which
     :func:`resolve_policy` refuses to choose between and the store's claim, written once by the warehouse that took the
-    bucket, settles. The project's record governs only where it names the creation of the project the claim names
-    (ADR 0241 §9 P2, ADR 0245): one an earlier creation of the id left governs no bucket the tenant holding the id now
-    claimed.
+    bucket, settles. The project's record is read in the keyspace of the creation of the project the claim names (ADR
+    0245, third review): one an earlier creation of the id set is filed under that creation, and governs no bucket the
+    tenant holding the id now claimed.
     The policy records are read under ``control_root`` and the bucket's claim under ``claims_root``, the catalog's
     registry, which a deployment may keep apart from its policies.
 
@@ -279,13 +274,12 @@ def governing_policy(
         nearest = [_keyed(control_root, storage_options, "namespace", namespace_uuid) for namespace_uuid in reversed(namespace_uuids)]
         bucket = split_s3_uri(location)[0] if on_s3(location) else ""
         claimant = warehouse_records.bucket_claimant(claims_root, storage_options, bucket) if bucket else None
-        tenant = _keyed(control_root, storage_options, "project", claimant[0]) if claimant is not None else None
+        tenant = _keyed(control_root, storage_options, "project", claimant[1]) if claimant is not None else None
     except OSError as exc:
         raise UnreadablePolicyError(f"a maintenance policy that may govern the table {table_uuid} could not be read: {exc}") from exc
     except ValueError as exc:
         raise MalformedPolicyError(f"a maintenance policy that may govern the table {table_uuid} cannot be read as one: {exc}") from exc
-    governs = claimant is not None and tenant is not None and tenant.get(PROJECT_UUID) == claimant[1]
-    tenant = tenant if governs and tenant is not None and bucket in (tenant.get("buckets") or []) else None
+    tenant = tenant if tenant is not None and bucket in (tenant.get("buckets") or []) else None
     return _held([record for record in (own, *nearest, tenant) if record is not None])
 
 

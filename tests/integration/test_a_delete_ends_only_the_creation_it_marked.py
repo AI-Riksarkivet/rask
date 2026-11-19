@@ -39,8 +39,8 @@ from lance_namespace import ServiceUnavailableError
 
 from catalog.api import declaration_converge, fga_deps
 from catalog.api.ticks import Tick
-from catalog.services import projects, tenancy, tenancy_converge, warehouses
-from lakehouse import records
+from catalog.services import object_labels, projects, tenancy, tenancy_converge, warehouses
+from lakehouse import maintenance_policies, records
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga
 from lakehouse.governed.tenancy import Kind
@@ -491,3 +491,179 @@ def test_a_table_create_held_across_its_warehouses_cascade_lands_nothing_under_i
 
     assert (deleted.status_code, answered[0].status_code >= 400, remade.status_code) == (200, True, 200), (deleted.text, answered[0].text, remade.text)
     assert (listed.json().get("namespaces"), left) == ([], []), (listed.text, left)
+
+
+def _one_tick(estate: Any) -> tenancy_converge.TenancyConverged:  # noqa: ANN401 — the conftest's Estate
+    """One run of the tenancy's convergence with its bound passed for every record, finishing deletes as the tick does."""
+    app = estate.client.app
+    settings = app.state.settings
+    finish = declaration_converge.finisher(Tick(app, settings))
+    return estate.client.portal.call(
+        partial(tenancy_converge.converge, settings, app.state.fga, bound=timedelta(0), connections=app.state.connections, finish=finish)
+    )
+
+
+def test_a_purge_refused_at_its_claim_leaves_its_warehouse_live_and_the_tick_ends_nothing(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401
+    """Third review, U19 (`GrantsPutBackPastStamp`, `GrantsTickFinishLive`): alice's purge delete is held at the purge's
+    claim, which another purge holds; the converge tick lists the warehouse meanwhile and is held before it settles it.
+    The claim is taken before the point of no return, so the refusal (409) puts the warehouse back live with nothing
+    stamped, and the tick, released, finds no stamped delete to finish: the live warehouse keeps its record and bucket."""
+    (alice,) = _admins(estate, "alice")
+    _project_and_warehouse(estate, alice)
+    assert estate.client.post(f"/v1/namespace/{WAREHOUSE}$keep/create", json={}, headers=alice).status_code == 200
+    settings = _settings(estate)
+    root, so = settings.registry_root, settings.storage_options()
+    bucket = f"{WAREHOUSE}-bucket"
+    taken, release_take = _held(monkeypatch, warehouses, "take_for_purge")
+    deleting, answered = _in_thread(lambda: _delete(estate, "warehouse", alice, purge_bucket="true", cascade="true"))
+    assert taken.wait(WAIT), "alice's delete never reached its purge's claim"
+    settling, release_settle = _held(monkeypatch, tenancy_converge._Convergence, "_settle_mark")  # noqa: SLF001 — the tick's own step, held
+    ticking, settled = _in_thread(lambda: _one_tick(estate))
+    assert settling.wait(WAIT), "the tick never listed the marked warehouse"
+
+    stored = warehouses._stored_claim(root, so, bucket)  # noqa: SLF001 — the test's own stand-in for a rival purge
+    assert stored is not None
+    records.replace_json(root, so, warehouses._claim_key(bucket), {**stored[0], warehouses.PURGING: "warehouse:other@" + "1" * 32}, etag=stored[1])  # noqa: SLF001
+    release_take.set()
+    deleting.join(WAIT)
+    after = _record(estate, "warehouse", WAREHOUSE) or {}
+    stored = warehouses._stored_claim(root, so, bucket)  # noqa: SLF001
+    assert stored is not None
+    records.replace_json(root, so, warehouses._claim_key(bucket), {k: v for k, v in stored[0].items() if k != warehouses.PURGING}, etag=stored[1])  # noqa: SLF001
+    release_settle.set()
+    ticking.join(WAIT)
+
+    assert (answered[0].status_code, after.get("state"), "no_return" in after) == (409, "live", False), answered[0].text
+    assert (settled[0].deleted, settled[0].put_back) == ([], []), settled[0]
+    assert (_record(estate, "warehouse", WAREHOUSE) is not None, warehouses.bucket_exists(bucket, so)) == (True, True)
+
+
+def test_the_tick_finishes_only_the_delete_its_listing_found_and_as_its_stamp_asked(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401
+    """Third review, U18 (`FreshFinish`): alice's delete of the warehouse, not asked to purge, fails past its point of no
+    return; the converge tick lists that stamped run and is held before it settles it; alice asks the delete again,
+    asking to purge now, which takes the mark over and is held. The tick, released, reads the record again, finds another
+    run's mark and finishes nothing. Alice's delete then finishes as the stamp records it was asked: its record is gone,
+    its bucket is kept, and its answer says why."""
+    (alice,) = _admins(estate, "alice")
+    _project_and_warehouse(estate, alice)
+    _fails(monkeypatch, fga_deps, "end_object")
+    failed = _delete(estate, "warehouse", alice)
+    monkeypatch.undo()
+    settling, release_settle = _held(monkeypatch, tenancy_converge._Convergence, "_settle_mark")  # noqa: SLF001 — the tick's own step, held
+    ticking, settled = _in_thread(lambda: _one_tick(estate))
+    assert settling.wait(WAIT), "the tick never listed the stamped warehouse"
+    resumed_at, release_resume = _held(monkeypatch, fga_deps, "end_object")
+    resuming, resumed = _in_thread(lambda: _delete(estate, "warehouse", alice, purge_bucket="true"))
+    assert resumed_at.wait(WAIT), "alice's delete asked again never took the mark over"
+    release_settle.set()
+    ticking.join(WAIT)
+    release_resume.set()
+    resuming.join(WAIT)
+
+    assert (failed.status_code, settled[0].deleted, settled[0].failed) == (503, [], []), (failed.text, settled[0])
+    answer = resumed[0]
+    assert (answer.status_code, answer.json().get("bucket_purged"), bool(answer.json().get("bytes_kept"))) == (200, False, True), answer.text
+    assert (_record(estate, "warehouse", WAREHOUSE), warehouses.bucket_exists(f"{WAREHOUSE}-bucket", _settings(estate).storage_options())) == (None, True)
+
+
+def test_a_delete_failing_before_its_stamp_puts_back_no_mark_another_delete_took_over(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401
+    """Third review, U20 (`GrantsPutBackTakenOver`, `PutBackOnlyItsOwn`): alice's delete A of acme marks it and is held at
+    its after-mark read; her delete B takes the mark over and is held at its own; A's read then fails. A puts back only a
+    mark its own run holds, so B's stands, and B finishes the delete."""
+    (alice,) = _admins(estate, "alice")
+    assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=alice).status_code == 200
+    real, calls = warehouses.every_warehouse, [0]
+    a_at, a_go, b_at, b_go = threading.Event(), threading.Event(), threading.Event(), threading.Event()
+
+    def every_warehouse(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the registry read's own arguments and answer
+        calls[0] += 1
+        if calls[0] == 2:  # A's read after its mark: held, then failing as a store not answering
+            a_at.set()
+            assert a_go.wait(WAIT)
+            raise ServiceUnavailableError("the store did not answer")
+        if calls[0] == 4:  # B's read after its mark: held
+            b_at.set()
+            assert b_go.wait(WAIT)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(warehouses, "every_warehouse", every_warehouse)
+    a, a_answer = _in_thread(lambda: _delete(estate, "project", alice))
+    assert a_at.wait(WAIT), "A never reached its after-mark read"
+    b, b_answer = _in_thread(lambda: _delete(estate, "project", alice))
+    assert b_at.wait(WAIT), "B never took the mark over"
+    b_run = (_record(estate, "project", PROJECT) or {}).get("delete_run")
+    a_go.set()
+    a.join(WAIT)
+    after_a = _record(estate, "project", PROJECT) or {}
+    b_go.set()
+    b.join(WAIT)
+
+    assert (a_answer[0].status_code, after_a.get("state"), after_a.get("delete_run")) == (503, "deleting", b_run), (a_answer[0].text, after_a)
+    assert (b_answer[0].status_code, _record(estate, "project", PROJECT)) == (200, None), b_answer[0].text
+
+
+def test_a_project_re_post_whose_creation_ended_meanwhile_answers_what_stands_and_holds_nothing(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401
+    """Third review, U4 (`GrantAnswersTruthfully`): alice re-POSTs acme and is held at its seed; acme is deleted and erin
+    makes it again. The re-POST's flip finds its creation gone: it answers the id that stands (409, code 2), and no grant
+    of alice's stands on the creation that ended or on erin's."""
+    alice, erin = _admins(estate, "alice", "erin")
+    assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=alice).status_code == 200
+    ended = _live(estate, "project", PROJECT).obj
+    arrived, release = _held(monkeypatch, fga_deps, "seed_project_admin")
+    reposting, answered = _in_thread(lambda: estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=alice))
+    assert arrived.wait(WAIT), "the re-POST never reached its seed"
+    assert _delete(estate, "project", alice).status_code == 200
+    assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=erin).status_code == 200
+    release.set()
+    reposting.join(WAIT)
+
+    alices = [t for t in estate.store.tuples() if t[0] == fga.user_object(f"{IDP}~alice") and t[2] in (ended, _live(estate, "project", PROJECT).obj)]
+    assert (answered[0].status_code, answered[0].json().get("code"), alices) == (409, 2, []), answered[0].text
+
+
+def test_a_project_policy_set_held_across_its_projects_end_leaves_the_next_creations_policy(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401
+    """Third review, keyspaces: alice's policy set on acme is held at its write; acme is deleted and erin makes it again
+    with a warehouse and a hold. The held set, filed under the creation it was decided on, answers 404 and leaves erin's
+    hold as erin set it."""
+    alice, erin = _admins(estate, "alice", "erin")
+    _project_and_warehouse(estate, alice)
+    arrived, release = _held(monkeypatch, maintenance_policies, "set_policy")
+    setting, answered = _in_thread(lambda: estate.client.post(f"/management/v1/project/{PROJECT}/policy/set", json={"retention_days": 90}, headers=alice))
+    assert arrived.wait(WAIT), "alice's set never reached its write"
+    assert _delete(estate, "warehouse", alice).status_code == 200
+    assert _delete(estate, "project", alice).status_code == 200
+    assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=erin).status_code == 200
+    made = estate.client.post("/management/v1/warehouses", json={"id": "wh-b", "project": PROJECT, "bucket": "wh-b-bucket"}, headers=erin)
+    assert made.status_code == 200, made.text
+    held = estate.client.post(f"/management/v1/project/{PROJECT}/policy/set", json={"cleanup_enabled": False}, headers=erin)
+    assert held.status_code == 200, held.text
+    release.set()
+    setting.join(WAIT)
+
+    described = estate.client.post(f"/management/v1/project/{PROJECT}/policy/describe", json={}, headers=erin).json()
+    assert (answered[0].status_code, described.get("set"), described.get("cleanup_enabled"), described.get("retention_days")) == (404, True, False, None), (
+        described
+    )
+
+
+def test_a_label_define_held_across_its_projects_end_leaves_the_next_creations_definition(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401
+    """Third review, keyspaces: alice's define of `pii` on acme is held at its write; acme is deleted and erin makes it
+    again and defines `pii`. The held define, filed under the creation it was decided on, answers 404, erin's project
+    defines the label erin defined, and the tick ends what the held define left."""
+    alice, erin = _admins(estate, "alice", "erin")
+    assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=alice).status_code == 200
+    body = {"name": "pii", "scope": ["table"], "kind": "marker"}
+    arrived, release = _held(monkeypatch, object_labels, "define")
+    defining, answered = _in_thread(lambda: estate.client.post(f"/management/v1/projects/{PROJECT}/labels/define", json=body, headers=alice))
+    assert arrived.wait(WAIT), "alice's define never reached its write"
+    assert _delete(estate, "project", alice).status_code == 200
+    assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=erin).status_code == 200
+    mine = estate.client.post(f"/management/v1/projects/{PROJECT}/labels/define", json=body, headers=erin)
+    assert mine.status_code == 200, mine.text
+    release.set()
+    defining.join(WAIT)
+    swept = _one_tick(estate)
+
+    listed = estate.client.get(f"/management/v1/projects/{PROJECT}/labels", headers=erin)
+    assert (answered[0].status_code, [d["uuid"] for d in listed.json()]) == (404, [mine.json()["uuid"]]), listed.text
+    assert [entry for entry in swept.ended if entry.startswith("labels:")] != [], swept

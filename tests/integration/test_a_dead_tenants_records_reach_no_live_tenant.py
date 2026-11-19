@@ -175,8 +175,8 @@ def test_the_tick_ends_a_warehouse_a_dead_creation_left_creating_and_sweeps_what
 
 def test_a_project_policy_governs_only_the_buckets_of_the_creation_that_set_it(estate: Any) -> None:  # noqa: ANN401
     """A warehouse record naming acme at a dead creation is no warehouse of acme's live one: acme's policy door answers
-    acme has no warehouse, its listing names no such bucket, and a policy record names the creation that wrote it: one an
-    earlier creation left is not acme's, and governs no bucket claimed by another (ADR 0241 §9 P2)."""
+    acme has no warehouse, its listing names no such bucket, and a policy record is filed under the creation that wrote
+    it: one an earlier creation left is not acme's, and governs no bucket claimed by another (ADR 0241 §9 P2, ADR 0245)."""
     (alice,) = _admins(estate, "alice")
     assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=alice).status_code == 200
     dead = "d" * 32
@@ -205,38 +205,33 @@ def test_a_project_policy_governs_only_the_buckets_of_the_creation_that_set_it(e
     assert (held.status_code, held.json().get("buckets")) == (200, ["wh-a-bucket"]), held.text
     settings = _settings(estate)
     so = settings.storage_options()
-    stored = policies.get_policy(settings.registry_root, so, "project", PROJECT)
-    assert (stored or {}).get(PROJECT_UUID) == _project_uuid(estate)
+    live = _project_uuid(estate)
+    stored = policies.get_policy(settings.registry_root, so, "project", live)
+    assert (stored or {}).get(PROJECT_UUID) == live
 
-    # The same record as one an earlier creation of acme left: it governs neither acme's bucket nor is acme's to read.
-    policies.put_policy(settings.registry_root, so, {**(stored or {}), PROJECT_UUID: dead})
+    # The same record filed under an earlier creation of acme (ADR 0245, third review): it governs neither acme's bucket
+    # nor is acme's to read, and a set naming one field takes every other from it never.
+    policies.put_policy(settings.registry_root, so, {**(stored or {}), PROJECT_UUID: dead, "retain_versions": 7, "retention_days": 30})
+    policies.delete_policy(settings.registry_root, so, "project", live)
     governing = policies.governing_policy(
         settings.registry_root, so, claims_root=settings.registry_root, location="s3://wh-a-bucket/sales/t", table_uuid="t" * 32, namespace_uuids=[]
     )
     described = estate.client.post(f"{policy}/describe", headers=alice)
     assert (governing, described.json()["set"]) == (None, False), described.text
-    assert warehouses_of(warehouses.list_warehouses(settings.registry_root, so), _project_uuid(estate)) == [estate.record("wh-a")]
-
-    # A set naming one field takes every other from no record an earlier creation left: acme never set a retention.
-    policies.put_policy(settings.registry_root, so, {**(stored or {}), PROJECT_UUID: dead, "retain_versions": 7, "retention_days": 30})
+    assert warehouses_of(warehouses.list_warehouses(settings.registry_root, so), live) == [estate.record("wh-a")]
     partial_set = estate.client.post(f"{policy}/set", json={"compact_enabled": True}, headers=alice)
-    written = policies.get_policy(settings.registry_root, so, "project", PROJECT) or {}
+    written = policies.get_policy(settings.registry_root, so, "project", live) or {}
     assert partial_set.status_code == 200, partial_set.text
-    assert [written.get(field) for field in ("retain_versions", "retention_days", "cleanup_enabled", PROJECT_UUID)] == [
-        None,
-        None,
-        True,
-        _project_uuid(estate),
-    ], written
+    assert [written.get(field) for field in ("retain_versions", "retention_days", "cleanup_enabled", PROJECT_UUID)] == [None, None, True, live], written
 
-    # The tick ends one an earlier creation left, by a removal conditional on the read that found it naming that creation
-    # (second review S3), and leaves the live creation's.
-    policies.put_policy(settings.registry_root, so, {**written, PROJECT_UUID: dead})
+    # The tick ends the one the earlier creation left, in its own keyspace, and leaves the live creation's.
     ended = _converge(estate, bound=timedelta(0))
-    policies.put_policy(settings.registry_root, so, written)
     kept = _converge(estate, bound=timedelta(0))
     assert (f"policy:project:{PROJECT}" in ended.ended, f"policy:project:{PROJECT}" in kept.ended) == (True, False), (ended, kept)
-    assert policies.get_policy(settings.registry_root, so, "project", PROJECT) == written
+    assert (policies.get_policy(settings.registry_root, so, "project", dead), policies.get_policy(settings.registry_root, so, "project", live)) == (
+        None,
+        written,
+    )
 
 
 def test_a_bucket_git_declares_is_claimed_once_the_dead_creation_that_claimed_it_is_released(estate: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401

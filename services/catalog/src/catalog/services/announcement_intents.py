@@ -164,12 +164,12 @@ class RefOnARelease(BaseModel):
 
 
 class RoleEnded(BaseModel):
-    """A role's end landed: ``project`` no longer holds the role standing."""
+    """A role's end landed: the project's creation ``project_uuid`` no longer holds the role standing."""
 
     model_config = ConfigDict(frozen=True)
 
     kind: Literal["role_ended"] = "role_ended"
-    project: str
+    project_uuid: str
     role: str
 
 

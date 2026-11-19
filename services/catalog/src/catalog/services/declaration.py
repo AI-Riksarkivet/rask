@@ -29,7 +29,7 @@ from lakehouse.governed import fga
 from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import CONTROL_ID_PATTERN, CONTROL_ID_RE
-from lakehouse.record_store import delete_record, list_records
+from lakehouse.record_store import list_records
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json, remove_json
 from lakehouse.storage_options import StorageOptions
 
@@ -255,8 +255,17 @@ def settle_grant(control_root: str, storage_options: StorageOptions, record: Gra
 
 
 def forget_grant(control_root: str, storage_options: StorageOptions, grant: GrantTuple) -> None:
-    """Remove the record of ``grant``, once its tuple is revoked."""
-    delete_record(control_root, storage_options, _grant_key(grant))
+    """Remove the settled record of ``grant``, once its tuple is revoked, in one removal under the ETag of the read that
+    found it so (``records.remove_json``), like every other removal of a record keyed by what an id names (ADR 0245, third
+    review): an intent another tick recorded for the grant since is another record, and stays for that tick to settle."""
+
+    def settled(current: dict[str, Any]) -> bool:
+        try:
+            return GrantRecord.model_validate(current).grant == grant and current.get("evidence") is None
+        except ValidationError:
+            return False
+
+    remove_json(control_root, storage_options, _grant_key(grant), settled)
 
 
 def forget_record(control_root: str, storage_options: StorageOptions, record: GrantRecord) -> None:

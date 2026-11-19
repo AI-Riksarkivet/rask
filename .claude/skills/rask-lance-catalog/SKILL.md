@@ -439,7 +439,8 @@ the rule:
   `allowed_values`) whose scope and allowed values only grow and whose kind never changes. An object's owner attaches
   them at `can_label` (`POST /management/v1/{table|namespace}/{id}/labels/{set,remove}`; `labels/describe` at
   `can_get_metadata`), and `GET .../labels/objects?label=` lists the project's labelled objects the caller may see.
-  Records: `_label_definitions/<project>/<blake2s(name)>.json` and `_labels/<record_name(kind, uuid)>` on the control
+  Records: `_label_definitions/<project_uuid>/<blake2s(name)>.json` (the project's creation's keyspace, ADR 0245) and
+  `_labels/<record_name(kind, uuid)>` on the control
   root (`catalog.services.object_labels`, `catalog/api/v1/endpoints/labels.py`); a rename keeps them, the object's
   ending ends them (`lakehouse.object_records`), a project's delete ends its definitions. No door reads a label to
   decide. Pinned by `tests/integration/test_a_project_defines_labels_its_owners_attach.py`.
@@ -595,11 +596,15 @@ written for a dead creation can never apply to a live one, because no create min
   past a point of no return (`tenancy.judges`: taking over a mark short of one is a NEW delete, judged on every check and
   on the caller's own authorization) → the span `tenancy.marked` (the mark: `deleting`, `deleting_by`, `delete_run`,
   `marked_at`, under that read's ETag, 409 where it changed; the children read AFTER it, a project's warehouses in every
-  state, a warehouse's late namespaces; the point of no return, `Marking.pass_no_return`: `no_return` and `delete_asked`).
-  ANY failure inside the span puts the record back live; one whose put-back fails too answers 503 `MarkLeft`
-  (`marked_for_deletion`, `cleared_by`) → revoke what stands on the creation and names it (`fga_deps.end_object`, the
-  naming types from the model, THE ONE WAY an object is revoked) and its companions OF THIS CREATION (roles by
-  `project_uuid`, label definitions by `project_uuid`, the trash by `warehouse_uuid`) → end (`tenancy.end`, one removal
+  state, a warehouse's late namespaces, a cascade's tables another request has fenced, a purge's bucket claim taken
+  (`warehouses.take_for_purge`); the point of no return, `Marking.pass_no_return`: `no_return`, and `delete_asked` written
+  ONCE, at the first stamp). ANY failure inside the span puts the record back live, and only the delete whose run holds
+  the mark puts it back (`tenancy.put_back`); one whose put-back fails too answers 503 `MarkLeft` (`marked_for_deletion`,
+  `cleared_by`). PAST `no_return` NOTHING PUTS THE RECORD BACK (ADR 0245, third review): a refusal there is answered
+  `partial`, and a delete asked again over a stamped mark finishes it as `delete_asked` records (`tenancy.asked_of`),
+  whatever its own caller asks → revoke what stands on the creation and names it (`fga_deps.end_object`, the
+  naming types from the model, THE ONE WAY an object is revoked) and its companions OF THIS CREATION (its roles, policy
+  and label definitions, each filed in its creation's keyspace; the trash by `warehouse_uuid`) → end (`tenancy.end`, one removal
   under a read finding this run's mark: another run took it over, 409; the id names another creation, 404). There is
   no re-read between steps (`require_own` is deleted: the model finds no property it holds, ADR 0245 S4). Past
   `no_return` a failure answers `partial` (503) and the same delete asked again finishes it. A warehouse marked
@@ -608,15 +613,25 @@ written for a dead creation can never apply to a live one, because no create min
   record still `creating` from what it names; finishes a warehouse record `creating` whose create no longer runs (past
   `tenancy.create_bound`) under its project's live creation and holding its claim, and ends one whose project creation is
   not live; puts back a `deleting` mark with no `no_return` whose run is past the bound (`marked_at`), and FINISHES one
-  past its `no_return` by running the delete door as no caller, as `delete_asked` says (`declaration_converge.finisher`;
-  `put_back`, `deleted` in its result); sweeps each ended creation's object and forgets it once a sweep past the bound
-  found nothing; ends a role and a project policy naming a project creation that is not live. Two replicas' ticks at once
+  past its `no_return` through the delete door's own steps as no caller (`declaration_converge.finisher`,
+  `remove_project`/`remove_warehouse` with `finishing=<the listed run>`): the door's fresh read must still carry that run
+  past its stamp (`tenancy.judged`, else `NothingToFinish`), the mark is taken over under that read's ETag, and the
+  steps run as `delete_asked` says, so the tick never begins a delete (`put_back`, `deleted` in its result); sweeps each
+  ended creation's object, and a project creation's label definitions, and forgets it once a sweep past the bound found
+  nothing; ends a role and a project policy naming a project creation that is not live. Two replicas' ticks at once
   settle each mark once: every write is conditional, and a finish another holds is no failure.
 - **A refusal names what the caller sent** (second review S2): `fga_deps.on_tenant` asks its gate with the object AND
   its label `<kind>:<id>`, and the refusal names the label; a creation's uuid belongs to the audit row and the events.
-- **Records belonging to a project** (a warehouse's, a role's, a bucket's claim, a project's maintenance policy) name the
-  creation they were made under (`project_uuid`), a required field of their Pydantic model; ONE comparison judges it,
-  `lakehouse.governed.tenancy.made_under`, and ONE function lists a project's warehouses, `tenancy.warehouses_of`.
+- **Records belonging to a project** (a warehouse's, a role's, a bucket's claim, a project's maintenance policy, a label
+  definition) name the creation they were made under (`project_uuid`), a required field of their Pydantic model; ONE
+  comparison judges it, `lakehouse.governed.tenancy.made_under`, and ONE function lists a project's warehouses,
+  `tenancy.warehouses_of`. **The keyspace rule** (ADR 0245, third review): a record that is the project's own (its
+  maintenance policy `_policies/project/<project_uuid>`, its label definitions `_label_definitions/<project_uuid>/`, its
+  roles `_roles/<project_uuid>/`) is FILED under its creation's uuid, so a change decided on one creation lands in that
+  creation's keyspace alone and never reaches the next; only the two registries that map an id to its creation
+  (`_projects/<id>`, `_warehouses/<id>`) are keyed by the id, and every change to them is conditional
+  (`control_records.change_creation`, `end_record`). Maintenance reads a project's policy under the creation its bucket's
+  claim names (`maintenance_policies.governing_policy`).
 - **The bucket half stays** (ADR 0241 §9, §10): a bucket is a name every creation shares, so its claim arbitrates who
   writes in it. Where the bucket holds only what a create writes (`warehouses.written_by_others`: `_validate/` and the
   `__manifest` row of the warehouse alone), the tick takes the claim of a dead creation no record names, deletes exactly

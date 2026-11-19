@@ -27,7 +27,7 @@ from lakehouse.governed import fga
 if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
 
-    from catalog.schemas import RoleRecord
+    from catalog.services.roles import StoredRole
     from lakehouse.storage_options import StorageOptions
 
 
@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 
 async def end_role(
     client: OpenFgaClient | None,
-    role: RoleRecord,
+    role: StoredRole,
     *,
     control_root: str,
     storage_options: StorageOptions,

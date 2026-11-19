@@ -89,7 +89,7 @@ async def _project_of(settings: Settings, segments: Sequence[str]) -> tenancy.Te
 
 
 async def _defined(settings: Settings, project: tenancy.Tenant) -> dict[str, LabelDefinition]:
-    listed = partial(object_labels.definitions, settings.registry_root, settings.storage_options(), project.id, project_uuid=str(project.uuid))
+    listed = partial(object_labels.definitions, settings.registry_root, settings.storage_options(), project_uuid=str(project.uuid))
     return {defined.name: defined for defined in await run_in_threadpool(listed)}
 
 
@@ -135,7 +135,7 @@ async def _set(
     project = await _project_of(settings, segments)
     so = settings.storage_options()
     name = object_labels.require_name(body.name)
-    defined = await run_in_threadpool(partial(object_labels.definition, settings.registry_root, so, project.id, name, project_uuid=str(project.uuid)))
+    defined = await run_in_threadpool(partial(object_labels.definition, settings.registry_root, so, name, project_uuid=str(project.uuid)))
     if defined is None:
         raise InvalidInputError(f"project {project.id!r} defines no label {body.name!r}; its admin defines it first")
     value = object_labels.judged_value(defined, kind=kind, value=body.value)
@@ -316,6 +316,9 @@ async def define_label(
         defined, changed = await run_in_threadpool(object_labels.define, settings.registry_root, settings.storage_options(), asked)
     except records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"label {asked.name!r} kept changing; define it again") from exc
+    # Filed under the creation it was decided on; one that ended meanwhile is answered as deleted (ADR 0245, third review),
+    # and what this wrote in its keyspace is the converge tick's to sweep.
+    await tenancy.require_still(settings, project)
     if not changed:
         return defined
     await emit_control(
@@ -338,13 +341,14 @@ async def delete_label_definition(
     no such label. The project's admin's act."""
     project = await _administered_project(id, settings, token, client)
     root, so = settings.registry_root, settings.storage_options()
-    deleted = await run_in_threadpool(partial(object_labels.definition, root, so, project.id, object_labels.require_name(name), project_uuid=str(project.uuid)))
+    deleted = await run_in_threadpool(partial(object_labels.definition, root, so, object_labels.require_name(name), project_uuid=str(project.uuid)))
     if deleted is None:
         raise TableNotFoundError(f"label not found: {name}")
     carried = sorted(named for _, named in await _standing(settings, await run_in_threadpool(object_labels.carriers, root, so, deleted)))
     if carried:
         raise NamespaceNotEmptyError(f"label {name!r} is attached to {len(carried)} object(s) ({', '.join(carried[:5])}); remove it from each first")
     await run_in_threadpool(object_labels.delete_definition, root, so, deleted)
+    await tenancy.require_still(settings, project)
     await emit_control(
         control,
         action="label_deleted",

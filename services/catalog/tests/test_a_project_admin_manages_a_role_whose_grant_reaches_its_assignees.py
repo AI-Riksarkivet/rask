@@ -24,7 +24,6 @@ import lance_namespace
 import pytest
 from fastapi.testclient import TestClient
 
-from catalog.schemas import RoleRecord
 from catalog.services import roles, warehouses
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
@@ -209,19 +208,20 @@ def test_an_ending_that_lost_a_race_ends_no_role_it_did_not_read(tmp_path: Path,
     rule). So of two endings of one role, with a create taking its name between the slower one's read and its write, the
     slower one reads again, finds the new role, and leaves it standing."""
     root, so = str(tmp_path), StorageOptions()
-    ended = RoleRecord(id=uuid.uuid4(), project="acme", name="analysts", created_at=datetime.now(UTC), created_by="dex~alice")
-    taken = RoleRecord(id=uuid.uuid4(), project="acme", name="analysts", created_at=datetime.now(UTC), created_by="dex~bob")
-    roles.create_role_record(root, so, ended, project_uuid="a" * 32)
+    creation = "a" * 32
+    ended = roles.StoredRole(id=uuid.uuid4(), project="acme", project_uuid=creation, name="analysts", created_at=datetime.now(UTC), created_by="dex~alice")
+    taken = roles.StoredRole(id=uuid.uuid4(), project="acme", project_uuid=creation, name="analysts", created_at=datetime.now(UTC), created_by="dex~bob")
+    roles.create_role_record(root, so, ended)
     read = roles.read_json
 
     def read_then_the_rivals_land(control_root: str, storage_options: StorageOptions, key: str) -> tuple[dict[str, Any], str] | None:
         found = read(control_root, storage_options, key)
         monkeypatch.setattr(roles, "read_json", read)
         roles.end_role_record(root, so, ended)
-        roles.create_role_record(root, so, taken, project_uuid="a" * 32)
+        roles.create_role_record(root, so, taken)
         return found
 
     monkeypatch.setattr(roles, "read_json", read_then_the_rivals_land)
     roles.end_role_record(root, so, ended)
 
-    assert roles.list_roles(root, so, "acme", project_uuid="a" * 32) == [taken]
+    assert [role.id for role in roles.list_roles(root, so, project_uuid=creation)] == [taken.id]

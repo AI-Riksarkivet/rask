@@ -46,10 +46,14 @@
 (*            every tuple on the uuid and naming it, and ends the record.  *)
 (*            Its stamp and its end are written only while its own mark   *)
 (*            stands; its other steps act on its creation's own objects.   *)
-(*            A failure before its stamp puts the record back; dying, it  *)
-(*            is asked again, and the tick puts back or finishes a mark   *)
-(*            whose run no longer runs; two deletes of one creation may   *)
-(*            run (Deleters).                                              *)
+(*            A failure before its stamp puts the record back, by the     *)
+(*            delete whose run holds the mark; past the stamp nothing     *)
+(*            puts it back, and every step that can refuse (the purge's   *)
+(*            claim among them) runs before it. Dying, it is asked again, *)
+(*            and the tick puts back or finishes a mark whose run no      *)
+(*            longer runs: it lists the registry, then finishes only on a *)
+(*            fresh read still carrying the listed run past its stamp;   *)
+(*            two deletes of one creation may run (Deleters).             *)
 (*   Sweep    the tick revokes what stands on an ended uuid: a write that  *)
 (*            raced the delete landed on a dead object, which authorizes   *)
 (*            nothing; the sweep is hygiene.                               *)
@@ -117,6 +121,19 @@
 (*      conditional on the read that found its own mark (DeleteObject      *)
 (*      If-Match), never by its key alone (GrantsEndByKey,                 *)
 (*      DeleteEndsOnlyItsOwn).                                             *)
+(*   U18 FreshFinish: the tick finishes a delete only on a read of the     *)
+(*      record made after its listing that still carries the listed run   *)
+(*      past its stamp, conditional on that read; it never begins one.    *)
+(*      Without it the finish acts on any record of the listed uuid, live *)
+(*      or marked, as a new delete with no caller (the code before the     *)
+(*      third review). Alone it is masked by U19, which keeps a stamped    *)
+(*      record from going live; GrantsTickFinishLive removes both         *)
+(*      (TickBeginsNoDelete).                                              *)
+(*   U19 NoReturnFinal: past its stamp a record is never put back: every   *)
+(*      step that can refuse (the purge's claim) runs before the stamp     *)
+(*      (GrantsPutBackPastStamp, temporal StampedEnds).                    *)
+(*   U20 PutsBackOwnMark: only the delete whose run holds the mark puts    *)
+(*      it back (GrantsPutBackTakenOver, PutBackOnlyItsOwn).               *)
 (*   G5 OwnOnly, G13 Intents: the converge part.                           *)
 (*   G14 AuthorizeFirst: a door asks its gate before it writes             *)
 (*      (GrantsIntruderWrites, OnlyAuthorizedWrites).                      *)
@@ -182,6 +199,9 @@ CONSTANTS Parts,          \* which parts this config checks: a subset of {"conta
           TickSettlesMarks, \* U15
           ChecksTakeOver, \* U16
           ConditionalEnd, \* U17
+          FreshFinish,    \* U18
+          NoReturnFinal,  \* U19
+          PutsBackOwnMark, \* U20
           OwnOnly,        \* G5
           Intents,        \* G13
           AuthorizeFirst, \* G14
@@ -230,7 +250,10 @@ VARIABLES prec,    \* the project's record: its state ("absent", "creating", "li
           purgedLive, \* a purge deleted the bytes of a bucket a live claim names
           foreign, \* the bucket holds bytes no create of the child writes (the tick then keeps its claim)
           wentLive,\* the child uuids that went live
-          liveReleased \* the tick released the claim of a child that went live
+          liveReleased, \* the tick released the claim of a child that went live
+          tl,      \* the stamped record the tick's listing found, which its finish reads again (NoRecord: none)
+          erased,  \* a delete put back a mark another delete's run held
+          unasked  \* the tick ended a creation no delete had marked past its point of no return
 
 \* -------------------------------------------------------------------- table
 VARIABLES live,    \* the uuid the name holds (0: none)
@@ -260,7 +283,7 @@ VARIABLES declared, \* git declares the tuple: "not yet", "yes", "dropped"
           wrong     \* the converge revoked a tuple a door created
 
 cvars == <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced,
-           crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+           crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 tvars == <<live, tnext, ttup, trashed, tphase, upc, uu, relpc, ru, tgpc, tgfor, everHeld, revoked, bad>>
 vvars == <<declared, vinc, held, first, recorded, intent, ev, cvpc, doorpc, wrong>>
 vars == <<cvars, tvars, vvars>>
@@ -284,7 +307,7 @@ Init ==
   /\ foreignEnd = FALSE /\ stuck = FALSE /\ unforced = FALSE
   /\ crec = NoChild /\ ctup = {} /\ cended = {} /\ estep = [e \in Edges |-> 0] /\ eu = [e \in Edges |-> 0]
   /\ claim = NoClaim /\ purge = NoPurge /\ purgedLive = FALSE /\ foreign \in (IF Bucket THEN BOOLEAN ELSE {FALSE})
-  /\ wentLive = {} /\ liveReleased = FALSE
+  /\ wentLive = {} /\ liveReleased = FALSE /\ tl = NoRecord /\ erased = FALSE /\ unasked = FALSE
   /\ live = 0 /\ tnext = 1 /\ ttup = {} /\ trashed = {} /\ tphase = "grace" /\ upc = "idle" /\ uu = 0 /\ relpc = "idle" /\ ru = 0
   /\ tgpc = "idle" /\ tgfor = 0 /\ everHeld = FALSE /\ revoked = FALSE /\ bad = FALSE
   /\ declared = "not yet" /\ vinc = 1 /\ held = FALSE /\ first = "none" /\ recorded = 0 /\ intent = FALSE /\ ev = FALSE
@@ -302,10 +325,14 @@ Resolves(u) == prec.u = u /\ Resolvable
 \* "noreturn" the delete is irreversible: a refusal no longer puts the record back. Without U17 the end reads its mark
 \* ("endread") and removes the record by its key in a later write ("end").
 Ending == IF ConditionalEnd THEN <<"end">> ELSE <<"endread", "end">>
+\* A step past the mark whose guard may refuse with nothing of it done (a purge's claim another purge holds,
+\* warehouses.take_for_purge): with U19 before the stamp, without it after (the code before the third review).
+Claim == IF Refusals THEN <<"claim">> ELSE <<>>
+Stamp == IF NoReturnFinal THEN Claim \o <<"noreturn">> ELSE <<"noreturn">> \o Claim
 DSteps ==
-  (IF ~MarksFirst THEN <<"check", "children", "mark", "noreturn", "cascade", "revoke">>
-   ELSE IF RevertsRefusal THEN <<"check", "mark", "children", "noreturn", "cascade", "revoke">>
-   ELSE <<"mark", "check", "children", "noreturn", "cascade", "revoke">>) \o Ending
+  (IF ~MarksFirst THEN <<"check", "children", "mark">>
+   ELSE IF RevertsRefusal THEN <<"check", "mark", "children">>
+   ELSE <<"mark", "check", "children">>) \o Stamp \o <<"cascade", "revoke">> \o Ending
 NSteps == Len(DSteps)
 DeadStep == NSteps + 1
 \* Whether the step at index i comes after the delete's mark.
@@ -327,31 +354,31 @@ CRecord(i) ==
        prec' = [NoRecord EXCEPT !.st = IF SeedFirst THEN "creating" ELSE "live", !.u = i, !.prot = p]
   /\ nextInc' = i + 1
   /\ cpc' = [cpc EXCEPT ![i] = "recorded"]
-  /\ UNCHANGED <<ended, tup, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<ended, tup, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* Its seed, on the uuid it minted.
 CSeedStep(i) ==
   /\ On("container") /\ cpc[i] = "recorded"
   /\ tup' = tup \cup {Seed(i)} /\ cpc' = [cpc EXCEPT ![i] = "seeded"]
-  /\ UNCHANGED <<prec, nextInc, ended, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* The flip, conditional on the record still `creating` with its uuid.
 CLive(i) ==
   /\ On("container") /\ cpc[i] = "seeded"
   /\ prec' = IF prec.st = "creating" /\ prec.u = i THEN [prec EXCEPT !.st = "live"] ELSE prec
   /\ cpc' = [cpc EXCEPT ![i] = "done"]
-  /\ UNCHANGED <<nextInc, ended, tup, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<nextInc, ended, tup, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 CDies(i) ==
   /\ On("container") /\ Deaths /\ cpc[i] \in {"recorded", "seeded"}
   /\ cpc' = [cpc EXCEPT ![i] = "dead"]
-  /\ UNCHANGED <<prec, nextInc, ended, tup, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* U8: the tick finishes a creating record from what it names (its uuid and its creator).
 TickFinish ==
   /\ On("container") /\ TickFinishes /\ prec.st = "creating"
   /\ tup' = tup \cup {Seed(prec.u)} /\ prec' = [prec EXCEPT !.st = "live"]
-  /\ UNCHANGED <<nextInc, ended, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<nextInc, ended, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* ---------------------------------------------------------------- the doors
 
@@ -370,7 +397,7 @@ WResolve(w) ==
        THEN wu' = [wu EXCEPT ![w] = prec.u] /\ wpc' = [wpc EXCEPT ![w] = "resolved"]
        ELSE wpc' = [wpc EXCEPT ![w] = "done"] /\ UNCHANGED wu
   /\ dsince' = IF Deleting THEN dsince \cup {w} ELSE dsince
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, dlast, refused, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, dlast, refused, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* G14: the gate before the write; with G14 off the write comes first and the gate after it.
 WGate(w) ==
@@ -379,7 +406,7 @@ WGate(w) ==
        THEN wpc' = [wpc EXCEPT ![w] = IF AuthorizeFirst THEN "gated" ELSE "written"] /\ UNCHANGED refused
        ELSE /\ wpc' = [wpc EXCEPT ![w] = "done"]
             /\ refused' = IF w \in dsince \/ w \in Intruders THEN refused ELSE refused \cup {w}
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wu, dlast, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wu, dlast, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* ONE Write on the object: a grant writes its tuple, a revoke removes RevTarget's grant there.
 WWrite(w) ==
@@ -392,7 +419,7 @@ WWrite(w) ==
                         ELSE tup \cup {[obj |-> o, k |-> "grant", g |-> w, for |-> wu[w]]}
               /\ UNCHANGED narrowed
   /\ wpc' = [wpc EXCEPT ![w] = IF AuthorizeFirst THEN "written" ELSE "pre"]
-  /\ UNCHANGED <<prec, nextInc, ended, cpc, wu, dlast, refused, dsince, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, cpc, wu, dlast, refused, dsince, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* U4: the id resolved again; success only where it still names the uuid written on live.
 WAnswer(w) ==
@@ -402,12 +429,12 @@ WAnswer(w) ==
         /\ refused' = IF ok \/ w \in dsince THEN refused ELSE refused \cup {w}
   /\ wpc' = [wpc EXCEPT ![w] = IF w \in Declarers THEN "idle" ELSE "done"]
   /\ dlast' = IF w \in Declarers THEN [dlast EXCEPT ![w] = wu[w]] ELSE dlast
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wu, dsince, narrowed, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wu, dsince, narrowed, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 WDies(w) ==
   /\ On("container") /\ Deaths /\ Running(w)
   /\ wpc' = [wpc EXCEPT ![w] = "dead"]
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* ---------------------------------------------------------------- the child
 
@@ -425,12 +452,12 @@ EResolve(e) ==
   /\ IF Resolvable
        THEN eu' = [eu EXCEPT ![e] = prec.u] /\ estep' = [estep EXCEPT ![e] = 1]
        ELSE estep' = [estep EXCEPT ![e] = EDone] /\ UNCHANGED eu
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 EGate(e) ==
   /\ On("container") /\ Child /\ estep[e] = 1
   /\ estep' = [estep EXCEPT ![e] = IF Seed(eu[e]) \in tup THEN 2 ELSE EDone]
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* Abandoning: its record removed where it is still its own `creating` one; its claim stays for the tick.
 Abandon(e) ==
@@ -461,12 +488,12 @@ EStep(e) ==
                     THEN crec' = [crec EXCEPT !.st = "live"] /\ wentLive' = wentLive \cup {e}
                     ELSE UNCHANGED <<crec, wentLive>>
                /\ estep' = [estep EXCEPT ![e] = EDone] /\ UNCHANGED <<cended, claim, tup, ctup>>
-  /\ UNCHANGED <<prec, nextInc, ended, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, eu, purge, purgedLive, foreign, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, eu, purge, purgedLive, foreign, liveReleased, tl, erased, unasked>>
 
 EDies(e) ==
   /\ On("container") /\ Child /\ Deaths /\ Creating(e)
   /\ estep' = [estep EXCEPT ![e] = EDead]
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* The parent named by a child record is live: the record is the live tenant's.
 ParentLive == Resolves(crec.p)
@@ -481,7 +508,7 @@ TickFinishChild ==
   /\ ctup' = ctup \cup {[obj |-> crec.u, for |-> crec.p]}
   /\ tup' = tup \cup {[obj |-> crec.p, k |-> "edge", g |-> crec.u, for |-> crec.p]}
   /\ crec' = [crec EXCEPT !.st = "live"] /\ wentLive' = wentLive \cup {crec.u}
-  /\ UNCHANGED <<prec, nextInc, ended, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, cended, estep, eu, claim, purge, purgedLive, foreign, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, cended, estep, eu, claim, purge, purgedLive, foreign, liveReleased, tl, erased, unasked>>
 
 \* The tick ends a creating child whose create no longer runs and whose parent is not live: its record removed, its
 \* tuples swept with its uuid, its claim released where releasable. With G20 off it ends a live one too.
@@ -493,19 +520,19 @@ TickEndChild ==
      IN /\ claim' = IF rel THEN NoClaim ELSE claim
         /\ liveReleased' = (liveReleased \/ (rel /\ crec.u \in wentLive))
   /\ crec' = NoChild /\ cended' = cended \cup {crec.u}
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, ctup, estep, eu, purge, purgedLive, foreign, wentLive>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, ctup, estep, eu, purge, purgedLive, foreign, wentLive, tl, erased, unasked>>
 
 \* G19's other half: a claim naming a child uuid no record names, whose create no longer runs, is released.
 ClaimEnd ==
   /\ On("container") /\ Bucket /\ Releasable /\ claim.w \in Edges /\ ~ChildStands(claim.w) /\ ~Creating(claim.w)
   /\ claim' = NoClaim
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* Another tenant claims the bucket wherever no claim stands (a released one included), and writes its own bytes there.
 OtherClaim ==
   /\ On("container") /\ Bucket /\ ~claim.held
   /\ claim' = [held |-> TRUE, w |-> Other, purging |-> FALSE]
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* A claim of a child creation no record names and whose create no longer runs.
 DeadClaim == claim.held /\ claim.w \in Edges /\ ~ChildStands(claim.w) /\ ~Creating(claim.w)
@@ -516,7 +543,7 @@ PurgeTake ==
   /\ On("container") /\ Bucket /\ PurgeByBucket /\ purge.pc = "idle" /\ DeadClaim
   /\ purge' = [pc |-> "taken", w |-> claim.w]
   /\ claim' = IF PurgeStamp THEN [claim EXCEPT !.purging = TRUE] ELSE claim
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 PurgeDelete ==
   /\ On("container") /\ Bucket /\ purge.pc = "taken"
@@ -525,7 +552,7 @@ PurgeDelete ==
         /\ foreign' = (foreign /\ ~del)
         /\ claim' = IF del /\ claim.held /\ claim.w = purge.w THEN NoClaim ELSE claim
   /\ purge' = NoPurge
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, wentLive, liveReleased, tl, erased, unasked>>
 
 \* ---------------------------------------------------------------- the delete
 
@@ -547,10 +574,14 @@ Advance(d) == dstep' = [dstep EXCEPT ![d] = dstep[d] + 1]
 \* nothing.
 Stop(d) == dstep' = [dstep EXCEPT ![d] = 0] /\ UNCHANGED <<prec, stuck, unforced>>
 
-\* Put back live: a record still `deleting` for the delete's creation and short of any point of no return, whoever marked
-\* it (tenancy.put_back).
-Left(d) == prec.st = "deleting" /\ prec.u = du[d] /\ ~prec.nr
-PutBack == [prec EXCEPT !.st = "live", !.by = "none"]
+\* Put back live (tenancy.put_back): a record still `deleting` for the delete's creation, with U20 only where the
+\* delete's own run holds the mark (without it, whoever marked it), and with U19 only short of any point of no return
+\* (without it, also past the delete's own stamp: a guard of its run refusing before any step of it landed).
+Left(d) ==
+  /\ prec.st = "deleting" /\ prec.u = du[d]
+  /\ PutsBackOwnMark => prec.by = d
+  /\ IF NoReturnFinal THEN ~prec.nr ELSE (~prec.nr \/ prec.by = d)
+PutBack == [prec EXCEPT !.st = "live", !.by = "none", !.nr = FALSE]
 
 \* A refusal: the delete answers. With U13 the record is put back; without, it is left marked, answered as absent by
 \* every door.
@@ -577,7 +608,7 @@ DStart(d) ==
   /\ On("container") /\ dstep[d] \in {0, DeadStep} /\ prec.st \in {"live", "deleting"}
   /\ du' = [du EXCEPT ![d] = prec.u] /\ dstep' = [dstep EXCEPT ![d] = 1] /\ dread' = [dread EXCEPT ![d] = prec]
   /\ dsince' = dsince \cup {w \in Writers : Running(w)}
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, narrowed, lied, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, narrowed, lied, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* Whether the delete judges its checks on the record it read: with U16 unless that record is past a point of no return
 \* (a resumed delete); without, only on a live one (a take-over of any mark skips them).
@@ -604,6 +635,10 @@ DStep(d) ==
                    IF Child /\ ~Cascade /\ Selected(d) /\ crec.st \in Counted
                      THEN Refuse(d) /\ UNCHANGED <<dsince, ended, tup, crec, ctup, cended, foreignEnd>>
                      ELSE Advance(d) /\ UNCHANGED <<prec, stuck, unforced, dsince, ended, tup, crec, ctup, cended, foreignEnd>>
+              [] s = "claim" ->
+                   \* The purge's claim, which another purge may hold: refused with nothing of this step done.
+                   \/ Advance(d) /\ UNCHANGED <<prec, stuck, unforced, dsince, ended, tup, crec, ctup, cended, foreignEnd>>
+                   \/ Refuse(d) /\ UNCHANGED <<dsince, ended, tup, crec, ctup, cended, foreignEnd>>
               [] s = "noreturn" ->
                    \* Written under the read that found its own mark (tenancy.pass_no_return).
                    IF Marked(d)
@@ -632,12 +667,14 @@ DStep(d) ==
                           /\ prec' = NoRecord
                           /\ ended' = ended \cup {du[d]} /\ dstep' = [dstep EXCEPT ![d] = 0]
                           /\ UNCHANGED <<stuck, unforced, dsince, tup, crec, ctup, cended>>
-  /\ UNCHANGED <<nextInc, cpc, wpc, wu, dlast, refused, narrowed, lied, du, dread, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  \* A put-back (a refusal's or a failure's) of a mark another delete's run holds.
+  /\ erased' = (erased \/ (prec.st = "deleting" /\ prec'.st = "live" /\ prec.by # d))
+  /\ UNCHANGED <<nextInc, cpc, wpc, wu, dlast, refused, narrowed, lied, du, dread, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, unasked>>
 
 DDies(d) ==
   /\ On("container") /\ Deaths /\ dstep[d] \in 1 .. NSteps
   /\ dstep' = [dstep EXCEPT ![d] = DeadStep]
-  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 \* The run whose mark the record carries no longer runs: it answered, or died, or its request is older than the tick's
 \* bound (the record's `marked_at`).
@@ -648,26 +685,44 @@ MarkerGone == ~(prec.by \in Deleters /\ dstep[prec.by] \in 1 .. NSteps)
 TickPutBack ==
   /\ On("container") /\ TickSettlesMarks /\ prec.st = "deleting" /\ ~prec.nr /\ MarkerGone
   /\ prec' = PutBack
-  /\ UNCHANGED <<nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
-\* U15: the tick finishes a stamped mark whose run no longer runs: it takes the mark over as a delete of its own and runs
-\* the steps past the stamp from what the record names (one step here; each is a delete's step, which the deleters
-\* model): the creation's cascaded child, its tuples, its record.
+\* U15: the tick's listing of the registry finds a stamped mark whose run no longer runs (tenancy_converge._deleting).
+TickList ==
+  /\ On("container") /\ TickSettlesMarks /\ tl = NoRecord /\ prec.st = "deleting" /\ prec.nr /\ MarkerGone
+  /\ tl' = prec
+  /\ UNCHANGED <<prec, nextInc, ended, tup, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, ctup, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, erased, unasked>>
+
+\* What the finish acts on, read again after the listing (the delete door's own read, tenancy.judged). With U18 only a
+\* record still carrying the listed run past its stamp, the mark taken over under that read's ETag; without it any record
+\* of the listed uuid the delete door serves, live or marked, judged as a new delete with no caller, which only a
+\* protection refuses (the code before the third review).
+FinishActs ==
+  IF FreshFinish THEN prec.st = "deleting" /\ prec.nr /\ prec.u = tl.u /\ prec.by = tl.by
+  ELSE prec.u = tl.u /\ prec.st \in {"live", "deleting"} /\ ~(~prec.nr /\ prec.prot)
+
+\* U15: the tick finishes what its listing found: it takes the mark over as a delete of its own and runs the steps past
+\* the stamp from what the record names (one step here; each is a delete's step, which the deleters model): the
+\* creation's cascaded child, its tuples, its record. Where the read finds anything else it does nothing.
 TickFinishDelete ==
-  /\ On("container") /\ TickSettlesMarks /\ prec.st = "deleting" /\ prec.nr /\ MarkerGone
-  /\ IF Child /\ Cascade /\ crec.p = prec.u /\ crec.st \in Counted
-       THEN crec' = NoChild /\ cended' = cended \cup {crec.u}
-       ELSE UNCHANGED <<crec, cended>>
-  /\ tup' = {t \in tup : t.obj # prec.u}
-  /\ ended' = ended \cup {prec.u} /\ prec' = NoRecord
-  /\ UNCHANGED <<nextInc, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, ctup, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ On("container") /\ TickSettlesMarks /\ tl # NoRecord
+  /\ tl' = NoRecord
+  /\ IF FinishActs
+       THEN /\ IF Child /\ Cascade /\ crec.p = prec.u /\ crec.st \in Counted
+                 THEN crec' = NoChild /\ cended' = cended \cup {crec.u}
+                 ELSE UNCHANGED <<crec, cended>>
+            /\ tup' = {t \in tup : t.obj # prec.u}
+            /\ ended' = ended \cup {prec.u} /\ prec' = NoRecord
+            /\ unasked' = (unasked \/ ~(prec.st = "deleting" /\ prec.nr))
+       ELSE UNCHANGED <<crec, cended, tup, ended, prec, unasked>>
+  /\ UNCHANGED <<nextInc, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, ctup, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, erased>>
 
 \* U10: hygiene. What stands on an ended uuid, written by a door that raced its delete, is revoked.
 Sweep ==
   /\ On("container") /\ TickSweeps
   /\ (\E t \in tup : t.obj \in ended) \/ (\E t \in ctup : t.obj \in cended)
   /\ tup' = {t \in tup : t.obj \notin ended} /\ ctup' = {t \in ctup : t.obj \notin cended}
-  /\ UNCHANGED <<prec, nextInc, ended, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased>>
+  /\ UNCHANGED <<prec, nextInc, ended, cpc, wpc, wu, dlast, refused, dsince, narrowed, lied, dstep, du, dread, foreignEnd, stuck, unforced, crec, cended, estep, eu, claim, purge, purgedLive, foreign, wentLive, liveReleased, tl, erased, unasked>>
 
 ContainerNext ==
   \/ \E i \in Incs : CRecord(i) \/ CSeedStep(i) \/ CLive(i) \/ CDies(i)
@@ -675,7 +730,7 @@ ContainerNext ==
   \/ \E e \in Edges : EResolve(e) \/ EGate(e) \/ EStep(e) \/ EDies(e)
   \/ TickFinish \/ TickFinishChild \/ TickEndChild \/ ClaimEnd \/ OtherClaim \/ PurgeTake \/ PurgeDelete
   \/ \E d \in Deleters : DStart(d) \/ DStep(d) \/ DDies(d)
-  \/ TickPutBack \/ TickFinishDelete
+  \/ TickPutBack \/ TickList \/ TickFinishDelete
   \/ Sweep
 
 Key(u) == IF UuidKeyed THEN u ELSE 0
@@ -858,7 +913,8 @@ Spec ==
   \* delete asked again may hold for a while (strong fairness).
   /\ \A d \in Deleters : WF_vars(DStep(d) /\ UNCHANGED <<tvars, vvars>>)
   /\ SF_vars(TickPutBack /\ UNCHANGED <<tvars, vvars>>)
-  /\ SF_vars(TickFinishDelete /\ UNCHANGED <<tvars, vvars>>)
+  /\ SF_vars(TickList /\ UNCHANGED <<tvars, vvars>>)
+  /\ WF_vars(TickFinishDelete /\ UNCHANGED <<tvars, vvars>>)
   /\ WF_vars(ClaimEnd /\ UNCHANGED <<tvars, vvars>>)
   /\ SF_vars(PurgeTake /\ foreign /\ UNCHANGED <<tvars, vvars>>)
   /\ WF_vars(PurgeDelete /\ UNCHANGED <<tvars, vvars>>)
@@ -900,6 +956,16 @@ RefusedDeleteLeavesLive == ~stuck
 \* A protected creation is deleted only by a delete asked with force: a delete that takes over a mark short of its
 \* point of no return judges the protection again.
 ProtectedDeletedOnlyByForce == ~unforced
+
+\* A delete's mark is put back only by the delete whose run holds it: a delete that took the mark over is not undone by
+\* the one it took it from (which, its stamp and its end finding the mark gone, then answers for an object that stands).
+PutBackOnlyItsOwn == ~erased
+
+\* The tick never begins a delete: it ends only a creation a delete marked past its point of no return.
+TickBeginsNoDelete == ~unasked
+
+\* A point of no return is one: a creation stamped past it is ended in the end, never put back live.
+StampedEnds == \A i \in Incs : (prec.u = i /\ prec.nr) ~> (prec.u # i \/ prec.st = "absent")
 
 \* Nothing stays `deleting`: a mark is put back live, or its creation ended, with no hand-run step.
 DeletingSettles == (prec.st = "deleting") ~> (prec.st \in {"live", "absent"})

@@ -31,8 +31,8 @@ def _policy(kind: str = "table", id_: str = "db$t", uuid: str = TABLE_UUID, **fi
 
 
 def _project_policy(id_: str = "acme", buckets: list[str] | None = None, **fields: Any) -> dict[str, Any]:
-    # #84 shape: no uuid — a project record matches by its warehouse BUCKETS (resolved at set time), and names the
-    # creation of the project that set it (ADR 0245).
+    # #84 shape: no uuid — a project record matches by its warehouse BUCKETS (resolved at set time), and is filed under
+    # the creation of the project that set it (ADR 0245).
     return {
         "kind": "project",
         "id": id_,
@@ -115,16 +115,16 @@ def test_resolve_precedence_table_over_namespace_over_none() -> None:
 
 
 def test_project_policy_round_trips_and_lists(tmp_path: Path) -> None:
-    # CONTRACT (#84): a UUID-LESS project record (it matches by buckets, keyed by its id) must survive the
+    # CONTRACT (#84): a UUID-LESS project record (it matches by buckets, keyed by its creation) must survive the
     # registry round-trip AND list_policies' validation — the sweep only ever sees what list returns.
     root = str(tmp_path)
     mp.put_policy(root, StorageOptions(), _project_policy(retention_days=90))
-    stored = mp.get_policy(root, StorageOptions(), "project", "acme")
+    stored = mp.get_policy(root, StorageOptions(), "project", "a" * 32)
     assert stored is not None and stored["buckets"] == ["acme-wh"]
     listed = mp.list_policies(root, StorageOptions())
     assert len(listed) == 1 and listed[0]["kind"] == "project"
-    assert mp.delete_policy(root, StorageOptions(), "project", "acme") is True
-    assert mp.delete_policy(root, StorageOptions(), "project", "acme") is False  # idempotent
+    assert mp.delete_policy(root, StorageOptions(), "project", "a" * 32) is True
+    assert mp.delete_policy(root, StorageOptions(), "project", "a" * 32) is False  # idempotent
 
 
 def test_list_policies_rejects_a_bucketless_project_record(tmp_path: Path) -> None:
@@ -132,7 +132,7 @@ def test_list_policies_rejects_a_bucketless_project_record(tmp_path: Path) -> No
     # and it must not void the well-formed records next to it.
     root = str(tmp_path)
     mp.put_policy(root, StorageOptions(), _project_policy())
-    mp.put_policy(root, StorageOptions(), {"kind": "project", "id": "ghost", "buckets": []})
+    mp.put_policy(root, StorageOptions(), {"kind": "project", "id": "ghost", "project_uuid": "b" * 32, "buckets": []})
     (tmp_path / "_policies" / "project-nolist.json").write_text('{"kind": "project", "id": "x"}')
     records = mp.list_policies(root, StorageOptions())
     assert len(records) == 1 and records[0]["id"] == "acme"

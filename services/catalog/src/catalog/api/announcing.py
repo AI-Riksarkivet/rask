@@ -25,7 +25,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, ObjectUuidsDep, Resolver, ResolverDep, SettingsDep, originator_hint
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, UuidReader, emit_write_event
-from catalog.schemas import AnnouncementIntentsFinishResponse, RoleRecord
+from catalog.schemas import AnnouncementIntentsFinishResponse
 from catalog.services import announcement_intents, roles, subject_tuples
 from catalog.services.announcement_intents import (
     Announcement,
@@ -286,8 +286,8 @@ class Announcer:
             case RecordHeld(key=key):
                 found = await self._read(lambda root, so: records.read_json(root, so, key))
                 return found is not None and evidence.holds(found[0])
-            case RoleEnded(project=project, role=role):
-                return await self._absent(lambda root, so: roles.find_role(root, so, project, role, project_uuid=None))
+            case RoleEnded(project_uuid=project_uuid, role=role):
+                return await self._absent(lambda root, so: roles.find_role(root, so, role, project_uuid=project_uuid))
             case TagGone(location=location, tag=tag):
                 try:
                     return not await run_in_threadpool(_tag_stands, location, self._settings.storage_options(plane="data"), tag)
@@ -455,7 +455,7 @@ class RoleEnding(BaseModel):
         await filing.send_grant_changes(self.grants, removed, action="grant_revoked", actor=actor, reason=reason)
 
 
-async def role_ending(client: OpenFgaClient | None, role: RoleRecord, *, actor: str | None, reason: str) -> RoleEnding:
+async def role_ending(client: OpenFgaClient | None, role: roles.StoredRole, *, actor: str | None, reason: str) -> RoleEnding:
     """What ending ``role`` will announce, read as its end will read it (``role_grants.end_role``): the tuples naming the
     role and those on it. With ``client`` ``None`` (authorization off) its end takes no grant.
 
@@ -477,7 +477,7 @@ async def role_ending(client: OpenFgaClient | None, role: RoleRecord, *, actor: 
         extra={"project": role.project, "name": role.name, "deleted": len(held)},
     )
     return RoleEnding(
-        ended=Announcement(evidence=RoleEnded(project=role.project, role=str(role.id)), message=ControlMessage(event=ended)),
+        ended=Announcement(evidence=RoleEnded(project_uuid=role.project_uuid, role=str(role.id)), message=ControlMessage(event=ended)),
         grants=grant_changes(held, action="grant_revoked", actor=actor, reason=reason),
     )
 

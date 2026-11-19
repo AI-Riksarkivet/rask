@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps
-from catalog.services import control_records, projects, roles, tenancy, warehouses
+from catalog.services import control_records, object_labels, projects, roles, tenancy, warehouses
 from catalog.services.control_records import NO_RETURN
 from catalog.services.tenancy import ACTOR, object_of_record
 from lakehouse import maintenance_policies
@@ -188,7 +188,12 @@ class _Convergence:
         if self._finish is None:
             raise InternalError(f"{obj} is past its delete's point of no return, and this run has no delete to finish it with")
         try:
+            # The finish reads the record again and acts only where that read still carries the run this listing found
+            # past its stamp (``FreshFinish``): the listing alone begins nothing.
             await self._finish(kind, record)
+        except tenancy.NothingToFinish:
+            log.info("delete_not_finished_by_the_tick", extra={"object": obj, "uuid": record[UUID], "delete_run": record.get(control_records.DELETE_RUN)})
+            return
         except (tenancy.DeleteGone, ConcurrentModificationError):
             # Another replica's tick, or a delete asked again, holds the delete now (its mark, or the warehouse's namespace
             # fence), or finished it: the conditional writes let one of them finish it, and it is no failure of this run.
@@ -274,8 +279,15 @@ class _Convergence:
             revoked = await fga_deps.end_object(self._client, self._settings, obj, token=None)
             if revoked:
                 self.done.swept[obj] = len(revoked)
+            # A project creation's keyspace (ADR 0245, third review): a label define held across its end wrote there after the
+            # delete ended it, and is ended here as the tuples a racing door left are.
+            defined = 0
+            if ended.kind == PROJECT:
+                defined = await run_in_threadpool(partial(object_labels.end_definitions, self._root, self._so, project_uuid=ended.uuid))
+                if defined:
+                    self.done.ended.append(f"labels:{obj}")
             swept = _written(ended.swept_at)
-            if revoked or swept is None:
+            if revoked or defined or swept is None:
                 await run_in_threadpool(partial(control_records.mark_swept, self._root, self._so, ended, now=self._now))
             elif swept < self._older_than:
                 await run_in_threadpool(control_records.forget_ended, self._root, self._so, ended)
@@ -356,10 +368,9 @@ class _Convergence:
             self.done.released.append(bucket)
 
     async def _policies(self, live: dict[str, str]) -> None:
-        """Report and end each project policy a creation that is not live set (a set racing its project's delete). Its
-        removal is one DeleteObject under the ETag of a read that found it naming that dead creation
-        (``maintenance_policies.end_project_policy``, ADR 0245, second review S3), so a policy the tenant holding the id set
-        meanwhile stays. Until it goes it governs only a bucket whose claim names the creation that set it
+        """Report and end each project policy a creation that is not live set (a set racing its project's delete). It is
+        filed under that dead creation's uuid (ADR 0245, third review), so its removal reaches no policy the tenant holding
+        the id set. Until it goes it governs only a bucket whose claim names the creation that set it
         (``maintenance_policies.governing_policy``), and no door reads or merges onto it."""
         listed = await self._listing("policies", partial(maintenance_policies.read_policies, self._root, self._so))
         for record in listed[0] if listed is not None else []:
@@ -371,7 +382,7 @@ class _Convergence:
                 continue
             report_orphan(obj, project=project, project_uuid=dead)
             self.done.orphans.append(obj)
-            ending = partial(maintenance_policies.end_project_policy, self._root, self._so, project, project_uuid=dead)
+            ending = partial(maintenance_policies.end_project_policy, self._root, self._so, project_uuid=dead)
             if self._may_end and await run_in_threadpool(ending):
                 self.done.ended.append(obj)
 

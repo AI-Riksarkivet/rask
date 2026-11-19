@@ -149,7 +149,9 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
     else:
         assert (answer.status_code, answer.headers["content-type"], answer.json()["code"], answer.json()["detail"]) == answered
     assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == read_after
-    assert (maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "project", PROJECT) is not None) is policy_after
+    assert (
+        maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "project", str(project.get("uuid"))) is not None
+    ) is policy_after
 
 
 @pytest.mark.parametrize(
@@ -174,8 +176,10 @@ def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(
     which the delete refuses to leave standing ([[LH-572]])."""
     settings = get_settings()
     fs, base = fs_and_base(settings.registry_root, settings.storage_options())
-    unreadable = f"{base}/_roles/{PROJECT}/unreadable.json"
-    fs.create_dir(f"{base}/_roles/{PROJECT}", recursive=True)
+    # A project's roles are filed under its creation's uuid (ADR 0245).
+    creation = (projects.get_project(settings.registry_root, settings.storage_options(), PROJECT) or {})["uuid"]
+    unreadable = f"{base}/_roles/{creation}/unreadable.json"
+    fs.create_dir(f"{base}/_roles/{creation}", recursive=True)
     with fs.open_output_stream(unreadable) as stream:
         stream.write(b"{not json")
     failed = estate.client.delete(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(CO_ADMIN))

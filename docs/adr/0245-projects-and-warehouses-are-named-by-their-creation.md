@@ -64,13 +64,18 @@ backward compatibility is owed. The rejection does not hold.
    second review). The converge tick revokes what stands on each ended creation whose record no longer stands, and
    forgets it once a sweep past the bound found nothing: a write that raced the delete left tuples on a dead object, which
    authorize nothing; the sweep is hygiene.
-6. **Registry layout.** Records stay keyed by id (`_projects/<id>.json`, `_warehouses/<id>.json`): "which uuid is live
-   for this id" is one read of that key, and a create is one conditional write (iff absent). Every other change of a
-   record is a write under the ETag of a read that found its creation (`control_records.change_creation`), and its
-   removal one DeleteObject under the ETag of a read that found it (`control_records.end_record`; second review S3). So
-   is every other id-keyed record's: a project's policy (`maintenance_policies.end_project_policy`), a label definition
-   (`object_labels.end_definitions`, `delete_definition`) and a declared grant's ledger record (`declaration.
-   forget_record`). An ended record is not kept under the id (it is removed, and its creation kept by uuid under
+6. **Registry layout, and the keyspace rule.** The two registries that map an id to its creation stay keyed by id
+   (`_projects/<id>.json`, `_warehouses/<id>.json`): "which uuid is live for this id" is one read of that key, and a
+   create is one conditional write (iff absent). Every other change of such a record is a write under the ETag of a read
+   that found its creation (`control_records.change_creation`), and its removal one DeleteObject under the ETag of a read
+   that found it (`control_records.end_record`; second review S3). Every record that is a project's own is FILED UNDER
+   ITS CREATION'S UUID (third review): its maintenance policy (`_policies/project/<project_uuid>.json`), its label
+   definitions (`_label_definitions/<project_uuid>/`) and its roles (`_roles/<project_uuid>/`), so a change decided on
+   one creation lands in that creation's keyspace alone and cannot reach the next by construction; the creation's end
+   removes its keyspace, and the converge tick ends what a change held across the end wrote there after it. Maintenance
+   reads a project's policy under the creation its bucket's claim names. A declared grant's ledger record stays keyed by
+   the grant (git names the id), and its removals are conditional on the read that judged them (`declaration.
+   forget_record`, `forget_grant`). An ended record is not kept under the id (it is removed, and its creation kept by uuid under
    `_ended/`), so it never blocks its id: G23 (KeepsEndedKey) is unnecessary and deleted. The records-by-uuid-with-a-pointer layout the analysis proposed costs two
    reads for the same answer. G24 (PurgeByBucket) stays: a claim a dead creation took and no record names is reached by
    its bucket.
@@ -137,7 +142,8 @@ namespace fence (409 while held) → the subtree's protection, the trash of its 
 names no creation), the clones outside → the mark → the namespaces read again (a late one: 409 without `cascade`, or held
 to the same checks with it) → the point of no return, recording `cascade` and `purge_bucket` → the purge's claim (given
 back, and the record put back, where a guard refuses before any step landed) → the trash, the cascade, the orphans, the
-revoke → the bytes → the fence confirmed → the end → the claim released. "Nothing irreversible yet" ends at `no_return`;
+revoke → the bytes → the fence confirmed → the end → the claim released. (The third review moves the claim, and a check
+of the cascade's tables, before the stamp: § Found by the third review.) "Nothing irreversible yet" ends at `no_return`;
 from there the delete finishes, or answers `partial` (503) and the same delete asked again, or the converge tick past its
 bound, finishes it. A delete asked again over a mark takes it over (`delete_run`): over one short of its point of no
 return it is a new delete, judged on every check; over one past it, it resumes. The earlier run's stamp or end then
@@ -170,8 +176,8 @@ change, the model first; each guard was removed in the code with its test run an
 | absent | a create | the record, `creating`, iff absent | nothing |
 | `creating` | its create (to `live` once seeded; ended where its project's creation is gone) | `set_live` under the ETag of a read finding the uuid creating; `end_record` (one removal under that read's ETag) | past its bound: finishes it (seed, then `live`) under a live parent holding its claim, or ends it |
 | `live` | a delete | the mark, under the ETag of the read its checks judged | nothing |
-| `deleting`, no `no_return` | the delete holding the mark (put back on any failure before its stamp, or stamped); a delete taking the mark over, as a new delete | `put_back`, `pass_no_return`, `mark`, each under the ETag of a read finding the creation | past its bound (`marked_at`): puts it back live under a read finding that same run's mark (`put_back`) |
-| `deleting`, `no_return` | the delete holding the mark, or one taking it over, which resumes | `end_record` under the ETag of a read finding the run's own mark | past its bound: finishes it by the delete door, as `delete_asked` says (`deleted`) |
+| `deleting`, no `no_return` | the delete whose run holds the mark (put back on any failure before its stamp, or stamped); a delete taking the mark over, as a new delete | `put_back` (only where `delete_run` is its own), `pass_no_return`, `mark`, each under the ETag of a read finding the creation | past its bound (`marked_at`): puts it back live under a read finding that same run's mark (`put_back`) |
+| `deleting`, `no_return` | never put back: the delete holding the mark, or one taking it over, which resumes as `delete_asked` records | `end_record` under the ETag of a read finding the run's own mark | past its bound: finishes it through the delete door's steps, on a fresh read still carrying the listed run past its stamp, as `delete_asked` says (`deleted`) |
 
 **The refusal wording rule.** A refusal is worded on what its caller sent: at a tenancy gate, `<relation> required on
 <kind>:<id>`, whether or not the id stands. A creation's uuid is named in the audit row, the logs and the events of those
@@ -195,6 +201,29 @@ plus the tick's bound (the request deadline plus five minutes), as a `creating` 
 is taken over by the tick, and the two act on one creation's own objects under the fence and the conditional writes.
 Two deletes asked again for ever may hand a mark between them for ever (`GrantsTakeOver` checks safety alone);
 `DeletingSettles` is checked with one delete asked again for ever (`Grants`, `GrantsMarkUnsettled`).
+
+## Found by the third review, and fixed (2026-11-19)
+
+A third independent review found five blocking defects (V1 to V5), each reproduced against the catalog with a real
+OpenFGA and moto S3 (`tests/integration/test_review_tenancy_three.py` on the review branch, five failing on `cf74ba5`;
+the tests are folded into the files of their seams). All are closed in one change, the model first; each guard was
+removed in the code with its test run and the file restored (measured 2026-11-19), and each must-fail config fails
+without it.
+
+| Problem | Guard | Where (file, function) | Must-fail config | Test | Guard removed |
+| --- | --- | --- | --- | --- | --- |
+| V1: the tick deleted, and purged, a LIVE warehouse nobody authorized: a purge delete past its stamp, refused at the purge's claim, put its own record back live, and the tick's finisher, which had listed it stamped, read it live, judged it a new delete with no caller and the listing's `delete_asked`, and deleted it | U19 NoReturnFinal: a record past its point of no return is never put back, by anyone; every step that can still refuse runs before the stamp (the purge's claim, `warehouses.take_for_purge`; a listed table another request has fenced, `_require_tables_unfenced`), and past it a refusal answers `partial`. U18 FreshFinish: the tick finishes only on the delete door's own fresh read that still carries the run its listing found past its stamp (`tenancy.judged(finishing=)`, else `NothingToFinish`), takes the mark over under that read's ETag, takes what was asked from that record, and never begins a delete | `services/catalog/src/catalog/api/v1/endpoints/warehouses.py` `remove_warehouse`; `services/catalog/src/catalog/services/tenancy.py` `put_back`, `marked`, `judged`, `asked_of`; `services/catalog/src/catalog/api/declaration_converge.py` `finisher`; `projects.remove_project` | `GrantsPutBackPastStamp` (temporal `StampedEnds`), `GrantsTickFinishLive` (`TickBeginsNoDelete`, U18 and U19 removed together) | `tests/integration/test_a_delete_ends_only_the_creation_it_marked.py::test_a_purge_refused_at_its_claim_leaves_its_warehouse_live_and_the_tick_ends_nothing`; `::test_the_tick_finishes_only_the_delete_its_listing_found_and_as_its_stamp_asked` | the claim taken after the stamp: 1 failed; the fresh-read check removed: 1 failed |
+| V2: a held project-policy set replaced the policy of the creation made again under the id: the compose took a record naming another creation for one an earlier creation left, and wrote over it | The keyspace rule (decision 6): the policy is filed under `_policies/project/<project_uuid>`; the set door writes in the keyspace of the creation it resolved and resolves again (`tenancy.require_still`); `_of_creation` and the cross-creation compare are deleted; maintenance reads the policy under the creation its bucket's claim names | `packages/lakehouse/src/lakehouse/maintenance_policies.py` `policy_key`, `end_project_policy`, `governing_policy`; `services/catalog/src/catalog/api/v1/endpoints/policies.py` `set_project_policy`, `describe_project_policy`, `delete_project_policy` | — (records the model does not hold) | `test_a_delete_ends_only_the_creation_it_marked.py::test_a_project_policy_set_held_across_its_projects_end_leaves_the_next_creations_policy`; `tests/integration/test_a_dead_tenants_records_reach_no_live_tenant.py::test_a_project_policy_governs_only_the_buckets_of_the_creation_that_set_it` | the resolve after the write removed: 1 failed (the review's reproduction failed on the id-keyed layout) |
+| V3: the same for a label definition (`object_labels._defined_over`), and a dead creation's standing role held a role name from the next creation | Label definitions under `_label_definitions/<project_uuid>/`, roles under `_roles/<project_uuid>/`; `_defined_over`'s cross-creation branch deleted; the define and delete doors resolve again; the tick ends an ended project creation's definitions (`labels:<object>` in `ended`) | `services/catalog/src/catalog/services/object_labels.py`; `services/catalog/src/catalog/services/roles.py`; `labels.define_label`, `delete_label_definition`; `tenancy_converge._sweep_ended` | — | `::test_a_label_define_held_across_its_projects_end_leaves_the_next_creations_definition` | the resolve after the write removed: 1 failed |
+| V4: a project re-POST whose creation ended under it answered 200 and announced `project_created` and `grant_added` (`set_live(...) or record`), on the door and on the declaration's path alike | A flip that finds its creation neither creating nor live is a lost creation: the create answers what stands (409 code 2 where another creation holds the id, 409 code 14 where none does or its own is being deleted), announces nothing (`project_created`'s evidence now names the creation's uuid live), and revokes what it wrote on the creation that ended | `services/catalog/src/catalog/api/v1/endpoints/projects.py` `establish_project`, `_lost_creation` | `GrantsAnswersUnread` (U4, unchanged) | `::test_a_project_re_post_whose_creation_ended_meanwhile_answers_what_stands_and_holds_nothing` | the old fallback restored: 1 failed |
+| V5: a delete failing before its stamp put back a mark another delete had taken over, so the taker found its mark gone and answered 404 for a project that stands | U20 PutsBackOwnMark: only the delete whose run holds the mark (`delete_run`) puts it back; a write of a delete that lost its mark answers 409 (taken over, or settled by the tick) while the creation stands, 404 only where it is gone | `tenancy.put_back`, `tenancy._lost` | `GrantsPutBackTakenOver` (`PutBackOnlyItsOwn`) | `::test_a_delete_failing_before_its_stamp_puts_back_no_mark_another_delete_took_over` | the run check removed: 1 failed |
+
+Also decided with them: a delete asked again over a stamped mark finishes it as the stamp records it was asked
+(`delete_asked` is written once, at the first stamp; a resuming caller's `cascade` and `purge_bucket` never widen it, and
+`bytes_kept` says why no byte was purged); `declaration.forget_grant` removes only the settled record of its grant, under
+the ETag of the read that found it. The sweep for the same classes found two more: a warehouse create answered after
+converging its grants without resolving again (it now does), and a project create's announcement evidence matched any
+record at the key (it now names the creation, live).
 
 ## The guarantees, the guard holding each, and the configs
 
@@ -227,28 +256,33 @@ for it and writes on it, and `NoLeakAcrossIncarnations` holds there.
 
 ## The model
 
-`specs/catalog/Grants.tla`, 896 lines before the first change, 731 after it, 947 after the second review's; 41
-configs before, 30 after the first change, 42 after the second review's. The table is regenerated from ONE run of
-`make tla-check` (TLC two workers, 2026-11-18, the host shared with other agents' runs; its time is in the commit
-message), after the second review; the delete is modelled with its failures, its take-over and the tick's settling
-(U14 to U17), so every container config's state count grew:
+`specs/catalog/Grants.tla`, 896 lines before the first change, 731 after it, 947 after the second review's, 1,013 after
+the third's; 41 configs before, 30 after the first change, 42 after the second review's, 48 after the third's. The table
+is regenerated from ONE run of `scripts/tla_check.sh Grants` (TLC two workers, 2026-11-19, the host shared with other
+agents' runs, 960 s in all), after the third review; the delete is modelled with the purge's claim as a step that may
+refuse (before the stamp with U19, after it without), its put-back by its own run alone (U20), and the tick's finish as
+the code runs it, its listing first, then the fresh read it acts on (U18):
 
 | Config | Result |
 | --- | --- |
-| `Grants` (one delete, failing between its mark and its stamp, its put-back failing too; liveness `DeletingSettles`) | holds, 44,364 distinct states |
-| `GrantsRevoke` | holds, 710,867 |
-| `GrantsIntruder` | holds, 530,733 |
-| `GrantsChild` (a warehouse under a project) | holds, 171,880 |
-| `GrantsChildCascade` (a namespace under a warehouse) | holds, 90,599 |
-| `GrantsDeclared` (MaxInc 2) | holds, 1,684,060 |
+| `Grants` (one delete, refusable, failing between its mark and its stamp, its put-back failing too; liveness `DeletingSettles`, `StampedEnds`) | holds, 118,659 distinct states |
+| `GrantsRevoke` | holds, 1,934,443 |
+| `GrantsIntruder` | holds, 1,449,354 |
+| `GrantsChildSafety` / `GrantsChildLiveness` (a warehouse under a project) | hold, 458,642 / 11,162 |
+| `GrantsChildCascade` (a namespace under a warehouse) | holds, 247,176 |
+| `GrantsDeclared` (MaxInc 2) | holds, 55,604 |
 | `GrantsDeclaredLedger` (the declarer's ledger, the id made again, liveness `DeclaredOnLive`) | holds, 3,681 |
 | `GrantsConvergeRecreate` (the converge part, its object made again between ticks, liveness `DeclaredHeld`) | holds, 58 |
-| `GrantsDeleteTwice` (two deletes of one creation, either refusable, a cascaded child, the id made again) | holds, 636,200 |
-| `GrantsTakeOver` (two deletes, one forced, a protected creation, failures between mark and stamp; safety alone) | holds, 143,817 |
+| `GrantsDeleteTwice` (two deletes of one creation, either refusable, a cascaded child, the id made again) | holds, 6,135,573 |
+| `GrantsTakeOver` (two deletes, one forced, a protected creation, failures between mark and stamp; safety alone) | holds, 696,241 |
 | `GrantsTable` | holds, 440 |
 | `GrantsConverge` | holds, 33 |
-| `GrantsChildTwice` (two edges; on demand, `make tla-check-full`) | not rerun after the second review (715,524 states, 694 s, before it) |
-| 29 must-fail configs | each fails on the property it names (`GrantsFailureStuck`, `GrantsMarkUnsettled`, `GrantsTakeOverUnchecked` and `GrantsEndByKey` added by the second review) |
+| `GrantsChild`, `GrantsChildTwice`, `GrantsDeclaredFull` (on demand, `make tla-check-full`) | not rerun after the third review |
+| 32 must-fail configs | each fails on the property it names (`GrantsPutBackPastStamp`, `GrantsPutBackTakenOver` and `GrantsTickFinishLive` added by the third review) |
+
+U18 alone removed is masked in the model by U19: no stamped record goes live for the finish to find, and a take-over
+between the listing and the read is finished by either run harmlessly. That is reasoned, not checked by a config of its
+own; `GrantsTickFinishLive` removes both, as the code before the third review had neither.
 
 The gate dropped `DrainBounded`, `DeadTicketsSwept` and `ClaimNamedByItsRecord` (G23's), and their configs, with the
 mechanisms. `GrantsDeclared` runs at MaxInc 2 in the gate (MaxInc 3: 8,935,664 states, 235 s, holds).
@@ -313,6 +347,13 @@ once; before, the gate was asked twice, and the fence took two Writes beside the
 - A delete asked again over a mark short of its point of no return is a new delete: a protected object refuses it 409
   without `force=true`, and its starter's own right, and `can_finish_project_delete`, no longer authorize it; they
   authorize finishing a delete past its point of no return only.
+- A warehouse delete refused at its purge's claim (another purge holds it), or at a table another request is acting
+  on, answers 409 with the warehouse live; past its point of no return a refusal answers `partial` (503) and nothing puts
+  the warehouse back. A delete asked again over a stamped mark does what the stamp records (`bytes_kept` says where a
+  purge it asked for is not done).
+- A project create or re-POST whose creation ended while it ran answers 409 and announces nothing, where it answered 200.
+- A project's policy, label definitions and roles are stored under the creation's uuid; `policy_deleted` for a project
+  still names `project:<id>`.
 - A refusal at a door on a project's or a warehouse's id names `<kind>:<id>`, what the caller sent, where it named
   `<kind>:<uuid>` (or the object nobody holds for an id that does not stand); its body is the same for an id that
   stands and one that does not.
@@ -364,6 +405,11 @@ stamp's `delete_asked`, and the conditional removal in `lakehouse.records`; remo
 `remove_stale_ended`, the tick's `_removing_ended`, `require_own` and its six calls, the ledger's `forgotten` mark and
 its filter); tests +341 / -24; the model (`specs/catalog/Grants*`) +683 / -64 (four must-fail configs and one gate
 config added). Collected tests: 3,963 passed and 4 skipped before, 3,976 and 4 after (+13).
+
+The third review's change, against its parent (`cf74ba5`), measured with `diff --shortstat`: production
+(`packages/lakehouse/src`, `services/catalog/src`) +424 / -258; tests +216 / -41 (the review's five reproductions folded
+into `test_a_delete_ends_only_the_creation_it_marked.py`, one more for the tick's fresh read); the model
+(`specs/catalog`) +421 / -52 (three must-fail configs added, three constants in every config).
 
 ## Consequences
 

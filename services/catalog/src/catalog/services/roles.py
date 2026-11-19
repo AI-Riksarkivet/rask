@@ -2,8 +2,10 @@
 
 A role exists while its record stands unended, as a project exists while its record does (`projects.py`): the role
 doors write the role's ``project`` edge in OpenFGA and its record together. One record per role name at
-``_roles/<project>/<blake2s(name)>.json``: keyed by the name, so the store arbitrates a project's names, and a digest
-because a name may hold any character a name may (ADR 0173 §4), which an object key cannot carry as written. The record
+``_roles/<project_uuid>/<blake2s(name)>.json``: filed under the creation of the project it was made in (ADR 0245, third
+review), so a role a create decided on one creation left standing never holds a name in a project made again under the
+id; keyed there by the name, so the store arbitrates a creation's names, and a digest because a name may hold any
+character a name may (ADR 0173 §4), which an object key cannot carry as written. The record
 holds the role's uuid, its OpenFGA object (``role:<uuid>``), so a role made again under a name an ended role held is
 another object and inherits nothing.
 
@@ -46,8 +48,7 @@ ASSIGNEE: Final = "assignee"
 
 class StoredRole(RoleRecord):
     """A role's record as the store keeps it: ``ended_at`` is set once the role is ended, and ``project_uuid``
-    names the creation of the project it was made in (ADR 0245), so a role a create left across its project's
-    delete is listed under no project made again under the id."""
+    names the creation of the project it was made in (ADR 0245), whose keyspace it is filed in."""
 
     project_uuid: str = Field(pattern=rf"^{tenancy.UUID_PATTERN}$")
     ended_at: datetime | None = None
@@ -63,19 +64,19 @@ def assignees_of(role_id: uuid.UUID | str) -> str:
     return f"{role_object(role_id)}#{ASSIGNEE}"
 
 
-def _key(project: str, name: str) -> str:
-    return f"{_ROLES_PREFIX}/{project}/{blake2s(name.encode('utf-8')).hexdigest()}.json"
+def _key(project_uuid: str, name: str) -> str:
+    return f"{_ROLES_PREFIX}/{project_uuid}/{blake2s(name.encode('utf-8')).hexdigest()}.json"
 
 
-def create_role_record(control_root: str, storage_options: StorageOptions, record: RoleRecord, *, project_uuid: str) -> None:
-    """Write ``record``, made in the creation ``project_uuid`` of its project, iff no standing role of its project holds its
-    name.
+def create_role_record(control_root: str, storage_options: StorageOptions, record: StoredRole) -> None:
+    """Write ``record``, made in the creation of its project it names (``project_uuid``), iff no standing role of that
+    creation holds its name.
 
     Raises:
         lakehouse.records.RecordExistsError: A standing role holds the name, or another create took it first.
     """
-    key = _key(record.project, record.name)
-    body = StoredRole(**record.model_dump(), project_uuid=project_uuid).model_dump(mode="json")
+    key = _key(record.project_uuid, record.name)
+    body = record.model_dump(mode="json")
     try:
         create_json(control_root, storage_options, key, body)
         return
@@ -90,9 +91,9 @@ def create_role_record(control_root: str, storage_options: StorageOptions, recor
         raise RecordExistsError(key) from exc
 
 
-def _read_roles(control_root: str, storage_options: StorageOptions, project: str) -> tuple[list[StoredRole], list[str]]:
-    """Every standing role of ``project``, of any creation of it, ordered by name, and the path of each record that is
-    there and cannot be read as one. A record deleted since the listing named it is no record.
+def _read_roles(control_root: str, storage_options: StorageOptions, project_uuid: str) -> tuple[list[StoredRole], list[str]]:
+    """Every standing role of the project's creation ``project_uuid``, ordered by name, and the path of each record that
+    is there and cannot be read as one. A record deleted since the listing named it is no record.
 
     Raises:
         ServiceUnavailableError: The store did not answer a record's read: one skipped as unreadable would read as a
@@ -101,7 +102,7 @@ def _read_roles(control_root: str, storage_options: StorageOptions, project: str
     fs, base = fs_and_base(control_root, storage_options)
     found: list[StoredRole] = []
     unreadable: list[str] = []
-    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_ROLES_PREFIX}/{project}", allow_not_found=True)):
+    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_ROLES_PREFIX}/{project_uuid}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
@@ -152,16 +153,15 @@ def _role(stored: StoredRole) -> RoleRecord:
     return RoleRecord(**stored.model_dump(exclude={"ended_at", "project_uuid"}))
 
 
-def list_roles(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> list[RoleRecord]:
-    """Every standing role of the creation ``project_uuid`` of ``project``, ordered by name: a role another creation's create left is
-    no role of this one. An unreadable record is skipped and logged, so one bad object does not void the project's roles;
-    a caller ending them all asks :func:`every_role`."""
-    return [_role(stored) for stored in _read_roles(control_root, storage_options, project)[0] if stored.project_uuid == project_uuid]
+def list_roles(control_root: str, storage_options: StorageOptions, *, project_uuid: str) -> list[RoleRecord]:
+    """Every standing role of the project's creation ``project_uuid``, ordered by name. An unreadable record is skipped and
+    logged, so one bad object does not void the project's roles; a caller ending them all asks :func:`every_role`."""
+    return [_role(stored) for stored in _read_roles(control_root, storage_options, project_uuid)[0]]
 
 
-def every_role(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> list[RoleRecord]:
-    """Every standing role of the creation ``project_uuid`` of ``project``, read whole, for its delete ending them all: a
-    role another creation's create made is that creation's, never this delete's (ADR 0245, review T2), and a record that
+def every_role(control_root: str, storage_options: StorageOptions, *, project_uuid: str) -> list[StoredRole]:
+    """Every standing role of the project's creation ``project_uuid``, read whole, for its delete ending them all: the
+    keyspace is that creation's, so a role another creation made is never this delete's (ADR 0245), and a record that
     cannot be read may be one of the roles it must end, so it is refused rather than left standing with its grants
     ([[LH-572]]).
 
@@ -169,27 +169,25 @@ def every_role(control_root: str, storage_options: StorageOptions, project: str,
         ServiceUnavailableError: The store did not answer a record's read.
         InternalError: A record is there and cannot be read as one.
     """
-    roles, unreadable = _read_roles(control_root, storage_options, project)
+    roles, unreadable = _read_roles(control_root, storage_options, project_uuid)
     if unreadable:
         raise InternalError(
-            f"{len(unreadable)} role record(s) of project {project!r} cannot be read as one ({', '.join(sorted(unreadable))}), so its "
-            "roles cannot all be ended. Refusing rather than leaving a role standing with its grants."
+            f"{len(unreadable)} role record(s) of the project's creation {project_uuid} cannot be read as one ({', '.join(sorted(unreadable))}), so "
+            "its roles cannot all be ended. Refusing rather than leaving a role standing with its grants."
         )
-    return [_role(stored) for stored in roles if stored.project_uuid == project_uuid]
+    return roles
 
 
-def find_role(control_root: str, storage_options: StorageOptions, project: str, role_id: uuid.UUID | str, *, project_uuid: str | None) -> RoleRecord | None:
-    """The standing role ``role_id`` of the creation ``project_uuid`` of ``project`` (of any creation for ``None``: whether it stands
-    at all), or ``None`` when it holds none of that id."""
-    found = (stored for stored in _read_roles(control_root, storage_options, project)[0] if str(stored.id) == str(role_id))
-    return next((_role(stored) for stored in found if project_uuid in (None, stored.project_uuid)), None)
+def find_role(control_root: str, storage_options: StorageOptions, role_id: uuid.UUID | str, *, project_uuid: str) -> StoredRole | None:
+    """The standing role ``role_id`` of the project's creation ``project_uuid``, or ``None`` when it holds none of that id."""
+    return next((stored for stored in _read_roles(control_root, storage_options, project_uuid)[0] if str(stored.id) == str(role_id)), None)
 
 
 #: How many times an ending reads the record: once, and once more after another write moved it.
 END_READS: Final = 2
 
 
-def end_role_record(control_root: str, storage_options: StorageOptions, record: RoleRecord) -> None:
+def end_role_record(control_root: str, storage_options: StorageOptions, record: StoredRole) -> None:
     """Stamp ``record`` ended, under the ETag of the read that finds it; a no-op once it is ended or its name holds
     another role.
 
@@ -199,7 +197,7 @@ def end_role_record(control_root: str, storage_options: StorageOptions, record: 
     Raises:
         lakehouse.records.RecordChangedError: The record changed under both reads.
     """
-    key = _key(record.project, record.name)
+    key = _key(record.project_uuid, record.name)
     for _ in range(END_READS):
         stored = read_json(control_root, storage_options, key)
         if stored is None:

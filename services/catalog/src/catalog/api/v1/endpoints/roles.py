@@ -85,7 +85,7 @@ class _Gated(NamedTuple):
     project the role belongs to, which the door resolves again once it has written (``tenancy.require_still``)."""
 
     client: OpenFgaClient
-    role: RoleRecord
+    role: roles.StoredRole
     project: Tenant
 
 
@@ -101,7 +101,7 @@ async def _role_gate(*, client: OpenFgaClient | None, settings: Settings, token:
     if (project := await tenancy.resolved(settings, PROJECT, project_id)) is None:
         raise missing
     so = settings.storage_options()
-    if (role := await run_in_threadpool(partial(roles.find_role, settings.registry_root, so, project_id, role_id, project_uuid=project.uuid))) is None:
+    if (role := await run_in_threadpool(partial(roles.find_role, settings.registry_root, so, role_id, project_uuid=str(project.uuid)))) is None:
         raise missing
     return _Gated(fga_deps.require_fga(settings, client, feature="roles"), role, project)
 
@@ -154,16 +154,24 @@ async def create_role(
     return Role(**record.model_dump(), assignees=[])
 
 
-async def _mint_role(wired: OpenFgaClient, settings: Settings, project: Tenant, body: RoleCreateRequest, *, actor: str) -> RoleRecord:
+async def _mint_role(wired: OpenFgaClient, settings: Settings, project: Tenant, body: RoleCreateRequest, *, actor: str) -> roles.StoredRole:
     """The role's record naming ``project``'s creation, the project resolved again, then its ``project`` edge; the record.
 
     Raises:
         TableNotFoundError: The project was deleted while the role was made, before or after its edge; its record is ended.
     """
-    record = RoleRecord(id=uuid.uuid4(), project=project.id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
+    record = roles.StoredRole(
+        id=uuid.uuid4(),
+        project=project.id,
+        project_uuid=str(project.uuid),
+        name=body.name,
+        description=body.description,
+        created_at=datetime.now(UTC),
+        created_by=actor,
+    )
     so = settings.storage_options()
     try:
-        await run_in_threadpool(partial(roles.create_role_record, settings.registry_root, so, record, project_uuid=str(project.uuid)))
+        await run_in_threadpool(partial(roles.create_role_record, settings.registry_root, so, record))
     except RecordExistsError:
         raise NamespaceAlreadyExistsError(f"project {project.id!r} already holds a role named {body.name!r}") from None
     if not await tenancy.still(settings, project):
@@ -186,7 +194,7 @@ async def list_roles(project_id: ProjectId, client: FgaClientDep, settings: Sett
     """The project's standing roles, ordered by name, gated on ``can_list_roles``; a role's assignees are its own read. A
     role made in an earlier creation of the project is no role of it (ADR 0245)."""
     _, project = await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_list_roles")
-    records = await run_in_threadpool(partial(roles.list_roles, settings.registry_root, settings.storage_options(), project_id, project_uuid=str(project.uuid)))
+    records = await run_in_threadpool(partial(roles.list_roles, settings.registry_root, settings.storage_options(), project_uuid=str(project.uuid)))
     return RoleList(roles=[Role(**record.model_dump()) for record in records])
 
 
@@ -246,9 +254,7 @@ async def _assignee(*, settings: Settings, role: RoleRecord, raw: str) -> str:
     project = await tenancy.resolved(settings, PROJECT, role.project)
     if (
         project is None
-        or await run_in_threadpool(
-            partial(roles.find_role, settings.registry_root, settings.storage_options(), role.project, nested_id, project_uuid=project.uuid)
-        )
+        or await run_in_threadpool(partial(roles.find_role, settings.registry_root, settings.storage_options(), nested_id, project_uuid=str(project.uuid)))
         is None
     ):
         raise InvalidInputError(f"{raw!r} is not a role of project {role.project!r}")

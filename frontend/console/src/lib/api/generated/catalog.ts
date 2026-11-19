@@ -2841,12 +2841,15 @@ export interface paths {
          *     account for and the clones outside it. Then the MARK: no door resolves the warehouse from here, and nothing is
          *     written beneath it (a declare or a commit is refused 409). The namespaces are read again after the mark
          *     (`ChildrenBeforeMark`): one made in between refuses 409 without ``cascade``, or is held to the subtree's checks with
-         *     it. From the mark to the stamp is one span (``tenancy.marked``): ANY failure in it, such a refusal or a store not
-         *     answering, PUTS THE RECORD BACK live, and one whose put-back fails too answers 503 saying the warehouse is left
-         *     marked (the converge tick puts it back past its bound). Then the POINT OF NO RETURN is stamped on the record, with
-         *     the ``cascade`` and ``purge_bucket`` the delete was asked, before the first irreversible step (the
-         *     trash's end, a table's detach, a grant's revoke): past it the delete finishes, or its answer is ``partial`` (503)
-         *     and the same delete asked again, or the converge tick as the stamp records it was asked, finishes it. A step past the
+         *     it; a listed table another request has fenced refuses 409; and the purge takes the bucket's claim, which another
+         *     purge holding refuses 409 with no byte touched. From the mark to the stamp is one span (``tenancy.marked``): ANY
+         *     failure in it, such a refusal or a store not answering, PUTS THE RECORD BACK live (the claim given back as it stood),
+         *     and one whose put-back fails too answers 503 saying the warehouse is left marked (the converge tick puts it back past
+         *     its bound). Then the POINT OF NO RETURN is stamped on the record, with the ``cascade`` and ``purge_bucket`` the delete
+         *     was asked, before the first irreversible step (the trash's end, a table's detach, a grant's revoke): past it NOTHING
+         *     puts the warehouse back (ADR 0245, third review); the delete finishes, or its answer is ``partial`` (503), a guard's
+         *     refusal there included, and the same delete asked again, or the converge tick, finishes it as the stamp records it
+         *     was asked (:func:`remove_warehouse`). A step past the
          *     mark acts on this creation's own objects: its trash is the records filed under its own creation
          *     (``warehouses.trash_owned_by``), its cascade writes only under the warehouse's namespace fence, which a delete made
          *     of a warehouse made again under the id takes from it, and its end is the record's one removal, conditional on a read

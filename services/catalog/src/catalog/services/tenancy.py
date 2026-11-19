@@ -213,25 +213,48 @@ def judges(record: dict[str, Any]) -> bool:
     return NO_RETURN not in record
 
 
-async def judged(settings: Settings, delete: DeleteRun) -> Stored:
+class NothingToFinish(DeleteGone):
+    """The converge tick's finish found, on its fresh read, no delete to finish: the record is not the run its listing
+    found past its point of no return (it was finished, taken over by a delete asked again, or is another creation's).
+    The tick never begins a delete (``FreshFinish``), so it does nothing."""
+
+
+async def judged(settings: Settings, delete: DeleteRun, *, finishing: str | None = None) -> Stored:
     """The record ``delete`` judges its checks on, with the ETag its mark is conditional on.
+
+    ``finishing`` is the run a converge tick's listing found past its point of no return: then the record read now must
+    still be that run's stamped mark, and the mark the tick takes over is conditional on this very read, so a record its
+    listing found stamped and that changed since (finished, taken over, another creation's) is no delete it finishes.
 
     Raises:
         DeleteGone: The id no longer names the creation, or its record is neither live nor marked.
+        NothingToFinish: ``finishing`` names a run the record read now does not carry past its point of no return.
     """
     stored = await run_in_threadpool(read_creation, settings.registry_root, settings.storage_options(), delete.key)
     if stored is None or stored.record.get(UUID) != delete.uuid or stored.record.get(STATE) not in SERVED:
         raise delete.gone()
+    if finishing is not None and not (stored.record.get(STATE) == DELETING and NO_RETURN in stored.record and stored.record.get(DELETE_RUN) == finishing):
+        raise NothingToFinish(f"{delete.kind} {delete.id!r} holds no stamped mark of the delete run {finishing}; nothing to finish")
     return stored
 
 
+def asked_of(record: dict[str, Any]) -> DeleteAsked:
+    """What the delete that passed ``record``'s point of no return was asked to do, as its stamp records it: what a delete
+    asked again over it, or the converge tick, finishes, whatever its own caller asks."""
+    return DeleteAsked.model_validate(record.get(DELETE_ASKED) or {})
+
+
 async def _lost(settings: Settings, delete: DeleteRun) -> DeleteGone | DeleteTakenOver:
-    """Why a write of ``delete`` conditional on its own mark did not land: the creation went, or another delete holds it."""
+    """Why a write of ``delete`` conditional on its own mark did not land: the creation went (404), or its mark is no
+    longer this run's (409: another delete took it over, or the converge tick settled it once the run passed its bound),
+    while the creation stands."""
     stored = await run_in_threadpool(read_creation, settings.registry_root, settings.storage_options(), delete.key)
     record = stored.record if stored is not None else None
-    if record is None or record.get(UUID) != delete.uuid or record.get(STATE) != DELETING:
+    if record is None or record.get(UUID) != delete.uuid:
         return delete.gone()
-    return DeleteTakenOver(f"another delete of {delete.kind} {delete.id!r} took it over; it finishes the delete")
+    return DeleteTakenOver(
+        f"the mark of this delete of {delete.kind} {delete.id!r} is no longer its own: another delete took it over, or the converge tick settled it; ask again"
+    )
 
 
 class Marking:
@@ -255,8 +278,10 @@ async def marked(settings: Settings, delete: DeleteRun, read: Stored, *, by: str
     ONE way for both delete doors, so no path out of the span skips it: whatever the block raises before the stamp
     landed (a refusal, a store or OpenFGA failing, the stamp's own write failing) puts the record back live, since
     nothing irreversible has been done; a delete that lost its mark meanwhile (taken over, or its creation gone) leaves
-    it to whoever holds it. Where the put-back fails too, the answer says the object is left marked and how it is cleared
-    (:class:`MarkLeft`).
+    it to whoever holds it (:func:`put_back` puts back only this run's own mark). Where the put-back fails too, the answer
+    says the object is left marked and how it is cleared (:class:`MarkLeft`). A delete taking over a mark already past its
+    point of no return (``read`` carries the stamp) puts nothing back whatever the block raises: past the stamp the delete
+    only finishes (``NoReturnFinal``).
 
     Raises:
         ConcurrentModificationError: The record changed since ``read``; nothing was marked.
@@ -270,7 +295,7 @@ async def marked(settings: Settings, delete: DeleteRun, read: Stored, *, by: str
     except (DeleteGone, DeleteTakenOver):
         raise
     except BaseException as exc:
-        if not marking.stamped:
+        if not marking.stamped and judges(read.record):
             try:
                 await put_back(settings, delete)
             except Exception as failed:
@@ -306,9 +331,11 @@ async def mark(settings: Settings, delete: DeleteRun, read: Stored, *, by: str) 
 
 async def pass_no_return(settings: Settings, delete: DeleteRun, asked: DeleteAsked | None = None) -> None:
     """Stamp ``delete``'s point of no return on its record, right before its first irreversible step, under the ETag of a
-    read that found its own mark: past it a failure leaves the record marked, and the same delete asked again, or the
-    converge tick, finishes it as ``asked``. The stamp names the run, so a guard of this run refusing before any step
-    landed may still put it back (:func:`put_back`).
+    read that found its own mark: past it nothing puts the record back (:func:`put_back`), and a failure leaves it marked
+    for the same delete asked again, or the converge tick, to finish as ``asked``. What was asked is written once, at the
+    first stamp: a delete taking over a stamped mark finishes it as that stamp records (:func:`asked_of`), whatever its
+    own caller asked, so a resumed delete never widens what the delete that passed the stamp was authorized and judged
+    for.
 
     Raises:
         DeleteGone: The id no longer names the creation.
@@ -318,7 +345,8 @@ async def pass_no_return(settings: Settings, delete: DeleteRun, asked: DeleteAsk
     def stamp(record: dict[str, Any]) -> dict[str, Any]:
         if record.get(DELETE_RUN) != delete.run:
             raise NotTheCreation(f"{delete.key} is marked by another delete")
-        return {**record, NO_RETURN: delete.run, DELETE_ASKED: (asked or DeleteAsked()).model_dump()}
+        stamped = record.get(DELETE_ASKED) if NO_RETURN in record else None
+        return {**record, NO_RETURN: delete.run, DELETE_ASKED: stamped or (asked or DeleteAsked()).model_dump()}
 
     change = partial(change_creation, settings.registry_root, settings.storage_options(), delete.key, delete.uuid, stamp, states=frozenset({DELETING}))
     if await run_in_threadpool(change) is None:
@@ -330,14 +358,17 @@ def _back_live(record: dict[str, Any]) -> dict[str, Any]:
 
 
 async def put_back(settings: Settings, delete: DeleteRun) -> bool:
-    """Put the record back ``live`` after ``delete`` stopped where nothing irreversible was done to the creation: no
-    delete of it passed its point of no return, or only ``delete`` did, which still holds its mark and refused by a guard
-    before any step of it landed. Whether it was put back. A record another delete of it has taken past its point of no
-    return stays marked, for that delete to finish."""
+    """Put the record back ``live`` after ``delete`` stopped short of its point of no return, where nothing irreversible
+    was done to the creation; whether it was put back. Only the delete whose run holds the mark puts it back
+    (``PutsBackOwnMark``): a mark another delete took over since is that delete's, which goes on unaware of this one. A
+    record past any point of no return is never put back (``NoReturnFinal``): every step that can refuse runs before the
+    stamp, and past it the delete only finishes, by its door asked again or by the converge tick."""
 
     def live(record: dict[str, Any]) -> dict[str, Any]:
-        if record.get(NO_RETURN) not in (None, delete.run) or (record.get(NO_RETURN) and record.get(DELETE_RUN) != delete.run):
-            raise NotTheCreation(f"{delete.key} is past another delete's point of no return")
+        if record.get(DELETE_RUN) != delete.run:
+            raise NotTheCreation(f"{delete.key} is marked by another delete")
+        if NO_RETURN in record:
+            raise NotTheCreation(f"{delete.key} is past its point of no return")
         return _back_live(record)
 
     change = partial(change_creation, settings.registry_root, settings.storage_options(), delete.key, delete.uuid, live, states=frozenset({DELETING}))

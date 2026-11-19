@@ -61,13 +61,13 @@ from catalog.schemas import (
     PolicyUnset,
     ProjectPoliciesResponse,
 )
-from catalog.services import reclaims, table_claims, warehouses
+from catalog.services import reclaims, table_claims, tenancy, warehouses
 from catalog.services.control_records import PROJECT_UUID
 from lakehouse import maintenance_policies as policies
 from lakehouse import records
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
-from lakehouse.governed.tenancy import PROJECT, made_under, warehouses_of
+from lakehouse.governed.tenancy import PROJECT, warehouses_of
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CONTROL_ID_RE
 
@@ -151,19 +151,15 @@ def _response(record: dict[str, object], *, condemned: CondemnedBeneath | None =
     return PolicyResponse.model_validate({**record, "set": True, **(condemned.model_dump() if condemned is not None else {})})
 
 
-async def _describe(
-    settings: Settings, *, kind: PolicyKind, key: str, canonical: str, uuid: str | None, project_uuid: str | None = None
-) -> PolicyResponse | PolicyUnset:
+async def _describe(settings: Settings, *, kind: PolicyKind, key: str, canonical: str, uuid: str | None) -> PolicyResponse | PolicyUnset:
     """Read one policy, once for all three rungs: its record, or :class:`PolicyUnset` where the object holds none. A
-    project's record is its only when it names ``project_uuid``, its live creation (:func:`_of_creation`).
+    project's is read under its live creation's uuid (``key``), the keyspace a set on that creation writes in.
 
     Each route establishes its object before this read, a table's or namespace's by resolving its name and a
     project's by reading its registry record, so an object that does not stand, or that its caller may not see,
     never reaches it ([[LH-589]]).
     """
     record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, key)
-    if kind == "project":
-        record = _of_creation(record, project_uuid)
     if record is None:
         return PolicyUnset(kind=kind, id=canonical, uuid=uuid, set=False)
     # Named as the door was addressed: the name the record kept is the one its object had when it was set.
@@ -179,26 +175,22 @@ async def _delete(
     key: str,
     canonical: str,
     condemned: Callable[[], CondemnedBeneath],
-    project_uuid: str | None = None,
 ) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs; the answer names the versions
     already condemned beneath it (``condemned``, read after the delete): removing a record hands what it governed to the
     next level. A hold that governs what it governed keeps every version the answer does not name; a retention the next
     level keeps more under binds the batches that condemn after the delete, and a batch already past its policy read
     finishes under the earlier one."""
-    if project_uuid is not None:
-        # A project's policy is keyed by its id: only the one its live creation set is removed (ADR 0245).
-        await run_in_threadpool(partial(policies.end_project_policy, settings.registry_root, settings.storage_options(), key, project_uuid=project_uuid))
-    else:
-        await run_in_threadpool(partial(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key))
+    # A project's key is its live creation's uuid, so only the policy that creation set is removed (ADR 0245).
+    await run_in_threadpool(partial(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key))
     named = await run_in_threadpool(condemned)
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
     await emit_control(
         control,
         action="policy_deleted",
         object_type="policy",
-        # A table's or namespace's key is its uuid, the object its grants are held by; a project's is its id.
-        object_id=f"{kind}:{key}",
+        # A table's or namespace's key is its uuid, the object its grants are held by; a project is named by its id.
+        object_id=f"{kind}:{canonical if kind == 'project' else key}",
         object_name=canonical if kind in ("table", "namespace") else None,
         actor=f"user:{token.subject}" if token else None,
         extra={"kind": kind},
@@ -315,15 +307,6 @@ async def _namespace(id: str, ns: LanceNamespace, settings: Settings) -> fga_dep
     return await fga_deps.identify(ns, settings, "namespace", segments)
 
 
-def _of_creation(record: dict[str, Any] | None, project_uuid: str | None) -> dict[str, Any] | None:
-    """``record``, the policy stored under a project's id, where it was set by the creation ``project_uuid`` of the
-    project, the live one; ``None`` for one an earlier creation left (ADR 0241 §9 P2, ADR 0245), which is no policy of the
-    tenant holding the id now: it is neither read nor merged onto, and the converge tick reports it."""
-    if record is None or not made_under(record, project_uuid):
-        return None
-    return record
-
-
 def _validated_project(id: str) -> str:
     if not _PROJECT_ID_RE.match(id):
         raise InvalidInputError(f"invalid project id {id!r}: must match {_PROJECT_ID_RE.pattern}")
@@ -379,17 +362,15 @@ async def set_project_policy(
                 "contested; refusing to set a policy over another tenant's data (fix the warehouse "
                 "records first)"
             )
-    # The record names the creation that set it, and merges onto none an earlier creation of the id left.
+    # Filed under the creation it was decided on (ADR 0245, third review): a set held across the project's end and the id
+    # made again lands in the ended creation's keyspace, which the converge tick sweeps, never in the live one's.
     record = await _set(
         settings,
         "project",
-        project,
-        lambda stored: {
-            **_record("project", project, body, _of_creation(stored, standing), uuid=None),
-            "buckets": buckets,
-            PROJECT_UUID: standing,
-        },
+        str(standing),
+        lambda stored: {**_record("project", project, body, stored, uuid=None), "buckets": buckets, PROJECT_UUID: standing},
     )
+    await tenancy.require_still(settings, tenant)
     condemned = await run_in_threadpool(partial(_condemned_under, settings, within=_in_warehouses({str(r["id"]) for r in mine if r.get("id")})))
     log.info("maintenance_policy_set", extra={"kind": "project", "id": project})
     await emit_control(
@@ -411,7 +392,7 @@ async def describe_project_policy(id: str, settings: SettingsDep, token: Current
     # Gated before the existence is told, so a caller who may not administer the project is refused alike whether it
     # exists or not (``fga_deps.require_on_tenant``).
     tenant = await fga_deps.require_on_tenant(client, settings, token, relation="can_administer", kind=PROJECT, object_id=project)
-    return await _describe(settings, kind="project", key=project, canonical=project, uuid=None, project_uuid=tenant.uuid)
+    return await _describe(settings, kind="project", key=str(tenant.uuid), canonical=project, uuid=None)
 
 
 @project_router.post("/{id}/policy/delete", response_model_exclude_none=True)
@@ -423,7 +404,9 @@ async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentTo
     so = settings.storage_options()
     mine = warehouses_of(await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so), tenant.uuid)
     condemned = partial(_condemned_under, settings, within=_in_warehouses({str(r["id"]) for r in mine if r.get("id")}))
-    return await _delete(settings, control, token, "project", key=project, canonical=project, condemned=condemned, project_uuid=tenant.uuid)
+    deleted = await _delete(settings, control, token, "project", key=str(tenant.uuid), canonical=project, condemned=condemned)
+    await tenancy.require_still(settings, tenant)
+    return deleted
 
 
 def _named_now(settings: Settings, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -450,13 +433,13 @@ def _scoped_to_project(record: dict[str, Any], *, warehouse_ids: frozenset[str],
     A ``project`` record matches by ID and creation and by nothing else — matching it on buckets would surface a rival
     tenant's project record the moment two registry entries contest a bucket (the state
     ``set_project_policy`` refuses at write time, and a read must not resurrect it), and one an earlier creation of the
-    id left is the dead tenant's (:func:`_of_creation`).
+    id set is filed under that creation, the dead tenant's.
 
     A table/namespace record matches when its object's name begins with one of the project's warehouses ([[LH-593]]).
     """
     kind = record.get("kind")
     if kind == "project":
-        return record.get("id") == project and _of_creation(record, project_uuid) is not None
+        return record.get(PROJECT_UUID) == project_uuid
     if kind not in ("table", "namespace"):
         return False
     segments = parse_identifier(str(record.get("id") or ""))

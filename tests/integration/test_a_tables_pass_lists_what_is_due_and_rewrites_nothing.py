@@ -109,7 +109,7 @@ def estate(moto_url: str) -> Iterator[StorageOptions]:
     location_claims.take(claims, BRANCHED, f"{WAREHOUSE}$db$b", [WAREHOUSE, "db", "b"], is_gone=lambda _claim: False, uuid=BRANCHED_UUID)
     policy = {"kind": "table", "id": TABLE, "uuid": LOCATION, "compact_enabled": True, "retain_versions": 2, "target_rows_per_fragment": 1000}
     maintenance_policies.put_policy(ROOT, options, policy)
-    maintenance_policies.put_policy(ROOT, options, {"kind": "project", "id": "acme", "buckets": [BUCKET], "retain_versions": 1})
+    maintenance_policies.put_policy(ROOT, options, {"kind": "project", "id": "acme", "project_uuid": "a" * 32, "buckets": [BUCKET], "retain_versions": 1})
     yield options
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET):

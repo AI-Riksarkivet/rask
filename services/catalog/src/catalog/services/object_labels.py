@@ -6,10 +6,12 @@ free-form properties, and a label is the project's controlled vocabulary over th
 
 Two records:
 
-- A **definition** per label name of a project, at ``_label_definitions/<project>/<blake2s(name)>.json``: its name, the
-  object kinds it applies to (``scope``), how a value is constrained (``kind``: a ``marker`` carries none, ``free_text``
-  any string, ``enumerated`` one of ``allowed_values``) and who defined it. Keyed by the name, so the store arbitrates a
-  project's names. A definition evolves only in ways that keep every attached label valid: its scope and its allowed
+- A **definition** per label name of a project, at ``_label_definitions/<project_uuid>/<blake2s(name)>.json``: its name,
+  the object kinds it applies to (``scope``), how a value is constrained (``kind``: a ``marker`` carries none,
+  ``free_text`` any string, ``enumerated`` one of ``allowed_values``) and who defined it. Filed under the creation of the
+  project that defined it (ADR 0245, third review), so a define decided on one creation lands in that creation's
+  keyspace alone and never reaches a project made again under the id; keyed there by the name, so the store arbitrates a
+  creation's names. A definition evolves only in ways that keep every attached label valid: its scope and its allowed
   values only grow, and its kind never changes.
 - An **attachment** record per labelled object, at ``record_key("_labels", kind, uuid)``: every label the object carries
   with its value, keyed by the object's uuid as every record kept for an object is (ADR 0173 §8), so a rename keeps its
@@ -65,8 +67,7 @@ class LabelDefinition(BaseModel):
     #: Minted at the first definition, kept while the name is defined.
     uuid: str
     project: str
-    #: The uuid of the creation of the project that defined it (ADR 0245): a definition another creation of the project
-    #: left is no definition of the tenant holding the id now, and its delete ends only its own creation's.
+    #: The uuid of the creation of the project that defined it (ADR 0245), whose keyspace it is filed in.
     project_uuid: str
     name: str
     description: str | None = None
@@ -103,8 +104,12 @@ def label_object(definition_uuid: str) -> str:
     return f"label:{definition_uuid}"
 
 
-def _definition_key(project: str, name: str) -> str:
-    return f"{control_prefixes.LABEL_DEFINITIONS}/{project}/{blake2s(name.encode('utf-8')).hexdigest()}.json"
+def _definitions_of(project_uuid: str) -> str:
+    return f"{control_prefixes.LABEL_DEFINITIONS}/{project_uuid}"
+
+
+def _definition_key(project_uuid: str, name: str) -> str:
+    return f"{_definitions_of(project_uuid)}/{blake2s(name.encode('utf-8')).hexdigest()}.json"
 
 
 def _attachment_key(kind: str, object_uuid: str) -> str:
@@ -185,14 +190,15 @@ def define(control_root: str, storage_options: StorageOptions, asked: LabelDefin
     """Define ``asked``, or evolve the definition its name holds; the definition that stands and whether this changed it.
 
     A definition applied again as it stands changes nothing, so a producer that declares its labels on every reconcile
-    announces only what moved. A definition another creation of the project left under the name is replaced, under the
-    ETag of the read that found it: it is none of this creation's (ADR 0245).
+    announces only what moved. It is filed under the creation ``asked`` names (ADR 0245, third review): a define decided
+    on a creation that ended meanwhile lands in that creation's keyspace, which the converge tick sweeps, and never
+    reaches the definition of a project made again under the id.
 
     Raises:
         InvalidInputError: The evolution would leave an attached label invalid (:func:`_evolved`).
         lakehouse.records.RecordChangedError: The definition kept changing under the evolution.
     """
-    key = _definition_key(asked.project, asked.name)
+    key = _definition_key(asked.project_uuid, asked.name)
     # A definition deleted between the refused create and the evolution is created on the next round.
     for _ in range(_ROUNDS):
         try:
@@ -203,18 +209,12 @@ def define(control_root: str, storage_options: StorageOptions, asked: LabelDefin
             return asked, True
         try:
             replaced, written = exchange_json(
-                control_root, storage_options, key, lambda current: _defined_over(_parsed(current, key=key), asked).model_dump(mode="json")
+                control_root, storage_options, key, lambda current: _evolved(_parsed(current, key=key), asked).model_dump(mode="json")
             )
         except RecordMissingError:
             continue
         return _parsed(written, key=key), written != replaced
     raise RecordChangedError(key)
-
-
-def _defined_over(stored: LabelDefinition, asked: LabelDefinition) -> LabelDefinition:
-    """What ``asked`` writes over ``stored``: its evolution (:func:`_evolved`), or ``asked`` itself over a definition
-    another creation of the project left."""
-    return asked if stored.project_uuid != asked.project_uuid else _evolved(stored, asked)
 
 
 def _parsed(record: Mapping[str, Any], *, key: str) -> LabelDefinition:
@@ -224,30 +224,26 @@ def _parsed(record: Mapping[str, Any], *, key: str) -> LabelDefinition:
         raise InternalError(f"the label definition at {key} cannot be read as one; write it again") from exc
 
 
-def definition(control_root: str, storage_options: StorageOptions, project: str, name: str, *, project_uuid: str) -> LabelDefinition | None:
-    """The definition the creation ``project_uuid`` of ``project`` holds under ``name``, or ``None``.
+def definition(control_root: str, storage_options: StorageOptions, name: str, *, project_uuid: str) -> LabelDefinition | None:
+    """The definition the project's creation ``project_uuid`` holds under ``name``, or ``None``.
 
     Raises:
         InternalError: A record is there and cannot be read as one.
     """
-    key = _definition_key(project, name)
+    key = _definition_key(project_uuid, name)
     record = get_record(control_root, storage_options, key, event="label_definition")
-    found = None if record is None else _parsed(record, key=key)
-    return found if found is not None and found.project_uuid == project_uuid else None
+    return None if record is None else _parsed(record, key=key)
 
 
-def definitions(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> list[LabelDefinition]:
-    """Every label the creation ``project_uuid`` of ``project`` defines, by name. A record that cannot be read is skipped
-    and logged by the listing."""
+def definitions(control_root: str, storage_options: StorageOptions, *, project_uuid: str) -> list[LabelDefinition]:
+    """Every label the project's creation ``project_uuid`` defines, by name. A record that cannot be read is skipped and
+    logged by the listing."""
     found = []
-    for record in list_records(control_root, storage_options, f"{control_prefixes.LABEL_DEFINITIONS}/{project}", event="label_definition"):
+    for record in list_records(control_root, storage_options, _definitions_of(project_uuid), event="label_definition"):
         try:
-            defined = LabelDefinition.model_validate(record)
+            found.append(LabelDefinition.model_validate(record))
         except ValidationError:
-            log.warning("label_definition_unreadable", extra={"project": project, "name": record.get("name")})
-            continue
-        if defined.project_uuid == project_uuid:
-            found.append(defined)
+            log.warning("label_definition_unreadable", extra={"project_uuid": project_uuid, "name": record.get("name")})
     return sorted(found, key=lambda defined: defined.name)
 
 
@@ -279,17 +275,16 @@ def delete_definition(control_root: str, storage_options: StorageOptions, define
     """Delete the definition ``defined``, where the record at its key is still that definition (its ``uuid``), under the
     ETag of the read that found it so: a definition made again under the name since is another's. Its caller has found no
     standing object carrying it (:func:`carriers`)."""
-    remove_json(control_root, storage_options, _definition_key(defined.project, defined.name), lambda record: record.get("uuid") == defined.uuid)
+    remove_json(control_root, storage_options, _definition_key(defined.project_uuid, defined.name), lambda record: record.get("uuid") == defined.uuid)
 
 
-def end_definitions(control_root: str, storage_options: StorageOptions, project: str, *, project_uuid: str) -> int:
-    """Delete every definition the creation ``project_uuid`` of ``project`` holds, once that creation goes; how many
-    went. Each is removed under the ETag of a read that found it naming that creation, so a definition another creation
-    made under the id, before or after the listing, is that creation's (ADR 0245, reviews T2 and S3)."""
+def end_definitions(control_root: str, storage_options: StorageOptions, *, project_uuid: str) -> int:
+    """Delete every definition the project's creation ``project_uuid`` holds, once that creation goes; how many went. The
+    keyspace is that creation's alone (ADR 0245, third review), so nothing another creation of the id defined is reached;
+    the converge tick ends what a define held across the creation's end wrote there after it."""
     ended = 0
-    for defined in definitions(control_root, storage_options, project, project_uuid=project_uuid):
-        key = _definition_key(project, defined.name)
-        ended += remove_json(control_root, storage_options, key, lambda record: record.get("project_uuid") == project_uuid) is not None
+    for defined in definitions(control_root, storage_options, project_uuid=project_uuid):
+        ended += delete_record(control_root, storage_options, _definition_key(project_uuid, defined.name))
     return ended
 
 

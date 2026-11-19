@@ -40,7 +40,7 @@ from catalog.core.vending import CredentialVendor
 from catalog.schemas import CreateWarehouseRequest, DeleteProfile
 from catalog.services import declaration, project_admins, tenancy, tenancy_converge, warehouses
 from catalog.services import projects as project_registry
-from catalog.services.control_records import DELETE_ASKED, GIT, MANAGED_BY, UUID, DeleteAsked, DeleteMode, ProtectionChange
+from catalog.services.control_records import DELETE_RUN, GIT, MANAGED_BY, UUID, DeleteMode, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
 from lakehouse import protection
 from lakehouse.control_emit import ControlEmitter
@@ -389,31 +389,36 @@ def _spec_drifted(record: dict[str, str], declared: DeclaredWarehouse) -> bool:
 
 
 def finisher(ctx: Tick) -> tenancy_converge.Finisher:
-    """What finishes a delete past its point of no return whose run died: the delete door itself, run by the tick as no
-    caller (ADR 0245, second review S1). Its authorization was asked of the delete that passed the stamp, and a delete
-    resumed past one judges no check, so the door takes the mark over and runs the steps left, a warehouse's with the
-    ``cascade`` and ``purge_bucket`` its stamp records (``delete_asked``): bytes are purged only where the delete that
-    passed the stamp was asked to, under the claim the purge takes itself (ADR 0241 §10)."""
+    """What finishes a delete past its point of no return whose run died: the delete door's own steps, run by the tick as
+    no caller (ADR 0245, second and third reviews). Its authorization was asked of the delete that passed the stamp, and a
+    delete resumed past one judges no check. The tick acts on its listing only through the door's own fresh read of the
+    record, which must still carry the run the listing found past its stamp (``finishing``), and takes the mark over
+    under that read's ETag: a record finished, taken over, or another creation's since the listing is left as it is,
+    so the tick never begins a delete. The steps left are run as the stamp records the delete was asked
+    (``tenancy.asked_of``): bytes are purged only where the delete that passed the stamp was asked to, under the claim
+    its purge took (ADR 0241 §10)."""
     request, settings = ctx.request, ctx.settings
     client = get_fga_client(request)
     announcer = get_announcer(request, settings, client, Resolver(request, settings), ctx.control, ObjectUuids(request, settings))
 
     async def finish(kind: Kind, record: dict[str, Any]) -> None:
+        listed_run = str(record[DELETE_RUN])
         if kind == PROJECT:
-            await project_doors.delete_project(str(record["id"]), record, settings, None, client, announcer)
+            await project_doors.remove_project(str(record["id"]), record, settings, None, client, announcer, force=False, finishing=listed_run)
             return
-        asked = DeleteAsked.model_validate(record.get(DELETE_ASKED) or {})
-        await warehouse_doors.delete_warehouse(
+        await warehouse_doors.remove_warehouse(
             str(record["id"]),
-            warehouse_doors.WarehouseToDelete(record=record),
+            record,
             request,
             settings,
             None,
             client,
             announcer,
             ObjectUuids(request, settings),
-            cascade=asked.cascade,
-            purge_bucket=asked.purge_bucket,
+            cascade=False,
+            purge_bucket=False,
+            force=False,
+            finishing=listed_run,
         )
 
     return finish
