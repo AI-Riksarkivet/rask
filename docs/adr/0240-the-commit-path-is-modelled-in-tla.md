@@ -518,10 +518,11 @@ argued each of these in comments; nothing checked them against each other.
       later send under the key was refused the same way. `land_keyed` now renews with the newest version it has read as
       another writer's, so that version is outside the key's window and the resend writes
       (`test_a_key_whose_put_lost_its_slot_is_not_refused_when_that_slot_is_removed`).
-    - **Checked and kept:** the insert door's stamped Overwrite (ADR 0244 U2) carries the key's stamp, files its data
-      files in the committed-files record under its ref, and a resend whose answer was lost finds it, on main and after
-      each kind of takeover and deletion the other doors are tested under (the `insert-overwrite` cases of
-      `test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit`).
+    - **Checked:** the insert door's stamped Overwrite (ADR 0244 U2) carries the key's stamp, and a resend whose answer
+      was lost finds it after each kind of takeover and deletion the other doors are tested under (kept: the
+      `insert-overwrite` cases of `test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit`, on main).
+      The review's own test also showed its data files in the committed-files record under its ref's prefix, on main
+      and on a branch; that test was not kept, so no test holds those two.
     - **Not confirmed by that review, and open:** a version a dead reclaim batch left half-removed past the reconciler's
       mark would fail its finish on every pass until a reclaim finishes it (reasoned from `commit_reconcile.scan_ref`,
       not reproduced: it needs a fault injected mid-delete); a keyed append whose write landed on a branch since deleted
