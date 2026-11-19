@@ -234,7 +234,7 @@ class TestARetriedAppendLandsOnce:
             "a-later-version-deleted-since",
         ],
     )
-    @pytest.mark.parametrize("door", ["insert-no-key", "insert-primary-key", "create-overwrite", "restore"])
+    @pytest.mark.parametrize("door", ["insert-no-key", "insert-primary-key", "insert-overwrite", "create-overwrite", "restore"])
     def test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
         self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: str, after: str
     ) -> None:
@@ -242,7 +242,8 @@ class TestARetriedAppendLandsOnce:
         resend past the claim's lease takes the key over. Run again, the write would land twice: its commit carries the
         key, so the takeover finds it there and answers with it (ADR 0240), at every door that lands a version: an append
         answers the rows it added, whatever operation committed them (an append to a table declaring a primary key commits
-        as Lance's merge, an ``Update``, ADR 0240 TakeoverCounts), a create the version, a restore the transaction.
+        as Lance's merge, an ``Update``, ADR 0240 TakeoverCounts; the insert door's Overwrite commits stamped, as the
+        create door's does), a create the version, a restore the transaction.
 
         However many attempts came between (ADR 0240 §11): ``a-chain-of-takeovers``, the takeover that found the write lost
         its answer too, and a third send takes the key over from it (KeyKeepsFirst: the search starts at the first put the
@@ -283,7 +284,8 @@ class TestARetriedAppendLandsOnce:
                 return real_ns_client.post(f"{table}/create?mode=Overwrite", content=rows(7, 8), headers={**ARROW_STREAM, **keyed})
             if door == "restore":
                 return real_ns_client.post(f"{table}/restore", json={"version": before}, headers=keyed)
-            return real_ns_client.post(f"{table}/insert?mode=append", content=rows(7, 8), headers={**ARROW_STREAM, **keyed})
+            mode = "overwrite" if door == "insert-overwrite" else "append"
+            return real_ns_client.post(f"{table}/insert?mode={mode}", content=rows(7, 8), headers={**ARROW_STREAM, **keyed})
 
         async def lost(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("the pod ended before the answer was recorded")
@@ -332,8 +334,57 @@ class TestARetriedAppendLandsOnce:
             assert again.json() == {"location": landed["location"], "version": before + 1}
         appended = len(later) if after == "a-later-version-deleted-since" else 0
         counted = real_ns_client.post(f"{table}/count_rows", json={})
-        held = {"create-overwrite": 2, "restore": 3}.get(door, 5) + appended
+        held = {"create-overwrite": 2, "insert-overwrite": 2, "restore": 3}.get(door, 5) + appended
         assert (_version(real_ns_client, "lance_catalog$db$lost"), counted.text) == (before + 1 + appended, str(held)), "the write ran again after its lease"
+
+    def test_a_key_whose_put_lost_its_slot_is_not_refused_when_that_slot_is_removed(self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A keyed append's put loses its slot to another writer, the attempt reads that version as the other writer's, and
+        its pod ends before its next put: the write landed nowhere. The key's record keeps the newest version an attempt
+        proved was not its own (ADR 0240 §12, the model's ``Renew`` after a lost ``Put``), so the owner deleting that
+        version later leaves no gap in the key's window, and the resend past the lease writes, where a record kept at the
+        transaction's first read version refused the key 409 (19) for good."""
+        import lance
+        from lance.commit import CommitConflictError
+
+        from catalog.api import idempotency as keyed_doors
+        from catalog.services import dataplane
+        from lakehouse import idempotency
+
+        table = "/v1/table/lance_catalog$db$slot"
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        created = real_ns_client.post(f"{table}/create", content=_rows(3), headers=ARROW_STREAM)
+        assert created.status_code == 200, created.text
+        location = created.json()["location"]
+        before = _version(real_ns_client, "lance_catalog$db$slot")
+        keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f6a"}
+        commit = dataplane.lance.LanceDataset.commit
+        puts: list[int] = []
+
+        def losing(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — Lance's own arguments, every one passed on
+            if kwargs.get("max_retries") != 0:
+                return commit(*args, **kwargs)
+            puts.append(len(puts))
+            if len(puts) == 1:
+                # Another writer takes the slot between Lance's rebase and this put, as a writer on another replica does.
+                lance.write_dataset(lance.dataset(location).to_table().slice(0, 1), location, mode="append")  # noqa: TID251
+                raise CommitConflictError(f"Commit conflict for version {before + 1}: Failed to commit the transaction after 0 retries.")
+            raise RuntimeError("the pod ended before its second put")
+
+        with monkeypatch.context() as during:
+            during.setattr(dataplane.lance.LanceDataset, "commit", staticmethod(losing))
+            with pytest.raises(RuntimeError, match="the pod ended"):
+                real_ns_client.post(f"{table}/insert?mode=append", content=_rows(2), headers=keyed)
+        for _ in range(2):
+            assert real_ns_client.post(f"{table}/insert?mode=append", content=_rows(1), headers=ARROW_STREAM).status_code == 200
+        deleted = real_ns_client.post(f"{table}/version/delete", json={"ranges": [{"start_version": before + 1, "end_version": before + 2}]})
+        assert (deleted.status_code, deleted.json().get("deleted_count")) == (200, 1), deleted.text
+        finished = real_ns_client.post("/management/v1/table/lance_catalog$db$slot/maintenance/run", json={"retain_versions": 10_000})
+        assert (finished.status_code, finished.json().get("old_versions_removed")) == (200, 1), finished.text
+
+        monkeypatch.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
+        again = real_ns_client.post(f"{table}/insert?mode=append", content=_rows(2), headers=keyed)
+
+        assert (again.status_code, again.json()) == (200, {"num_inserted_rows": 2, "version": before + 4}), again.text
 
     def test_the_key_names_one_append_on_one_ref(self, real_ns_client: TestClient) -> None:
         """The same key on another mode or another ref is another operation, refused rather than answered with this one."""

@@ -1941,7 +1941,9 @@ def land_keyed(
     turn wait (``wait``) and the renewal, which is the last write before each put. An attempt that loses its put (a
     retryable conflict, "Commit conflict for version N ... after 0 retries") reads the version that put tried for its own
     transaction first: a store that answered a put that landed as a conflict leaves the commit landed, and the same
-    transaction committed again lands a second time (measured on pylance 13.0.0).
+    transaction committed again lands a second time (measured on pylance 13.0.0). Every version read so and found another
+    writer's is one the key's write is known not to be in, so the next renewal records the newest of them as the version the
+    put is planned on (ADR 0240 §12).
 
     Raises:
         SupersededError: Another attempt under the key took it over: nothing landed.
@@ -1955,7 +1957,9 @@ def land_keyed(
         started = time.monotonic()
         if wait is not None:
             wait()
-        renew_held(key, int(stamped.read_version))
+        # The newest version this landing has read as another writer's, not the transaction's first read version: the
+        # key's record bounds the window a resend searches, and a version below it that is removed later is no gap in it.
+        renew_held(key, checked)
         lost: re.Match[str] | None = None
         try:
             # A handle commits through the store it was opened on; a location is opened with the catalog's options.

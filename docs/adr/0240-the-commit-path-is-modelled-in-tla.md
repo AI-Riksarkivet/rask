@@ -506,6 +506,29 @@ argued each of these in comments; nothing checked them against each other.
     - **The gate**, measured 2026-11-18 on two of four cores shared with other agents (`TLC_WORKERS=2
       scripts/tla_check.sh CommitPath`): eight configs that hold, twenty that must fail, one on demand, in 3 min 52 s at a load average of 2 to 4 (the reconcile and lost-answer suites running beside it). `CommitPath.cfg` 251,641 states; `CommitPathGap.cfg` 440,234; `CommitPathKeys.cfg` 89,745; `CommitPathLane.cfg` 392,280; `CommitPathNested.cfg` 47; `CommitPathOverwrite.cfg` 12,481; `CommitPathRebody.cfg` 3,927; `CommitPathRestore.cfg` 12,293 (each a little above §12, the "gone" answer now told from a 409 conflict). `GoneIsTrue` and `MarkReachesHead` are in every gate config.
 
+14. **Found by a fifth review, and FIXED (2026-11-19).** One finding, reproduced against the real catalog; the model
+    already had it right, so the code moved to the model.
+    - **E1, a keyed Lance commit renewed with its transaction's first read version on every attempt.** `land_keyed` reads
+      the version a lost put tried and, finding another writer's transaction there, knows the key's write is not in it;
+      it still renewed with `stamped.read_version`, so the key's `written_from` stayed below a slot the attempt had proved
+      was not its own, where the model's lane path plans again (`Put`: `plan' = Len(log)`) and `Renew` records that plan
+      (§12). Reproduced: a keyed append's first put loses version 2 to another writer, its pod ends before its second
+      put, two more appends land, the owner deletes version 2 and the next reclaim removes it; the resend past the lease
+      was refused 409 (19), "may have landed in a version since removed", though the write had landed nowhere, and every
+      later send under the key was refused the same way. `land_keyed` now renews with the newest version it has read as
+      another writer's, so that version is outside the key's window and the resend writes
+      (`test_a_key_whose_put_lost_its_slot_is_not_refused_when_that_slot_is_removed`).
+    - **Checked and kept:** the insert door's stamped Overwrite (ADR 0244 U2) carries the key's stamp, files its data
+      files in the committed-files record under its ref, and a resend whose answer was lost finds it, on main and after
+      each kind of takeover and deletion the other doors are tested under (the `insert-overwrite` cases of
+      `test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit`).
+    - **Not confirmed by that review, and open:** a version a dead reclaim batch left half-removed past the reconciler's
+      mark would fail its finish on every pass until a reclaim finishes it (reasoned from `commit_reconcile.scan_ref`,
+      not reproduced: it needs a fault injected mid-delete); a keyed append whose write landed on a branch since deleted
+      and made again is searched by number on the new branch, finds nothing and writes again, and whether that is "applied
+      twice" is undecided; an observation of a warehouse's seal posture landing between a load's read and its rebind is
+      overwritten until the next load or probe (alerts only: enforcement reads the settings).
+
 ## What a client observes that differs
 
 - A keyed `/insert`, `/create` or `/restore` resent after its first attempt landed unanswered, when a version committed
