@@ -8,6 +8,9 @@
 #   "EXPECT VIOLATION temporal"     the same for a property over a whole behaviour, which TLC reports without a name;
 #   "ON DEMAND"                     too large for every run: checked only with --full;
 #   anything else                   the model must hold.
+# Each line it prints names the distinct states TLC found and the seconds the config took. TLC_WORKERS sets TLC's workers
+# (default auto); TLC_TIMEOUT, a `timeout` duration such as 30m, stops a config that runs longer and reports it as not
+# finished, which fails the run.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 jar="$root/.localbin/tla2tools.jar"
@@ -32,22 +35,30 @@ for model in "$root"/specs/*/*.tla; do
       continue
     fi
     work="$(mktemp -d)"
+    started=$SECONDS
     # TLC exits non-zero on a violation, which an expected one is: its output decides, not its status.
-    out="$(cd "$(dirname "$model")" && java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-auto}" -deadlock -metadir "$work" -config "$(basename "$config")" "$(basename "$model")" 2>&1 || true)"
+    status=0
+    out="$(cd "$(dirname "$model")" && timeout "${TLC_TIMEOUT:-0}" java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-auto}" -deadlock -metadir "$work" -config "$(basename "$config")" "$(basename "$model")" 2>&1)" || status=$?
     rm -rf "$work"
+    took="$((SECONDS - started)) s"
+    if [ "$status" = 124 ]; then
+      echo "!! $name did not finish within ${TLC_TIMEOUT} ($took): neither holds nor fails" >&2
+      failed=1
+      continue
+    fi
     states="$(grep -oE '[0-9,]+ distinct states found' <<<"$out" | tail -1 || true)"
     if [[ "$first" =~ EXPECT\ VIOLATION\ ([A-Za-z]+) ]]; then
       expected="${BASH_REMATCH[1]}"
       reported="Invariant $expected is violated"
       [ "$expected" = "temporal" ] && reported="Temporal properties were violated"
       if grep -q "$reported" <<<"$out"; then
-        echo "fails as expected  $name ($expected)"
+        echo "fails as expected  $name ($expected, $states, $took)"
       else
         echo "!! $name was expected to violate $expected and did not" >&2
         failed=1
       fi
     elif grep -q "Model checking completed. No error has been found." <<<"$out"; then
-      echo "holds     $name ($states)"
+      echo "holds     $name ($states, $took)"
     else
       echo "!! $name does not hold:" >&2
       grep -E '^Error|is violated|line [0-9]+, col' <<<"$out" | head -5 >&2

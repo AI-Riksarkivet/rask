@@ -14,6 +14,11 @@
 # the run's own holding the catalog's canned policy as the chart renders it (race_catalog); the vend's test writes under the credentials
 # the catalog's own session policy vends. Stops the store at the end; KEEP_UP=1 leaves it running
 # and prints the environment a test run needs.
+#
+# RASK_LIFECYCLE_WAIT_LICENCE=1 (`make lifecycle-rustfs-check-full`) adds the one slow case: the store refusing a
+# maintain session once the licence it deletes under has ended (ADR 0246 §14, assumption C), which waits the licence out,
+# about 17 minutes, since RustFS issues no session shorter than 900 s. Off by default: the fact is the store's, rask's part
+# (`covers`) is pinned by the cheap cases, and the lane takes about 6 minutes without it.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 port="${RASK_LIFECYCLE_STORE_PORT:-$("$root/scripts/free_port.sh")}"
@@ -58,11 +63,14 @@ if [ "${KEEP_UP:-}" = 1 ]; then
   echo "RASK_LIFECYCLE_STORE_ENDPOINT=$endpoint RASK_LIFECYCLE_STORE_ACCESS_KEY=rask-lifecycle-root RASK_LIFECYCLE_STORE_SECRET_KEY=$RASK_LIFECYCLE_STORE_SECRET_KEY (pid $store_pid, $work)"
   exit 0
 fi
-# The store refuses a reclaim's session once the licence it deletes under ends (ADR 0246 §14, assumption C): it waits the
-# licence out (about 17 minutes; RustFS issues no shorter session), so it runs beside every other test of the lane.
-uv run --no-sync pytest tests/integration/test_no_vended_credential_writes_a_pin_or_the_condemned_record.py -k licence -p no:cacheprovider -rA "$@" \
-  >"$work/licence.log" 2>&1 &
-licence_pid=$!
+# The store refuses a reclaim's session once the licence it deletes under ends (ADR 0246 §14, assumption C): asked for, it
+# waits the licence out (about 17 minutes; RustFS issues no shorter session) beside every other test of the lane.
+if [ "${RASK_LIFECYCLE_WAIT_LICENCE:-}" = 1 ]; then
+  export RASK_LIFECYCLE_WAIT_LICENCE
+  uv run --no-sync pytest tests/integration/test_no_vended_credential_writes_a_pin_or_the_condemned_record.py -k licence -p no:cacheprovider -rA "$@" \
+    >"$work/licence.log" 2>&1 &
+  licence_pid=$!
+fi
 uv run --no-sync pytest \
   tests/integration/test_a_lifecycle_door_keeps_what_it_answered_beside_a_concurrent_door.py \
   tests/integration/test_a_cascade_keeps_what_it_answered.py \
@@ -77,5 +85,7 @@ uv run --no-sync pytest \
 uv run --no-sync pytest tests/integration/test_no_vended_credential_writes_a_pin_or_the_condemned_record.py -k "not licence" -p no:cacheprovider -rA "$@"
 # A reclaim beside the doors on its history (ADR 0246), its deletes held or refused on the wire in front of the store.
 uv run --no-sync pytest tests/integration/test_a_reclaim_condemns_before_it_deletes.py -k rustfs -p no:cacheprovider -n "${PYTEST_WORKERS:-2}" -rA "$@"
-wait "$licence_pid" || { cat "$work/licence.log" >&2; exit 1; }
-tail -3 "$work/licence.log"
+if [ -n "${licence_pid:-}" ]; then
+  wait "$licence_pid" || { cat "$work/licence.log" >&2; exit 1; }
+  tail -3 "$work/licence.log"
+fi

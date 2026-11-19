@@ -10,7 +10,6 @@ through the ref's own handle on the local root, a credential no store expires. W
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 import lance
 
@@ -19,17 +18,24 @@ from lakehouse.condemned_versions import Credential, RefReclaim, Verdict
 from lakehouse.storage_options import StorageOptions
 
 
-def unheld(control_root: str, table_uuid: str, uri: str) -> Callable[[str | None, Any], RefReclaim]:
-    """For each ref of the table at ``uri`` and its handle, its batches: condemned (a fork point among them), pins read,
-    promoted; each deleted through that handle."""
+def unheld(control_root: str, table_uuid: str, uri: str) -> Callable[[str | None], RefReclaim]:
+    """For each ref of the table at ``uri``, its batches, naming the ref's identity as read when asked for: condemned (a
+    fork point among them), pins read, promoted; each deleted through the ref's own handle."""
 
-    def of(ref: str | None, handle: Any) -> RefReclaim:  # noqa: ANN401 — a lance.LanceDataset of the ref
+    def of(ref: str | None) -> RefReclaim:
+        listed_on = condemned_versions.identity_of(lance.dataset(uri), ref, table_uuid=table_uuid)
+
         def batch(versions: list[int]) -> Verdict:
-            run = condemned_versions.Batch(control_root, StorageOptions(), table_uuid=table_uuid, location=uri, dataset=lance.dataset(uri), ref=ref)
+            main = lance.dataset(uri)
+            run = condemned_versions.Batch(control_root, StorageOptions(), table_uuid=table_uuid, location=uri, dataset=main, ref=ref, listed_on=listed_on)
             run.condemn(versions, forks=True)
             run.read_pins()
             return run.promote(None)
 
-        return RefReclaim(condemn=batch, mint=lambda: Credential(dataset=handle, expires_at=None))
+        def mint() -> Credential:
+            main = lance.dataset(uri)
+            return Credential(dataset=main if ref is None else main.checkout_version((ref, None)), expires_at=None)
+
+        return RefReclaim(condemn=batch, mint=mint)
 
     return of

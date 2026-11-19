@@ -18,10 +18,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Final
 
 import lance
-from lance_namespace import LanceNamespace, ServiceUnavailableError, TableBranchNotFoundError
+from lance_namespace import ConcurrentModificationError, LanceNamespace, ServiceUnavailableError, TableBranchNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from catalog.core.base_judge import BaseJudge
@@ -110,6 +110,7 @@ def batch(
     main: lance.LanceDataset,
     *,
     ref: str | None,
+    listed_on: str,
     versions: Sequence[int],
     forks: bool = False,
     holds: bool = True,
@@ -117,20 +118,27 @@ def batch(
     """One batch of ``ref``'s reclaim, run to its verdict (:class:`lakehouse.condemned_versions.Batch`): ``versions``
     condemned with whatever a dead batch or ``version/delete`` left on the ref, the pins read, the policy read where
     ``holds`` asks for it (an erasure's reclaims do not), the entries promoted. ``main`` is a handle of the table's main,
-    under the catalog's own credential.
+    under the catalog's own credential. ``listed_on`` is the ref's identity as the reclaimer read it before it opened the
+    handle it listed ``versions`` on (:func:`lakehouse.condemned_versions.identity_of`).
 
     Raises:
         TableBranchNotFoundError: ``ref`` is a branch the table does not have (code 22).
+        ConcurrentModificationError: ``ref`` is now another incarnation than ``listed_on`` (code 14, ListedOn): the
+            reclaimer lists its versions again and asks again; nothing was condemned.
         ServiceUnavailableError: The store did not answer, the record does not parse, or every rewrite of it lost to
             another writer (contention among batches, never a conflict the caller made); nothing is licensed (503).
     """
     try:
-        run = condemned_versions.Batch(control_root, storage_options, table_uuid=governance.table_uuid, location=governance.location, dataset=main, ref=ref)
+        run = condemned_versions.Batch(
+            control_root, storage_options, table_uuid=governance.table_uuid, location=governance.location, dataset=main, ref=ref, listed_on=listed_on
+        )
         run.condemn(versions, forks=forks)
         run.read_pins()
         verdict = run.promote(governance.held_by() if holds else None)
     except condemned_versions.RefGoneError as exc:
         raise TableBranchNotFoundError(str(exc)) from exc
+    except condemned_versions.ListedElsewhereError as exc:
+        raise ConcurrentModificationError(f"{exc}; nothing was condemned") from exc
     except records.RecordChangedError as exc:
         raise ServiceUnavailableError(f"the table's condemned versions kept changing under this batch; nothing was licensed, retry: {exc}") from exc
     except OSError as exc:
@@ -142,23 +150,27 @@ def batch(
     return verdict
 
 
-def minter(settings: Settings, location: str, ref: str | None, fallback: Any) -> Callable[[], Credential]:  # noqa: ANN401 — a lance.LanceDataset
+def minter(settings: Settings, location: str, ref: str | None, main: lance.LanceDataset) -> Callable[[], Credential]:
     """How a reclaim the catalog runs in process mints each batch's credential (:func:`condemned_versions.reclaim`): a
     maintain-tier session for the table, minted for the batch through the catalog's web identity before the batch is
     asked and lasting at most :data:`condemned_versions.CREDENTIAL_LIFETIME`, with the grants the maintain vend gives a pass
     of the ref (none on the control root), and the ref opened under it, so a reclaim frozen past its licence's instant
     deletes nothing more. Where the catalog has no web identity (``LANCE_VENDING_MODE=mode_b``, the development fixtures on
-    a key pair) nothing is minted: the batch deletes through ``fallback``, the ref's handle under the catalog's own key
+    a key pair) nothing is minted: the batch deletes through the ref opened from ``main``, under the catalog's own key
     pair, which no store expires (the residual of ADR 0246 §14).
 
     Raises:
         ServiceUnavailableError: The store refused, or could not answer, the exchange or a read of the ref (503).
         InvalidTableStateError: A base the catalog did not sanction (409).
     """
-    if settings.vending_mode != "web_identity":
-        return lambda: Credential(dataset=fallback, expires_at=None)
-    vendor = vendor_for(settings)
     branch = recorded_branch(ref) or ""
+
+    def own() -> Credential:
+        return Credential(dataset=main if branch == "" else main.checkout_version((branch, None)), expires_at=None)
+
+    if settings.vending_mode != "web_identity":
+        return own
+    vendor = vendor_for(settings)
     facts = dataset_facts(location, settings.storage_options(), branch=branch)
     bases = require_vendable_bases(location, facts, BaseJudge.from_settings(settings))
 
@@ -174,7 +186,7 @@ def minter(settings: Settings, location: str, ref: str | None, fallback: Any) ->
             at_most_seconds=int(condemned_versions.CREDENTIAL_LIFETIME.total_seconds()),
         )
         if vended is None:
-            return Credential(dataset=fallback, expires_at=None)
+            return own()
         opened = lance.dataset(location, storage_options=vended.as_storage_options().in_clear())
         return Credential(
             dataset=opened if branch == "" else opened.checkout_version((branch, None)),
@@ -184,32 +196,34 @@ def minter(settings: Settings, location: str, ref: str | None, fallback: Any) ->
     return mint
 
 
-def in_process(
-    governance: Governance,
-    settings: Settings,
-    main: lance.LanceDataset,
-    *,
-    ref: str | None,
-    handle: Any,
-    forks: bool = False,
-    holds: bool = True,  # noqa: ANN401 — a lance.LanceDataset
-) -> RefReclaim:
+def in_process(governance: Governance, settings: Settings, main: lance.LanceDataset, *, ref: str | None, forks: bool = False, holds: bool = True) -> RefReclaim:
     """How a reclaim of ``ref`` the catalog runs in process (``maintenance/run``, an erasure's verification and its
-    release) asks for each batch and mints each batch's credential; ``handle`` is the ref's handle under the catalog's
-    own credential (:func:`minter`'s fallback)."""
+    release) asks for each batch and mints each batch's credential. The ref's identity is read HERE, and every batch names
+    it (ListedOn): a caller asks for this before it opens the handle it lists the ref's victims on.
+
+    Raises:
+        TableBranchNotFoundError: ``ref`` is a branch the table does not have (code 22).
+        ServiceUnavailableError: The store refused, or could not answer, a read of the ref or the exchange (503).
+        InvalidTableStateError: A base the catalog did not sanction (409).
+    """
+    try:
+        listed_on = condemned_versions.identity_of(main, ref, table_uuid=governance.table_uuid)
+    except condemned_versions.RefGoneError as exc:
+        raise TableBranchNotFoundError(str(exc)) from exc
     return RefReclaim(
         condemn=lambda versions: batch(
-            governance, settings.registry_root, settings.storage_options(), main, ref=ref, versions=versions, forks=forks, holds=holds
+            governance, settings.registry_root, settings.storage_options(), main, ref=ref, listed_on=listed_on, versions=versions, forks=forks, holds=holds
         ),
-        mint=minter(settings, governance.location, ref, handle),
+        mint=minter(settings, governance.location, ref, main),
     )
 
 
-def erasure_reclaims(governance: Governance, settings: Settings, main: lance.LanceDataset) -> Callable[[str | None, Any], RefReclaim]:
-    """For each ref of an erasure's reclaim and its handle, how it asks for each batch and mints each batch's credential:
-    a version a branch is cut from among what it may condemn, since the erasure takes the files only that version names
-    (ADR 0243 R1), and no maintenance hold read (``holds=False``, ADR 0246 §14)."""
-    return lambda ref, handle: in_process(governance, settings, main, ref=ref, handle=handle, forks=True, holds=False)
+def erasure_reclaims(governance: Governance, settings: Settings, main: lance.LanceDataset) -> Callable[[str | None], RefReclaim]:
+    """For each ref of an erasure's reclaim, how it asks for each batch and mints each batch's credential, asked for
+    before the ref's handle is opened (:func:`in_process`): a version a branch is cut from among what it may condemn,
+    since the erasure takes the files only that version names (ADR 0243 R1), and no maintenance hold read
+    (``holds=False``, ADR 0246 §14)."""
+    return lambda ref: in_process(governance, settings, main, ref=ref, forks=True, holds=False)
 
 
 class Found(BaseModel):
@@ -217,7 +231,6 @@ class Found(BaseModel):
 
     #: ``(table, branch, branch identifier, version)`` of each version found, by table, branch and version; the identifier
     #: names the incarnation of the branch (``None`` for main), since a branch made again under its name repeats numbers.
-    #: ``(table, branch, version)`` of each version found, by table, branch and version.
     named: list[tuple[str, str | None, str | None, int]] = Field(default_factory=list)
     #: What could not be read: each a record (or the listing of them) that may name a version beneath the door.
     unread: list[str] = Field(default_factory=list)

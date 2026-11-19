@@ -21,9 +21,17 @@
 (* A RECLAIM BATCH (a pass, the erasure's verification, the release's own  *)
 (* reclaim: every reclaim calls the catalog once per batch of at most 16   *)
 (* versions, then runs Lance's cleanup under its maintain vend):           *)
-(*   RBegin    the versions: some past retention (fresh) on one ref, and  *)
-(*             every standing version an entry names on it (finish)        *)
-(*   RCondemn  (CondemnFirst) the entries written, state "c"               *)
+(*   RBegin    the reclaimer reads its ref's identity (main's is the       *)
+(*             table's uuid, a branch's its incarnation), THEN opens the   *)
+(*             handle it lists the versions past retention on: so the      *)
+(*             listing is of that incarnation or a later one, and one      *)
+(*             step stands for both (a later one is refused at RCondemn)   *)
+(*   RCondemn  the catalog resolves the ref's name and refuses the batch   *)
+(*             (409, code 14, nothing condemned) where it is another       *)
+(*             identity than the one the reclaimer read (ListedOn); else   *)
+(*             (CondemnFirst) the entries written, state "c": the numbers  *)
+(*             asked that stand on the ref, and every standing version an  *)
+(*             entry names on it (finish)                                  *)
 (*   RPins     (ExplicitPins) the table's tags read: user tags and pins;   *)
 (*             a version one names is excluded, unless an entry of another *)
 (*             batch names it "g" (GoOnly): no door pinned it before that  *)
@@ -135,9 +143,9 @@
 (* it with reclaims off the fence); two tags on one version; a batch of    *)
 (* more than the versions here; a branch whose own versions name its       *)
 (* fork's files (each branch version here names a file of its own, the     *)
-(* erasure's shape); a hold lifted; a reclaimer that lists its victims on   *)
-(* one incarnation of branch b and asks for its batch once the name holds  *)
-(* another (RBegin picks the ref and its versions in one step).            *)
+(* erasure's shape); a hold lifted; a table dropped and made again at its  *)
+(* location, another uuid and so another identity of main                  *)
+(* (TableLifecycle.tla's): here main's identity never changes.             *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
@@ -152,7 +160,7 @@ CONSTANTS Recl,        \* the reclaimers that may run at once (a pass, version/d
 
 Guards == {"CondemnFirst", "PinFirst", "ExplicitPins", "PolicyAfterCondemn", "HoldWritesFirst", "GoOnly", "GCOnlyGone",
            "KeepAfterDelete", "IdentityKeys", "ReleasePins", "AgeFloor", "GoUnpins", "NameGuard", "GCAfterLicence",
-           "StandsAfterGo", "CredentialDies", "ReleasePinKind", "VDeleteCondemnsFirst"}
+           "StandsAfterGo", "CredentialDies", "ReleasePinKind", "VDeleteCondemnsFirst", "ListedOn"}
 ASSUME Off \subseteq Guards
 ASSUME LanceOrder \in {"tags", "manifests", "any"} /\ PinSweep \in {"none", "dead", "any"}
 On(g) == g \notin Off
@@ -284,9 +292,20 @@ RKeep == UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, e
 \* main, the ref the fork is cut from.
 PathOf(r) == IF rref[r] = "m" \/ rkind[r] = "fork" THEN "m" ELSE "b"
 
-\* The batch: some of the ref's versions past retention that no entry names, and every standing version of the ref an
-\* entry names (a dead batch's, version/delete's, another reclaim's). The erasure's fork cleanup instead names the version
-\* branch b is cut from, once b's own history no longer names it.
+\* The reclaimer's own state set back to its rest, so states differing only in what a finished batch held are one.
+Rest(r, s) ==
+  /\ rpc' = [rpc EXCEPT ![r] = s]
+  /\ rref' = [rref EXCEPT ![r] = "m"] /\ rkind' = [rkind EXCEPT ![r] = "plain"] /\ rb' = [rb EXCEPT ![r] = {}]
+  /\ rfresh' = [rfresh EXCEPT ![r] = {}] /\ rex' = [rex EXCEPT ![r] = {}] /\ rgo' = [rgo EXCEPT ![r] = {}]
+  /\ rheld' = [rheld EXCEPT ![r] = FALSE] /\ snapT' = [snapT EXCEPT ![r] = {}] /\ snapM' = [snapM EXCEPT ![r] = {}]
+  /\ del' = [del EXCEPT ![r] = {}] /\ mdel' = [mdel EXCEPT ![r] = {}] /\ bdel' = [bdel EXCEPT ![r] = {}]
+  /\ rcred' = [rcred EXCEPT ![r] = FALSE] /\ snapI' = [snapI EXCEPT ![r] = "none"]
+
+\* The reclaimer reads the ref's identity i, then lists on a handle opened after: some of i's versions past retention that
+\* no entry names (rfresh). It asks for their NUMBERS, naming i, and the catalog chooses the batch at the condemn. One step
+\* stands for the read and the listing: a listing of a later incarnation names i all the same, and is refused there. The
+\* erasure's fork cleanup instead names the version branch b is cut from (a batch of main), once b's own history no longer
+\* names it.
 RBegin(r) ==
   /\ rpc[r] = "idle"
   /\ \/ \E i \in Refs :
@@ -294,7 +313,7 @@ RBegin(r) ==
               finish == CondemnedVs \cap OfRef(i)
           IN \E F \in SUBSET eligible :
                /\ F \cup finish # {}
-               /\ rb' = [rb EXCEPT ![r] = F \cup finish] /\ rfresh' = [rfresh EXCEPT ![r] = F]
+               /\ rb' = [rb EXCEPT ![r] = {}] /\ rfresh' = [rfresh EXCEPT ![r] = F]
                /\ rref' = [rref EXCEPT ![r] = i] /\ rkind' = [rkind EXCEPT ![r] = "plain"]
      \/ /\ ErasureFork /\ binc # "none" /\ bhead[binc] > bfork[binc] /\ MainV(bfork[binc]) \in manifests
         /\ MainV(bfork[binc]) \notin CondemnedVs
@@ -309,13 +328,26 @@ RBegin(r) ==
   /\ tomb' = {IF e.b = r THEN [e EXCEPT !.b = "old"] ELSE e : e \in tomb}
   /\ UNCHANGED <<snapT, snapM, del, mdel, bdel, snapI, pins, chosen, policy, answered, badDelete>> /\ RKeep
 
+\* The catalog resolves the ref's name now (cur): a branch's name may hold another incarnation than the one the reclaimer
+\* listed on. A name that holds none answers 404 (code 22), and one that holds another 409 (code 14, ListedOn), nothing
+\* condemned. Else the batch is the numbers asked that stand on cur below its head, and every standing version of cur an
+\* entry names. Without ListedOn the numbers listed on one incarnation are condemned on another.
 \* CondemnFirst removed: the entries are written only once the cleanup has run (the order today's marks had before §7.4).
 RCondemn(r) ==
   /\ rpc[r] = "condemn"
-  /\ tomb' = IF On("CondemnFirst") THEN tomb \cup {[k |-> Key(v), b |-> r, s |-> "c", l |-> FALSE] : v \in rb[r]} ELSE tomb
-  /\ chosen' = chosen \cup rfresh[r]
-  /\ Go(r, After("condemn"))
-  /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI, pins, policy, answered, badDelete>> /\ RKeep
+  /\ LET plain == rkind[r] = "plain"
+         cur == IF plain /\ rref[r] # "m" THEN binc ELSE rref[r]
+         asked == IF plain THEN {v \in manifests : v[1] = cur /\ v # HeadOf(cur) /\ v \notin Forks /\ \E u \in rfresh[r] : u[2] = v[2]}
+                           ELSE rfresh[r]
+         batch == asked \cup (IF plain THEN CondemnedVs \cap OfRef(cur) ELSE {})
+     IN IF cur = "none" \/ (On("ListedOn") /\ cur # rref[r]) \/ batch = {}
+          THEN Rest(r, "idle") /\ UNCHANGED <<tomb, chosen>>
+          ELSE /\ rb' = [rb EXCEPT ![r] = batch] /\ rref' = [rref EXCEPT ![r] = cur]
+               /\ tomb' = IF On("CondemnFirst") THEN tomb \cup {[k |-> Key(v), b |-> r, s |-> "c", l |-> FALSE] : v \in batch} ELSE tomb
+               /\ chosen' = chosen \cup rfresh[r]
+               /\ Go(r, After("condemn"))
+               /\ UNCHANGED <<rkind, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI>>
+  /\ UNCHANGED <<pins, policy, answered, badDelete>> /\ RKeep
 
 \* The table's tags read: a version a user tag or a pin names is excluded, unless (GoOnly) another batch's entry names it
 \* "g". Without GoOnly any other batch's entry licenses ignoring the pin.
@@ -334,15 +366,6 @@ RLevel(r, n) ==
   /\ rheld' = [rheld EXCEPT ![r] = rheld[r] \/ policy[Levels[n]] = "hold"]
   /\ Go(r, After("lvl" \o ToString(n)))
   /\ UNCHANGED <<rref, rkind, rb, rfresh, rex, rgo, snapT, snapM, del, mdel, bdel, rcred, snapI, pins, tomb, chosen, policy, answered, badDelete>> /\ RKeep
-
-\* The reclaimer's own state set back to its rest, so states differing only in what a finished batch held are one.
-Rest(r, s) ==
-  /\ rpc' = [rpc EXCEPT ![r] = s]
-  /\ rref' = [rref EXCEPT ![r] = "m"] /\ rkind' = [rkind EXCEPT ![r] = "plain"] /\ rb' = [rb EXCEPT ![r] = {}]
-  /\ rfresh' = [rfresh EXCEPT ![r] = {}] /\ rex' = [rex EXCEPT ![r] = {}] /\ rgo' = [rgo EXCEPT ![r] = {}]
-  /\ rheld' = [rheld EXCEPT ![r] = FALSE] /\ snapT' = [snapT EXCEPT ![r] = {}] /\ snapM' = [snapM EXCEPT ![r] = {}]
-  /\ del' = [del EXCEPT ![r] = {}] /\ mdel' = [mdel EXCEPT ![r] = {}] /\ bdel' = [bdel EXCEPT ![r] = {}]
-  /\ rcred' = [rcred EXCEPT ![r] = FALSE] /\ snapI' = [snapI EXCEPT ![r] = "none"]
 
 \* Promoted, each own entry carries its licence (l) until its instant. A batch of branch b then reads the branches
 \* (StandsAfterGo): one whose incarnation no longer stands under the name licenses nothing, so a name made free after its
@@ -762,6 +785,9 @@ HalfOnlyCondemned == \A v \in manifests : (Stands(v) /\ ~Whole(v)) => v \in Cond
 DeletesCondemned == ~badDelete
 \* A door refuses only a version some reclaim, version/delete or fork cleanup chose.
 RefusedOnlyChosen == ~refusedWrong
+\* A version is condemned only by a batch whose reclaimer listed it on its own incarnation (or that version/delete named,
+\* or a fork cleanup took): every entry names a version some reclaim chose, never another incarnation's of its number.
+CondemnsAsListed == \A e \in tomb : e.k \in {Key(v) : v \in chosen}
 \* Once version/delete has answered, none of its entries names a version a caller's tag names: a tag on a condemned
 \* version would hide it from version/list and keep it condemned for as long as the tag stands.
 VDeleteSparesTags == dpc["vdelete"] = "done" => \A e \in tomb : e.b = "vd" => Resolve(e.k) \notin tagged

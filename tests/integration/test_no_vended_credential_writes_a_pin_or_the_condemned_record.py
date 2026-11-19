@@ -106,13 +106,18 @@ def test_a_vended_credential_neither_plants_nor_lifts_a_pin_or_an_entry(tier: st
     assert store.get_object(Bucket=bucket, Key=pin)["Body"].read() == b'{"version": 1}', "the catalog's pin did not stand"
 
 
+@pytest.mark.skipif(os.environ.get("RASK_LIFECYCLE_WAIT_LICENCE") != "1", reason="waits a licence out, about 17 minutes: make lifecycle-rustfs-check-full")
 def test_the_store_refuses_a_maintain_session_once_the_licence_it_deletes_under_ends() -> None:
     """C, the clock a licence rests on (ADR 0246 §14): a maintain session minted as the vend door mints one (the catalog's
     maintain session policy, as long as the door's cap ``CREDENTIAL_LIFETIME``) before a batch is asked carries an expiry
     the batch's licence covers (``covers``: the expiry the store stamped, plus the clocks' margin, no later than the
-    instant a promotion after it states), and once that instant has passed the store refuses a delete signed by it. RustFS
-    issues no session shorter than 900 s (measured 2026-11-18), so this waits the licence out, once, on the lane, in the
-    background of its other tests (``scripts/lifecycle_on_rustfs_check.sh``)."""
+    instant a promotion after it states), and once that instant has passed the store refuses a delete signed by it.
+
+    The fact is the store's (it refuses an expired session); rask's part, that a credential's expiry is no later than the
+    licence, is ``covers``, which the lane's other tests and the offline suite pin. RustFS issues no session shorter than
+    900 s (measured 2026-11-18), so this waits the licence out, about 17 minutes, and runs only when asked
+    (``RASK_LIFECYCLE_WAIT_LICENCE=1``, ``make lifecycle-rustfs-check-full``); its last result is in the ``rask-rustfs``
+    skill's measured status and ADR 0246 §15."""
     root = (os.environ["RASK_LIFECYCLE_STORE_ACCESS_KEY"], os.environ["RASK_LIFECYCLE_STORE_SECRET_KEY"])
     bucket, table_uuid = f"lic-{uuid.uuid4().hex[:20]}", str(uuid.uuid4())
     vend, credentials = _vended("maintain", bucket, table_uuid, seconds=int(condemned_versions.CREDENTIAL_LIFETIME.total_seconds()))

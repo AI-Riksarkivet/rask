@@ -18,7 +18,10 @@ own batch before that batch deleted anything (a pinned version, or a hold): cond
 and the next reclaim finishes it.
 
 A RECLAIM BATCH (:class:`Batch`, at most :data:`BATCH` versions; every reclaim in the estate goes through it, a pass,
-the catalog's ``maintenance/run``, an erasure's verification and its release):
+the catalog's ``maintenance/run``, an erasure's verification and its release). A reclaimer reads its ref's identity
+(:func:`identity_of`) before it opens the handle it lists the versions it asks for on, and names it with every batch; a
+batch of a ref that is now another incarnation is refused, nothing condemned (ListedOn, :class:`ListedElsewhereError`),
+since the numbers listed on one incarnation of a branch name other versions on the next:
 
 1. :meth:`Batch.condemn` (CondemnFirst) writes the batch's entries, ``c``: the versions asked for, and every standing
    version of the ref an entry already names, which a dead batch or ``version/delete`` left;
@@ -188,6 +191,10 @@ class RefGoneError(ValueError):
     """The branch a batch names does not stand."""
 
 
+class ListedElsewhereError(Exception):
+    """The ref a batch names is another incarnation than the one its versions were listed on: retry, listing again."""
+
+
 class Verdict(BaseModel):
     """What a batch answered its reclaimer."""
 
@@ -332,6 +339,38 @@ def _refs(dataset: lance.LanceDataset) -> dict[str | None, str]:
     return {None: MAIN, **{str(name): ident for name, entry in listed.items() if (ident := branch_identity(entry)) is not None}}
 
 
+def identity_of(dataset: lance.LanceDataset, ref: str | None, *, table_uuid: str) -> str:
+    """The identity of ``ref`` as it stands now, which a reclaimer reads BEFORE it opens the handle it lists its victims on
+    and names with every batch it asks for (ListedOn): ``table_uuid`` for main, whose identity is its table's (a table
+    dropped and made again at its location, or registered there again, is another uuid), and for a branch the uuid of
+    its incarnation, from one listing of the branches through ``dataset``, a handle of the table.
+
+    Raises:
+        RefGoneError: The branch does not stand.
+    """
+    ref = recorded_branch(ref)
+    if ref is None:
+        return table_uuid
+    found = _refs(dataset).get(ref)
+    if found is None:
+        raise RefGoneError(f"branch {ref!r} not found")
+    return found
+
+
+def _require_listed_on(listed_on: str, standing: str, ref: str | None) -> None:
+    """Refuse a batch whose versions were listed on another incarnation of ``ref`` than the one standing (ListedOn):
+    Lance numbers each incarnation from its fork, so a branch deleted and made again under its name repeats numbers, and
+    the numbers listed on one would condemn the other's, versions nobody chose (``ReclaimListedElsewhere.cfg``).
+
+    Raises:
+        ListedElsewhereError: ``listed_on`` is not the identity standing.
+    """
+    if listed_on != standing:
+        raise ListedElsewhereError(
+            f"the versions were listed on {recorded_branch(ref) or MAIN} as {listed_on!r}, which now stands as {standing!r}: list them again"
+        )
+
+
 def _forks(dataset: lance.LanceDataset) -> set[tuple[str | None, int]]:
     """``(ref, version)`` of every version a standing branch is cut from, whose manifest Lance keeps for it."""
     return {
@@ -468,10 +507,28 @@ def pin_whole(control_root: str, storage_options: StorageOptions, *, table_uuid:
 
 class Batch:
     """One reclaim batch of one ref of one table, run by the catalog: :meth:`condemn`, :meth:`read_pins`, the caller's
-    read of the governing policy, then :meth:`promote`. ``dataset`` is a handle of the table's main."""
+    read of the governing policy, then :meth:`promote`. ``dataset`` is a handle of the table's main.
+
+    ``listed_on`` is the identity of the ref its reclaimer read before it opened the handle it listed the versions asked
+    on (:func:`identity_of`). The ref's identity is read here, as the one its entries are keyed by, and the batch is
+    refused where it is another (ListedOn): the reclaimer listed one incarnation and its numbers would condemn the
+    versions of another.
+
+    Raises:
+        RefGoneError: The branch does not stand.
+        ListedElsewhereError: ``listed_on`` is not the ref's identity now.
+    """
 
     def __init__(
-        self, control_root: str, storage_options: StorageOptions, *, table_uuid: str, location: str, dataset: lance.LanceDataset, ref: str | None
+        self,
+        control_root: str,
+        storage_options: StorageOptions,
+        *,
+        table_uuid: str,
+        location: str,
+        dataset: lance.LanceDataset,
+        ref: str | None,
+        listed_on: str,
     ) -> None:
         self._root, self._options, self._uuid, self._location, self._dataset = control_root, storage_options, table_uuid, location, dataset
         self._ref = recorded_branch(ref)
@@ -483,6 +540,7 @@ class Batch:
         identity = _refs(dataset).get(self._ref)
         if identity is None:
             raise RefGoneError(f"branch {self._ref!r} not found")
+        _require_listed_on(listed_on, table_uuid if self._ref is None else identity, self._ref)
         self._identity = identity
 
     def condemn(self, versions: Iterable[int], *, forks: bool = False) -> None:
@@ -599,11 +657,14 @@ def condemn_named(
     location: str,
     dataset: lance.LanceDataset,
     ref: str | None,
+    listed_on: str,
     versions: Sequence[int],
     refuse_pinned: Callable[[list[int]], None],
 ) -> list[int]:
     """``version/delete``: condemn ``versions`` of ``ref`` that stand below its head, under a batch id of its own; the
     versions condemned. Nothing is deleted: the next reclaim of the ref finishes them unless a hold keeps them.
+    ``listed_on`` is the ref's identity as the door read it before it opened the handle it judged the request on, and
+    the delete is refused where the ref is now another (ListedOn), as a batch is.
 
     In a batch's order (VDeleteCondemnsFirst, ``ReclaimVDeleteReadsFirst.cfg``): the entries are written, THEN
     ``refuse_pinned`` reads the tags, the pins and the branches cut from the ref and raises where one names a version
@@ -612,6 +673,7 @@ def condemn_named(
 
     Raises:
         RefGoneError: The branch does not stand.
+        ListedElsewhereError: ``listed_on`` is not the ref's identity now.
         OSError: The store did not answer, or the record does not parse.
         records.RecordChangedError: Every attempt lost to another writer.
         Exception: Whatever ``refuse_pinned`` raises; nothing stays condemned.
@@ -620,6 +682,7 @@ def condemn_named(
     found = _refs(dataset).get(ref)
     if found is None:
         raise RefGoneError(f"branch {ref!r} not found")
+    _require_listed_on(listed_on, table_uuid if ref is None else found, ref)
     identity: str = found
     stands = _versions_of(dataset, ref)
     head = max(stands, default=0)

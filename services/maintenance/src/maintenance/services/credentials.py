@@ -557,22 +557,29 @@ def disarm_cleanup(table_id: str, settings: MaintenanceSettings, *, branch: str 
     return _parsed(_answered(settings, door), Disarmed, asked_for=door.asked_for)
 
 
-def condemn(table_id: str, settings: MaintenanceSettings, versions: list[int], *, branch: str | None) -> Verdict:
+def condemn(table_id: str, settings: MaintenanceSettings, versions: list[int], *, branch: str | None, listed_on: str) -> Verdict:
     """Have the catalog run one reclaim batch of the ref ``branch`` (``None`` = main) of ``table_id`` (ADR 0246): ``versions``
     condemned with whatever a dead batch or ``version/delete`` left on the ref, the pins and the governing policy read, and
     the versions the pass may delete under its vend answered. Only the catalog writes a table's condemned versions; the
-    vend reaches nothing on the control root.
+    vend reaches nothing on the control root. ``listed_on`` is the ref's identity as the pass read it before it opened the
+    handle it listed ``versions`` on; a ref that is now another incarnation is refused (409 code 14, ListedOn).
 
     Raises:
         VendingNotDirect: No catalog door is configured.
         MaintenanceDenied: The door refused: this identity holds no can_vend_maintain on the table (403), or the table
-            changed since the door resolved it (409).
+            changed since the door resolved it, or the ref is another incarnation than ``listed_on`` (409, code 14):
+            the dataset is parked, and its table asked about again after ``retry_seconds``, listing afresh.
         TableNotGoverned: The catalog names the table absent.
         VendUndecided: The door could not be asked or decided nothing: the store did not answer, or the record kept
-            changing (503, 409 code 14); the next pass asks again.
+            changing (503); the next pass asks again.
     """
     door = _maintainer_door(
-        table_id, settings, act="condemn", answer="a reclaim batch", params={"branch": branch} if branch else {}, body={"versions": versions}
+        table_id,
+        settings,
+        act="condemn",
+        answer="a reclaim batch",
+        params={"branch": branch} if branch else {},
+        body={"listed_on": listed_on, "versions": versions},
     )
     return _parsed(_answered(settings, door), Verdict, asked_for=door.asked_for)
 

@@ -373,7 +373,9 @@ def test_a_release_pins_where_its_branches_come_back_before_its_first_delete(tmp
         main = lance.dataset(location)
 
         def _batch(versions: list[int]) -> condemned_versions.Verdict:
-            run = condemned_versions.Batch(str(tmp_path / "control"), StorageOptions(), table_uuid=table_uuid, location=location, dataset=main, ref=None)
+            run = condemned_versions.Batch(
+                str(tmp_path / "control"), StorageOptions(), table_uuid=table_uuid, location=location, dataset=main, ref=None, listed_on=table_uuid
+            )
             run.condemn(versions)
             run.read_pins()
             return run.promote(None)

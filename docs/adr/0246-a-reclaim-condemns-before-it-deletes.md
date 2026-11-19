@@ -6,7 +6,9 @@ built to protect a reclaim's deletes, which is deleted (§13). `specs/maintenanc
 overturn (§9).** §1 to §12 are the step that checked the design before the code; §13 says what the code changed in it
 and what was measured after; §14 says what an independent review of that code found and how each finding was fixed,
 model first: a licence to delete ends at a stated instant, since Lance deletes by number under a branch's name, so the
-clock §4 called gone is back for branches (assumption C). It carries a second open question for the owner (§14, V7, Q5).
+clock §4 called gone is back for branches (assumption C). It carries a second open question for the owner (§14, V7, Q5). §15 fixes
+the defect §14 found and left (a batch is asked for one incarnation of its ref, ListedOn), and records what the model gate
+and the RustFS lane cost and how they were brought within what a person can wait for.
 
 ## Context
 
@@ -553,11 +555,9 @@ too.
   removal.
 - **A reclaim of a branch deleted while it ran answered 500** (found here): Lance's cleanup through the stale handle
   answers `Ref not found error`; it answers 404 code 22 now, nothing more deleted.
-- **Found and NOT fixed, for the owner**: a reclaimer that lists a branch's victims on one incarnation and asks for its
-  batch once the name holds another has the batch condemn and delete the new incarnation's versions of those numbers
-  (each condemned first, so no door names them and no hold is broken, but versions younger than the retention go). The
-  model's `RBegin` picks the ref and its versions in one step, so it does not show it. The fix is the reclaimer naming the
-  incarnation it listed (read before its handle is opened) with each batch, and the batch refusing another.
+- **Found here, fixed in §15 (ListedOn)**: a reclaimer that lists a branch's victims on one incarnation and asks for its
+  batch once the name holds another had the batch condemn and delete the new incarnation's versions of those numbers
+  (each condemned first, so no door named them and no hold was broken, but versions younger than the retention went).
 
 **The guarantees, each reversed** (`tests/integration/test_a_reclaim_condemns_before_it_deletes.py` unless named; moto on
 every row, the pinned RustFS 1.0.3 of `make lifecycle-rustfs-check` on the store-arbitrated rows; the reversal applied to
@@ -648,6 +648,150 @@ The on-demand configs (`ReclaimWide`, `ReclaimTwoWide`, `ReclaimTwoFaults`, `Rec
 
 The 21 requests are the listing, the ten reads and the ten claim reads that name each table; every request passes the counting proxy, which costs about 45 ms a request on this host shared with other agents, so the times compare the two layouts and are no measure of the store. A table with no reclaim in flight costs the door nothing.
 
+### 15. A batch is asked for one incarnation of its ref; the model gate and the lane cost what a person can wait for (2026-11-18)
+
+**ListedOn: the defect §14 left, found and fixed.** A reclaimer listed a branch's victims on one incarnation and asked
+for its batch by the branch's NAME; the catalog resolved the name at the condemn, so once the branch was deleted and made
+again under it (Lance numbers each incarnation from its fork, so the numbers repeat) the batch condemned, licensed and
+deleted the new incarnation's versions of the numbers listed: no door named them (condemned first) and no hold was broken,
+but versions younger than the retention went. The same holds for main, whose identity is the table's: a registered
+table deregistered and registered again at its location is another uuid under another policy, and a pass of the first
+deleted the second's versions by number. Reproduced first, on moto, by the test below with the check removed (branch:
+`b` held `[5]` of `[3, 4, 5]`; main: `[3]` of `[1, 2, 3]`).
+
+- **The model first** (`Reclaim.tla`): `RBegin` reads the ref's identity and lists that incarnation's versions past
+  retention (one step: a listing of a later incarnation names the earlier identity all the same and is refused); the
+  batch asks for NUMBERS naming that identity, and `RCondemn` resolves the ref's name at the condemn and chooses the
+  standing versions of those numbers there. The guard `ListedOn` refuses the batch where the name holds another identity,
+  nothing condemned. A new invariant, `CondemnsAsListed` (every entry names a version some reclaim chose, `version/delete`
+  named or a fork cleanup took), is checked by every holding gate config. `ReclaimListedElsewhere.cfg` (ListedOn removed)
+  fails it in 11 steps: the reclaim lists `b1`'s version 2, `b` is deleted and made again (`b2`) and written twice, and
+  the batch condemns `b2`'s version 2, which never aged; with `DeletesCondemned` in its place the same config fails that
+  too (7,486 states), the retention's loss. Every other must-fail config still fails as before.
+- **The guard**: a reclaimer reads its ref's identity (`condemned_versions.identity_of`: the table's uuid for main, the
+  uuid Lance lists last in a branch's `branch_identifier` for a branch) BEFORE it opens the handle it lists its victims
+  on, and names it with every batch; `condemned_versions.Batch` reads the ref's identity, the one its entries are keyed by,
+  and raises `ListedElsewhereError` where it is another (`_require_listed_on`), as `condemn_named` (`version/delete`)
+  does. Every caller: a pass (`table_pass._identity`, read before the pass's handle opens; the `listed_on` field of
+  `maintenance/condemn`'s `CondemnRequest`), `maintenance/run` (`reclaims.in_process` reads it before the door opens the
+  ref), an erasure's verification and its release (`reclaims.erasure_reclaims`, asked for in `erasure.reclaim_refs`
+  before `_head` opens the ref), and `version/delete` (read before its handle opens).
+- **What a caller sees**: 409 ConcurrentModification (code 14), nothing condemned, retryable after listing again. A pass
+  is parked (`vend_denied`) and asked about again after `retry_seconds`; `maintenance/run` and `version/delete` answer
+  the 409; an erasure's `history:<ref>` surface fails naming it, and its next tick tries again.
+- **The test**: `tests/integration/test_a_reclaim_condemns_before_it_deletes.py::test_a_batch_names_the_incarnation_its_versions_were_listed_on`
+  (branch, main): the real pass held as it asks the real catalog for its batch; branch `b` deleted, made again under
+  its name and written to the same numbers (or the table deregistered and registered again at its location); let go.
+  With the check: 409 code 14, nothing of the new incarnation deleted, and the next pass reclaims it by its own listing.
+  With the check removed: 2 of 2 fail on moto and 2 of 2 on the pinned RustFS 1.0.3 (the pass deletes `b`'s 3 and 4, or
+  the registered table's 1 and 2).
+
+**The model gate's cost.** `make tla-check` took 2,275 s (38 min) on this machine (four cores shared with other agents,
+two TLC workers, the gate run beside this change's own tests for part of it), 27 gate configs over 25 s, the largest
+`ReclaimBranchesTag` at 249 s. The owner's rule: small constants, a gate a person can wait for, about 12 minutes in all
+and no gate config over about 30 s. Every config over the bound was narrowed while its property is still exercised, and
+its wide form kept `ON DEMAND`:
+
+- a config with liveness properties, whose check over the behaviour graph cost ten to twenty times its safety check, was
+  split in two: the safety config at the full constants (every invariant) and a `<Name>Liveness.cfg` with one failure
+  fewer (or one caller fewer), the original kept as `<Name>Full.cfg`, on demand;
+- a Reclaim config dropped a fault, a door or Lance's either-order read for the measured tags-first order where an
+  existing `Wide` config, on demand, already covers the wide form, or kept a new `Wide` copy;
+- the one must-fail config narrowed, `CommitPathFinishPassed.cfg` (38 s → 3 s, `Mix` lane → overwrite), still fails
+  `EveryFileSealed` for its stated reason: its trace is the append's writer dying after its version landed and before it
+  sealed, `ReconcileFails`, then `ReconcileFinish` moving the mark past it, then stuttering.
+
+After: **810 s (13.5 min), no gate config over 20 s.** About 1.5 minutes over the bound: what is left is the cost of 233
+small configs (the median 2 s, most of it TLC's own start), and the next cut would check liveness with no failure at all
+(`ErasureLiveness`, `CondemnedErasureLiveness`, the `TableLifecycle*Liveness` configs, 6 to 18 s each), which this change
+did not take. `scripts/tla_check.sh` now prints each config's states and seconds and takes `TLC_TIMEOUT`, a limit per
+config past which it is reported not finished, never as holding. The table of every config is `specs/README.md`; the
+configs this change touched:
+
+| Config | Before: states, seconds | After: run, states, seconds |
+| --- | --- | --- |
+| `catalog/CommitPathFinishPassed.cfg` | 385,359, 38 s | gate, 12,041, 2 s |
+| `catalog/CommitPathGap.cfg` | 440,234, 58 s | gate, 440,234, 10 s |
+| `catalog/CommitPathGapFull.cfg` | 440,234, 58 s (as `catalog/CommitPathGap.cfg`) | on demand, 440,234, 78 s |
+| `catalog/CommitPathGapLiveness.cfg` | (new) | gate, 108,153, 12 s |
+| `catalog/CommitPathLane.cfg` | 392,280, 41 s | gate, 392,280, 7 s |
+| `catalog/CommitPathLaneLiveness.cfg` | (new) | gate, 95,104, 9 s |
+| `catalog/CondemnedErasure.cfg` | 76,065, 96 s | gate, 76,065, 4 s |
+| `catalog/CondemnedErasureFull.cfg` | 76,065, 96 s (as `catalog/CondemnedErasure.cfg`) | on demand, 76,065, 79 s |
+| `catalog/CondemnedErasureLiveness.cfg` | (new) | gate, 21,048, 18 s |
+| `catalog/CondemnedErasureRefsInTheGrace.cfg` | 195,397, 80 s | gate, 195,397, 7 s |
+| `catalog/CondemnedErasureRefsInTheGraceFull.cfg` | 195,397, 80 s (as `catalog/CondemnedErasureRefsInTheGrace.cfg`) | on demand, 195,397, 81 s |
+| `catalog/CondemnedErasureRefsInTheGraceLiveness.cfg` | (new) | gate, 18,036, 7 s |
+| `catalog/Erasure.cfg` | 65,124, 76 s | gate, 65,124, 4 s |
+| `catalog/ErasureConcurrent.cfg` | 122,841, 63 s | gate, 122,841, 4 s |
+| `catalog/ErasureConcurrentFull.cfg` | 122,841, 63 s (as `catalog/ErasureConcurrent.cfg`) | on demand, 122,841, 69 s |
+| `catalog/ErasureConcurrentLiveness.cfg` | (new) | gate, 21,286, 9 s |
+| `catalog/ErasureFull.cfg` | 65,124, 76 s (as `catalog/Erasure.cfg`) | on demand, 65,124, 101 s |
+| `catalog/ErasureLiveness.cfg` | (new) | gate, 19,179, 17 s |
+| `catalog/ErasureRefsInTheGrace.cfg` | 159,837, 69 s | gate, 159,837, 5 s |
+| `catalog/ErasureRefsInTheGraceFull.cfg` | 159,837, 69 s (as `catalog/ErasureRefsInTheGrace.cfg`) | on demand, 159,837, 60 s |
+| `catalog/ErasureRefsInTheGraceLiveness.cfg` | (new) | gate, 17,080, 6 s |
+| `catalog/GrantsChild.cfg` | 143,976, 101 s | on demand, 143,976, 57 s |
+| `catalog/GrantsChildLiveness.cfg` | (new) | gate, 10,004, 6 s |
+| `catalog/GrantsChildSafety.cfg` | (new) | gate, 143,976, 4 s |
+| `catalog/GrantsDeclared.cfg` | 1,397,283, 39 s | gate, 55,604, 3 s |
+| `catalog/GrantsDeclaredFull.cfg` | 1,397,283, 39 s (as `catalog/GrantsDeclared.cfg`) | on demand, 1,397,283, 27 s |
+| `catalog/TableLifecycle.cfg` | 243,416, 61 s | gate, 243,416, 7 s |
+| `catalog/TableLifecycleCascade.cfg` | 234,291, 60 s | gate, 234,291, 7 s |
+| `catalog/TableLifecycleCascadeFull.cfg` | 234,291, 60 s (as `catalog/TableLifecycleCascade.cfg`) | on demand, 234,291, 34 s |
+| `catalog/TableLifecycleCascadeLiveness.cfg` | (new) | gate, 94,893, 15 s |
+| `catalog/TableLifecycleCreate.cfg` | 167,698, 39 s | gate, 167,698, 5 s |
+| `catalog/TableLifecycleCreateFull.cfg` | 167,698, 39 s (as `catalog/TableLifecycleCreate.cfg`) | on demand, 167,698, 23 s |
+| `catalog/TableLifecycleCreateLiveness.cfg` | (new) | gate, 61,232, 10 s |
+| `catalog/TableLifecycleFull.cfg` | 243,416, 61 s (as `catalog/TableLifecycle.cfg`) | on demand, 243,416, 41 s |
+| `catalog/TableLifecycleLiveness.cfg` | (new) | gate, 101,648, 16 s |
+| `catalog/TableLifecycleUndrop.cfg` | 234,695, 41 s | gate, 234,695, 8 s |
+| `catalog/TableLifecycleUndropFull.cfg` | 234,695, 41 s (as `catalog/TableLifecycleUndrop.cfg`) | on demand, 234,695, 34 s |
+| `catalog/TableLifecycleUndropLiveness.cfg` | (new) | gate, 103,269, 17 s |
+| `maintenance/Reclaim.cfg` | 149,943, 9 s | gate, 149,943, 5 s |
+| `maintenance/ReclaimBranches.cfg` | 1,660,468, 75 s | gate, 289,358, 8 s |
+| `maintenance/ReclaimBranchesTag.cfg` | 5,943,373, 249 s | gate, 59,687, 3 s |
+| `maintenance/ReclaimBranchesWide.cfg` | on demand, not run | on demand, not run |
+| `maintenance/ReclaimFork.cfg` | 1,131,849, 40 s | gate, 232,014, 7 s |
+| `maintenance/ReclaimForkWide.cfg` | on demand, not run | on demand, not run |
+| `maintenance/ReclaimListedElsewhere.cfg` | 1,508, 1 s | gate, 938, 1 s |
+| `maintenance/ReclaimLive.cfg` | 194,202, 40 s | gate, 3,899, 3 s |
+| `maintenance/ReclaimLiveRestore.cfg` | (new) | gate, 58,101, 8 s |
+| `maintenance/ReclaimLiveWide.cfg` | 194,202, 40 s (as `maintenance/ReclaimLive.cfg`) | on demand, not run |
+| `maintenance/ReclaimPolicies.cfg` | 168,224, 6 s | gate, 168,224, 6 s |
+| `maintenance/ReclaimRelease.cfg` | 4,859,836, 136 s | gate, 89,301, 3 s |
+| `maintenance/ReclaimReleaseWide.cfg` | 4,859,836, 136 s (as `maintenance/ReclaimRelease.cfg`) | on demand, not run |
+| `maintenance/ReclaimReleaseWriter.cfg` | (new) | gate, 368,101, 12 s |
+| `maintenance/ReclaimSweep.cfg` | 207,462, 7 s | gate, 207,462, 6 s |
+| `maintenance/ReclaimTwo.cfg` | 499,299, 16 s | gate, 426,270, 12 s |
+| `maintenance/ReclaimTwoFaults.cfg` | on demand, not run | on demand, 3,550,974, 206 s |
+| `maintenance/ReclaimTwoRefs.cfg` | 2,003,599, 80 s | gate, 429,952, 15 s |
+| `maintenance/ReclaimTwoRefsWide.cfg` | 2,003,599, 80 s (as `maintenance/ReclaimTwoRefs.cfg`) | on demand, not run |
+| `maintenance/ReclaimTwoWide.cfg` | on demand, not run | on demand, 11,699,903, 495 s |
+| `maintenance/ReclaimWide.cfg` | on demand, not run | on demand, not run |
+| `maintenance/ReclaimWriter.cfg` | 137,345, 5 s | gate, 137,345, 4 s |
+| `maintenance/WorkQueueLive.cfg` | 81,845, 31 s | gate, 9,640, 6 s |
+
+`make tla-check-full` (`TLC_TIMEOUT=30m`), once, beside the lane's slow case and this change's tests: stopped before it reached
+every on-demand config. Every on-demand config it ran holds, among them each `Full` form this change made
+(`CommitPathGapFull`, `CondemnedErasureFull`, `CondemnedErasureRefsInTheGraceFull`, `ErasureFull`,
+`ErasureConcurrentFull`, `ErasureRefsInTheGraceFull`, `GrantsChild`, `GrantsDeclaredFull`, the four
+`TableLifecycle*Full`), `ReclaimTwoFaults` and `ReclaimTwoWide`. Two did not finish within 30 minutes (`ErasureWide`,
+`GrantsChildTwice`, neither touched here), and eight were not run: `ReclaimBranchesWide`, `ReclaimForkWide`,
+`ReclaimLiveWide`, `ReclaimReleaseWide`, `ReclaimTwoRefsWide`, `ReclaimWide`, `WorkQueueLiveWide`, `WorkQueueWide`.
+So the Reclaim model with ListedOn is shown to hold in its gate configs, not yet in its wide forms.
+
+**The lane's wait.** `make lifecycle-rustfs-check` ran `test_the_store_refuses_a_maintain_session_once_the_licence_it_deletes_under_ends`
+in its background, which waits a licence out (17 minutes: RustFS 1.0.3 issues no session shorter than 900 s), so the
+lane took about 17 minutes where its other groups take about 6. The fact under test is the store's (it refuses an
+expired session's delete); rask's part, that a credential's expiry is no later than the licence (`covers`), is pinned by
+`test_a_pass_deletes_only_under_a_vend_the_store_refuses_by_its_licences_end` and
+`test_a_maintain_vend_dies_by_the_licence_of_a_batch_asked_after_it`. The slow case now runs only when asked
+(`RASK_LIFECYCLE_WAIT_LICENCE=1`, `make lifecycle-rustfs-check-full`; the test skips without it). Measured 2026-11-18 on
+RustFS 1.0.3: the default lane 348 s, all passed; the full lane 1,082 s, the slow case 1 of 1 passed in 1,061 s.
+
+**Net tests**: +2 collected (the ListedOn test's branch and main cases on moto; two more on the lane), none removed.
+
 ## The four facts
 
 - **GitOps**: met; no new chart value.
@@ -665,8 +809,8 @@ The 21 requests are the listing, the ten reads and the ten claim reads that name
 Staged manifests and committed-file records; a drop,
 undrop and purge; the erasure's scheduling and notices beyond `CondemnedErasure.tla`'s overrides; the release taking a
 dead door's pin on a residual; two tags on one version; a branch whose own versions name its fork's files; a hold lifted;
-batches larger than the model's versions; Q2; a reclaimer that lists its victims on one incarnation of a branch and asks
-for its batch once the name holds another (§14, found and not fixed).
+batches larger than the model's versions; Q2; main's identity changing (a table registered again at its location is
+another uuid, §15: checked by the code and its test, and here main's identity never changes).
 
 ## Appendix: the measurement scripts
 

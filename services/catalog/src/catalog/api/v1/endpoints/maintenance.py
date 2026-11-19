@@ -116,14 +116,16 @@ async def run_maintenance(
     the store refuses once the licence ends (``reclaims.minter``; on a key pair, the residual ADR 0246 §14 states). A hold
     at any level that can govern the table answers 409 InvalidTableState (19),
     nothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions
-    condemned for the next reclaim."""
-    ds = await run_in_threadpool(partial(table.open, so, branch=branch))
+    condemned for the next reclaim. The ref's identity is read before the handle its victims are listed on is opened, and
+    a branch deleted and made again under its name meanwhile answers 409 ConcurrentModification (14), nothing condemned
+    (ListedOn)."""
     main = await run_in_threadpool(partial(table.open_unchecked, so))
+    governance = reclaims.Governance.of(table, settings.registry_root, settings.storage_options())
+    reclaim = await run_in_threadpool(partial(reclaims.in_process, governance, settings, main, ref=branch))
+    ds = await run_in_threadpool(partial(table.open, so, branch=branch))
 
     def _reclaim() -> maintenance.GcRunData:
         # [[LH-232]] Each transaction file the cleanup removes is recorded; Lance records the rest itself.
-        governance = reclaims.Governance.of(table, settings.registry_root, settings.storage_options())
-        reclaim = reclaims.in_process(governance, settings, main, ref=branch, handle=ds)
         with stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, branch), so):
             return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch, reclaim=reclaim)
 
@@ -143,11 +145,21 @@ async def condemn_versions(
     versions asked condemned with whatever a dead batch or ``version/delete`` left condemned on the ref, the table's tags
     and pins read, the governing policy read level by level, the entries promoted, and the answer names the versions the
     reclaimer may delete now. The maintenance identity's rung (``can_vend_maintain``): the maintain vend already deletes
-    anything in the table, and this licenses only what no ref door may name."""
+    anything in the table, and this licenses only what no ref door may name. A ref that is now another incarnation than
+    the one ``listed_on`` names answers 409 ConcurrentModification (14), nothing condemned (ListedOn)."""
     main = await run_in_threadpool(partial(table.open_unchecked, so))
     governance = reclaims.Governance.of(table, settings.registry_root, settings.storage_options())
     verdict = await run_in_threadpool(
-        partial(reclaims.batch, governance, settings.registry_root, settings.storage_options(), main, ref=branch, versions=body.versions)
+        partial(
+            reclaims.batch,
+            governance,
+            settings.registry_root,
+            settings.storage_options(),
+            main,
+            ref=branch,
+            listed_on=body.listed_on,
+            versions=body.versions,
+        )
     )
     return CondemnedBatch.model_validate(verdict.model_dump())
 

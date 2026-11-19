@@ -3184,6 +3184,12 @@
         "additionalProperties": false,
         "description": "One reclaim batch a reclaimer asks of the catalog (ADR 0246): the versions past their retention it would delete,\nat most a batch of them; none to finish only what a dead batch or ``version/delete`` left condemned.",
         "properties": {
+          "listed_on": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Listed On",
+            "type": "string"
+          },
           "versions": {
             "items": {
               "type": "integer"
@@ -3193,6 +3199,9 @@
             "type": "array"
           }
         },
+        "required": [
+          "listed_on"
+        ],
         "title": "CondemnRequest",
         "type": "object"
       },
@@ -19750,7 +19759,7 @@
     },
     "/management/v1/table/{id}/maintenance/condemn": {
       "post": {
-        "description": "One reclaim batch, run by the catalog for a reclaimer that deletes under its own maintain-tier vend (ADR 0246): the\nversions asked condemned with whatever a dead batch or ``version/delete`` left condemned on the ref, the table's tags\nand pins read, the governing policy read level by level, the entries promoted, and the answer names the versions the\nreclaimer may delete now. The maintenance identity's rung (``can_vend_maintain``): the maintain vend already deletes\nanything in the table, and this licenses only what no ref door may name.",
+        "description": "One reclaim batch, run by the catalog for a reclaimer that deletes under its own maintain-tier vend (ADR 0246): the\nversions asked condemned with whatever a dead batch or ``version/delete`` left condemned on the ref, the table's tags\nand pins read, the governing policy read level by level, the entries promoted, and the answer names the versions the\nreclaimer may delete now. The maintenance identity's rung (``can_vend_maintain``): the maintain vend already deletes\nanything in the table, and this licenses only what no ref door may name. A ref that is now another incarnation than\nthe one ``listed_on`` names answers 409 ConcurrentModification (14), nothing condemned (ListedOn).",
         "operationId": "condemn_versions_management_v1_table__id__maintenance_condemn_post",
         "parameters": [
           {
@@ -20098,7 +20107,7 @@
     },
     "/management/v1/table/{id}/maintenance/run": {
       "post": {
-        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.\n\nTHROUGH THE ONE RECLAIM A PASS GOES THROUGH (ADR 0246, ``catalog.services.reclaims``): each batch of 16 versions\ncondemned, its pins read, the governing policy read along the table's chain as it stands then, its entries promoted,\nand only what that licenses deleted, under a maintain session the catalog minted for the batch before asking it, which\nthe store refuses once the licence ends (``reclaims.minter``; on a key pair, the residual ADR 0246 \u00a714 states). A hold\nat any level that can govern the table answers 409 InvalidTableState (19),\nnothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions\ncondemned for the next reclaim.",
+        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.\n\nTHROUGH THE ONE RECLAIM A PASS GOES THROUGH (ADR 0246, ``catalog.services.reclaims``): each batch of 16 versions\ncondemned, its pins read, the governing policy read along the table's chain as it stands then, its entries promoted,\nand only what that licenses deleted, under a maintain session the catalog minted for the batch before asking it, which\nthe store refuses once the licence ends (``reclaims.minter``; on a key pair, the residual ADR 0246 \u00a714 states). A hold\nat any level that can govern the table answers 409 InvalidTableState (19),\nnothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions\ncondemned for the next reclaim. The ref's identity is read before the handle its victims are listed on is opened, and\na branch deleted and made again under its name meanwhile answers 409 ConcurrentModification (14), nothing condemned\n(ListedOn).",
         "operationId": "run_maintenance_management_v1_table__id__maintenance_run_post",
         "parameters": [
           {

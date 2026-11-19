@@ -146,7 +146,9 @@ def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) 
     source_files = sorted(p.name for p in (tmp_path / "src.lance" / "data").iterdir())
 
     def condemn(versions: list[int]) -> condemned_versions.Verdict:
-        run = condemned_versions.Batch(str(tmp_path / "control"), StorageOptions(), table_uuid="clone", location=clone, dataset=lance.dataset(clone), ref=None)
+        run = condemned_versions.Batch(
+            str(tmp_path / "control"), StorageOptions(), table_uuid="clone", location=clone, dataset=lance.dataset(clone), ref=None, listed_on="clone"
+        )
         run.condemn(versions)
         run.read_pins()
         return run.promote(None)

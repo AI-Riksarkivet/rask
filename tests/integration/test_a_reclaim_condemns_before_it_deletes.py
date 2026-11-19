@@ -273,14 +273,17 @@ class _Running:
 
 
 class _Pause:
-    """The first call of ``owner.name`` held, before or after it runs: ``reached`` once it got there, ``let_go`` to go on."""
+    """The first call of ``owner.name`` (that ``when`` takes) held, before or after it runs: ``reached`` once it got there,
+    ``let_go`` to go on."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, owner: object, name: str, *, after: bool) -> None:
+    def __init__(
+        self, monkeypatch: pytest.MonkeyPatch, owner: object, name: str, *, after: bool, when: Callable[..., bool] = lambda *_args, **_kwargs: True
+    ) -> None:
         self.reached, self._let_go, self._taken = threading.Event(), threading.Event(), threading.Lock()
         original = getattr(owner, name)
 
         def _held(*args: object, **kwargs: object) -> object:
-            first = self._taken.acquire(blocking=False)
+            first = when(*args, **kwargs) and self._taken.acquire(blocking=False)
             if first and not after:
                 self._wait()
             answer = original(*args, **kwargs)
@@ -629,13 +632,18 @@ def test_an_erasures_fork_point_stays_condemned_while_a_branch_keeps_it(estate: 
     so = settings.storage_options()
     main = lance.dataset(estate.task.location, storage_options=so.in_clear())
 
-    def _condemn(ref: str | None, handle: Any) -> condemned_versions.RefReclaim:  # noqa: ANN401 — a lance.LanceDataset of the ref
+    def _condemn(ref: str | None) -> condemned_versions.RefReclaim:
+        listed_on = condemned_versions.identity_of(main, ref, table_uuid=estate.task.uuid)
+
         def _batch(versions: list[int]) -> condemned_versions.Verdict:
-            run = condemned_versions.Batch(settings.registry_root, so, table_uuid=estate.task.uuid, location=estate.task.location, dataset=main, ref=ref)
+            run = condemned_versions.Batch(
+                settings.registry_root, so, table_uuid=estate.task.uuid, location=estate.task.location, dataset=main, ref=ref, listed_on=listed_on
+            )
             run.condemn(versions, forks=True)
             run.read_pins()
             return run.promote(None)
 
+        handle = main if ref is None else main.checkout_version((ref, None))
         return condemned_versions.RefReclaim(condemn=_batch, mint=lambda: condemned_versions.Credential(dataset=handle, expires_at=None))
 
     report = ErasureReport(table=T, predicate="id = 4")
@@ -787,6 +795,65 @@ def test_a_branch_made_again_under_its_name_loses_nothing_to_a_reclaim_of_the_on
     assert estate.reads(("b", 4)) == [100], "b made again does not read whole"
 
 
+def _registered(estate: _Estate) -> _Estate:
+    """The estate's table ``r`` instead: written at ``reg`` with three versions (ids [1], [2], [3]), registered there under a
+    policy keeping one. A location of the writer's own, so it may be deregistered and registered again, another uuid."""
+    location, written = f"s3://{estate.bucket}/reg", estate.store.options().in_clear()
+    lance.write_dataset(pa.table({"id": pa.array([1], pa.int64())}), location, storage_options=written, data_storage_version="2.2", enable_stable_row_ids=True)
+    for n in (2, 3):
+        lance.write_dataset(pa.table({"id": pa.array([n], pa.int64())}), location, mode="overwrite", storage_options=written)
+    _ok(estate.catalog.post(f"/v1/table/{NS}$r/register", json={"location": "reg"}))
+    _ok(estate.catalog.post(f"/management/v1/table/{NS}$r/policy/set", json={"retain_versions": 1}))
+    described = _ok(estate.catalog.post(f"/v1/table/{NS}$r/describe", json={}))
+    return estate.model_copy(update={"task": TableTask(uuid=described["properties"]["rask.uuid"], location=described["location"])})
+
+
+@pytest.mark.parametrize("ref", ["branch", "main"])
+def test_a_batch_names_the_incarnation_its_versions_were_listed_on(estate: _Estate, monkeypatch: pytest.MonkeyPatch, ref: str) -> None:
+    """ListedOn (ADR 0246 §15): a pass reads its ref's identity, opens the ref and lists the versions past retention, and
+    is held as it asks for its batch. The ref is then made again: branch ``b`` (3 to 7, of which a retention of two lists
+    3, 4 and 5) deleted and made again under its name from main 3 and written twice, so the new incarnation holds 3, 4
+    and 5 again and keeps 4 and 5; or a registered table deregistered and registered again at its location, another uuid
+    under no policy of its own, which keeps every version a week. Let go, the batch is refused (409, code 14) and nothing
+    of the ref made again is deleted; the next pass reclaims the new branch by its own listing. A batch that took the
+    numbers on whichever incarnation stands at its condemn deletes ``b``'s 4, which its retention keeps, or main's 1
+    and 2."""
+    from maintenance.services import credentials
+
+    table = T
+    if ref == "branch":
+        estate.passed()
+        _ok(estate.catalog.post(f"/management/v1/table/{T}/policy/set", json={"retain_versions": 2}))
+        _ok(estate.catalog.post(f"/v1/table/{T}/branches/create", json={"name": "b", "from_version": 3}))
+        estate.written(4, branch="b")
+    else:
+        estate, table = _registered(estate), f"{NS}$r"
+    on = "b" if ref == "branch" else None
+    asked = _Pause(monkeypatch, credentials, "condemn", after=False, when=lambda *_args, branch, **_kwargs: branch == on)
+    passing = _Running(estate.passed)
+    assert asked.reached.wait(WAIT), "the pass never asked for a batch"
+    if ref == "branch":
+        _ok(estate.catalog.post(f"/v1/table/{T}/branches/delete", json={"name": "b"}))
+        _ok(estate.catalog.post(f"/v1/table/{T}/branches/create", json={"name": "b", "from_version": 3}))
+        estate.written(2, branch="b")
+    else:
+        _ok(estate.catalog.post(f"/v1/table/{table}/deregister", json={}))
+        _ok(estate.catalog.post(f"/v1/table/{table}/register", json={"location": "reg"}))
+    asked.let_go()
+    passed = passing.joined()
+
+    if ref == "main":
+        assert (estate.versions(), estate.reads(1)) == ([1, 2, 3], [1]), "the pass deleted versions of the table registered again"
+    else:
+        assert (estate.versions("b"), estate.reads(("b", 4))) == ([3, 4, 5], [100]), "the pass deleted versions of b made again"
+    refused = [result.refused or "" for result in passed.results if result.uri.endswith("/tree/b") == (ref == "branch")]
+    assert any("(409, code 14)" in reason and "listed on" in reason for reason in refused), refused
+    if ref == "main":
+        return
+    estate.passed()
+    assert estate.versions("b") == [4, 5], "the next pass did not reclaim b made again by its own listing"
+
+
 def test_a_pass_deletes_only_under_a_vend_the_store_refuses_by_its_licences_end(estate: _Estate) -> None:
     """C (ADR 0246 §14): a batch's licence ends at its instant, after which its name may mean another incarnation, so a
     pass deletes a batch's versions only under a vend whose stamped expiry, the clocks' margin added, is no later
@@ -828,7 +895,9 @@ def test_a_maintain_vend_dies_by_the_licence_of_a_batch_asked_after_it(estate: _
 
     estate.catalog.app.dependency_overrides[get_vendor] = lambda: _Vendor()
     vended = _ok(estate.catalog.post(f"/management/v1/table/{T}/credentials?tier=maintain"))
-    verdict = condemned_versions.Verdict.model_validate(_ok(estate.catalog.post(f"/management/v1/table/{T}/maintenance/condemn", json={"versions": [1]})))
+    verdict = condemned_versions.Verdict.model_validate(
+        _ok(estate.catalog.post(f"/management/v1/table/{T}/maintenance/condemn", json={"listed_on": estate.task.uuid, "versions": [1]}))
+    )
     expires = datetime.fromtimestamp(vended["credentials"]["expires_at_millis"] / 1000, UTC)
 
     assert verdict.versions == [1] and condemned_versions.covers(verdict, condemned_versions.Credential(dataset=None, expires_at=expires)), (
@@ -927,7 +996,7 @@ def test_only_another_batchs_go_entry_licenses_ignoring_a_pin(estate: _Estate, m
     answers = _Running(lambda: _ref_door(estate, "tag", 1))
     assert door_read.reached.wait(WAIT), "the door never read the record"
     first = _Pause(monkeypatch, condemned_versions.Batch, "condemn", after=True)
-    passing = _Running(lambda: estate.catalog.post(f"/management/v1/table/{T}/maintenance/condemn", json={"versions": [1]}))
+    passing = _Running(lambda: estate.catalog.post(f"/management/v1/table/{T}/maintenance/condemn", json={"listed_on": estate.task.uuid, "versions": [1]}))
     assert first.reached.wait(WAIT), "the first batch never condemned"
     with estate.proxy.holding(_a_manifest_delete) as held:
         second = _Running(lambda: estate.catalog.post(f"/management/v1/table/{T}/maintenance/run", json={"retain_versions": 1}))

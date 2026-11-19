@@ -647,6 +647,9 @@ def reclaim_refs(
             # and that writer's commit then lands a head that cannot be read (measured on pylance 12.0.0;
             # `lance_docs/lance/guide/read_and_write.md` Cleanup: "Any concurrent write may have its files deleted out from
             # under it, leaving the dataset corrupted").
+            # Asked for before the ref's handle is opened, so the batches name the incarnation its victims are listed on
+            # (ListedOn, ADR 0246).
+            reclaim = condemn(ref)
             handle = _head(dataset, ref)
             if (refused := describe_gc_unsupported_flags(*manifest_feature_flags(handle))) is not None:
                 log.warning("erasure_cleanup_refused", extra={"table": report.table, "ref": _label(ref), "reason": refused})
@@ -654,7 +657,7 @@ def reclaim_refs(
                 continue
             victims = sorted({*condemned_versions.victims(cast("Any", handle), older_than=retention, retain_versions=None), *_fork_points(handle, ref)})
             with stored_objects.recording_removed_transactions(branch_layout.ref_root(dataset.uri, ref), storage_options):
-                done = condemned_versions.reclaim(victims, condemn(ref, handle))
+                done = condemned_versions.reclaim(victims, reclaim)
             if done.held_by is not None:
                 report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"held: {done.held_by} keeps the whole history. Not reclaimed."))
                 continue
@@ -1269,10 +1272,11 @@ def _depth(name: str, forks: Mapping[str, _Reference | None]) -> int:
 #: because a bare version number means "on the handle's branch".
 type _Reference = tuple[str | None, int]
 
-#: For each ref and its handle, how its reclaim asks the catalog for each batch and mints the credential each batch deletes
-#: under (``catalog.services.reclaims.erasure_reclaims``, ADR 0246): the versions it asks for condemned, a version a branch
-#: is cut from among them, then the pins read; no maintenance hold read.
-type Condemner = Callable[[str | None, Any], RefReclaim]
+#: For each ref, how its reclaim asks the catalog for each batch and mints the credential each batch deletes under
+#: (``catalog.services.reclaims.erasure_reclaims``, ADR 0246), asked for before the ref's handle is opened, since it reads
+#: the ref's identity every batch names: the versions it asks for condemned, a version a branch is cut from among them,
+#: then the pins read; no maintenance hold read.
+type Condemner = Callable[[str | None], RefReclaim]
 
 
 def _fork_points(handle: Any, ref: str | None) -> set[int]:  # noqa: ANN401 — a pylance handle of the ref

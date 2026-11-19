@@ -427,8 +427,13 @@ async def batch_delete_table_versions(
 
 
 def _delete_versions(table: DoorTable, so: StorageOptions, body: BatchDeleteTableVersionsRequest, *, settings: Settings) -> BatchDeleteTableVersionsResponse:
-    ds = table.open_unchecked(so, branch=body.branch)
     main = table.open_unchecked(so)
+    # The ref's identity, read before the handle the request is judged on is opened (ListedOn, ADR 0246).
+    try:
+        listed_on = condemned_versions.identity_of(main, body.branch, table_uuid=table.resolved.require_uuid())
+    except condemned_versions.RefGoneError as exc:
+        raise TableBranchNotFoundError(str(exc)) from exc
+    ds = table.open_unchecked(so, branch=body.branch)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
 
     def condemn(versions: list[int]) -> list[int]:
@@ -440,11 +445,14 @@ def _delete_versions(table: DoorTable, so: StorageOptions, body: BatchDeleteTabl
                 location=table.location,
                 dataset=main,
                 ref=body.branch,
+                listed_on=listed_on,
                 versions=versions,
                 refuse_pinned=partial(maintenance.refuse_pinned_versions, ds, body.branch),
             )
         except condemned_versions.RefGoneError as exc:
             raise TableBranchNotFoundError(str(exc)) from exc
+        except condemned_versions.ListedElsewhereError as exc:
+            raise ConcurrentModificationError(f"{exc}; nothing was condemned") from exc
         except records.RecordChangedError as exc:
             raise ConcurrentModificationError(f"the table's condemned versions kept changing; nothing was condemned, retry: {exc}") from exc
         except OSError as exc:

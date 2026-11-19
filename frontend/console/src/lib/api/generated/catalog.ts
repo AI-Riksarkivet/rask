@@ -2180,7 +2180,8 @@ export interface paths {
          *     versions asked condemned with whatever a dead batch or ``version/delete`` left condemned on the ref, the table's tags
          *     and pins read, the governing policy read level by level, the entries promoted, and the answer names the versions the
          *     reclaimer may delete now. The maintenance identity's rung (``can_vend_maintain``): the maintain vend already deletes
-         *     anything in the table, and this licenses only what no ref door may name.
+         *     anything in the table, and this licenses only what no ref door may name. A ref that is now another incarnation than
+         *     the one ``listed_on`` names answers 409 ConcurrentModification (14), nothing condemned (ListedOn).
          */
         post: operations["condemn_versions_management_v1_table__id__maintenance_condemn_post"];
         delete?: never;
@@ -2296,7 +2297,9 @@ export interface paths {
          *     the store refuses once the licence ends (``reclaims.minter``; on a key pair, the residual ADR 0246 §14 states). A hold
          *     at any level that can govern the table answers 409 InvalidTableState (19),
          *     nothing deleted, and a run the store refused a delete of 503 ServiceUnavailable, naming how many, its versions
-         *     condemned for the next reclaim.
+         *     condemned for the next reclaim. The ref's identity is read before the handle its victims are listed on is opened, and
+         *     a branch deleted and made again under its name meanwhile answers 409 ConcurrentModification (14), nothing condemned
+         *     (ListedOn).
          */
         post: operations["run_maintenance_management_v1_table__id__maintenance_run_post"];
         delete?: never;
@@ -5917,6 +5920,8 @@ export interface components {
          *     at most a batch of them; none to finish only what a dead batch or ``version/delete`` left condemned.
          */
         CondemnRequest: {
+            /** Listed On */
+            listed_on: string;
             /** Versions */
             versions?: number[];
         };

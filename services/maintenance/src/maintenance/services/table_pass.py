@@ -405,13 +405,17 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     """
     table = named.table
     options = settings.storage_options()
+    ref = _branch_of(uri, table, readings=readings)
+    try:
+        listed_on = _identity(uri, ref, table_uuid=named.owners.table_uuid, options=options)
+    except Exception as exc:  # noqa: BLE001 — a ref that cannot be named is this dataset's failure, retried next pass
+        return DatasetResult(uri=uri, table_id=table, error=f"refs: {exc}"[:600], error_type=type(exc).__name__)
     policy = _expiry_policy(uri, plan, settings=settings, opened=opened)
     directories = _data_directories(uri, uuid=named.owners.table_uuid, readings=readings, settings=settings, options=options, opened=opened)
     now = readings.context.now
-    ref = _branch_of(uri, table, readings=readings)
     recorded = partial(condemned_versions.recorded, settings.resolved_control_root, options, named.owners.table_uuid)
     probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now, opened=opened, recorded=recorded)
-    condemn = partial(credentials.condemn, table, settings, branch=ref)
+    condemn = partial(credentials.condemn, table, settings, branch=ref, listed_on=listed_on)
     target = ExpiryTarget(uri=uri, storage_options=options, table_id=table, data_directories=directories, now=now, ref=ref, victims=probe.victims)
     first: Verdict | None = None
     if probe.asks:
@@ -435,6 +439,22 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
         "control_root": settings.resolved_control_root,
     }
     return _condemned_reported(disarm.onto(expire_versions(target.model_copy(update=held), policy)), named.owners.table_uuid, ref)
+
+
+def _identity(uri: str, ref: str | None, *, table_uuid: str, options: StorageOptions) -> str:
+    """The identity of the ref ``uri`` is, read BEFORE the pass opens the handle it lists the ref's victims on, and named
+    with every batch it asks for (ListedOn, ADR 0246): the table's uuid for main; for a branch, its incarnation, from one
+    open of the table and one listing of its branches. A branch deleted and made again under its name after this read is
+    another incarnation, whose numbers the pass's listing does not name, and the catalog refuses its batch.
+
+    Raises:
+        lakehouse.condemned_versions.RefGoneError: The branch does not stand.
+        Exception: The table could not be opened or its branches read.
+    """
+    if ref is None:
+        return table_uuid
+    table = lance.dataset(uri.removesuffix(f"/{BRANCH_CONTAINER}/{ref}"), storage_options=options.in_clear(), session=shared_lance_session())
+    return condemned_versions.identity_of(table, ref, table_uuid=table_uuid)
 
 
 def _condemned_reported(result: DatasetResult, table_uuid: str, ref: str | None) -> DatasetResult:

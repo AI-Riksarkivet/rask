@@ -468,6 +468,10 @@ class CondemnRequest(RequestBody):
     """One reclaim batch a reclaimer asks of the catalog (ADR 0246): the versions past their retention it would delete,
     at most a batch of them; none to finish only what a dead batch or ``version/delete`` left condemned."""
 
+    #: The identity of the ref the reclaimer listed ``versions`` on, read before it opened the handle it listed them on:
+    #: the table's uuid for main, the uuid Lance lists last in a branch's ``branch_identifier`` for a branch. A ref that is
+    #: now another incarnation is refused (409, code 14): its numbers name other versions.
+    listed_on: str = Field(min_length=1, max_length=128)
     versions: list[int] = Field(default_factory=list, max_length=16)
 
 

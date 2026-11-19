@@ -198,9 +198,14 @@ tla-check-full:
 
 # The table lifecycle's and the cascade's race tests (ADR 0227) with the catalog's root and control root on a real S3
 # store's conditional writes: the pinned RustFS, run as a process (scripts/rustfs_server.sh), no container.
-.PHONY: lifecycle-rustfs-check
+.PHONY: lifecycle-rustfs-check lifecycle-rustfs-check-full
 lifecycle-rustfs-check:
 	bash scripts/lifecycle_on_rustfs_check.sh
+
+# The same lane with its one slow case: the store refusing a maintain session once its licence ends (ADR 0246 §14), which
+# waits the licence out, about 17 minutes.
+lifecycle-rustfs-check-full:
+	RASK_LIFECYCLE_WAIT_LICENCE=1 bash scripts/lifecycle_on_rustfs_check.sh
 
 # ---- the console image -----------------------------------------------------
 # The console is one static single-page app served by its own `serve.ts` (.docker/frontend.dockerfile). The build goes

@@ -1019,8 +1019,11 @@ governing their data. The project-scoped surface is the console's project page, 
   reads. An entry is dropped only once its manifest is gone or its ref no longer stands, or by its own batch before it
   deleted anything. (2) **Every reclaim goes through ONE batch function** (`condemned_versions.Batch` +
   `condemned_versions.reclaim`; a pass through the catalog door `maintenance/condemn`, rung `can_vend_maintain`, the
-  catalog's `maintenance/run`, an erasure's verification and release in process, `catalog.services.reclaims`): at most
-  16 versions (`BATCH`) condemned with whatever a dead batch or `version/delete` left on the ref, the table's tags and
+  catalog's `maintenance/run`, an erasure's verification and release in process, `catalog.services.reclaims`): the
+  reclaimer reads its ref's identity (`condemned_versions.identity_of`: the table's uuid for main, the branch's
+  incarnation) BEFORE it opens the handle it lists its victims on and names it with every batch (`listed_on`), and a
+  batch of a ref that is now another incarnation is refused 409 code 14, nothing condemned (ListedOn,
+  `ReclaimListedElsewhere.cfg`); then at most 16 versions (`BATCH`) condemned with whatever a dead batch or `version/delete` left on the ref, the table's tags and
   pins read (a version one names is excluded unless ANOTHER batch's entry names it `g`; a pin older than
   `PIN_LIFETIME`, a day, is swept as a dead door's), the governing policy read level by level on the chain the table's
   claim names THEN (`reclaims.Governance.held_by`; a hold at any level keeps everything, a record that cannot be read
@@ -1486,7 +1489,9 @@ governing their data. The project-scoped surface is the console's project page, 
 - **A reclaim condemns before it deletes, and a ref door pins before it reads** (ADR 0246, `specs/maintenance/Reclaim.tla`,
   `lakehouse.condemned_versions`, `catalog.services.reclaims`). No reclaim takes the history fence. Every reclaim (a
   pass through `maintenance/condemn`, `maintenance/run`, an erasure's verification and its release) asks the catalog for
-  each batch of at most 16 versions: it condemns them in the table's record (`_condemned/table-<digest>.json`, one per
+  each batch of at most 16 versions, naming the identity of the ref it listed them on, read before it opened the handle it
+  listed on (ListedOn: a ref that is now another incarnation is refused 409 code 14, nothing condemned): it condemns them
+  in the table's record (`_condemned/table-<digest>.json`, one per
   table, standing only while it has entries: its last entry's rewrite deletes it under the ETag read), reads the tags and
   pins, reads the governing policy level by level (an erasure's batch reads none: which of an erasure and a hold wins is
   the owner's open question, §14 of the ADR), promotes its entries `g` with `licensed_until` (`LICENCE`, 17 minutes,

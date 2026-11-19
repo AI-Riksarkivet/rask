@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import httpx
 import lance
@@ -34,18 +34,25 @@ from tests.integration.test_the_store_refuses_a_put_over_a_committed_file import
 TABLE_ID = ["lance_catalog", "clocks", "t"]
 
 
-def unheld(control_root: str, table_uuid: str, uri: str) -> Callable[[str | None, Any], condemned_versions.RefReclaim]:
+def unheld(control_root: str, table_uuid: str, uri: str) -> Callable[[str | None], condemned_versions.RefReclaim]:
     """Each ref's reclaim batches as the catalog runs them for an erasure (``catalog.services.reclaims``), each deleted
     through the ref's own handle."""
 
-    def of(ref: str | None, handle: Any) -> condemned_versions.RefReclaim:  # noqa: ANN401 — a lance.LanceDataset of the ref
+    def of(ref: str | None) -> condemned_versions.RefReclaim:
+        listed_on = condemned_versions.identity_of(lance.dataset(uri), ref, table_uuid=table_uuid)
+
         def batch(versions: list[int]) -> condemned_versions.Verdict:
-            run = condemned_versions.Batch(control_root, StorageOptions(), table_uuid=table_uuid, location=uri, dataset=lance.dataset(uri), ref=ref)
+            main = lance.dataset(uri)
+            run = condemned_versions.Batch(control_root, StorageOptions(), table_uuid=table_uuid, location=uri, dataset=main, ref=ref, listed_on=listed_on)
             run.condemn(versions, forks=True)
             run.read_pins()
             return run.promote(None)
 
-        return condemned_versions.RefReclaim(condemn=batch, mint=lambda: condemned_versions.Credential(dataset=handle, expires_at=None))
+        def mint() -> condemned_versions.Credential:
+            main = lance.dataset(uri)
+            return condemned_versions.Credential(dataset=main if ref is None else main.checkout_version((ref, None)), expires_at=None)
+
+        return condemned_versions.RefReclaim(condemn=batch, mint=mint)
 
     return of
 

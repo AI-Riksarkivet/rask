@@ -336,7 +336,9 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
         """The pass's target with the catalog's batches (ADR 0246), its record on a control root of the test's own."""
 
         def condemn(versions: list[int]) -> Verdict:
-            run = condemned_versions.Batch(str(tmp_path / "control"), StorageOptions(), table_uuid=uri, location=uri, dataset=lance.dataset(uri), ref=None)
+            run = condemned_versions.Batch(
+                str(tmp_path / "control"), StorageOptions(), table_uuid=uri, location=uri, dataset=lance.dataset(uri), ref=None, listed_on=uri
+            )
             run.condemn(versions)
             run.read_pins()
             return run.promote(None)
