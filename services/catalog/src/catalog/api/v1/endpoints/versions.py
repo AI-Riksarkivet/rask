@@ -405,11 +405,12 @@ async def batch_delete_table_versions(
     branch pins.
 
     The spec's operation (``lance_docs/ns_catalog/spec.yaml``, BatchDeleteTableVersions: "deletes version tracking
-    records, NOT the actual table data"): each version named is CONDEMNED (ADR 0246), which ``version/list`` leaves out
-    and every tag, branch, restore and clone door refuses (409, code 19) from this answer on, and nothing is deleted
-    here; the next reclaim of the ref (a maintenance pass, ``maintenance/run``) deletes its files, unless a hold at a level
-    that can govern the table keeps them, which lifting is a separate, audited act at a policy door. ``deleted_count`` is
-    how many records it condemned.
+    records, NOT the actual table data"): each version named is CONDEMNED as its owner's (ADR 0246), which
+    ``version/list`` leaves out and every tag, branch, restore and clone door refuses (409, code 19) from this answer on,
+    whatever reclaim runs beside it, until its files are gone; nothing is deleted here. The next reclaim of the ref (a
+    maintenance pass, ``maintenance/run``) deletes its files, unless a hold at a level that can govern the table keeps
+    them, which lifting is a separate, audited act at a policy door. ``deleted_count`` is how many versions this call
+    marked deleted; one an earlier ``version/delete`` already marked is not counted again.
 
     ``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for "through the latest". A range
     that reaches the current version is refused (400), the spec's ``{0, -1}`` included: Lance commits by

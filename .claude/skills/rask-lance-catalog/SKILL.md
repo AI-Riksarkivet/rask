@@ -1048,9 +1048,12 @@ governing their data. The project-scoped surface is the console's project page, 
   it, and it ends only with the bytes (`condemned_versions.end`: a destructive drop, a namespace cascade's destroy, a
   warehouse purge's detach, the trash's end with `bytes_gone`). Each entry names a version by its ref's IDENTITY (main: a
   number at the location, whoever registered it; a branch: one incarnation's uuid, `version_retention.branch_identity`),
-  the batch holding it and its state, `c` condemned or `g` past a batch's pin and policy reads; at most ONE entry per
-  version (TakeOver: a batch condemning a version an entry names takes it over). An entry is dropped only once its
-  manifest is gone or its ref no longer stands, or by the batch holding it before anything was deleted under it.
+  its state, `c` condemned or `g` past a batch's pin and policy reads, and WHO condemns it (ADR 0246 §17): its `owner`,
+  the `version/delete` call that marked it, and its `claims`, the live batches that condemned it, each lapsing `CLAIM`
+  (10 minutes) after its condemn; at most ONE entry per version (TakeOver: a batch condemning a version an entry names
+  adds its claim there). An entry is dropped once its manifest is gone or its ref no longer stands, and a `c` one once
+  no one condemns it (no owner, no claim left: every rewrite drops lapsed claims and such entries). An owner's mark is
+  final while the manifest stands.
   (2) **Every reclaim goes through ONE batch function** (`condemned_versions.Batch` +
   `condemned_versions.reclaim`; a pass through the catalog door `maintenance/condemn`, rung `can_vend_maintain`, the
   catalog's `maintenance/run`, an erasure's verification and release in process, `catalog.services.reclaims`): the
@@ -1062,11 +1065,12 @@ governing their data. The project-scoped surface is the console's project page, 
   pins read (a version one names is excluded unless an entry names it `g`; a pin older than
   `PIN_LIFETIME`, a day, is swept as a dead door's), the governing policy read level by level on the chain the table's
   claim names THEN (`reclaims.Governance.held_by`; a hold at any level keeps everything, a record that cannot be read
-  too; an erasure's batch reads no hold), then one conditional write under the take-over rule (`Batch.promote`): a `c`
-  entry it still holds is set `g` with the licence's instant `licensed_until` (`LICENCE`, 17 minutes), or removed where
-  its version is excluded or, under a hold, where the batch wrote it; a `c` entry another batch took over since is left
-  to that batch; a `g` entry is never set back or removed, and is taken over with the later of its instant and the
-  batch's; the batch deletes exactly what this write set `g`. It then deletes the pins on another batch's `g` versions;
+  too; an erasure's batch reads no hold), then one conditional write under the rule of ADR 0246 §17's table
+  (`Batch.promote`), on the entries it still claims and no other: held, or the version excluded, it WITHDRAWS (its own
+  claim removed, the entry gone only if no one condemns it any more, so an owner's mark and another batch's claim stand);
+  else the entry is set `g`, or re-licensed, with the later of its `licensed_until` and the batch's (`LICENCE`, 17
+  minutes), the claim spent; a `g` entry is never set back or removed; the batch deletes exactly what this write set or
+  re-licensed `g`. It then deletes the pins on another batch's `g` versions;
   a branch's batch then reads the branches and licenses nothing where its incarnation went. The
   reclaimer runs `cleanup_old_versions(versions=..., error_if_tagged_old_versions=False)` on what it licensed, under a
   credential minted before it asked whose stamped expiry plus `CLOCK_MARGIN` is no later than `licensed_until`
@@ -1080,14 +1084,18 @@ governing their data. The project-scoped surface is the console's project page, 
   pin): tag create and update, branch create, restore, a clone's source tag (`clone_sources.take`,
   `CloneSourceGoneError`), and the erasure release's recreate points (its own `rask-release-<32 hex>` pins, which no sweep
   takes). The tag doors refuse the `rask-` prefix from callers and hide such tags from their listing. (4)
-  **`version/delete` only condemns** (the spec's "deletes version tracking records, NOT the actual table data"), then
-  reads the tags and pins and takes back what one names; `version/list` leaves condemned versions out; the next reclaim
+  **`version/delete` only condemns**, as the version's owner (the spec's "deletes version tracking records, NOT the actual
+  table data"): its mark on the entry already there or a new one, `deleted_count` the marks this call set; then it reads
+  the tags and pins and takes back the marks it set where one names a version; `version/list` leaves condemned versions out; the next reclaim
   finishes them unless a hold keeps them. (5) **A policy door (set or delete, at the table, a namespace, the project)
   writes, then reads the records standing (a table's record stands only while it has entries), and answers 200 at once**
   naming in `condemned` at most 100 versions already condemned of the tables it governs (each with its
   `branch_identifier`), which its promise does not reach, counting the rest in `condemned_beyond` and naming a record it
-  could not read in `condemned_unread`; a rename answers at once and promises nothing. The history fence keeps four kinds
-  (REFS, BRANCH, SCHEDULE, RELEASE) for the erasure; no reclaim takes it. The pass asks the catalog for a batch when its
+  could not read in `condemned_unread`; a rename and a register answer the same three fields beside the spec's, read
+  after they land (`schemas.RenamedTable`, `schemas.RegisteredTable`), since a hold over where they put the table does
+  not keep what a batch already past its policy read deletes. The history fence keeps four kinds (REFS, BRANCH,
+  SCHEDULE, RELEASE) for the erasure and a fifth, DETACH, which a deregister holds alone (it ends the fence, keyed by the
+  uuid): a deregister beside any of them answers 409 code 14; no reclaim takes it. The pass asks the catalog for a batch when its
   victims meet the threshold, when the table's record stands (one listing under its own session), or when a dead door's
   pin waits; `maintenance.reclaims.condemned` gauges the versions left condemned, and
   `MaintenanceCondemnedVersionsStanding` warns past a day. A maintain-tier credential is vended for at most
@@ -1519,11 +1527,11 @@ governing their data. The project-scoped surface is the console's project page, 
 - **`version/delete` condemns, and deletes nothing** (the spec's `BatchDeleteTableVersions` "deletes version tracking
   records, NOT the actual table data"; ADR 0246, `maintenance.delete_versions`, `condemned_versions.condemn_named`).
   The door refuses any range that reaches the current version (400; ranges are end-exclusive) and judges every range
-  first; then, in a batch's order, it writes the versions no entry names yet into the table's condemned record under a
-  batch id of its own (one an entry already names stays as it is, one entry per version; `deleted_count` counts those
-  it wrote),
-  THEN reads the tags, the pins and the branches cut from the ref, and where one names a version it takes its entries
-  back and answers 409 naming it (a pin as "a request in flight"); a version a registered clone reads is refused like any
+  first; then, in a batch's order, it sets its OWNER mark (a call id of its own) on each version named, on the entry
+  already naming it (a batch beside it may be condemning it) or a new one, one entry per version; `deleted_count`
+  counts the marks this call set, and no batch's hold or exclusion removes an owner's mark (ADR 0246 §17),
+  THEN reads the tags, the pins and the branches cut from the ref, and where one names a version it takes back the marks
+  it set and answers 409 naming it (a pin as "a request in flight"); a version a registered clone reads is refused like any
   tagged one (ADR 0198 §1). Condemned, a version leaves `version/list`, every ref door refuses it (409, code 19), and the
   ref's next reclaim finishes it unless a hold keeps it (`ReclaimVDeleteReadsFirst.cfg` fails the other order).
 - **A reclaim condemns before it deletes, and a ref door pins before it reads** (ADR 0246, `specs/maintenance/Reclaim.tla`,

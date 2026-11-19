@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
+from lance_namespace import RegisterTableResponse, RenameTableResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from catalog.services.changes import ChangeKind
@@ -509,6 +510,17 @@ class CondemnedBeneath(BaseModel):
     condemned: list[CondemnedVersion] = Field(default_factory=list)
     condemned_beyond: int = 0
     condemned_unread: list[str] = Field(default_factory=list)
+
+
+class RenamedTable(RenameTableResponse, CondemnedBeneath):
+    """The spec's ``RenameTableResponse``, with the versions of the table already condemned, read after the rename landed
+    (ADR 0246 §17): a rename into a namespace under a hold binds every batch that reads the policy after it, and a batch
+    past its policy read finishes the versions named here. A stock client reads the spec's fields and ignores these."""
+
+
+class RegisteredTable(RegisterTableResponse, CondemnedBeneath):
+    """The spec's ``RegisterTableResponse``, with the versions at the location already condemned, read after the
+    registration landed (ADR 0246 §17): what a hold governing the new name keeps does not include them."""
 
 
 class CleanupDisarmed(BaseModel):

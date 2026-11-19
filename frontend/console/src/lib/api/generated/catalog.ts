@@ -4392,11 +4392,12 @@ export interface paths {
          *     branch pins.
          *
          *     The spec's operation (``lance_docs/ns_catalog/spec.yaml``, BatchDeleteTableVersions: "deletes version tracking
-         *     records, NOT the actual table data"): each version named is CONDEMNED (ADR 0246), which ``version/list`` leaves out
-         *     and every tag, branch, restore and clone door refuses (409, code 19) from this answer on, and nothing is deleted
-         *     here; the next reclaim of the ref (a maintenance pass, ``maintenance/run``) deletes its files, unless a hold at a level
-         *     that can govern the table keeps them, which lifting is a separate, audited act at a policy door. ``deleted_count`` is
-         *     how many records it condemned.
+         *     records, NOT the actual table data"): each version named is CONDEMNED as its owner's (ADR 0246), which
+         *     ``version/list`` leaves out and every tag, branch, restore and clone door refuses (409, code 19) from this answer on,
+         *     whatever reclaim runs beside it, until its files are gone; nothing is deleted here. The next reclaim of the ref (a
+         *     maintenance pass, ``maintenance/run``) deletes its files, unless a hold at a level that can govern the table keeps
+         *     them, which lifting is a separate, audited act at a policy door. ``deleted_count`` is how many versions this call
+         *     marked deleted; one an earlier ``version/delete`` already marked is not counted again.
          *
          *     ``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for "through the latest". A range
          *     that reaches the current version is refused (400), the spec's ``{0, -1}`` included: Lance commits by
@@ -9385,6 +9386,43 @@ export interface components {
             transaction_id?: string | null;
         };
         /**
+         * RegisteredTable
+         * @description The spec's ``RegisterTableResponse``, with the versions at the location already condemned, read after the
+         *     registration landed (ADR 0246 §17): what a hold governing the new name keeps does not include them.
+         */
+        RegisteredTable: {
+            /** Condemned */
+            condemned?: components["schemas"]["CondemnedVersion"][];
+            /**
+             * Condemned Beyond
+             * @default 0
+             */
+            condemned_beyond?: number;
+            /** Condemned Unread */
+            condemned_unread?: string[];
+            /**
+             * Context
+             * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
+             */
+            context?: {
+                [key: string]: string;
+            } | null;
+            /** Location */
+            location?: string | null;
+            /**
+             * Properties
+             * @description If the implementation does not support table properties, it should return null for this field. Otherwise, it should return the properties.
+             */
+            properties?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Transaction Id
+             * @description Optional transaction identifier
+             */
+            transaction_id?: string | null;
+        };
+        /**
          * RelationGrants
          * @description One ``can_*`` action and every user subject holding it (``"*"`` = a public wildcard grant).
          */
@@ -9437,10 +9475,21 @@ export interface components {
             new_table_name: string;
         };
         /**
-         * RenameTableResponse
-         * @description RenameTableResponse
+         * RenamedTable
+         * @description The spec's ``RenameTableResponse``, with the versions of the table already condemned, read after the rename landed
+         *     (ADR 0246 §17): a rename into a namespace under a hold binds every batch that reads the policy after it, and a batch
+         *     past its policy read finishes the versions named here. A stock client reads the spec's fields and ignores these.
          */
-        RenameTableResponse: {
+        RenamedTable: {
+            /** Condemned */
+            condemned?: components["schemas"]["CondemnedVersion"][];
+            /**
+             * Condemned Beyond
+             * @default 0
+             */
+            condemned_beyond?: number;
+            /** Condemned Unread */
+            condemned_unread?: string[];
             /**
              * Context
              * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
@@ -18134,7 +18183,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RegisterTableResponse"];
+                    "application/json": components["schemas"]["RegisteredTable"];
                 };
             };
             /** @description Bad Request */
@@ -18237,7 +18286,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RenameTableResponse"];
+                    "application/json": components["schemas"]["RenamedTable"];
                 };
             };
             /** @description Bad Request */

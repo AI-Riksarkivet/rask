@@ -36,7 +36,6 @@ from lance_namespace import (
     RegisterTableRequest,
     RegisterTableResponse,
     RenameTableRequest,
-    RenameTableResponse,
     RestoreTableRequest,
     RestoreTableResponse,
     TableAlreadyExistsError,
@@ -96,11 +95,11 @@ from catalog.core.vending import (
     unsanctioned_bases,
     vend_or_refuse,
 )
-from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import clone_endings, commit_reconcile, dataplane, native, table_bases, table_claims, trash_doors, warehouses
+from catalog.schemas import ProtectionResponse, RegisteredTable, RenamedTable, SetProtectionRequest, TrashEntry
+from catalog.services import clone_endings, commit_reconcile, dataplane, native, reclaims, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from lakehouse import base_registry, condemned_versions, location_claims, object_records, protection, trash
+from lakehouse import base_registry, condemned_versions, history_fences, location_claims, object_records, protection, trash
 from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent, ControlAction
@@ -1083,10 +1082,10 @@ async def deregister_table(
     detached = _marker(announcer, token, gone, segments, operation=DEREGISTER_TABLE, uuids=known)
     detached_event = _table_event(token, gone, action="table_deregistered", table_uuid=table_uuid, name=canonical, extra={}, named_by=known)
     async with announcer.announcing(door="deregister_table", target=fga.table_object(table_uuid), announcements=[detached, detached_event]) as filing:
+        # The table leaves governance, so what was kept for it under its uuid goes, ended by the detach under the
+        # table's history fence. Its condemned versions are its bytes', which stay: the next registration at the
+        # location reads them (ADR 0246 §16).
         response = await _detach(ns, settings, table, segments=segments)
-        # The table leaves governance, so what was kept for it under its uuid goes. Its condemned versions are its
-        # bytes', which stay: the next registration at the location reads them (ADR 0246 §16).
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
         # Record the detach as lineage — asymmetric with drop (which deletes data), deregister only detaches, so without
         # this marker the feed reads it as a still-live, never-touched table. Versionless (no data was written), sent
         # BEFORE the revoke: on the http transport the caller's bearer authorizes ingest against their (still-live) write
@@ -1103,12 +1102,60 @@ async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, 
 
     The door acts on the table its name resolved to, under the fence that holds the claim it read (ADR 0173 §7,
     [[LH-521]]): a rename landing since answers this deregister 409, as one landing after the fence answers itself.
+
+    An identified table is detached under its history fence held alone (``HistoryWork.DETACH``, ADR 0246 §17), and the
+    records kept under its uuid, that fence among them, are ended under it: the fence is keyed by the uuid, so a detach
+    beside an erasure's release or a ref write would end that work's hold, and a registration made again at the location
+    would take a fence of its own that excludes nothing of it. Such a detach answers 409 (code 14), nothing detached.
     """
     canonical = fga.canonical_object_id(segments)
     claims = table_claims.claim_store(settings)
     fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="deregister"))
+    history = (
+        None
+        if table.uuid is None
+        else history_fences.TableHistory(control_root=settings.registry_root, storage_options=settings.storage_options(), table_uuid=table.uuid)
+    )
+    try:
+        hold = None if history is None else await run_in_threadpool(history.taking, history_fences.HistoryWork.DETACH)
+    except history_fences.HistoryFencedError as exc:
+        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        raise ConcurrentModificationError(f"{exc}; the table was not deregistered, retry once that work is done") from exc
+    try:
+        return await _detach_fenced(
+            ns,
+            settings,
+            table,
+            claims,
+            fenced,
+            segments=segments,
+            held=None if history is None or hold is None else Hold(history, hold.token, history_fences.HistoryWork.DETACH),
+        )
+    finally:
+        if history is not None and hold is not None:
+            await run_in_threadpool(history.release, hold.token)
+
+
+async def _detach_fenced(
+    ns: LanceNamespace,
+    settings: Settings,
+    table: ResolvedTable,
+    claims: location_claims.ClaimStore,
+    fenced: table_claims.DoorFence,
+    *,
+    segments: list[str],
+    held: Hold | None,
+) -> DeregisterTableResponse:
+    """:func:`_detach` once its fences are held: ``held`` the table's history fence, confirmed right before the row goes,
+    so a detach that stalled past its hold detaches nothing once other work may hold it."""
+    canonical = fga.canonical_object_id(segments)
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     try:
+        if held is not None:
+            try:
+                await run_in_threadpool(held.confirm)
+            except history_fences.HistoryFencedError as exc:
+                raise ConcurrentModificationError(f"{exc}; the table was not deregistered") from exc
         # A clone's ending is filed before its row goes (ADR 0198 §1), so a tag release that fails below is finished by
         # maintenance's audit rather than left for good: the row it would be re-issued against is gone by then. One filed
         # before a failed native call stays too: a describe cannot tell whether the row the failure followed is still the
@@ -1136,6 +1183,8 @@ async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, 
     await run_in_threadpool(location_claims.release, claims, fenced.location, canonical)
     if ending is not None:
         await run_in_threadpool(clone_endings.clear_ending, claims, ending)
+    if held is not None:
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table.require_uuid())
     return response
 
 
@@ -1240,7 +1289,7 @@ async def register_table(
     uuids: ObjectUuidsDep,
     announcer: AnnouncerDep,
     resolver: ResolverDep,
-) -> RegisterTableResponse:
+) -> RegisteredTable:
     """Register an existing table location at ``id`` via ``register_table``, refuse it when the location
     overlaps the control root, a configured base or another table, when the dataset there carries reader
     flag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, and emit a
@@ -1312,7 +1361,7 @@ async def register_table(
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await keyed.begin(endpoint="POST /v1/table/{id}/register", target=fga.canonical_object_id(parse_identifier(id)))
     if converge.replay is not None:
-        return RegisterTableResponse.model_validate(converge.replay.body)
+        return RegisteredTable.model_validate(converge.replay.body)
 
     segments = parse_identifier(id)
     await fga_deps.require_parent_exists(ns, "table", segments)
@@ -1550,8 +1599,15 @@ async def register_table(
         await run_in_threadpool(partial(table_bases.settle_admitted, admitted, context=context))
         await filing.send(registered)
         await filing.send(registered_event)
-    await converge.remember(200, response)
-    return response
+    # Read after the registration landed (HoldWritesFirst, ADR 0246 §17): the record is the location's, so a batch of an
+    # earlier registration past its policy read may still delete what this names, which a hold over the new name
+    # therefore does not keep.
+    condemned = await run_in_threadpool(
+        partial(reclaims.condemned_beneath, settings.registry_root, settings.storage_options(), table_claims.claim_store(settings), location=location)
+    )
+    answered = RegisteredTable(**response.model_dump(exclude_none=True), **condemned.model_dump())
+    await converge.remember(200, answered)
+    return answered
 
 
 async def _require_clone_sources(
@@ -1757,7 +1813,7 @@ async def rename_table(
     resolver: ResolverDep,
     root: NamespaceRootDep,
     force: RaskFlag = False,
-) -> RenameTableResponse:
+) -> RenamedTable:
     """Rename the table at ``id`` by moving its POINTER, and emit lineage; its grants stay on its uuid.
 
     Lance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and
@@ -1796,7 +1852,7 @@ async def rename_table(
         endpoint="POST /v1/table/{id}/rename", target=f"{fga.canonical_object_id(segments)} -> {fga.canonical_object_id(new_segments)}"
     )
     if converge.replay is not None:
-        return RenameTableResponse.model_validate(converge.replay.body)
+        return RenamedTable.model_validate(converge.replay.body)
 
     # #73: a rename RETIRES the source id, so the source's protection gates it exactly like drop even
     # though no byte moves: every reader and pipeline addressing the table by its id loses it. `force` rides
@@ -1853,7 +1909,12 @@ async def rename_table(
         )
         await filing.send(moved)
         await filing.send(moved_event)
-    response = RenameTableResponse()
+    # Read after the rename landed (HoldWritesFirst, ADR 0246 §17): a batch past its policy read under the old name may
+    # still delete what this names, which a hold over the destination therefore does not keep.
+    condemned = await run_in_threadpool(
+        partial(reclaims.condemned_beneath, settings.registry_root, settings.storage_options(), table_claims.claim_store(settings), location=table.location)
+    )
+    response = RenamedTable(**condemned.model_dump())
     await converge.remember(200, response)
     return response
 

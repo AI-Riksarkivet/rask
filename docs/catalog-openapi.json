@@ -11213,6 +11213,85 @@
         "title": "RegisterTableResponse",
         "type": "object"
       },
+      "RegisteredTable": {
+        "description": "The spec's ``RegisterTableResponse``, with the versions at the location already condemned, read after the\nregistration landed (ADR 0246 \u00a717): what a hold governing the new name keeps does not include them.",
+        "properties": {
+          "condemned": {
+            "items": {
+              "$ref": "#/components/schemas/CondemnedVersion"
+            },
+            "title": "Condemned",
+            "type": "array"
+          },
+          "condemned_beyond": {
+            "default": 0,
+            "title": "Condemned Beyond",
+            "type": "integer"
+          },
+          "condemned_unread": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Condemned Unread",
+            "type": "array"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{\"header.Authorization\": \"Bearer abc\"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{\"header.x-request-id\": \"abc123\"}`. ",
+            "title": "Context"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "properties": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "If the implementation does not support table properties, it should return null for this field. Otherwise, it should return the properties. ",
+            "title": "Properties"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional transaction identifier",
+            "title": "Transaction Id"
+          }
+        },
+        "title": "RegisteredTable",
+        "type": "object"
+      },
       "RelationGrants": {
         "description": "One ``can_*`` action and every user subject holding it (``\"*\"`` = a public wildcard grant).",
         "properties": {
@@ -11325,9 +11404,28 @@
         "title": "RenameTableRequest",
         "type": "object"
       },
-      "RenameTableResponse": {
-        "description": "RenameTableResponse",
+      "RenamedTable": {
+        "description": "The spec's ``RenameTableResponse``, with the versions of the table already condemned, read after the rename landed\n(ADR 0246 \u00a717): a rename into a namespace under a hold binds every batch that reads the policy after it, and a batch\npast its policy read finishes the versions named here. A stock client reads the spec's fields and ignores these.",
         "properties": {
+          "condemned": {
+            "items": {
+              "$ref": "#/components/schemas/CondemnedVersion"
+            },
+            "title": "Condemned",
+            "type": "array"
+          },
+          "condemned_beyond": {
+            "default": 0,
+            "title": "Condemned Beyond",
+            "type": "integer"
+          },
+          "condemned_unread": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Condemned Unread",
+            "type": "array"
+          },
           "context": {
             "anyOf": [
               {
@@ -11356,7 +11454,7 @@
             "title": "Transaction Id"
           }
         },
-        "title": "RenameTableResponse",
+        "title": "RenamedTable",
         "type": "object"
       },
       "RestoreTableRequest": {
@@ -28225,7 +28323,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RegisterTableResponse"
+                  "$ref": "#/components/schemas/RegisteredTable"
                 }
               }
             },
@@ -28388,7 +28486,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RenameTableResponse"
+                  "$ref": "#/components/schemas/RenamedTable"
                 }
               }
             },
@@ -30348,7 +30446,7 @@
     },
     "/v1/table/{id}/version/delete": {
       "post": {
-        "description": "Delete the version records of old versions of this table \u2014 never the current one, and never one a tag or a\nbranch pins.\n\nThe spec's operation (``lance_docs/ns_catalog/spec.yaml``, BatchDeleteTableVersions: \"deletes version tracking\nrecords, NOT the actual table data\"): each version named is CONDEMNED (ADR 0246), which ``version/list`` leaves out\nand every tag, branch, restore and clone door refuses (409, code 19) from this answer on, and nothing is deleted\nhere; the next reclaim of the ref (a maintenance pass, ``maintenance/run``) deletes its files, unless a hold at a level\nthat can govern the table keeps them, which lifting is a separate, audited act at a policy door. ``deleted_count`` is\nhow many records it condemned.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the latest\". A range\nthat reaches the current version is refused (400), the spec's ``{0, -1}`` included: Lance commits by\nput-if-not-exists on the next number, so a deleted latest manifest is minted again by the next write and a pinned\n``(table, version)`` would name different rows. A version a tag or a child branch pins is refused (409), naming the\npin. Every range is judged before anything is condemned, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which no\nretention judges and deletion protection does not guard (protection guards dropping the table, not its history, ADR\n0150). A version that must survive is tagged.",
+        "description": "Delete the version records of old versions of this table \u2014 never the current one, and never one a tag or a\nbranch pins.\n\nThe spec's operation (``lance_docs/ns_catalog/spec.yaml``, BatchDeleteTableVersions: \"deletes version tracking\nrecords, NOT the actual table data\"): each version named is CONDEMNED as its owner's (ADR 0246), which\n``version/list`` leaves out and every tag, branch, restore and clone door refuses (409, code 19) from this answer on,\nwhatever reclaim runs beside it, until its files are gone; nothing is deleted here. The next reclaim of the ref (a\nmaintenance pass, ``maintenance/run``) deletes its files, unless a hold at a level that can govern the table keeps\nthem, which lifting is a separate, audited act at a policy door. ``deleted_count`` is how many versions this call\nmarked deleted; one an earlier ``version/delete`` already marked is not counted again.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the latest\". A range\nthat reaches the current version is refused (400), the spec's ``{0, -1}`` included: Lance commits by\nput-if-not-exists on the next number, so a deleted latest manifest is minted again by the next write and a pinned\n``(table, version)`` would name different rows. A version a tag or a child branch pins is refused (409), naming the\npin. Every range is judged before anything is condemned, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears): an explicit act by an authorized principal, which no\nretention judges and deletion protection does not guard (protection guards dropping the table, not its history, ADR\n0150). A version that must survive is tagged.",
         "operationId": "batch_delete_table_versions_v1_table__id__version_delete_post",
         "parameters": [
           {

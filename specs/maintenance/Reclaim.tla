@@ -11,12 +11,14 @@
 (* (If-Match). An entry names a version by the IDENTITY of its ref (main,  *)
 (* or one incarnation of a branch: Lance's branch_identifier, so a branch  *)
 (* deleted and made again under its name is another ref), the version's   *)
-(* number, the batch that wrote it, and its state: "c" (condemned) or "g" *)
-(* (the batch passed its pin read and its policy read: deletion may have   *)
-(* begun under it). A ref door refuses a version an entry names. An entry *)
-(* is dropped only once its version's manifest is gone or its ref's        *)
-(* identity no longer stands (GC), or by its own batch before it deleted  *)
-(* anything (a pinned version, or a hold).                                 *)
+(* number, its state, "c" (condemned) or "g" (a batch passed its pin read  *)
+(* and its policy read: deletion may have begun under it), and WHO         *)
+(* condemns it: an owner mark (o, version/delete's) and the batches        *)
+(* claiming it (c). A ref door refuses a version an entry names. An entry *)
+(* is dropped once its version's manifest is gone or its ref's identity    *)
+(* no longer stands (GC), and a "c" one once no one condemns it: no owner  *)
+(* mark, and every batch that claimed it withdrew, promoted it, or died    *)
+(* and saw its claim lapse (Unclaimed).                                    *)
 (*                                                                         *)
 (* THE RECORD BELONGS TO THE BYTES (RecordKept, LocationKeyed). It is      *)
 (* filed by the table's location, not by the registration (the uuid) that  *)
@@ -27,15 +29,17 @@
 (* incarnation. Which registration may CONDEMN is ListedOn's question: a  *)
 (* batch condemns only while the registration it was asked for stands.     *)
 (*                                                                         *)
-(* ONE ENTRY PER VERSION (TakeOver). A batch that condemns a version an    *)
-(* entry already names takes that entry over instead of adding one: its   *)
-(* batch id at the condemn; at the promotion, a "c" entry not excluded and *)
-(* a "g" entry are set "g" with this batch's licence added to whatever     *)
-(* licence it carries (l, the batches whose licence is live on it: the     *)
-(* code keeps the latest instant, live while any is). It removes, when     *)
-(* excluded, only a "c" entry still its own, and under a hold only a "c"   *)
-(* entry it wrote; a "g" entry is never downgraded or removed by a batch;  *)
-(* and it deletes exactly what its promotion set "g".                      *)
+(* ONE ENTRY PER VERSION (TakeOver), MANY CONDEMNERS (ADR 0246 §17). A     *)
+(* batch that condemns a version an entry already names adds its claim to  *)
+(* that entry instead of adding one, and version/delete sets its owner     *)
+(* mark there (VDeleteMarksNamed). At its promotion a batch acts only on   *)
+(* an entry it still claims: held, or the version excluded, it WITHDRAWS   *)
+(* its own claim (WithdrawAll), and the entry goes only once Unclaimed, so *)
+(* an owner's mark stands (OwnerFinal); else it sets the entry "g" with    *)
+(* its licence added to whatever licence it carries (l, the batches whose  *)
+(* licence is live on it: the code keeps the latest instant), its claim    *)
+(* spent. A "g" entry is never downgraded or removed by a batch, and a     *)
+(* batch deletes exactly what its promotion set or re-licensed "g".        *)
 (*                                                                         *)
 (* A RECLAIM BATCH (a pass, the erasure's verification, the release's own  *)
 (* reclaim: every reclaim calls the catalog once per batch of at most 16   *)
@@ -59,9 +63,9 @@
 (*   RLevel    (PolicyAfterCondemn) the governing policy read level by     *)
 (*             level: the table's record, its namespace's, its project's;  *)
 (*             a hold at any of them keeps every version                   *)
-(*   RPromote  held: its own entries removed (nothing was deleted under   *)
-(*             them), answer "held". Else its own entries of excluded      *)
-(*             versions removed, the rest set "g", and (GoUnpins) the pins *)
+(*   RPromote  held: its claims withdrawn (nothing was deleted under      *)
+(*             them), answer "held". Else its claims on excluded versions  *)
+(*             withdrawn, the rest set "g", and (GoUnpins) the pins        *)
 (*             on another batch's "g" versions deleted: Lance keeps every  *)
 (*             tagged version, so a dead door's pin would keep a half       *)
 (*             removed version so for good                                 *)
@@ -108,9 +112,11 @@
 (* rename into a namespace that holds) writes, then (HoldWritesFirst)      *)
 (* reads the record, and answers 200 naming the versions already           *)
 (* condemned: it promises every other standing version.                    *)
-(* VERSION/DELETE condemns the versions it names, then reads the tags and *)
-(* pins and takes back an entry one names (VDeleteCondemnsFirst); it      *)
-(* deletes nothing.                                                        *)
+(* VERSION/DELETE sets its owner mark on the version it names, on the     *)
+(* entry already there or a new one, then reads the tags and pins and     *)
+(* takes back the mark it set where one names it (VDeleteCondemnsFirst);  *)
+(* it deletes nothing. A dead batch's claim lapses at its instant          *)
+(* (ClaimLapse).                                                           *)
 (* THE ERASURE'S RELEASE still holds the history fence as RELEASE, which  *)
 (* excludes every ref door (G1 of Erasure.tla) and no reclaim: it records *)
 (* main's head, (ReleasePins) pins it and reads the record, deletes the    *)
@@ -166,7 +172,10 @@
 (* with its registration among them; a table dropped and made again under *)
 (* its name, which the catalog places at another location                  *)
 (* (TableLifecycle.tla's): another record. A registration changes at most  *)
-(* once (Reregister).                                                      *)
+(* once (Reregister). A live batch's claim lapsing (only a dead one's      *)
+(* does here): such a batch then acts on nothing it no longer claims, the  *)
+(* case of an entry removed and written again, which the model has. Two    *)
+(* version/delete calls on one version (one call here).                    *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
@@ -182,7 +191,7 @@ CONSTANTS Recl,        \* the reclaimers that may run at once (a pass, version/d
 Guards == {"CondemnFirst", "PinFirst", "ExplicitPins", "PolicyAfterCondemn", "HoldWritesFirst", "GoOnly", "GCOnlyGone",
            "KeepAfterDelete", "IdentityKeys", "ReleasePins", "AgeFloor", "GoUnpins", "NameGuard", "GCAfterLicence",
            "StandsAfterGo", "CredentialDies", "ReleasePinKind", "VDeleteCondemnsFirst", "ListedOn", "RecordKept",
-           "LocationKeyed", "TakeOver"}
+           "LocationKeyed", "TakeOver", "OwnerFinal", "VDeleteMarksNamed", "WithdrawAll"}
 ASSUME Off \subseteq Guards
 ASSUME LanceOrder \in {"tags", "manifests", "any"} /\ PinSweep \in {"none", "dead", "any"}
 On(g) == g \notin Off
@@ -207,7 +216,7 @@ VARIABLES manifests, names, files, mhead,
           bfork, bhead, used, expired,
           tagged,      \* versions a user tag names
           pins,        \* <<who, version>>: each rask-pin tag standing
-          tomb,        \* the record's entries [k, b, s, l, u]: u the record it is in (RecOf)
+          tomb,        \* the record's entries [k, o, c, s, l, u]: o the owner mark, c the batches claiming it, u its record (RecOf)
           reg,         \* the registration (uuid) that holds the table's location: 1, then 2 after Reregister
           rreg,        \* the registration a reclaimer read and asks its batch for
           rnew,        \* the versions whose entries a reclaimer's batch wrote, not took over
@@ -219,15 +228,17 @@ VARIABLES manifests, names, files, mhead,
           snapI,       \* the incarnation the reclaimer's path held when Lance listed its manifests ("m" for main)
           dpc, dv, dcond,
           vdv,         \* the version version/delete names
+          vdmark,      \* whether version/delete set the owner mark on it (deleted_count counts it)
+          vdok,        \* whether version/delete answered 200 for it: no tag or pin named it at its read
           wpc, relpc, relat,
           faults, badDelete, refusedWrong
 
 vars == <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, tomb, reg, rreg, rnew, chosen,
           policy, answered, rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI, dpc,
-          dv, dcond, vdv, wpc, relpc, relat, faults, badDelete, refusedWrong>>
+          dv, dcond, vdv, vdmark, vdok, wpc, relpc, relat, faults, badDelete, refusedWrong>>
 \* What only a reclaimer's own steps change (reg is the Reregister's alone).
 R == <<rpc, rref, rkind, rb, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI, rreg, rnew>>
-D == <<dpc, dv, dcond, vdv>>
+D == <<dpc, dv, dcond, vdv, vdmark, vdok>>
 
 NoV == <<"none", 0>>
 Proc == RefDoors \cup HoldDoors
@@ -261,6 +272,8 @@ Init ==
   /\ dv = [d \in RefDoors |-> NoV]
   /\ dcond = [d \in HoldDoors |-> {}]
   /\ vdv = NoV
+  /\ vdmark = FALSE
+  /\ vdok = FALSE
   /\ wpc = [w \in {"writer", "bwriter"} |-> IF w \in Doors THEN "idle" ELSE "done"]
   /\ relpc = IF "release" \in Doors /\ InitBranch THEN "idle" ELSE "done"
   /\ relat = 0
@@ -300,7 +313,11 @@ KeysIn(T) == {e.k : e \in T}
 CondemnedIn(T) == {Resolve(e.k) : e \in T}
 TombKeys == KeysIn(tomb)
 CondemnedVs == CondemnedIn(tomb)
-Own(r) == {e \in tomb : e.b = r}
+\* The entries batch r's promotion set or re-licensed "g".
+Own(r) == {e \in tomb : r \in e.l}
+\* An entry left in state "c" with no owner mark and no batch claiming it condemns for nobody, and is removed by the
+\* write that left it so; without OwnerFinal the owner mark is not read.
+Unclaimed(e) == e.s = "c" /\ e.c = {} /\ (~e.o \/ ~On("OwnerFinal"))
 Held == \E l \in {"table", "ns", "proj"} : policy[l] = "hold"
 Running(r) == rpc[r] \notin {"idle", "dead"}
 \* The release holds the history fence as RELEASE, which every ref door's REFS excludes (Erasure.tla G1).
@@ -360,9 +377,9 @@ RBegin(r) ==
   \* The credential the batch's cleanup deletes under is minted before the batch is asked, so it dies by the licence's
   \* instant, which the promotion states (CredentialDies, LicenceEnds).
   /\ rcred' = [rcred EXCEPT ![r] = TRUE]
-  \* Each batch has an id of its own: the entries and licences an earlier batch of this reclaimer left are another
-  \* batch's ("old").
-  /\ tomb' = {[e EXCEPT !.b = IF @ = r THEN "old" ELSE @, !.l = IF r \in @ THEN (@ \ {r}) \cup {"old"} ELSE @] : e \in tomb}
+  \* Each batch has an id of its own: the claims and licences an earlier batch of this reclaimer left are another
+  \* batch's ("old"; a finished batch leaves no claim, HoldLeavesNothingCondemned).
+  /\ tomb' = {[e EXCEPT !.c = IF r \in @ THEN (@ \ {r}) \cup {"old"} ELSE @, !.l = IF r \in @ THEN (@ \ {r}) \cup {"old"} ELSE @] : e \in tomb}
   \* The registration that holds the location now, which the batch names (main's identity, ListedOn).
   /\ rreg' = [rreg EXCEPT ![r] = reg] /\ rnew' = [rnew EXCEPT ![r] = {}]
   /\ UNCHANGED <<snapT, snapM, del, mdel, bdel, snapI, pins, chosen, policy, answered, badDelete>> /\ RKeep
@@ -374,8 +391,9 @@ RBegin(r) ==
 \* CondemnFirst removed: the entries are written only once the cleanup has run (the order today's marks had before §7.4).
 \* ListedOn also refuses a batch whose registration no longer holds the location (main's identity): who may condemn is
 \* the registration the reclaimer read, while what an entry of main names is a number at the location.
-\* TakeOver: a version an entry of the record already names is taken over (its batch id set to this one's) rather than
-\* given a second entry; without it each batch adds its own beside the earlier ones (OneEntryPerVersion).
+\* TakeOver: a version an entry of the record already names is claimed (the batch added to the entry's claims, every
+\* claim and the owner mark kept) rather than given a second entry; without it each batch adds its own beside the
+\* earlier ones (OneEntryPerVersion).
 RCondemn(r) ==
   /\ rpc[r] = "condemn"
   /\ LET plain == rkind[r] = "plain"
@@ -389,8 +407,8 @@ RCondemn(r) ==
           THEN Rest(r, "idle") /\ UNCHANGED <<tomb, chosen>>
           ELSE /\ rb' = [rb EXCEPT ![r] = batch] /\ rref' = [rref EXCEPT ![r] = cur] /\ rnew' = [rnew EXCEPT ![r] = new]
                /\ tomb' = IF ~On("CondemnFirst") THEN tomb
-                          ELSE {IF On("TakeOver") /\ e \in T /\ Resolve(e.k) \in batch THEN [e EXCEPT !.b = r] ELSE e : e \in tomb}
-                               \cup {[k |-> Key(v), b |-> r, s |-> "c", l |-> {}, u |-> RecOf(rreg[r])] : v \in new}
+                          ELSE {IF On("TakeOver") /\ e \in T /\ Resolve(e.k) \in batch THEN [e EXCEPT !.c = @ \cup {r}] ELSE e : e \in tomb}
+                               \cup {[k |-> Key(v), o |-> FALSE, c |-> {r}, s |-> "c", l |-> {}, u |-> RecOf(rreg[r])] : v \in new}
                /\ chosen' = chosen \cup rfresh[r]
                /\ Go(r, After("condemn"))
                /\ UNCHANGED <<rkind, rfresh, rex, rgo, rheld, snapT, snapM, del, mdel, bdel, rcred, snapI, rreg>>
@@ -403,7 +421,7 @@ RPins(r) ==
   /\ rpc[r] = "pins"
   /\ LET T == TombOf(rreg[r])
          licensed == IF On("GoOnly") THEN CondemnedIn({e \in T : e.s = "g"})
-                     ELSE CondemnedIn({e \in T : ~(e.b = r /\ Resolve(e.k) \in rnew[r])})
+                     ELSE CondemnedIn({e \in T : Resolve(e.k) \notin rnew[r]})
          named == tagged \cup PinVs
      IN /\ rex' = [rex EXCEPT ![r] = IF On("ExplicitPins") THEN (rb[r] \cap named) \ licensed ELSE {}]
         /\ rgo' = [rgo EXCEPT ![r] = IF On("ExplicitPins") THEN rb[r] \cap licensed ELSE {}]
@@ -425,25 +443,29 @@ RLevel(r, n) ==
 \* (StandsAfterGo): one whose incarnation no longer stands under the name licenses nothing, so a name made free after its
 \* promotion is free only of a licence no reclaimer acts on, and a name made free before it is one a create's record read
 \* finds licensed.
-\* The entries promoted are those naming the batch's versions that it still holds (it wrote or took them over at its
-\* condemn, and no batch took them over since: so they stood from before its pin read), and with TakeOver every "g" one,
-\* which no door may name since the pin read of the batch that set it: one not excluded is set "g" under this batch, its
-\* licence added. An entry another batch wrote since this batch's pin read is not this batch's to promote: that read
-\* never saw the pins it may have to keep. An excluded "c" entry still this batch's is removed, and any other excluded
-\* entry is left as it is. Held, the "c" entries this batch wrote and still holds are removed, and so is
-\* an excluded one it took over (a version/delete's whose version a tag names): one it took over and nothing names stays
-\* condemned, as its writer left it. A "g" entry is never set back or removed by a batch. What the batch deletes is what
-\* this write set "g" (rb'), so an entry another batch removed since the condemn is not deleted under. Nobody relies on
-\* a "c" entry this batch still holds: a batch that condemned it since took it over.
+\* THE RULE, for an entry naming one of the batch's versions (ADR 0246 §17's table). The batch acts only on an entry it
+\* still claims: its claim, added at its condemn, stands only while the entry has stood since then (a removed entry takes
+\* every claim with it, and a batch claims only at its condemn), so the entry stood from before the batch's pin read and
+\* every door that pinned since read it and refused. An entry it no longer claims (removed and written again by another
+\* batch since, which read pins this batch's read never saw) is left as it is.
+\*   held, or its version excluded (a tag or a pin): the batch WITHDRAWS, its claim removed and nothing else; the entry
+\*     goes only once it is "c" with no owner mark and no claim left (Unclaimed), so an owner's condemn stands and a
+\*     claim of a batch still running stands. Without WithdrawAll it withdraws only from the entries it wrote.
+\*   neither: set "g" (or re-licensed, "g" already), the batch's licence added and its claim spent.
+\* A "g" entry is never set back or removed by a batch. What the batch deletes is what this write set or re-licensed "g"
+\* (rb'), so an entry another batch removed since the condemn is not deleted under.
 RPromote(r) ==
   /\ rpc[r] = "promote"
   /\ LET T == TombOf(rreg[r])
-         Mine(e) == e \in T /\ Resolve(e.k) \in rb[r] /\ (e.b = r \/ (On("TakeOver") /\ e.s = "g"))
-         Up(e) == Mine(e) /\ Resolve(e.k) \notin rex[r]
-         Dropped(e) == e \in T /\ e.b = r /\ e.s = "c" /\ Resolve(e.k) \in rex[r]
+         Claimed(e) == e \in T /\ r \in e.c
+         Withdraws(e) == Claimed(e) /\ (rheld[r] \/ Resolve(e.k) \in rex[r]) /\ (On("WithdrawAll") \/ Resolve(e.k) \in rnew[r])
+         Up(e) == Claimed(e) /\ ~rheld[r] /\ Resolve(e.k) \notin rex[r]
+         Then(e) == IF Up(e) THEN [e EXCEPT !.s = "g", !.l = @ \cup {r}, !.c = @ \ {r}]
+                    ELSE IF Withdraws(e) THEN [e EXCEPT !.c = @ \ {r}] ELSE e
+         Left == {Then(e) : e \in {y \in tomb : ~(Withdraws(y) /\ Unclaimed(Then(y)))}}
      IN IF rheld[r]
-          THEN /\ tomb' = tomb \ {e \in T : e.b = r /\ e.s = "c" /\ Resolve(e.k) \in rnew[r] \cup rex[r]} /\ Rest(r, "idle") /\ UNCHANGED pins
-          ELSE /\ tomb' = {IF Up(e) THEN [e EXCEPT !.b = r, !.s = "g", !.l = @ \cup {r}] ELSE e : e \in {x \in tomb : ~Dropped(x)}}
+          THEN /\ tomb' = Left /\ Rest(r, "idle") /\ UNCHANGED pins
+          ELSE /\ tomb' = Left
                \* Without CondemnFirst no entry is written before the cleanup, which deletes what the batch chose.
                /\ rb' = [rb EXCEPT ![r] = IF On("CondemnFirst") THEN CondemnedIn({e \in tomb : Up(e)}) ELSE rb[r] \ rex[r]]
                \* GoUnpins takes a door's pin, never the release's, which only the release removes (ReleasePinKind).
@@ -541,12 +563,23 @@ RBDel(r) ==
   /\ UNCHANGED <<manifests, names, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, faults, refusedWrong>>
   /\ UNCHANGED <<pins, tomb, chosen, policy, answered, badDelete, reg>>
 
-\* A reclaim that dies at any step: its entries stand.
+\* A reclaim that dies at any step: its entries stand, its claims a dead batch's until they lapse (ClaimLapse).
 RCrash(r) ==
   /\ Running(r) /\ Fault
   /\ Rest(r, "dead")
+  /\ tomb' = {[e EXCEPT !.c = IF r \in @ THEN (@ \ {r}) \cup {"dead"} ELSE @] : e \in tomb}
   /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, D, wpc, relpc, relat, refusedWrong>>
-  /\ UNCHANGED <<pins, tomb, chosen, policy, answered, badDelete, reg>>
+  /\ UNCHANGED <<pins, chosen, policy, answered, badDelete, reg>>
+
+\* A dead batch's claim reaches its instant (claimed_until): the next rewrite of the record drops it, and an entry it
+\* leaves Unclaimed with it. Nothing was deleted under a "c" entry, so it condemns for nobody once no batch alive claims
+\* it and no owner marked it: the record holds no more claims than batches alive at once.
+ClaimLapse ==
+  \E x \in {"dead", "old"} :
+    /\ \E e \in tomb : x \in e.c
+    /\ tomb' = {[e EXCEPT !.c = @ \ {x}] : e \in {y \in tomb : ~(x \in y.c /\ Unclaimed([y EXCEPT !.c = @ \ {x}]))}}
+    /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, chosen, policy, answered>>
+    /\ UNCHANGED <<R, D, wpc, relpc, relat, faults, badDelete, refusedWrong, reg>>
 
 \* The store refuses its deletes (the vend expired): Lance counts them and returns, and the reclaim answers. With
 \* KeepAfterDelete its entries stand for the next reclaim; without it the batch takes them back as though nothing went.
@@ -598,7 +631,7 @@ GC ==
   \E e \in tomb :
     /\ \/ Resolve(e.k) \notin manifests /\ Stands(Resolve(e.k))
        \/ ~Stands(Resolve(e.k)) /\ (e.l # {} => ~On("GCAfterLicence"))
-       \/ ~On("GCOnlyGone") /\ e.b # "vd" /\ (e.b \in Recl => ~Running(e.b))
+       \/ ~On("GCOnlyGone") /\ ~e.o /\ \A x \in e.c : x \in Recl => ~Running(x)
     /\ tomb' = tomb \ {e}
     /\ UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, chosen, policy, answered>>
     /\ UNCHANGED <<R, D, wpc, relpc, relat, faults, badDelete, refusedWrong, reg>>
@@ -623,7 +656,7 @@ Reregister ==
 \* ---------------------------------------------------------------- the ref doors
 \* A door, and every reader below that is not a reclaimer's batch, reads the record of the registration holding the
 \* location now: the location's own (LocationKeyed), or only that registration's.
-DKeep == UNCHANGED <<R, wpc, relpc, relat, dcond, vdv, chosen, policy, answered, badDelete, expired, reg>>
+DKeep == UNCHANGED <<R, wpc, relpc, relat, dcond, vdv, vdmark, vdok, chosen, policy, answered, badDelete, expired, reg>>
 DGo(d, s) == dpc' = [dpc EXCEPT ![d] = s]
 
 \* What a door may name: a tag, any standing version; a restore, a main version not the head; a branch create, a main
@@ -706,7 +739,7 @@ Sweep ==
 \* standing version. Without HoldWritesFirst it reads the record first.
 Promise(cond) == {v \in manifests : Stands(v) /\ Whole(v) /\ v \notin cond}
 PKeep == UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, tomb, chosen>>
-          /\ UNCHANGED <<R, dv, vdv, wpc, relpc, relat, faults, badDelete, refusedWrong, reg>>
+          /\ UNCHANGED <<R, dv, vdv, vdmark, vdok, wpc, relpc, relat, faults, badDelete, refusedWrong, reg>>
 
 PWrite(d) ==
   /\ dpc[d] = "idle" /\ On("HoldWritesFirst")
@@ -730,24 +763,39 @@ PLate(d) ==
 \* version left condemned for good.
 VKeep == UNCHANGED <<manifests, names, files, mhead, binc, bfork, bhead, used, expired, tagged, pins, policy, answered>>
          /\ UNCHANGED <<R, dv, dcond, wpc, relpc, relat, faults, badDelete, refusedWrong, reg>>
-VTargets == {x \in manifests : Stands(x) /\ x \notin Heads /\ x \notin CondemnedIn(TombOf(reg))}
+\* Any standing version but a head, an entry naming it or not (a batch beside it may be condemning it).
+VTargets == {x \in manifests : Stands(x) /\ x \notin Heads}
+\* The owner mark written: on a new entry, or (VDeleteMarksNamed) on the entry already naming the version, which a batch
+\* holding only a claim on would otherwise withdraw from and remove. Without VDeleteMarksNamed a named version is left
+\* as it is, and the door answers 200 all the same. vdmark' says whether this call set the mark.
+VMark(v) ==
+  LET there == {e \in TombOf(reg) : e.k = Key(v)}
+  IN IF there = {}
+       THEN tomb' = tomb \cup {[k |-> Key(v), o |-> TRUE, c |-> {}, s |-> "c", l |-> {}, u |-> RecOf(reg)]} /\ vdmark' = TRUE
+     ELSE IF On("VDeleteMarksNamed")
+       THEN tomb' = {IF e \in there THEN [e EXCEPT !.o = TRUE] ELSE e : e \in tomb} /\ vdmark' = \E e \in there : ~e.o
+     ELSE UNCHANGED tomb /\ vdmark' = FALSE
 VCondemn ==
   /\ dpc["vdelete"] = "idle" /\ On("VDeleteCondemnsFirst")
-  /\ \E v \in VTargets :
-       /\ tomb' = tomb \cup {[k |-> Key(v), b |-> "vd", s |-> "c", l |-> {}, u |-> RecOf(reg)]}
-       /\ chosen' = chosen \cup {v} /\ vdv' = v
-  /\ DGo("vdelete", "read") /\ VKeep
+  /\ \E v \in VTargets : VMark(v) /\ chosen' = chosen \cup {v} /\ vdv' = v
+  /\ DGo("vdelete", "read") /\ UNCHANGED vdok /\ VKeep
+\* Refused (a tag or a pin names the version): the owner mark this call set taken back, and the entry with it once
+\* Unclaimed; a batch's claim on it stands.
 VRead ==
   /\ dpc["vdelete"] = "read"
-  /\ tomb' = IF vdv \in tagged \cup PinVs THEN {e \in tomb : ~(e.b = "vd" /\ e.k = Key(vdv))} ELSE tomb
-  /\ DGo("vdelete", "done") /\ UNCHANGED <<chosen, vdv>> /\ VKeep
+  /\ LET refused == vdv \in tagged \cup PinVs
+         Back(e) == vdmark /\ e.k = Key(vdv) /\ e.u = RecOf(reg)
+     IN /\ tomb' = IF refused THEN {IF Back(e) THEN [e EXCEPT !.o = FALSE] ELSE e : e \in {y \in tomb : ~(Back(y) /\ Unclaimed([y EXCEPT !.o = FALSE]))}}
+                   ELSE tomb
+        /\ vdok' = ~refused
+  /\ DGo("vdelete", "done") /\ UNCHANGED <<chosen, vdv, vdmark>> /\ VKeep
 VReadFirst ==
   /\ dpc["vdelete"] = "idle" /\ ~On("VDeleteCondemnsFirst")
   /\ \E v \in VTargets : vdv' = v /\ DGo("vdelete", IF v \in tagged \cup PinVs THEN "done" ELSE "write")
-  /\ UNCHANGED <<tomb, chosen>> /\ VKeep
+  /\ UNCHANGED <<tomb, chosen, vdmark, vdok>> /\ VKeep
 VLate ==
   /\ dpc["vdelete"] = "write"
-  /\ tomb' = tomb \cup {[k |-> Key(vdv), b |-> "vd", s |-> "c", l |-> {}, u |-> RecOf(reg)]}
+  /\ VMark(vdv) /\ vdok' = TRUE
   /\ chosen' = chosen \cup {vdv}
   /\ DGo("vdelete", "done") /\ UNCHANGED vdv /\ VKeep
 VDelete == VCondemn \/ VRead \/ VReadFirst \/ VLate
@@ -759,7 +807,7 @@ BDelete ==
   /\ binc' = "none"
   /\ DGo("bdelete", "done")
   /\ UNCHANGED <<manifests, names, files, mhead, bfork, bhead, used, expired, tagged, pins, tomb, chosen, policy, answered>>
-  /\ UNCHANGED <<R, dv, dcond, vdv, wpc, relpc, relat, faults, badDelete, refusedWrong, reg>>
+  /\ UNCHANGED <<R, dv, dcond, vdv, vdmark, vdok, wpc, relpc, relat, faults, badDelete, refusedWrong, reg>>
 
 \* ---------------------------------------------------------------- the writers
 WKeep == UNCHANGED <<binc, bfork, bhead, used, expired, tagged, pins, tomb, chosen, policy, answered>>
@@ -842,7 +890,7 @@ Next ==
   \/ \E d \in HoldDoors \cap Doors : PStep(d)
   \/ VDelete \/ BDelete \/ WStage \/ WCommit \/ BWrite
   \/ RelStep \/ RelCrash
-  \/ GC \/ Age \/ Sweep \/ LicenceEnds \/ Reregister
+  \/ GC \/ Age \/ Sweep \/ LicenceEnds \/ Reregister \/ ClaimLapse
 
 Fairness ==
   /\ \A r \in Recl : WF_vars(RStep(r)) /\ WF_vars(RRestart(r))
@@ -878,7 +926,16 @@ RefusedOnlyChosen == ~refusedWrong
 CondemnsAsListed == \A e \in tomb : e.k \in {Key(v) : v \in chosen}
 \* Once version/delete has answered, none of its entries names a version a caller's tag names: a tag on a condemned
 \* version would hide it from version/list and keep it condemned for as long as the tag stands.
-VDeleteSparesTags == dpc["vdelete"] = "done" => \A e \in tomb : e.b = "vd" => Resolve(e.k) \notin tagged
+VDeleteSparesTags == dpc["vdelete"] = "done" => \A e \in tomb : e.o => Resolve(e.k) \notin tagged
+\* A version version/delete answered 200 for stays condemned for as long as its manifest stands on its ref: no batch
+\* beside it, a hold or a door's pin landing after the answer takes it back (ADR 0246 §17).
+VDeleteStaysCondemned == (dpc["vdelete"] = "done" /\ vdok /\ vdv \in manifests /\ Stands(vdv)) => Key(vdv) \in KeysIn(TombOf(reg))
+\* An entry in state "c" with no owner mark stands only while a batch that has not finished claims it: one running, or
+\* one that died, until its claim lapses. So under a hold standing since before every live batch condemned, which each
+\* of them reads and withdraws under, once they have finished no entry without an owner mark is "c": the versions the
+\* hold did not name stand whole and unrefused.
+HoldLeavesNothingCondemned ==
+  \A e \in tomb : (e.s = "c" /\ ~e.o) => (e.c # {} /\ \A x \in e.c : x = "dead" \/ (x \in Recl /\ Running(x)))
 
 \* Once faults stop, condemned versions are finished: no standing version stays over deleted files, unless a hold keeps it.
 EventuallyWhole == <>[](Held \/ \A v \in manifests : Stands(v) => Whole(v))

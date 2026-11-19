@@ -53,7 +53,6 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import (
     CondemnedBeneath,
-    CondemnedVersion,
     PolicyDeleteResponse,
     PolicyKind,
     PolicyRequest,
@@ -134,17 +133,7 @@ def _condemned_under(settings: Settings, *, location: str | None = None, within:
     every table whose name now ``within`` takes, read AFTER the door's write (HoldWritesFirst, ADR 0246): what its answer
     does not promise, the first :data:`reclaims.CONDEMNED_SHOWN` named and the rest counted. A record that cannot be read
     is named in the answer, never a refusal: the policy stands as written."""
-    found = reclaims.condemned_versions_of(
-        settings.registry_root, settings.storage_options(), table_claims.claim_store(settings), location=location, within=within
-    )
-    return CondemnedBeneath(
-        condemned=[
-            CondemnedVersion(table=name, branch=branch, branch_identifier=identifier, version=version)
-            for name, branch, identifier, version in found.named[: reclaims.CONDEMNED_SHOWN]
-        ],
-        condemned_beyond=max(0, len(found.named) - reclaims.CONDEMNED_SHOWN),
-        condemned_unread=found.unread,
-    )
+    return reclaims.condemned_beneath(settings.registry_root, settings.storage_options(), table_claims.claim_store(settings), location=location, within=within)
 
 
 def _response(record: dict[str, object], *, condemned: CondemnedBeneath | None = None) -> PolicyResponse:

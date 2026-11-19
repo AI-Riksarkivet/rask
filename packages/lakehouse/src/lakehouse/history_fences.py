@@ -35,6 +35,12 @@ catalog refuses such a pair at create, judging the table's branch listing; :attr
 that excludes its own, so two creates on one table take turns and each judges a listing no other create changes
 before it commits.
 
+A DEREGISTER HOLDS IT ALONE (ADR 0246 §17). The fence is keyed by the registration's uuid and a deregister ends it, so a
+deregister beside a release would delete the release's hold, and the registration made again at the location would take
+a fence of another uuid that excludes nothing of the release still at work on the same bytes (measured on moto: a tag on
+the new registration answered 200 while the release held the old one's). :attr:`HistoryWork.DETACH` excludes every
+other kind, so a deregister is refused while any work holds the table's history, and no work takes it while one runs.
+
 A HOLD IS KEPT FOR AS LONG AS ITS WORK RUNS ([[LH-575]]). A release can run longer than one :data:`HOLD`, and a hold
 that ran out under it would admit a ref write beside it, so :meth:`TableHistory.held` renews its hold every third of
 :data:`HOLD` while its block runs: two renewals that fail in a row leave a third inside the hold. A holder that crashed
@@ -112,6 +118,9 @@ class HistoryWork(StrEnum):
     RELEASE = "release"
     #: Writes an erasure release's mark and then its record: no ref write may land between the two unseen.
     SCHEDULE = "schedule"
+    #: Deregisters the table, which ends its fence (:func:`end`): beside any other work it would end that work's hold, and
+    #: a registration made again at the location takes a fence of its own uuid that excludes nothing of the old one's.
+    DETACH = "detach"
 
 
 #: The kind of an erasure release's mark in a table's fence directory (``catalog.services.erasure_release.mark_key``): the
@@ -123,8 +132,8 @@ _REF_WRITES: Final = frozenset({HistoryWork.REFS, HistoryWork.BRANCH})
 
 def _excludes(held: HistoryWork, work: HistoryWork) -> bool:
     """Whether a holder doing ``held`` refuses a take for ``work``: a ref write beside a scheduling, a second branch
-    create, or anything beside a release."""
-    if HistoryWork.RELEASE in (held, work):
+    create, or anything beside a release or a deregister."""
+    if HistoryWork.RELEASE in (held, work) or HistoryWork.DETACH in (held, work):
         return True
     if held is work:
         return work is HistoryWork.BRANCH

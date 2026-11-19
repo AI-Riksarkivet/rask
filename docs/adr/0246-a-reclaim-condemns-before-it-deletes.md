@@ -912,6 +912,128 @@ than the location's (the promoted case fails: nothing named, versions 1 and 2 de
 test fails: two entries per version). **Net tests**: +2 collected (the new test's two cases on moto; two more on the
 lane), one extended, none removed.
 
+### 17. An entry records who condemns it: an owner, and the live batches (2026-11-19)
+
+**What a third review found**, each reproduced on moto first. Every one came from §16's take-over rule: an entry has one
+holder, so a batch taking it over took the condemn its writer, or whoever skipped it, relied on.
+
+1. **A tag asked after `version/delete` answered 200 landed on the deleted version.** `Batch.condemn` took the
+   `version/delete` entry over; the batch's pin read found the pin of a tag door that was about to read the entry and
+   refuse, and `Batch.promote` removed the entry as its own excluded `c` one; the door read an empty record and tagged
+   the version.
+2. **`version/delete` beside a live batch was undone under a hold.** `condemn_named` wrote nothing for a version an entry
+   already named (answering `deleted_count: 0`), and the batch that wrote that entry removed it when it read a hold set
+   since: the version the owner deleted was listed again, and no reclaim would finish it.
+3. **Two live batches under a hold that named nothing left a version condemned.** Batch A wrote the entry, B took it
+   over; under the hold B kept it (taken over, not its own) and A removed nothing (no longer its own): the hold answered
+   `condemned: []`, yet the version was refused at every ref door and hidden for as long as the hold stood, and the next
+   reclaim after the hold would delete it whatever retention said then.
+
+**The decision (the owner's): one entry per (ref incarnation, version) stays, and an entry records WHO condemns it,
+apart.** `owner` is the `version/delete` call that marked it (`vd-<hex>`); `claims` are the live batches that condemned
+it and have neither withdrawn nor promoted it, each with the instant its claim lapses (`condemned_versions.Claim`,
+`CLAIM` = 10 minutes from the condemn). A batch condemning adds its claim; a batch that reads a hold, or finds the
+version excluded by a tag or a pin, WITHDRAWS: it removes its own claim and nothing else. Every rewrite of the record
+(`_rewrite`, `_settled`) drops each claim past its instant and each entry no one condemns any more (`Entry.condemns`:
+`c`, no owner, no claim). An owner's condemn is final: no batch removes it, and the entry goes only once its manifest is
+gone (or its incarnation no longer stands, GCOnlyGone as before). `g` is as before: set by a promotion, never set back,
+never removed while the manifest stands, `licensed_until` the latest licence granted on it.
+
+**The rule** (`Batch.promote`, `condemn_named`), for an entry naming one of a batch's versions:
+
+| State | Owner mark | This batch claims it | Held, or the version excluded (a tag, a pin) | Neither |
+| --- | --- | --- | --- | --- |
+| `c` | none | yes | withdraw; the entry goes if no claim is left | `g`, licensed, claim spent; this batch deletes it |
+| `c` | set | yes | withdraw; the entry stays (the owner's) | `g`, licensed, claim spent; this batch deletes it |
+| `c` | either | no | left as it is | left as it is; not deleted by this batch |
+| `g` | either | yes | withdraw; the entry stays `g` | re-licensed (the later instant kept), claim spent; this batch deletes it |
+| `g` | either | no | left as it is | left as it is; not deleted by this batch |
+
+A batch claims only at its condemn, and a removed entry takes every claim with it, so a claim standing at the promotion
+means the entry has stood since the batch's condemn, before its pin read: every door that pinned since read it and
+refused. That is why a batch that no longer claims an entry (its claim lapsed and was dropped, or the entry was removed
+and written again by a batch whose pin read this one never saw) acts on nothing of it, the case §16's `ReclaimTwo.cfg`
+failure found. A live batch whose claim lapsed loses nothing it may delete: it promotes nothing it no longer claims.
+
+`version/delete` sets its owner mark on the entry already naming a version as on a new one, and `deleted_count` counts the
+versions whose mark this call set (one another call marked is that call's), so its answer stays true whatever batch
+runs beside it. What it does when a tag or a pin names a version at its own read is unchanged: it answers 409 naming it,
+and takes back the marks it set, each entry with its mark once no one else condemns it; a batch's claim on it stands, and
+that batch's own pin read excludes the version.
+
+**What bounds the record**: one entry per (ref incarnation, version) standing condemned at the location, each carrying one
+owner field and at most the claims of the batches that condemned it within the last `CLAIM` and have not promoted or
+withdrawn: the batches alive at once over that version (a reclaim asks its batches one after another, each promoting or
+withdrawing before the next), plus those that died in the last ten minutes.
+
+**The model first** (`specs/maintenance/Reclaim.tla`). An entry is `[k, o, c, s, l, u]`: `o` the owner mark, `c` the
+claims. `RCondemn` adds the batch's claim, `RPromote` applies the table above, `VCondemn` and `VLate` mark (`VMark`), `VRead`
+takes back the mark it set, `RCrash` turns the batch's claims into a dead batch's, and `ClaimLapse` drops a dead batch's
+claim with every entry it leaves `Unclaimed`. Two invariants are new and checked by every gate config:
+`VDeleteStaysCondemned` (a version `version/delete` answered 200 for stays condemned for as long as its manifest stands
+on its ref) and `HoldLeavesNothingCondemned` (a `c` entry with no owner mark stands only while a batch that has not
+finished claims it: one running, or one that died until its claim lapses; so under a hold standing since before every
+live batch condemned, once they have finished, no entry without an owner mark is `c`). Three guards, each with a config
+that fails without it, its trace the defect:
+
+| Guard | Config | Fails | Trace |
+| --- | --- | --- | --- |
+| `OwnerFinal`: a withdrawal leaves an owner's entry | `ReclaimOwnerWithdrawn.cfg` | `VDeleteStaysCondemned`, 295 states | the batch condemns 1, `version/delete` marks it and answers 200, a tag door pins 1, the batch reads the pin and withdraws, the entry goes (defect 1) |
+| `VDeleteMarksNamed`: `version/delete` marks a version an entry names | `ReclaimVDeleteSkipsNamed.cfg` | `VDeleteStaysCondemned`, 175 states | the batch condemns 1, `version/delete` writes nothing and answers 200, a hold, the batch withdraws, the entry goes (defect 2) |
+| `WithdrawAll`: a batch withdraws from every entry it claims | `ReclaimWithdrawOwn.cfg` | `HoldLeavesNothingCondemned`, 225 states | a hold, two batches claim 1, the one that did not write it keeps its claim and finishes (defect 3) |
+
+A new gate config, `ReclaimTwoHeld.cfg` (two reclaims beside a namespace's hold, `version/delete` and a tag: a hold set
+before both condemned, `version/delete` beside a live batch, a door's pin landing between a condemn and a promotion),
+holds at 635,870 states in 23 s. `scripts/tla_check.sh Reclaim` (`TLC_WORKERS=2`): every gate config holds or fails as
+its first line says (`specs/README.md`), the largest `ReclaimTwoHeld.cfg`, then `ReclaimBranchesReregister.cfg` at 427,639
+states and 17 s. `ReclaimTwo.cfg` fell from 582,524 states to 397,847: a batch no longer re-licenses a `g` entry it does
+not claim. The on-demand configs were not run after this change.
+
+**What the review could not confirm, settled.**
+
+- **A rename, or a register, into a namespace whose hold predates it, beside a licensed cleanup: real, fixed.** Measured on
+  moto: a namespace's hold answered `condemned: []`; `maintenance/run` of the table was paused after its promotion; the
+  table was renamed into that namespace, the rename answered `{}`, and the cleanup then deleted versions 1 and 2 of a
+  table under the hold. The model's rename door has always answered what is condemned (`HoldDoors` holds `rename`); the
+  code's did not. Both doors now answer as the policy doors do, read after their write lands (HoldWritesFirst):
+  `condemned`, `condemned_beyond` and `condemned_unread` beside the spec's fields (`schemas.RenamedTable`,
+  `schemas.RegisteredTable`, `reclaims.condemned_beneath`); a stock client ignores them (measured: the
+  `lance_namespace_urllib3_client` models' `from_dict` drops the extra fields). The register reads the record of the
+  location it registered, which a batch of the earlier registration may still be deleting under.
+- **An erasure's batch (`holds=False`) promoting after a deregister and a register at the location: ruled out; the
+  promotion need not read the registration again.** What a batch's promotion licenses is versions at the location, the
+  same bytes under either registration; every door of the new registration reads the location's record (its ref doors
+  refuse them, its hold names them), so nothing it answered for is lost, and an erasure reads no hold under either
+  registration (§14, V7). Shown by `ReclaimBranchesReregister.cfg`: no policy door acts there, so a batch promotes with no
+  policy read (an erasure's shape) across a `Reregister` at any step, and `RefsWhole`, `HalfOnlyCondemned`,
+  `DeletesCondemned`, `RefusedOnlyChosen` and `CondemnsAsListed` hold. A promotion refusing the new registration would
+  leave the erased subject's versions standing for the next registration to keep.
+- **The history fence across a registration made again: real, fixed; the commit turn: ruled out.** Measured on moto: with
+  the fence held as `RELEASE` under a registered table's uuid (as an erasure's release holds it), a tag on the table was
+  refused 409, its deregister answered 200 (and `object_records.end_object_records` deleted the release's hold), the
+  table registered again at the location answered 200, and a tag on it answered 200. Keying the fence by location would
+  not have been enough, since the deregister ends it; the deregister is the step that must wait. It now holds the fence
+  alone (`HistoryWork.DETACH`, which excludes every kind and every kind excludes), taken in `_detach` under the location
+  claim's fence and confirmed right before the row goes, and the records kept under the uuid are ended under it: beside a
+  release, a scheduling or a ref write it answers 409 (code 14) and the table stays registered. Taken there and not at the
+  door's start, a keyed deregister's first attempt stalled before its detach holds nothing a resend past the key's lease
+  waits on (`test_a_keyed_write_lands_once_beside_its_resend.py`'s deregister case). The commit turn (`commit_turns`) orders which commit of a ref finalizes next and nothing else: a writer
+  waits on it rather than being refused, a turn lapses at its hold, and Lance's put-if-not-exists decides every commit,
+  so writers of two registrations racing as they would with no turn lose no commit and delete nothing. Not changed.
+  `Erasure.tla` does not model a deregister; the guard is held by the test below, not by a model.
+
+**Tests** (`tests/integration/test_a_reclaim_condemns_before_it_deletes.py`), the review's three reproductions folded in
+and named for the behaviour, each red on moto with its guard removed:
+`test_two_batches_under_a_hold_that_named_nothing_leave_nothing_condemned` (WithdrawAll: the record held `[(None, 1,
+'c')]` and the tag answered 409), `test_version_delete_beside_a_batch_stays_condemned_under_a_hold` (VDeleteMarksNamed:
+`deleted_count` 0 and version 1 listed again) and
+`test_a_tag_asked_after_version_delete_answered_is_refused_whatever_batch_runs_beside_it` (OwnerFinal: the tag answered
+200); `test_a_hold_answered_beside_a_reclaim_keeps_every_version_it_did_not_name` gains two cases, a rename and a
+registration into a held namespace after the batch's policy read (red: each answered `condemned: []`); and
+`test_a_deregister_is_refused_while_work_holds_the_tables_history` is new (red: the deregister answered 200).
+`test_a_policy_door_names_at_most_its_bound_and_what_it_could_not_read` plants owner-marked entries, since an entry no one
+condemns is removed by the next rewrite.
+
 ## The four facts
 
 - **GitOps**: met; no new chart value.
@@ -931,7 +1053,8 @@ undrop and purge; the erasure's scheduling and notices beyond `CondemnedErasure.
 dead door's pin on a residual; two tags on one version; a branch whose own versions name its fork's files; a hold lifted;
 batches larger than the model's versions; Q2; a table's registration changing more than once (§16 models one
 deregister and register at the location); a table dropped and made again under its name, which the catalog places at
-another location (another record).
+another location (another record); a live batch's claim lapsing (§17: it then acts on nothing it no longer claims); two
+`version/delete` calls on one version; a deregister beside the history fence's holders (§17, held by its test).
 
 ## Appendix: the measurement scripts
 

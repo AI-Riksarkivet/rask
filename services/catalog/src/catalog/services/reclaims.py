@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.core.vending import dataset_facts, require_vendable_bases, role_session_name, vend_or_refuse, vendor_for
+from catalog.schemas import CondemnedBeneath, CondemnedVersion
 from catalog.services import object_uuids, table_claims
 from lakehouse import condemned_versions, location_claims, maintenance_policies, records
 from lakehouse.condemned_versions import Credential, RefReclaim, Verdict
@@ -289,6 +290,29 @@ def condemned_versions_of(
             continue
         named.update((held.table, entry.ref, None if entry.ref is None else entry.ref_id, entry.version) for entry in record.entries)
     return Found(named=sorted(named, key=_ordered), unread=unread)
+
+
+def condemned_beneath(
+    registry_root: str,
+    storage_options: StorageOptions,
+    claims: location_claims.ClaimStore,
+    *,
+    location: str | None = None,
+    within: Callable[[list[str]], bool] | None = None,
+) -> CondemnedBeneath:
+    """:func:`condemned_versions_of` as a door's answer names it, read AFTER the door's write (HoldWritesFirst): the
+    first :data:`CONDEMNED_SHOWN` named and the rest counted, what could not be read named. Asked by every door whose
+    write a batch's policy read then reads: the policy doors, and a rename or a registration that puts a table where a
+    hold governs it."""
+    found = condemned_versions_of(registry_root, storage_options, claims, location=location, within=within)
+    return CondemnedBeneath(
+        condemned=[
+            CondemnedVersion(table=name, branch=branch, branch_identifier=identifier, version=version)
+            for name, branch, identifier, version in found.named[:CONDEMNED_SHOWN]
+        ],
+        condemned_beyond=max(0, len(found.named) - CONDEMNED_SHOWN),
+        condemned_unread=found.unread,
+    )
 
 
 def _ordered(found: tuple[str, str | None, str | None, int]) -> tuple[str, str, str, int]:

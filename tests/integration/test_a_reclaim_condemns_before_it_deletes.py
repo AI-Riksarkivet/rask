@@ -512,7 +512,7 @@ def _governed_by_a_project(estate: _Estate) -> None:
 def _readied(estate: _Estate, door: str) -> None:
     if door == "project-hold":
         _governed_by_a_project(estate)
-    if door == "rename-into-a-held-namespace":
+    if door in ("rename-into-a-held-namespace", "register-into-a-held-namespace"):
         _ok(estate.catalog.post(f"/v1/namespace/{HELD}/create", json={}))
         _ok(estate.catalog.post(f"/management/v1/namespace/{HELD}/policy/set", json={"cleanup_enabled": False}))
 
@@ -525,6 +525,8 @@ def _readied(estate: _Estate, door: str) -> None:
         ("project-hold", "after-its-policy-read"),
         ("namespace-hold", "before-its-policy-read"),
         ("rename-into-a-held-namespace", "before-its-policy-read"),
+        ("rename-into-a-held-namespace", "after-its-policy-read"),
+        ("register-into-a-held-namespace", "after-its-policy-read"),
     ],
 )
 def test_a_hold_answered_beside_a_reclaim_keeps_every_version_it_did_not_name(
@@ -535,22 +537,30 @@ def test_a_hold_answered_beside_a_reclaim_keeps_every_version_it_did_not_name(
     condemned (``condemned``); every other version stands whole after the pass, and nothing it named is promised. Held
     before its policy read, the batch reads the hold (a rename's included: the chain is read after the condemn) and
     deletes nothing. A batch that read the policy before it condemned would delete under a hold whose read named
-    nothing."""
+    nothing. A rename, or a registration made again at the location, into a namespace whose hold predates it, landing
+    after the batch's policy read, answers what is already condemned as a hold does (ADR 0246 §17): its namespace's hold
+    named nothing, and the batch goes on to delete under it."""
     from catalog.services import reclaims
 
     _readied(estate, door)
+    if door == "register-into-a-held-namespace":
+        estate = _registered(estate)
     batch = _Pause(monkeypatch, reclaims.Governance, "held_by", after=batch_held == "after-its-policy-read")
     standing = estate.versions()
-    path, body = _POLICY_DOORS[door]
     running = _Running(estate.passed)
     assert batch.reached.wait(WAIT), "the pass's batch never read the policy"
-    answered = estate.catalog.post(path, json=body)
+    if door == "register-into-a-held-namespace":
+        _ok(estate.catalog.post(f"/v1/table/{NS}$r/deregister", json={}))
+        answered = estate.catalog.post(f"/v1/table/{HELD}$r/register", json={"location": "reg"})
+    else:
+        path, body = _POLICY_DOORS[door]
+        answered = estate.catalog.post(path, json=body)
     batch.let_go()
     running.joined()
 
     assert answered.status_code == 200, answered.text
     named = {(entry.get("branch"), entry["version"]) for entry in answered.json().get("condemned", [])}
-    if door == "rename-into-a-held-namespace":
+    if door == "rename-into-a-held-namespace" and batch_held == "before-its-policy-read":
         assert estate.versions() == standing, f"a rename into a held namespace beside a reclaim left {estate.versions()} of {standing}"
         return
     if batch_held == "after-its-policy-read":
@@ -1022,7 +1032,7 @@ def test_a_policy_door_names_at_most_its_bound_and_what_it_could_not_read(estate
     answers 200 (it landed). Once a reclaim finishes the table's entries, its record is gone."""
     from catalog.core.config import get_settings
 
-    _planted_record(estate, [condemned_versions.Entry(ref_id=condemned_versions.MAIN, version=1000 + n, batch="dead", state="c") for n in range(120)])
+    _planted_record(estate, [condemned_versions.Entry(ref_id=condemned_versions.MAIN, version=1000 + n, owner="vd-planted", state="c") for n in range(120)])
     malformed = "_condemned/" + "f" * 64 + ".json"
     estate.s3().put_object(Bucket=estate.bucket, Key=malformed, Body=b"{not a record")
     answered = _ok(estate.catalog.post(f"/management/v1/namespace/{NS}/policy/set", json={"retain_versions": 1}))
@@ -1062,3 +1072,94 @@ def test_only_another_batchs_go_entry_licenses_ignoring_a_pin(estate: _Estate, m
 
     assert answered.status_code in (200, 409), answered.text
     assert answered.status_code != 200 or _made(estate, "tag") == [1], f"the tag answered 200 for version 1, which reads {_made(estate, 'tag')}"
+
+
+def _listed(estate: _Estate) -> list[int]:
+    """The versions ``version/list`` answers for main: every condemned one left out."""
+    return [row["version"] for row in _ok(estate.catalog.post(f"/v1/table/{T}/version/list", json={}))["versions"]]
+
+
+def test_two_batches_under_a_hold_that_named_nothing_leave_nothing_condemned(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """WithdrawAll (ADR 0246 §17): a namespace's hold answered 200 naming nothing condemned, then two batches of main run
+    under it: the first condemns version 1 (writing its entry) and is held; the second claims the entry, reads the hold
+    and withdraws; the first, let go, reads the hold and withdraws. Every claim gone and no owner, the entry goes: the
+    record is empty and a tag on version 1 lands. A batch withdrawing only from the entries it wrote leaves the second's
+    claim, and version 1 refused at every ref door under a hold that promised it whole."""
+    held = _ok(estate.catalog.post(f"/management/v1/namespace/{NS}/policy/set", json={"cleanup_enabled": False}))
+    assert held["condemned"] == [], held
+    asked = {"listed_on": estate.task.uuid, "versions": [1]}
+    first = _Pause(monkeypatch, condemned_versions.Batch, "condemn", after=True)
+    a = _Running(lambda: estate.catalog.post(f"/management/v1/table/{T}/maintenance/condemn", json=asked))
+    assert first.reached.wait(WAIT), "the first batch never condemned"
+    b = _ok(estate.catalog.post(f"/management/v1/table/{T}/maintenance/condemn", json=asked))
+    first.let_go()
+    a_answer = _ok(a.joined())
+    assert a_answer["held_by"] and b["held_by"], (a_answer, b)
+
+    left = estate.condemned()
+    tagged = estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "kept", "version": 1})
+    assert (left, tagged.status_code, 1 in _listed(estate)) == ([], 200, True), (
+        f"under a hold that named nothing, the record holds {left}, a tag on version 1 answered {tagged.status_code}: {tagged.text}"
+    )
+
+
+def test_version_delete_beside_a_batch_stays_condemned_under_a_hold(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """VDeleteMarksNamed, OwnerFinal (ADR 0246 §17): a batch condemned version 1 and is held before its policy read;
+    ``version/delete`` of version 1 marks the entry already there as its owner's and counts it; a namespace's hold is
+    set; the batch reads it and withdraws its claim, and the owner's mark keeps the entry: version 1 stays out of
+    ``version/list``. A ``version/delete`` that wrote nothing for a version an entry names would answer 200 and see the
+    batch remove the entry, the version it deleted listed again."""
+    from catalog.services import reclaims
+
+    _ok(estate.catalog.post(f"/management/v1/table/{T}/policy/set", json={"retain_versions": 100}))
+    batch = _Pause(monkeypatch, reclaims.Governance, "held_by", after=False)
+    a = _Running(lambda: estate.catalog.post(f"/management/v1/table/{T}/maintenance/condemn", json={"listed_on": estate.task.uuid, "versions": [1]}))
+    assert batch.reached.wait(WAIT), "the batch never read the policy"
+    deleted = _ok(estate.catalog.post(f"/v1/table/{T}/version/delete", json={"ranges": [{"start_version": 1, "end_version": 2}]}))
+    _ok(estate.catalog.post(f"/management/v1/namespace/{NS}/policy/set", json={"cleanup_enabled": False}))
+    batch.let_go()
+    assert _ok(a.joined())["held_by"]
+
+    listed = _listed(estate)
+    assert (deleted["deleted_count"], 1 in listed) == (1, False), (
+        f"version/delete answered {deleted} for version 1, listed {listed}; record {estate.condemned()}"
+    )
+
+
+def test_a_tag_asked_after_version_delete_answered_is_refused_whatever_batch_runs_beside_it(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OwnerFinal (ADR 0246 §17): ``version/delete`` of version 1 answers 200 (``deleted_count`` 1). A tag door on version
+    1, asked after that answer, pins and is held before its read of the record; a batch claims the entry, reads the
+    door's pin and withdraws, and the owner's mark keeps the entry: the door reads it and refuses (409). A batch removing
+    the entry it excluded, the owner's mark unread, would let the door tag the version deleted."""
+    _ok(estate.catalog.post(f"/management/v1/table/{T}/policy/set", json={"retain_versions": 100}))
+    deleted = _ok(estate.catalog.post(f"/v1/table/{T}/version/delete", json={"ranges": [{"start_version": 1, "end_version": 2}]}))
+    assert deleted["deleted_count"] == 1 and 1 not in _listed(estate), deleted
+    door_read = _Pause(monkeypatch, condemned_versions, "condemned", after=False)
+    answers = _Running(lambda: estate.catalog.post(f"/v1/table/{T}/tags/create", json={"tag": "kept", "version": 1}))
+    assert door_read.reached.wait(WAIT), "the tag door never pinned"
+    _ok(estate.catalog.post(f"/management/v1/table/{T}/maintenance/condemn", json={"listed_on": estate.task.uuid, "versions": []}))
+    door_read.let_go()
+    tagged = answers.joined()
+
+    assert tagged.status_code == 409, (
+        f"a tag asked after version/delete answered {deleted} for version 1 answered {tagged.status_code}; listed {_listed(estate)}"
+    )
+
+
+def test_a_deregister_is_refused_while_work_holds_the_tables_history(estate: _Estate) -> None:
+    """DETACH (ADR 0246 §17): the history fence is keyed by the registration's uuid and a deregister ends it, so a
+    deregister beside an erasure's release (its RELEASE hold taken here as the release takes it) is refused 409 (code
+    14) and the table stays registered; once the release lets go, the deregister lands. A deregister landing beside it
+    would delete the release's hold, and a registration made again at the location would take a fence of its own that
+    excludes nothing of the release still at work on the same bytes: a tag on it answered 200."""
+    from catalog.core.config import get_settings
+    from lakehouse import history_fences
+
+    estate, table = _registered(estate), f"{NS}$r"
+    settings = get_settings()
+    fence = history_fences.TableHistory(control_root=settings.registry_root, storage_options=settings.storage_options(), table_uuid=estate.task.uuid)
+    with fence.held(history_fences.HistoryWork.RELEASE, renewed=False):
+        refused = estate.catalog.post(f"/v1/table/{table}/deregister", json={})
+        described = estate.catalog.post(f"/v1/table/{table}/describe", json={})
+    assert ((refused.status_code, refused.json().get("code")), described.status_code) == ((409, 14), 200), refused.text
+    _ok(estate.catalog.post(f"/v1/table/{table}/deregister", json={}))
