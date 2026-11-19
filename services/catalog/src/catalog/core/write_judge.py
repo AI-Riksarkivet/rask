@@ -14,7 +14,7 @@ a table one cannot read as an input would launder it into the derived table's li
 table by what its commits declared (ADR 0183). The judge answers allow or refuse before a write. A staged manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run
 here.
 
-A DOOR THAT PLACES A TABLE IN A NAMESPACE (a create, a register, a rename in) reads the rule again under that
+A DOOR THAT PLACES A TABLE IN A NAMESPACE (a create, a register, a rename in, an undrop) reads the rule again under that
 namespace's add fence, held until the table stands there, and refuses there a namespace that does not stand
 (:func:`placing`, ADR 0244 R1, W1): the judge's read comes before the add, and the namespace can be made afresh under the
 rule in between.
@@ -242,7 +242,9 @@ async def placing(op: Write, ns: LanceNamespace, *, control_root: str, storage_o
     hold a namespace that does not stand is refused before its rule is read (ADR 0244 W1), since one created under the
     name after that read could declare the rule. ``ns`` is the connection of the table's warehouse, a rename's source
     included (the rename door keeps a rename within its warehouse). A door that places no new table (an Overwrite or
-    ExistOk of a standing one) holds the fence of a namespace that cannot be dropped anyway.
+    ExistOk of a standing one) holds the fence of a namespace that cannot be dropped anyway. An undrop places a table, or
+    a namespace (``op.table`` then names the namespace), back under the hold, and reads inside it that the namespace is
+    the one it was dropped from (``trash_doors.placing_back``); no rule refuses it.
 
     Raises:
         NamespaceFencedError: The namespace is being dropped, or made afresh by an Overwrite (409, code 14).

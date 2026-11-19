@@ -1073,7 +1073,9 @@ export interface paths {
          *     restores the namespace its caller names (``?uuid=`` when several held the name, 409 listing each one's uuid and
          *     deadline otherwise) and what the cascade that dropped it filed under it, each object under its own uuid. While
          *     another namespace holds the name, or the parent's name is held by a namespace other than the one it was dropped
-         *     from, it answers 409.
+         *     from, it answers 409. Each namespace and table it restores is placed back as a create places one (ADR 0244): under
+         *     its parent's add fence, which it holds from its read of that parent's uuid through its create or register, so a
+         *     parent being dropped or made afresh answers 409 (code 14) and one that does not stand 404 (code 1).
          */
         post: operations["undrop_namespace_management_v1_namespace__id__undrop_post"];
         delete?: never;
@@ -2457,6 +2459,11 @@ export interface paths {
          *     one's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another
          *     table holds the name the undrop answers 409: two tables cannot share it. What it announces is filed before it takes
          *     the location back, so a door failing after the re-registration still announces it ([[LH-576]]).
+         *
+         *     The undrop places the table back as a create places one (ADR 0244): under its namespace's add fence it reads that
+         *     the namespace stands and is the one the table was dropped from, and registers it (``trash_doors.restore_kept_table``).
+         *     A namespace dropped and made again since, perhaps under the run rule, answers 409 (code 19); one being dropped or made
+         *     afresh meanwhile answers 409 (code 14); one that does not stand answers 404 (code 1).
          */
         post: operations["undrop_table_management_v1_table__id__undrop_post"];
         delete?: never;

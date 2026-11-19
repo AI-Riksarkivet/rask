@@ -1021,29 +1021,50 @@ def _overwrite_stamped(
     transaction_properties: dict[str, str],
     data_bases: list[DataBase] | None,
     allow_external: bool,
+    branch: str | None = None,
+    opened: lance.LanceDataset | None = None,
+    keeps_schema: bool = False,
 ) -> int:
-    """Overwrite ``table`` with ``rows`` as a stamped commit (:func:`commit_stamped`), and answer its version.
+    """Overwrite ``table``'s ref ``branch`` (``None`` = main) with ``rows`` as a stamped commit (:func:`commit_stamped`),
+    and answer its version: the one path an Overwrite of a table lands by, the create door's and the insert door's.
 
     A table's Overwrite is the one write of a governed table that Lance's own commit would land over whatever committed
     since its read (`lance_docs/lance/format/table/transaction.md` § Overwrite Compatibility; measured on pylance 13.0.0
     over an UpdateConfig of the table's config, table metadata and schema metadata alike). Finalized instead exactly at
     the slot after the version it planned on, it is judged against that version and the contract read after the plan, as
     every door's commit is, and a contract set meanwhile orders it (ADR 0244 C2). Each attempt writes its rows again: a
-    lost race deletes what the attempt wrote. The fragments are written as :func:`_write_blob` writes an overwrite's.
+    lost race deletes what the attempt wrote. The fragments are written onto the handle the attempt planned on, the ref's
+    own, at the table's file version, keeping its stable row ids. ``opened`` is the ref as the door already opened it,
+    which the first attempt plans on.
+
+    ``keeps_schema`` is the insert door's Overwrite, which removes the ref's rows and keeps its schema (`spec.yaml`
+    InsertIntoTableRequest.mode): its rows were aligned to the ref's schema when the request arrived, so a version that
+    changed the schema since (a column added, dropped or retyped, a field's metadata or the schema's changed) refuses the
+    attempt before it writes, rather than land the schema the rows were aligned to over it. That is also what lets the
+    door ask only the writer rung: it changes rows, never the schema.
+
+    Raises:
+        ConcurrentModificationError: ``keeps_schema`` and the ref's schema changed since the rows were aligned to it.
     """
     stamped = encoding.stamp_encoding(rows, properties)
     target_bases = [base.name for base in data_bases or []] or None
 
     def plan(dataset: lance.LanceDataset) -> tuple[Transaction, None]:
+        if keeps_schema and not rows.schema.equals(dataset.schema, check_metadata=True):
+            raise ConcurrentModificationError(
+                f"the schema of table {fga.canonical_object_id(table.segments)} changed since this overwrite read it; send it again"
+            )
         try:
             transaction = lance.fragment.write_fragments(  # noqa: TID251
                 stamped,
-                table.location,
+                dataset,
                 return_transaction=True,
                 mode="overwrite",
                 storage_options=so.in_clear(),
-                data_storage_version=CREATE_FILE_VERSION,
-                enable_stable_row_ids=CREATE_FORMAT.stable_row_ids,
+                # The table's own: an overwrite writing files at another version than the manifest names leaves a mixed
+                # table (measured on pylance 13.0.0: a 2.2 file under a 2.0 table's manifest). Its stable row ids are
+                # create-time-only and carried by the handle.
+                data_storage_version=dataset.data_storage_version,
                 target_bases=target_bases,
                 allow_external_blob_outside_bases=allow_external,
             )
@@ -1055,7 +1076,7 @@ def _overwrite_stamped(
             raise InternalError("Lance answered a table's overwrite with no transaction to commit")
         return transaction, None
 
-    version, _ = commit_stamped(table, so, transaction_properties, plan)
+    version, _ = commit_stamped(table, so, transaction_properties, plan, branch=branch, opened=opened)
     return version
 
 
@@ -3219,6 +3240,10 @@ def insert_into_table(
     every stamped commit is, so :func:`commit_stamped` judges its rows against those the version it lands on carries
     (ADR 0240, AppendJudged).
 
+    An overwrite lands as a table's Overwrite at the create door does (:func:`_overwrite_stamped`, ADR 0244): a stamped
+    commit judged against the version it lands on and the contract in force there, which keeps the ref's schema, so one
+    that changed since the rows were aligned to it refuses the overwrite 409 (code 14).
+
     A request holding an Idempotency-Key on the table (:func:`held_key`) renews it right before the put that lands its
     version (ADR 0240, KeyRenews): a stamped commit at its finalize, and any other write through :func:`land_keyed`, Lance's
     own commit of the fragments written first, which rebases onto whatever landed since as Lance's insert does, so keyed
@@ -3259,10 +3284,25 @@ def insert_into_table(
                 branch=req.branch,
                 opened=dataset,
             )
+        elif mode is InsertMode.OVERWRITE:
+            # An Overwrite lands as the create door's does (ADR 0244): Lance's own commit would land it over whatever committed
+            # since its read, a contract's barrier and a schema change included.
+            version = _overwrite_stamped(
+                table,
+                rows,
+                so,
+                properties=None,
+                transaction_properties=transaction_properties,
+                data_bases=None,
+                allow_external=False,
+                branch=req.branch,
+                opened=dataset,
+                keeps_schema=True,
+            )
         else:
-            # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole: its fragments are
-            # written first and sealed, then Lance commits them (:func:`_land_rows`).
-            version = _land_rows(table, so, dataset, rows, mode, transaction_properties, key, ref=ref)
+            # An append commutes with any racing append, so Lance's own rebase keeps it whole: its fragments are written
+            # first and sealed, then Lance commits them (:func:`_land_rows`).
+            version = _land_rows(table, so, dataset, rows, transaction_properties, key, ref=ref)
     # The rows this request wrote, read off its own payload: a row count diff across the commit would
     # include whatever a concurrent writer appended in between.
     return InsertIntoTableResponse(version=version, num_inserted_rows=rows.num_rows)
@@ -3273,14 +3313,15 @@ def _land_rows(
     so: StorageOptions,
     dataset: lance.LanceDataset,
     rows: pa.Table,
-    mode: InsertMode,
     properties: dict[str, str],
     key: idempotency.HeldKey | None,
     *,
     ref: str | None,
 ) -> int:
-    """Land ``rows`` on ``dataset``'s ref (``ref``) through Lance's own commit, which rebases them onto whatever landed
-    since; the version landed.
+    """Append ``rows`` to ``dataset``'s ref (``ref``) through Lance's own commit, which rebases them onto whatever landed
+    since; the version landed. An append adds fragments and keeps the schema of the version it lands on
+    (`lance_docs/lance/format/table/transaction.md` § Append Compatibility); an Overwrite, which replaces it, lands by
+    :func:`_overwrite_stamped` instead.
 
     The fragments are written first (``write_fragments``, `lance_docs/lance/guide/distributed_write.md` § Append data), their
     files sealed and recorded before the commit (ADR 0242 § The order of effects), then committed: under the request's key
@@ -3290,7 +3331,7 @@ def _land_rows(
     commit reconciler. A write that cannot have landed (superseded, every put lost, refused by Lance against a version
     landed since) deletes what it wrote ([[LH-564]]); one whose outcome is unknown keeps it.
     """
-    written = lance.fragment.write_fragments(rows, dataset, mode=mode.value, return_transaction=True)  # noqa: TID251 — the insert door's own write
+    written = lance.fragment.write_fragments(rows, dataset, mode=InsertMode.APPEND.value, return_transaction=True)  # noqa: TID251 — the insert door's own write
     if not isinstance(written, Transaction):
         raise InternalError("Lance answered an insert's write with no transaction to commit")
     transaction = replace(written, transaction_properties=properties)

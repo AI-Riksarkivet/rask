@@ -3,7 +3,10 @@
 **Status:** accepted; the model of the last part of the write path no model described. Four defects were found, each
 reproduced against the real catalog over HTTP and fixed model first (owner's standing ruling: fix now). An independent
 review then found three more (W1, W2, W3: §7 to §9), each reproduced over HTTP with held requests, two of them places
-where the code did less than the model assumed; each is now in the model as the code's own steps and FIXED. It amends
+where the code did less than the model assumed; each is now in the model as the code's own steps and FIXED. A second
+review found two more (U1, U2: §11, §12), each reproduced over HTTP with held requests: the undrops judged their
+namespace outside its add fence, which the model's undrop did in one step with its add, and the insert door's Overwrite
+landed through Lance's own commit, which C2 had closed for the create door's only. It amends
 [ADR 0212](0212-publication-goes-and-a-tables-data-contract-is-checked-on-every-commit.md) §3 ("the door reads the table
 before it writes the record and again after") and withdraws its "Not taken: serializing a set with every commit", and
 it amends [ADR 0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md) §2 with where a door
@@ -37,8 +40,9 @@ read and the landing.
      refusal puts back, refs still to verify and its barrier's plan. Set `s1` states column `a`, set `s2` column `c`
      only (a major version that no longer names `a`). The run rule seam: whether namespace `x` stands, whether it
      requires a run, its incarnation (its uuid), the placers holding its add fence, whether the actor remaking `x` holds
-     its drop fence, the tables standing in it that hold data no run produced, each placer's step and the incarnation an
-     undrop's table was dropped from, and the step of the actor remaking `x`.
+     its drop fence, the tables standing in it (or beneath it) that hold data no run produced, each placer's step and the
+     incarnation an undrop's table, or a namespace undrop's namespace, was dropped from, and the step of the actor
+     remaking `x`.
    - **Actions.** `WPlan` (a commit reads the ref's head), `WJudge` (reads the contract after its plan, as
      `commit_stamped` and `version/create` do, and refuses what it introduces), `WLand` (an exact commit fills the slot
      after its plan or loses and plans again; Lance's own Overwrite lands over whatever committed since); `SFirst` (the
@@ -47,7 +51,10 @@ read and the landing.
      before this ADR) or `SBPlan`/`SBLand` (the barrier, §2), `SMark` (`contracts.confirm`), each refusal taking the
      record back (`Rollback`, `contracts.take_back`); `Delete` (`contracts.forget`); `Branch` (a branch from main's
      head). `PJudge` (the write judge reads `x`'s rule; under guard PlacedUnderHold while holding `x`'s add fence),
-     `PAdd` (the backend's add under the fence), `PUndrop`; `OTake` (the Overwrite takes `x`'s drop fence for its run),
+     `PAdd` (the backend's add under the fence), `PUndrop`. The placers are a create, a register, a rename in, a table
+     undrop and a namespace undrop (`y`, dropped from `x` by a cascade of `y` with a table in it, made again under `x`
+     with the table beneath it); an undrop reads `x`'s uuid in `PJudge`, under `x`'s add fence with guard UndropHeld,
+     and adds in `PAdd` with no second read, as the code does. `OTake` (the Overwrite takes `x`'s drop fence for its run),
      `ODrop` (the Restrict drop under that fence, once `x` is empty and no add holds it), `OForget`
      (`_forget_namespace`) and `OCreate` (`x` made afresh with a new uuid, declaring the rule, an add under the parent's
      fence). Mix `rule` runs these as the namespace Overwrite, one request; mix `redeclare` as the drop door and then a
@@ -59,7 +66,8 @@ read and the landing.
      last one a set or the delete door answered 200 for, or none), never another: so a set answered 200 is replaced only
      by a later set or delete, and a refused contract never stands in force. `RunRuleHeld`: no table holding data no run
      produced stands in a namespace that requires a run. `OverwriteUnseen`: no placer holds `x`'s add fence while the
-     Overwrite is between its drop and its re-create. `TypeOK`.
+     Overwrite is between its drop and its re-create. `EveryActorMoves`: every unfinished actor of the run rule seam has
+     a step, so none waits on another's hold (§ Lock order). `TypeOK`.
    - **What it proves** (`scripts/tla_check.sh WriteGovernance`, two TLC workers on four cores shared with other
      agents, 2026-11-18), every gate config checking every invariant:
 
@@ -69,8 +77,8 @@ read and the landing.
      | `WriteGovernanceBranch.cfg` | a branch made while a set runs, a drop on it, a restore of main | 1,448 | 1.6 s |
      | `WriteGovernanceSets.cfg` | two sets (the second no longer naming the column) and a delete, a drop and a commit adding the column back | 650,613 | 14.5 s |
      | `WriteGovernanceWide.cfg` | the same with two lost races each | 887,175 | 18 s |
-     | `WriteGovernanceRule.cfg` | a create, a register, a rename in and an undrop beside the Overwrite declaring the rule, in its steps | 702 | 1.9 s |
-     | `WriteGovernanceRedeclare.cfg` | the same beside the drop door and then a create door declaring the rule | 547 | 1.7 s |
+     | `WriteGovernanceRule.cfg` | a create, a register, a rename in, a table undrop and a namespace undrop beside the Overwrite declaring the rule, in its steps | 2,676 | 1.3 s |
+     | `WriteGovernanceRedeclare.cfg` | the same beside the drop door and then a create door declaring the rule | 1,868 | 1.5 s |
 
 2. **Guards**, each with the config that removes it and must fail, and the test that fails without it:
 
@@ -79,7 +87,8 @@ read and the landing.
    | Judged: every commit reads the contract after its plan and refuses what it introduces | `dataplane.commit_stamped`, `managed_versions.judge` (`contracts.require_kept`) | `WriteGovernanceUnjudged.cfg` (ContractKept) | `test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_makes` |
    | JudgedStrict (new, W2): while a set is in flight a commit is held to its contract and to the one in force it replaced | `contracts.ContractRecord.binding`, read by `DoorTable.binding` | `WriteGovernanceJudgedLoose.cfg` (ContractKept) | model only (Could not confirm, §8) |
    | Barrier (new, C1): a set commits on every ref listed once its record stands, a stamped commit whose plan judges the ref's head against the contract | `endpoints/contracts.py` `_verify_on_every_ref` | `WriteGovernanceSecondRead.cfg` (ContractKept) | `test_a_commit_judged_before_its_contract_was_set_does_not_land_after_the_set_answered[door]`, `[stock]` |
-   | OverwriteStamped (new, C2): a table's Overwrite is a stamped commit | `dataplane._overwrite_stamped` | `WriteGovernanceOverwriteRebases.cfg` (ContractKept) | `…[overwrite]` |
+   | OverwriteStamped (new, C2; U2 for the insert door): a table's Overwrite is a stamped commit, at the create door and at the insert door alike | `dataplane._overwrite_stamped` | `WriteGovernanceOverwriteRebases.cfg` (ContractKept) | `…[overwrite]`; `test_an_insert_overwrite_keeps_a_column_added_after_it_read_the_schema[under-a-contract-naming-it]` |
+   | KeepsSchema (new, U2; not modelled, the door's own promise): the insert door's Overwrite refuses a ref whose schema changed since its rows were aligned to it | `dataplane._overwrite_stamped(keeps_schema=True)` | — | `…[under-no-contract]`, and `[under-a-contract-naming-it]` answers code 19 instead of 14 without it |
    | RollbackOwn (new, C3): a refused set takes back only its own record | `contracts.take_back` (`_replace_own`) | `WriteGovernanceRollbackAny.cfg` (RollbackRestoresInForce) | `test_a_refused_set_takes_back_only_the_contract_it_wrote[after-its-record]` |
    | ReplacedInKeep (new, W2): what a refused set puts back is the record its own conditional write replaced | `contracts.keep` (`exchange_json`, `ContractRecord.replaced`) | `WriteGovernanceReplacedRead.cfg` (RollbackRestoresInForce) | `test_a_refused_set_takes_back_only_the_contract_it_wrote[before-its-record]` |
    | RestoreInForce (new, W2): a record written over an in-flight one carries the in-force record that one carried | `contracts.keep` (`ContractRecord.in_force_record`) | `WriteGovernanceRestoreRefused.cfg` (RollbackRestoresInForce) | model only (Could not confirm, §8) |
@@ -89,7 +98,8 @@ read and the landing.
    | OverwriteHeld (new, W1): the namespace Overwrite holds the namespace's drop fence from its emptiness check through its re-create | `endpoints/namespaces.py` `_create_or_replace_empty_namespace` | `WriteGovernanceOverwriteUnheld.cfg` (OverwriteUnseen); with PlacedStanding also off, `WriteGovernanceOverwriteGap.cfg` (RunRuleHeld) | `…[create-between-drop-and-recreate]`, `[register-…]`, `[rename-…]`: answered 404 instead of 409 without it, and a table no run produced stands under the rule without both |
    | RenameJudged: a rename into a namespace requiring a run from one that does not is refused | `write_judge.judge`, `placing` | `WriteGovernanceRenameUnjudged.cfg` (RunRuleHeld) | `test_a_write_names_its_run_where_a_namespace_above_it_requires_one` and the rename case above |
    | RegisterJudged: a register under the rule is refused | `UNSTAMPABLE_DATA_DOORS` | `WriteGovernanceRegisterUnjudged.cfg` (RunRuleHeld) | the register case above |
-   | UndropChecksParent: an undrop lands only in the namespace its table was dropped from, by its uuid | `endpoints/tables.py` undrop ("the namespace it was dropped from is gone") | `WriteGovernanceUndropUnchecked.cfg` (RunRuleHeld) | measured once, below (Candidates) |
+   | UndropChecksParent: an undrop, of a table or of a namespace, lands only in the namespace it was dropped from, by its uuid | `trash_doors.require_its_own_parent` | `WriteGovernanceUndropUnchecked.cfg` (RunRuleHeld) | measured once; under UndropHeld the Overwrite meets the hold first, so no test removes it alone |
+   | UndropHeld (new, U1): an undrop reads that uuid, and the namespace's rule, under the namespace's add fence, held through its register (a namespace undrop: through each create and register beneath it) | `trash_doors.placing_back` (`write_judge.placing`), at `trash_doors.restore_kept_table` and `namespaces.undrop_namespace` | `WriteGovernanceUndropUnheld.cfg` (RunRuleHeld) | `test_a_table_placed_beside_the_overwrite_that_declares_the_rule_does_not_stand_under_it[undrop]`, `[namespace-undrop]` |
 
 3. **C1: a set beside a commit judged before it.** Trace: a commit plans on version N and reads the table's contract
    (none); the set's first read finds every ref meeting the contract, it writes the record, its second read finds every
@@ -238,6 +248,81 @@ read and the landing.
     - **The register door renews its Idempotency-Key after its fence is held** (ADR 0227 §8: renew before the
       irreversible effect, with nothing slow between): `renew_held` moved inside `write_judge.placing`, right before
       `register_table`, so the fence take and the rule reads no longer sit between the renewal and the put.
+11. **U1 (found by the second review, FIXED): an undrop judged its namespace outside the namespace's add fence.** The
+    table undrop read the parent's uuid once, at the door (`require_its_own_parent` on the resolver's read), and
+    registered the table later in `trash_doors.restore_kept_table`, holding only the table's claim fence; the namespace
+    undrop held the add fence of the namespace it restored, not its parent's, and read the parent's uuid before
+    `create_or_keep_namespace` and the tables' registers. The model's undrop did the check in one step with the add
+    (`PAdd`, `pgen[p] # gen`), which the code did not, and the model had no namespace undrop. The namespace Overwrite's
+    emptiness check lists live and declared tables, never trashed ones, so it ran in that gap. Reproduced over HTTP on
+    the parent commit: a table dropped from `plain` (kept in the trash), its undrop held after its parent check and before
+    its claim fence, `plain` overwritten declaring the rule (200), the undrop released (200): the table stood under the
+    rule, attached under a namespace of another uuid; and a namespace `plain$sub` cascade-dropped with a table in it, its
+    undrop held before it made `sub` again, the same Overwrite (200), the undrop released (200): `plain$sub$t` stood
+    under the rule. **Model:** the undrop's uuid read moved into `PJudge`, its add in `PAdd` with no second read, the
+    namespace undrop added as a fifth placer, and guard UndropHeld; `WriteGovernanceUndropUnheld.cfg` (the check outside
+    the hold, as the code did) fails RunRuleHeld, and the gate configs hold with it, checking `EveryActorMoves` too.
+    **Fix: an undrop is a placement like any other.** `trash_doors.placing_back` takes the parent's add fence through
+    `write_judge.placing` (the parent must stand, its rule read; no rule refuses an undrop, which restores what stood
+    under the rule that namespace holds all its life, A3), and inside it `trash_doors.require_its_own_parent` reads the
+    parent's uuid from the backend (not from the request's resolver, which caches the router's earlier read) and refuses
+    another. `restore_kept_table`, the one step both undrops register a table by, runs inside that hold, so every table
+    either undrop restores is placed under its own parent's; the namespace undrop holds its parent's for its whole run
+    and places each namespace it makes again under that namespace's parent's. A caller now sees: an undrop answers 409
+    (code 14) while its namespace is being dropped or made afresh, 404 (code 1) when it does not stand, and 409 (code 19)
+    when another namespace holds its name; a namespace Overwrite answers 409 (code 14) while an undrop into it runs.
+12. **U2 (found by the second review, FIXED): `/insert?mode=overwrite` landed through Lance's own commit.**
+    `dataplane._land_rows` wrote its fragments with `mode="overwrite"` and committed them with
+    `lance.LanceDataset.commit`, unstamped and with no contract read where it landed; its rows had been aligned to the
+    schema the ref had when the request arrived (`coerce_insert_arrow`). Lance lands an Overwrite over anything since its
+    read but another Overwrite or an UpdateConfig of a key it writes (§ Overwrite Compatibility), so the set's barrier
+    ordered nothing against it. Reproduced on the parent commit: the overwrite held after it wrote its fragments, a
+    column `n` added (200), a contract naming `n` set (200, in force), the overwrite released (200): `n` was gone. The
+    door table's sentence that an insert "adds fragments and keeps the schema of the version it lands on" held for an
+    append only. **Model:** the `overwrite` writer is the one path both doors take, so `WriteGovernanceOverwriteRebases.cfg`
+    is this defect's config as it is C2's. **Fix: one path for an Overwrite of a table.** The insert door's overwrite
+    lands through `dataplane._overwrite_stamped`, as the create door's does: a stamped commit on the ref the request
+    names (its branch included, the fragments written onto that ref's handle), judged against the version it lands on
+    and the contract in force there, finalized at the slot after its plan. Its run rule is judged as the create door's
+    Overwrite's is, by the write judge (`insert` is a stamping door) and on the table standing in its namespace (A3). It
+    also keeps the ref's schema, as the spec's InsertIntoTable `mode` states ("remove all data in the table and then
+    insert data to it", `lance_docs/ns_catalog/spec.yaml`), which is why the door asks only the writer rung: a plan on a
+    version whose schema is not the one its rows were aligned to (a column added, dropped or retyped, a field's or the
+    schema's metadata changed) is refused 409 (code 14) before it writes (KeepsSchema), and a retry aligns afresh. The
+    stamped Overwrite also writes its files at the table's own file version rather than the create pin: measured on
+    pylance 13.0.0, `write_fragments(dataset, mode="overwrite", data_storage_version="2.2")` over a 2.0 table writes 2.2
+    files under a manifest still naming 2.0, a mixed table. `_land_rows` now lands appends only. A caller now sees: an
+    insert overwrite racing another commit plans again on the new head; one racing a schema change or a contract its
+    rows break answers 409 (code 14, code 19 for the contract).
+    **The other landings through Lance's own commit, swept:** `_land_rows` (an append, which keeps the schema of the
+    version it lands on), `land_keyed` (the same append under an Idempotency-Key, and a fresh create's first version) and
+    `_write_blob` (a create's first version; its `mode="overwrite"` is reached only by a caller passing no `overwriting`,
+    which `table_create` always passes for a table it overwrites, an Overwrite of a name it found no table under being
+    downgraded to a Create, so no door reaches it). Every other door commits through `commit_stamped` or a stock
+    client's `version/create`. **The other placements, swept:** create, register and rename in judge under
+    `write_judge.placing`; a declare places a table holding no data, whose first version `version/create` judges with the
+    table standing (A3); a clone is a register; a namespace create places no data.
+
+## Lock order
+
+Every take of a namespace fence or a table's claim fence refuses (409, code 14 or 19) rather than waits
+(`lakehouse.fences.HolderFence`), so no request waits on another's hold and no cycle of waits can form; the model's
+`EveryActorMoves` holds in every reachable state of `WriteGovernanceRule.cfg` and `WriteGovernanceRedeclare.cfg`. The
+order still decides which of two requests is refused, and every request holding several takes them in one order:
+namespace fences from the shallowest down, then a table's claim fence, then, for a trash record it files, its
+warehouse's add fence (`lakehouse.trash.put`, which only a warehouse delete excludes). An undrop takes its parent's add
+fence before its own namespace's and before the table's claim, so it keeps that order.
+
+| Request | Takes, in order |
+|---|---|
+| table undrop | the parent's add, then the table's claim (`fence_kept`), then the parent's add again for the backend's register (adds share) |
+| namespace undrop of `y` under `x` | `x`'s add (`placing_back`), `y`'s add (its own, ADR 0233), each namespace's parent's add as it is made again, then each table's parent's add and its claim (`restore_kept_table`) |
+| create, register, rename in | the destination's add (`placing`), then the claim (a create's declaration fence) |
+| namespace Overwrite | `x`'s drop, then `x`'s parent's add for its re-create |
+| cascade drop of `x` | `x`'s drop, then each table's claim in turn with its warehouse's add for the record it files, then each child's drop, deepest first |
+
+A namespace undrop and a cascade of its parent meet at the parent's fence first, an add against a drop, and one of them
+is refused before it holds anything else; a namespace undrop and the Overwrite of its parent likewise.
 
 ## What the model assumes
 
@@ -256,8 +341,9 @@ Every way a version lands or a table's schema, name or location changes, where i
 |---|---|---|
 | `/create` mode=Create of a new name | none: a new table holds no contract (one is set on a table that exists); a name made again after a drop is a new uuid | the write judge, then `write_judge.placing` under the parent's add fence, refusing a parent that does not stand (run named in the Context) |
 | `/create` mode=ExistOk | writes nothing | as Create; nothing placed when the table stands |
-| `/create` mode=Overwrite | `create_table` on its first read, then `commit_stamped` against the version it lands on | the write judge; the table stands in its namespace (A3) |
-| `/insert`, `/merge_insert` | `commit_stamped`; an append through Lance's own commit (`land_keyed`, `_land_rows`) adds fragments and keeps the schema of the version it lands on | the write judge: run named |
+| `/create` mode=Overwrite | `create_table` on its first read, then `commit_stamped` (`_overwrite_stamped`) against the version it lands on | the write judge; the table stands in its namespace (A3) |
+| `/insert` mode=overwrite | `_overwrite_stamped`, as the create door's Overwrite: `commit_stamped` against the version it lands on, on the ref it names; refused 409 (code 14) when that version's schema is not the one its rows were aligned to, since it keeps the ref's schema (U2) | the write judge: run named; the table stands in its namespace (A3) |
+| `/insert` (append), `/merge_insert` | `commit_stamped`; an append through Lance's own commit (`land_keyed`, `_land_rows`) adds fragments and keeps the schema of the version it lands on | the write judge: run named |
 | `/update`, `/delete`, `add_columns`, `alter_columns`, `drop_columns`, `update_field_metadata`, `schema_metadata/update`, `drop_index` | `commit_stamped`, against the version it lands on | `update`, `add_columns` refused under the rule; the others add no data |
 | `backfill_column` | not judged: the backend answers 406 (unserved) | not judged, likewise |
 | `/restore` (to any version, one older than the contract included) | `commit_stamped` (a Restore): refused when the restored schema breaks a contracted column the head keeps, and only then (the set's version carries no key a restore rewinds, §9); a stock client's restore likewise at `version/create` | adds no data the table did not hold under the same rule (A3) |
@@ -268,7 +354,7 @@ Every way a version lands or a table's schema, name or location changes, where i
 | branch create | not judged: a branch cut from a version older than the contract carries that version's violation (ADR 0212 §4); commits on it are judged as main's | the table's namespace |
 | a branch's commits | as main's, against the branch's head | as main's |
 | tag create, update, delete | no version, no schema | no data |
-| soft drop, undrop | the record is kept through the trash (`OBJECT_RECORD_PREFIXES` end at purge), so an undrop keeps its contract | the undrop lands only in the namespace its table was dropped from, by uuid |
+| soft drop, undrop (of a table, or of a namespace and the tables beneath it) | the record is kept through the trash (`OBJECT_RECORD_PREFIXES` end at purge), so an undrop keeps its contract | `trash_doors.placing_back` under the parent's add fence, refusing a parent that does not stand, and inside it `require_its_own_parent`: the undrop lands only in the namespace it was dropped from, by uuid (U1) |
 | purge, deregister | the record ends with the table | — |
 | the contract's set | its first read (`_require_described`), its record kept in flight, its barrier on every ref, then its own record marked in force (`contracts.confirm`) | — |
 | any commit while a set is in flight | held to the in-flight contract and to the one in force it replaced (`ContractRecord.binding`) | — |
@@ -311,6 +397,11 @@ register of the same bytes or a clone hold none.
   runs is held to two contracts.
 - A namespace Overwrite holds its namespace's drop fence while it forgets the dropped namespace's grants; a placement
   into the namespace meanwhile answers 409 and is retried.
+- An undrop holds its parent namespace's add fence through its register, and a namespace undrop for its whole run; a
+  drop or Overwrite of that parent answers 409 meanwhile and is retried. Each namespace and table an undrop places back
+  costs a fence take and the describes of the namespaces above it.
+- An insert overwrite under contention plans again rather than landing over another commit, and one racing a schema
+  change answers 409 for the caller to align its rows again.
 - **Four facts.** GitOps: nothing new is live-only; a contract applied from git converges as before. Cloud native: no
   new workload. Lance-namespace and table idiomatic: the set is ordered by Lance's own put-if-not-exists of the next
   version, its own Lance operation (an `UpdateConfig` that updates nothing), which leaves nothing a restore or a stock client must carry. Zero trust: no writer is trusted to have read the latest
@@ -337,5 +428,11 @@ register of the same bytes or a clone hold none.
 - **A commit held to the in-flight contract alone while a set runs** (the reading before W2).
   `WriteGovernanceJudgedLoose.cfg` fails: a set loosening the contract lets a commit through that its refusal then makes
   a violation of the contract it puts back.
+- **The insert door's Overwrite re-aligning its rows to the version it plans on.** A column added since would be
+  missing from the rows and refused 400 by the alignment, and one dropped would be extra; the caller's rows were
+  written for the schema it read, so the door answers the race 409 and the caller's retry aligns afresh.
+- **Holding only each placement's own parent in a namespace undrop.** It is enough for the run rule (once `y` stands in
+  `x`, `x` is not empty and no Overwrite drops it), but it takes `y`'s fence before `x`'s, the opposite of a cascade of
+  `x`; the parent's hold over the whole run keeps one order.
 - **Refusing a namespace Overwrite that declares the rule.** It is how the rule is dropped and declared again (ADR 0211
   §2); the race is the placement's, which now reads the rule under the fence it adds under.

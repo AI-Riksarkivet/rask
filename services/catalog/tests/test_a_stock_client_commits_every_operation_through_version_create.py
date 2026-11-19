@@ -2080,6 +2080,36 @@ def test_a_commit_judged_before_its_contract_was_set_does_not_land_after_the_set
     assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] == contract
 
 
+#: ``_CONTRACT`` naming the column ``n`` an ``add_columns`` makes, in place of ``v``.
+_KEEPS_N = _with_v({"name": "n", "physicalType": "int64"}, "1.0.0")
+
+
+@pytest.mark.parametrize("contracted", [True, False], ids=["under-a-contract-naming-it", "under-no-contract"])
+def test_an_insert_overwrite_keeps_a_column_added_after_it_read_the_schema(served: Served, monkeypatch: pytest.MonkeyPatch, contracted: bool) -> None:
+    """ADR 0244 C2 and U2: ``/insert?mode=overwrite`` lands as the create door's Overwrite does, a stamped commit judged
+    against the version it lands on, and it keeps the ref's schema, as the spec's InsertIntoTable mode says. Held after
+    it wrote its fragments, aligned to the table's schema when it arrived, a column is added and, in one case, a contract
+    naming it set and answered 200; released, the overwrite loses its slot, plans again on a schema it was not aligned to
+    and is refused 409 (code 14), and the column stands."""
+    stock = _created(served)
+    held = _HeldOnce(lance.fragment.write_fragments)
+    monkeypatch.setattr(lance.fragment, "write_fragments", held)
+    answers: list[tuple[int, int | None]] = []
+    body = encode_arrow_stream(_keyed([9], ["z"]))
+    overwriting = _in_thread(lambda: answers.append(_answered(served, "/v1/table/lance_catalog$db$t/insert?mode=overwrite", arrow=body)))
+    assert held.arrived.wait(30), "the overwrite never wrote its fragments"
+
+    assert _answered(served, "/v1/table/lance_catalog$db$t/add_columns", {"new_columns": [{"name": "n", "expression": "id * 2"}]}) == (200, None)
+    if contracted:
+        assert _answered(served, f"{_CONTRACT_DOOR}/set", _KEEPS_N) == (200, None)
+        assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["in_force"] is True
+    held.release.set()
+    overwriting.join(60)
+
+    assert "n" in _opened(stock).schema.names, f"insert?mode=overwrite answered {answers} and dropped column n, added after it read the schema"
+    assert answers == [(409, 14)], answers
+
+
 #: Where the first set is held, and the two contracts: ``after-its-record`` right after it wrote its record, which the
 #: second set's then replaces; ``before-its-record`` (review W2) after its first read and before it writes its record,
 #: which then replaces the second's, answered 200.

@@ -119,7 +119,9 @@ Two contracts stack here, and confusing them is how bugs happen:
   its rollback: a fence that lapsed during the write and that another request took since answers 409 code 14
   (`FenceLostError`) with nothing committed and nothing rolled back (ADR 0227 §8). Every undrop restores a table through
   ONE step, `trash_doors.restore_kept_table`, the table door's and the namespace undrop's for each table its cascade
-  filed: it fences the claim the drop kept (`table_claims.fence_kept`) before the register and lifts it once the trash
+  filed: it is a placement (ADR 0244 U1), holding the parent namespace's add fence (`trash_doors.placing_back`, through
+  `write_judge.placing`) from its read of the parent's uuid (`require_its_own_parent`, a fresh describe, never the
+  resolver's cached one) until the record is cleared; then it fences the claim the drop kept (`table_claims.fence_kept`) before the register and lifts it once the trash
   record is cleared, reads the record again under the fence, and takes a TableAlreadyExists as its own only while the
   name describes that uuid at that location. A drop reads protection again once it holds its fence, and so does each
   table step of a namespace cascade (`_destroy_listed_table`, `_trash_listed_table`, through the door's `unprotected`):
@@ -465,9 +467,12 @@ the rule:
   renames, retypes or loosens a contracted column is refused 409 code 19 (`contracts.require_kept`, which refuses only a
   violation the commit introduces over the version it follows, so a table already breaking its contract is not frozen)
   where every commit passes: `managed_versions.judge` (a stock client), `dataplane.commit_stamped` (every catalog door, a
-  restore and the create door's Overwrite included, `dataplane._overwrite_stamped`); each reads the binding off the
-  control root through `DoorTable.binding`. Modelled in `specs/catalog/WriteGovernance.tla` with the run rule, whose
-  placements (create, register, rename in) read the rule again under the namespace's add fence and refuse there a
+  restore and both Overwrites included, `create?mode=Overwrite` and `insert?mode=overwrite` alike through
+  `dataplane._overwrite_stamped`, ADR 0244 U2; the insert's also refuses 409 code 14 a ref whose schema changed since
+  its rows were aligned to it, since it keeps the schema); each reads the binding off the
+  control root through `DoorTable.binding`. Only an append lands through Lance's own commit (`_land_rows`, `land_keyed`).
+  Modelled in `specs/catalog/WriteGovernance.tla` with the run rule, whose
+  placements (create, register, rename in, both undrops) read the rule again under the namespace's add fence and refuse there a
   namespace that does not stand (`write_judge.placing`, 404 code 1), while the namespace Overwrite holds the
   namespace's drop fence from its emptiness check through its re-create (a placement meanwhile is 409 code 14).
   Pinned by `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py`.
@@ -853,7 +858,9 @@ governing their data. The project-scoped surface is the console's project page, 
   as a table's, so a re-issue finishes a cascade cut short; shared drop-time `expires_at`; tuples
   KEPT, the same #75 rule). `POST /management/v1/namespace/{id}/undrop` is the PLURAL undrop: it restores the
   records one cascade filed (`cascade` equal to the chosen namespace's uuid), rebuilding every namespace
-  shallowest-first and re-registering every table (relative-location form), and clears the namespaces' records only
+  shallowest-first and re-registering every table (relative-location form), each under its parent's add fence with
+  its parent's uuid read inside it (the root's parent held for the whole run, before the namespace's own fence: ADR
+  0244 § Lock order), and clears the namespaces' records only
   once every table is back, deepest first and its own last, so it is resumable (`exist_ok` creates;
   already-registered = recovered; ADR 0233);
   `GET /management/v1/namespace/{id}/tasks` shows the subtree's deadline; `purge=true` is the same explicit

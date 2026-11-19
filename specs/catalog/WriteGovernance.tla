@@ -28,7 +28,9 @@
 (*             Each writer drops column a, or adds column b, or adds a     *)
 (*             back, or restores the table's first version                 *)
 (*             (dataplane.restore).                                        *)
-(*   overwrite /create mode=Overwrite of a table (dataplane.create_table): *)
+(*   overwrite /create mode=Overwrite of a table (dataplane.create_table)  *)
+(*             or /insert mode=overwrite (dataplane.insert_into_table),    *)
+(*             both through dataplane._overwrite_stamped: without it,      *)
 (*             judged against the head and the contract it read first;     *)
 (*             landed by Lance's own commit, which lands an Overwrite over *)
 (*             whatever committed since (lance_docs/lance/format/table/    *)
@@ -69,9 +71,18 @@
 (*             rule, UNSTAMPABLE_DATA_DOORS);                              *)
 (*   rename    a rename into x from a namespace that does not require a    *)
 (*             run (refused into one that does, write_judge.judge);        *)
-(*   undrop    the undrop of a table soft-dropped from x, which lands it   *)
-(*             in x only while x is the namespace it was dropped from      *)
-(*             (UndropChecksParent).                                       *)
+(*   undrop    the undrop of a table soft-dropped from x                   *)
+(*             (tables.undrop_table, trash_doors.restore_kept_table),      *)
+(*             which lands it in x only while x is the namespace it was    *)
+(*             dropped from, by x's uuid (UndropChecksParent);             *)
+(*   nsundrop  the undrop of a namespace y a cascade of y dropped from x   *)
+(*             with a table in it (namespaces.undrop_namespace): y made    *)
+(*             again under x, its table registered under y, so the table   *)
+(*             stands beneath x and under x's rule. It holds y's own ADD   *)
+(*             fence for its run, which excludes nothing on x. Each undrop *)
+(*             judges x's uuid, and places beneath x, as one placement     *)
+(*             (UndropHeld): x's ADD fence first, then y's and the table's *)
+(*             claim fence, each take refused rather than waited for.      *)
 (*                                                                         *)
 (* THE PROPERTY. No committed version of a governed table breaks the rule  *)
 (* that stood when it committed:                                           *)
@@ -90,7 +101,11 @@
 (*   RunRuleHeld      no table stands in a namespace that requires a run   *)
 (*                    holding data no run produced;                        *)
 (*   OverwriteUnseen  no placer holds x's ADD fence while the Overwrite is *)
-(*                    between its drop and its re-create.                  *)
+(*                    between its drop and its re-create;                  *)
+(*   EveryActorMoves  no unfinished actor of the run rule seam waits on    *)
+(*                    another's hold: each has a step, since every take of *)
+(*                    a fence refuses (409) rather than waits, so no       *)
+(*                    order of takes can deadlock.                         *)
 (*                                                                         *)
 (* WHAT THE MODEL ASSUMES, and where each is held:                         *)
 (*   A1. A version slot is filled put-if-not-exists (CommitPath A1).       *)
@@ -143,8 +158,12 @@
 (*                   that does not is refused (write_judge.judge).         *)
 (*   RegisterJudged  a register under the rule is refused                  *)
 (*                   (UNSTAMPABLE_DATA_DOORS).                             *)
-(*   UndropChecksParent  an undrop lands only in the namespace its table   *)
-(*                   was dropped from, by its uuid (tables.py undrop).     *)
+(*   UndropChecksParent  an undrop lands only in the namespace it was      *)
+(*                   dropped from, by its uuid                             *)
+(*                   (trash_doors.require_its_own_parent).                 *)
+(*   UndropHeld      an undrop reads that uuid, and x's rule, under x's    *)
+(*                   ADD fence, which it keeps until it is placed          *)
+(*                   (trash_doors.placing_back, write_judge.placing).      *)
 (*                                                                         *)
 (* NOT MODELLED, each argued in ADR 0244: the columns' types and           *)
 (* nullability (a contracted column kept at another type or looser is a    *)
@@ -165,7 +184,7 @@ CONSTANTS Mix,       \* which actors: "gate", "branch", "sets", "rule", "redecla
           Off        \* the guards a config removes
 
 Guards == {"Judged", "JudgedStrict", "Barrier", "OverwriteStamped", "RollbackOwn", "ReplacedInKeep", "RestoreInForce", "MarkOwn",
-           "PlacedUnderHold", "PlacedStanding", "OverwriteHeld", "RenameJudged", "RegisterJudged", "UndropChecksParent"}
+           "PlacedUnderHold", "PlacedStanding", "OverwriteHeld", "RenameJudged", "RegisterJudged", "UndropChecksParent", "UndropHeld"}
 ASSUME Off \subseteq Guards
 On(g) == g \notin Off
 
@@ -188,8 +207,10 @@ Sets == CASE Mix = "sets" -> {"s1", "s2"} [] Mix \in {"rule", "redeclare"} -> {}
 K == [s \in Sets |-> IF s = "s2" THEN {"c"} ELSE {"a"}]
 Deletes == IF Mix = "sets" THEN {"d1"} ELSE {}
 Branching == Mix = "branch"
-Placers == IF Mix \in {"rule", "redeclare"} THEN {"p1", "p2", "p3", "p4"} ELSE {}
-Door == [p \in Placers |-> CASE p = "p1" -> "create" [] p = "p2" -> "register" [] p = "p3" -> "rename" [] OTHER -> "undrop"]
+Placers == IF Mix \in {"rule", "redeclare"} THEN {"p1", "p2", "p3", "p4", "p5"} ELSE {}
+Door == [p \in Placers |-> CASE p = "p1" -> "create" [] p = "p2" -> "register" [] p = "p3" -> "rename" [] p = "p4" -> "undrop" [] OTHER -> "nsundrop"]
+\* The undrops: each restores what a drop took from x, and is judged by x's uuid rather than by the rule.
+Undrops == {"undrop", "nsundrop"}
 Doors == Sets \cup Deletes
 \* Whether the actor remaking x keeps x's DROP fence across its steps: only the Overwrite, one request, can.
 Holds == Mix = "rule" /\ On("OverwriteHeld")
@@ -252,7 +273,7 @@ Init ==
   /\ spc = [s \in Sets |-> "first"] /\ sreplaced = [s \in Sets |-> None] /\ slist = [s \in Sets |-> {}]
   /\ splan = [s \in Sets |-> 0] /\ stries = [s \in Sets |-> 0]
   /\ nslive = TRUE /\ rule = FALSE /\ gen = 1 /\ adds = {} /\ odrop = FALSE /\ placed = {}
-  /\ ppc = [p \in Placers |-> IF Door[p] = "undrop" THEN "dropped" ELSE "judge"]
+  /\ ppc = [p \in Placers |-> IF Door[p] \in Undrops THEN "dropped" ELSE "judge"]
   /\ pjudged = [p \in Placers |-> FALSE] /\ pgen = [p \in Placers |-> 1]
   /\ opc = IF Placers = {} THEN "done" ELSE "take"
 
@@ -397,37 +418,40 @@ Branch ==
 \* --------------------------------------------------------------------------
 \* The run rule seam: namespace x, which declares nothing at first.
 
-\* A placer under PlacedUnderHold takes x's ADD fence first, refused (409) while the actor remaking x holds its DROP
-\* fence, and reads the rule inside it: x missing is refused (PlacedStanding), else the rule it reads is the one it
-\* lands under. Without the hold every add holds the fence only for the backend call (fenced_namespace), PAdd.
+\* A placer under PlacedUnderHold (an undrop under UndropHeld) takes x's ADD fence first, refused (409) while the actor
+\* remaking x holds its DROP fence, and reads the rule inside it: x missing is refused (PlacedStanding), else the rule it
+\* reads is the one it lands under. An undrop reads x's uuid in the same step, and refuses an x made afresh since its drop
+\* (UndropChecksParent); unheld, a missing x reads no uuid and passes, and its add then finds no x. Without the hold every
+\* add holds the fence only for the backend call (fenced_namespace), PAdd.
 PJudge(p) ==
   /\ ppc[p] = "judge"
-  /\ LET held == On("PlacedUnderHold") /\ Door[p] # "undrop" IN
+  /\ LET held == IF Door[p] \in Undrops THEN On("UndropHeld") ELSE On("PlacedUnderHold") IN
        IF held /\ odrop
        THEN ppc' = [ppc EXCEPT ![p] = "refused"] /\ UNCHANGED <<adds, pjudged>>
        ELSE /\ adds' = IF held THEN adds \cup {p} ELSE adds
             /\ pjudged' = [pjudged EXCEPT ![p] = nslive /\ rule]
             /\ ppc' = [ppc EXCEPT ![p] =
                  IF held /\ ~nslive /\ On("PlacedStanding") THEN "refused"
+                 ELSE IF Door[p] \in Undrops /\ On("UndropChecksParent") /\ nslive /\ pgen[p] # gen THEN "refused"
                  ELSE IF nslive /\ rule /\ (Door[p] = "create" \/ (Door[p] = "register" /\ On("RegisterJudged"))
                                              \/ (Door[p] = "rename" /\ On("RenameJudged")))
                  THEN "refused" ELSE "add"]
   /\ UNCHANGED <<nslive, rule, gen, odrop, placed, pgen, opc, cvars>>
 
-\* The add: the backend's register under x's ADD fence, refused while x is dropped or its drop holds the fence.
+\* The add: the backend's register (an nsundrop's create of y and its table's register beneath it) under x's ADD fence,
+\* refused while x is dropped or its drop holds the fence. It reads neither x's rule nor its uuid again.
 PAdd(p) ==
   /\ ppc[p] = "add"
   /\ \/ /\ nslive /\ (p \in adds \/ ~odrop)
-        /\ IF Door[p] = "undrop" /\ On("UndropChecksParent") /\ pgen[p] # gen
-           THEN ppc' = [ppc EXCEPT ![p] = "refused"] /\ UNCHANGED placed
-           ELSE ppc' = [ppc EXCEPT ![p] = "done"] /\ placed' = placed \cup {p}
+        /\ ppc' = [ppc EXCEPT ![p] = "done"] /\ placed' = placed \cup {p}
      \/ /\ ~nslive \/ (p \notin adds /\ odrop)
         /\ ppc' = [ppc EXCEPT ![p] = "refused"] /\ UNCHANGED placed
   /\ adds' = adds \ {p}
   /\ UNCHANGED <<nslive, rule, gen, odrop, pjudged, pgen, opc, cvars>>
 
-\* An undrop's table was soft-dropped from x before the behaviour: the trash records x's uuid. Its undrop is judged by
-\* the write judge with no rule refusal (it is no data door, and moves nothing in from outside).
+\* An undrop's table (an nsundrop's namespace) was dropped from x before the behaviour: the trash records x's uuid. No
+\* rule refuses an undrop (it is no data door, and moves nothing in from outside): what it restores stood in x under the
+\* rule x holds all its life, which only another x, of another uuid, can change (A3).
 PUndrop(p) ==
   /\ ppc[p] = "dropped"
   /\ ppc' = [ppc EXCEPT ![p] = "judge"]
@@ -504,4 +528,9 @@ RunRuleHeld == nslive /\ rule => placed = {}
 
 \* While the Overwrite is between its drop and its re-create, no placer holds x's ADD fence.
 OverwriteUnseen == Mix = "rule" /\ opc \in {"forget", "create"} => adds = {}
+
+\* No actor of the run rule seam is stuck behind another's hold: every unfinished one has a step.
+EveryActorMoves ==
+  /\ \A p \in Placers : ppc[p] \notin {"done", "refused"} => ENABLED (PJudge(p) \/ PAdd(p) \/ PUndrop(p))
+  /\ opc # "done" => ENABLED (OTake \/ ODrop \/ OForget \/ OCreate)
 =============================================================================

@@ -1107,13 +1107,18 @@ async def undrop_namespace(
     restores the namespace its caller names (``?uuid=`` when several held the name, 409 listing each one's uuid and
     deadline otherwise) and what the cascade that dropped it filed under it, each object under its own uuid. While
     another namespace holds the name, or the parent's name is held by a namespace other than the one it was dropped
-    from, it answers 409."""
+    from, it answers 409. Each namespace and table it restores is placed back as a create places one (ADR 0244): under
+    its parent's add fence, which it holds from its read of that parent's uuid through its create or register, so a
+    parent being dropped or made afresh answers 409 (code 14) and one that does not stand 404 (code 1)."""
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
     so = settings.storage_options()
-    # The namespace's fence held for an add while the subtree is restored (ADR 0233): its drop holds it for a drop, so the
-    # undrop never registers a table the cascade is still filing and detaching, nor clears a record the cascade just filed.
-    async with _held_by_the_door(settings, segments, NamespaceWork.ADD):
+    # The parent's add fence first, as every placement takes it (ADR 0244): the namespace is placed back under its parent,
+    # which no drop or Overwrite can make afresh, perhaps under the run rule, while it is held. Then the namespace's own
+    # fence for an add while the subtree is restored (ADR 0233): its drop holds it for a drop, so the undrop never
+    # registers a table the cascade is still filing and detaching, nor clears a record the cascade just filed. Parent
+    # before child, then each table's claim, the order every request holding several takes them in (ADR 0244 § Lock order).
+    async with trash_doors.placing_back(ns, settings, segments=segments, name=canonical), _held_by_the_door(settings, segments, NamespaceWork.ADD):
         trashed = await resolver.admitted_trash("namespace", segments)
         if not trashed:
             raise NamespaceNotFoundError(f"no recoverable drop for namespace: {canonical}. The grace period may have expired, or the drop purged its subtree.")
@@ -1125,8 +1130,6 @@ async def undrop_namespace(
         standing = await resolver.namespace_uuid(segments)
         if standing is not None and standing != root_uuid:
             raise NamespaceAlreadyExistsError(f"cannot undrop namespace {canonical!r}: another namespace holds the name now; drop it first")
-        if len(segments) > 1:
-            trash_doors.require_its_own_parent(record, standing=await resolver.namespace_uuid(segments[:-1]), name=canonical)
         # Read whole, as the name's own records were (``trash.named``): a record that cannot be read may be one this cascade
         # filed, which the undrop would leave for the purge under a subtree its owner was told is restored ([[LH-572]]).
         everything = await run_in_threadpool(trash.every_record, settings.registry_root, so)
@@ -1152,9 +1155,15 @@ async def undrop_namespace(
             # `undrop_table_already_registered` — so the docstring's "rerun finishes the job" was true of
             # tables and false of namespaces. And the false half gated the true one: namespaces are rebuilt
             # shallowest-FIRST, so a rerun aborted before it ever reached the tolerant loop.
+            #
+            # EACH NAMESPACE IS PLACED BACK AS A TABLE IS (ADR 0244): under its parent's add fence, the parent read as the
+            # one it was dropped from, so none is made again under a parent another request made afresh meanwhile. Each
+            # table below is placed back the same way, by the table undrop's own step.
             n_segments = parse_identifier(n_id)
             rebuilt = CreateNamespaceRequest(id=n_segments, mode="exist_ok", properties=n_rec.get("properties"))
-            created, _kept = await create_or_keep_namespace(ns, n_segments, rebuilt)
+            async with trash_doors.placing_back(ns, settings, segments=n_segments, name=n_id):
+                await trash_doors.require_its_own_parent(ns, n_rec, segments=n_segments, name=n_id)
+                created, _kept = await create_or_keep_namespace(ns, n_segments, rebuilt)
             if n_id == canonical:
                 response = created
         skipped = 0

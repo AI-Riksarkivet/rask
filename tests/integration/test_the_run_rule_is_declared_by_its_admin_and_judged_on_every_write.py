@@ -9,6 +9,7 @@ judged by what it declares, never by its name.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from collections.abc import AsyncGenerator, Callable, Iterator
@@ -25,6 +26,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.testclient import TestClient
 
 from catalog.api.dependencies import get_namespace
+from catalog.api.v1.endpoints import namespaces
 from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, projects, table_claims, warehouses
 from lakehouse.governed import fga
@@ -252,10 +254,22 @@ _AT_ITS_FENCE = ("holding", "")
 class _Placement:
     """A door placing a table holding data no run produced into namespace `plain`, how the namespace is made afresh under
     the rule beside it, and where the door is held: ``before`` its add fence, after the write judge, and ``inside`` it,
-    after it read the rule again (each a backend call, ``(method, last segment)``, or :data:`_AT_ITS_FENCE`)."""
+    after it read the rule again (each a backend call, ``(method, last segment)``, or :data:`_AT_ITS_FENCE`), or right
+    before the step ``gated`` names (``(module, function)``), its last before the backend call that adds. ``prepare``
+    makes what the door places back, and ``table`` is the table it places."""
 
-    def __init__(self, send: Callable[[TestClient], httpx.Response], *, remade: str, before: tuple[str, str] | None, inside: tuple[str, str] | None) -> None:
-        self.send, self.remade, self.before, self.inside = send, remade, before, inside
+    def __init__(
+        self,
+        send: Callable[[TestClient], httpx.Response],
+        *,
+        remade: str,
+        before: tuple[str, str] | None,
+        inside: tuple[str, str] | None,
+        gated: tuple[object, str] | None = None,
+        prepare: Callable[[TestClient, pytest.MonkeyPatch], None] | None = None,
+        table: str = "lance_catalog$plain$t",
+    ) -> None:
+        self.send, self.remade, self.before, self.inside, self.gated, self.prepare, self.table = send, remade, before, inside, gated, prepare, table
 
 
 def _create_existok(client: TestClient) -> httpx.Response:
@@ -268,6 +282,25 @@ def _register(client: TestClient) -> httpx.Response:
 
 def _rename(client: TestClient) -> httpx.Response:
     return client.post(_RENAME, json=_INTO_PLAIN)
+
+
+def _kept_for_a_week(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A drop kept in the trash, so an undrop has something to place back."""
+    monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "7")
+    get_settings.cache_clear()
+
+
+def _a_dropped_table(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _kept_for_a_week(monkeypatch)
+    assert client.post(_CREATE, content=_rows()).status_code == 200
+    assert client.post("/v1/table/lance_catalog$plain$t/drop", json={}).status_code == 200
+
+
+def _a_dropped_namespace(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _kept_for_a_week(monkeypatch)
+    assert client.post("/v1/namespace/lance_catalog$plain$sub/create", json={}).status_code == 200
+    assert client.post("/v1/table/lance_catalog$plain$sub$t/create?mode=create", content=_rows()).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$plain$sub/drop", json={"behavior": "Cascade"}).status_code == 200
 
 
 #: ``remade`` is "overwrite", the namespace Overwrite run whole while the door is held; "gap", the Overwrite held between
@@ -285,7 +318,45 @@ _PLACEMENTS: dict[str, _Placement] = {
     "register-between-drop-and-recreate": _Placement(_register, remade="gap", before=_AT_ITS_FENCE, inside=("register_table", "t")),
     "rename-between-drop-and-recreate": _Placement(_rename, remade="gap", before=_AT_ITS_FENCE, inside=("deregister_table", "s")),
     "create-after-a-drop-and-a-create": _Placement(_create_existok, remade="redeclared", before=("describe_table", "t"), inside=("describe_table", "t")),
+    # An undrop is a placement too: held after it judged which namespace it goes back into, right before the claim fence
+    # its register is made under (a namespace undrop: before it makes `sub` again under `plain`).
+    "undrop": _Placement(
+        lambda client: client.post("/management/v1/table/lance_catalog$plain$t/undrop", json={}),
+        remade="overwrite",
+        before=None,
+        inside=None,
+        gated=(table_claims, "fence_kept"),
+        prepare=_a_dropped_table,
+    ),
+    "namespace-undrop": _Placement(
+        lambda client: client.post("/management/v1/namespace/lance_catalog$plain$sub/undrop", json={}),
+        remade="overwrite",
+        before=None,
+        inside=None,
+        gated=(namespaces, "create_or_keep_namespace"),
+        prepare=_a_dropped_namespace,
+        table="lance_catalog$plain$sub$t",
+    ),
 }
+
+
+def _gate_before(monkeypatch: pytest.MonkeyPatch, module: object, name: str, gate: Any) -> None:  # noqa: ANN401 — the lifecycle test's gate
+    """``module.name`` held at ``gate`` right before it runs, whether the step is a coroutine or a blocking call."""
+    real: Callable[..., Any] = getattr(module, name)
+    if inspect.iscoroutinefunction(real):
+
+        async def _held_async(*args: object, **kwargs: object) -> object:
+            await run_in_threadpool(gate.hold)
+            return await real(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, _held_async)
+        return
+
+    def _held(*args: object, **kwargs: object) -> object:
+        gate.hold()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, _held)
 
 
 def _gated(holding: Callable[..., AbstractAsyncContextManager[None]], gate: Any) -> Callable[..., AbstractAsyncContextManager[None]]:  # noqa: ANN401 — the lifecycle test's gate
@@ -311,7 +382,8 @@ def test_a_table_placed_beside_the_overwrite_that_declares_the_rule_does_not_sta
     way the namespace is made afresh declaring the rule beside the door, one of the two lands, and no table holding data
     no run produced stands under the rule. A door sent while the Overwrite is between its drop and its re-create is
     refused for the Overwrite's hold (409, code 14), and one whose namespace was dropped under it for the namespace
-    (404, code 1)."""
+    (404, code 1). An undrop, of a table or of a namespace holding one, places it back the same way (ADR 0244 U1): it
+    reads which namespace it goes back into under that namespace's add fence and keeps it through its register."""
     from catalog.core import fenced_namespace
     from tests.integration.test_a_lifecycle_door_keeps_what_it_answered_beside_a_concurrent_door import _Gate, _holding, _Request
 
@@ -322,12 +394,17 @@ def test_a_table_placed_beside_the_overwrite_that_declares_the_rule_does_not_sta
     outside = tmp_path / "outside" / "registered"
     lance.write_dataset(pa.table({"id": pa.array([0], pa.int64())}), str(outside), data_storage_version="2.2", enable_stable_row_ids=True)
     case = _PLACEMENTS[door]
+    if case.prepare is not None:
+        case.prepare(client, monkeypatch)
     held = _holding()
     before = held.at(*case.before, _Gate()) if case.before not in (None, _AT_ITS_FENCE) else None
     if case.before == _AT_ITS_FENCE:
         before = _Gate()
         monkeypatch.setattr(fenced_namespace, "holding", _gated(fenced_namespace.holding, before))
     inside = held.at(*case.inside, _Gate()) if case.inside is not None else None
+    if case.gated is not None:
+        inside = _Gate()
+        _gate_before(monkeypatch, *case.gated, inside)
     # The Overwrite's first create of the namespace is refused (it stands); its second is the re-create after the drop.
     if case.remade == "gap":
         held.at("create_namespace", "plain", _Gate()).release.set()
@@ -363,7 +440,7 @@ def test_a_table_placed_beside_the_overwrite_that_declares_the_rule_does_not_sta
     placed = placing.answer()
 
     rule = client.post("/v1/namespace/lance_catalog$plain/describe", json={}).json()["properties"].get("rask.requires_run")
-    stands = client.post("/v1/table/lance_catalog$plain$t/describe", json={}).status_code == 200
+    stands = client.post(f"/v1/table/{case.table}/describe", json={}).status_code == 200
     assert not (rule == "true" and stands), (
         f"{door} answered {placed} and the namespace was made afresh {remade}: a table no run produced stands under the rule"
     )

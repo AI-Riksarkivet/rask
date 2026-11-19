@@ -1641,6 +1641,11 @@ async def undrop_table(
     one's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another
     table holds the name the undrop answers 409: two tables cannot share it. What it announces is filed before it takes
     the location back, so a door failing after the re-registration still announces it ([[LH-576]]).
+
+    The undrop places the table back as a create places one (ADR 0244): under its namespace's add fence it reads that
+    the namespace stands and is the one the table was dropped from, and registers it (``trash_doors.restore_kept_table``).
+    A namespace dropped and made again since, perhaps under the run rule, answers 409 (code 19); one being dropped or made
+    afresh meanwhile answers 409 (code 14); one that does not stand answers 404 (code 1).
     """
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
@@ -1658,7 +1663,6 @@ async def undrop_table(
     standing = await resolver.table(segments, ns=ns)
     if standing.location is not None and standing.uuid != record_uuid:
         raise TableAlreadyExistsError(f"cannot undrop {canonical}: another table holds the name now; rename or drop it first")
-    trash_doors.require_its_own_parent(record, standing=await resolver.namespace_uuid(segments[:-1]), name=canonical)
     # The absolute URL the record kept, for an operator and for the announcement; the step re-attaches the table at the
     # relative key it decodes to ([[LH-517]]).
     location = str(record["location"])
