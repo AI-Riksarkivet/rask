@@ -211,6 +211,16 @@ class _NotServedError(RuntimeError):
     is not the store's shape, or no time left."""
 
 
+class SecretStoreUnansweredError(ConnectionError):
+    """The store gave no answer about a secret: it could not be reached, ran out the caller's time, asked the caller to
+    come back (408, 429), or answered a server error. It says nothing of the secret, where any other 4xx is the store's
+    own answer that it is not there, or not this process's to read."""
+
+
+#: The 4xx answers that say "not now" rather than "no": the request ran out the store's time, or its rate limit.
+_COME_BACK: Final = frozenset({httpx.codes.REQUEST_TIMEOUT, httpx.codes.TOO_MANY_REQUESTS})
+
+
 #: What an attempt raises when the store did not serve it: a transport fault or a refusal (`httpx.HTTPError`), or this
 #: module's own finding. Anything else is a defect and propagates.
 _NOT_SERVED: Final = (httpx.HTTPError, _NotServedError)
@@ -390,13 +400,37 @@ class SecretStore:
         Raises:
             ValueError: ``name`` is no secret name.
         """
+        try:
+            return self.read_answered(name, timeout=timeout, retries=retries, backoff=backoff)
+        except SecretStoreUnansweredError:
+            return {}
+
+    def read_answered(
+        self, name: str, *, timeout: float = _BOOT_ATTEMPT_SECONDS, retries: int = _BOOT_ATTEMPTS, backoff: float = _BOOT_BACKOFF_SECONDS
+    ) -> dict[str, str]:
+        """:meth:`read`, for a caller that holds what it read before and must tell a secret the store says is gone
+        from a store that said nothing: ``{}`` only for the store's own refusal (a 4xx), logged as :meth:`read` logs it.
+
+        Raises:
+            SecretStoreUnansweredError: The store did not answer within the caller's budget.
+            ValueError: ``name`` is no secret name.
+        """
         if _SECRET_NAME.fullmatch(name) is None:
             raise ValueError(f"{name!r} is no secret name: it becomes a segment of the store's path, so only [a-z0-9-] is read")
         try:
             return self._asking_again(retries, backoff)(self._read_once, name, timeout)
         except _NOT_SERVED as exc:
             log.warning("secret_store_read_failed", extra={"secret": name, "error": str(exc)})
-            return {}
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.is_client_error and exc.response.status_code not in _COME_BACK:
+                return {}
+            raise SecretStoreUnansweredError(f"the secret store did not answer the read of {name!r}: {exc}") from exc
+
+    def holds_login(self) -> bool:
+        """Whether this process holds a login the store admitted whose lease has not run out: its standing at the
+        store. A caller riding through an unanswered read on what it read before does so only while this holds, so a
+        store that stopped admitting the process bounds the ride by one lease."""
+        held = self._held
+        return held is not None and self._clock() < held.expires
 
     def answers(self) -> None:
         """Raise unless the store admits this process and answers its token about itself: what a readiness report shows
@@ -697,6 +731,28 @@ def read_secret(name: str, *, timeout: float = _BOOT_ATTEMPT_SECONDS, retries: i
         ValueError: ``name`` is no secret name.
     """
     return _PROCESS.get().read(name, timeout=timeout, retries=retries, backoff=backoff)
+
+
+def read_secret_answered(
+    name: str, *, timeout: float = _BOOT_ATTEMPT_SECONDS, retries: int = _BOOT_ATTEMPTS, backoff: float = _BOOT_BACKOFF_SECONDS
+) -> dict[str, str]:
+    """`SecretStore.read_answered` on this process's session.
+
+    Raises:
+        SecretStoreUnansweredError: The store did not answer within the caller's budget.
+        RuntimeError: This process is configured with no secret store.
+        ValueError: ``name`` is no secret name.
+    """
+    return _PROCESS.get().read_answered(name, timeout=timeout, retries=retries, backoff=backoff)
+
+
+def secret_store_login_held() -> bool:
+    """`SecretStore.holds_login` on this process's session.
+
+    Raises:
+        RuntimeError: This process is configured with no secret store.
+    """
+    return _PROCESS.get().holds_login()
 
 
 def read_required_secret(

@@ -13,9 +13,12 @@ emits while every probe stayed green. The publish and the seed are two independe
 state is the likelier fault. Until the key is listed the signer reports itself not ready (`signing_ready_check`), which
 its worker reads before it takes a task, and hands out no key (`SigningKeyHolder.key`).
 
-NOTHING EMPTY IS EVER HELD. Every pass replaces the whole resolution, so an unreadable seed, a malformed one or an
-unlisted key leaves the holder with no key rather than the previous one: a store that was re-minted swaps to its new key
-on the next pass and an outage is not mistaken for a key. The background loop keeps re-resolving, on a short interval
+NOTHING EMPTY IS EVER HELD. Every pass the store answers replaces the whole resolution, so a seed the store says is
+gone, a malformed one or an unlisted key leaves the holder with no key rather than the previous one, and a store that
+was re-minted swaps to its new key on the next pass. A pass the store does NOT answer changes nothing: an outage says
+nothing of the key, so a signer rides through it on the key it holds (ADR 0203) for as long as the login the store last
+admitted it under has not run out, and one holding none stays unready.
+The background loop keeps re-resolving, on a short interval
 while unresolved and at most every five minutes once ready, so a signer heals in place without a restart. `/livez` is
 untouched: a signer that is waiting for its key is alive.
 
@@ -41,7 +44,14 @@ from typing import TYPE_CHECKING, Final, Protocol
 from fastapi import FastAPI, Request
 
 from lakehouse.governed.principal import Principal
-from lakehouse.governed.secrets import read_secret, secret_store_answers, secret_store_configured
+from lakehouse.governed.secrets import (
+    SecretStoreUnansweredError,
+    read_secret,
+    read_secret_answered,
+    secret_store_answers,
+    secret_store_configured,
+    secret_store_login_held,
+)
 from lakehouse.health import Dependency
 from lakehouse.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
@@ -223,14 +233,23 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         Returns:
             Whether the signer is ready after this pass.
         """
-        seed = read_secret(signing_key_secret(self._identity), retries=1).get(SEED_FIELD, "")
-        if not seed.strip():
-            return self._settle(None, "the signing key cannot be read from the secret store")
         try:
-            key = self._load_key(seed)
-        except (TypeError, ValueError) as exc:
-            return self._settle(None, f"the stored seed is not a signing key ({exc})")
-        published = read_secret(signing_public_secret(self._identity), retries=1).get(KEYS_FIELD, "")
+            seed = read_secret_answered(signing_key_secret(self._identity), retries=1).get(SEED_FIELD, "")
+            if not seed.strip():
+                return self._settle(None, "the signing key cannot be read from the secret store")
+            try:
+                key = self._load_key(seed)
+            except (TypeError, ValueError) as exc:
+                return self._settle(None, f"the stored seed is not a signing key ({exc})")
+            published = read_secret_answered(signing_public_secret(self._identity), retries=1).get(KEYS_FIELD, "")
+        except SecretStoreUnansweredError:
+            # AN OUTAGE SAYS NOTHING OF THE KEY, so a signer rides through it on the key it holds (ADR 0203); the read
+            # has logged what the store did. ONLY WHILE THE STORE'S LAST ADMISSION OF THIS PROCESS STANDS: a store that
+            # refuses the process's next login is not heard by a read (the session's loop makes the logins), so once
+            # the held lease has run out nothing says the process may still read its key, and it stops signing.
+            if self._key is not None and secret_store_login_held():
+                return True
+            return self._settle(None, "the secret store did not answer the read of the signing key, and this process holds no login it admitted")
         if key.public_nkey not in self._parse_published(published):
             return self._settle(None, f"key {key.kid} is not in {self._identity}'s published list")
         return self._settle(key, "")

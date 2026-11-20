@@ -3,8 +3,9 @@
 A verifier refuses an event signed with a key its identity does not publish and acknowledges the refusal, so a signer
 that kept signing with an unlisted key would destroy every event it emits while every probe stayed green. The holder
 therefore reads the seed and the published list under its own login to the store, is ready only while the derived key is listed,
-holds no key at all otherwise, and keeps re-resolving so a store that is re-minted or seeded late is followed without a
-restart.
+holds no key at all once the store answers otherwise, rides through a store that does not answer on the key it holds for
+as long as its login's lease stands, and keeps re-resolving so a store that is re-minted or seeded late is followed
+without a restart.
 
 DRIVEN AGAINST THE STORE'S HTTP API, which respx answers over the real `read_secret`: the claim is what the holder does
 with each answer the store can give (a value, a 500, an empty field), so the answers are the inputs.
@@ -23,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse.governed import signing_key
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, make_signing_holder, signing_ready_check
 from lakehouse.lifecycle import mark_started
 from lakehouse.probes import make_probes_router
@@ -124,6 +126,39 @@ def test_a_service_with_no_secret_store_or_no_identity_signs_nothing(request: py
         request.getfixturevalue("secret_store")
 
     assert make_signing_holder(identity=identity, load_key=_load_key, parse_published=_parse_published) is None
+
+
+@pytest.mark.parametrize(
+    ("then", "admitted", "kid"),
+    [
+        pytest.param(httpx.Response(503), True, "a", id="a-store-that-answers-nothing-of-the-key"),
+        pytest.param(httpx.Response(429), True, "a", id="a-store-that-asks-it-to-come-back"),
+        pytest.param(httpx.ConnectError("the store is away"), True, "a", id="a-store-that-cannot-be-reached"),
+        pytest.param(SecretStoreDouble.refused(404, "no secret at this path"), True, None, id="a-store-that-says-the-key-is-gone"),
+        pytest.param(SecretStoreDouble.refused(403), True, None, id="a-store-that-no-longer-lets-it-read-the-key"),
+        pytest.param(httpx.Response(503), False, None, id="no-answer-once-the-login-it-was-admitted-under-has-run-out"),
+    ],
+)
+def test_a_signer_keeps_the_key_it_holds_through_an_outage_and_drops_it_on_the_stores_own_no(
+    store: _Store, monkeypatch: pytest.MonkeyPatch, then: httpx.Response | Exception, admitted: bool, kid: str | None
+) -> None:
+    """An outage says nothing of the key, so a service rides through it on the key it holds; a refusal is the store
+    answering that the key is not this signer's to read any more, and it stops signing. The ride lasts as long as the
+    login the store last admitted the process under: a store that refuses its next login is heard by the session's
+    loop and by no read, so past that lease nothing says the process may still read its key."""
+    store.serve(_found("seed", "SEED-a"), _found("keys", "PUB-a"))
+    holder = _holder()
+    assert holder.resolve()
+    if not admitted:
+        monkeypatch.setattr(signing_key, "secret_store_login_held", lambda: False)
+    if isinstance(then, Exception):
+        store.seed.mock(side_effect=then)
+    else:
+        store.seed.mock(return_value=then)
+
+    ready = holder.resolve()
+
+    assert (ready, holder.ready, _held_kid(holder)) == (kid is not None, kid is not None, kid)
 
 
 @pytest.mark.asyncio
