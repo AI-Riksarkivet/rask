@@ -44,7 +44,7 @@ from catalog.services.control_records import GIT, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.governed import fga
-from lakehouse.warehouse_records import DeleteMode, WarehouseRecord
+from lakehouse.records.warehouse_records import DeleteMode, WarehouseRecord
 
 
 log = logging.getLogger(__name__)

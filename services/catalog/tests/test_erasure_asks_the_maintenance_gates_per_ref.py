@@ -29,9 +29,9 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
-from lakehouse import base_registry
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.history_fences import HistoryWork, TableHistory
+from lakehouse.records import base_registry
+from lakehouse.records.history_fences import HistoryWork, TableHistory
 from lakehouse.storage.options import StorageOptions
 
 

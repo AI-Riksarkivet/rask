@@ -49,10 +49,22 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import control_prefixes
-from lakehouse.record_store import record_key
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import record_key
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "HOLD",
+    "PREFIX",
+    "HistoryFence",
+    "HistoryFencedError",
+    "HistoryWork",
+    "Holder",
+    "TableHistory",
+    "fence_key",
+]
 
 
 log = logging.getLogger(__name__)

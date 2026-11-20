@@ -40,8 +40,8 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from lakehouse import base_registry, maintenance_policies, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.records import base_registry, maintenance_policies, trash
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import dataset_root_probe, lance_storage_options

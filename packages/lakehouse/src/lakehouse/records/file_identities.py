@@ -32,12 +32,27 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse import control_prefixes
-from lakehouse.record_store import delete_record, put_record
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import delete_record, put_record
 from lakehouse.storage import stored_objects
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "COPY_PREFIX",
+    "PREFIX",
+    "CommittedFile",
+    "CommittedFiles",
+    "as_stored",
+    "end",
+    "forget",
+    "listed_records",
+    "record",
+    "recorded_and_copied",
+    "records_of",
+]
 
 
 log = logging.getLogger(__name__)

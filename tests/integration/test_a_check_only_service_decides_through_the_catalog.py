@@ -40,7 +40,7 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.decider import CatalogDecider, TableDecision
 from lakehouse.governed.fga import user_object
-from lakehouse.warehouse_records import WarehouseRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 
 
 #: The two tenants, each mapped to its warehouse and the namespace in it; each namespace holds one table, `<ns>$t`.

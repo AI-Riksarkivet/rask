@@ -113,9 +113,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import SpanKind
 from pydantic import BaseModel, SecretStr
 
-from lakehouse import location_claims
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.events.lineage_events import LANCE_FACET, DatasetUuids, with_dataset_uuids
+from lakehouse.records import location_claims
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.supervision import EndProcess, end_process

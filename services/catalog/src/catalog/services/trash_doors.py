@@ -17,13 +17,13 @@ from lance_namespace import InvalidTableStateError
 from catalog.core.config import Settings
 from catalog.schemas import TrashEntry
 from catalog.services import warehouses
-from lakehouse.trash import TrashRecord
+from lakehouse.records.trash import TrashRecord
 
 
 def entry(record: TrashRecord) -> TrashEntry:
     """What a trash door answers about ``record``: the object, the name it held, its deadline and which side of it.
 
-    ``expired`` reads the deadline by :meth:`lakehouse.trash.TrashRecord.past_deadline`, the rule the undrop refuses by and maintenance releases
+    ``expired`` reads the deadline by :meth:`lakehouse.records.trash.TrashRecord.past_deadline`, the rule the undrop refuses by and maintenance releases
     the grants by (ADR 0146), so a listing never calls a drop recoverable that the undrop refuses.
     """
     return TrashEntry(

@@ -23,7 +23,7 @@ Two disciplines this module exists to keep:
 Same store shape as ``maintenance_policies``/``protection``: one JSON per object under its own prefix, keyed by the
 object's uuid (ADR 0173 §8, [[LH-525]]). A name is free again the moment its object is dropped, so several trashed
 objects may share one, each under its own record: :func:`named` finds them by the name a door is addressed by, and
-:func:`get` reads one by its uuid. The shape itself lives in :mod:`lakehouse.record_store`; this module is
+:func:`get` reads one by its uuid. The shape itself lives in :mod:`lakehouse.records.record_store`; this module is
 the trash vocabulary over it.
 """
 
@@ -37,12 +37,35 @@ from typing import Any, Final, Literal
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from lakehouse import control_prefixes, location_claims, object_records
-from lakehouse.base_registry import BaseRegistry, forget_base_record
-from lakehouse.record_store import delete_record, list_records, put_record, read_record, record_key
+from lakehouse.records import control_prefixes, location_claims, object_records
+from lakehouse.records.base_registry import BaseRegistry, forget_base_record
+from lakehouse.records.record_store import delete_record, list_records, put_record, read_record, record_key
 from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError, mutate_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "RELEASE_SETTLE",
+    "Refusal",
+    "TrashKind",
+    "TrashRecord",
+    "UnreadableTrashRecordError",
+    "clear",
+    "end",
+    "every_record",
+    "expired",
+    "get",
+    "keeps",
+    "key",
+    "list_all",
+    "make_record",
+    "mark_released",
+    "named",
+    "note_refusal",
+    "put",
+    "read",
+]
 
 
 log = logging.getLogger(__name__)
@@ -369,12 +392,12 @@ def clear(control_root: str, storage_options: StorageOptions, uuid: str, *, kind
 
 def end(control_root: str, storage_options: StorageOptions, record: TrashRecord, *, kind: TrashKind, uuid: str) -> None:
     """End what the trashed object ``uuid`` names kept for an undrop besides its grants: the records it holds under its
-    uuid (:func:`lakehouse.object_records.end_object_records`), a table's base record and claim, then ``record`` itself.
+    uuid (:func:`lakehouse.records.object_records.end_object_records`), a table's base record and claim, then ``record`` itself.
 
     The record goes last: it is all that still names what the object holds, so a failure before it is cleared leaves it
     for the next attempt to end. Every step is idempotent. The base record is forgotten with its data directories'
-    claims (:func:`lakehouse.base_registry.forget_base_record`): a caller that deletes the bytes deletes the directories
-    before this (:func:`lakehouse.data_directories.delete_table_directories`).
+    claims (:func:`lakehouse.records.base_registry.forget_base_record`): a caller that deletes the bytes deletes the directories
+    before this (:func:`lakehouse.records.data_directories.delete_table_directories`).
 
     Raises:
         UnreadableBaseRecordError: The table's base record exists and cannot be read.

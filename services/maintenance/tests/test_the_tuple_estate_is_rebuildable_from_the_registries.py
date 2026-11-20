@@ -28,7 +28,7 @@ import httpx
 import pytest
 import respx
 
-from lakehouse.project_records import ProjectRecord
+from lakehouse.records.project_records import ProjectRecord
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.rebuild import RebuildReport, plan_rebuild, rebuild_tuples
 from maintenance.services.reconcile import ReconcileReport, Sources, UnreferencedProject

@@ -13,7 +13,7 @@ Two records:
   values only grow, and its kind never changes.
 - An **attachment** record per labelled object, at ``record_key("_labels", kind, uuid)``: every label the object carries
   with its value, keyed by the object's uuid as every record kept for an object is (ADR 0173 §8), so a rename keeps its
-  labels, the object's ending ends them (`lakehouse.object_records`), and an object made again under the name carries
+  labels, the object's ending ends them (`lakehouse.records.object_records`), and an object made again under the name carries
   none.
 
 An attachment records the uuid of the definition it was judged against. A definition is deleted only while no standing
@@ -37,9 +37,9 @@ from typing import Any, Final, Literal
 from lance_namespace import InternalError, InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse import control_prefixes
 from lakehouse.naming import PLATFORM_PREFIX
-from lakehouse.record_store import delete_record, get_record, list_records, record_key
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import delete_record, get_record, list_records, record_key
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage.options import StorageOptions
 

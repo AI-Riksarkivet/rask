@@ -7,7 +7,7 @@ dataset-root base on the table's root, and a branch of a branch through its pare
 branch sets flag 16. Those bases are the table's own history, and a branch's compaction copies what it inherited into
 its own ``tree/<name>/data/`` on purpose (measured on pylance 13.0.0: a stock compaction on a branch rewrote the
 inherited fragments there and main stayed at its version). So a base inside the table, by the rule the base judge
-calls a table's own (:func:`lakehouse.base_registry.is_own`), is not weighed, and every other base is
+calls a table's own (:func:`lakehouse.records.base_registry.is_own`), is not weighed, and every other base is
 weighed by :func:`lakehouse.lancekit.features.describe_compaction_unsupported_flags`.
 """
 
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 
-from lakehouse.base_registry import is_own
 from lakehouse.lancekit.features import (
     FLAG_BASE_PATHS,
     BasePathRef,
@@ -26,6 +25,7 @@ from lakehouse.lancekit.features import (
     gather_compaction_bases,
     manifest_feature_flags,
 )
+from lakehouse.records.base_registry import is_own
 from lakehouse.storage.objectfs import dataset_root_probe
 from lakehouse.storage.options import StorageOptions
 

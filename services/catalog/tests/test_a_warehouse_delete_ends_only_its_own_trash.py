@@ -17,7 +17,7 @@ import pytest
 from lance_namespace import InternalError
 
 from catalog.services import warehouses
-from lakehouse import trash
+from lakehouse.records import trash
 from lakehouse.storage.options import StorageOptions
 
 

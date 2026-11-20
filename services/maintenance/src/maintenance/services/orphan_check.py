@@ -38,7 +38,7 @@ from typing import Final
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel
 
-from lakehouse import location_claims, trash
+from lakehouse.records import location_claims, trash
 from lakehouse.storage import objectfs
 from lakehouse.storage.credential import StoreCredentialUnavailableError
 from lakehouse.storage.objectfs import fs_and_base

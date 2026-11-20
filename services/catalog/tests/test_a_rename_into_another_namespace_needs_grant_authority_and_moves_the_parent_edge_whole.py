@@ -48,8 +48,8 @@ from lance_namespace import LanceNamespace, ServiceUnavailableError
 from lance_namespace.errors import ErrorCode
 from openfga_sdk import OpenFgaClient
 
-from lakehouse import location_claims
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.records import location_claims
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))

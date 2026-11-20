@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from lakehouse import trash
-from lakehouse.trash import TrashRecord
+from lakehouse.records import trash
+from lakehouse.records.trash import TrashRecord
 from maintenance.services.purge import due_from
 
 

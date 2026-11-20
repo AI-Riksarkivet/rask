@@ -20,7 +20,7 @@ import pyarrow.fs as pafs
 import pytest
 from pydantic import SecretStr
 
-from lakehouse import record_store
+from lakehouse.records import record_store
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import REGION, StorageOptions
 from tests.integration import store_requests

@@ -18,10 +18,7 @@ from typing import Final, Literal
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import trash
-from lakehouse.base_registry import RecordedBase
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.lancekit import manifest_names
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from lakehouse.lancekit.features import (
@@ -32,6 +29,9 @@ from lakehouse.lancekit.features import (
     unsupported_features_from_open_error,
 )
 from lakehouse.lancekit.lance_session import open_dataset
+from lakehouse.records import trash
+from lakehouse.records.base_registry import RecordedBase
+from lakehouse.records.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import delete_objects, list_under_at, recording_removed_transactions
 from maintenance.core.config import shared_lance_session

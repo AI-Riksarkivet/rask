@@ -591,8 +591,8 @@ def test_a_policy_record_that_cannot_be_read_is_a_fault_until_its_owner_deletes_
     never merges onto nothing over it, which would drop the hold. Its owner deletes it and sets the policy they mean."""
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
     from catalog.core.config import get_settings
-    from lakehouse import maintenance_policies, record_store
-    from lakehouse.record_store import record_key
+    from lakehouse.records import maintenance_policies, record_store
+    from lakehouse.records.record_store import record_key
 
     users = claim_described("lance_catalog$db1$users")
     settings = get_settings()
@@ -626,7 +626,7 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
     meanwhile keeps the field it set, and a delete landing meanwhile is not undone by the fields the set read before it."""
     from catalog.api.v1.endpoints import policies as policy_doors
     from catalog.core.config import get_settings
-    from lakehouse import maintenance_policies
+    from lakehouse.records import maintenance_policies
 
     assert client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"retain_versions": 5}).status_code == 200
     real_record = policy_doors._record  # noqa: SLF001 — the merge, where another request's write is landed in between
@@ -814,7 +814,7 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     # cross, and acme's table, renamed since its policy was set, is listed as `wh-a$db$u`.
     from catalog.core.config import get_settings
     from catalog.services import table_claims
-    from lakehouse import location_claims
+    from lakehouse.records import location_claims
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
@@ -856,7 +856,7 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     # operator is looking for at exactly the moment they are offboarding.
     from catalog.core.config import get_settings
     from catalog.services import table_claims
-    from lakehouse import location_claims
+    from lakehouse.records import location_claims
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s

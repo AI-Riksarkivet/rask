@@ -34,8 +34,9 @@ from lance_namespace import InternalError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from catalog.core.run_context import RunInput
-from lakehouse import control_prefixes, derived_tables
-from lakehouse.record_store import list_records, record_key
+from lakehouse import derived_tables
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import list_records, record_key
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, create_json, read_json_at, replace_json
 from lakehouse.storage.options import StorageOptions
 

@@ -33,12 +33,12 @@ from catalog.core import formats
 from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import CatalogMaintenanceSettings, Settings, StorePlane, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
-from lakehouse.clone_sources import CloneReference, clone_reference
 from lakehouse.lancekit import auto_cleanup
 from lakehouse.lancekit.absence import reads_as_absent
 from lakehouse.lancekit.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.outage import reads_as_store_outage
+from lakehouse.records.clone_sources import CloneReference, clone_reference
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
 

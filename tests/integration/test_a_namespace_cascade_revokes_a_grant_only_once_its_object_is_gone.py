@@ -27,8 +27,8 @@ from lance_namespace import DeregisterTableRequest, DeregisterTableResponse, Lan
 
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
-from lakehouse import location_claims, maintenance_policies
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.records import location_claims, maintenance_policies
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 from maintenance.services.purge import objects_held

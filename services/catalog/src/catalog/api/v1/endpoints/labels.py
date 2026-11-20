@@ -43,11 +43,11 @@ from catalog.schemas import LabelDefinitionRequest, LabelledObjectsResponse, Obj
 from catalog.services import object_labels, table_claims, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.object_labels import Attachment, LabelDefinition, LabelScope
-from lakehouse import trash
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import ControlAction
 from lakehouse.governed import fga
 from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.records import trash
 from lakehouse.storage import conditional_records
 
 
@@ -128,7 +128,7 @@ async def _set(
 ) -> ObjectLabelsResponse:
     """Attach ``body``'s label to the object, judged against the definition its project holds, and announce it.
 
-    An object's ending ends its labels (`lakehouse.object_records`), so a label attached as its object ended would be a
+    An object's ending ends its labels (`lakehouse.records.object_records`), so a label attached as its object ended would be a
     record nothing ends: the name is resolved again after the write, and where it no longer holds this object the record
     is taken back and the caller answered as for any object that is gone.
     """

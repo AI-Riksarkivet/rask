@@ -4,7 +4,7 @@ A MANIFEST'S BASE LIST IS A WRITER'S CLAIM. Any holder of the table's write vend
 ``UpdateBases`` commit, and a base pylance resolves a fragment through is a base the reader reads through:
 measured on pylance 12.0.0 (lh279 m2), a table that planted another table's root answered a query with
 the other table's rows, and a vend for it would have granted READ on that root. So the doors that hand
-out a table's rows or a credential for them ask :func:`lakehouse.base_registry.judge_bases`
+out a table's rows or a credential for them ask :func:`lakehouse.records.base_registry.judge_bases`
 first — its own root, or the catalog's record — and refuse the rest with
 ``InvalidTableStateError`` (code 19, 409): the caller holds the rung, the TABLE is in a state no read
 should serve. A 403 would send an operator to FGA tuples that are not what is wrong.
@@ -29,9 +29,9 @@ from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidTableStateError, ServiceUnavailableError
 from pydantic import BaseModel
 
-from lakehouse import base_registry
 from lakehouse.lancekit import base_refs
 from lakehouse.lancekit.features import BasePathRef
+from lakehouse.records import base_registry
 
 
 if TYPE_CHECKING:
@@ -119,7 +119,7 @@ class BaseJudge(BaseModel):
         )
 
     def judge(self, location: str, refs: Sequence[BasePathRef]) -> list[base_registry.BaseJudgement]:
-        """:func:`lakehouse.base_registry.judge_bases`, with a configured base that covers governed storage judged by the record alone.
+        """:func:`lakehouse.records.base_registry.judge_bases`, with a configured base that covers governed storage judged by the record alone.
 
         A configured entry can cover governed storage, so CONFIGURED standing there would let a holder of a
         table's write credential ``add_bases`` a prefix holding another tenant's bytes and have the blob door

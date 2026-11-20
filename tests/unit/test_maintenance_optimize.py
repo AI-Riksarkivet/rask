@@ -17,7 +17,7 @@ import lance
 import pyarrow as pa
 from lance.blob import Blob
 
-from lakehouse.maintenance_due import CompactionDue
+from lakehouse.records.maintenance_due import CompactionDue
 from lakehouse.storage.options import StorageOptions
 from maintenance.services.due import DueQuestion, compaction_due
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions

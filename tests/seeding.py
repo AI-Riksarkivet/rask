@@ -9,11 +9,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from lakehouse import control_prefixes, maintenance_due, maintenance_policies, trash
-from lakehouse.maintenance_due import DueRecord
-from lakehouse.record_store import put_record, record_key
+from lakehouse.records import control_prefixes, maintenance_due, maintenance_policies, trash
+from lakehouse.records.maintenance_due import DueRecord
+from lakehouse.records.record_store import put_record, record_key
+from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.options import StorageOptions
-from lakehouse.warehouse_records import WarehouseRecord
 
 
 def put_warehouse(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:

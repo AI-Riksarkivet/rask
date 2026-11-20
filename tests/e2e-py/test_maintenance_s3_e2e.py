@@ -66,9 +66,9 @@ from pydantic import BaseModel, Field
 from throwaway_rustfs import ThrowawayStore
 
 from catalog.services.warehouses import ensure_catalog_row
-from lakehouse import location_claims
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records import location_claims
 from lakehouse.storage.options import s3_filesystem
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans

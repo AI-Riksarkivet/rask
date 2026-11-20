@@ -31,9 +31,9 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
-from lakehouse.warehouse_records import WarehouseRecord
 from tests import seeding
 
 

@@ -22,8 +22,8 @@ import pytest
 import respx
 from pydantic import SecretStr
 
-from lakehouse import location_claims, trash
 from lakehouse.events.control_emit import ControlEmitter, NoopControlEmitter
+from lakehouse.records import location_claims, trash
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import audit

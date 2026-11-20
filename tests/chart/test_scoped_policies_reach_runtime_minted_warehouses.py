@@ -8,7 +8,7 @@ so a compromised maintenance pod reads no tenant's rows.
 THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so the read grant enumerates none. `catalog.warehouses.enabled` (on by
 default) provisions one physically separate bucket per warehouse at `POST /management/v1/warehouses`, with an
 operator-chosen name, and maintenance's discovery and the purge's protection pre-pass open those buckets
-(`lakehouse.warehouse_records.maintainable_buckets` extends the configured list from the warehouse registry itself). Measured on the live
+(`lakehouse.records.warehouse_records.maintainable_buckets` extends the configured list from the warehouse registry itself). Measured on the live
 estate 2026-09-04/05: a policy that reached warehouses through a `*-wh` name pattern refused `acme-bucket`.
 
 EVERY WRITE IS A VEND'S, owner, 2026-11-03: a compromised maintenance pod must not be able to defeat an erasure or a hold.

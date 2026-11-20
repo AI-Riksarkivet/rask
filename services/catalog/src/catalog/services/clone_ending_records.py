@@ -1,6 +1,6 @@
 """The end of a registered clone, filed before its row goes and removed once its holds are released (ADR 0198 §1).
 
-A registered shallow clone holds a tag on each source it reads through (:mod:`lakehouse.clone_sources`), named for its
+A registered shallow clone holds a tag on each source it reads through (:mod:`lakehouse.records.clone_sources`), named for its
 location. Every door that ends the clone removes its row, then releases those tags, then its location's claim; a store
 error on a source's tags, or a process dying, between the row and the tags would leave a tag standing for good, and the
 source undestroyable, since a re-issued call no longer finds the row. So the door files an ENDING before the row goes,
@@ -32,9 +32,9 @@ from typing import Final
 
 from pydantic import BaseModel, Field
 
-from lakehouse import control_prefixes
-from lakehouse.location_claims import ClaimStore, claim_digest
-from lakehouse.record_store import delete_record
+from lakehouse.records import control_prefixes
+from lakehouse.records.location_claims import ClaimStore, claim_digest
+from lakehouse.records.record_store import delete_record
 from lakehouse.storage import conditional_records
 from lakehouse.storage.stored_objects import list_under
 

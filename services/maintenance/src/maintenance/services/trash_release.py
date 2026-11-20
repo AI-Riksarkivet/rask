@@ -24,7 +24,7 @@ judges both again on its own reads:
 * **OUTSIDE EVERY ROOT READ.** On the backstop's estate-wide read, a table whose location sits under no root it read
   cannot be told live or gone. A task's release reads the root its record's location is under, so it never meets one.
 
-A record is taken :data:`lakehouse.trash.RELEASE_SETTLE` after its deadline, not at it: an undrop the door admitted
+A record is taken :data:`lakehouse.records.trash.RELEASE_SETTLE` after its deadline, not at it: an undrop the door admitted
 just before the deadline registers before it clears the record, and a revoke landing between the two would leave the
 restored table ownerless. A refusal the catalog judges it notes on the record; this step reports it as held.
 """
@@ -38,10 +38,10 @@ from functools import partial
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse import trash, warehouse_records
 from lakehouse.lancekit.base_refs import location_within
+from lakehouse.records import trash, warehouse_records
+from lakehouse.records.trash import TrashRecord
 from lakehouse.storage.options import StorageOptions, on_s3
-from lakehouse.trash import TrashRecord
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, release_trash
 from maintenance.services.purge import Liveness, liveness_across, still_registered
@@ -88,7 +88,7 @@ class TrashReleaseReport(BaseModel):
 def roots_read(settings: MaintenanceStore, storage_options: StorageOptions, control_root: str) -> set[str]:
     """Every root whose manifest tells whether a trashed object stands again: the swept buckets and every warehouse's.
 
-    Raises if the registry, or any one record in it, cannot be read (:func:`lakehouse.warehouse_records
+    Raises if the registry, or any one record in it, cannot be read (:func:`lakehouse.records.warehouse_records
     .read_warehouse_records`): a root left out would read every live table under it as gone.
     """
     records = warehouse_records.read_warehouse_records(control_root, storage_options)
@@ -141,7 +141,7 @@ async def _release_one(record: TrashRecord, *, roots: set[str], live: Liveness |
 
 
 async def release_expired_trash(settings: MaintenanceSettings, *, control_root: str | None = None, now: datetime | None = None) -> TrashReleaseReport:
-    """Release every drop :data:`lakehouse.trash.RELEASE_SETTLE` past its deadline that this step may release: the audit's
+    """Release every drop :data:`lakehouse.records.trash.RELEASE_SETTLE` past its deadline that this step may release: the audit's
     and the scan's backstop for a record no task released. Never raises."""
     at = now or datetime.now(UTC)
     out = TrashReleaseReport()
@@ -164,7 +164,7 @@ async def release_expired_trash(settings: MaintenanceSettings, *, control_root: 
 
 
 async def release_record(record: TrashRecord, settings: MaintenanceSettings, *, now: datetime | None = None) -> TrashReleaseReport:
-    """Release the one drop ``record`` keeps, read by its key, once it is :data:`lakehouse.trash.RELEASE_SETTLE` past its
+    """Release the one drop ``record`` keeps, read by its key, once it is :data:`lakehouse.records.trash.RELEASE_SETTLE` past its
     deadline: a trash task's release at its own deadline. Never raises.
 
     What it reads is the record's, never the estate's (ADR 0198 §2): whether a table stands again is asked of the

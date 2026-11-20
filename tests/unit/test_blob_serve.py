@@ -27,7 +27,7 @@ from catalog.services import blob_serving
 from catalog.services.blob_serving import BlobStream, read_blob
 from catalog.services.dataplane import create_table
 from catalog.services.table_claims import DoorTable
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

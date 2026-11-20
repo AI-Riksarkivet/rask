@@ -36,7 +36,7 @@ from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
+from lakehouse.records.location_claims import ClaimRead, ClaimStore, LocationClaim
 
 
 @pytest.fixture

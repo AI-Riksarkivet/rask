@@ -34,9 +34,9 @@ from lance_namespace import ServiceUnavailableError
 
 from catalog.core.config import get_settings
 from catalog.services import native
-from lakehouse import location_claims
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga
+from lakehouse.records import location_claims
 from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import TupleStore

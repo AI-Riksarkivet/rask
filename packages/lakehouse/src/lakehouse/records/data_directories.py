@@ -6,7 +6,7 @@ no other table writes or reads there. Those bytes are the table's storage as muc
 is forgotten no maintenance pass and no purge finds them again: both read a table's directories off its record. So
 every path that ends a table with its bytes, the catalog's destructive drops and purging cascades and maintenance's
 purge, deletes the table's directories before the record goes (:func:`delete_table_directories`, then
-:func:`lakehouse.base_registry.forget_base_record`).
+:func:`lakehouse.records.base_registry.forget_base_record`).
 
 ONLY A DIRECTORY THE TABLE'S CLAIM NAMES IS DELETED: a ``data`` entry on a plain base whose claim records the table's
 uuid, held or released by it (:func:`last_claimed_by`). A claim recording another table's uuid, or none, as an approved
@@ -21,11 +21,23 @@ import logging
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import location_claims
-from lakehouse.base_registry import BaseRecord, BaseRegistry, BaseRole, RecordedBase, read_base_record
 from lakehouse.lancekit.base_refs import key_uri
+from lakehouse.records import location_claims
+from lakehouse.records.base_registry import BaseRecord, BaseRegistry, BaseRole, RecordedBase, read_base_record
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import delete_objects, list_under
+
+
+__all__ = [
+    "Deleted",
+    "claimed_by",
+    "delete_directories",
+    "delete_table_directories",
+    "directories_to_end",
+    "directory_uri",
+    "last_claimed_by",
+    "recorded_directories",
+]
 
 
 log = logging.getLogger(__name__)

@@ -23,12 +23,12 @@ from typing import Annotated, Final, Self
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
 from catalog.schemas import DeleteProfile
-from lakehouse import control_prefixes
 from lakehouse.governed import fga
 from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import CONTROL_ID_PATTERN, CONTROL_ID_RE
-from lakehouse.record_store import delete_record, list_records
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import delete_record, list_records
 from lakehouse.storage.conditional_records import RecordExistsError, create_json
 from lakehouse.storage.options import StorageOptions
 

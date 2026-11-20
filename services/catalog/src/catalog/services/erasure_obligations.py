@@ -38,8 +38,8 @@ from lance_namespace import InvalidInputError, InvalidTableStateError
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.erasure import OPEN_OUTCOMES, ErasureReport, PinRelease, SurfaceResult, shown
-from lakehouse import control_prefixes
-from lakehouse.record_store import list_records
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import list_records
 from lakehouse.storage.conditional_records import RecordMissingError, create_json, mutate_json, read_json
 from lakehouse.storage.options import StorageOptions
 

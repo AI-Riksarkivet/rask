@@ -30,12 +30,12 @@ from catalog.core.vending import reclaim_or_refuse, role_session_name
 from catalog.schemas import CredentialResponse, TrashEndResponse, TrashRefusalRequest, TrashRefusalResponse, TrashReleaseResponse, VendedCredentials
 from catalog.services import trash_reclaim
 from catalog.services.announcement_intents import Announcement
-from lakehouse import trash
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit.base_refs import decoded_path
-from lakehouse.location_claims import LocationClaim
-from lakehouse.trash import TrashKind, TrashRecord
+from lakehouse.records import trash
+from lakehouse.records.location_claims import LocationClaim
+from lakehouse.records.trash import TrashKind, TrashRecord
 
 
 async def require_can_reclaim_trash(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
@@ -62,7 +62,7 @@ async def release_trash(
     fails after the revoke still tells them ([[LH-576]]).
 
 
-    Refused 409 (code 19) until the deadline has settled (``lakehouse.trash.RELEASE_SETTLE``), and while a live object
+    Refused 409 (code 19) until the deadline has settled (``lakehouse.records.trash.RELEASE_SETTLE``), and while a live object
     holds the record's place or name again: an undrop registers before it clears its record. Audited as it lands or as it
     fails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.
     """

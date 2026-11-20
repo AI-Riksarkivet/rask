@@ -27,7 +27,6 @@ from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor
 from catalog.services import dataplane, object_uuids, provenance_namespace, table_claims, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from lakehouse import trash
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
@@ -35,8 +34,9 @@ from lakehouse.governed import fga
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.outage import store_refusal
+from lakehouse.records import trash
+from lakehouse.records.trash import TrashKind, TrashRecord
 from lakehouse.storage.options import StorageOptions
-from lakehouse.trash import TrashKind, TrashRecord
 
 
 log = logging.getLogger(__name__)

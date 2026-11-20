@@ -13,7 +13,7 @@ import pytest
 from catalog.core.config import Settings
 from catalog.services import warehouse_grant_backfill
 from lakehouse.governed import fga
-from lakehouse.warehouse_records import WarehouseRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 
 
 def _settings(**overrides: object) -> Settings:

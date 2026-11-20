@@ -27,12 +27,12 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import location_claims
-from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
 from lakehouse.lancekit.transactions import read_transaction
+from lakehouse.records import location_claims
+from lakehouse.records.history_fences import HistoryWork, TableHistory
 from lakehouse.storage import objectfs, stored_objects
 
 
@@ -40,6 +40,23 @@ if TYPE_CHECKING:
     import lance
 
     from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "TAG_PREFIX",
+    "CloneReference",
+    "CloneSource",
+    "CloneSourceGoneError",
+    "ReadFromOutsideError",
+    "clone_reference",
+    "clones_reading",
+    "delete_tag",
+    "destroy_order",
+    "release",
+    "release_all",
+    "tag_of",
+    "take",
+]
 
 
 log = logging.getLogger(__name__)
@@ -106,7 +123,7 @@ class CloneSource(BaseModel):
 
 def tag_of(clone_location: str) -> str:
     """The tag the clone at ``clone_location``, in either spelling, holds on each source it reads through: the SHA-256 of
-    the path it decodes to, as `lakehouse.location_claims` keys the location's claim."""
+    the path it decodes to, as `lakehouse.records.location_claims` keys the location's claim."""
     return f"{TAG_PREFIX}{location_claims.claim_digest(clone_location)}"
 
 
@@ -165,7 +182,7 @@ def take(source: CloneSource, *, clone_location: str, control_root: str, storage
 
     Raises:
         CloneSourceGoneError: The source no longer keeps the version, or the branch it is on.
-        lakehouse.history_fences.HistoryFencedError: A reclaim holds the source's history; nothing was written.
+        lakehouse.records.history_fences.HistoryFencedError: A reclaim holds the source's history; nothing was written.
     """
     tag = tag_of(clone_location)
     dataset = _open(source.location, storage_options)

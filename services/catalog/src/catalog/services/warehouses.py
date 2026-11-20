@@ -36,16 +36,16 @@ from catalog.services.control_records import (
     with_manager,
     with_protection,
 )
-from lakehouse import control_prefixes, trash
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.outage import reads_as_store_outage, store_refusal
-from lakehouse.record_store import delete_record
+from lakehouse.records import control_prefixes, trash
+from lakehouse.records.record_store import delete_record
+from lakehouse.records.trash import TrashRecord
+from lakehouse.records.warehouse_records import DeleteMode, UnreadableWarehouseRecordError, WarehouseRecord
+from lakehouse.records.warehouse_records import read as read_warehouse_record
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import DEFAULT_REGION, StorageOptions, object_client
-from lakehouse.trash import TrashRecord
-from lakehouse.warehouse_records import DeleteMode, UnreadableWarehouseRecordError, WarehouseRecord
-from lakehouse.warehouse_records import read as read_warehouse_record
 
 
 log = logging.getLogger(__name__)

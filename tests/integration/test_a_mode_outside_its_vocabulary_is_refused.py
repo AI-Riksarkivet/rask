@@ -36,7 +36,7 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, InvalidInputError, connect
 
 from catalog.services.dataplane import create_table, insert_into_table
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

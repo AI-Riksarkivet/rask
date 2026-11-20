@@ -28,11 +28,11 @@ import pyarrow as pa
 import pytest
 
 from catalog.core.config import get_settings as catalog_settings
-from lakehouse import trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.governed.fga import user_object
+from lakehouse.records import trash
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.trash_task import TrashUnreadableError, run_trash_task

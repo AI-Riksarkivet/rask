@@ -45,9 +45,9 @@ import uvicorn
 from lance import blob_array
 from pydantic import SecretStr
 
-from lakehouse import file_identities, maintenance_policies
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records import file_identities, maintenance_policies
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options

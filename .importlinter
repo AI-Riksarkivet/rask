@@ -133,6 +133,66 @@ source_modules =
 forbidden_modules =
     lakehouse.*
 
+# The catalog's records sit on the Lance table plane and the store (ADR 0224): the registries and governance records kept
+# on the control root, and the hashed-key layout and prefixes they are kept by. They read a table's locations and
+# feature flags through `lancekit`, read and write their records through `storage`, and check a warehouse's name by
+# `naming`; each such import is named below, one line per edge, and nothing else in the library is imported, directly or
+# through another module. The rest of the library builds on the records (`timers` claims its windows under their
+# prefix, `compaction_gate` asks the base record), so an import of the rest here would make the two import each other.
+[importlinter:contract:the-records-import-only-the-table-plane-the-store-and-naming]
+name = ADR 0224: lakehouse.records imports nothing in the library beyond its named imports of lancekit, storage and naming
+type = forbidden
+source_modules =
+    lakehouse.records
+forbidden_modules =
+    lakehouse.*
+ignore_imports =
+    lakehouse.records.base_registry -> lakehouse.lancekit.base_refs
+    lakehouse.records.base_registry -> lakehouse.lancekit.features
+    lakehouse.records.base_registry -> lakehouse.storage.conditional_records
+    lakehouse.records.base_registry -> lakehouse.storage.options
+    lakehouse.records.clone_sources -> lakehouse.lancekit.base_refs
+    lakehouse.records.clone_sources -> lakehouse.lancekit.branch_layout
+    lakehouse.records.clone_sources -> lakehouse.lancekit.lance_session
+    lakehouse.records.clone_sources -> lakehouse.lancekit.transactions
+    lakehouse.records.clone_sources -> lakehouse.storage.objectfs
+    lakehouse.records.clone_sources -> lakehouse.storage.options
+    lakehouse.records.clone_sources -> lakehouse.storage.stored_objects
+    lakehouse.records.commit_records -> lakehouse.storage.conditional_records
+    lakehouse.records.commit_records -> lakehouse.storage.options
+    lakehouse.records.commit_records -> lakehouse.storage.stored_objects
+    lakehouse.records.commit_turns -> lakehouse.storage.conditional_records
+    lakehouse.records.commit_turns -> lakehouse.storage.options
+    lakehouse.records.data_directories -> lakehouse.lancekit.base_refs
+    lakehouse.records.data_directories -> lakehouse.storage.options
+    lakehouse.records.data_directories -> lakehouse.storage.stored_objects
+    lakehouse.records.file_identities -> lakehouse.storage.conditional_records
+    lakehouse.records.file_identities -> lakehouse.storage.objectfs
+    lakehouse.records.file_identities -> lakehouse.storage.options
+    lakehouse.records.file_identities -> lakehouse.storage.stored_objects
+    lakehouse.records.history_fences -> lakehouse.storage.conditional_records
+    lakehouse.records.history_fences -> lakehouse.storage.options
+    lakehouse.records.location_claims -> lakehouse.lancekit.base_refs
+    lakehouse.records.location_claims -> lakehouse.storage.conditional_records
+    lakehouse.records.location_claims -> lakehouse.storage.options
+    lakehouse.records.maintenance_due -> lakehouse.storage.options
+    lakehouse.records.maintenance_due -> lakehouse.storage.stored_objects
+    lakehouse.records.maintenance_policies -> lakehouse.storage.conditional_records
+    lakehouse.records.maintenance_policies -> lakehouse.storage.options
+    lakehouse.records.maintenance_policies -> lakehouse.storage.stored_objects
+    lakehouse.records.maintenance_policies -> lakehouse.storage.uri
+    lakehouse.records.object_records -> lakehouse.storage.options
+    lakehouse.records.protection -> lakehouse.storage.options
+    lakehouse.records.record_store -> lakehouse.storage.objectfs
+    lakehouse.records.record_store -> lakehouse.storage.options
+    lakehouse.records.record_store -> lakehouse.storage.stored_objects
+    lakehouse.records.record_store -> lakehouse.storage.uri
+    lakehouse.records.trash -> lakehouse.storage.conditional_records
+    lakehouse.records.trash -> lakehouse.storage.objectfs
+    lakehouse.records.trash -> lakehouse.storage.options
+    lakehouse.records.warehouse_records -> lakehouse.naming
+    lakehouse.records.warehouse_records -> lakehouse.storage.options
+
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
 name = Phase 1 (3): no lakehouse service and nothing in the lakehouse library imports a workflow engine
 type = forbidden

@@ -29,8 +29,8 @@ from lance_namespace import InternalError
 from pydantic import ValidationError
 
 from catalog.schemas import RoleRecord
-from lakehouse import control_prefixes
 from lakehouse.outage import reads_as_store_outage, store_refusal
+from lakehouse.records import control_prefixes
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions

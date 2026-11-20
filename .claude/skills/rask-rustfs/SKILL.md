@@ -116,7 +116,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   revision 51, 2026-11-12: a data file of a tenant table and of a control-bucket table refused `AccessDenied`, their
   manifests and transactions answered). It writes only
   `<control bucket>/_maintenance_due/*`, `_maintenance_files/*` (its copy of the commit records it has read,
-  `lakehouse.file_identities`, which no erasure or hold reads), `_policies/state/*` and `_lineage_outbox/*` (owner,
+  `lakehouse.records.file_identities`, which no erasure or hold reads), `_policies/state/*` and `_lineage_outbox/*` (owner,
   2026-11-03: a compromised
   maintenance pod must not be able to defeat an erasure or a hold). A cleanup's deletes sign with the table's
   `maintain`-tier vend, which gets and deletes and puts nothing of the table (a pass's two commits are the catalog's,
@@ -221,7 +221,7 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
 - **pyarrow cannot write through a vended credential.** Before a write, pyarrow's `S3FileSystem` asks `HeadBucket`,
   which RustFS authorizes as an unprefixed `s3:ListBucket` (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`), as
   AWS does; a session scoped to a table's prefix is refused it (measured on 1.0.1 and 1.0.3). rask writes its records
-  by key through the object client (`lakehouse.record_store.put_record`) and its other pyarrow writes on a service's own
+  by key through the object client (`lakehouse.records.record_store.put_record`) and its other pyarrow writes on a service's own
   session, and a vended credential writes through Lance's object_store, which never asks. Never
   widen a session policy to the bucket root to make pyarrow work.
 - **The image logs to files, not stdout.** It sets `RUSTFS_OBS_LOG_DIRECTORY=/logs` and

@@ -63,18 +63,18 @@ from catalog.core.config import CatalogAuthzSettings, CatalogLineageSettings, Ca
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
 from catalog.services import dataplane, native, object_uuids, protections, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
-from lakehouse import object_records, trash
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.governed.subjects import is_person_subject
-from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import store_refusal
+from lakehouse.records import object_records, trash
+from lakehouse.records.location_claims import ClaimStore
+from lakehouse.records.trash import TrashKind, TrashRecord
 from lakehouse.storage.options import StorageOptions
-from lakehouse.trash import TrashKind, TrashRecord
 
 
 log = logging.getLogger(__name__)

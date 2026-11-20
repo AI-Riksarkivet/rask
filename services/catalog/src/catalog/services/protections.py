@@ -5,8 +5,8 @@ from __future__ import annotations
 from lance_namespace import InternalError
 
 from catalog.core.config import CatalogStore
-from lakehouse import protection
-from lakehouse.protection import ProtectedKind, ProtectionRecord
+from lakehouse.records import protection
+from lakehouse.records.protection import ProtectedKind, ProtectionRecord
 
 
 def read(settings: CatalogStore, kind: ProtectedKind, uuid: str) -> ProtectionRecord | None:

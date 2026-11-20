@@ -11,7 +11,7 @@ before that commit.
   each by key: the same number of requests at 4 tables as at 12, and once eight more warehouses and a policy on every
   other table are there, since a pass that listed the registries would read each record. The files its commits recorded are
   checked against one listing of its root, and of the records only the one the commit wrote is read, maintenance's copy
-  holding the rest (`lakehouse.file_identities.recorded_and_copied`), so a table of 13 commits reads one. The pass opens
+  holding the rest (`lakehouse.records.file_identities.recorded_and_copied`), so a table of 13 commits reads one. The pass opens
   each dataset once before its expiry and once after, and asks Lance's count of its reclaimable versions once where it
   holds no vend. Measured 2026-11-10: 50 for a table of 4 versions, and 155 for one of 25. What still grows with a table is Lance's
   own cleanup accounting, which reads each retained version's manifest (`explain_cleanup_old_versions` and `versions`,
@@ -40,8 +40,8 @@ import pyarrow as pa
 import pytest
 from moto.server import ThreadedMotoServer
 
-from lakehouse import file_identities
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.records import file_identities
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.audit import run_audit
 from maintenance.services.queue import Task, TaskQueue

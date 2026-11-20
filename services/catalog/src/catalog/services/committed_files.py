@@ -1,6 +1,6 @@
 """The files a version adds under its table's root, as the store holds them when the catalog commits it ([[LH-419]]).
 
-Every catalog commit records them before its version is announced (``lakehouse.file_identities``), and
+Every catalog commit records them before its version is announced (``lakehouse.records.file_identities``), and
 maintenance's sweep reads each one again: ``version/create`` reads them before it judges a stock commit's files, a door's
 stamped commit (``dataplane.commit_stamped``) before its finalize, and a write Lance commits in one call (the create
 door's ``write_dataset``, an unkeyed ``/insert``) just after it lands (:func:`record_landed`).
@@ -27,10 +27,10 @@ from lance import Transaction
 from opentelemetry import metrics
 
 from catalog.services import client_fragments
-from lakehouse import file_identities
 from lakehouse.lancekit import base_refs
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
 from lakehouse.lancekit.transactions import read_transaction
+from lakehouse.records import file_identities
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 

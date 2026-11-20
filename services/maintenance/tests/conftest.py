@@ -13,9 +13,9 @@ from fastapi.testclient import TestClient
 from lance_namespace import connect
 from moto.server import ThreadedMotoServer
 
-from lakehouse import location_claims
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.records import location_claims
 from lakehouse.storage.options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings

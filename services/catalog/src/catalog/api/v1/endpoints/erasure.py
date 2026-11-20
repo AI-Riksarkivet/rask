@@ -52,8 +52,8 @@ from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
-from lakehouse.history_fences import TableHistory
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
+from lakehouse.records.history_fences import TableHistory
 from lakehouse.storage.conditional_records import RecordExistsError
 from lakehouse.storage.options import StorageOptions
 

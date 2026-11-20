@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse import history_fences
-from lakehouse.history_fences import HistoryFence, HistoryWork, TableHistory
+from lakehouse.records import history_fences
+from lakehouse.records.history_fences import HistoryFence, HistoryWork, TableHistory
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 

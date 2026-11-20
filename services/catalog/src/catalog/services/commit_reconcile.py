@@ -2,7 +2,7 @@
 
 The catalog announces a write after its commit, by staging the event in its object-store outbox and publishing it, and a
 crash between the commit and the stage loses the announcement. The version itself is not lost: the catalog recorded the
-caller it authorized every commit for (:mod:`lakehouse.commit_records`, ADR 0187), a catalog door's commit
+caller it authorized every commit for (:mod:`lakehouse.records.commit_records`, ADR 0187), a catalog door's commit
 names its lineage operation (``rask.operation``), and an announcement's run id is derived from the commit itself
 (:mod:`catalog.core.commit_ids`). So each table's own version log is the outbox: a pass reads each ref's versions after
 its mark, looks for each on the feed, and hands the caller every version the feed lacks, rebuilt from the version log and
@@ -41,7 +41,6 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core import lineage_emit, run_context
 from catalog.core.config import CatalogStore, Settings
 from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
-from lakehouse import commit_records
 from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.events.openlineage import BRANCH_IDENTIFIER
 from lakehouse.events.signing import SIGNATURE_FACET
@@ -53,6 +52,7 @@ from lakehouse.lancekit.filters import sql_literal
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
 from lakehouse.lancekit.manifest_names import committed_version
 from lakehouse.lancekit.transactions import read_transaction
+from lakehouse.records import commit_records
 from lakehouse.storage import stored_objects
 from lakehouse.storage.options import StorageOptions, on_s3
 

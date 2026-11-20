@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from lakehouse.trash import TrashKind
+from lakehouse.records.trash import TrashKind
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
 
 

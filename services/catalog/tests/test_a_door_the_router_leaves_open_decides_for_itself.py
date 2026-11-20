@@ -43,11 +43,11 @@ from catalog.api.dependencies import get_fga_client
 from catalog.api.security import authenticate
 from catalog.core.config import get_settings
 from catalog.services import warehouses
-from lakehouse import maintenance_due
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
-from lakehouse.maintenance_due import CompactionDue, DueRecord
-from lakehouse.warehouse_records import WarehouseRecord
+from lakehouse.records import maintenance_due
+from lakehouse.records.maintenance_due import CompactionDue, DueRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 from tests.traces import trace_named, traceparent_named
 
 

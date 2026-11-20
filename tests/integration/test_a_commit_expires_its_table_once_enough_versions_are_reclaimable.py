@@ -34,10 +34,10 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest, Descri
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from lakehouse import location_claims, maintenance_policies
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.record_store import record_key
+from lakehouse.records import location_claims, maintenance_policies
+from lakehouse.records.record_store import record_key
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions

@@ -18,7 +18,7 @@ from lance_namespace import LanceNamespace
 
 from catalog.api.dependencies import Resolver
 from catalog.services.table_claims import ResolvedTable
-from lakehouse.trash import TrashRecord
+from lakehouse.records.trash import TrashRecord
 
 
 def uuid_of(kind: str, segments: list[str]) -> str:

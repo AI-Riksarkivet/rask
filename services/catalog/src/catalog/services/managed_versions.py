@@ -44,7 +44,6 @@ from catalog.core.config import shared_lance_session
 from catalog.core.namespace import overlapping_segments
 from catalog.core.vending import labelled_fields
 from catalog.services import client_fragments, committed_files, contracts, dataplane, maintenance, primary_keys, row_digests, table_claims
-from lakehouse import base_registry, commit_records, commit_turns, file_identities
 from lakehouse.lancekit import features, manifest_names
 from lakehouse.lancekit.auto_cleanup import AUTO_CLEANUP_PREFIX
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
@@ -53,6 +52,7 @@ from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.outage import reads_as_store_outage
+from lakehouse.records import base_registry, commit_records, commit_turns, file_identities
 from lakehouse.storage.options import StorageOptions
 
 

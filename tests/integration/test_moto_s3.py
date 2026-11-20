@@ -510,7 +510,7 @@ def _age_the_claim(moto_endpoint: str, location: str) -> None:
     import json
     from datetime import UTC, datetime
 
-    from lakehouse.location_claims import LEASE, claim_key
+    from lakehouse.records.location_claims import LEASE, claim_key
 
     s3 = boto3.client("s3", endpoint_url=moto_endpoint, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     key = claim_key(location)
@@ -528,7 +528,7 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     its location, the residue record stands, and it keeps the location's claim once the drop's fence lapses: no
     register adopts the bytes, and no undrop restores them."""
     from catalog.core.config import get_settings
-    from lakehouse import trash
+    from lakehouse.records import trash
     from lakehouse.storage import stored_objects
 
     prefix = uuid.uuid4().hex[:8]
@@ -593,8 +593,8 @@ def _expire_trash_record(moto_endpoint: str, table_uuid: str) -> None:
     """
     import json
 
-    from lakehouse.record_store import record_key
-    from lakehouse.trash import _TRASH_PREFIX
+    from lakehouse.records.record_store import record_key
+    from lakehouse.records.trash import _TRASH_PREFIX
 
     s3 = boto3.client(
         "s3",

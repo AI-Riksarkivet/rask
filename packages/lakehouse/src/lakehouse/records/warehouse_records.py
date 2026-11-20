@@ -8,7 +8,7 @@ answer changes at runtime — a warehouse is provisioned by an API call, not by 
 So the reader lives here, in the shared lakehouse library, deliberately narrow: it reads records and
 nothing else. It cannot write or delete, which keeps the catalog the only writer while giving
 maintenance a truthful answer. Same store shape as its siblings (one JSON per record under a prefix),
-and that primitive now exists: :mod:`lakehouse.record_store`.
+and that primitive now exists: :mod:`lakehouse.records.record_store`.
 """
 
 from __future__ import annotations
@@ -19,10 +19,24 @@ from typing import Any, Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lakehouse import control_prefixes
 from lakehouse.naming import CONTROL_ID_RE
-from lakehouse.record_store import list_records, read_record
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import list_records, read_record
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "REGISTRY_PREFIX",
+    "DeleteMode",
+    "UnreadableWarehouseRecordError",
+    "WarehouseRecord",
+    "WarehouseStatus",
+    "bucket_project",
+    "maintainable_buckets",
+    "read",
+    "read_warehouse_records",
+    "warehouse_record",
+]
 
 
 log = logging.getLogger(__name__)

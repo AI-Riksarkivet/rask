@@ -34,7 +34,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
+from lakehouse.records.base_registry import BaseOrigin, BaseRole, RecordedBase
 from lakehouse.storage.options import StorageOptions
 from maintenance.services.expiry import DatasetOpener, ExpiryPolicy
 from maintenance.services.table_pass import _probe_before_vending

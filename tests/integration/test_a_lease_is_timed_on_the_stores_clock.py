@@ -17,9 +17,9 @@ from datetime import datetime, timedelta, tzinfo
 import boto3
 import pytest
 
-from lakehouse import history_fences, location_claims
-from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse.location_claims import ClaimStore, LocationClaim, LocationHeldError
+from lakehouse.records import history_fences, location_claims
+from lakehouse.records.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from lakehouse.records.location_claims import ClaimStore, LocationClaim, LocationHeldError
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 

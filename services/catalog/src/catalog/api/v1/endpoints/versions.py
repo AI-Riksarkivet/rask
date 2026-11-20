@@ -47,11 +47,11 @@ from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
-from lakehouse import commit_records
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.history_fences import HistoryWork
 from lakehouse.lancekit import branch_layout
+from lakehouse.records import commit_records
+from lakehouse.records.history_fences import HistoryWork
 from lakehouse.storage import stored_objects
 from lakehouse.storage.options import StorageOptions
 

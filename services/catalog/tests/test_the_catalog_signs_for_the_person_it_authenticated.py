@@ -51,7 +51,6 @@ from lance_namespace import (
     connect,
 )
 
-from lakehouse import location_claims
 from lakehouse.events import outbox
 from lakehouse.events.control_events import CONTROL_TOPIC
 from lakehouse.events.signing import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
@@ -60,6 +59,7 @@ from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.governed.signing_key import signing_key_name
+from lakehouse.records import location_claims
 from lakehouse.storage.options import StorageOptions
 from tests.bus_double import BusDouble, session_holding
 from tests.secret_store_double import SecretStoreDouble

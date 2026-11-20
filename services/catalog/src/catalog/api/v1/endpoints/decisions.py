@@ -46,7 +46,6 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, require_names
 from catalog.services import table_claims
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse import location_claims
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.decider import (
@@ -63,7 +62,8 @@ from lakehouse.governed.decider import (
 )
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.lancekit.base_refs import names_a_location
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records import location_claims
+from lakehouse.records.location_claims import ClaimStore
 
 
 log = logging.getLogger(__name__)
@@ -286,7 +286,7 @@ def _table_at(store: ClaimStore, location: str) -> str | None:
     """The uuid of the table holding ``location``, or ``None`` where none does: a spelling that names no location, one no
     claim holds, a released claim, and a data directory's claim, which records no uuid.
 
-    A recoverable drop keeps its table's claim (`lakehouse.location_claims`), so a trashed table's location still
+    A recoverable drop keeps its table's claim (`lakehouse.records.location_claims`), so a trashed table's location still
     answers the table: its grants decide what may be recorded about it, as they do by its name.
     """
     if not names_a_location(location):
@@ -305,7 +305,7 @@ async def decide_locate(token: CurrentToken, settings: SettingsDep, body: Decisi
     so it answers to the same role. A claim that cannot be read (the store's error, a record that is no claim, a root the
     conditional read does not serve: `lakehouse.storage.conditional_records`) is 503, never "holds none", which would exempt it. The
     claims are the answer because the ``dir`` backend keeps no location exclusive (``lance_docs/ns_catalog/catalog/dir``
-    § Manifest Table Commits) and the claim store picks one holder (`lakehouse.location_claims`).
+    § Manifest Table Commits) and the claim store picks one holder (`lakehouse.records.location_claims`).
     """
     caller = token.subject if token else "anonymous"
     asked = {"locations": ",".join(body.locations)}

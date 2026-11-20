@@ -49,8 +49,8 @@ from typing import TYPE_CHECKING
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse.project_records import ProjectRecord
-from lakehouse.warehouse_records import WarehouseRecord
+from lakehouse.records.project_records import ProjectRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, rebuild_tenancy
 
 

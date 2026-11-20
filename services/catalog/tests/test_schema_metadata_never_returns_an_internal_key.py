@@ -21,8 +21,8 @@ from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
-from lakehouse import base_registry
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records import base_registry
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

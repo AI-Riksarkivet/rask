@@ -13,12 +13,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from lakehouse import location_claims
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
 from lakehouse.lancekit.base_refs import key_uri, normalise, store_of
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
+from lakehouse.records import location_claims
 from maintenance.core.config import MaintenanceStore
 
 

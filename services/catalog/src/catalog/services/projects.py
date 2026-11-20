@@ -23,11 +23,11 @@ import pyarrow.fs as pafs
 from lance_namespace import InternalError
 
 from catalog.services.control_records import ProtectionChange, read_json, with_manager, with_protection
-from lakehouse import control_prefixes
 from lakehouse.outage import reads_as_store_outage, store_refusal
-from lakehouse.project_records import ProjectRecord, UnreadableProjectRecordError
-from lakehouse.project_records import read as read_project_record
-from lakehouse.record_store import delete_record
+from lakehouse.records import control_prefixes
+from lakehouse.records.project_records import ProjectRecord, UnreadableProjectRecordError
+from lakehouse.records.project_records import read as read_project_record
+from lakehouse.records.record_store import delete_record
 from lakehouse.storage.conditional_records import RecordMissingError, create_json, mutate_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions

@@ -32,9 +32,9 @@ import pytest
 from botocore.exceptions import ClientError
 from tests.secret_store_double import SecretStoreDouble
 
-from lakehouse import location_claims
 from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.records import location_claims
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.arrival import Arrivals, LaneTask, lane_task
 from maintenance.services.queue import QueueUnavailableError, Task, TaskQueue

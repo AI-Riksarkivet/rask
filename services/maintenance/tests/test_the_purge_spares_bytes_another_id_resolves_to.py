@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, DeregisterTableRequest, DescribeTableRequest, RegisterTableRequest, connect
 from pydantic import SecretStr
 
-from lakehouse import trash
+from lakehouse.records import trash
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash

@@ -27,9 +27,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings
-from lakehouse import location_claims, maintenance_due, object_records
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.maintenance_due import CompactionDue, DueRecord
+from lakehouse.records import location_claims, maintenance_due, object_records
+from lakehouse.records.maintenance_due import CompactionDue, DueRecord
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.naming import policy_owners

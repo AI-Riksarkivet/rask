@@ -295,7 +295,7 @@ recheck a day later.
 - **Resource-demand ranges and demand classes** (`mod.rs:198-220`, `queue_demand.rs`): for sizing workers by task cost.
   rask's maintenance decides and does not rewrite; heavy work is bring-your-own compute (ADR 0162).
 - **Per-warehouse queue configuration validated on save** (`mod.rs:510-522`): rask's maintenance policies resolve per
-  table, namespace and project (`packages/lakehouse/src/lakehouse/maintenance_policies.py:1-30`), set through the
+  table, namespace and project (`packages/lakehouse/src/lakehouse/records/maintenance_policies.py:1-30`), set through the
   catalog's owner-gated doors.
 - **The pin test that keeps destructive queues off the manual-schedule endpoint** (`mod.rs:284-333`): rask has no door
   that queues maintenance work by hand; the commit lane takes only signed events.

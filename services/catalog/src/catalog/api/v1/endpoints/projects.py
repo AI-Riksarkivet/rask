@@ -84,17 +84,17 @@ from catalog.services import object_labels, role_grants, roles, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
 from catalog.services.control_records import GIT, ProtectionChange
-from lakehouse import maintenance_policies
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
-from lakehouse.project_records import ProjectRecord
+from lakehouse.records import maintenance_policies
+from lakehouse.records.project_records import ProjectRecord
+from lakehouse.records.warehouse_records import WarehouseRecord, WarehouseStatus
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError
 from lakehouse.storage.options import StorageOptions
-from lakehouse.warehouse_records import WarehouseRecord, WarehouseStatus
 
 
 log = logging.getLogger(__name__)

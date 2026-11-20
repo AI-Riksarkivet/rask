@@ -19,6 +19,46 @@ from __future__ import annotations
 from typing import Final
 
 
+__all__ = [
+    "ANNOUNCEMENT_INTENTS",
+    "BACKUPS",
+    "BASES",
+    "CLONE_ENDINGS",
+    "COMMIT_AUTHORS",
+    "COMMIT_MARKS",
+    "COMMIT_TURNS",
+    "CONTRACTS",
+    "CONTROL_OUTBOX",
+    "CONTROL_PREFIXES",
+    "DECLARED_GRANTS",
+    "ERASURE_OBLIGATIONS",
+    "ERASURE_RELEASES",
+    "FILE_IDENTITIES",
+    "HISTORY_FENCES",
+    "IDEMPOTENCY",
+    "LABELS",
+    "LABEL_DEFINITIONS",
+    "LEASE_PREFIXES",
+    "LINEAGE_OUTBOX",
+    "LOCATIONS",
+    "MAINTENANCE_DUE",
+    "MAINTENANCE_FILES",
+    "NAMESPACE_INDEX",
+    "POLICIES",
+    "PRINCIPALS",
+    "PROJECTS",
+    "PROTECTION",
+    "QUEUE_PREFIXES",
+    "RECORD_PREFIXES",
+    "ROLES",
+    "STAGING",
+    "TABLE_INPUTS",
+    "TIMERS",
+    "TRASH",
+    "WAREHOUSES",
+]
+
+
 # The records: one object each, the estate's governance and bookkeeping.
 TRASH: Final = "_trash"
 PROJECTS: Final = "_projects"

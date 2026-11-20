@@ -2,7 +2,7 @@
 
 The commit lane queues the task when the catalog announces a table's drop (``drop_table``, filed after its record), and
 the audit queues it for any record no task or schedule holds, a namespace's among them. The task holds itself until the
-record's deadline and :data:`lakehouse.trash.RELEASE_SETTLE` (a schedule), then asks the catalog to release this record
+record's deadline and :data:`lakehouse.records.trash.RELEASE_SETTLE` (a schedule), then asks the catalog to release this record
 alone, read by its key (:func:`maintenance.services.trash_release.release_record`): the release deletes no byte, and the purge of
 the bytes stays the daily scan's, gated on the drift report that scan produced. A record gone by the time its task runs was undropped or
 ended; a table undropped stands again under the same uuid, so it gets a table task, as a table the catalog makes does.
@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.concurrency import run_in_threadpool
 
-from lakehouse import location_claims, trash
+from lakehouse.records import location_claims, trash
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.services.naming import claim_store
 from maintenance.services.queue import Task, TaskQueue

@@ -1,7 +1,7 @@
 """Back up and RESTORE the catalog's control root — the records that define who owns what.
 
 [[LH-110]]. The control root holds the estate's governance as small JSON objects, the records
-`lakehouse.control_prefixes` names: the project and warehouse registries, every table's location claim (which holds
+`lakehouse.records.control_prefixes` names: the project and warehouse registries, every table's location claim (which holds
 its uuid, and so every grant), protection, maintenance policies, data contracts, erasure obligations, roles, and the
 trash records that make a drop recoverable. Lose them and the Lance data survives while every statement about who may
 touch it does not.
@@ -48,11 +48,11 @@ from typing import Any
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
-from lakehouse.control_prefixes import BACKUPS, CONTROL_PREFIXES, RECORD_PREFIXES
+from lakehouse.records.control_prefixes import BACKUPS, CONTROL_PREFIXES, RECORD_PREFIXES
 from lakehouse.storage.store_session import JobStoreIdentity, job_client
 
 
-#: The record prefixes a restore must bring back: the registry's records (`lakehouse.control_prefixes`), never a glob
+#: The record prefixes a restore must bring back: the registry's records (`lakehouse.records.control_prefixes`), never a glob
 #: on a leading underscore, so what a backup copies is what the estate declares a record and nothing a feature leaves.
 BACKED_UP_PREFIXES: tuple[str, ...] = tuple(f"{prefix}/" for prefix in sorted(RECORD_PREFIXES))
 

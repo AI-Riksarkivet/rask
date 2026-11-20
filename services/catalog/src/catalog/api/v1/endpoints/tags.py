@@ -23,9 +23,9 @@ from catalog.api.pagination import ListLimit
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
-from lakehouse import clone_sources
 from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga
+from lakehouse.records import clone_sources
 
 
 spec_router = APIRouter(prefix="/v1/table", tags=["tag"])
@@ -33,7 +33,7 @@ spec_router = APIRouter(prefix="/v1/table", tags=["tag"])
 
 def _refuse_a_catalog_tag(tag: str) -> None:
     """Refuse a tag the catalog writes itself, on every door that writes a tag: the tag a registered clone holds on the
-    source version it reads (`lakehouse.clone_sources`), which the clone's own end releases. Every other name is the
+    source version it reads (`lakehouse.records.clone_sources`), which the clone's own end releases. Every other name is the
     caller's, `published` and `stable` included: marking a version ready is a pipeline's own tag (ADR 0212).
 
     Raises:

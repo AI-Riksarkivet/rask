@@ -27,8 +27,8 @@ from lance_namespace import DescribeNamespaceRequest, LanceNamespace, connect
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
-from lakehouse import maintenance_policies
 from lakehouse.governed import fga
+from lakehouse.records import maintenance_policies
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 

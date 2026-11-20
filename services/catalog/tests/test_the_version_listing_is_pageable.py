@@ -38,7 +38,7 @@ import pyarrow as pa
 from catalog.api import pagination
 from catalog.api.v1.endpoints import versions as versions_ep
 from catalog.services import table_claims
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

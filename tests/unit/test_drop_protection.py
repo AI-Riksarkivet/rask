@@ -31,9 +31,9 @@ from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
 from catalog.services import table_claims
 from catalog.services.table_claims import ResolvedTable
-from lakehouse import location_claims, protection
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records import location_claims, protection
 from lakehouse.storage.options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -155,7 +155,7 @@ def test_the_flag_reads_one_way_for_the_guard_and_for_the_door_that_answers_it(t
     from pathlib import Path
 
     from catalog.api.v1.endpoints import tables as t_ep
-    from lakehouse.record_store import record_key
+    from lakehouse.records.record_store import record_key
 
     settings = _settings(tmp_path)
     filed = Path(settings.registry_root.removeprefix("file://")) / record_key(protection.PREFIX, "table", _uuid("bronze$pages"))
@@ -241,7 +241,7 @@ def test_a_protection_record_that_cannot_be_read_refuses_the_drop_and_is_never_r
     is refused before the native call, by the key the record is filed under."""
     from pathlib import Path
 
-    from lakehouse.record_store import record_key
+    from lakehouse.records.record_store import record_key
 
     settings = _settings(tmp_path)
     key = record_key(protection.PREFIX, "table", _uuid("bronze$pages"))
@@ -358,7 +358,7 @@ def test_expired_selects_only_past_deadlines_and_never_deletes(tmp_path: Any) ->
     table someone was still inside their window to recover."""
     from datetime import UTC, datetime, timedelta
 
-    from lakehouse import trash
+    from lakehouse.records import trash
 
     now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     fresh = trash.make_record("ns$fresh", uuid=_uuid("ns$fresh"), location="s3://b/fresh", dropped_by="u", grace_days=7, now=now)
@@ -372,7 +372,7 @@ def test_a_record_that_is_no_trash_record_is_refused_by_its_key_and_never_read_a
     """A record whose name is not text cannot be acted on. Every read a caller decides from refuses it by the key it is
     filed under, so its object is never taken for gone (a location's claim is handed on only when no record keeps it);
     the listing that feeds a report leaves it out and says so."""
-    from lakehouse import trash
+    from lakehouse.records import trash
     from tests import seeding
 
     root, options, uuid = str(tmp_path), StorageOptions(), "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a55"
@@ -393,7 +393,7 @@ def test_a_record_whose_body_is_json_null_is_refused_and_never_read_as_absent(tm
     decides from refuses it, as it does any body that is no object, and agrees with the presence check."""
     from pathlib import Path
 
-    from lakehouse import trash
+    from lakehouse.records import trash
 
     root, options, uuid = str(tmp_path), StorageOptions(), "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a57"
     filed = Path(root) / trash.key(uuid)
@@ -408,7 +408,7 @@ def test_a_record_whose_body_is_json_null_is_refused_and_never_read_as_absent(tm
 def test_a_record_is_read_whatever_its_bookkeeping_holds(tmp_path: Any) -> None:
     """Who dropped it and why the purge last declined it decide nothing, so a record that holds neither as written is
     still the record of its object: read as dropped by nobody known and never refused."""
-    from lakehouse import trash
+    from lakehouse.records import trash
     from tests import seeding
 
     root, options, uuid = str(tmp_path), StorageOptions(), "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a56"
@@ -423,7 +423,7 @@ def test_a_record_is_read_whatever_its_bookkeeping_holds(tmp_path: Any) -> None:
 def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:
     """ "We do not know when this expires" must read as "not yet" — the same fail-toward-not-deleting
     stance the sweep takes when the policy registry is unreadable."""
-    from lakehouse import trash
+    from lakehouse.records import trash
 
     assert trash.expired([trash.read(held, at="a record of this test's") for held in ({"id": "a"}, {"id": "b", "expires_at": "not-a-date"})]) == []
 
@@ -442,7 +442,7 @@ class _TrashableNamespace(_RecordingNamespace):
 
 def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
     """The explicit opt-out: a caller who means 'destroy the bytes now' says so, and no trash is filed."""
-    from lakehouse import trash
+    from lakehouse.records import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
@@ -635,7 +635,7 @@ def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child
     lie, so with a grace period the cascade must never issue the destructive native call: tables are
     DEREGISTERED (bytes stay), namespaces emptied then dropped plainly, and every destroyed object —
     both tables, both namespaces — has a trash record undrop can act on."""
-    from lakehouse import trash
+    from lakehouse.records import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
@@ -664,7 +664,7 @@ def test_cascade_purge_true_destroys_and_files_nothing(tmp_path: Any) -> None:
     does not implement the native cascade at all (#117). Which bytes a destroy deletes is pinned over moto
     (`tests/integration/test_moto_s3.py::test_a_destructive_drop_leaves_no_byte_of_the_table_at_its_location`).
     """
-    from lakehouse import trash
+    from lakehouse.records import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
@@ -679,7 +679,7 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any, monkeypatch:
     """The plural undrop: namespaces shallowest-first, then every table re-registered at its old id
     from the RELATIVE location form (#75's dir-backend lesson), and the records cleared."""
     from catalog.api.v1.endpoints import namespaces as n_ep
-    from lakehouse import trash
+    from lakehouse.records import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
@@ -744,7 +744,7 @@ def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any, monkeypatch: 
 def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
     """A namespace and a table sharing a canonical id are separate trash records — same rule the
     protection store already pins."""
-    from lakehouse import trash
+    from lakehouse.records import trash
 
     settings = _settings(tmp_path)
     so = settings.storage_options()

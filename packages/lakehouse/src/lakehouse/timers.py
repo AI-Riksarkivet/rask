@@ -31,7 +31,7 @@ from typing import Final
 from opentelemetry import metrics
 from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
-from lakehouse import control_prefixes
+from lakehouse.records import control_prefixes
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 

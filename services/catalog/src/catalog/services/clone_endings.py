@@ -29,7 +29,7 @@ none while another finish's mark on it is younger than that. Then the location's
   holds, and the ending is removed with nothing released, so a door that crashed before its native call is not asked
   about hourly for ever;
 - held for the clone, which no longer stands: the finish FENCES the claim under the ETag it read
-  (:func:`lakehouse.location_claims.fence`), so no registration takes the location while it acts, and a claim that
+  (:func:`lakehouse.records.location_claims.fence`), so no registration takes the location while it acts, and a claim that
   moved since its read answers 409 (code 14) with nothing released; it releases that claim under the clone's uuid, so a
   claim anything else wrote there is never freed by it;
 - released or absent: nothing to fence; a registration taking the location meanwhile refuses itself while the ending
@@ -65,9 +65,9 @@ from pydantic import BaseModel, Field
 from catalog.core.config import CatalogStore
 from catalog.services import clone_ending_records, table_claims
 from catalog.services.clone_ending_records import CloneEnding, EndingIntent
-from lakehouse import base_registry, clone_sources, location_claims
-from lakehouse.base_registry import BaseRegistry
 from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
+from lakehouse.records import base_registry, clone_sources, location_claims
+from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.storage import conditional_records, objectfs
 from lakehouse.storage.options import StorageOptions
 

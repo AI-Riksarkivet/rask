@@ -83,10 +83,38 @@ from datetime import datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import control_prefixes, record_store
 from lakehouse.lancekit.base_refs import decoded_path
+from lakehouse.records import control_prefixes, record_store
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "LEASE",
+    "ClaimChangedError",
+    "ClaimFence",
+    "ClaimRead",
+    "ClaimStore",
+    "DirectoryClaimant",
+    "LocationClaim",
+    "LocationFencedError",
+    "LocationHeldError",
+    "claim_digest",
+    "claim_key",
+    "directory_holder_stands",
+    "every_claim",
+    "fence",
+    "hand_over",
+    "held_claims",
+    "holder",
+    "lift_fence",
+    "read",
+    "release",
+    "release_directory",
+    "store_now",
+    "take",
+    "take_directory",
+]
 
 
 log = logging.getLogger(__name__)

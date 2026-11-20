@@ -242,7 +242,7 @@ class TestThePublicDoor:
     ) -> None:
         """The 409 path is where a retried, un-detached refusal lands: a clean dataset's base record still converges
         there, and a mixed dataset's never does."""
-        from lakehouse import base_registry
+        from lakehouse.records import base_registry
 
         _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1, 2], version="2.1")

@@ -15,11 +15,11 @@ from typing import Literal
 from lance_namespace import DescribeNamespaceRequest, DescribeTableRequest, InternalError, LanceNamespace, NamespaceNotFoundError
 
 from catalog.services import native
-from lakehouse import location_claims
 from lakehouse.events.control_events import ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import uuid_of
+from lakehouse.records import location_claims
+from lakehouse.records.location_claims import ClaimStore
 
 
 log = logging.getLogger(__name__)

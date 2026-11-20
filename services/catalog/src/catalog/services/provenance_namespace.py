@@ -50,11 +50,11 @@ from catalog.core.identifiers import parse_identifier, with_minted_uuid
 from catalog.core.lineage_emit import COMPACT_TABLE
 from catalog.schemas import PolicyRequest
 from catalog.services import native, object_uuids
-from lakehouse import maintenance_policies, protection
 from lakehouse.governed import fga
-from lakehouse.maintenance_policies import PolicyRecord
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.protection import ProtectionRecord
+from lakehouse.records import maintenance_policies, protection
+from lakehouse.records.maintenance_policies import PolicyRecord
+from lakehouse.records.protection import ProtectionRecord
 
 
 log = logging.getLogger(__name__)

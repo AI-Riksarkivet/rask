@@ -27,8 +27,8 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from lakehouse import commit_turns
-from lakehouse.commit_turns import TableTurns, Writer
+from lakehouse.records import commit_turns
+from lakehouse.records.commit_turns import TableTurns, Writer
 from lakehouse.storage import conditional_records
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions

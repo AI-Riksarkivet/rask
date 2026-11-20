@@ -36,16 +36,16 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import base_registry, data_directories, location_claims, maintenance_policies, trash, warehouse_records
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.history_fences import TableHistory
 from lakehouse.lancekit import auto_cleanup, base_refs
 from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
 from lakehouse.lancekit.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse.lancekit.lance_session import affordable_cache_bytes, open_dataset
 from lakehouse.lancekit.versions import committed_at
-from lakehouse.maintenance_due import delete_due
+from lakehouse.records import base_registry, data_directories, location_claims, maintenance_policies, trash, warehouse_records
+from lakehouse.records.history_fences import TableHistory
+from lakehouse.records.maintenance_due import delete_due
 from lakehouse.storage import objectfs
 from lakehouse.storage.options import StorageOptions, on_s3
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, get_settings, shared_lance_session
@@ -759,10 +759,10 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
     What it costs in requests is the table's, never the estate's: the rows of the table and of each namespace above it
     in the ``__manifest`` of the bucket ``location`` is in, one filtered read of an index Lance keeps unindexed, so its
     bytes grow with the bucket's rows while its requests do not (:func:`maintenance.services.purge.manifest_rows_named`);
-    and, by key, the one policy record that governs the table (:func:`lakehouse.maintenance_policies.governing_policy`).
+    and, by key, the one policy record that governs the table (:func:`lakehouse.records.maintenance_policies.governing_policy`).
     A manifest, or a policy record the store did not answer, decides nothing (``None``): the policies are the protective
     surface, and expiring without them would reclaim history an owner kept. A policy record that is there and cannot be
-    read as one (:class:`lakehouse.maintenance_policies.MalformedPolicyError`) leaves the readings without owners and
+    read as one (:class:`lakehouse.records.maintenance_policies.MalformedPolicyError`) leaves the readings without owners and
     names why, so each of the table's datasets is parked (:func:`name_dataset`), and the orphan check counts the table
     ``policy_unreadable`` and raises no floor on it. A table whose policy owners cannot be read
     (:func:`maintenance.services.naming.policy_owners`) leaves the policy unread and the readings without owners, so each

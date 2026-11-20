@@ -53,8 +53,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from lakehouse.governed import fga
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from lakehouse.lancekit.base_refs import decoded_path, normalise
+from lakehouse.records.trash import TrashKind
 from lakehouse.storage.options import StorageOptions
-from lakehouse.trash import TrashKind
 
 
 if TYPE_CHECKING:

@@ -19,7 +19,7 @@ import pytest
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from lakehouse import file_identities
+from lakehouse.records import file_identities
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions

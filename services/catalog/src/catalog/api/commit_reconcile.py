@@ -42,12 +42,12 @@ from catalog.core.config import CatalogLineageSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
 from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
-from lakehouse import location_claims
 from lakehouse.context import continuing
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit.base_refs import decoded_path
+from lakehouse.records import location_claims
 from lakehouse.storage.options import StorageOptions
 
 

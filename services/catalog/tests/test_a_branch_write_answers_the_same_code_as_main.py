@@ -38,7 +38,7 @@ from tables_by_name import open_by_name
 from catalog.core.namespace import open_resolved_dataset_unchecked
 from catalog.services.dataplane import create_table, merge_insert_into_table
 from catalog.services.table_claims import DoorTable
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

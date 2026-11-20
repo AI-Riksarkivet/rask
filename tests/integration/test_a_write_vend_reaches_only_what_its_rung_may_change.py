@@ -49,9 +49,9 @@ from lance_namespace import ErrorCode
 from moto.iam.access_control import IAMPolicy, PermissionResult
 from moto.sts.models import sts_backends
 
-from lakehouse import file_identities, history_fences, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.record_store import record_key
+from lakehouse.records import file_identities, history_fences, location_claims, trash
+from lakehouse.records.record_store import record_key
 from tests.integration import store_requests
 
 
@@ -206,7 +206,7 @@ def test_a_vend_permits_only_what_its_tier_may_change(estate: _Estate, tier: _Ti
 
 def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(estate: _Estate) -> None:
     """The reclaim holds its table's history fence and forgets the records of its committed files under the vend
-    (`lakehouse.history_fences`, `lakehouse.file_identities`), so the vend reaches those two of its own table; it puts no
+    (`lakehouse.records.history_fences`, `lakehouse.records.file_identities`), so the vend reaches those two of its own table; it puts no
     committed-file record, since one it could put would record a replaced file as committed, and reaches no other table's.
     The control root here is the table's bucket."""
     mine, other = estate.table_uuid(), uuid.uuid4().hex

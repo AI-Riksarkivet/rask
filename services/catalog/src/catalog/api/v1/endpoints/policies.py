@@ -47,12 +47,12 @@ from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, PolicyResponse, PolicyUnset, ProjectPoliciesResponse
 from catalog.services import projects as project_registry
 from catalog.services import table_claims, warehouses
-from lakehouse import maintenance_policies as policies
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
-from lakehouse.location_claims import ClaimStore
-from lakehouse.maintenance_policies import PolicyRecord
 from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.records import maintenance_policies as policies
+from lakehouse.records.location_claims import ClaimStore
+from lakehouse.records.maintenance_policies import PolicyRecord
 from lakehouse.storage import conditional_records
 
 

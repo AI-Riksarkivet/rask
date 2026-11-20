@@ -32,10 +32,10 @@ from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, St
 from catalog.api.security import CurrentToken
 from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import maintenance, maintenance_commits, table_claims
-from lakehouse import maintenance_due
 from lakehouse.governed import fga
-from lakehouse.history_fences import HistoryWork
 from lakehouse.lancekit import branch_layout
+from lakehouse.records import maintenance_due
+from lakehouse.records.history_fences import HistoryWork
 from lakehouse.storage import stored_objects
 
 

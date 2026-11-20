@@ -45,8 +45,6 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from lakehouse import location_claims
-from lakehouse.commit_records import is_canonical_uuid
 from lakehouse.events.bus import processing
 from lakehouse.events.bus_delivery import envelope_of
 from lakehouse.events.door_verdict import DoorMode, DoorVerdict, judge
@@ -54,6 +52,8 @@ from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.events.published_keys import PublishedKeys
 from lakehouse.events.signing import signature_of, verify_signature
 from lakehouse.governed.signing_key import published_key_fetch
+from lakehouse.records import location_claims
+from lakehouse.records.commit_records import is_canonical_uuid
 from lakehouse.storage.credential import StoreCredentialUnavailableError
 from maintenance.core.metrics import ArrivalOutcome, SignatureDoor, record_signature_refused, record_signature_would_refuse
 from maintenance.services.naming import claim_store

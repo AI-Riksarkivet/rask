@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 #: Re-exported from `lakehouse.problem`, which owns the Lance-free half of this module. Both names
 #: stay importable from here so no call site moved: `problem_body` had seven of them and the point of
 #: the split was packaging, not API churn. See that module for why it exists.
-__all__ = ["PROBLEM_JSON", "install_problem_handlers", "problem_body", "problem_detail", "status_for"]
+__all__ = ["PROBLEM_JSON", "PartiallyApplied", "as_unsupported_if_stub", "install_problem_handlers", "problem_body", "problem_detail", "status_for"]
 
 _STATUS: dict[ErrorCode, int] = {
     # 406, NOT 501, and the spec is explicit about it: `UnsupportedOperationErrorResponse` is status

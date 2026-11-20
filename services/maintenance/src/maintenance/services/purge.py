@@ -73,19 +73,19 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import trash, warehouse_records
-from lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError
-from lakehouse.control_prefixes import CONTROL_PREFIXES
-from lakehouse.data_directories import delete_directories, directories_to_end, directory_uri
 from lakehouse.events.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from lakehouse.events.control_events import ControlAction, ControlObjectType, ControlUuids
 from lakehouse.lancekit.base_refs import decoded_path, decoded_segments, location_within, names_a_location, store_of
 from lakehouse.lancekit.lance_session import open_dataset
+from lakehouse.records import trash, warehouse_records
+from lakehouse.records.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError
+from lakehouse.records.control_prefixes import CONTROL_PREFIXES
+from lakehouse.records.data_directories import delete_directories, directories_to_end, directory_uri
+from lakehouse.records.trash import TrashRecord
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.storage.stored_objects import StoredObject, delete_objects, list_under
 from lakehouse.table_paths import objects_at, spellings
-from lakehouse.trash import TrashRecord
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, end_trash, note_trash_refusal, reclaim_options_for
@@ -291,7 +291,7 @@ def maintained_roots(settings: MaintenanceStore, storage_options: StorageOptions
     destroying a quarantined tenant's dropped tables is not a maintenance decision to make on their
     behalf.
 
-    Raises if the registry, or any one record in it, cannot be read (:func:`lakehouse.warehouse_records
+    Raises if the registry, or any one record in it, cannot be read (:func:`lakehouse.records.warehouse_records
     .read_warehouse_records`). The caller turns that into a refusal to run — narrowing the estate silently would be
     safe for the purge, but "we could not enumerate what we maintain" is exactly the moment a reclaimer should stop
     rather than proceed on a partial map: a record left out may name the bucket a live table resolving into a trashed
@@ -539,7 +539,7 @@ def held_by(finding: OrphanedTrash, *, storage_options: StorageOptions, registry
     bytes are gone ([[LH-061]]).
 
     Counted where the catalog's end door counts them, so a record the tombstone sweep plans is one the door ends: the location in
-    both spellings, and each data directory its claim names on the table (:func:`lakehouse.data_directories
+    both spellings, and each data directory its claim names on the table (:func:`lakehouse.records.data_directories
     .directories_to_end`, [[LH-286]]). A table whose fragments sit on a data base keeps them there once its root is
     empty, and a sweep judging the root alone planned the record the door then refused.
 
@@ -1011,7 +1011,7 @@ def _record_metrics(out: TrashPurgeReport) -> None:
 def _judged_data_directories(location: str, *, registry: BaseRegistry, uuid: str) -> list[RecordedBase]:
     """The data directories ending the table ``uuid`` at ``location`` deletes, each judged before any byte goes ([[LH-286]]).
 
-    :func:`lakehouse.data_directories.directories_to_end` decides which are the table's (its claim records the uuid the
+    :func:`lakehouse.records.data_directories.directories_to_end` decides which are the table's (its claim records the uuid the
     trash record keeps, held or released by it, and every other one is left, a table registered under the trashed
     table's name since included, [[LH-575]]).
 

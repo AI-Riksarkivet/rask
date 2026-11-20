@@ -1,7 +1,7 @@
 """What a create or a register may leave a table declaring, and where a table may be registered ([[LH-279]]).
 
 The catalog's two table-making doors are the only writers of the ``_bases/`` record
-(:mod:`lakehouse.base_registry`), and this is their half of it: the entries each door records,
+(:mod:`lakehouse.records.base_registry`), and this is their half of it: the entries each door records,
 the register door's judge of the bases a dataset arrives declaring, and the location-exclusivity rule
 that keeps every table prefix — and so every vended session policy — off the control root.
 
@@ -42,13 +42,13 @@ from catalog.core.namespace import registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import clone_ending_records, native, table_inputs
-from lakehouse import base_registry, clone_sources, control_prefixes, location_claims
 from lakehouse.governed import fga
-from lakehouse.history_fences import HistoryFencedError
 from lakehouse.lancekit.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.lancekit.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.outage import store_refusal
+from lakehouse.records import base_registry, clone_sources, control_prefixes, location_claims
+from lakehouse.records.history_fences import HistoryFencedError
 from lakehouse.storage import conditional_records
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
@@ -266,7 +266,7 @@ def require_exclusive_location(root: str, relative: str, storage_options: Storag
 class CloneAdmission(BaseModel):
     """What a registered shallow clone is admitted with: the sources to tag, and the record entries its roots earn."""
 
-    #: Every table the clone reads through, each at the version its tag pins (:mod:`lakehouse.clone_sources`): the
+    #: Every table the clone reads through, each at the version its tag pins (:mod:`lakehouse.records.clone_sources`): the
     #: source its first transaction names, and each table that source itself reads through (a clone of a clone reads
     #: the first source's files where they are, measured on pylance 13.0.0).
     sources: list[clone_sources.CloneSource] = Field(default_factory=list)

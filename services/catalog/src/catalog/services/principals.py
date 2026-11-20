@@ -14,8 +14,8 @@ from hashlib import blake2s
 from typing import Final
 
 from catalog.schemas import PrincipalRecord
-from lakehouse import control_prefixes
 from lakehouse.governed.principal import Principal
+from lakehouse.records import control_prefixes
 from lakehouse.storage.conditional_records import RecordExistsError, create_json, read_json
 from lakehouse.storage.options import StorageOptions
 

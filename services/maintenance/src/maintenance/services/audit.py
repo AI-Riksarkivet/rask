@@ -26,10 +26,10 @@ from typing import Any, Literal
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from lakehouse import location_claims, trash
-from lakehouse.base_registry import BaseRegistry
-from lakehouse.commit_records import is_canonical_uuid
 from lakehouse.events.control_emit import ControlEmitter
+from lakehouse.records import location_claims, trash
+from lakehouse.records.base_registry import BaseRegistry
+from lakehouse.records.commit_records import is_canonical_uuid
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.bucket_events import report_bucket_events
 from maintenance.services.clone_endings import finish_clone_endings
@@ -413,7 +413,7 @@ async def _queued(
     for uuid, record in trashed.items():
         # A released or undated record's task ends holding nothing (:mod:`maintenance.services.trash_task`), so queueing
         # one would queue it again every hour. The daily scan's purge reaches a released record without a task, and an
-        # undated one is never released (:attr:`lakehouse.trash.TrashRecord.release_at`).
+        # undated one is never released (:attr:`lakehouse.records.trash.TrashRecord.release_at`).
         if record.is_released or record.release_at is None:
             continue
         task = Task(kind="trash", uuid=uuid, location=record.location, trashed=record.kind)

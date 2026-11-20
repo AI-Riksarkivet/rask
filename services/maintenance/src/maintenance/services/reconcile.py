@@ -26,7 +26,7 @@ page ceiling, unreadable record and paginated listing lands in :attr:`ReconcileR
 Why the registries are re-read here rather than imported from the catalog: maintenance has no catalog
 client BY DESIGN, and declaring one would put the whole catalog closure in the maintenance image, because
 `uv sync --package` installs a member's declared closure. This is the same catalog↔maintenance shape as
-:mod:`lakehouse.maintenance_policies` and :mod:`lakehouse.warehouse_records`:
+:mod:`lakehouse.records.maintenance_policies` and :mod:`lakehouse.records.warehouse_records`:
 one service writes the records, another reads them straight off the bucket. The record layout is the
 shared contract, and the reader below is deliberately the *tolerant* half of it — a record it cannot
 parse is reported as an incomplete scan, never allowed to void a category.
@@ -46,16 +46,16 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse import control_prefixes, location_claims, project_records, trash, warehouse_records
 from lakehouse.governed import fga
 from lakehouse.lancekit.base_refs import decoded_path, normalise
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.project_records import ProjectRecord, UnreadableProjectRecordError
+from lakehouse.records import control_prefixes, location_claims, project_records, trash, warehouse_records
+from lakehouse.records.project_records import ProjectRecord, UnreadableProjectRecordError
+from lakehouse.records.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
+from lakehouse.records.warehouse_records import UnreadableWarehouseRecordError, WarehouseRecord
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
-from lakehouse.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
-from lakehouse.warehouse_records import UnreadableWarehouseRecordError, WarehouseRecord
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.services.discovery import discover_datasets

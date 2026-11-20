@@ -38,9 +38,9 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest, Regist
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from lakehouse import location_claims
 from lakehouse.events.lineage_events import DatasetUuids, dataset_uuids
-from lakehouse.maintenance_due import DueRecord, write_due
+from lakehouse.records import location_claims
+from lakehouse.records.maintenance_due import DueRecord, write_due
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions

@@ -27,11 +27,11 @@ from pydantic import BaseModel
 from catalog.core.config import CatalogStore, shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.services import manifest_reclaim, table_claims
-from lakehouse import location_claims
 from lakehouse.governed import fga
 from lakehouse.lancekit.lance_session import open_dataset
-from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import uuid_of
+from lakehouse.records import location_claims
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 

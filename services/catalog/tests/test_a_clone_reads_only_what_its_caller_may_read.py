@@ -20,9 +20,9 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse import location_claims
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga
+from lakehouse.records import location_claims
 
 
 #: The Lance Namespace spec's code for a refusal on authorization (`spec.yaml`).

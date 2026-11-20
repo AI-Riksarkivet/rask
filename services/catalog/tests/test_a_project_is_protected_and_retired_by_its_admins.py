@@ -22,10 +22,10 @@ from announcement_filings import age_filings
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from lakehouse import maintenance_policies
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
 from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.records import maintenance_policies
 from lakehouse.storage import conditional_records
 from lakehouse.storage.objectfs import fs_and_base
 from tests import seeding

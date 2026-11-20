@@ -35,7 +35,6 @@ from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
 from catalog.services.dataplane import create_table, read_arrow_body
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.base_registry import BaseRegistry
 from lakehouse.derived_tables import EDGES
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent
@@ -43,6 +42,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.storage.options import StorageOptions
 
 

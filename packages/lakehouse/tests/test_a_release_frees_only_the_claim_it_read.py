@@ -5,7 +5,7 @@ A rename hands its location's claim from the source id to the destination under 
 the hand-over lands between the release's read and its write, a release that removes whatever then
 stands at the key removes the destination's fresh claim: the destination resolves to the location with
 no claim, and a third id takes it and registers over the same bytes, so a destructive drop of either id
-deletes what the other still resolves to (the loss :mod:`lakehouse.location_claims` exists
+deletes what the other still resolves to (the loss :mod:`lakehouse.records.location_claims` exists
 to prevent).
 
 Driven on a real local control root. The hand-over runs inside the release's own read of the record,
@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse import location_claims
-from lakehouse.location_claims import ClaimStore, LocationClaim, LocationHeldError
+from lakehouse.records import location_claims
+from lakehouse.records.location_claims import ClaimStore, LocationClaim, LocationHeldError
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 
@@ -106,7 +106,7 @@ def test_a_record_that_is_no_claim_is_left_out_of_the_held_claims_and_said(tmp_p
     stray = tmp_path / location_claims.claim_key("s3://lance-catalog/stray")
     stray.write_text('{"location": "lance-catalog/stray"}')
 
-    with caplog.at_level("WARNING", logger="lakehouse.location_claims"):
+    with caplog.at_level("WARNING", logger="lakehouse.records.location_claims"):
         held = location_claims.held_claims(store)
 
     assert [claim.table for claim in held] == ["ns$x"]

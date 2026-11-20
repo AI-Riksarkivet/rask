@@ -25,9 +25,9 @@ from botocore.exceptions import ClientError
 
 import lakehouse.storage.client as storage_client
 from catalog.services import warehouses
+from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
-from lakehouse.warehouse_records import WarehouseRecord
 
 
 def _root(tmp_path: Any) -> str:

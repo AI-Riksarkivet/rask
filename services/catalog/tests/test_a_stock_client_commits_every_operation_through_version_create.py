@@ -50,7 +50,6 @@ from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
 from catalog.services import dataplane, table_claims
-from lakehouse import commit_records, commit_turns, control_prefixes
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga as fga_module
@@ -59,7 +58,8 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.lancekit import manifest_wire
-from lakehouse.record_store import put_record, record_key
+from lakehouse.records import commit_records, commit_turns, control_prefixes
+from lakehouse.records.record_store import put_record, record_key
 from lakehouse.storage import conditional_records
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.options import StorageOptions

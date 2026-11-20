@@ -19,8 +19,8 @@ from fastapi.testclient import TestClient
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import table_claims
-from lakehouse import location_claims, maintenance_due
-from lakehouse.maintenance_due import DUE_PREFIX, CompactionDue, DueRecord, write_due
+from lakehouse.records import location_claims, maintenance_due
+from lakehouse.records.maintenance_due import DUE_PREFIX, CompactionDue, DueRecord, write_due
 from lakehouse.storage.options import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 

@@ -35,8 +35,8 @@ from tables_by_name import open_by_name
 
 from catalog.services.dataplane import coerce_insert_arrow, create_table, insert_into_table
 from catalog.services.table_claims import DoorTable
-from lakehouse import base_registry
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records import base_registry
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

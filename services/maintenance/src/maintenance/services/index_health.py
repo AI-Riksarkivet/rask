@@ -1,7 +1,7 @@
 """Which of a dataset's indices an optimize is due on: rows it does not cover, or too many delta segments.
 
 Read-only. Maintenance builds and optimizes no index (ADR 0156 C6); it names the ones a bring-your-own job should
-optimize, on the table's due record (:mod:`lakehouse.maintenance_due`).
+optimize, on the table's due record (:mod:`lakehouse.records.maintenance_due`).
 
 READ OFF THE MANIFEST ALONE ([[LH-575]]). ``describe_indices()`` lists each index's segments with the fragments each
 covers, and each fragment's live rows are its physical rows less the deletions its manifest entry records; neither
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import lance
 
-from lakehouse.maintenance_due import IndexDue
+from lakehouse.records.maintenance_due import IndexDue
 
 
 #: Delta segments tolerated before an optimize is due. One is the steady state after an optimize that appended rather

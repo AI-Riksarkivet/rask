@@ -15,7 +15,7 @@ import logging
 from lance_namespace import InternalError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse.protection import is_protected
+from lakehouse.records.protection import is_protected
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 
@@ -34,8 +34,8 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict[
         return json.loads(stream.readall().decode("utf-8"))
 
 
-# The declared shape of a bucket claim. A project's and a warehouse's records are `lakehouse.project_records` and
-# `lakehouse.warehouse_records`. The fields a consumer keys on are declared, so a claim whose `bucket` is a list is no
+# The declared shape of a bucket claim. A project's and a warehouse's records are `lakehouse.records.project_records` and
+# `lakehouse.records.warehouse_records`. The fields a consumer keys on are declared, so a claim whose `bucket` is a list is no
 # claim rather than one that matches no bucket; every other field rides along (`extra="allow"`).
 
 

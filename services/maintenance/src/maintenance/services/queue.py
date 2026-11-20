@@ -55,8 +55,8 @@ from opentelemetry import propagate, trace
 from opentelemetry.trace import Link, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lakehouse.commit_records import is_canonical_uuid
 from lakehouse.events.bus import BusSettings, pull
+from lakehouse.records.commit_records import is_canonical_uuid
 from lakehouse.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
 from maintenance.core.metrics import (
     ArrivalOutcome,

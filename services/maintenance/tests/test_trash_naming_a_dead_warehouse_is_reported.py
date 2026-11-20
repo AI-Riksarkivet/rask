@@ -26,7 +26,7 @@ from uuid import uuid4
 
 import pytest
 
-from lakehouse.trash import TrashRecord
+from lakehouse.records.trash import TrashRecord
 from maintenance.services.reconcile import _orphaned_trash
 
 

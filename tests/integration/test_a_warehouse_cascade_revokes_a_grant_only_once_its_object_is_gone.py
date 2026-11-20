@@ -38,13 +38,13 @@ from openfga_sdk.client.models import ClientWriteRequest
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import BusEmitter
 from catalog.services import clone_ending_records, native
-from lakehouse import base_registry, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records import base_registry, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
+from lakehouse.records.trash import TrashKind
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.options import StorageOptions
-from lakehouse.trash import TrashKind
 from tests.bus_double import BusDouble
 from tests.integration.openfga_grants import Options, TupleStore, act_as
 

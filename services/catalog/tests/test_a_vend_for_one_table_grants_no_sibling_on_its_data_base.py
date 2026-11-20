@@ -34,8 +34,8 @@ from moto.iam.access_control import IAMPolicy, PermissionResult
 from pydantic import SecretStr
 
 from catalog.core.config import get_settings
-from lakehouse import location_claims
 from lakehouse.lancekit.features import manifest_base_path_refs
+from lakehouse.records import location_claims
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.store_session import IssuedSession
 

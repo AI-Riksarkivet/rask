@@ -20,7 +20,7 @@ metadata:
 Same store shape as ``maintenance_policies`` (one JSON per object, keyed by the object's uuid, ADR 0173 §8),
 own ``_protection/`` prefix so neither plane can misread the other's records. A record also keeps the object's
 name under ``id``, as it was when the record was set, for display. The store mechanics are
-:mod:`lakehouse.record_store`'s; this module is the protection vocabulary over them.
+:mod:`lakehouse.records.record_store`'s; this module is the protection vocabulary over them.
 """
 
 from __future__ import annotations
@@ -30,9 +30,21 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from lakehouse import control_prefixes
-from lakehouse.record_store import delete_record, put_record, read_record, record_key
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import delete_record, put_record, read_record, record_key
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "PREFIX",
+    "ProtectedKind",
+    "ProtectionRecord",
+    "UnreadableProtectionRecordError",
+    "clear_protection",
+    "get_protection",
+    "is_protected",
+    "set_protection",
+]
 
 
 #: Where the records live on the control root, one per object under ``record_key(PREFIX, kind, uuid)``.

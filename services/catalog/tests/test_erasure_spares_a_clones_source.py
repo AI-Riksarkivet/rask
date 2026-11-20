@@ -2,7 +2,7 @@
 
 A shallow clone reads its source's data files where they are (``lance_docs/lance/format/table/layout.md`` "Shallow
 Clone"), and the catalog keeps the version a registered clone reads by a tag it takes on the source (ADR 0198 §1,
-:mod:`lakehouse.clone_sources`). Dropping that tag would let a cleanup take files the clone has no other copy of, so the
+:mod:`lakehouse.records.clone_sources`). Dropping that tag would let a cleanup take files the clone has no other copy of, so the
 verification keeps it, names it ``held``, and the obligation stays open until the clone ends: the clone holds the
 subject too, which is its own surface ([[LH-263]]). The job here rewrites the source (the conftest's ``ErasureJob``); the
 tag keeps the version the clone reads while the source's own history is reclaimed.
@@ -29,9 +29,9 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
-from lakehouse import base_registry, clone_sources
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.records import base_registry, clone_sources
 from lakehouse.storage.options import StorageOptions
 
 

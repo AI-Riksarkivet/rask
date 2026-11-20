@@ -43,7 +43,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   arbitrates only object-id ADDs, so a register at an occupied location commits and two deregisters of one
   id both succeed (measured on pylance 12.0.0: eight barrier-threaded renames left eight live ids on one
   dataset, where `drop_table` on any destroys the others' bytes). The rename hands the location's claim
-  (`lakehouse.location_claims`, `_locations/` on the control root, put-if-not-exists then
+  (`lakehouse.records.location_claims`, `_locations/` on the control root, put-if-not-exists then
   ETag) from source to destination before either backend call, stamped with a per-request token so two
   renames into ONE destination are not each other's retry; the losers answer 409 code 14, and a failed
   retire or destination register puts the source back and hands the claim back under that token. **The claim is
@@ -215,7 +215,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   `object_store_path`, so `version/create` too) uses the key it decodes to once, and so does a destructive drop: the
   table door and the namespace cascade judge the bytes, remove the row with DeregisterTable and delete under the decoded
   key and the spelling themselves (`dataplane.destroy_table`, [[LH-532]]), since the backend's own drop deletes where
-  `Path::join` percent-encodes the location. A location holding a `_versions/` tree gets a residue trash record (`trash.make_record(residue=True)`, grace 0) before the row goes, cleared once the bytes are; a delete that fails leaves it, so the claim stays held (`table_claims.kept_in_trash`), undrop refuses it and the trash purge reclaims the bytes. `_versions/` is deleted last. The control prefixes a drop, the purge and discovery refuse are one set, `lakehouse.control_prefixes`. The register door refuses a location in
+  `Path::join` percent-encodes the location. A location holding a `_versions/` tree gets a residue trash record (`trash.make_record(residue=True)`, grace 0) before the row goes, cleared once the bytes are; a delete that fails leaves it, so the claim stays held (`table_claims.kept_in_trash`), undrop refuses it and the trash purge reclaims the bytes. `_versions/` is deleted last. The control prefixes a drop, the purge and discovery refuse are one set, `lakehouse.records.control_prefixes`. The register door refuses a location in
   a uuid-spelled directory directly under the namespace root (`identifiers.is_spelled_as_a_uuid`): that is the catalog's
   layout. Pinned by `tests/integration/test_warehouse_routing.py`,
   `services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py` and
@@ -415,7 +415,7 @@ the rule:
   `can_get_metadata`), and `GET .../labels/objects?label=` lists the project's labelled objects the caller may see.
   Records: `_label_definitions/<project>/<blake2s(name)>.json` and `_labels/<record_name(kind, uuid)>` on the control
   root (`catalog.services.object_labels`, `catalog/api/v1/endpoints/labels.py`); a rename keeps them, the object's
-  ending ends them (`lakehouse.object_records`), a project's delete ends its definitions. No door reads a label to
+  ending ends them (`lakehouse.records.object_records`), a project's delete ends its definitions. No door reads a label to
   decide. Pinned by `tests/integration/test_a_project_defines_labels_its_owners_attach.py`.
 - **A table's data contract is checked on every commit, and nowhere else** (ADR 0212, [[LH-594]]). A table's owner
   sets an ODCS v3 document at `POST /management/v1/table/{id}/contract/set` (`can_set_contract`, `owner_effective`;
@@ -442,7 +442,7 @@ the rule:
   writer that lost that version plans again. An attempt that cannot land (its finalize lost, or a judge refused it) first
   deletes its own transaction file, the files it wrote and their committed-files record, for an operation that writes its
   own (a `Restore` keeps the files it names), so nothing waits for Lance's 7-day rule ([[LH-564]]). **A commit that lost its race takes its ref's commit turn** for its
-  remaining attempts ([[LH-259]], ADR 0186, `lakehouse.commit_turns`, `_commit_turns/` per table uuid), and a
+  remaining attempts ([[LH-259]], ADR 0186, `lakehouse.records.commit_turns`, `_commit_turns/` per table uuid), and a
   stock writer that lost its race, its staged version found taken by `version/create` (409 code 14) or its finalize lost,
   is handed the ref's next turn under its verified caller and its transaction's uuid, which pylance keeps when it stages
   again, unless it staged a Merge, which Lance never retries (`transaction.md` § Merge Compatibility); a handed turn that
@@ -468,7 +468,7 @@ the rule:
   restore is planned as Lance's `Restore`, and `drop_index` keeps the `dir` backend's own refusals (a system index 406,
   a missing one 404). **Every commit of an operation the doors announce records the caller it was authorized for**
   ([[LH-550]], ADR 0187), at `_commit_authors/<table uuid>/<transaction uuid>/<version>.json`
-  (`lakehouse.commit_records`) naming the ref's key (`ref_key`: the branch and its incarnation, `""` for
+  (`lakehouse.records.commit_records`) naming the ref's key (`ref_key`: the branch and its incarnation, `""` for
   main), so a version put past every door under another commit's transaction uuid (pylance 13.0.0 commits any uuid it is
   given, measured) matches no record; a record written before its finalize also names the SHA-256 of the manifest the
   catalog judged, which the backend lands unchanged (measured), and the reconciler signs only when that manifest is the
@@ -599,7 +599,7 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 
 Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
 `services/maintenance/src/maintenance/services/{queue,tasks,table_pass,orphan_check,orphans,floor,expiry,arrival,store_events,committed_files,due,plan,trash_task,audit,purge,reconcile,index_health}.py`
-and ADR 0198 with its amendments — plus `packages/lakehouse/src/lakehouse/clone_sources.py`, the tag a
+and ADR 0198 with its amendments — plus `packages/lakehouse/src/lakehouse/records/clone_sources.py`, the tag a
 registered shallow clone holds on the source version it reads (ADR 0198 §1), which lives in the `lakehouse` library
 beside `base_registry`, whose `forget_base_record` releases that tag wherever a clone's base record is forgotten
 (`trash.end` included), and `base_refs.py`, the one spelling rule every reader comparing two locations asks. Read them
@@ -611,7 +611,7 @@ project record, and the winner supplies EVERY field. Maintenance matches a table
 uuids `__manifest` and the location claims record (`maintenance.services.naming.policy_owners`); a table whose uuid, or
 an ancestor's, cannot be read is refused (gate `unidentified`), never maintained under the defaults, since the record it
 cannot find may be a legal hold. Every reader of a setting parses the record's settings strictly where it reads it, through
-`lakehouse.maintenance_policies.PolicySettings` (the door's types and bounds; `"false"` reads false, `"30d"` refuses), since
+`lakehouse.records.maintenance_policies.PolicySettings` (the door's types and bounds; `"false"` reads false, `"30d"` refuses), since
 a record can reach the store past the typed door: a record that is there and cannot be read as a policy
 (`MalformedPolicyError`) PARKS the table (gate `policy_unreadable`, counted on `maintenance.tables.parked`, which
 `MaintenanceTableParked` pages on) until it is written again, and a policy read the store did not answer decides nothing
@@ -685,7 +685,7 @@ governing their data. The project-scoped surface is the console's project page, 
   the drop on `GET /management/v1/warehouses/{id}/trash` ([[LH-556]]): the route asks `can_get_metadata` on the
   warehouse, its candidates are `warehouses.trash_owned_by`'s, each is judged on its own uuid
   (`fga_deps.judged_page`), `?namespace=` keeps what was dropped beneath a name, and it pages on name then uuid
-  (`trash_doors.listing_key`); every trash door answers `trash_doors.entry`, `expired` read by `TrashRecord.past_deadline`. A trash record is a `lakehouse.trash.TrashRecord`: writers build one, `trash.get` and `trash.list_all` answer a record they cannot read as absent and log its key, and `trash.every_record` and `trash.named` raise `UnreadableTrashRecordError`.
+  (`trash_doors.listing_key`); every trash door answers `trash_doors.entry`, `expired` read by `TrashRecord.past_deadline`. A trash record is a `lakehouse.records.trash.TrashRecord`: writers build one, `trash.get` and `trash.list_all` answer a record they cannot read as absent and log its key, and `trash.every_record` and `trash.named` raise `UnreadableTrashRecordError`.
   Pinned by `services/catalog/tests/test_a_warehouses_trash_lists_what_its_caller_may_see.py`. A record keeps `uuid`,
   `namespace_uuid` (its namespace's at the drop) and, when a cascade filed it, `cascade` (the dropped namespace's
   uuid). A new table's claim never takes a location the trash keeps for its name's dropped table
@@ -720,7 +720,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `services/catalog/tests/test_a_project_is_protected_and_retired_by_its_admins.py`). Both registries apply one
   rule, `control_records.with_protection`: arming an armed record keeps its armer, and clearing removes both fields.
   Tables/namespaces carry it as a **control-root `_protection/` record**
-  (`lakehouse.protection`) gating drop/deregister/rename
+  (`lakehouse.records.protection`) gating drop/deregister/rename
   (table) and drop (namespace), and no write of rows: an overwrite, a delete and a merge ask nothing of it (ADR 0221). It guards no history reclaim (ADR 0150, [[LH-300]]): `version/delete`, `tags/delete`,
   `branches/delete` and `maintenance/run` are governed by authorization alone, since deleting a tag or a branch is what
   makes its versions reclaimable, and a version that must survive is tagged
@@ -737,7 +737,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `read_actions.META_READ_ACTIONS`/`DATA_READ_ACTIONS`, which the read-only window judges by too, and `_MAINTENANCE_ACTIONS`) —
   `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
   on one that has none. **Every control-root record kept for a table or namespace is keyed by its uuid** ([[LH-523]],
-  ADR 0173 §8): protection, maintenance policy, labels and the data contract (`lakehouse.object_records.OBJECT_RECORD_PREFIXES`),
+  ADR 0173 §8): protection, maintenance policy, labels and the data contract (`lakehouse.records.object_records.OBJECT_RECORD_PREFIXES`),
   maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
   maintenance's policy cadence stamps and its copy of the table's commit records (`_maintenance_files/`, which
   `file_identities.end` deletes with the records). A door resolves the uuid from the name it is addressed by
@@ -785,7 +785,7 @@ governing their data. The project-scoped surface is the console's project page, 
 - Maintenance lives in **`services/maintenance`** and DECIDES; it rewrites no data (ADR 0162, [[LH-467]]). It runs
   version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, each table's orphan check and cross-store reconcile, and
   writes the DUE LIST: one record per table that needs compacting or an index optimize, under `_maintenance_due/` on
-  the control root (`lakehouse.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
+  the control root (`lakehouse.records.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
   a caller holding `can_maintain`; the list is advisory. **Maintenance is driven by commits** (ADR 0198 and its
   2026-11-09 amendment): a table is passed when it changes or its time comes, never on a whole-estate clock. Its work is tasks on a NATS JetStream
   work queue (`maintenance.services.queue`): one per subject on `MAINTENANCE_TASKS` (`maintenance.task.<kind>.<uuid>`; a
@@ -999,7 +999,7 @@ governing their data. The project-scoped surface is the console's project page, 
   tier names, never either. A put over an existing key is the residue no session policy can refuse, so it is DETECTED
   ([[LH-419]], ADR 0184): every catalog commit records each file it adds under the table's root (data files, blob sidecars,
   deletion files, index files and its transaction file), with the ETag and size the store answers, before its version is
-  announced (`lakehouse.file_identities`, `_file_identities/<table
+  announced (`lakehouse.records.file_identities`, `_file_identities/<table
   uuid>/<transaction uuid>.json`, written by `version/create` before it judges a stock commit's files, by
   `commit_stamped` before its finalize, and by the create door and an unkeyed `/insert`, which Lance commits itself,
   just after it lands, logging `committed_files_unrecorded` at ERROR and counting `catalog.committed_files.unrecorded`,
@@ -1043,7 +1043,7 @@ governing their data. The project-scoped surface is the console's project page, 
   the table's history fence on the control root: maintenance's two commits are the catalog's, at the maintainer doors
   `maintenance/disarm` and `maintenance/floor` (ADR 0204, [[LH-575]]), and the warehouse scope probe signs with a `probe`
   tier of its own, which no door vends. The management door refuses the tier 409 code 19 for a table whose maintenance policy keeps its
-  whole history (`cleanup_enabled` false, `lakehouse.maintenance_policies.PolicyRecord.keeps_whole_history`, gate
+  whole history (`cleanup_enabled` false, `lakehouse.records.maintenance_policies.PolicyRecord.keeps_whole_history`, gate
   `require_reclaimable_history` in `api/v1/endpoints/credentials.py`) or is there and cannot be read as a policy (it may
   be the hold, and no retry reads it otherwise), and 503 code 17 when the store did not answer the policy read; and
   maintenance's probe asks no vend for such a table.
@@ -1058,7 +1058,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `POST .../credentials` vends a released table record's bytes session (`vending.ReclaimScope`: list and delete over its
   location in both spellings and its data directories, nothing on the control root, a whole-bucket place refused, and
   none while a registered clone's tag stands on the table, `trash_reclaim.clone_refusal`, ADR 0198 §1);
-  `DELETE ...` ends a released record once its place holds nothing (`lakehouse.trash.end`: the object's records, its
+  `DELETE ...` ends a released record once its place holds nothing (`lakehouse.records.trash.end`: the object's records, its
   base record and with it a clone's tags, its claim, then the record); `POST .../refusals` notes maintenance's own refusals. The release comes
   first, so the settle an undrop admitted at the deadline needs and the telling of each person who loses access
   precede any delete; maintenance's purge selects released records only (`purge.due_from`), and the daily scan releases
@@ -1140,7 +1140,7 @@ governing their data. The project-scoped surface is the console's project page, 
   an `optimize_indices`) needs the writer rung, changes no data, and each new segment lives under the table's own
   `_indices/<uuid>/` with its declared files present and the index opening. A compaction of a table a registered clone
   reads is judged as any other: the clone's tag keeps the version it reads, whatever the compaction and the cleanup
-  after it remove (ADR 0198 §1, `lakehouse.clone_sources`). The register door takes that tag,
+  after it remove (ADR 0198 §1, `lakehouse.records.clone_sources`). The register door takes that tag,
   `rask.clone.<sha256 of the clone's location>`, on the source version the clone's first transaction (a shallow
   `Clone`) names, under the source's history fence (`table_bases.admit_clone`, `clone_sources.take`). It takes one on EVERY table the clone reads through: a clone of a clone reads the first source's files where they are (measured on pylance 13.0.0), so it tags that source too, at the version its own source's record pins, and the end of the clone between them releases only that clone's tag. A clone of a source branch names `<source>/tree/<branch>` and `Clone.ref_name`, and is tagged `(branch, version)` on the source table. Each `derived_from` entry of the clone's base record keeps the version and branch it pins, because the clone's own version expiry removes the transaction that says so: a later registration of it tags from the record, and a recorded root with no pin is refused (400), never admitted untagged. Its caller must
   hold `can_read_data` and `can_create_tag` on each source, asked in that order and in the order the clone reads through
@@ -1202,7 +1202,7 @@ governing their data. The project-scoped surface is the console's project page, 
   and the erasure's verification reports the tag as a `held` surface it never drops, which the clone's own end
   releases (`erasure._HELD_BY_A_CLONE`).
   **A ref written during a reclaim is held off by the table's history fence** ([[LH-308]], ADR 0176,
-  `lakehouse.history_fences`). Lance reads tags and branches once per `cleanup_old_versions`
+  `lakehouse.records.history_fences`). Lance reads tags and branches once per `cleanup_old_versions`
   (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
   20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
@@ -1348,7 +1348,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`maintenance.base_fragments.holding_deleted_rows`) and the compaction gate keeps refusing the table, since
   `CompactionOptions` has no `target_bases` and a rewrite would move the rows into the root (owner, 2026-10-24). The
   trash purge deletes a dropped table's data directories after its root and before the catalog forgets its base record, and
-  so does every catalog door that ends a table with its bytes (`lakehouse.data_directories`, one rule for
+  so does every catalog door that ends a table with its bytes (`lakehouse.records.data_directories`, one rule for
   which directories: a `data` entry on a plain base whose claim names the table, held or released by it): a destructive
   drop and namespace cascade (`dataplane.destroy_table`, after the root, inside its residue record), a purging
   warehouse cascade (`_detach_table` before the deregister, so a failed delete leaves the table for the re-issue;
@@ -1550,7 +1550,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (ADR 0198 §1): compacting the source and cleaning up after it deletes files only the clone references (reproduced),
   and the source's own manifest carries no flag, so no per-dataset check can see it. The tag a registered clone holds
   on the version it reads keeps those files, since cleanup exempts a tagged version (measured on pylance 13.0.0,
-  `lakehouse.clone_sources`); a clone never registered keeps its own tag through the tag door, as Lance's contract
+  `lakehouse.records.clone_sources`); a clone never registered keeps its own tag through the tag door, as Lance's contract
   asks.
 - **A namespace is a `__manifest` ROW, not a directory** (the `dir` impl the chart runs —
   `LANCE_REST_IMPL=dir`). Only a TABLE materialises a directory. Any scan that enumerates namespaces

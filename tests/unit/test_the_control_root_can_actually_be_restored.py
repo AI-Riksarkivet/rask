@@ -33,7 +33,7 @@ from typing import Any, cast
 import pytest
 from botocore.exceptions import ClientError
 
-from lakehouse.control_prefixes import CONTROL_PREFIXES, RECORD_PREFIXES
+from lakehouse.records.control_prefixes import CONTROL_PREFIXES, RECORD_PREFIXES
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

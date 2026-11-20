@@ -8,7 +8,7 @@ record an ending missed governs nothing, since no other object holds its uuid.
 
 Not listed, each for its own reason:
 
-- The trash record (:mod:`lakehouse.trash`) is the record of an object that is not live, and a drop files it
+- The trash record (:mod:`lakehouse.records.trash`) is the record of an object that is not live, and a drop files it
   rather than ending it.
 - Grants live in OpenFGA; the catalog's ``fga_deps`` revokes them.
 - Location claims and base records are keyed by the table's location, and the claim records the uuid.
@@ -24,9 +24,15 @@ from __future__ import annotations
 
 from typing import Final
 
-from lakehouse import commit_records, commit_turns, control_prefixes, file_identities, history_fences, maintenance_policies, protection
-from lakehouse.record_store import delete_record, record_key
+from lakehouse.records import commit_records, commit_turns, control_prefixes, file_identities, history_fences, maintenance_policies, protection
+from lakehouse.records.record_store import delete_record, record_key
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "OBJECT_RECORD_PREFIXES",
+    "end_object_records",
+]
 
 
 #: Every control-root registry holding one record per object under its uuid.

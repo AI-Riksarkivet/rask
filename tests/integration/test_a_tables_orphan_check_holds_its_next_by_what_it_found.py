@@ -38,10 +38,10 @@ from moto.server import ThreadedMotoServer
 from pydantic import BaseModel, SecretStr
 
 from catalog.services.warehouses import ensure_catalog_row
-from lakehouse import location_claims, maintenance_policies, record_store, trash
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.lancekit.listing_floor import FLOOR_KEY
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records import location_claims, maintenance_policies, record_store, trash
 from lakehouse.storage.credential import S3KeyPair, StoreCredentialUnavailableError
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions

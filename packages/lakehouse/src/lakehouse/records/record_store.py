@@ -41,6 +41,17 @@ from lakehouse.storage.options import StorageOptions, object_client, on_s3
 from lakehouse.storage.uri import split_s3_uri
 
 
+__all__ = [
+    "delete_record",
+    "get_record",
+    "list_records",
+    "put_record",
+    "read_record",
+    "record_key",
+    "record_name",
+]
+
+
 log = logging.getLogger(__name__)
 
 

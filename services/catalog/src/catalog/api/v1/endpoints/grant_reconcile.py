@@ -26,8 +26,8 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GhostRevokeRequest, GhostRevokeResponse, GrantCensusResponse, TenancyRebuildRequest, TenancyRebuildResponse
 from catalog.services import grant_reconcile, table_claims, warehouses
-from lakehouse import location_claims
 from lakehouse.governed import fga
+from lakehouse.records import location_claims
 
 
 async def require_can_reconcile_grants(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:

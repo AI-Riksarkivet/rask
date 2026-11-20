@@ -29,10 +29,10 @@ import pytest
 
 from catalog.services import warehouses
 from catalog.services.control_records import ProtectionChange
-from lakehouse.project_records import ProjectRecord
+from lakehouse.records.project_records import ProjectRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError
 from lakehouse.storage.options import StorageOptions
-from lakehouse.warehouse_records import WarehouseRecord
 from tests import seeding
 
 

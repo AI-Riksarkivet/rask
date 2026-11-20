@@ -5,7 +5,7 @@ latest version and finalized as exactly the next one through the backend's put-i
 that version plans again on the new latest. So six concurrent `add_columns` on one table, each adding its own column,
 all land, in six consecutive versions. A writer losing every one of its attempts answers 14 `ConcurrentModification`
 (409), the spec's code for a retryable race. A commit that lost its race takes its ref's turn ([[LH-259]],
-`lakehouse.commit_turns`), so it lands even beside a writer appending in a tight loop.
+`lakehouse.records.commit_turns`), so it lands even beside a writer appending in a tight loop.
 
 THE RACES ARE REAL, NOT SIMULATED. Threads commit against one dataset on a real `dir` root. Neither test is marked slow:
 measured at a few seconds, because nothing large is written.
@@ -46,8 +46,8 @@ from catalog.services.dataplane import (
     update_table,
 )
 from catalog.services.table_claims import DoorTable
-from lakehouse import base_registry, commit_records, file_identities
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records import base_registry, commit_records, file_identities
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

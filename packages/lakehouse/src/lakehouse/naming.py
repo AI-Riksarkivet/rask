@@ -24,7 +24,7 @@ PLATFORM_PREFIX: Final = "rask."
 
 #: The read-only property DescribeTable and DescribeNamespace answer an object's uuid under (ADR 0173 §11). A namespace
 #: keeps its own in its `__manifest` row's properties, which only its create writes and its undrop restores; a table's
-#: lives in its location's claim (``lakehouse.location_claims``). No door accepts a caller's ``rask.*``
+#: lives in its location's claim (``lakehouse.records.location_claims``). No door accepts a caller's ``rask.*``
 #: property, so no caller sets or changes one. Every service that names an object by its uuid reads it, so it is declared
 #: once.
 UUID_PROPERTY: Final = "rask.uuid"

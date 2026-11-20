@@ -2,7 +2,7 @@
 
 This is the first thing in ``services/maintenance`` that deletes bytes it did not write, so the harness
 is deliberately the same shape as ``test_drop_protection.py`` / ``test_reconcile_report.py``: a real
-``file://`` control root written with the real ``lakehouse.trash`` primitives, and a real
+``file://`` control root written with the real ``lakehouse.records.trash`` primitives, and a real
 Lance estate built through ``lance_namespace.connect("dir", …)`` — the impl the chart runs. Nothing about
 the object store or the trash registry is mocked, because every interesting refusal in this module is a
 statement about what is REALLY on disk, and a double would happily agree with a wrong one.
@@ -13,7 +13,7 @@ configured — the manifest row goes away, the bytes stay. A trash record over t
 real thing, not a fixture shaped like one.
 
 The catalog's trash doors are the one seam that is faked ([[XC-084]]), by ``trash_doors``, which acts with the same
-``lakehouse.trash`` calls the doors make: the purge deletes a table's bytes under the session the catalog vends and then
+``lakehouse.records.trash`` calls the doors make: the purge deletes a table's bytes under the session the catalog vends and then
 asks the catalog to end the record, which revokes the grants it still holds. What the catalog judges before it acts is
 its own tests' claim; these hold what the purge does around it, the load-bearing ordering rule included: the record is
 ended only once its bytes are gone.
@@ -47,9 +47,9 @@ from lance_namespace import (
 )
 from pydantic import SecretStr
 
-from lakehouse import base_registry, location_claims, trash
-from lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
 from lakehouse.events.control_events import CatalogControlEvent
+from lakehouse.records import base_registry, location_claims, trash
+from lakehouse.records.base_registry import BaseOrigin, BaseRole, RecordedBase
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod

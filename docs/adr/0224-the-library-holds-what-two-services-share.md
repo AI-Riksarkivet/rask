@@ -359,3 +359,87 @@ them, with `timers` either joining as a claim on the control root or named as th
 `forbidden` contract from it to `lakehouse.*` ignoring the three, and moves 622 references in the same change. The
 name is the group's to choose: `lakehouse.records` is free, since the store's writes it arbitrates are
 `storage.conditional_records`.
+
+## The catalog's records group (2026-11-20)
+
+The sixth group by job is the catalog's records, `lakehouse.records`: the registries and governance records the
+lakehouse keeps on the control root, and the hashed-key layout and control prefixes they are kept by. Measured with
+`ast` on `5fa83ac19` (module-level, function-local, `TYPE_CHECKING` and relative imports; 112 modules, 226 edges), the
+proposal above held on the graph: its 19 candidates import nothing in the library but each other, `lakehouse.lancekit`,
+`lakehouse.storage` and `lakehouse.naming` (`warehouse_records` alone), and the rest of the library imports them from
+`timers` (`control_prefixes`) and `compaction_gate` (`base_registry`). The graph is necessary and the job decides, so
+17 join and two stay out by their job. The 17 move with every reference to them, in one change.
+
+| Module | In the group as |
+| --- | --- |
+| `lakehouse.record_store` | `lakehouse.records.record_store` |
+| `lakehouse.control_prefixes` | `lakehouse.records.control_prefixes` |
+| `lakehouse.object_records` | `lakehouse.records.object_records` |
+| `lakehouse.project_records` | `lakehouse.records.project_records` |
+| `lakehouse.warehouse_records` | `lakehouse.records.warehouse_records` |
+| `lakehouse.location_claims` | `lakehouse.records.location_claims` |
+| `lakehouse.trash` | `lakehouse.records.trash` |
+| `lakehouse.protection` | `lakehouse.records.protection` |
+| `lakehouse.maintenance_policies` | `lakehouse.records.maintenance_policies` |
+| `lakehouse.maintenance_due` | `lakehouse.records.maintenance_due` |
+| `lakehouse.history_fences` | `lakehouse.records.history_fences` |
+| `lakehouse.commit_records` | `lakehouse.records.commit_records` |
+| `lakehouse.commit_turns` | `lakehouse.records.commit_turns` |
+| `lakehouse.base_registry` | `lakehouse.records.base_registry` |
+| `lakehouse.clone_sources` | `lakehouse.records.clone_sources` |
+| `lakehouse.file_identities` | `lakehouse.records.file_identities` |
+| `lakehouse.data_directories` | `lakehouse.records.data_directories` |
+
+**The name.** `lakehouse.records` names what the modules hold, and no module or installed package uses it. The store's
+primitive is named for how a write lands (`storage.conditional_records`, `If-None-Match` and `If-Match`), and these for
+what is kept, so the two do not read alike. `control_records` was weighed and refused: `catalog.services.control_records`
+holds the catalog's own writes of the same records. `registries` was weighed and refused: `control_prefixes`,
+`clone_sources` and `data_directories` hold no registry. Every module keeps its name, `records.project_records` and its
+siblings included, since none collides inside the package and each importer's local name stays what it was.
+
+Borderline calls:
+
+- `clone_sources` joins: `base_registry` imports it, and it imports `location_claims` and `history_fences`, so outside
+  the group the two would import each other. Its job is a record too: the Lance tag a clone holds its source by, and
+  the claim on the source it takes before tagging.
+- `data_directories` joins: its every input is a base record and a location claim, and it is the one rule for which of
+  the directories they name an ending deletes, so the rule and the records it reads are kept together.
+- `project_records` joins with no import at all: it is the project registry's record, which maintenance reads beside
+  the catalog that writes it.
+- `compaction_gate` stays out: it is the judge of a compaction (`version/create` and maintenance's due list), keeps no
+  record, and asks the base record one question (`is_own`).
+- `table_paths` stays out: it lists a table's own objects at its location in both spellings, not a record on the
+  control root.
+- `timers` stays out and is the group's named importer: its job is the process's supervised loop, and claiming a window
+  under `control_prefixes.TIMERS` is how it runs once a window, not a record the catalog keeps about an object.
+- No label, contract, erasure, retention or idempotency record is in the library: each is written and read by the
+  catalog alone (`catalog.services.*`), so by point 2 it lives there.
+
+`records/__init__.py` is a docstring with no import, and every module of the group declares `__all__` (none did): the
+public names it defines, with `log` left out of each.
+
+`.importlinter`'s `the-records-import-only-the-table-plane-the-store-and-naming` (a `forbidden` contract from
+`lakehouse.records` to `lakehouse.*`) holds it: the group imports nothing else in the library, directly or through
+another module, beyond the 45 imports of `lancekit`, `storage` and `naming` that `ignore_imports` names one line per
+edge. The contract held before it was added; a planted `import lakehouse.timers` in `lakehouse.records.protection` broke
+it.
+
+A module's logger is named by its path, so twelve logger names follow the group: `record_store`, `warehouse_records`,
+`location_claims`, `trash`, `maintenance_policies`, `maintenance_due`, `history_fences`, `commit_turns`,
+`base_registry`, `clone_sources`, `file_identities` and `data_directories` log as `lakehouse.records.<module>`. No alert
+rule, dashboard, collector route or runbook names them; two tests read one with `caplog` by its name
+(`tests/unit/test_maintenance_policies.py`, `packages/lakehouse/tests/test_a_release_frees_only_the_claim_it_read.py`)
+and name the new one. No module of the group has a tracer or a meter.
+
+`ns_errors` declared `__all__` without `PartiallyApplied` and `as_unsupported_if_stub`, which it defines and the
+catalog imports; both are listed.
+
+**What remains at the top of the library**, each with its plan:
+
+- The runtime primitives `health`, `supervision`, `lifecycle`, `context`, `timers`, `log_handler`, `obs`, with
+  `draining`, `probes` and `exceptions`: one group, once the probe's `Dependency` type lives in a module that imports
+  neither the bus nor the store, which cuts the auth plane's chain through `health`.
+- The spec's error answers `ns_errors`, `problem`, `spec_routes`, `outage`, `read_refusal`: one group, the answers the
+  catalog's doors raise.
+- The rest, `naming`, `arrow_ipc`, `compaction_gate`, `table_paths`, `derived_tables`, `lance_metrics` and `schemas`:
+  each judged by its own job when its group is drawn, or left at the top where it is a leaf of one job alone.

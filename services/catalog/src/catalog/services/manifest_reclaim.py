@@ -23,8 +23,8 @@ from pydantic import BaseModel
 
 from catalog.core.config import CatalogStore, shared_lance_session
 from catalog.services import warehouses
-from lakehouse import control_prefixes
 from lakehouse.lancekit.lance_session import open_dataset
+from lakehouse.records import control_prefixes
 from lakehouse.storage import stored_objects
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions

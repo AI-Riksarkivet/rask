@@ -18,7 +18,7 @@ import pyarrow as pa
 import pytest
 from pydantic import SecretStr
 
-from lakehouse import maintenance_policies
+from lakehouse.records import maintenance_policies
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.expiry import DatasetOpener, DatasetResult, ExpiryPolicy, ExpiryTarget

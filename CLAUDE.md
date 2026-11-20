@@ -256,8 +256,8 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     lance app factory (`lakehouse.service_app.factory`) and what it installs: exceptions, the request's trace (ADR 0209), logging
     (`lakehouse.log_handler`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
     the spec's error mapping (`naming`, `ns_errors`, `spec_routes`); the input and credential guards
-    (`arrow_ipc`, `storage.options`); the catalog's records, registries and governance guards (protection, trash,
-    history fences, retention); what every plane reads and judges a Lance table by (`lakehouse.lancekit`: versions,
+    (`arrow_ipc`, `storage.options`); the catalog's records, registries and governance guards on the control root
+    (`lakehouse.records`: protection, trash, history fences, location claims, the maintenance policies); what every plane reads and judges a Lance table by (`lakehouse.lancekit`: versions,
     filters, absence and the commit verdict, the manifest's wire and names in `manifest_wire` and `manifest_names`, its
     feature checks in `features`, the table layout in `table_layout` and `branch_layout`, a location's spellings in
     `base_refs`, the transaction reader in `transactions`, the bounded session in `lance_session`, and the config keys

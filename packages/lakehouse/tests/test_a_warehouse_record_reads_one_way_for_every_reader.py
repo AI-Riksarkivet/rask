@@ -1,4 +1,4 @@
-"""The warehouse registry as its readers outside the catalog read it (`lakehouse.warehouse_records`).
+"""The warehouse registry as its readers outside the catalog read it (`lakehouse.records.warehouse_records`).
 
 One model for the record: what is no warehouse record refuses the read a decision is made from, and a record is
 quarantined by the one status that says so.
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse import warehouse_records
+from lakehouse.records import warehouse_records
 from lakehouse.storage.options import StorageOptions
 
 

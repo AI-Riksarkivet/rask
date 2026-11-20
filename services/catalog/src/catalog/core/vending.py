@@ -42,8 +42,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
-from lakehouse import file_identities, history_fences
-from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
 from lakehouse.lancekit.base_refs import decoded_path, location_within, names_a_location, normalise
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
@@ -51,6 +49,8 @@ from lakehouse.lancekit.features import CREATE_FORMAT, BasePathRef, TableFileFor
 from lakehouse.lancekit.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.outage import reads_as_store_outage, store_refusal
+from lakehouse.records import file_identities, history_fences
+from lakehouse.records.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
@@ -171,8 +171,8 @@ class TableRecords(BaseModel):
     """Where one table's records are kept on the control root, which its maintain-tier vend may write ([[LH-219]]).
 
     Maintenance signs every write of a reclaim with the table's vend, so the vend reaches the table's history fence, to
-    get and put (:mod:`lakehouse.history_fences`), and the records of its committed files, to get and delete
-    (:mod:`lakehouse.file_identities`). It never puts one of those: a holder that could would record a replaced file as
+    get and put (:mod:`lakehouse.records.history_fences`), and the records of its committed files, to get and delete
+    (:mod:`lakehouse.records.file_identities`). It never puts one of those: a holder that could would record a replaced file as
     the one committed. No other record on the control root, and none of another table.
     """
 

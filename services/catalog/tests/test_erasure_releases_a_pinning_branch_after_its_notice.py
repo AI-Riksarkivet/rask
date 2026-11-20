@@ -43,14 +43,14 @@ from catalog.core.identifiers import with_minted_uuid
 from catalog.services import erasure_release, table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
-from lakehouse.base_registry import BaseRegistry
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.history_fences import HistoryWork, TableHistory
-from lakehouse.location_claims import ClaimStore
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.records.base_registry import BaseRegistry
+from lakehouse.records.history_fences import HistoryWork, TableHistory
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 
 

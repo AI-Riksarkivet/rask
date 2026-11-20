@@ -29,8 +29,8 @@ from tables_by_name import open_by_name
 
 from catalog.services.dataplane import create_table, update_table
 from catalog.services.table_claims import DoorTable
-from lakehouse import base_registry
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records import base_registry
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

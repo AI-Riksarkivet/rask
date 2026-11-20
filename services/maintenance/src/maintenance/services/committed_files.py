@@ -4,7 +4,7 @@ A writer's vend may put over any file a commit adds under its table (``table_lay
 vend may also delete one. Lance checks no file's content: measured on pylance 13.0.0, a same-size overwrite of a data
 file is served silently, while Lance requires a published payload to stay immutable while a protected snapshot references
 it (``lance_docs/lance/format/table/blob.md:254-257``). The catalog records every file a commit adds, with its ETag and
-size, before the version lands (``lakehouse.file_identities``), and each pass of the table reads them all again, off one
+size, before the version lands (``lakehouse.records.file_identities``), and each pass of the table reads them all again, off one
 listing of its root (:func:`lakehouse.storage.stored_objects.listed_identities`): a request per thousand objects, not one per file.
 The store's own event of a write under the table holds that pass early (:mod:`maintenance.services.store_events`).
 
@@ -28,10 +28,10 @@ from collections.abc import Callable, Iterable
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import file_identities
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
 from lakehouse.lancekit.transactions import read_transaction
+from lakehouse.records import file_identities
 from lakehouse.storage import stored_objects
 from lakehouse.storage.options import StorageOptions
 from maintenance.services import base_reclaim
@@ -62,7 +62,7 @@ def check_and_copy(
     control_options: StorageOptions,
 ) -> FileCheck:
     """Read every file the catalog recorded for the table at ``table_root`` (the store's own spelling of it) again. Writes
-    only maintenance's copy of the records (:func:`lakehouse.file_identities.recorded_and_copied`).
+    only maintenance's copy of the records (:func:`lakehouse.records.file_identities.recorded_and_copied`).
 
     ``open_table`` opens the table's latest version, and is called only when a recorded file is gone: the retained
     versions say whether it was reclaimed.

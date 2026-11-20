@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse.maintenance_policies import MalformedPolicyError, get_policy
+from lakehouse.records.maintenance_policies import MalformedPolicyError, get_policy
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
@@ -47,7 +47,7 @@ def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:
     Protection and policy records are keyed by their object's uuid (ADR 0173 §8), the trash record by the
     dropped object's name; the derivation from that key is the one ``record_key``.
     """
-    from lakehouse.record_store import record_key
+    from lakehouse.records.record_store import record_key
 
     assert record_key("_protection", "table", _TABLE_UUID) == "_protection/table-9f9a37202eeb7dc7cabba84b.json"
     assert record_key("_policies", "namespace", _NAMESPACE_UUID) == "_policies/namespace-3c0b296fe7c2d32e9edd2812.json"

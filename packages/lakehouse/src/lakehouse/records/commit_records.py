@@ -29,10 +29,30 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from lakehouse import control_prefixes
-from lakehouse.record_store import delete_record, get_record, put_record, read_record, record_key
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import delete_record, get_record, put_record, read_record, record_key
 from lakehouse.storage import conditional_records, stored_objects
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "AUTHORS_PREFIX",
+    "MARKS_PREFIX",
+    "AuthorRecordedError",
+    "CommitAuthor",
+    "CommitMarks",
+    "InvalidTransactionUuidError",
+    "UnreadableAuthorRecordError",
+    "end_authors",
+    "forget_author",
+    "is_canonical_uuid",
+    "manifest_digest",
+    "read_marks",
+    "record_author",
+    "recorded",
+    "ref_key",
+    "write_marks",
+]
 
 
 AUTHORS_PREFIX: Final = control_prefixes.COMMIT_AUTHORS

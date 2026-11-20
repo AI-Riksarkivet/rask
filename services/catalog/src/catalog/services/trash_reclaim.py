@@ -4,7 +4,7 @@ A recoverable drop keeps its object's bytes, its records and its grants for an u
 which the drop is DropTable's, its data deleted asynchronously (ADR 0146). Maintenance runs that ending and holds no
 write of its own on the store and no client that writes grants, so every write it needs is the catalog's:
 
-- the release, once the deadline has settled (:data:`lakehouse.trash.RELEASE_SETTLE`): the catalog revokes the
+- the release, once the deadline has settled (:data:`lakehouse.records.trash.RELEASE_SETTLE`): the catalog revokes the
   object's grants, tells each person who lost one, and stamps the record released;
 - the purge of a released table's bytes, under a session the catalog vends for that record alone (:func:`scope_of`),
   which lists and deletes at the location and in the table's own data directories and reaches nothing on the control
@@ -22,7 +22,7 @@ Every judgement reads only what no session can write: the kind and uuid the door
 under them, and the claim on the record's location, which must record that uuid, so a record naming another table's
 place is refused rather than vended for. Whether a live object holds the place or the name again is the door's to ask
 (``catalog.api.v1.endpoints.trash_reclaim``), through the request's own resolution. A refusal is noted on the record
-(:func:`lakehouse.trash.note_refusal`), as maintenance's own refusals are, so a record refused tick after tick sorts
+(:func:`lakehouse.records.trash.note_refusal`), as maintenance's own refusals are, so a record refused tick after tick sorts
 behind the ones that move (``maintenance.services.purge._drain_order``).
 
 Every function is BLOCKING IO; callers threadpool it.
@@ -38,15 +38,15 @@ from lance_namespace import InternalError, NamespaceNotFoundError, TableNotFound
 from catalog.core.config import CatalogStore
 from catalog.core.vending import ReclaimScope
 from catalog.services import table_claims
-from lakehouse import clone_sources, location_claims, trash
-from lakehouse.base_registry import BaseRegistry
-from lakehouse.control_prefixes import CONTROL_PREFIXES
-from lakehouse.data_directories import directories_to_end, directory_uri
 from lakehouse.lancekit.base_refs import decoded_segments, store_of
-from lakehouse.location_claims import LocationClaim
+from lakehouse.records import clone_sources, location_claims, trash
+from lakehouse.records.base_registry import BaseRegistry
+from lakehouse.records.control_prefixes import CONTROL_PREFIXES
+from lakehouse.records.data_directories import directories_to_end, directory_uri
+from lakehouse.records.location_claims import LocationClaim
+from lakehouse.records.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
 from lakehouse.storage.stored_objects import list_under
 from lakehouse.table_paths import objects_at
-from lakehouse.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
 
 
 #: Why a record past its deadline is neither purged nor ended before its release.
@@ -106,7 +106,7 @@ def vend_refusal(record: TrashRecord, claim: LocationClaim | None, *, kind: Tras
 def clone_refusal(settings: CatalogStore, record: TrashRecord) -> str | None:
     """Why a released table's bytes are kept, or ``None``: a registered clone reads its files (ADR 0198 §1).
 
-    The clone's tag is what says so (:mod:`lakehouse.clone_sources`), and the clone's own end releases it, so the purge
+    The clone's tag is what says so (:mod:`lakehouse.records.clone_sources`), and the clone's own end releases it, so the purge
     reclaims the bytes on a later attempt. The refusal is noted on the record like any other.
 
     Raises:
@@ -152,7 +152,7 @@ def release_refusal(record: TrashRecord, *, now: datetime) -> str | None:
 
 def scope_of(settings: CatalogStore, record: TrashRecord, *, uuid: str) -> ReclaimScope:
     """What the purge of ``record`` deletes: its table's bytes at its location, and in the data directories its claim
-    names ([[LH-286]], :func:`lakehouse.data_directories.directories_to_end`).
+    names ([[LH-286]], :func:`lakehouse.records.data_directories.directories_to_end`).
 
     Raises:
         UnreadableBaseRecordError: The table's base record exists and cannot be read.

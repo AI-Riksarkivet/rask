@@ -42,9 +42,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.dataplane import recorded_branch
 from catalog.services.erasure import Pin
-from lakehouse import control_prefixes
-from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse.record_store import delete_record, list_records
+from lakehouse.records import control_prefixes
+from lakehouse.records.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from lakehouse.records.record_store import delete_record, list_records
 from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
 from lakehouse.storage.options import StorageOptions
 

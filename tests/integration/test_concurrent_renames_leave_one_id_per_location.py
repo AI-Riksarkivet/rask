@@ -33,7 +33,7 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ConcurrentModificationError, InvalidInputError, LanceNamespace, TableAlreadyExistsError
 
-from lakehouse import location_claims
+from lakehouse.records import location_claims
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 

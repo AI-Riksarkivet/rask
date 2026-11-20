@@ -125,10 +125,7 @@ from catalog.core.version_retention import MAIN_BRANCH, recorded_branch
 from catalog.services import changes, commit_authors, committed_files, contracts, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse import base_registry, clone_sources, commit_records, commit_turns, data_directories, file_identities, location_claims, trash
 from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
-from lakehouse.control_prefixes import CONTROL_PREFIXES
-from lakehouse.history_fences import HistoryWork
 from lakehouse.lancekit import auto_cleanup, branch_layout, manifest_names
 from lakehouse.lancekit.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
@@ -139,10 +136,13 @@ from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import reads_as_store_outage
+from lakehouse.records import base_registry, clone_sources, commit_records, commit_turns, data_directories, file_identities, location_claims, trash
+from lakehouse.records.control_prefixes import CONTROL_PREFIXES
+from lakehouse.records.history_fences import HistoryWork
+from lakehouse.records.trash import TrashRecord
 from lakehouse.storage import stored_objects
 from lakehouse.storage.options import StorageOptions, object_client, on_s3, s3_filesystem
 from lakehouse.storage.uri import split_s3_uri
-from lakehouse.trash import TrashRecord
 
 
 log = logging.getLogger(__name__)
@@ -1159,7 +1159,7 @@ def rename_table(
     THE LOCATION CLAIM IS THE ARBITRATION ([[LH-204]]). ``source`` is the table the request's name resolved to when
     it reached the door, its location and that location's claim as read then (ADR 0173 §7, [[LH-521]]). Before
     either backend call the claim is handed from the source id to the destination id under the ETag that read
-    found (:mod:`lakehouse.location_claims`), so of N concurrent renames of one source exactly one
+    found (:mod:`lakehouse.records.location_claims`), so of N concurrent renames of one source exactly one
     holds the location and the rest answer code 14, and so does a rename of a table a drop or deregister is
     acting on. Nothing in the backend can do this: measured on
     pylance 12.0.0 (lh204 m1), concurrent deregisters of one id all succeed and a register at an occupied
@@ -1478,7 +1478,7 @@ def commit_stamped[T](
     (:func:`_discard_unlanded_attempt`, [[LH-564]]); one whose outcome is unknown keeps everything.
 
     A COMMIT THAT LOST ITS RACE TAKES ITS REF'S TURN for its remaining attempts ([[LH-259]],
-    :mod:`lakehouse.commit_turns`), whether Lance refused the plan for a version committed since or the finalize
+    :mod:`lakehouse.records.commit_turns`), whether Lance refused the plan for a version committed since or the finalize
     lost: a writer committing more often than one plan takes would otherwise win every version, and Lance cannot rebase a
     schema change over an append (``lance_docs/lance/format/table/transaction.md`` § Merge Compatibility). While the turn is
     held every other finalize of the ref waits, so the next plans meet only the writers already past their wait; a commit
@@ -2011,7 +2011,7 @@ def destroy_table(
        prefix, and neither be nor contain an ``estate_roots`` entry; at its key it must hold nothing, a ``_versions/``
        tree, or the reservation marker alone (a declared table); as spelled, at most the marker. A refusal leaves the
        table registered and every byte in place. The table's own data directories on its data bases are read from its
-       base record here too ([[LH-286]], :func:`lakehouse.data_directories.directories_to_end`), since
+       base record here too ([[LH-286]], :func:`lakehouse.records.data_directories.directories_to_end`), since
        they are its bytes as much as its root is.
     2. A location holding a ``_versions/`` tree gets a residue trash record on ``control`` before the row goes
        (:func:`trash.make_record`'s ``residue``, grace 0), so bytes a failed delete leaves keep their location's claim
@@ -2187,7 +2187,7 @@ def require_no_clone_reading(location: str, so: StorageOptions, *, table: str) -
     """Refuse destroying the bytes at ``location`` while a registered clone reads through them (ADR 0198 §1).
 
     A clone reads its source's data files where they are (`lance_docs/lance/format/table/blob.md` § Clones), so the
-    source's bytes are the clone's too; the tag each clone holds on its source says so (:mod:`lakehouse.clone_sources`).
+    source's bytes are the clone's too; the tag each clone holds on its source says so (:mod:`lakehouse.records.clone_sources`).
     A recoverable drop keeps the bytes and is not refused; its purge asks this again.
 
     Raises:

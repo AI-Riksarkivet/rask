@@ -25,9 +25,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings as catalog_settings
-from lakehouse import trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.fga import user_object
+from lakehouse.records import trash
 from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import TupleStore, principal_key

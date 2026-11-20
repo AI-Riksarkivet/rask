@@ -25,9 +25,9 @@ from moto.server import ThreadedMotoServer
 from catalog.api import declaration_converge
 from catalog.api.ticks import Tick
 from catalog.services import warehouses
-from lakehouse import control_prefixes
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
+from lakehouse.records import control_prefixes
 from tests import seeding
 
 

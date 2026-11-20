@@ -25,7 +25,7 @@ from typing import Any, Final
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, Field
 
-from lakehouse import warehouse_records
+from lakehouse.records import warehouse_records
 from lakehouse.storage.credential import StoreCredentialUnavailableError
 from lakehouse.storage.options import object_client
 from maintenance.core.config import MaintenanceStore

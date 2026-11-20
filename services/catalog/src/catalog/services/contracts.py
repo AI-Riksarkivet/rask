@@ -26,7 +26,7 @@ landed, a branch cut from a version older than the contract) is not the next wri
 owner mends the table or the contract.
 
 One record per table, at ``record_key("_contracts", "table", uuid)``: keyed by the table's uuid as every record kept
-for an object is (ADR 0173 §8), so a rename keeps it and the table's ending ends it (`lakehouse.object_records`).
+for an object is (ADR 0173 §8), so a rename keeps it and the table's ending ends it (`lakehouse.records.object_records`).
 
 All IO here is blocking; callers threadpool it.
 """
@@ -43,9 +43,9 @@ from lance_namespace import InternalError, InvalidInputError, InvalidTableStateE
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from catalog.services import primary_keys
-from lakehouse import control_prefixes
 from lakehouse.outage import store_refusal
-from lakehouse.record_store import delete_record, put_record, read_record, record_key
+from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import delete_record, put_record, read_record, record_key
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError, create_json, mutate_json
 from lakehouse.storage.options import StorageOptions
 

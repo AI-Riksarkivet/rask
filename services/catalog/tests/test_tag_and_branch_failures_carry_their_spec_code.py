@@ -73,8 +73,8 @@ from catalog.services.dataplane import (
     update_tag,
 )
 from catalog.services.table_claims import DoorTable
-from lakehouse.history_fences import HistoryWork, TableHistory
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records.history_fences import HistoryWork, TableHistory
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 

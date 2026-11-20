@@ -19,7 +19,7 @@ import pytest
 
 from catalog.core.config import get_settings
 from catalog.services import warehouses
-from lakehouse.warehouse_records import WarehouseRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 
 
 PROJECT, WAREHOUSE = "acme", "wh-acme"

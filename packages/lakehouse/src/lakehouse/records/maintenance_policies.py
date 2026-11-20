@@ -3,7 +3,7 @@
 per-service copy of the format would drift).
 
 Stateless-over-object-store, the same shape as the warehouse registry, written once in
-:mod:`lakehouse.record_store`; this module is the policy vocabulary over it. Each policy is one
+:mod:`lakehouse.records.record_store`; this module is the policy vocabulary over it. Each policy is one
 JSON record under ``<control_root>/_policies/``, written by the catalog (owner-gated) and read directly off
 the bucket by maintenance:
 
@@ -22,7 +22,7 @@ Trust boundary: like the warehouse registry, who wrote a record is trusted — t
 owner-gated API, and a principal with direct write access to the control bucket is already inside the storage trust
 boundary. What a record says is not: a record that reached the store past the door is read back strictly
 (:class:`PolicySettings`), and one that cannot be read refuses what it governs rather than letting the defaults govern
-it. A drop or deregister ends a table's record through :mod:`lakehouse.object_records`.
+it. A drop or deregister ends a table's record through :mod:`lakehouse.records.object_records`.
 
 Fields: ``retention_days`` / ``retain_versions`` (old-version cleanup overrides — Lance itself exempts
 tag-pinned versions from cleanup, so every tagged version survives any policy), ``compact_enabled``
@@ -41,11 +41,34 @@ from typing import Any, Final, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lakehouse import control_prefixes, warehouse_records
-from lakehouse.record_store import delete_record, list_records, put_record, read_record, record_key
+from lakehouse.records import control_prefixes, warehouse_records
+from lakehouse.records.record_store import delete_record, list_records, put_record, read_record, record_key
 from lakehouse.storage import conditional_records, stored_objects
 from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.storage.uri import split_s3_uri
+
+
+__all__ = [
+    "PREFIX",
+    "STATE_PREFIX",
+    "CadenceStamp",
+    "MalformedPolicyError",
+    "PolicyKind",
+    "PolicyRecord",
+    "PolicySettings",
+    "UnreadablePolicyError",
+    "cadence_key",
+    "delete_policy",
+    "end_table_state",
+    "get_policy",
+    "governing_policy",
+    "list_policies",
+    "read",
+    "read_state",
+    "resolve_policy",
+    "set_policy",
+    "write_state",
+]
 
 
 log = logging.getLogger(__name__)

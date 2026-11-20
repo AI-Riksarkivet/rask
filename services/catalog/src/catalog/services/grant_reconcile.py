@@ -18,10 +18,10 @@ from datetime import datetime
 
 from catalog.core.config import CatalogStore, Settings
 from catalog.services import projects, table_claims, warehouses
-from lakehouse import location_claims, trash
 from lakehouse.governed import fga
 from lakehouse.governed.settings import FgaSettings
-from lakehouse.warehouse_records import WarehouseRecord
+from lakehouse.records import location_claims, trash
+from lakehouse.records.warehouse_records import WarehouseRecord
 
 
 def platform_objects(settings: FgaSettings) -> frozenset[str]:

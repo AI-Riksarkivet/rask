@@ -40,9 +40,9 @@ from catalog.core.vending import (
 )
 from catalog.core.version_retention import recorded_branch
 from catalog.schemas import CredentialResponse, VendedCredentials
-from lakehouse import maintenance_policies
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.records import maintenance_policies
 
 
 log = logging.getLogger(__name__)

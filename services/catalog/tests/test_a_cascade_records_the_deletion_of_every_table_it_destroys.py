@@ -38,12 +38,12 @@ from catalog.api.v1.endpoints import namespaces as door
 from catalog.core.identifiers import with_minted_uuid
 from catalog.core.lineage_emit import NoopEmitter
 from catalog.services.dataplane import create_table
-from lakehouse.base_registry import BaseRegistry
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.storage.options import StorageOptions
 
 

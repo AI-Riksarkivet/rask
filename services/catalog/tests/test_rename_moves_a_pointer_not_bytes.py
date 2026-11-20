@@ -37,7 +37,7 @@ from lance_namespace import (
 )
 
 from catalog.services import dataplane, table_claims
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 
 

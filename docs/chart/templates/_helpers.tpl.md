@@ -726,7 +726,7 @@ with none fails the render as an undefined template.
   blob file ends in `.manifest`, `.json` or `.txn`. Get on the control-root records it judges by (`_locations`, `_trash`,
   `_policies`, `_warehouses`, `_projects`, `_bases`, `_file_identities`, `_maintenance_due`, `_maintenance_files`,
   `_lineage_outbox`), and no backup; put and delete only on `<control bucket>/_maintenance_due/*`,
-  `<control bucket>/_maintenance_files/*` (its copy of the commit records it has read, `lakehouse.file_identities`, which
+  `<control bucket>/_maintenance_files/*` (its copy of the commit records it has read, `lakehouse.records.file_identities`, which
   no erasure or hold reads), `<control bucket>/_policies/state/*` and `<control bucket>/_lineage_outbox/*`. What a pass,
   the audit and the scan read under it was measured on pylance 13.0.0 behind a counting proxy: opens, version lists,
   `explain_cleanup_old_versions`, transactions, `tracked_files()` and the compaction planner read only listings,

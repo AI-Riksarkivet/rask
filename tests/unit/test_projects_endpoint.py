@@ -24,9 +24,9 @@ from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.project_records import ProjectRecord
+from lakehouse.records.project_records import ProjectRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.options import StorageOptions
-from lakehouse.warehouse_records import WarehouseRecord
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:

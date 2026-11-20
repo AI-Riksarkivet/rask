@@ -11,7 +11,7 @@ makes, so a grant that reads right can still miss a call the purge makes.
 
 The parent is a user holding the whole data plane, the shape of the catalog's own policy, and the session is minted by
 AssumeRole with the policy the catalog builds; the doors that would hand it over and end the record are stood in for (the
-end by `lakehouse.trash.end`, the catalog's own ending, under the parent's pair), as the catalog's judgement of which
+end by `lakehouse.records.trash.end`, the catalog's own ending, under the parent's pair), as the catalog's judgement of which
 record is due is its own tests' claim. The table is written by pylance under a name that needs an escape, so its bytes
 and its reservation marker sit under two spellings of its location ([[LH-319]]).
 
@@ -38,8 +38,8 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 from throwaway_rustfs import ThrowawayStore, admin, s3_client
 
 from catalog.core.vending import ReclaimScope
-from lakehouse import trash
-from lakehouse.record_store import put_record, record_key
+from lakehouse.records import trash
+from lakehouse.records.record_store import put_record, record_key
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions

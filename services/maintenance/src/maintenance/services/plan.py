@@ -13,8 +13,8 @@ from datetime import datetime, timedelta
 
 from pydantic import BaseModel
 
-from lakehouse import maintenance_policies
-from lakehouse.maintenance_policies import PolicyRecord
+from lakehouse.records import maintenance_policies
+from lakehouse.records.maintenance_policies import PolicyRecord
 from lakehouse.storage.credential import StoreCredentialUnavailableError
 from maintenance.core.config import MaintenanceStore
 from maintenance.services.due import DueQuestion
@@ -85,7 +85,7 @@ def plan_from_policy(policy: PolicyRecord | None, *, older_than: timedelta) -> D
     """The plan one resolved record makes, ``None`` meaning the global defaults.
 
     Raises:
-        MalformedPolicyError: The record's settings cannot be read (:attr:`lakehouse.maintenance_policies.PolicyRecord.settings`).
+        MalformedPolicyError: The record's settings cannot be read (:attr:`lakehouse.records.maintenance_policies.PolicyRecord.settings`).
     """
     if policy is None:
         return DatasetPlan(older_than=older_than)

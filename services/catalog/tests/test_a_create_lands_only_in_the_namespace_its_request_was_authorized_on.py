@@ -29,8 +29,8 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, ResolverDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.services import native, table_claims
-from lakehouse import location_claims
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.records import location_claims
 
 
 _TABLE = pa.table({"id": pa.array([1, 2], pa.int64())})

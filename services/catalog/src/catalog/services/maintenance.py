@@ -122,7 +122,7 @@ def require_reclaimable(ds: ManifestCarrier) -> None:
     flag 64, anything unknown — refuses exactly as before.
 
     A registered clone of this table needs no refusal here: its tag keeps the version it reads, and every cleanup
-    exempts a tagged version (ADR 0198 §1, :mod:`lakehouse.clone_sources`).
+    exempts a tagged version (ADR 0198 §1, :mod:`lakehouse.records.clone_sources`).
     """
     reader, writer = manifest_feature_flags(ds)
     if (reason := describe_gc_unsupported_flags(reader, writer)) is not None:

@@ -20,7 +20,7 @@ from fastapi import Request
 
 from catalog.core import namespace as namespace_module
 from catalog.core.config import Settings
-from lakehouse.warehouse_records import WarehouseRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 
 
 _STORAGE = "storage."

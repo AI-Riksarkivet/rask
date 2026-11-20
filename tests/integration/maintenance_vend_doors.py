@@ -22,9 +22,9 @@ import httpx
 import respx
 from fastapi.testclient import TestClient
 
-from lakehouse import trash
+from lakehouse.records import trash
+from lakehouse.records.trash import TrashKind
 from lakehouse.storage.options import StorageOptions
-from lakehouse.trash import TrashKind
 
 
 #: Where maintenance is told the catalog's door is (`MAINTENANCE_CATALOG_URL`).
@@ -98,7 +98,7 @@ def _no_record(kind: TrashKind, uuid: str) -> httpx.Response:
 
 
 def end_door(control_root: str, storage_options: StorageOptions) -> Callable[[httpx.Request, str, str], httpx.Response]:
-    """The end door `trash_doors` answers with: it ends a record and what it keeps (`lakehouse.trash.end`), as the
+    """The end door `trash_doors` answers with: it ends a record and what it keeps (`lakehouse.records.trash.end`), as the
     catalog's `DELETE /management/v1/trash/{kind}/{uuid}` does once it judges the record's place empty."""
 
     def _end(_request: httpx.Request, kind: str, uuid: str) -> httpx.Response:
@@ -114,8 +114,8 @@ def end_door(control_root: str, storage_options: StorageOptions) -> Callable[[ht
 def trash_doors(control_root: str, storage_options: StorageOptions) -> Generator[respx.MockRouter]:
     """Answer each trash door maintenance asks `CATALOG_URL`, acting on the trash at ``control_root`` as the catalog's
     doors act, with no catalog running: the reclaim session is the vend's pair, a release stamps the record (no grant is
-    revoked: these suites run with authorization off), an end ends the record and what it keeps (`lakehouse.trash.end`)
-    and a refusal's note counts it (`lakehouse.trash.note_refusal`); a uuid no record holds is answered 404, as the
+    revoked: these suites run with authorization off), an end ends the record and what it keeps (`lakehouse.records.trash.end`)
+    and a refusal's note counts it (`lakehouse.records.trash.note_refusal`); a uuid no record holds is answered 404, as the
     catalog answers it.
 
     Whether the catalog would act (its judgement) is its own tests' claim

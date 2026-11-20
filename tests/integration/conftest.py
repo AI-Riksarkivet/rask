@@ -125,7 +125,7 @@ def claim_described(client: TestClient, fake_ns: MagicMock) -> Callable[[str], s
     return the uuid it records (ADR 0173 §2): a door keeping a record for a table, or acting on it, reads it there."""
     from catalog.core.config import get_settings
     from catalog.services import table_claims
-    from lakehouse import location_claims
+    from lakehouse.records import location_claims
 
     def _claim(table: str) -> str:
         minted = str(uuid4())

@@ -17,8 +17,8 @@ from typing import Any
 from lance_namespace import NamespaceNotFoundError
 
 from catalog.api.fga_deps import GovernedObject
-from lakehouse import base_registry, location_claims
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records import base_registry, location_claims
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 
 

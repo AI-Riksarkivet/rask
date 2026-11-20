@@ -35,12 +35,37 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lakehouse import clone_sources, control_prefixes, location_claims
 from lakehouse.lancekit.base_refs import decoded_path, key_uri, location_in_store, names_a_location, normalise, store_of
 from lakehouse.lancekit.features import BasePathRef
-from lakehouse.record_store import delete_record, record_key
+from lakehouse.records import clone_sources, control_prefixes, location_claims
+from lakehouse.records.record_store import delete_record, record_key
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
+
+
+__all__ = [
+    "BaseClaim",
+    "BaseJudgement",
+    "BaseOrigin",
+    "BaseRecord",
+    "BaseRegistry",
+    "BaseRole",
+    "BaseStanding",
+    "RecordedBase",
+    "UnreadableBaseRecordError",
+    "claim_bases",
+    "claim_data_directories",
+    "clone_source_locations",
+    "forget_base_record",
+    "is_own",
+    "judge_base",
+    "judge_bases",
+    "read_base_record",
+    "record_key_for",
+    "release_claim",
+    "release_clone_sources",
+    "release_data_directories",
+]
 
 
 log = logging.getLogger(__name__)
@@ -96,7 +121,7 @@ class RecordedBase(BaseModel):
     #: The source's tag that pins the relation, for a pinned ``DERIVED_FROM``.
     tag: str | None = None
     #: The source version a ``DERIVED_FROM`` entry's clone reads, and the source branch it is on (``None`` for main): what
-    #: the clone's tag pins on ``source_table`` (:mod:`lakehouse.clone_sources`). Kept here because the clone's own first
+    #: the clone's tag pins on ``source_table`` (:mod:`lakehouse.records.clone_sources`). Kept here because the clone's own first
     #: transaction, the only other place that says so, goes with the clone's own version expiry.
     version: int | None = None
     branch: str | None = None
@@ -344,9 +369,9 @@ def forget_base_record(registry: BaseRegistry, location: str, *, uuid: str | Non
     THE DATA DIRECTORIES AND THE CLONE TAGS GO FIRST. Each ``data`` entry names the table's own directory
     beneath an approved data base, held for the table's uuid by a claim on the same control root
     (:func:`claim_data_directories`, [[LH-252]]), and each ``derived_from`` entry a source whose version a tag keeps
-    for this clone (:mod:`lakehouse.clone_sources`, ADR 0198); the record is the one place that still lists them, so
+    for this clone (:mod:`lakehouse.records.clone_sources`, ADR 0198); the record is the one place that still lists them, so
     they are released before it is deleted, and a failure leaves the record for the retry. A directory another table
-    holds is left alone (:func:`~lakehouse.location_claims.release_directory`).
+    holds is left alone (:func:`~lakehouse.records.location_claims.release_directory`).
 
     The record is keyed by the location, so while the location's claim records another table's uuid the record is that
     table's: an end of this table landing after a registration there forgets nothing and answers ``False``, as it keeps
@@ -395,7 +420,7 @@ def release_clone_sources(registry: BaseRegistry, location: str, *, uuid: str | 
 
 def clone_source_locations(record: BaseRecord | None) -> list[str]:
     """The root of each source table the clone ``record`` describes reads through (its ``derived_from`` entries), where
-    the clone's tags stand (:mod:`lakehouse.clone_sources`); empty for a table that is no clone.
+    the clone's tags stand (:mod:`lakehouse.records.clone_sources`); empty for a table that is no clone.
 
     One source per table: a clone of a branch also records the branch's directory, which lies inside its table's root.
     """

@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import pytest
 
-from lakehouse import base_registry
 from lakehouse.lancekit.features import BasePathRef
+from lakehouse.records import base_registry
 
 
 _TABLE = "s3://lance-catalog/aa11bb22_ns$t"

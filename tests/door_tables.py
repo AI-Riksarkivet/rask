@@ -7,7 +7,7 @@ from collections.abc import Callable
 from lance_namespace import LanceNamespace
 
 from catalog.services.table_claims import DoorTable, resolve
-from lakehouse.location_claims import ClaimStore
+from lakehouse.records.location_claims import ClaimStore
 
 
 def door_table(ns: LanceNamespace, store: ClaimStore, segments: list[str], *, announces: Callable[[str], bool]) -> DoorTable:

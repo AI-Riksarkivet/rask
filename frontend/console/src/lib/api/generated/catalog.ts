@@ -496,7 +496,7 @@ export interface paths {
          *     so it answers to the same role. A claim that cannot be read (the store's error, a record that is no claim, a root the
          *     conditional read does not serve: `lakehouse.storage.conditional_records`) is 503, never "holds none", which would exempt it. The
          *     claims are the answer because the ``dir`` backend keeps no location exclusive (``lance_docs/ns_catalog/catalog/dir``
-         *     § Manifest Table Commits) and the claim store picks one holder (`lakehouse.location_claims`).
+         *     § Manifest Table Commits) and the claim store picks one holder (`lakehouse.records.location_claims`).
          */
         post: operations["decide_locate_management_v1_decisions_locate_post"];
         delete?: never;
@@ -2460,7 +2460,7 @@ export interface paths {
          *     fails after the revoke still tells them ([[LH-576]]).
          *
          *
-         *     Refused 409 (code 19) until the deadline has settled (``lakehouse.trash.RELEASE_SETTLE``), and while a live object
+         *     Refused 409 (code 19) until the deadline has settled (``lakehouse.records.trash.RELEASE_SETTLE``), and while a live object
          *     holds the record's place or name again: an undrop registers before it clears its record. Audited as it lands or as it
          *     fails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.
          */

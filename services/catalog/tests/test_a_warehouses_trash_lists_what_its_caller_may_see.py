@@ -22,7 +22,7 @@ import pytest
 from catalog.core.config import get_settings
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.warehouse_records import WarehouseRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 
 
 PROJECT, HERE, ELSEWHERE = "acme", "wh-here", "wh-elsewhere"

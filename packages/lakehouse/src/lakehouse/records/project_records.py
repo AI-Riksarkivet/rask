@@ -13,6 +13,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
+__all__ = [
+    "ProjectRecord",
+    "UnreadableProjectRecordError",
+    "read",
+]
+
+
 class UnreadableProjectRecordError(ValueError):
     """A project record is stored and cannot be read as one, so whether the tenant stands, is being deleted, is
     protected or is git's is unknown. Names where the record sits and the fields that are not a record's."""

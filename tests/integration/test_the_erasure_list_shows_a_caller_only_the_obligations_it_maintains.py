@@ -23,7 +23,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import erasure_obligations, table_claims
 from catalog.services.erasure_obligations import ErasureObligation
-from lakehouse import location_claims
+from lakehouse.records import location_claims
 from tests.integration.openfga_grants import Grants, act_as
 
 

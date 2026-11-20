@@ -4,7 +4,7 @@ Lance's ``cleanup_old_versions`` reads the refs once, when it starts (``rust/lan
 v13.0.0), so a tag or branch written while it runs can name a version it then deletes. Measured on pylance 13.0.0, a
 tag created on version 2 a few milliseconds into ``cleanup_old_versions(older_than=0)`` named a deleted version in 20 of
 60 races, and a branch could not be read in 9 of 60. A ref write and a reclaim therefore each hold the table's history
-fence (:mod:`lakehouse.history_fences`); the ref doors' side is pinned in
+fence (:mod:`lakehouse.records.history_fences`); the ref doors' side is pinned in
 ``services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py``.
 
 One estate on moto: the catalog over HTTP and maintenance's own pass. While a ref write holds the table's history,
@@ -29,11 +29,11 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from lakehouse import history_fences, maintenance_due, maintenance_policies, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records import history_fences, maintenance_due, maintenance_policies, trash
+from lakehouse.records.history_fences import HistoryWork, TableHistory
 from lakehouse.storage import conditional_records
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options

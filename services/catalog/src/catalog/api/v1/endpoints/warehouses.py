@@ -97,18 +97,18 @@ from catalog.services.vend_probe import (
     ProbeReport,
     summarize_probe,
 )
-from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.ns_errors import PartiallyApplied, status_for
+from lakehouse.records import base_registry, clone_sources, data_directories, location_claims, trash
+from lakehouse.records.trash import TrashRecord
+from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.client import s3_client
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError
 from lakehouse.storage.uri import split_s3_uri
-from lakehouse.trash import TrashRecord
-from lakehouse.warehouse_records import WarehouseRecord
 
 
 log = logging.getLogger(__name__)
@@ -940,7 +940,7 @@ async def _require_no_outside_clones(
 
 async def _forget_trashed(settings: CatalogStore, entry: TrashRecord, *, purge: bool) -> None:
     """End what one trashed object kept for an undrop besides its grants, as the trash's own ending does
-    (:func:`lakehouse.trash.end`): its records, a table's claim and base record, then its record.
+    (:func:`lakehouse.records.trash.end`): its records, a table's claim and base record, then its record.
 
     A purge deletes a trashed table's data directories before its base record ([[LH-286]]): they are on approved bases,
     which the bucket purge does not reach, and nothing names them once the record is gone. Without one the bytes stay,

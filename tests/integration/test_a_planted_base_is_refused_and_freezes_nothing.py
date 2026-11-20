@@ -54,12 +54,12 @@ import lakehouse.storage.client as storage_client
 from catalog.core.config import get_settings
 from catalog.services import clone_ending_records, dataplane, native, table_bases
 from catalog.services import clone_endings as clone_endings_door
-from lakehouse import base_registry, clone_sources, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.lancekit.features import manifest_base_path_refs
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records import base_registry, clone_sources, location_claims, trash
 from lakehouse.storage import conditional_records
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.credential import S3KeyPair
@@ -1208,7 +1208,7 @@ def _registered(estate: _Estate, table: str, location: str) -> str:
 
 def _purge_expired(estate: _Estate, table: str, location: str) -> None:
     """The maintenance purge of the trash record ``table``'s recoverable drop filed, re-stamped long expired, under a clean drift report."""
-    from lakehouse import trash
+    from lakehouse.records import trash
     from maintenance.services.reconcile import CATEGORIES, ReconcileReport
 
     (filed,) = trash.named(estate.root, estate.key, table)

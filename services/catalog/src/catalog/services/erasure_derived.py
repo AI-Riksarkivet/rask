@@ -30,7 +30,7 @@ A derived table is:
 * ``gone`` once no obligation can be recorded on it and nothing of it stands: its claim released and no dataset at its
   location, or no claim recording it any more, its location taken by another table since.
 
-The claims are read whole (:func:`lakehouse.location_claims.every_claim`): a claim that cannot be read may be
+The claims are read whole (:func:`lakehouse.records.location_claims.every_claim`): a claim that cannot be read may be
 the table's own, which would otherwise pass as gone.
 
 **WHAT THIS CANNOT PROMISE.** A write that declares no inputs derives from nothing, so a run that read this table and said
@@ -60,10 +60,11 @@ from catalog.core.identifiers import parse_identifier
 from catalog.services import erasure_obligations, native, table_claims, table_inputs
 from catalog.services.erasure import OPEN_OUTCOMES, SurfaceResult, derived_key, derived_surface
 from catalog.services.erasure_obligations import ErasureObligation
-from lakehouse import derived_tables, location_claims
+from lakehouse import derived_tables
 from lakehouse.lancekit.base_refs import key_uri, store_of
 from lakehouse.lancekit.filters import in_lists
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
+from lakehouse.records import location_claims
 from lakehouse.storage import objectfs
 from lakehouse.storage.options import StorageOptions
 

@@ -31,7 +31,7 @@ from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse.record_store import get_record, put_record
+from lakehouse.records.record_store import get_record, put_record
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.options import StorageOptions
 
@@ -245,7 +245,7 @@ def write_session() -> None:
             "denied" in str(exc).lower() or "403" in str(exc), "Lance is refused a dataset outside the vended prefix", f"{type(exc).__name__}: {str(exc)[:120]}"
         )
     # The record store is pyarrow's S3FileSystem, and rask writes it with a service's own scoped pair (the catalog's,
-    # maintenance's), never a vended session: `lakehouse.record_store.put_record`.
+    # maintenance's), never a vended session: `lakehouse.records.record_store.put_record`.
     own = StorageOptions.from_flat(
         {"endpoint": ENDPOINT, "aws_access_key_id": "catalog", "aws_secret_access_key": CATALOG_SECRET, "region": REGION, "allow_http": "true"}
     )

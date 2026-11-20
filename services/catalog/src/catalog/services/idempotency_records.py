@@ -40,7 +40,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
-from lakehouse import control_prefixes
+from lakehouse.records import control_prefixes
 from lakehouse.storage import conditional_records, stored_objects
 from lakehouse.storage.options import StorageOptions
 
