@@ -173,6 +173,24 @@ async def judge(
     if check is not None and op.rung is not None:
         await check(op.rung)
     required = await _requires_run_for(namespace, op.table)
+    try:
+        await _judge_under_the_run_rule(op, required=required, inputs=inputs, namespace=namespace)
+    except (InvalidInputError, UnsupportedOperationError):
+        # The rung's own denial is audited where it is asked; this is the rule's, or an input the committer may not read.
+        audit(AuditAction.WRITE_JUDGE, AuditOutcome.DENY, subject=caller, resource=op.obj, op=op.op, requires_run=str(required).lower())
+        raise
+    audit(AuditAction.WRITE_JUDGE, AuditOutcome.ALLOW, subject=caller, resource=op.obj, op=op.op, requires_run=str(required).lower())
+    return Judgement(requires_run=required)
+
+
+async def _judge_under_the_run_rule(op: Write, *, required: bool, inputs: InputsCheck, namespace: Callable[[str], Awaitable[LanceNamespace]]) -> None:
+    """Refuse ``op`` where the run rule, read as ``required``, does not admit it.
+
+    Raises:
+        InvalidInputError: A rename into a namespace that requires a run from one that does not, or a stamping door's
+            write that names no run or an input the committer may not read.
+        UnsupportedOperationError: A door that cannot carry a run, under a namespace that requires one.
+    """
     if op.moved_from and required and not await _requires_run_for(namespace, op.moved_from):
         raise InvalidInputError(
             f"rename refused: moving a table into a namespace that requires a run ({REQUIRES_RUN_PROPERTY}) from one that does not "
@@ -185,8 +203,6 @@ async def judge(
         )
     if op.op in STAMPING_DOORS:
         await judge_run(required, op.run, inputs=inputs, names=f"the request's Context headers {RUN_ID_HEADER} and {INPUTS_HEADER}")
-    audit(AuditAction.WRITE_JUDGE, AuditOutcome.ALLOW, subject=caller, resource=op.obj, op=op.op, requires_run=str(required).lower())
-    return Judgement(requires_run=required)
 
 
 async def _requires_run_for(namespace: Callable[[str], Awaitable[LanceNamespace]], table: Sequence[str]) -> bool:

@@ -197,20 +197,27 @@ def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(real_ns_c
     _refused(client.post(f"/v1/table/{SALES}$t/insert", content=_rows(), headers={**ARROW, **_RUN}), 15)
 
     act_as(client, "alice")
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    caplog.clear()
     for ns in (SALES, f"{SALES}$lane"):
         _refused(client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers=ARROW), 13)
     assert client.post(f"/v1/table/{WAREHOUSE}$gold$t/insert", content=_rows(), headers=ARROW).status_code == 200
-    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
-    caplog.clear()
     for ns in spaces:
         assert client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
     judged = [
-        (r.__dict__["audit.resource"], r.__dict__["audit.requires_run"])
+        (r.__dict__["audit.resource"], r.__dict__["audit.requires_run"], r.__dict__["audit.outcome"])
         for r in caplog.records
         if r.name == AUDIT_LOGGER and r.__dict__.get("audit.action") == "write_judge" and r.__dict__.get("audit.op") == "insert"
     ]
-    # The judgement is audited under the written table's name (``Write.obj``), as a refusal names it.
-    assert judged == [(f"table:{SALES}$t", "true"), (f"table:{SALES}$lane$t", "true"), (f"table:{WAREHOUSE}$gold$t", "false")]
+    # The judgement is audited under the written table's name (``Write.obj``), a refusal under the run rule as an allow is.
+    assert judged == [
+        (f"table:{SALES}$t", "true", "deny"),
+        (f"table:{SALES}$lane$t", "true", "deny"),
+        (f"table:{WAREHOUSE}$gold$t", "false", "allow"),
+        (f"table:{SALES}$t", "true", "allow"),
+        (f"table:{SALES}$lane$t", "true", "allow"),
+        (f"table:{WAREHOUSE}$gold$t", "false", "allow"),
+    ]
 
 
 def test_a_recoverable_drop_and_its_undrop_keep_the_run_rule_and_the_uuid(real_ns_client: TestClient, grants: Grants) -> None:

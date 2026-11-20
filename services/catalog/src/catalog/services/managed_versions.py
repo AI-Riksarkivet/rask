@@ -243,8 +243,11 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     if request.naming_scheme not in (None, "V2"):
         raise InvalidInputError(f"commit refused: the table's manifests are named V2, not {request.naming_scheme}")
     fs, _ = dataplane.dataset_fs(location, so)
-    with fs.open_input_stream(dataplane.dataset_fs(staged, so)[1]) as source:
-        manifest = source.read()
+    try:
+        with fs.open_input_stream(dataplane.dataset_fs(staged, so)[1]) as source:
+            manifest = source.read()
+    except FileNotFoundError as exc:
+        raise InvalidInputError(f"commit refused: no staged manifest is at {request.manifest_path}") from exc
     stated = manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.VERSION_FIELD)
     detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
     _write(location, so, manifest_names.detached_name(detached_id), manifest_bytes.with_manifest_version(manifest, detached_id))

@@ -78,18 +78,22 @@ def report_bucket_events(settings: MaintenanceStore) -> BucketEventsReport | Non
     buckets = sorted({root.partition("/")[0] for root in roots})
     client = object_client(options)
     report = BucketEventsReport()
-    for bucket in buckets:
-        try:
-            configuration = client.get_bucket_notification_configuration(Bucket=bucket)
-        except (ClientError, BotoCoreError) as exc:
-            log.warning("maintenance_bucket_store_events_unknown", extra={"bucket": bucket, "error": f"{type(exc).__name__}: {exc}"[:300]})
-            report.unknown.append(bucket)
-            record_store_event_bucket_checked(outcome="unknown")
-            continue
-        if not covers_every_write(configuration):
-            log.warning("maintenance_bucket_without_store_events", extra={"bucket": bucket})
-            report.without.append(bucket)
-            record_store_event_bucket_checked(outcome="without")
-            continue
-        record_store_event_bucket_checked(outcome="configured")
+    try:
+        for bucket in buckets:
+            try:
+                configuration = client.get_bucket_notification_configuration(Bucket=bucket)
+            except (ClientError, BotoCoreError) as exc:
+                log.warning("maintenance_bucket_store_events_unknown", extra={"bucket": bucket, "error": f"{type(exc).__name__}: {exc}"[:300]})
+                report.unknown.append(bucket)
+                record_store_event_bucket_checked(outcome="unknown")
+                continue
+            if not covers_every_write(configuration):
+                log.warning("maintenance_bucket_without_store_events", extra={"bucket": bucket})
+                report.without.append(bucket)
+                record_store_event_bucket_checked(outcome="without")
+                continue
+            record_store_event_bucket_checked(outcome="configured")
+    finally:
+        # The client is this run's own, and its connections go with it.
+        client.close()
     return report

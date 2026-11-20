@@ -1257,7 +1257,20 @@ async def judge_staged_run(
     async def inputs(named: run_context.RunContext) -> None:
         declared.update(await require_declared_inputs(settings, token, injected, resolver, named))
 
-    await write_judge.judge_run(required, run, inputs=inputs, names=names)
+    # The stock client's door asks the rule directly, so its decision is audited here as the catalog's own doors' is in
+    # `write_judge.judge`: every decision under the run rule leaves a record, whichever door took the write.
+    judged = {
+        "subject": token.subject if token is not None else None,
+        "resource": f"table:{fga.canonical_object_id(list(segments))}",
+        "op": "version_create",
+        "requires_run": str(required).lower(),
+    }
+    try:
+        await write_judge.judge_run(required, run, inputs=inputs, names=names)
+    except InvalidInputError:
+        audit(AuditAction.WRITE_JUDGE, AuditOutcome.DENY, **judged)
+        raise
+    audit(AuditAction.WRITE_JUDGE, AuditOutcome.ALLOW, **judged)
     return declared
 
 

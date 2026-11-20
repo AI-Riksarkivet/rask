@@ -22,7 +22,7 @@ from functools import partial
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus
@@ -67,6 +67,10 @@ class DrainOutcome(BaseModel):
     recorded: int = 0
 
 
+class RelayStepsFailedError(RuntimeError):
+    """A relay tick's own steps could not run; its timer counts the turn failed."""
+
+
 class RelayReport(BaseModel):
     """One relay tick: what the drain did, how many feed rows retention removed, and what the forwarder sent."""
 
@@ -81,6 +85,9 @@ class RelayReport(BaseModel):
     forward_refused: int = 0
     #: Why the forward stopped short of the feed's head, ``None`` when it did not or no backend is configured.
     forward_stalled: str | None = None
+    #: The lakehouse's own steps that could not run ("outbox", "parks"), which the tick's timer counts a failed turn for.
+    #: The forward is not one: a graph backend that is away is the user's, and `forward_stalled` says so.
+    failed: list[str] = Field(default_factory=list)
 
 
 async def _prune_old_events(provenance: ProvenanceStore, settings: LineageSettings) -> int:
@@ -123,7 +130,11 @@ def start_relay(app: FastAPI, settings: LineageSettings, loops: Supervisor) -> N
     outbox_metrics.create_series("lineage")
 
     async def work() -> None:
-        await tick(app, settings)
+        report = await tick(app, settings)
+        if report.failed:
+            # Each step has logged its own failure. Raised so the timer counts the turn failed, which is what pages
+            # for a relay that cannot reach its outbox on any tick.
+            raise RelayStepsFailedError(f"the relay tick could not run: {', '.join(report.failed)}")
 
     timer = Timer(
         RELAY_TIMER,
@@ -143,7 +154,7 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
     """One relay tick: drain the outbox, forward the feed, then prune what retention and the forwarder release.
 
     Each step degrades to a warning, so one step's failure leaves the others to this tick and the report says what
-    each did.
+    each did, and which could not run (``failed``), which the timer's work raises on.
     """
     provenance: ProvenanceStore = app.state.provenance
     publisher: Bus | None = getattr(app.state, "bus", None)
@@ -154,10 +165,12 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
             report.outbox_drained, report.outbox_stranded, report.outbox_refused = outcome.drained, outcome.stranded, outcome.refused
             report.outbox_refusals_recorded = outcome.recorded
         except Exception as exc:
+            report.failed.append("outbox")
             log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
     try:
         report.parks_retired = await provenance.retire_recovered_parks()
     except Exception as exc:
+        report.failed.append("parks")
         log.warning("lineage_parks_retire_failed", extra={"error": str(exc)})
     client = getattr(app.state, "forward_client", None)
     if settings.forward_url and client is not None:

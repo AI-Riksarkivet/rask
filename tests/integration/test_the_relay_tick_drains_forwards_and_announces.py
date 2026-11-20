@@ -83,6 +83,7 @@ def test_a_tick_forwards_the_feed_and_reports_every_count(tmp_path: Path, monkey
         "forwarded": 1,
         "forward_refused": 0,
         "forward_stalled": None,
+        "failed": [],
     }
 
 
@@ -218,3 +219,33 @@ def test_through_a_read_only_window_the_relays_timer_is_held(tmp_path: Path, mon
         turn = lineage.portal.call(timer.turn)
 
     assert turn.outcome == Outcome.HELD
+
+
+def test_a_tick_whose_drain_could_not_run_is_a_failed_turn_of_its_timer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The timer's failed turns are what pages for a relay that cannot reach its outbox, so a tick that could not drain
+    says so to its timer, having still done the steps the outbox does not gate."""
+
+    def unlisted(*_args: object, **_kwargs: object) -> None:
+        raise OSError("the store did not list the outbox")
+
+    timer_env = {"LINEAGE_RELAY_PERIOD_SECONDS": "0.2", "LINEAGE_TIMER_ROOT": str(tmp_path / "timers")}
+    with (
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        _lineage_as_its_pod_starts_it(catalog_url, f"file://{tmp_path}/outbox", BusDouble(), monkeypatch, **timer_env) as lineage,
+    ):
+        monkeypatch.setattr(outbox, "measured_backlog", unlisted)
+        monkeypatch.setattr(outbox, "list_events", unlisted)
+        timer = cast(Timer, getattr(main.app.state, relay.RELAY_TIMER_STATE))
+        assert lineage.portal is not None
+        # The app's own loop turns too, and one of the two claims each window: a turn of this test's is read once it does.
+        deadline = time.monotonic() + 30
+        turn = lineage.portal.call(timer.turn)
+        while turn.outcome is Outcome.ELSEWHERE and time.monotonic() < deadline:
+            time.sleep(turn.wait)
+            turn = lineage.portal.call(timer.turn)
+
+    assert turn.outcome is Outcome.FAILED
+    failures = [str(r.exc_info[1]) for r in caplog.records if r.message == "timer_work_failed" and r.exc_info]
+    assert failures[-1:] == ["the relay tick could not run: outbox"]

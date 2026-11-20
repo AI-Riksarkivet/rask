@@ -54,6 +54,7 @@ from lakehouse import commit_records, commit_turns, control_prefixes, manifest_w
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga as fga_module
+from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -948,6 +949,19 @@ def test_a_protected_table_takes_a_stock_clients_overwrite_as_one_more_version(s
     assert _rows(_opened(stock).checkout_version(before)) != [(9, "z")]
 
 
+def test_a_commit_naming_a_staged_manifest_that_was_never_put_is_the_callers_mistake(served: Served) -> None:
+    stock = _created(served)
+    before = _opened(stock).version
+    location = httpx.post(f"{served.url}/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}, headers=_TOKEN).json()["location"]
+    under = Path(location.removeprefix("file://")).relative_to("/").as_posix() if served.root is not None else location.removeprefix("s3://").partition("/")[2]
+    never_put = f"{under}/_versions/{before + 1}.manifest-0b7f6a0e-6a52-4c7a-9a64-3f2d6a1c9e10"
+
+    answer = httpx.post(f"{served.url}/v1/table/lance_catalog$db$t/version/create", json={"version": before + 1, "manifest_path": never_put}, headers=_TOKEN)
+
+    assert (answer.status_code, answer.json()["code"]) == (400, 13), answer.text
+    assert _opened(stock).version == before
+
+
 def _answer_to_the_staged_commit(served: Served, table: str, version: int, *, branch: str | None = None, location: str | None = None) -> tuple[int, int, str]:
     """The status, spec code and detail the catalog answers the one staged manifest of ``table`` (or of its ``branch``)
     at ``version``; the table's ``location`` is described unless given.
@@ -1769,7 +1783,12 @@ def _rename_under_the_run_rule(served: Served) -> tuple[int, int, str]:
     ],
 )
 def test_a_commit_under_the_run_rule_lands_only_when_it_names_its_run_and_inputs(
-    served: Served, write: Callable[[Served], tuple[int, int, str]], answer: tuple[int, int], names: str, monkeypatch: pytest.MonkeyPatch
+    served: Served,
+    write: Callable[[Served], tuple[int, int, str]],
+    answer: tuple[int, int],
+    names: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from catalog.main import app
 
@@ -1785,9 +1804,16 @@ def test_a_commit_under_the_run_rule_lands_only_when_it_names_its_run_and_inputs
         transaction_properties=_PROVENANCE,
     )
 
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    caplog.clear()
+
     status, code, detail = write(served)
 
     assert ((status, code), names in detail) == (answer, True), detail
+    # The refusal is the run rule's decision, audited as one at whichever door took the write. A commit stamped with
+    # another author is refused before the rule is read, on who it claims to be.
+    judged = {(r.__dict__["audit.outcome"], r.__dict__["audit.requires_run"]) for r in caplog.records if r.__dict__.get("audit.action") == "write_judge"}
+    assert (("deny", "true") in judged) == (names != "rask.author"), judged
     assert lance.dataset(namespace_client=stock, table_id=_SILVER).version == 1
     recorder = _Recorder()
     monkeypatch.setattr(app.state, "lineage_emitter", recorder, raising=False)
