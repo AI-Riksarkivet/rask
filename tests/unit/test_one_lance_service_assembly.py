@@ -153,17 +153,28 @@ def test_every_lance_app_translates_a_lance_error(name: str, module_path: str) -
 def test_the_catalog_maintenance_gate_answers_inside_the_requests_trace() -> None:
     """The read-only gate answers inside the request's trace, so its 503 names the trace (the problem body's
     ``instance``) an operator correlates the refusal with (ADR 0209)."""
+    from catalog.api.signing_gate import COMMIT_IDS_STATE
+    from catalog.core.commit_ids import UnkeyedCommitIds
     from catalog.core.config import get_settings
+    from lakehouse.governed.signing_key import SIGNING_STATE
 
     get_settings.cache_clear()
     app = _app("catalog.main")
     client = TestClient(app, raise_server_exceptions=False)
     # The gate reads the setting per request, so flipping it needs no rebuild — and it is put BACK,
     # because `app` is the process-wide catalog app every other test in this run also imports.
-    original = getattr(app.state, "settings", None)
-    app.state.settings = get_settings().model_copy(update={"maintenance_read_only": True})
+    # No lifespan runs here, so the wires the gates in front of this one read are set as a catalog that does not
+    # sign sets them (`catalog.main`): no signing holder, and commit ids that need no key.
+    wired = {"settings": get_settings().model_copy(update={"maintenance_read_only": True}), SIGNING_STATE: None, COMMIT_IDS_STATE: UnkeyedCommitIds()}
+    before = {name: getattr(app.state, name) for name in wired if hasattr(app.state, name)}
+    for name, value in wired.items():
+        setattr(app.state, name, value)
     try:
         response = client.post("/v1/namespace/x/create", json={}, headers={"traceparent": f"00-{_CALLERS_TRACE}-00f067aa0ba902b7-01"})
     finally:
-        app.state.settings = original
+        for name in wired:
+            if name in before:
+                setattr(app.state, name, before[name])
+            else:
+                delattr(app.state, name)
     assert (response.status_code, response.json().get("instance")) == (503, _CALLERS_TRACE), response.text
