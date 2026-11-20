@@ -61,6 +61,7 @@ soft cap is published and logged, the early sight of facet bloat (docs/DATA-CONT
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -152,6 +153,9 @@ _MAX_ID_CHARS: Final = 200
 _PULL_SECONDS: Final = 5.0
 #: How often a connection the keeper has not yet let go of is looked at again by a consumer waiting for the next.
 _NEXT_CONNECTION_SECONDS: Final = 0.5
+#: How long a readiness read waits for the first connection of a process that has held none, well inside the watch's
+#: own budget for a read (`lakehouse.health.HEALTH_BUDGET_SECONDS`).
+_FIRST_CONNECTION_SECONDS: Final = 2.0
 #: How long past a pull's own wait the bus is given to end it before it is judged gone.
 _PULL_ANSWERED_WITHIN_SECONDS: Final = 10.0
 #: The status the bus ends a pull with once its wait ran out with no message.
@@ -447,9 +451,17 @@ class Bus:
     async def answering(self) -> None:
         """Raise unless this process's connection to the bus is up: the verdict a readiness report shows for the bus.
 
+        A read taken before this process has held any connection waits for the first one, within
+        :data:`_FIRST_CONNECTION_SECONDS`: a service's watch starts beside its session, and the first connect returning
+        a few milliseconds later is the bus coming up, not the bus being away.
+
         Raises:
             ConnectionError: No connection is held, or the one held is reconnecting or closed.
         """
+        if self._client is None:
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(_FIRST_CONNECTION_SECONDS):
+                    await self._held.wait()
         if not self.connected:
             raise ConnectionError("this process is not connected to the bus")
 

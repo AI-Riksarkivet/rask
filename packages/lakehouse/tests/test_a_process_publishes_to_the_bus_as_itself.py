@@ -519,6 +519,20 @@ async def test_a_publish_that_meets_a_session_being_asked_for_again_waits_for_it
 
 
 @pytest.mark.asyncio
+async def test_a_readiness_read_taken_as_the_process_boots_waits_for_its_first_connection(broker: _Broker, as_catalog: Path) -> None:
+    """A service's watch reads the bus the moment its session starts, before the first connect has returned: that is
+    the connection coming up, not the bus being away, so the read answers once it is held."""
+    del as_catalog
+    broker.will(_client())
+
+    async with Supervisor() as loops, bus.bus_session(loops) as session:
+        assert session is not None
+        await session.answering()
+
+        assert session.connected
+
+
+@pytest.mark.asyncio
 async def test_a_process_whose_connection_is_not_up_says_so_and_publishes_nothing(broker: _Broker, as_catalog: Path) -> None:
     """The verdict a readiness report shows for the bus, and what a publish is answered, while no server takes the connection."""
     del as_catalog

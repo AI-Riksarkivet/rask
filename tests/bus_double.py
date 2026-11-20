@@ -56,6 +56,8 @@ class BusDouble(Bus):
         self.sent: list[Sent] = []
         self.failing = failing
         self.down = False
+        # The double stands for a process that holds its connection, so a readiness read judges it at once.
+        self._held.set()
         self._consumers: dict[str, tuple[Lane, Handle, Park]] = {}
         self._follows: dict[str, Follow] = {}
         self._handed_count = 0
