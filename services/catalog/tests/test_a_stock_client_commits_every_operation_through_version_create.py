@@ -868,64 +868,53 @@ def _staged_with(
 
 
 @pytest.mark.parametrize(
-    ("stage", "denied", "protect", "status", "code", "staged_at"),
+    ("stage", "denied", "status", "code", "staged_at"),
     [
-        pytest.param(_append_at_file_version_2_1, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="foreign-data-file-versions-are-refused"),
-        pytest.param(_create_at_file_version_2_1, set(), False, 400, 13, ("lance_catalog$db$u", 1), id="a-create-is-at-2.2-with-stable-row-ids"),
-        pytest.param(_append_a_held_key, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused"),
-        pytest.param(_replace_a_key_with_a_held_one, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused-in-a-replaced-file"),
-        pytest.param(_drop_the_key_column, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="the-key-column-is-kept"),
-        pytest.param(_re_append_a_held_file, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="a-held-data-file-is-not-appended-again"),
-        pytest.param(_undelete_as_an_update, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="a-deleted-row-does-not-come-back-whatever-the-label"),
-        pytest.param(_reuse_live_row_ids_as_an_update, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
-        pytest.param(_staged_with(_an_append, 14, 1), set(), False, 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-never-falls"),
-        pytest.param(
-            _staged_with(_a_delete_of_the_newest_fragment, 11, 0), set(), False, 400, 13, ("lance_catalog$db$t", 4), id="the-max-fragment-id-never-falls"
-        ),
+        pytest.param(_append_at_file_version_2_1, set(), 400, 13, ("lance_catalog$db$t", 4), id="foreign-data-file-versions-are-refused"),
+        pytest.param(_create_at_file_version_2_1, set(), 400, 13, ("lance_catalog$db$u", 1), id="a-create-is-at-2.2-with-stable-row-ids"),
+        pytest.param(_append_a_held_key, set(), 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused"),
+        pytest.param(_replace_a_key_with_a_held_one, set(), 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused-in-a-replaced-file"),
+        pytest.param(_drop_the_key_column, set(), 400, 13, ("lance_catalog$db$t", 4), id="the-key-column-is-kept"),
+        pytest.param(_re_append_a_held_file, set(), 400, 13, ("lance_catalog$db$t", 4), id="a-held-data-file-is-not-appended-again"),
+        pytest.param(_undelete_as_an_update, set(), 400, 13, ("lance_catalog$db$t", 4), id="a-deleted-row-does-not-come-back-whatever-the-label"),
+        pytest.param(_reuse_live_row_ids_as_an_update, set(), 400, 13, ("lance_catalog$db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
+        pytest.param(_staged_with(_an_append, 14, 1), set(), 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-never-falls"),
+        pytest.param(_staged_with(_a_delete_of_the_newest_fragment, 11, 0), set(), 400, 13, ("lance_catalog$db$t", 4), id="the-max-fragment-id-never-falls"),
         # The table's next row id is 4 and the appended row takes 4: the counter holds, and the next append would mint 4.
-        pytest.param(_staged_with(_an_append, 14, 4), set(), False, 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-passes-every-new-row"),
-        pytest.param(_append_at_file_version_2_1, set(), False, 409, 14, ("lance_catalog$db$t", 3), id="a-version-the-table-already-holds-is-taken"),
-        pytest.param(_arm_auto_cleanup, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
-        pytest.param(_steer_compaction, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="compaction-is-not-steered-by-a-commit"),
-        pytest.param(_opt_into_managed_blobs, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="managed-blobs-are-not-opted-into"),
-        pytest.param(_opt_into_spilled_row_lineage, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="spilled-row-lineage-is-not-opted-into"),
-        pytest.param(
-            _stamp_a_scheme_lance_does_not_know, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"
-        ),
-        pytest.param(_restore_version_1, {"can_restore"}, False, 403, 15, ("lance_catalog$db$t", 4), id="a-writer-cannot-stage-a-restore"),
-        pytest.param(_overwrite, set(), True, 409, 19, ("lance_catalog$db$t", 4), id="an-overwrite-of-a-protected-table-is-refused"),
-        pytest.param(_compact, {"can_maintain"}, False, 403, 15, ("lance_catalog$db$t", 4), id="a-writer-cannot-stage-a-compaction"),
-        pytest.param(_append_a_new_key, {"can_write_data"}, False, 403, 15, ("lance_catalog$db$t", 4), id="a-maintainer-cannot-stage-an-append"),
-        pytest.param(_create_a_table, {"can_write_data"}, False, 403, 15, ("lance_catalog$db$u", 1), id="a-maintainer-cannot-commit-a-tables-first-version"),
-        pytest.param(
-            _create_a_labelled_table, {"can_classify"}, False, 403, 15, ("lance_catalog$db$u", 1), id="a-first-version-labels-a-field-only-for-a-classifier"
-        ),
-        pytest.param(_rewrite_losing_a_replaced_fragments_rows, set(), False, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-loses-no-row"),
-        pytest.param(_rewrite_duplicating_a_carried_fragments_rows, set(), False, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-duplicates-no-row"),
-        pytest.param(_rewrite_changing_a_carried_rows_value, set(), False, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-changes-no-value"),
-        pytest.param(_index_read_through_a_base, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
-        pytest.param(_index_with_no_files, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-index-names-files-that-are-there"),
-        pytest.param(_initialise_mem_wal, set(), False, 406, 0, ("lance_catalog$db$t", 4), id="a-mem-wal-is-not-served"),
-        pytest.param(_data_staged_under_an_index_label, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-index-commit-changes-no-data"),
+        pytest.param(_staged_with(_an_append, 14, 4), set(), 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-passes-every-new-row"),
+        pytest.param(_append_at_file_version_2_1, set(), 409, 14, ("lance_catalog$db$t", 3), id="a-version-the-table-already-holds-is-taken"),
+        pytest.param(_arm_auto_cleanup, set(), 400, 13, ("lance_catalog$db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
+        pytest.param(_steer_compaction, set(), 400, 13, ("lance_catalog$db$t", 4), id="compaction-is-not-steered-by-a-commit"),
+        pytest.param(_opt_into_managed_blobs, set(), 400, 13, ("lance_catalog$db$t", 4), id="managed-blobs-are-not-opted-into"),
+        pytest.param(_opt_into_spilled_row_lineage, set(), 400, 13, ("lance_catalog$db$t", 4), id="spilled-row-lineage-is-not-opted-into"),
+        pytest.param(_stamp_a_scheme_lance_does_not_know, set(), 400, 13, ("lance_catalog$db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"),
+        pytest.param(_restore_version_1, {"can_restore"}, 403, 15, ("lance_catalog$db$t", 4), id="a-writer-cannot-stage-a-restore"),
+        pytest.param(_compact, {"can_maintain"}, 403, 15, ("lance_catalog$db$t", 4), id="a-writer-cannot-stage-a-compaction"),
+        pytest.param(_append_a_new_key, {"can_write_data"}, 403, 15, ("lance_catalog$db$t", 4), id="a-maintainer-cannot-stage-an-append"),
+        pytest.param(_create_a_table, {"can_write_data"}, 403, 15, ("lance_catalog$db$u", 1), id="a-maintainer-cannot-commit-a-tables-first-version"),
+        pytest.param(_create_a_labelled_table, {"can_classify"}, 403, 15, ("lance_catalog$db$u", 1), id="a-first-version-labels-a-field-only-for-a-classifier"),
+        pytest.param(_rewrite_losing_a_replaced_fragments_rows, set(), 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-loses-no-row"),
+        pytest.param(_rewrite_duplicating_a_carried_fragments_rows, set(), 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-duplicates-no-row"),
+        pytest.param(_rewrite_changing_a_carried_rows_value, set(), 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-changes-no-value"),
+        pytest.param(_index_read_through_a_base, set(), 400, 13, ("lance_catalog$db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
+        pytest.param(_index_with_no_files, set(), 400, 13, ("lance_catalog$db$t", 4), id="an-index-names-files-that-are-there"),
+        pytest.param(_initialise_mem_wal, set(), 406, 0, ("lance_catalog$db$t", 4), id="a-mem-wal-is-not-served"),
+        pytest.param(_data_staged_under_an_index_label, set(), 400, 13, ("lance_catalog$db$t", 4), id="an-index-commit-changes-no-data"),
         pytest.param(
             _append_under_a_transaction_recorded_for_another_commit,
             set(),
-            False,
             400,
             13,
             ("lance_catalog$db$t", 4),
             id="another-commits-transaction-is-not-reused",
         ),
-        pytest.param(
-            _append_under_a_transaction_whose_record_is_unreadable, set(), False, 500, 18, ("lance_catalog$db$t", 4), id="an-unreadable-record-is-no-retrys"
-        ),
+        pytest.param(_append_under_a_transaction_whose_record_is_unreadable, set(), 500, 18, ("lance_catalog$db$t", 4), id="an-unreadable-record-is-no-retrys"),
     ],
 )
 def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_error(
     served: Served,
     stage: Callable[[lance_namespace.LanceNamespace], None],
     denied: set[str],
-    protect: bool,
     status: int,
     code: int,
     staged_at: tuple[str, int],
@@ -933,8 +922,6 @@ def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_err
     stock = _created(served)
     lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
     _opened(stock).delete("id = 2")
-    if protect:
-        assert httpx.post(f"{served.url}/management/v1/table/lance_catalog$db$t/protection", json={"protected": True}, headers=_TOKEN).status_code == 200
     served.denied.update(denied)
 
     # pylance reports a refused finalize as an OSError; a manifest staged by hand asks nothing until it is answered below.
@@ -946,6 +933,19 @@ def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_err
     assert _rows(after) == [(1, "a"), (3, "c"), (4, "d")]
     assert _answer_to_the_staged_commit(served, *staged_at)[:2] == (status, code)
     assert _opened(stock).version == 3
+
+
+def test_a_protected_table_takes_a_stock_clients_overwrite_as_one_more_version(served: Served) -> None:
+    """Protection guards the table's drop (ADR 0221): the overwrite commits, and every earlier version is still read."""
+    stock = _created(served)
+    assert httpx.post(f"{served.url}/management/v1/table/lance_catalog$db$t/protection", json={"protected": True}, headers=_TOKEN).status_code == 200
+    before = _opened(stock).version
+
+    _overwrite(stock)
+
+    after = _opened(stock)
+    assert (after.version, _rows(after)) == (before + 1, [(9, "z")])
+    assert _rows(_opened(stock).checkout_version(before)) != [(9, "z")]
 
 
 def _answer_to_the_staged_commit(served: Served, table: str, version: int, *, branch: str | None = None, location: str | None = None) -> tuple[int, int, str]:

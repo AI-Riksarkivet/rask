@@ -3374,8 +3374,8 @@ export interface paths {
          * @description Create a Lance table from an Arrow-IPC stream — ``create_table``; seeds ownership + lineage.
          *
          *     ``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],
-         *     ``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which
-         *     turns the protection lock only, as on drop.
+         *     ``table_create``'s module docstring). Protection guards a table's drop, not its rows (ADR 0221), so a protected
+         *     table takes it as any table does.
          *
          *     ``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``
          *     are refused 400 (code 13), never dropped unread: storage access is the catalog's to vend (two-tier
@@ -3761,10 +3761,10 @@ export interface paths {
          *     ``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).
          *
          *     ``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),
-         *     so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
-         *     table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]). It asks the
+         *     and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]). It asks the
          *     writer rung, not ``can_drop``: it keeps the table's schema, so it does what a delete of every row and an insert do
-         *     (ADR 0099, [[LH-415]]).
+         *     (ADR 0099, [[LH-415]]), and like a delete it asks nothing of the table's protection, which guards its drop
+         *     (ADR 0221).
          *
          *     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
          *

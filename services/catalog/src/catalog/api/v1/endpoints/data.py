@@ -48,7 +48,7 @@ from catalog.api.dependencies import (
     SettingsDep,
     StorageOptionsDep,
 )
-from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag
+from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import encoding, formats, provenance_guard
 from catalog.core.formats import reject_unsupported_properties
@@ -125,13 +125,12 @@ async def create_table(
     storage_options: Annotated[str | None, Query(description="REFUSED: storage access is the catalog's to vend.")] = None,
     data_base: RaskDataBase = [],  # noqa: B006 — FastAPI Query default, not mutated
     external_blob_base: RaskExternalBlobBase = None,
-    force: RaskFlag = False,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream — ``create_table``; seeds ownership + lineage.
 
     ``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],
-    ``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which
-    turns the protection lock only, as on drop.
+    ``table_create``'s module docstring). Protection guards a table's drop, not its rows (ADR 0221), so a protected
+    table takes it as any table does.
 
     ``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``
     are refused 400 (code 13), never dropped unread: storage access is the catalog's to vend (two-tier
@@ -203,7 +202,6 @@ async def create_table(
         shape=shape,
         data_base=data_base,
         run=run,
-        force=force,
     )
     # AFTER the door succeeded, and only then: a failure raises past this line, and records no outcome the caller
     # never received. A refusal gives the claim back (`idem.keyed_door`); a fault leaves it in flight for its lease.
@@ -228,16 +226,15 @@ async def insert_into_table(
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     branch: Annotated[str | None, Query(description="The ref to insert into. Omit for main.")] = None,
-    force: RaskFlag = False,
 ) -> InsertIntoTableResponse:
     """Append Arrow-IPC rows — ``insert_into_table``; emits an INSERT lineage event.
     ``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).
 
     ``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),
-    so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
-    table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]). It asks the
+    and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]). It asks the
     writer rung, not ``can_drop``: it keeps the table's schema, so it does what a delete of every row and an insert do
-    (ADR 0099, [[LH-415]]).
+    (ADR 0099, [[LH-415]]), and like a delete it asks nothing of the table's protection, which guards its drop
+    (ADR 0221).
 
     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
 
@@ -251,8 +248,6 @@ async def insert_into_table(
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
     # Ahead of the coerce because that opens the dataset, and a shape refusal costs no round trip.
     insert_mode = InsertMode.parse(mode)
-    if insert_mode is InsertMode.OVERWRITE:
-        await fga_deps.require_table_unprotected(settings, table.resolved, force=force)
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
     # browser infers float64 for every JS number) can append to int64 columns — else the append 500s on
     # the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.

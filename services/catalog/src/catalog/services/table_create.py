@@ -26,9 +26,9 @@ words are "the existing table is dropped and a new table with this name is creat
 CreateTableRequest.mode), and the backend writes a Lance overwrite on the same dataset, whose earlier
 versions stay readable by time travel. The catalog takes the second meaning whole: the id keeps its
 grants (revoking them while the history they guard stays readable gave the overwriter that history and
-took it from everyone else), its provenance (``provenance_guard.keep_provenance``) and its protection
-(a protected table refuses the Overwrite unless ``force=true``, as its drop does). The spec's "dropped"
-survives as the owner-tier ``can_drop`` gate: the tip's schema and rows are replaced.
+took it from everyone else), and its provenance (``provenance_guard.keep_provenance``). The spec's "dropped"
+survives as the owner-tier ``can_drop`` gate: the tip's schema and rows are replaced. Its protection is not asked:
+protection guards the table's drop, and an overwrite keeps the table and every earlier version (ADR 0221).
 
 It imports ``catalog.api.fga_deps`` for the authorization seam, exactly as
 ``catalog.services.warehouse_grant_backfill`` already does: the guards are the estate's one implementation and
@@ -80,7 +80,7 @@ log = logging.getLogger(__name__)
 def table_exists(ns: LanceNamespace, segments: list[str]) -> bool:
     """True if a table already lives at ``segments`` (declared-only counts — it already holds an owner
     grant). Used to decide whether a create ``mode=Overwrite`` replaces an EXISTING table (which then
-    needs the owner-tier gate and the protection guard, and is recorded as ``overwrite_table``) or
+    needs the owner-tier gate, and is recorded as ``overwrite_table``) or
     creates a fresh one. Blocking native call → run in a threadpool."""
     try:
         native.call(ns, "describe_table", DescribeTableRequest(id=segments, check_declared=True))
@@ -169,7 +169,6 @@ async def create_governed_table(
     shape: CreateShape,
     data_base: list[str],
     run: RunContext | None,
-    force: bool = False,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream, governed end to end.
 
@@ -180,8 +179,7 @@ async def create_governed_table(
     before its idempotency claim (``CreateMode.parse``, :func:`parse_create_shape`,
     ``dataplane.read_arrow_body``); four decisions below turn on
     the mode: the pre-existence guards, the schema read-back and the announcements. ``run`` is the run the request's Context names, which the write judge already judged: it is stamped
-    into the commit and its inputs become the event's inputs. ``force`` releases deletion protection for an Overwrite of an existing table,
-    and nothing else.
+    into the commit and its inputs become the event's inputs.
     """
     # THE ROUND TRIPS COME AFTER THE FREE CHECKS (catalog-api-19). These two both dial out — a
     # describe against the namespace backend and a trash-registry read on the object store — and they
@@ -221,7 +219,7 @@ async def create_governed_table(
     # ([[LH-492]]). The probe's FGA questions:
     #   · Overwrite of an EXISTING table replaces the tip's schema and rows, the spec's "dropped" — so it
     #     clears the owner-tier can_drop a real drop needs, not only the writer-tier can_create_table the
-    #     router applied on the parent, and a protected table refuses it unless force=true.
+    #     router applied on the parent.
     #   · ExistOk that KEPT an existing table wrote NOTHING — so seeding the caller `owner` would let ANY
     #     authenticated user (or namespace-writer) SEIZE ownership of an already-owned table via a no-op
     #     create (audit: CRITICAL). We must never grant owner on a table this request did not create.
@@ -233,9 +231,6 @@ async def create_governed_table(
     if overwrote_existing:
         overwritten = await resolver.table(segments, ns=ns)
         await fga_deps.require_can_drop_table(client, settings, token, table=overwritten)
-        # After the authz gate, as on the drop door: a caller who may not drop the table learns nothing
-        # about its protection.
-        await fga_deps.require_table_unprotected(settings, overwritten, force=force)
         # The table asked about is the one overwritten ([[LH-530]]).
         overwriting = table_claims.DoorTable(ns, table_claims.claim_store(settings), overwritten, announces=provenance_namespace.announcer(segments, settings))
     operation = OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE

@@ -720,9 +720,8 @@ governing their data. The project-scoped surface is the console's project page, 
   `services/catalog/tests/test_a_project_is_protected_and_retired_by_its_admins.py`). Both registries apply one
   rule, `control_records.with_protection`: arming an armed record keeps its armer, and clearing removes both fields.
   Tables/namespaces carry it as a **control-root `_protection/` record**
-  (`lakehouse.protection`) gating drop/deregister/rename and both Overwrite modes,
-  `create?mode=Overwrite` over an existing table and `insert?mode=overwrite` on any branch ([[LH-242]]),
-  (table) and drop (namespace). It guards no history reclaim (ADR 0150, [[LH-300]]): `version/delete`, `tags/delete`,
+  (`lakehouse.protection`) gating drop/deregister/rename
+  (table) and drop (namespace), and no write of rows: an overwrite, a delete and a merge ask nothing of it (ADR 0221). It guards no history reclaim (ADR 0150, [[LH-300]]): `version/delete`, `tags/delete`,
   `branches/delete` and `maintenance/run` are governed by authorization alone, since deleting a tag or a branch is what
   makes its versions reclaimable, and a version that must survive is tagged
   (`tests/integration/test_protection_guards_deletion_not_history_reclaim.py`). The record is
@@ -1105,7 +1104,7 @@ governing their data. The project-scoped surface is the console's project page, 
   committed version follows version 0, and one whose latest committed version does not open answers 500 code 18
   ([[LH-545]], `lance_docs/ns_catalog/namespace/operations/errors.md`). The door admits a writer or a maintainer (`can_create_version`), and the judge
   asks the operation's own rung (`fga_deps.require_staged_operation`: the writer operations and a table's first version `can_write_data`, restore
-  `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` plus protection,
+  `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` (protection guards a drop, not a write: ADR 0221),
   `Clone` and unknown operations refused); a create at 2.2 with stable row ids and no later change to either;
   reserved schema metadata, the provenance and key columns (the key read by Lance's own parser) and field-level
   `rask.*` metadata unchanged, judged by Lance field id so a rename keeps a label (by path for an Overwrite, whose

@@ -2841,8 +2841,8 @@ async def require_can_drop_table(
 #: (``can_create_version``, [[LH-471]]). Each is the rung the catalog's own door for that operation asks, so staging an
 #: operation never clears a lower bar than doing it through the door: the writer operations are the writer rung, restore
 #: is ``restore``'s owner rung, a compaction's two commits (the ``ReserveFragments`` and the ``Rewrite`` after it) are the
-#: maintainer rung, and an Overwrite of a table that already has a version is drop-then-recreate
-#: (``require_can_drop_table``). A table's first version is the writer rung whatever it is staged as
+#: maintainer rung, and an Overwrite of a table that already has a version replaces its tip's schema and rows, the
+#: owner rung (``require_can_drop_table``). A table's first version is the writer rung whatever it is staged as
 #: (:func:`require_staged_operation`).
 _STAGED_OPERATION_RELATION: Final[dict[str, str]] = {
     **dict.fromkeys(("Append", "Delete", "Update", "Merge", "Project", "CreateIndex", "DataReplacement", "DataOverlay", "UpdateConfig"), "can_write_data"),
@@ -2867,8 +2867,8 @@ async def require_staged_operation(
 
     ``creates`` is true for the table's first version, which writes the rows of a table only declared so far: it asks
     the writer rung, as every write does, since the router admits a maintainer too, and no protection record, since
-    none holds a table with no version. An Overwrite of a table with a version is drop-then-recreate, so the
-    protection record refuses it as it refuses a drop, with FGA on or off; ``force`` has no channel on the spec door.
+    none holds a table with no version. An Overwrite of a table with a version replaces its tip, so it asks the
+    owner-tier ``can_drop``; it asks nothing of the table's protection, which guards its drop (ADR 0221).
     With FGA off the rung check allows (:func:`authorization`); an operation outside the map (``Clone`` among them,
     which the branch and clone doors own) is refused whatever FGA says.
 
@@ -2878,17 +2878,11 @@ async def require_staged_operation(
     if operation not in _STAGED_OPERATION_RELATION:
         raise InvalidInputError(f"a {operation} cannot be committed through CreateTableVersion")
     relation = "can_write_data" if creates else _STAGED_OPERATION_RELATION[operation]
-    replaces = operation == "Overwrite" and not creates
     canonical = fga.canonical_object_id(segments)
     authz = authorization(settings, client, token)
-    if not replaces and authz is None:
-        return
-    table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
-    if replaces:
-        guard = await run_in_threadpool(protections.read, settings, "table", table_uuid)
-        require_not_protected(guard is not None and guard.protected, kind="table", obj_id=canonical, force=False)
     if authz is None:
         return
+    table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
     await authz.require(relation, fga.table_object(table_uuid), label=f"table:{canonical}")
 
 

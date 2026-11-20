@@ -2,13 +2,13 @@
 
 Two doors take an Overwrite mode, and both replace every row at the tip: `create?mode=Overwrite`
 (spec.yaml `CreateTableRequest.mode`) and `insert?mode=overwrite` (`InsertIntoTableRequest.mode`).
-Measured before the fix: on a protected table the drop answered 409 while both overwrites answered 200,
-and the lineage event called the first a `create_table` and the second an `insert`, neither carrying the
-standard `OVERWRITE` lifecycle state.
+Measured before the fix: the lineage event called the first a `create_table` and the second an `insert`, neither
+carrying the standard `OVERWRITE` lifecycle state.
 
 The table's earlier versions stay readable by time travel either way, so the catalog serves the
-Overwrite as a new version of the same table: its protection holds unless `force=true`, its record
-says the table was overwritten, not created, and it keeps the uuid the catalog minted for it ([[LH-519]]).
+Overwrite as a new version of the same table: its record says the table was overwritten, not created, and it keeps
+the uuid the catalog minted for it ([[LH-519]]). Protection guards the table's drop, not its rows (ADR 0221): a
+protected table takes an overwrite like any other write its grants admit.
 No table came into being, so neither door announces one on the control lane: the lineage `OVERWRITE` event is
 the overwrite's announcement, as Lance records it as one more version of the same dataset ([[LH-415]], ADR 0099).
 
@@ -85,18 +85,17 @@ def protected(real_ns_client: TestClient) -> str:
 
 
 @pytest.mark.parametrize("door", list(DOORS))
-def test_a_protected_table_refuses_an_overwrite_without_force(real_ns_client: TestClient, protected: str, door: str) -> None:
-    before = lance.dataset(protected)
-
+def test_protection_guards_a_tables_drop_and_not_an_overwrite_of_its_rows(real_ns_client: TestClient, protected: str, door: str) -> None:
+    """Protection keeps the table, and an overwrite keeps it: one more version, every earlier one still read. What may
+    write its rows is its grants' and its data contract's to say."""
     answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}", content=_ipc(_rows(9)), headers=ARROW)
+    dropped = real_ns_client.post(f"/v1/table/{TABLE}/drop", json={})
 
-    assert answer.status_code == 409, f"{door}: a protected table was overwritten: {answer.status_code} {answer.text}"
-    problem = answer.json()
-    assert problem["code"] == 19, problem  # InvalidTableState, the code the drop door refuses with
-    assert "force=true" in problem["detail"], problem
+    assert answer.status_code == 200, f"{door}: {answer.text}"
+    assert (dropped.status_code, dropped.json()["code"]) == (409, 19), dropped.text  # InvalidTableState
     after = lance.dataset(protected)
-    assert after.version == before.version, f"{door}: refused, but the table moved to v{after.version}"
-    assert sorted(after.to_table()["id"].to_pylist()) == [1, 2, 3]
+    assert sorted(after.to_table()["id"].to_pylist()) == [9]
+    assert sorted(lance.dataset(protected, version=1).to_table()["id"].to_pylist()) == [1, 2, 3]
 
 
 def _uuid(client: TestClient) -> str:
@@ -108,16 +107,16 @@ def _uuid(client: TestClient) -> str:
 
 
 @pytest.mark.parametrize("door", list(DOORS))
-def test_a_forced_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
+def test_an_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
     real_ns_client: TestClient, protected: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch, door: str
 ) -> None:
     minted = _uuid(real_ns_client)
     control = _Control()
     monkeypatch.setattr(real_ns_client.app.state, "control_emitter", control, raising=False)
 
-    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}&force=true", content=_ipc(_rows(9)), headers=ARROW)
+    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}", content=_ipc(_rows(9)), headers=ARROW)
 
-    assert answer.status_code == 200, f"{door}: force did not release the protection lock: {answer.text}"
+    assert answer.status_code == 200, f"{door}: {answer.text}"
     assert _uuid(real_ns_client) == minted, f"{door}: the overwritten table answers another uuid"
     version = int(answer.json()["version"])
     assert sorted(lance.dataset(protected, version=1).to_table()["id"].to_pylist()) == [1, 2, 3], "the table's history did not survive"
