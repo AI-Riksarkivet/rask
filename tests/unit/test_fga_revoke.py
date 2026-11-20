@@ -1,4 +1,4 @@
-"""Unit tests for the revoke-on-delete path (lakehouse.governed.fga + catalog.fga_deps).
+"""Unit tests for the revoke-on-delete path (lakehouse.governed.fga_writes + catalog.fga_deps).
 
 A dropped object's FGA tuples are removed, so the store holds no grant on an object that is gone. These pin the read+delete contract WITHOUT
 the network: the paginated read returns the COMPLETE set, the delete issues exactly those tuples,
@@ -20,7 +20,7 @@ from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
 
 from catalog.api import fga_deps
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_writes
 
 
 def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
@@ -84,7 +84,7 @@ class _PartialMissingClient:
 
 def test_per_tuple_delete_tolerates_one_missing_without_losing_the_rest() -> None:
     fake = _PartialMissingClient()
-    removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:t", actor="test", origin="create"))
+    removed = asyncio.run(fga_writes.revoke_object_tuples(_client(fake), "table:t", actor="test", origin="create"))
     # The present two are removed and returned; the concurrently-absent one is tolerated — NOT an all-or-nothing loss,
     # and not counted as a removal the server never made.
     assert _keys(fake.deleted) == {("user:a", "owner", "table:t"), ("user:c", "writer", "table:t")}
@@ -96,7 +96,7 @@ def _settings(*, fga_enabled: bool) -> Any:
 
 
 #: The object a dropped table's grants are held by: its uuid's (ADR 0173 §8).
-_TABLE = fga.table_object("0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
+_TABLE = fga_ids.table_object("0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
 
 
 def test_revoke_ownership_noop_when_fga_disabled() -> None:
@@ -168,7 +168,7 @@ def test_a_revoke_the_server_says_was_never_there_is_not_audited_as_a_revoke(cap
     configure_audit(enabled=True)
     with caplog.at_level(logging.INFO, logger="lance.audit"):
         asyncio.run(
-            fga.delete_tuples(
+            fga_writes.delete_tuples(
                 _client(_AbsentDeleteAuditClient()),
                 [ClientTuple(user="user:alice", relation="parent", object="namespace:n1")],
                 actor="admin@example.com",
@@ -207,7 +207,7 @@ def test_commit_unless_changed_reports_a_rolled_back_write_and_fails_closed_on_a
     tup = ClientTuple(user="revision:2", relation="admin_revision", object="project:acme")
 
     async def commit() -> bool:
-        return await fga.commit_unless_changed(_client(_WriteRefusedClient(exc)), deletes=[], writes=[tup], actor="a", origin="grant_api")  # noqa: TID251
+        return await fga_writes.commit_unless_changed(_client(_WriteRefusedClient(exc)), deletes=[], writes=[tup], actor="a", origin="grant_api")  # noqa: TID251
 
     if exc.status == 409:
         assert asyncio.run(commit()) is False

@@ -47,7 +47,7 @@ from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit import branch_layout
 from lakehouse.records import commit_records
@@ -217,7 +217,7 @@ async def create_table_version(
     body.id = reconcile_body_id(segments, body.id)
     await run_in_threadpool(table.require_held)
     location = table.location
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     caller = token.subject if token is not None else None
     ref = await run_in_threadpool(managed_versions.commit_ref, location, so, dataplane.recorded_branch(body.branch))
     try:
@@ -254,7 +254,7 @@ async def create_table_version(
             # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
             labels = await run_in_threadpool(managed_versions.staged_field_labels, staged, so)
             await fga_deps.require_classifier_to_set_labels(
-                client, settings, token, obj=fga.table_object(table.resolved.require_uuid()), label=canonical, labels=labels
+                client, settings, token, obj=fga_ids.table_object(table.resolved.require_uuid()), label=canonical, labels=labels
             )
         author = caller if caller is not None and table.announces(managed_versions.lineage_operation(staged)) else None
         if author is not None:

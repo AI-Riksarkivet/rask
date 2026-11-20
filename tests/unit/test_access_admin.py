@@ -36,7 +36,7 @@ from catalog.schemas import (
     TupleCondition,
 )
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.governed import fga
+from lakehouse.governed import fga_model, fga_reads, fga_writes
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -66,7 +66,7 @@ def _fga_client(stub: Any = None) -> Any:
 
     The handlers take the client as a DEPENDENCY now rather than getting it back from the gate, so the
     tests pass one explicitly. Typed loosely on purpose: every test that needs real behaviour
-    monkeypatches the module-level `ep.fga.*` functions, and the ones that do not never touch it.
+    monkeypatches the module-level `ep.fga_reads.*` and `ep.fga_writes.*` functions, and the ones that do not never touch it.
     """
     return stub if stub is not None else object()
 
@@ -105,17 +105,17 @@ def rec(monkeypatch: pytest.MonkeyPatch) -> _AuditRecorder:
 
 
 def _read(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> tuple[dict[str, Any], Any]:
-    """Call the tuple-read handler with a recording fake ``fga.read_tuples``; return (seen, response)."""
+    """Call the tuple-read handler with a recording fake ``fga_reads.read_tuples``; return (seen, response)."""
     seen: dict[str, Any] = {}
 
     async def _fake_read_tuples(_client: Any, **read_kwargs: Any) -> tuple[list[Any], str | None]:
         seen.update(read_kwargs)
         return (
-            [fga.ClientTuple(user="user:dex~alice", relation="reader", object=TABLE)],
+            [fga_writes.ClientTuple(user="user:dex~alice", relation="reader", object=TABLE)],
             "tok-next",
         )
 
-    monkeypatch.setattr(ep.fga, "read_tuples", _fake_read_tuples)
+    monkeypatch.setattr(ep.fga_reads, "read_tuples", _fake_read_tuples)
     response = asyncio.run(
         ep.read_access_tuples(
             resolver=_RESOLVER,
@@ -151,7 +151,7 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
             raise ServiceUnavailableError("authorization service unavailable")
         written.extend(tuples)
 
-    monkeypatch.setattr(ep.fga, "write_tuples" if write else "delete_tuples", _fake_mutation)
+    monkeypatch.setattr(ep.fga_writes, "write_tuples" if write else "delete_tuples", _fake_mutation)
     handler = partial(ep.write_access_tuple if write else ep.delete_access_tuple, resolver=_RESOLVER)
     response = asyncio.run(
         handler(
@@ -214,7 +214,7 @@ def _mutate_recording_emission(
         if fail:
             raise ServiceUnavailableError("authorization service unavailable")
 
-    monkeypatch.setattr(ep.fga, "write_tuples" if write else "delete_tuples", _fake_mutation)
+    monkeypatch.setattr(ep.fga_writes, "write_tuples" if write else "delete_tuples", _fake_mutation)
     # The control emitter is INJECTED now (catalog-api-09) rather than dug out of `request.app.state`.
     handler = partial(ep.write_access_tuple if write else ep.delete_access_tuple, resolver=_RESOLVER)
     asyncio.run(handler(client=_fga_client(), announcer=unfiled(emitter), token=_token("root_admin"), body=NamedAccessTuple.model_validate(body.model_dump())))
@@ -227,7 +227,7 @@ def test_write_emits_grant_added(gate_seen: dict[str, Any], rec: _AuditRecorder,
     assert (event.action, event.object_type, event.object_id) == ("grant_added", "grant", TABLE)
     assert event.actor == "user:dex~root_admin"
     assert event.extra == {"relation": "reader", "subject": "user:dex~alice"}
-    # The SUCCESS row is emitted by `fga.write_tuples` itself, so EVERY write site gets one — see
+    # The SUCCESS row is emitted by `fga_writes.write_tuples` itself, so EVERY write site gets one — see
     # test_fga_expand.py for the library-level proof. This handler must therefore emit none of its own,
     # or this one surface would produce two rows per write while the other six produced none.
     assert rec.calls == []
@@ -262,7 +262,7 @@ def test_model_returns_the_checked_in_dsl_and_the_id_the_catalog_checks_against(
     client = SimpleNamespace(get_authorization_model_id=lambda: "01MODEL")
     response = asyncio.run(ep.get_access_model(client=_fga_client(client)))
     assert response.authorization_model_id == "01MODEL"
-    assert response.dsl == fga.load_model_dsl() and "type table" in response.dsl
+    assert response.dsl == fga_model.load_model_dsl() and "type table" in response.dsl
 
 
 def test_check_probes_any_defined_relation_with_qualified_subject(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -272,7 +272,7 @@ def test_check_probes_any_defined_relation_with_qualified_subject(gate_seen: dic
         seen.update(kwargs)
         return True
 
-    monkeypatch.setattr(ep.fga, "check", _fake_check)
+    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
     response = asyncio.run(
         ep.check_access(
             resolver=_RESOLVER,
@@ -282,7 +282,7 @@ def test_check_probes_any_defined_relation_with_qualified_subject(gate_seen: dic
             body=AccessCheckBody(user="dex~alice", relation="writer", object=NAMESPACE),
         )
     )
-    # qualify=False + pre-resolved subject: fga.check must see the full subject verbatim (the 2026-07-20
+    # qualify=False + pre-resolved subject: fga_reads.check must see the full subject verbatim (the 2026-07-20
     # double-prefix regression), and the verdict echoes the exact tuple probed.
     # `context` is None with no condition in play. Asserted rather than ignored: passing `{}` instead
     # would be a different request — OpenFGA treats an empty context as "evaluate with no operands",
@@ -331,9 +331,9 @@ def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_ans
 
     async def _fake(_client: Any, **kwargs: Any) -> Any:
         seen.update(kwargs)
-        return ep.fga.ObjectListing(objects=[TABLE, OTHER_TABLE], truncated=True)
+        return ep.fga_reads.ObjectListing(objects=[TABLE, OTHER_TABLE], truncated=True)
 
-    monkeypatch.setattr(ep.fga, "list_objects", _fake)
+    monkeypatch.setattr(ep.fga_reads, "list_objects", _fake)
     response = asyncio.run(
         ep.list_access_objects(
             settings=_settings(),
@@ -380,7 +380,7 @@ def test_list_objects_outage_audits_failure_and_raises(gate_seen: dict[str, Any]
     async def _down(_client: Any, **_kwargs: Any) -> list[str]:
         raise ServiceUnavailableError("openfga down")
 
-    monkeypatch.setattr(ep.fga, "list_objects", _down)
+    monkeypatch.setattr(ep.fga_reads, "list_objects", _down)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             ep.list_access_objects(
@@ -398,9 +398,9 @@ def test_list_users_returns_qualified_subjects_and_flags_truncation(gate_seen: d
 
     async def _fake(_client: Any, **kwargs: Any) -> list[str]:
         seen.update(kwargs)
-        return [f"user:u{i}" for i in range(fga.LIST_USERS_SERVER_CAP)]
+        return [f"user:u{i}" for i in range(fga_reads.LIST_USERS_SERVER_CAP)]
 
-    monkeypatch.setattr(ep.fga, "list_users", _fake)
+    monkeypatch.setattr(ep.fga_reads, "list_users", _fake)
     response = asyncio.run(
         ep.list_access_users(
             resolver=_RESOLVER,
@@ -424,7 +424,7 @@ def test_list_users_passes_a_userset_filter_through(gate_seen: dict[str, Any], r
         seen.update(kwargs)
         return ["role:stewards#assignee"]
 
-    monkeypatch.setattr(ep.fga, "list_users", _fake)
+    monkeypatch.setattr(ep.fga_reads, "list_users", _fake)
     response = asyncio.run(
         ep.list_access_users(
             resolver=_RESOLVER,
@@ -469,7 +469,7 @@ def test_expand_returns_the_tree_and_records_the_depth(gate_seen: dict[str, Any]
         seen.update(kwargs)
         return {"name": f"{TABLE}#reader", "leaf": {"users": ["user:dex~alice"], "computed": None, "tuple_to_userset": None}}
 
-    monkeypatch.setattr(ep.fga, "expand_tree", _fake)
+    monkeypatch.setattr(ep.fga_reads, "expand_tree", _fake)
     response = asyncio.run(
         ep.expand_access(
             resolver=_RESOLVER,
@@ -493,7 +493,7 @@ def test_expand_clamps_depth_to_the_library_ceiling(gate_seen: dict[str, Any], r
         seen.update(kwargs)
         return {}
 
-    monkeypatch.setattr(ep.fga, "expand_tree", _fake)
+    monkeypatch.setattr(ep.fga_reads, "expand_tree", _fake)
     # The request model caps at 6 too, but the handler must not depend on that: a caller reaching the
     # function directly (or a later schema loosening) still cannot ask for an unbounded fan-out.
     response = asyncio.run(
@@ -505,15 +505,15 @@ def test_expand_clamps_depth_to_the_library_ceiling(gate_seen: dict[str, Any], r
             body=AccessExpandRequest.model_construct(object=TABLE, relation="reader", depth=9999),
         )
     )
-    assert seen["max_depth"] == fga.MAX_EXPAND_TREE_DEPTH
-    assert response.depth == fga.MAX_EXPAND_TREE_DEPTH
+    assert seen["max_depth"] == fga_reads.MAX_EXPAND_TREE_DEPTH
+    assert response.depth == fga_reads.MAX_EXPAND_TREE_DEPTH
 
 
 def test_expand_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     async def _down(_client: Any, **_kwargs: Any) -> dict[str, Any]:
         raise ServiceUnavailableError("openfga down")
 
-    monkeypatch.setattr(ep.fga, "expand_tree", _down)
+    monkeypatch.setattr(ep.fga_reads, "expand_tree", _down)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             ep.expand_access(
@@ -549,7 +549,7 @@ def test_simulate_returns_the_delta_not_just_the_verdict(gate_seen: dict[str, An
         # Denied today; allowed once the hypothesis is in play.
         return kwargs.get("contextual_tuples") is not None
 
-    monkeypatch.setattr(ep.fga, "check", _fake_check)
+    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
     response = asyncio.run(
         ep.simulate_access(
             resolver=_RESOLVER,
@@ -579,7 +579,7 @@ def test_simulate_reports_a_no_op_grant_honestly(gate_seen: dict[str, Any], rec:
     async def _always(_client: Any, **_kwargs: Any) -> bool:
         return True
 
-    monkeypatch.setattr(ep.fga, "check", _always)
+    monkeypatch.setattr(ep.fga_reads, "check", _always)
     response = asyncio.run(
         ep.simulate_access(
             resolver=_RESOLVER,
@@ -625,7 +625,7 @@ def test_simulate_outage_audits_failure_and_raises(gate_seen: dict[str, Any], re
     async def _down(_client: Any, **_kwargs: Any) -> bool:
         raise ServiceUnavailableError("openfga down")
 
-    monkeypatch.setattr(ep.fga, "check", _down)
+    monkeypatch.setattr(ep.fga_reads, "check", _down)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             ep.simulate_access(
@@ -648,7 +648,7 @@ def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> li
     async def _fake_write(_client: Any, tuples: list[Any], **_kw: Any) -> None:
         written.extend(tuples)
 
-    monkeypatch.setattr(ep.fga, "write_tuples", _fake_write)
+    monkeypatch.setattr(ep.fga_writes, "write_tuples", _fake_write)
     asyncio.run(
         ep.write_access_tuple(
             resolver=_RESOLVER,
@@ -752,7 +752,7 @@ def test_a_caller_supplied_clock_is_refused_on_a_write(gate_seen: dict[str, Any]
     async def _fake_write(_client: Any, tuples: list[Any], **_kw: Any) -> None:
         written.extend(tuples)
 
-    monkeypatch.setattr(ep.fga, "write_tuples", _fake_write)
+    monkeypatch.setattr(ep.fga_writes, "write_tuples", _fake_write)
     with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
         asyncio.run(
             ep.write_access_tuple(
@@ -771,7 +771,7 @@ def test_a_simulated_hypothesis_cannot_carry_a_clock_either(gate_seen: dict[str,
         checks.append(kwargs)
         return True
 
-    monkeypatch.setattr(ep.fga, "check", _fake_check)
+    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
     body = AccessSimulateRequest(user="dex~alice", relation="writer", object=NAMESPACE, hypothetical=[_clock_pinned_grant()])
     with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
         asyncio.run(ep.simulate_access(resolver=_RESOLVER, settings=_settings(), client=_fga_client(), token=None, body=body))

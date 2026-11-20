@@ -97,7 +97,7 @@ through the `local` connector, mapped to idp `dex`, and `person("alice")` is the
 through the doors (a create seeds the creator's tuples, `/management/v1/<type>/{id}/access/grant` grants), and seed
 only what no door writes with `store.write(...)`. Assert the outcome a caller sees, a status and the spec's `code`,
 never which relation was asked. A model edit takes effect once `model.json` is regenerated
-(`fga model transform`), since that is what `fga.provision` writes. `test_a_role_grant_stays_inside_its_tenant.py`
+(`fga model transform`), since that is what `fga_provision.provision` writes. `test_a_role_grant_stays_inside_its_tenant.py`
 and `test_an_absent_object_is_not_found_rather_than_forbidden.py` are the examples.
 
 ## Real pylance on `tmp_path`

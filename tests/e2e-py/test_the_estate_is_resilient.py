@@ -15,7 +15,7 @@ The drills, and what each outage must look like while it lasts:
    bound the catalog's own store timeouts set, and never lands while the store is gone. No answer, or no door reached,
    is a failure: a catalog that did not answer or was not there is not one that refused.
 2. OpenFGA, the authorization decision. A governed write answers ServiceUnavailable at its authorization check: never an
-   allow, and never a deny, which would read as a missing grant (`lakehouse.governed.fga`).
+   allow, and never a deny, which would read as a missing grant (`lakehouse.governed.fga_resilience`).
 3. Lineage, the commit feed's recorder. Commits go on landing, and each announcement is recorded once lineage is back:
    its durable consumer resumes where it stopped.
 4. The bus, held down past the window a service's own NATS client reconnects for. Commits and grants go on landing while
@@ -79,7 +79,7 @@ from chaos import Workload
 from correctness import as_named, edges_named, history_of, parked_since, rask_properties, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
 from pydantic import BaseModel
 
-from lakehouse.governed.fga import user_object
+from lakehouse.governed.fga_ids import user_object
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
 from maintenance.services.queue import ARRIVALS_CONSUMER, ARRIVALS_STREAM

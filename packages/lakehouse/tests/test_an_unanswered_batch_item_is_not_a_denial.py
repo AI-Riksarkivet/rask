@@ -4,7 +4,7 @@ OpenFGA's BatchCheck answers each item with EITHER a verdict OR an error (a per-
 resolution too complex, a relation the pinned model lacks), and the SDK hands an errored item back as
 ``allowed=False`` beside a ``CheckError``. A gate that reads only ``allowed`` turns every such item into
 a deny: a catalog batch route answers 403, a lineage feed row is hidden, and each is recorded as a
-decision. :func:`fga.check` answers the same faults with a 503.
+decision. :func:`fga_reads.check` answers the same faults with a 503.
 
 The doubles below speak the SDK's own response classes, and the last test drives a real
 ``OpenFgaClient`` against a server answering OpenFGA's wire shape, so the double cannot drift from
@@ -27,7 +27,7 @@ from openfga_sdk.client.models.batch_check_response import ClientBatchCheckRespo
 from openfga_sdk.client.models.batch_check_single_response import ClientBatchCheckSingleResponse
 from openfga_sdk.models.check_error import CheckError
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_provision, fga_reads, fga_resilience
 
 
 #: Two per-item faults, each as OpenFGA reports it.
@@ -63,12 +63,12 @@ class _BatchOpenFga:
 
 def _ask(client: _BatchOpenFga, objects: list[str], *, attempts: int = 1) -> dict[str, bool]:
     return asyncio.run(
-        fga.batch_check(
+        fga_reads.batch_check(
             cast("OpenFgaClient", client),
             user="dex~alice",
             relation="can_read_data",
             objects=objects,
-            retry=fga.RetryPolicy(attempts=attempts, backoff_seconds=0.0, max_backoff_seconds=0.0),
+            retry=fga_resilience.RetryPolicy(attempts=attempts, backoff_seconds=0.0, max_backoff_seconds=0.0),
         )
     )
 
@@ -77,7 +77,7 @@ def _ask(client: _BatchOpenFga, objects: list[str], *, attempts: int = 1) -> dic
 def test_an_item_openfga_could_not_answer_is_a_503_not_a_deny(fault: CheckError, caplog: pytest.LogCaptureFixture) -> None:
     """One errored item fails the call closed even when its sibling was answered cleanly, and the log
     line names the item and the code, since the 503's body is constant by design."""
-    caplog.set_level(logging.ERROR, logger=fga.log.name)
+    caplog.set_level(logging.ERROR, logger=fga_resilience.log.name)
     client = _BatchOpenFga({"table:answered": True, "table:unanswered": fault})
 
     with pytest.raises(ServiceUnavailableError):
@@ -138,14 +138,14 @@ def _over_the_wire(objects: list[str]) -> dict[str, bool]:
         app = web.Application()
         app.router.add_post("/stores/{store_id}/batch-check", _wire_batch_check)
         async with TestServer(app) as server:
-            client = fga.make_client(str(server.make_url("")).rstrip("/"), _STORE_ID, _MODEL_ID, token_file=None)
+            client = fga_provision.make_client(str(server.make_url("")).rstrip("/"), _STORE_ID, _MODEL_ID, token_file=None)
             try:
-                return await fga.batch_check(
+                return await fga_reads.batch_check(
                     client,
                     user="dex~alice",
                     relation="can_read_data",
                     objects=objects,
-                    retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
+                    retry=fga_resilience.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
                 )
             finally:
                 await client.close()

@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.testclient import TestClient
 
 from lakehouse.events.bus_delivery import Lane, Settlement
-from lakehouse.governed import fga
+from lakehouse.governed import fga_provision
 from lakehouse.governed.decider import AccessDecider
 from lineage import main
 from lineage.api.ingest_lane import CONSUMER
@@ -134,7 +134,7 @@ def governed(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _the_store_holds_this_images_model(*_args: object, **_kwargs: object) -> tuple[str, str]:
         return "01JA0000000000000000000000", "01JA0000000000000000000001"
 
-    monkeypatch.setattr(fga, "resolve", _the_store_holds_this_images_model)
+    monkeypatch.setattr(fga_provision, "resolve", _the_store_holds_this_images_model)
     for key, value in {
         "RASK_FGA_ENABLED": "true",
         "RASK_OIDC_ENABLED": "true",

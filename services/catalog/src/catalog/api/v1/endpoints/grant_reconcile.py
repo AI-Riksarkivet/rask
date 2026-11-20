@@ -26,7 +26,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GhostRevokeRequest, GhostRevokeResponse, GrantCensusResponse, TenancyRebuildRequest, TenancyRebuildResponse
 from catalog.services import grant_reconcile, table_claims, warehouses
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads, fga_writes
 from lakehouse.records import location_claims
 
 
@@ -47,7 +47,7 @@ async def grant_census(settings: SettingsDep, client: FgaClientDep) -> GrantCens
     """
     if (client := fga_deps.wired(settings, client)) is None:
         return GrantCensusResponse(enabled=False)
-    counted = await fga.census(client, exclude=grant_reconcile.platform_objects(settings))
+    counted = await fga_reads.census(client, exclude=grant_reconcile.platform_objects(settings))
     return GrantCensusResponse(enabled=True, counts_by_type=counted.counts_by_type)
 
 
@@ -98,7 +98,7 @@ async def rebuild_warehouse_tenancy(body: TenancyRebuildRequest, settings: Setti
     project, or no record at all, is answered unjustified.
     """
     answer = TenancyRebuildResponse()
-    edges: list[fga.ClientTuple] = []
+    edges: list[fga_writes.ClientTuple] = []
     for warehouse_id in dict.fromkeys(body.warehouses):
         record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
         match grant_reconcile.tenancy_edge(record, warehouse_id):

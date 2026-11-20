@@ -12,19 +12,19 @@ were not stylistic variants; they encoded three decisions, and a single-posture 
 them survived the first extraction:
 
   * **`provision`** — whether this service may CREATE the store and PUBLISH the authorization model.
-    **False by default, and the default is the control.** `fga.provision` writes a model the store
+    **False by default, and the default is the control.** `fga_provision.provision` writes a model the store
     does not hold and OpenFGA mints a new immutable id per write, so every publisher grows the history
     and an older image that publishes adds its older body; one publisher keeps that to the catalog.
-    Every service checks against the model its own image carries (`fga.resolve`, [[LH-201]]).
+    Every service checks against the model its own image carries (`fga_provision.resolve`, [[LH-201]]).
     Measured live 2026-09-09: 1,256 models in the store, the oldest carrying no `pass_grants`,
     `managed_access` or `maintainer`, and three services running images whose vendored `model.fga` had
     no `maintainer` rung at all.
     Pinned by `packages/lakehouse/tests/test_attach_auth_postures.py::test_the_default_posture_RESOLVES_when_unpinned`,
-    and the TID251 banned-api entry on `lakehouse.governed.fga.provision` keeps the call at one site.
+    and the TID251 banned-api entry on `lakehouse.governed.fga_provision.provision` keeps the call at one site.
     `maintenance` passes `False` explicitly: a data writer that mints a store and writes an
     authorization model becomes the source of truth for everyone else's permissions. They resolve read-only and fail closed against an estate
     that has not been bootstrapped. Reading which store exists is not authoring one, which is the
-    distinction `fga.resolve` exists for.
+    distinction `fga_provision.resolve` exists for.
   * **`fatal`** — whether a failed build takes the pod down. `catalog` and `lineage`
     wrap neither construction in a `try` and therefore crash on boot; that is deliberate and it is
     the only signal an operator watches. Defaulting them into the swallowing posture would convert a
@@ -137,33 +137,35 @@ async def build_fga_client(
     It returns the client rather than assigning it, because one caller builds its client outside a FastAPI
     lifespan: the catalog's warehouse-grant backfill holds the client for its own run and closes it.
 
-    `provision=False` takes the read-only half: `fga.resolve` finds the store the estate already uses and the model
+    `provision=False` takes the read-only half: `fga_provision.resolve` finds the store the estate already uses and the model
     this image carries, and can never create either. When either is still absent at its deadline it raises
-    `fga.OpenFgaModelAbsentError`: a non-fatal caller logs `openfga_unpinned` with the cause, builds no client and its
+    `fga_provision.OpenFgaModelAbsentError`: a non-fatal caller logs `openfga_unpinned` with the cause, builds no client and its
     gate answers 503; a fatal one lets the error end its boot, because a fatal caller reads a missing client as
     "authorization off".
 
-    Disposal belongs to the caller's lifespan: `lakehouse.governed.fga.dispose`.
+    Disposal belongs to the caller's lifespan: `lakehouse.governed.fga_provision.dispose`.
     """
     if not settings.fga_enabled:
         return None
-    from lakehouse.governed import fga
+    from lakehouse.governed import fga_provision
 
     try:
         # THE MODEL IS NEVER A SETTING: every service checks against the model its own image carries, found in the store
         # by its body ([[LH-201]]), so a `model.fga` edit takes effect with the image that ships it. A store id may be
         # named (a per-cluster id, never a committed default); the model's id is read from that store.
         if provision:
-            store_id, model_id = await fga.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)  # noqa: TID251
+            store_id, model_id = await fga_provision.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)  # noqa: TID251
             # Structured, not a printf: `openfga_provisioned` is a documented INFO audit-tier event
             # (`lakehouse.process.log_levels`), and its fields are what the audit reads.
             log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
         else:
-            store_id, model_id = await fga.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)
+            store_id, model_id = await fga_provision.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)
             log.info("openfga_resolved_by_name", extra={"service": service, "store_id": store_id, "model_id": model_id})
-        client = fga.make_client(settings.fga_api_url, store_id, model_id, token_file=settings.fga_token_file, timeout_seconds=settings.fga_timeout_seconds)
+        client = fga_provision.make_client(
+            settings.fga_api_url, store_id, model_id, token_file=settings.fga_token_file, timeout_seconds=settings.fga_timeout_seconds
+        )
         log.info("%s: FGA client ready (%s)", service, settings.fga_api_url)
-    except fga.OpenFgaModelAbsentError as exc:
+    except fga_provision.OpenFgaModelAbsentError as exc:
         # Fails CLOSED, and never by provisioning: the service that noticed must not be the one that decides
         # what everyone is allowed to do. A fatal caller lets it end the boot rather than serve with no checker
         # behind its doors.
@@ -173,10 +175,10 @@ async def build_fga_client(
         return None
     except Exception as exc:
         # A refused credential is raised whatever `fatal` says: the pod must not report Ready with every
-        # governed door failing closed ([[XC-077]], `fga.OpenFgaCredentialRefusedError`).
-        if fga.credential_refused(exc) and not isinstance(exc, fga.OpenFgaCredentialRefusedError):
-            raise fga.OpenFgaCredentialRefusedError(f"{service}: OpenFGA refused this pod's credential") from exc
-        if fatal or fga.credential_refused(exc):
+        # governed door failing closed ([[XC-077]], `fga_provision.OpenFgaCredentialRefusedError`).
+        if fga_provision.credential_refused(exc) and not isinstance(exc, fga_provision.OpenFgaCredentialRefusedError):
+            raise fga_provision.OpenFgaCredentialRefusedError(f"{service}: OpenFGA refused this pod's credential") from exc
+        if fatal or fga_provision.credential_refused(exc):
             raise
         log.exception("openfga_client_failed", extra={"service": service})
         return None

@@ -160,7 +160,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   door refuses a caller's `rask.*` property (only an admin's `rask.requires_run` on a namespace). Pinned by
   `tests/integration/test_the_door_that_makes_a_table_or_namespace_mints_its_uuid.py`.
 - **Every grant is held by the object's uuid** ([[LH-524]], ADR 0173 §8): OpenFGA objects are `table:<uuid>` and
-  `namespace:<uuid>` (`fga.table_object`, `fga.namespace_object`), the parent and child edges join uuids, and a
+  `namespace:<uuid>` (`fga_ids.table_object`, `fga_ids.namespace_object`), the parent and child edges join uuids, and a
   namespace directly in a warehouse (a two-segment name) has `warehouse:<id>` as its parent. Every door stays addressed by name and resolves it ONCE per request
   (`catalog.api.dependencies.Resolver`, `ResolverDep`, which `authorize`, the write judge and `ResolvedTableDep` share),
   so a door acts on the table it authorized. An absent name is refused 403, audited and refused by the name, and only a
@@ -316,7 +316,7 @@ of `admin` tuples, since a role holding `admin` may reach nobody. Every change t
 is in a role goes through `project_admins.confer` or `project_admins.withdraw`: the members door, the role doors'
 assign and unassign, a role's ending, the offboarding door and the declaration converge. Each judges the administration
 it read and commits in ONE Write that moves `project#admin_revision` (`revision:<n>` to `<n+1>`, a bookkeeping relation
-no permission reads) without ignoring duplicates (`fga.commit_unless_changed`), so of two overlapping changes one
+no permission reads) without ignoring duplicates (`fga_writes.commit_unless_changed`), so of two overlapping changes one
 commits and the other reads again and judges again; a refused Write is a 400 on the memory datastore and a 409 rollback
 on a SQL one. A removal after which the project's `admin` reaches no person is refused 409 code 14. While a project's
 `admin` reaches a role, filling, emptying or ending it asks `can_grant_admin` on that project (a refusal answers the
@@ -327,7 +327,7 @@ the last person any project's `admin` reaches, refuses 400 code 13 the caller an
 a rung on the estate root other than a machine role, or a warehouse `maintenance` tuple, which only the catalog's own seed
 and its declaration converge write, and the accounts the catalog's settings name; judged on the tuples, so the catalog names no
 client, XC-183), and revokes a machine role on the estate root (a relation only a user holds directly,
-`fga.machine_relations`) like any other grant: the declaration grants one only to the release's own accounts, and any other
+`fga_model.machine_relations`) like any other grant: the declaration grants one only to the release's own accounts, and any other
 holder was granted it at a door ([[LH-563]]). It records `_principals/<blake2s>.json` (`GET` on the same path), answers `revoked` as the tuples it removed and
 emits `principal_deleted` (signed by the catalog), on which a notifier erases what it keeps for the person. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create: one
 door, and a warehouse-owner cannot ride a create into project admin. **A project is read by the callers its list shows
@@ -522,7 +522,7 @@ An install from git holds its tenants with no call to any door. The chart's `cat
 `<release>-catalog-declaration`, mounted as a volume at `LANCE_DECLARATION_FILE`, so a change reaches the pod with no
 roll. The models are `catalog.services.declaration` (`Declaration`, `DeclaredProject`, `DeclaredWarehouse`,
 `DeclaredGrant`, each `extra="forbid"`): a grant to a person is refused at load (`is_person_subject`), and so is a
-relation the model does not admit for a principal on that type (`fga.admits`). People's other grants, namespaces and
+relation the model does not admit for a principal on that type (`fga_model.admits`). People's other grants, namespaces and
 tables are never declared.
 
 - **The tick** runs on the catalog's `catalog-declaration-converge` timer (`catalog.api.declaration_converge`,
@@ -568,7 +568,7 @@ tables are never declared.
   audited `access_tuple_write` as `system:declaration`, a tick as declared writes and audits nothing, and a changed
   `auth.bootstrapAdmin` revokes the old principal's two tuples and grants the new one's, each audited. Beyond the ledger,
   each machine role on those two objects held by one of the release's own accounts (`LANCE_OWN_ACCOUNTS`) that git does
-  not declare is revoked (`_Converger._own_accounts`, `fga.revoke_undeclared`), recorded or not, since no door grants
+  not declare is revoked (`_Converger._own_accounts`, `fga_writes.revoke_undeclared`), recorded or not, since no door grants
   the release's accounts an estate role; one naming any other principal was made at a door and stands. No chart hook
   writes OpenFGA: only the catalog and the model hook hold a `rask-openfga` token.
 
@@ -640,7 +640,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`_destroy_subtree`, a generator) announces each table to lineage as it goes and ends the subtree through the same
   walk, as do its Restrict, Skip and Overwrite paths. A part-way failure answers 503 `PartiallyApplied` naming
   `namespaces_dropped` (nested ones included), `tables_removed`, `trash_ended` and `tuples_revoked`, which counts each
-  revoke as it lands and a partly revoked object's removed tuples through `fga.RevokeInterrupted`; re-issuing the call
+  revoke as it lands and a partly revoked object's removed tuples through `fga_writes.RevokeInterrupted`; re-issuing the call
   finishes it. A guard's refusal (a spec error answered 4xx, `endpoints.warehouses._a_refusal`) raised before any step
   counted answers as itself, since a guard refuses before its step writes; a store's or OpenFGA's failure is partial even
   with nothing counted, since the step it stopped may have landed ([[LH-572]]). A destroyed table's base record and location claim are keyed by its location, which nothing names once
@@ -1048,7 +1048,7 @@ governing their data. The project-scoped surface is the console's project page, 
   for `LANCE_FGA_MAINTAINERS` on every warehouse (`cascade_tuples`, backfilled at startup; on the estate's own
   warehouse, which has no record, the declaration converge) and no grant door hands out. The list holds principals, maintenance's service-account principal
   (`kubernetes~system:serviceaccount:<ns>:<release>-sa-maintenance`, `lance.saSubject`), each written as the user it is
-  (`fga.user_object`); a bare name in it is refused when the catalog's settings are read ([[LH-063]]). An owner is a
+  (`fga_ids.user_object`); a bare name in it is refused when the catalog's settings are read ([[LH-063]]). An owner is a
   maintainer and keeps the maintainer doors, and is
   not vended the tier. The tier gets and deletes on the table's prefix but `_refs/` and puts nothing of the table, only
   the table's history fence on the control root: maintenance's two commits are the catalog's, at the maintainer doors
@@ -1329,7 +1329,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `docs/catalog-openapi.json` → `frontend/console/src/lib/api/generated/catalog.ts`. Adding an action
   without `make openapi` + `bun --cwd=frontend run gen:types:catalog` leaves the TS client unable to
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
-  (`lakehouse/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
+  (`lakehouse/governed/fga_writes.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
 - Maintenance covers EVERY warehouse bucket, not a static list (#81): a table's pass runs only on a table in a bucket
   it governs, read per task (`table_pass.governs`, by the table name's first segment: a registered warehouse is judged
   by its status, so a deactivated warehouse's table is not governed even in a configured bucket; only the estate's own

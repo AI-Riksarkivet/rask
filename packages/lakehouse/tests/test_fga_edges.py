@@ -10,7 +10,7 @@ Both edges of a table's and a namespace's create, on the uuid objects a real Ope
 ``services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py::test_every_tuple_a_create_writes_names_the_objects_uuid``;
 these pin the branches no create door reaches.
 
-In the library's own suite rather than ``tests/unit/``: these exercise ``lakehouse.governed.fga`` alone, with
+In the library's own suite rather than ``tests/unit/``: these exercise ``lakehouse.governed.fga_writes`` alone, with
 no service, while the root ``tests/unit/test_fga_revoke.py`` drives the catalog's ``catalog.api.fga_deps``.
 
 Sync via stdlib ``asyncio.run``, matching test_fga_revoke / test_fga_resilience — no pytest-asyncio
@@ -26,7 +26,7 @@ from typing import Any, cast
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_writes
 
 
 def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
@@ -80,7 +80,7 @@ class _ReadDeleteClient:
 def test_grant_on_create_writes_no_edges_for_a_root_object() -> None:
     """No parent → no edges either way; the creator's own grant is the whole write."""
     fake = _WriteClient()
-    asyncio.run(fga.grant_on_create(_client(fake), user_sub="dex~alice", obj=_TABLE, actor="dex~alice", origin="create"))
+    asyncio.run(fga_writes.grant_on_create(_client(fake), user_sub="dex~alice", obj=_TABLE, actor="dex~alice", origin="create"))
     assert _keys(fake.written) == {("user:dex~alice", "owner", _TABLE)}
 
 
@@ -90,7 +90,7 @@ def test_grant_on_create_skips_the_inverse_when_the_parent_type_declares_no_chil
     exactly that reason."""
     fake = _WriteClient()
     asyncio.run(
-        fga.grant_on_create(
+        fga_writes.grant_on_create(
             _client(fake),
             user_sub="dex~alice",
             obj="classification:pii",
@@ -114,6 +114,6 @@ def test_revoke_skips_the_inverse_edge_for_a_parent_type_that_declares_no_child(
     """The revoke side of the ``estate`` case above. The two must agree, or a create/drop pair leaves
     residue in one direction."""
     fake = _ReadDeleteClient([_tuple("estate:rask", "parent", "classification:pii")])
-    removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "classification:pii", actor="test", origin="create"))
+    removed = asyncio.run(fga_writes.revoke_object_tuples(_client(fake), "classification:pii", actor="test", origin="create"))
     assert len(removed) == 1
     assert _keys(fake.deleted) == {("estate:rask", "parent", "classification:pii")}

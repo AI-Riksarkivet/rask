@@ -48,7 +48,7 @@ from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, Pol
 from catalog.services import projects as project_registry
 from catalog.services import table_claims, warehouses
 from lakehouse.events.control_emit import ControlEmitter, emit_control
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import maintenance_policies as policies
 from lakehouse.records.location_claims import ClaimStore
@@ -173,7 +173,7 @@ async def set_table_policy(
     control: ControlEmitterDep,
 ) -> PolicyResponse:
     """Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``)."""
-    canonical = fga.canonical_object_id(table.segments)
+    canonical = fga_ids.canonical_object_id(table.segments)
     table_uuid = table.require_uuid()
     # The location beside the uuid, so a listing names the table as it is named now (`table_claims.names_now`).
     record = await _set(settings, "table", table_uuid, lambda stored: _record("table", canonical, body, stored, uuid=table_uuid, location=str(table.location)))
@@ -182,7 +182,7 @@ async def set_table_policy(
         control,
         action="policy_set",
         object_type="policy",
-        object_id=fga.table_object(table_uuid),
+        object_id=fga_ids.table_object(table_uuid),
         object_name=canonical,
         actor=f"user:{token.subject}" if token else None,
         extra={"kind": "table"},
@@ -194,13 +194,13 @@ async def set_table_policy(
 async def describe_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep) -> PolicyResponse | PolicyUnset:
     """The table's maintenance policy (reader-gated), or ``set: false`` when none is set."""
     uuid = table.require_uuid()
-    return await _describe(settings, kind="table", key=uuid, canonical=fga.canonical_object_id(table.segments), uuid=uuid)
+    return await _describe(settings, kind="table", key=uuid, canonical=fga_ids.canonical_object_id(table.segments), uuid=uuid)
 
 
 @table_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the table's maintenance policy (idempotent) — owner-gated by the router."""
-    return await _delete(settings, control, token, "table", key=table.require_uuid(), canonical=fga.canonical_object_id(table.segments))
+    return await _delete(settings, control, token, "table", key=table.require_uuid(), canonical=fga_ids.canonical_object_id(table.segments))
 
 
 @namespace_router.post("/{id}/policy/set", response_model_exclude_none=True)
@@ -210,14 +210,14 @@ async def set_namespace_policy(
     """Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
     a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``)."""
     namespace = await _namespace(id, ns, settings)
-    canonical = fga.canonical_object_id(namespace.segments)
+    canonical = fga_ids.canonical_object_id(namespace.segments)
     record = await _set(settings, "namespace", namespace.uuid, lambda stored: _record("namespace", canonical, body, stored, uuid=namespace.uuid))
     log.info("maintenance_policy_set", extra={"kind": "namespace", "id": canonical})
     await emit_control(
         control,
         action="policy_set",
         object_type="policy",
-        object_id=fga.namespace_object(namespace.uuid),
+        object_id=fga_ids.namespace_object(namespace.uuid),
         object_name=canonical,
         actor=f"user:{token.subject}" if token else None,
         extra={"kind": "namespace"},
@@ -229,14 +229,14 @@ async def set_namespace_policy(
 async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep) -> PolicyResponse | PolicyUnset:
     """The namespace's maintenance policy (reader-gated), or ``set: false`` when none is set."""
     namespace = await _namespace(id, ns, settings)
-    return await _describe(settings, kind="namespace", key=namespace.uuid, canonical=fga.canonical_object_id(namespace.segments), uuid=namespace.uuid)
+    return await _describe(settings, kind="namespace", key=namespace.uuid, canonical=fga_ids.canonical_object_id(namespace.segments), uuid=namespace.uuid)
 
 
 @namespace_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router."""
     namespace = await _namespace(id, ns, settings)
-    return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=fga.canonical_object_id(namespace.segments))
+    return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=fga_ids.canonical_object_id(namespace.segments))
 
 
 async def _namespace(id: str, ns: LanceNamespace, settings: CatalogStore) -> fga_deps.GovernedObject:

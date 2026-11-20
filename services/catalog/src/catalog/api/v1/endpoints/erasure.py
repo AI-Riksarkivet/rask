@@ -49,7 +49,7 @@ from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
 from lakehouse import derived_tables
 from lakehouse.events.control_emit import ControlEmitter, emit_control
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
@@ -80,7 +80,7 @@ def get_table_owners(client: FgaClientDep, settings: SettingsDep) -> TableOwners
     async def _owners(object_id: str) -> list[str]:
         if (wired := fga_deps.wired(settings, client)) is None:
             return []
-        return await fga.list_users(wired, relation="owner_effective", obj=object_id, qualified=True)
+        return await fga_reads.list_users(wired, relation="owner_effective", obj=object_id, qualified=True)
 
     return _owners
 
@@ -120,7 +120,7 @@ async def erase_subject(
     narrowed the obligation to one ref.
     """
     segments = parse_identifier(id)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     table_uuid = table.resolved.require_uuid()
     if body.follows is not None:
         await run_in_threadpool(erasure_obligations.require_followable, settings.registry_root, settings.storage_options(), body.follows)
@@ -132,7 +132,7 @@ async def erase_subject(
         obligation_id=uuid4().hex,
         table=canonical,
         table_uuid=table_uuid,
-        object_id=fga.table_object(table_uuid),
+        object_id=fga_ids.table_object(table_uuid),
         location=str(dataset.uri),
         predicate_digest=erasure_obligations.digest(body.predicate),
         retain_days=body.retain_days,
@@ -210,7 +210,7 @@ async def verify_erasure(
     `delete_unverified`).
     """
     segments = parse_identifier(id)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     control_root, control_options = settings.registry_root, settings.storage_options()
     obligation = await run_in_threadpool(erasure_obligations.read, control_root, control_options, obligation_id)
     table_uuid = table.resolved.require_uuid()
@@ -237,7 +237,7 @@ async def verify_erasure(
             control,
             action="table_tag_deleted",
             object_type="table",
-            object_id=fga.table_object(table_uuid),
+            object_id=fga_ids.table_object(table_uuid),
             object_name=canonical,
             actor=f"user:{token.subject}" if token is not None else None,
             extra={"tag": dropped.tag, **pinned, "obligation_id": obligation_id},
@@ -311,9 +311,9 @@ async def _hidden_derived(
         return frozenset()
     if (authz := fga_deps.authorization(settings, client, token)) is None:
         return frozenset()
-    objects = sorted(fga.table_object(key) for key in keys if derived_tables.is_table_uuid(key))
+    objects = sorted(fga_ids.table_object(key) for key in keys if derived_tables.is_table_uuid(key))
     allowed = await authz.batch_check("can_get_metadata", objects) if objects else {}
-    return frozenset(key for key in keys if not (derived_tables.is_table_uuid(key) and allowed.get(fga.table_object(key))))
+    return frozenset(key for key in keys if not (derived_tables.is_table_uuid(key) and allowed.get(fga_ids.table_object(key))))
 
 
 async def _schedule_release(
@@ -345,7 +345,7 @@ async def _schedule_release(
     requester = obligation.requested_by
     # `requested_by` is the notice's actor, `user:` and the principal key as the door verified it; a notice names its
     # subject as the OpenFGA user, the form the owners are listed in, so the requester is encoded to be told ([[LH-063]]).
-    told = [fga.user_object(requester.removeprefix("user:"))] if requester else []
+    told = [fga_ids.user_object(requester.removeprefix("user:"))] if requester else []
     notified = list(dict.fromkeys([*told, *sorted(holders)]))
     record = erasure_release.new_release(
         report.pinned_by,

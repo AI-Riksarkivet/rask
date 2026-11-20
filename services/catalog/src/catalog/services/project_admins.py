@@ -22,7 +22,7 @@ from lance_namespace import ConcurrentModificationError, InvalidInputError
 from pydantic import BaseModel, ConfigDict
 
 from catalog.services.roles import ASSIGNEE
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads, fga_writes
 
 
 if TYPE_CHECKING:
@@ -39,12 +39,12 @@ _TUPLES_PER_WRITE: Final = 100
 type Permit = Callable[[list[str]], Awaitable[None]]
 
 
-def is_admin(t: fga.ClientTuple) -> bool:
+def is_admin(t: fga_writes.ClientTuple) -> bool:
     """Whether ``t`` is a project's ``admin`` tuple."""
     return t.relation == ADMIN and t.object.startswith("project:")
 
 
-def is_assignment(t: fga.ClientTuple) -> bool:
+def is_assignment(t: fga_writes.ClientTuple) -> bool:
     """Whether ``t`` assigns its subject to a role."""
     return t.relation == ASSIGNEE and t.object.startswith("role:")
 
@@ -61,16 +61,16 @@ def revision_number(subject: str) -> int:
     return int(number) if number.isdigit() else 0
 
 
-def next_revision(tuples: list[fga.ClientTuple], obj: str) -> tuple[fga.ClientTuple, list[fga.ClientTuple]]:
+def next_revision(tuples: list[fga_writes.ClientTuple], obj: str) -> tuple[fga_writes.ClientTuple, list[fga_writes.ClientTuple]]:
     """The ``admin_revision`` tuple a Write changing project ``obj``'s administration writes, and the ones it deletes.
 
-    A Write carrying both commits only while the revision is the one ``tuples`` were read at (:func:`fga.commit_unless_changed`),
+    A Write carrying both commits only while the revision is the one ``tuples`` were read at (:func:`fga_writes.commit_unless_changed`),
     so two changes to who administers a project, each judged on one read, cannot both commit.
     """
-    revisions = [t for t in tuples if t.object == obj and t.relation == fga.ADMIN_REVISION]
+    revisions = [t for t in tuples if t.object == obj and t.relation == fga_reads.ADMIN_REVISION]
     following = 1 + max((revision_number(t.user) for t in revisions), default=0)
-    moved = fga.ClientTuple(user=f"revision:{following}", relation=fga.ADMIN_REVISION, object=obj)
-    return moved, [fga.ClientTuple(user=t.user, relation=t.relation, object=obj) for t in revisions]
+    moved = fga_writes.ClientTuple(user=f"revision:{following}", relation=fga_reads.ADMIN_REVISION, object=obj)
+    return moved, [fga_writes.ClientTuple(user=t.user, relation=t.relation, object=obj) for t in revisions]
 
 
 #: What a change takes away: grants, each ``(subject, object)``.
@@ -87,7 +87,7 @@ class Administration(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     project: str
-    tuples: list[fga.ClientTuple]
+    tuples: list[fga_writes.ClientTuple]
     #: Each role the project's ``admin`` reaches, and its direct assignees.
     assignees: dict[str, frozenset[str]]
 
@@ -121,12 +121,12 @@ class Administration(BaseModel):
 
 
 async def _on(client: OpenFgaClient, obj: str, relation: str) -> set[str]:
-    return {t.user for t in await fga.read_object_tuples(client, obj) if t.object == obj and t.relation == relation}
+    return {t.user for t in await fga_reads.read_object_tuples(client, obj) if t.object == obj and t.relation == relation}
 
 
 async def administration(client: OpenFgaClient, project: str) -> Administration:
     """Read ``project``'s administration: its own tuples first, then each role its ``admin`` reaches, each once."""
-    tuples = await fga.read_object_tuples(client, project)
+    tuples = await fga_reads.read_object_tuples(client, project)
     assignees: dict[str, frozenset[str]] = {}
     pending = [role for t in tuples if t.object == project and t.relation == ADMIN and (role := _role_of(t.user)) is not None]
     while pending:
@@ -149,12 +149,12 @@ async def _projects_of(client: OpenFgaClient, role: str) -> list[str]:
             continue
         asked.add(current)
         subject = f"{current}#{ASSIGNEE}"
-        projects.extend(t.object for t in await fga.read_subject_tuples(client, subject, "project") if is_admin(t))
-        pending.extend(t.object for t in await fga.read_subject_tuples(client, subject, "role") if is_assignment(t))
+        projects.extend(t.object for t in await fga_reads.read_subject_tuples(client, subject, "project") if is_admin(t))
+        pending.extend(t.object for t in await fga_reads.read_subject_tuples(client, subject, "role") if is_assignment(t))
     return projects
 
 
-async def administrations(client: OpenFgaClient, targets: list[fga.ClientTuple]) -> dict[str, Administration]:
+async def administrations(client: OpenFgaClient, targets: list[fga_writes.ClientTuple]) -> dict[str, Administration]:
     """The administration of every project a change to ``targets`` (``admin`` tuples and role assignments) can touch,
     by project: an ``admin`` tuple's own project, and for an assignment its role's project and every project that role
     administers through the roles it is nested in."""
@@ -164,31 +164,31 @@ async def administrations(client: OpenFgaClient, targets: list[fga.ClientTuple])
     return {project: await administration(client, project) for project in dict.fromkeys(projects)}
 
 
-def touched(scope: dict[str, Administration], targets: list[fga.ClientTuple]) -> list[str]:
+def touched(scope: dict[str, Administration], targets: list[fga_writes.ClientTuple]) -> list[str]:
     """The projects of ``scope`` whose administration ``targets`` change: an ``admin`` tuple's, and those whose
     ``admin`` reaches an assignment's role."""
     return sorted(project for project, held in scope.items() if any(t.object == project or held.bears(t.object) for t in targets))
 
 
-async def _held(client: OpenFgaClient, targets: list[fga.ClientTuple]) -> list[fga.ClientTuple]:
+async def _held(client: OpenFgaClient, targets: list[fga_writes.ClientTuple]) -> list[fga_writes.ClientTuple]:
     """Those of ``targets`` the store holds now."""
-    held = {obj: await fga.read_object_tuples(client, obj) for obj in dict.fromkeys(t.object for t in targets)}
+    held = {obj: await fga_reads.read_object_tuples(client, obj) for obj in dict.fromkeys(t.object for t in targets)}
     return [t for t in targets if any(h.user == t.user and h.relation == t.relation and h.object == t.object for h in held[t.object])]
 
 
-def _revisions(scope: dict[str, Administration]) -> tuple[list[fga.ClientTuple], list[fga.ClientTuple]]:
+def _revisions(scope: dict[str, Administration]) -> tuple[list[fga_writes.ClientTuple], list[fga_writes.ClientTuple]]:
     """The revision tuples a Write changing every administration in ``scope`` writes, and those it deletes."""
     moves = [next_revision(held.tuples, project) for project, held in scope.items()]
     return [moved for moved, _ in moves], [t for _, replaced in moves for t in replaced]
 
 
-def _fits(scope: dict[str, Administration], targets: list[fga.ClientTuple]) -> bool:
+def _fits(scope: dict[str, Administration], targets: list[fga_writes.ClientTuple]) -> bool:
     """Whether changing ``targets`` and moving every revision in ``scope`` is one Write the store takes."""
     moved, stale = _revisions(scope)
     return len(targets) + len(moved) + len(stale) <= _TUPLES_PER_WRITE
 
 
-def _refuse_a_change_past_one_write(scope: dict[str, Administration], target: fga.ClientTuple) -> None:
+def _refuse_a_change_past_one_write(scope: dict[str, Administration], target: fga_writes.ClientTuple) -> None:
     if not _fits(scope, [target]):
         raise InvalidInputError(
             f"{target.object} administers {len(scope)} projects, more than one change can arbitrate — remove it from the roles holding their admin first"
@@ -199,17 +199,17 @@ async def _commit(
     client: OpenFgaClient,
     scope: dict[str, Administration],
     *,
-    deletes: list[fga.ClientTuple],
-    writes: list[fga.ClientTuple],
+    deletes: list[fga_writes.ClientTuple],
+    writes: list[fga_writes.ClientTuple],
     actor: str,
-    origin: fga.TupleOrigin,
+    origin: fga_writes.TupleOrigin,
 ) -> bool:
     """Apply the change in one Write that moves the revision of every project in ``scope``; whether it committed."""
     moved, stale = _revisions(scope)
-    return await fga.commit_unless_changed(client, deletes=[*deletes, *stale], writes=[*writes, *moved], actor=actor, origin=origin)  # noqa: TID251
+    return await fga_writes.commit_unless_changed(client, deletes=[*deletes, *stale], writes=[*writes, *moved], actor=actor, origin=origin)  # noqa: TID251
 
 
-async def confer(client: OpenFgaClient, target: fga.ClientTuple, *, actor: str, origin: fga.TupleOrigin, permit: Permit | None = None) -> bool:
+async def confer(client: OpenFgaClient, target: fga_writes.ClientTuple, *, actor: str, origin: fga_writes.TupleOrigin, permit: Permit | None = None) -> bool:
     """Write ``target``, a project's ``admin`` tuple or a role assignment; whether this call wrote it.
 
     ``permit`` is asked with the projects the tuple makes its subject an administrator of, on the read the Write is
@@ -233,8 +233,8 @@ async def confer(client: OpenFgaClient, target: fga.ClientTuple, *, actor: str, 
 
 
 async def withdraw(
-    client: OpenFgaClient, targets: list[fga.ClientTuple], *, actor: str, origin: fga.TupleOrigin, permit: Permit | None = None
-) -> list[fga.ClientTuple]:
+    client: OpenFgaClient, targets: list[fga_writes.ClientTuple], *, actor: str, origin: fga_writes.TupleOrigin, permit: Permit | None = None
+) -> list[fga_writes.ClientTuple]:
     """Delete ``targets``, project ``admin`` tuples and role assignments; those this call removed.
 
     Removing what is not held is a no-op. A removal after which a project's ``admin`` reaches no person is refused

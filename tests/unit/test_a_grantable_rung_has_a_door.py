@@ -20,7 +20,7 @@ and should stay that way". What is not fine is no door at all.
 
 from __future__ import annotations
 
-from lakehouse.governed import fga as fga_module
+from lakehouse.governed import fga_model
 
 
 #: Rungs delegated somewhere OTHER than `access.py`'s per-object grant surface, with the door named.
@@ -33,7 +33,7 @@ _OTHER_DOORS: dict[tuple[str, str], str] = {
 def test_every_can_grant_rung_is_reachable_from_a_door() -> None:
     from catalog.api.v1.endpoints.access import _GRANTABLE_BASE
 
-    model = fga_module.load_model()
+    model = fga_model.load_model()
     orphaned: list[tuple[str, str]] = []
     for td in model["type_definitions"]:
         relations = td.get("relations") or {}

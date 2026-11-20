@@ -10,7 +10,7 @@ and a manual "live-verified" run, because a prose CLAIM was never mechanically c
      A whole feature was configured and inert.
   3. "seed_warehouse grants the FGA parent edge" — it wrote `warehouse#parent`, a relation the warehouse
      type does NOT define (its pointer is `project`). OpenFGA rejected the write → a live 503, while every
-     unit test stayed green because mocked `fga.check`/`write_tuples` pin the STRING, never the SCHEMA.
+     unit test stayed green because mocked `fga_reads.check`/`write_tuples` pin the STRING, never the SCHEMA.
 
 The rule these encode: a claim that cannot be proven by a grep, a test, or a render is not a claim — it is
 a guess. Each test below fails on the ORIGINAL buggy code and passes now.

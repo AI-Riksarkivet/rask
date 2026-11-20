@@ -33,7 +33,7 @@ from catalog.api.dependencies import get_resolver, get_vendor
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import VendedSession
 from catalog.services import table_claims
-from lakehouse.governed import fga as fga_module
+from lakehouse.governed import fga_reads, fga_writes
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -97,11 +97,11 @@ def _grants(monkeypatch: pytest.MonkeyPatch, relations: set[str]) -> None:
     async def check(_client: object, *, relation: str, **_kw: object) -> bool:
         return relation in relations or relation == "can_create_table"
 
-    monkeypatch.setattr(fga_module, "check", check)
-    monkeypatch.setattr(fga_module, "grant_on_create", AsyncMock())
-    monkeypatch.setattr(fga_module, "grant_before_arrival", AsyncMock())
-    monkeypatch.setattr(fga_module, "name_child", AsyncMock())
-    monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))
+    monkeypatch.setattr(fga_reads, "check", check)
+    monkeypatch.setattr(fga_writes, "grant_on_create", AsyncMock())
+    monkeypatch.setattr(fga_writes, "grant_before_arrival", AsyncMock())
+    monkeypatch.setattr(fga_writes, "name_child", AsyncMock())
+    monkeypatch.setattr(fga_writes, "revoke_object_tuples", AsyncMock(return_value=[]))
 
 
 _READER = {"can_get_metadata", "can_read_data"}

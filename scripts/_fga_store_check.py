@@ -8,7 +8,7 @@ imported from the image is missing there, or is a different rule from the one th
     compare <store>  < one model page per line, newest first  exit 0 held, 1 absent
 
 THE QUESTION IS THE ONE EVERY SERVICE ASKS ([[LH-201]]): does the store hold a model whose canonical
-body is this checkout's `model.json`, at any depth of its history (`fga.ModelHistory`)? A service
+body is this checkout's `model.json`, at any depth of its history (`fga_provision.ModelHistory`)? A service
 checks against the model its own image carries, so a body held below the newest is one a pod built from
 this checkout resolves, and the chart's hook writes only a body the store lacks.
 """
@@ -23,7 +23,7 @@ from _fga_model_rungs import rungs
 from pydantic import BaseModel
 
 from lakehouse.governed.auth.write_model import STORE_NAME, model_document
-from lakehouse.governed.fga import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, canonical_model, newest_store
+from lakehouse.governed.fga_provision import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, canonical_model, newest_store
 
 
 class StoreListing(BaseModel):

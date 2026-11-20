@@ -2,7 +2,7 @@
 write is judged under it.
 
 ADR 0156 C8 and ADR 0211, on the real catalog app over real pylance with OIDC and FGA on, in a registered warehouse. The
-OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga` functions that answers a
+OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga_reads` and `fga_writes` functions that answers a
 check from an explicit grant set, so who may act IS the claim here. A namespace named `gold` that declares nothing is
 judged by what it declares, never by its name.
 """
@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims, warehouses
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
@@ -81,10 +81,10 @@ def _object(client: TestClient, kind: str, name: str) -> str:
     ns = client.app.dependency_overrides[get_namespace]()
     segments = name.split("$")
     if kind == "namespace":
-        return fga.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
+        return fga_ids.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
     table_uuid = object_uuids.table_uuid(ns, table_claims.claim_store(client.app.dependency_overrides[get_settings]()), segments)
     assert table_uuid is not None, f"table {name} carries no uuid"
-    return fga.table_object(table_uuid)
+    return fga_ids.table_object(table_uuid)
 
 
 def _top_level(client: TestClient, name: str, properties: dict[str, str] | None = None) -> int:

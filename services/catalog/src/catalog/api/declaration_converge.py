@@ -43,7 +43,7 @@ from catalog.services import projects as project_registry
 from catalog.services.control_records import GIT, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
 from lakehouse.events.control_emit import ControlEmitter
-from lakehouse.governed import fga
+from lakehouse.governed import fga_model, fga_reads, fga_writes
 from lakehouse.records.warehouse_records import DeleteMode, WarehouseRecord
 
 
@@ -250,8 +250,8 @@ class _Converger:
         if not own:
             return
         declared = [grant.client_tuple for grant in wanted if grant.object == obj]
-        for relation in sorted(fga.machine_relations(obj.partition(":")[0])):
-            revoked = await fga.revoke_undeclared(  # noqa: TID251 — the declaration's revoking site
+        for relation in sorted(fga_model.machine_relations(obj.partition(":")[0])):
+            revoked = await fga_writes.revoke_undeclared(  # noqa: TID251 — the declaration's revoking site
                 client, declared, obj=obj, relation=relation, own=own, actor=DECLARATION.subject, origin="declaration"
             )
             for gone in revoked:
@@ -274,7 +274,7 @@ class _Converger:
                 # With the project's revision, as the members door grants it: who administers the project changes.
                 await project_admins.confer(client, grant.client_tuple, actor=DECLARATION.subject, origin="declaration")
             else:
-                await fga.write_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
+                await fga_writes.write_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
             await filing.send(told)
         self.tick.grants_written += 1
 
@@ -285,7 +285,7 @@ class _Converger:
                 # Through the members door's own rule, which keeps a project administered.
                 await project_admins.withdraw(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")
             else:
-                await fga.delete_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
+                await fga_writes.delete_tuples(client, [grant.client_tuple], actor=DECLARATION.subject, origin="declaration")  # noqa: TID251
             await filing.send(told)
         await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
         self.tick.grants_revoked += 1
@@ -301,7 +301,7 @@ class _Converger:
 
 async def _held(client: OpenFgaClient, obj: str) -> set[tuple[str, str]]:
     """Each ``(user, relation)`` the store holds on ``obj``."""
-    return {(held.user, held.relation) for held in await fga.read_object_tuples(client, obj)}
+    return {(held.user, held.relation) for held in await fga_reads.read_object_tuples(client, obj)}
 
 
 def _order(grant: GrantTuple) -> tuple[str, str, str]:

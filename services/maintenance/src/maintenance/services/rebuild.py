@@ -109,7 +109,7 @@ def _warehouse_tenancy(record: WarehouseRecord) -> RebuiltTuple:
     type does not declare; writing it makes OpenFGA reject the whole seed with a 503. The catalog's
     `seed_warehouse` writes this relation directly for the same reason, and its being a plain pointer
     rather than a hierarchy edge is why rebuilding it does not touch the TID251 banned-api entry on
-    `lakehouse.governed.fga.hierarchy_edge_tuples`, whose closed set of callers is about
+    `lakehouse.governed.fga_model.hierarchy_edge_tuples`, whose closed set of callers is about
     `parent`/`child` pairs.
     """
     return RebuiltTuple(user=f"project:{record.project}", relation="project", object=f"warehouse:{record.id}", justified_by=f"_warehouses/{record.id}.json")

@@ -18,7 +18,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 
 
 ACCESS = "/management/v1/access"
@@ -41,7 +41,7 @@ def _uuid(catalog: Any, kind: str, name: str) -> str:
 def estate(governed_catalog: Any) -> Any:
     """root administers the estate; alice owns namespace ``lance_catalog$db`` and table ``lance_catalog$db$t``, on which the raw door grants bob ``reader`` by name."""
     catalog = governed_catalog
-    catalog.store.write((fga.user_object("dex~root"), "owner", "estate:rask"))
+    catalog.store.write((fga_ids.user_object("dex~root"), "owner", "estate:rask"))
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
     _ok(catalog, "/v1/table/lance_catalog$db$t/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
     _ok(catalog, f"{ACCESS}/tuples", "root", json={"user": catalog.person("bob"), "relation": "reader", "object": "table:lance_catalog$db$t"})

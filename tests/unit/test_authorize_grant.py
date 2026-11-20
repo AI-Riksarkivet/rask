@@ -47,7 +47,7 @@ def _run(
         asked.append((user, relation, obj))
         return allow
 
-    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro(body)))
     asyncio.run(
         fga_deps._authorize_grant(
@@ -114,7 +114,7 @@ def test_a_rung_with_no_grant_action_is_refused_before_reaching_openfga(monkeypa
         asked.append((user, relation, obj))
         return True
 
-    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
     with pytest.raises(PermissionDeniedError):
         asyncio.run(
@@ -138,7 +138,7 @@ def test_revoke_still_refuses_a_phantom_rung_before_reaching_openfga(monkeypatch
         asked.append((user, relation, obj))
         return True
 
-    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
 
     with pytest.raises(PermissionDeniedError):
@@ -161,7 +161,7 @@ def test_re_granting_yourself_what_you_already_hold_is_allowed(monkeypatch: pyte
     async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
         return True  # may grant it, and already holds it
 
-    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~alice", "relation": "owner"})))
 
     asyncio.run(
@@ -178,7 +178,7 @@ def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) 
             return True  # the caller IS inside the userset being granted
         return relation.startswith("can_grant_")  # may grant; does not hold the rung
 
-    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:stewards#assignee", "relation": "owner"})))
 
     with pytest.raises(PermissionDeniedError, match="may not raise your own access"):

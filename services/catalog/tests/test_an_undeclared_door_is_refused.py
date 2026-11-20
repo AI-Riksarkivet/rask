@@ -49,7 +49,7 @@ from lakehouse.records.trash import TrashRecord
 
 _ID = "acme$events"
 
-#: Nothing calls a method on it: `fga.check` / `fga.batch_check` are replaced below before it is used.
+#: Nothing calls a method on it: `fga_reads.check` / `fga_reads.batch_check` are replaced below before it is used.
 _CLIENT = cast("OpenFgaClient", object())
 
 
@@ -111,8 +111,8 @@ def asked(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
         recorded.extend((relation, obj) for obj in objects)
         return dict.fromkeys(objects, True)
 
-    monkeypatch.setattr(fga_deps.fga, "check", check)
-    monkeypatch.setattr(fga_deps.fga, "batch_check", batch_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", check)
+    monkeypatch.setattr(fga_deps.fga_reads, "batch_check", batch_check)
     return recorded
 
 

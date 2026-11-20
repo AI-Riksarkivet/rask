@@ -35,7 +35,7 @@ from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads, fga_resilience
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
 
 
@@ -49,8 +49,8 @@ log = logging.getLogger(__name__)
 DECISIONS_PREFIX: Final = "/management/v1/decisions"
 
 #: The most objects one question may name: above it the door answers 400, and the client asks in chunks. The door
-#: answers a question with one `fga.batch_check`, which the OpenFGA SDK sends as batches of `CLIENT_MAX_BATCH_SIZE` (50)
-#: checks, all at once (`fga.batch_check`), so one question costs the store at most twenty batch requests in one wave.
+#: answers a question with one `fga_reads.batch_check`, which the OpenFGA SDK sends as batches of `CLIENT_MAX_BATCH_SIZE` (50)
+#: checks, all at once (`fga_reads.batch_check`), so one question costs the store at most twenty batch requests in one wave.
 MAX_OBJECTS_PER_QUESTION: Final = 1000
 
 #: How often a decision is re-sent after the catalog could not be reached at all. Only a connection that never opened
@@ -113,7 +113,7 @@ class DecisionListUsers(BaseModel):
 
 
 class DecisionListUsersResult(BaseModel):
-    """Bare subject ids, sorted, as `fga.list_users` returns them."""
+    """Bare subject ids, sorted, as `fga_reads.list_users` returns them."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -189,10 +189,10 @@ class OpenFgaDecider:
         return False
 
     async def check(self, *, user: str, relation: str, obj: str) -> bool:
-        return await fga.check(self._client, user=user, relation=relation, obj=obj)
+        return await fga_reads.check(self._client, user=user, relation=relation, obj=obj)
 
     async def batch_check(self, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        return await fga.batch_check(self._client, user=user, relation=relation, objects=objects)
+        return await fga_reads.batch_check(self._client, user=user, relation=relation, objects=objects)
 
     async def check_tables(self, *, user: str, relation: str, tables: list[str]) -> dict[str, TableDecision]:
         """Refused, every one: the store holds uuids and no names, and only the catalog resolves a name."""
@@ -200,11 +200,11 @@ class OpenFgaDecider:
         return {name: TableDecision(allowed=False) for name in tables}
 
     async def list_users(self, *, relation: str, obj: str) -> list[str]:
-        return await fga.list_users(self._client, relation=relation, obj=obj)
+        return await fga_reads.list_users(self._client, relation=relation, obj=obj)
 
     async def governed(self, objects: list[str]) -> dict[str, bool]:
         # A name that is no object id holds no tuple, and reading it would fail the whole read.
-        return {obj: fga.is_object_id(obj) and bool(await fga.read_object_tuples(self._client, obj)) for obj in objects}
+        return {obj: fga_ids.is_object_id(obj) and bool(await fga_reads.read_object_tuples(self._client, obj)) for obj in objects}
 
     async def locate(self, locations: list[str]) -> dict[str, str | None]:
         """Unanswerable, so an outage: the store holds no locations, and only the catalog's claims say which table one holds.
@@ -219,7 +219,7 @@ class OpenFgaDecider:
         raise ServiceUnavailableError("only the catalog answers which table a location holds")
 
     async def close(self) -> None:
-        """The client belongs to the lifespan that built it (`fga.dispose`), not to this view of it."""
+        """The client belongs to the lifespan that built it (`fga_provision.dispose`), not to this view of it."""
 
 
 class CatalogDecider:
@@ -307,7 +307,7 @@ class CatalogDecider:
     @retry(
         retry=retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout)),
         stop=stop_after_attempt(_TRANSPORT_ATTEMPTS),
-        wait=wait_exponential_jitter(initial=fga.DEFAULT_RETRY.backoff_seconds, max=fga.DEFAULT_RETRY.max_backoff_seconds),
+        wait=wait_exponential_jitter(initial=fga_resilience.DEFAULT_RETRY.backoff_seconds, max=fga_resilience.DEFAULT_RETRY.max_backoff_seconds),
         reraise=True,
     )
     async def _post(self, route: str, question: BaseModel) -> httpx.Response:

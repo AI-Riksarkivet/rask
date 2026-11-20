@@ -19,10 +19,10 @@ from lance_namespace import InvalidInputError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientCheckRequest, ClientTuple, ClientWriteRequest
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads, fga_writes
 
 
-REFUSAL = f"cannot carry {fga.CLOCK_PARAMETER} on the tuple"
+REFUSAL = f"cannot carry {fga_reads.CLOCK_PARAMETER} on the tuple"
 
 
 def _grant(**context: str) -> ClientTuple:
@@ -30,7 +30,7 @@ def _grant(**context: str) -> ClientTuple:
         user="user:alice",
         relation="writer",
         object="namespace:bronze",
-        condition=fga.RelationshipCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h", **context}),
+        condition=fga_writes.RelationshipCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h", **context}),
     )
 
 
@@ -55,7 +55,7 @@ class _Store:
 
 
 async def _write(store: _Store, tuples: list[ClientTuple]) -> None:
-    await fga.write_tuples(cast(OpenFgaClient, store), tuples, actor="test", origin="admin_api")
+    await fga_writes.write_tuples(cast(OpenFgaClient, store), tuples, actor="test", origin="admin_api")
 
 
 @pytest.mark.asyncio
@@ -81,7 +81,9 @@ async def test_a_check_refuses_a_contextual_tuple_carrying_the_clock() -> None:
     grant that `write_tuples` refuses to create."""
     store = _Store()
     with pytest.raises(InvalidInputError, match=REFUSAL):
-        await fga.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False, contextual_tuples=[_pinned()])
+        await fga_reads.check(
+            cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False, contextual_tuples=[_pinned()]
+        )
     assert store.checks == [], "a check ran with a clock-pinned contextual tuple"
 
 
@@ -89,16 +91,16 @@ async def test_a_check_refuses_a_contextual_tuple_carrying_the_clock() -> None:
 async def test_a_check_may_still_name_its_own_clock_in_the_request_context() -> None:
     """The clock belongs to the CHECK, so the request context is exactly where it may be named."""
     store = _Store()
-    await fga.check(
+    await fga_reads.check(
         cast(OpenFgaClient, store),
         user="user:alice",
         relation="writer",
         obj="namespace:bronze",
         qualify=False,
         contextual_tuples=[_grant()],
-        context={fga.CLOCK_PARAMETER: "2026-07-29T10:00:00Z"},
+        context={fga_reads.CLOCK_PARAMETER: "2026-07-29T10:00:00Z"},
     )
-    assert [c.context for c in store.checks] == [{fga.CLOCK_PARAMETER: "2026-07-29T10:00:00Z"}]
+    assert [c.context for c in store.checks] == [{fga_reads.CLOCK_PARAMETER: "2026-07-29T10:00:00Z"}]
 
 
 @pytest.mark.asyncio
@@ -106,10 +108,10 @@ async def test_a_check_that_names_no_clock_is_evaluated_at_the_servers_now() -> 
     """What the estate-admin `/management/v1/access/check` docstring promises: an omitted clock is not a DENY."""
     store = _Store()
     before = datetime.now(UTC)
-    await fga.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False)
+    await fga_reads.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False)
     context = store.checks[0].context
     assert context is not None, "the check was sent with no context, so a time-boxed grant reads as expired"
-    sent = context[fga.CLOCK_PARAMETER]
+    sent = context[fga_reads.CLOCK_PARAMETER]
     assert isinstance(sent, str), f"the clock was sent as {type(sent).__name__}, not an RFC 3339 string"
     assert before <= datetime.fromisoformat(sent) <= datetime.now(UTC)
 
@@ -119,5 +121,5 @@ async def test_delete_tuples_still_removes_a_tuple_carrying_the_clock() -> None:
     """A delete is by key and evaluates nothing; refusing it would make the one grant that never
     expires also the one grant that cannot be revoked."""
     store = _Store()
-    await fga.delete_tuples(cast(OpenFgaClient, store), [_pinned()], actor="test", origin="admin_api")
+    await fga_writes.delete_tuples(cast(OpenFgaClient, store), [_pinned()], actor="test", origin="admin_api")
     assert [(t.user, t.relation, t.object) for request in store.writes for t in request.deletes or []] == [("user:alice", "writer", "namespace:bronze")]

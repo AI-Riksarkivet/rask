@@ -3,7 +3,7 @@
 No catalog door lists a store's raw tuples to a tenant, so a leg holding a door to the tuples it seeds, or a refused call
 to the tuples it leaves, reads the store itself, as the model hook's ServiceAccount (the run's `fga-token`
 credential, [[XC-077]]). The store is `LANCE_E2E_FGA_STORE_ID` when the runner pinned one, else the newest store named
-`lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).
+`lance-catalog` (`fga_provision.newest_store`), the rule the hook and every service share ([[LH-201]]).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import requests
 from credentials import Credential, credential_path
 
 from lakehouse.governed.auth.write_model import STORE_NAME, fga_headers
-from lakehouse.governed.fga import newest_store
+from lakehouse.governed.fga_provision import newest_store
 
 
 FGA = os.environ.get("LANCE_E2E_FGA", "").rstrip("/")

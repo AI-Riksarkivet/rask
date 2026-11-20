@@ -16,7 +16,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, require_metadata_access
 from lineage.schemas import Derived
@@ -47,6 +47,6 @@ async def get_derived(
     resolved = (await names.table(name, bearer=bearer)).table_uuid
     tables, walked = await provenance.derived({name} | ({resolved} if resolved else set()), max_depth=depth)
     # A derived table is shown on the uuid its edges recorded ([[LH-524]]); one recorded without a uuid names no object.
-    visible = await datasets.visible([fga.table_object(derived.uuid) for derived in tables if derived.uuid])
-    shown = [derived for derived in tables if derived.uuid and fga.table_object(derived.uuid) in visible] if settings.fga_enabled else tables
+    visible = await datasets.visible([fga_ids.table_object(derived.uuid) for derived in tables if derived.uuid])
+    shown = [derived for derived in tables if derived.uuid and fga_ids.table_object(derived.uuid) in visible] if settings.fga_enabled else tables
     return Derived(table=name, uuid=resolved, derived=shown, complete=walked and len(shown) == len(tables))

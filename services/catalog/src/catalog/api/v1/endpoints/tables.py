@@ -103,7 +103,7 @@ from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent, ControlAction
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.lancekit.features import CREATE_FORMAT, table_file_format
@@ -143,7 +143,7 @@ def _collect_tables(ns: LanceNamespace, warehouse_id: str) -> list[str]:
         seen.add(tuple(parent))
         try:
             tables = native.call(ns, "list_tables", ListTablesRequest(id=parent, include_declared=True)).tables or []
-            found.extend(fga.canonical_object_id([*parent, name]) for name in tables)
+            found.extend(fga_ids.canonical_object_id([*parent, name]) for name in tables)
             children = native.call(ns, "list_namespaces", ListNamespacesRequest(id=parent)).namespaces or []
         except Exception:  # noqa: BLE001 — one bad namespace, not a blank registry
             log.warning("could not list %s", parent, exc_info=True)
@@ -296,7 +296,7 @@ async def _vend_on_spec_door(
         tier = await fga_deps.spec_vend_tier(settings, token, client, ns, segments, table_uuid=table_uuid, door=door)
         if tier is None:
             if asked:
-                raise PermissionDeniedError(f"can_read_data required on table:{fga.canonical_object_id(segments)} to vend credentials")
+                raise PermissionDeniedError(f"can_read_data required on table:{fga_ids.canonical_object_id(segments)} to vend credentials")
             return None
         subject = token.subject if token is not None else ANONYMOUS_SUBJECT
         options = await run_in_threadpool(partial(_mint, location, tier=tier, bases=bases, vendor=vendor, session_name=role_session_name(subject)))
@@ -306,7 +306,7 @@ async def _vend_on_spec_door(
         log.warning("spec_vend_skipped", extra={"door": door, "table": "/".join(segments)}, exc_info=True)
         return None
     if options is not None:
-        resource = fga.table_object(table_uuid)
+        resource = fga_ids.table_object(table_uuid)
         audit(AuditAction.VEND_CREDENTIALS, AuditOutcome.SUCCESS, subject=token.subject if token is not None else None, resource=resource, tier=tier, door=door)
     return options
 
@@ -352,13 +352,13 @@ async def declare_table(
         )
     segments = parse_identifier(id)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/declare", target=fga.canonical_object_id(segments))
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/declare", target=fga_ids.canonical_object_id(segments))
     if converge.replay is not None:
         return DeclareTableResponse.model_validate(converge.replay.body)
     await fga_deps.require_parent_exists(ns, "table", segments)
     req = body or DeclareTableRequest()
     req.id = reconcile_body_id(segments, req.id)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     claims = table_claims.claim_store(settings)
     # The table's uuid is minted with its location's claim, before anything grants or announces it (ADR 0173 §2, §5),
     # and its grants are written once the claim records it, before the backend records the table ([[LH-588]]).
@@ -401,7 +401,7 @@ async def declare_table(
     )
     declared_event = _table_event(token, named, action="table_declared", table_uuid=table_uuid, name=canonical, extra={"location": location})
     async with _filed_or_undone(
-        announcer, door="declare_table", target=fga.table_object(table_uuid), announcements=[declared, declared_event], undo=_take_back_declare
+        announcer, door="declare_table", target=fga_ids.table_object(table_uuid), announcements=[declared, declared_event], undo=_take_back_declare
     ) as filing:
         response = await _vended_declaration(
             ns, so, segments, req, location=location, table_uuid=table_uuid, undo=_undo_declare, settings=settings, vendor=vendor, token=token, client=client
@@ -490,7 +490,7 @@ def _table_event(
     event = CatalogControlEvent(
         action=action,
         object_type="table",
-        object_id=fga.table_object(table_uuid),
+        object_id=fga_ids.table_object(table_uuid),
         object_name=name,
         object_uuid=named_by.table_uuid if named_by is not None else None,
         namespace_uuid=named_by.namespace_uuid if named_by is not None else None,
@@ -810,12 +810,12 @@ async def drop_table(
     with or without it."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # DELETES BYTES or files a trash record. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/drop", target=fga.canonical_object_id(parse_identifier(id)))
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/drop", target=fga_ids.canonical_object_id(parse_identifier(id)))
     if converge.replay is not None:
         return DropTableResponse.model_validate(converge.replay.body)
 
     segments = parse_identifier(id)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     await fga_deps.require_table_unprotected(settings, table, force=force)
     table_uuid = table.require_uuid()
     # What the drop's announcements name the table by, read while it still stands (ADR 0173 §10).
@@ -833,7 +833,7 @@ async def drop_table(
     gone = NameResolves(segments=segments, uuid=table_uuid, held=False)
     dropped = _marker(announcer, token, gone, segments, operation=DROP_TABLE, uuids=known)
     dropped_event = _table_event(token, gone, action="table_dropped", table_uuid=table_uuid, name=canonical, extra={"recoverable": trashed}, named_by=known)
-    async with announcer.announcing(door="drop_table", target=fga.table_object(table_uuid), announcements=[dropped, dropped_event]) as filing:
+    async with announcer.announcing(door="drop_table", target=fga_ids.table_object(table_uuid), announcements=[dropped, dropped_event]) as filing:
         response = await _drop(ns, settings, table, segments=segments, table_uuid=table_uuid, known=known, grace=grace, token=token, so=so)
         # Record the drop as lineage — provenance of the deletion (the dataset node persists in the graph, named a
         # `drop_table` run). Sent BEFORE the revoke, so a revoke that fails ends the request with the marker already
@@ -845,7 +845,7 @@ async def drop_table(
         # that caller (found by driving the deployed catalog, not by a unit test — the unit tests run FGA
         # off). The grants die with the bytes instead: at purge, or when the sweep's expiry reclaims it.
         if not trashed:
-            await fga_deps.revoke_ownership(client, settings, obj=fga.table_object(table_uuid), token=token, origin="lifecycle_delete")
+            await fga_deps.revoke_ownership(client, settings, obj=fga_ids.table_object(table_uuid), token=token, origin="lifecycle_delete")
         await filing.send(dropped_event)
     await converge.remember(200, response)
     return response
@@ -865,7 +865,7 @@ async def _drop(
 ) -> DropTableResponse:
     """Drop the table ``table`` resolved to: into the trash under a grace period, else its bytes, under the fence that
     holds the claim its resolution read."""
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     trashed = grace > 0
     # THE DOOR ACTS ON THE TABLE ITS NAME RESOLVED TO (ADR 0173 §7, [[LH-521]]): the fence holds the claim that
     # resolution read, so a rename landing since answers this drop 409, and one landing after the fence answers 409
@@ -911,7 +911,7 @@ async def _drop(
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
             # The bytes are deleted later, by the purge, so the spec's answer is a transaction id to track the deletion
             # by (`spec.yaml` DropTableRequest): `<table id>$<its uuid>`, which DescribeTransaction answers from the record.
-            response = DropTableResponse(transaction_id=fga.canonical_object_id([*segments, table_uuid]))
+            response = DropTableResponse(transaction_id=fga_ids.canonical_object_id([*segments, table_uuid]))
         else:
             # [[LH-532]] The bytes go at the location this door resolved, at the key Lance opens, never where the
             # backend's own drop looks: the backend removes only the row. RECORD FIRST here too: a residue record is filed
@@ -1004,12 +1004,12 @@ async def deregister_table(
     door failing after it still announces it ([[LH-576]])."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # retires the id while the bytes stay. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/deregister", target=fga.canonical_object_id(parse_identifier(id)))
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/deregister", target=fga_ids.canonical_object_id(parse_identifier(id)))
     if converge.replay is not None:
         return DeregisterTableResponse.model_validate(converge.replay.body)
 
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     if table.location is not None and table.uuid is None:
         response = await _deregister_unidentified(ns, settings, table, control, token, segments=segments)
         await converge.remember(200, response)
@@ -1020,7 +1020,7 @@ async def deregister_table(
     gone = NameResolves(segments=segments, uuid=table_uuid, held=False)
     detached = _marker(announcer, token, gone, segments, operation=DEREGISTER_TABLE, uuids=known)
     detached_event = _table_event(token, gone, action="table_deregistered", table_uuid=table_uuid, name=canonical, extra={}, named_by=known)
-    async with announcer.announcing(door="deregister_table", target=fga.table_object(table_uuid), announcements=[detached, detached_event]) as filing:
+    async with announcer.announcing(door="deregister_table", target=fga_ids.table_object(table_uuid), announcements=[detached, detached_event]) as filing:
         response = await _detach(ns, settings, table, segments=segments)
         # The table leaves governance, so what was kept for it under its uuid goes.
         await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
@@ -1029,7 +1029,7 @@ async def deregister_table(
         # BEFORE the revoke, so a revoke that fails ends the request with the marker already published. Lineage admits a
         # detach this catalog signed on that signature, never on the grants the revoke takes.
         await filing.send(detached)
-        await fga_deps.revoke_ownership(client, settings, obj=fga.table_object(table_uuid), token=token, origin="lifecycle_delete")
+        await fga_deps.revoke_ownership(client, settings, obj=fga_ids.table_object(table_uuid), token=token, origin="lifecycle_delete")
         await filing.send(detached_event)
     await converge.remember(200, response)
     return response
@@ -1041,7 +1041,7 @@ async def _detach(ns: LanceNamespace, settings: CatalogStore, table: ResolvedTab
     The door acts on the table its name resolved to, under the fence that holds the claim it read (ADR 0173 §7,
     [[LH-521]]): a rename landing since answers this deregister 409, as one landing after the fence answers itself.
     """
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     claims = table_claims.claim_store(settings)
     fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="deregister"))
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
@@ -1083,7 +1083,7 @@ async def _deregister_unidentified(
 
     Its control event names it by name (``table:<name>``), because no uuid object exists to name it by.
     """
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     response = await _detach(ns, settings, table, segments=segments)
     log.warning("unidentified_table_deregistered", extra={"table": canonical, "location": table.location})
     await emit_control(
@@ -1212,7 +1212,7 @@ async def register_table(
         configured=settings.external_blob_bases_for(parse_identifier(id)[0]),
         data_allowlist=settings.multibase_data_base_list,
         governed=GovernedStorage.from_settings(settings),
-        holder=fga.canonical_object_id(parse_identifier(id)),
+        holder=fga_ids.canonical_object_id(parse_identifier(id)),
     )
     body.location = table_bases.require_registrable_location(
         body.location,
@@ -1224,7 +1224,7 @@ async def register_table(
     )
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/register", target=fga.canonical_object_id(parse_identifier(id)))
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/register", target=fga_ids.canonical_object_id(parse_identifier(id)))
     if converge.replay is not None:
         return RegisterTableResponse.model_validate(converge.replay.body)
 
@@ -1242,7 +1242,7 @@ async def register_table(
     held_by_a_standing_table = stated_claim is not None and not await run_in_threadpool(
         table_claims.holder_is_gone, ns, table_claims.claim_store(settings), stated_claim
     )
-    if stated_claim is not None and held_by_a_standing_table and stated_claim.table != fga.canonical_object_id(segments):
+    if stated_claim is not None and held_by_a_standing_table and stated_claim.table != fga_ids.canonical_object_id(segments):
         log.warning("register_refused_held_location", extra={"table": id, "location": stated_claim.location, "holder": stated_claim.table})
         raise table_bases.occupied_location_refusal(body.location)
     registered_already = held_by_a_standing_table
@@ -1345,7 +1345,7 @@ async def register_table(
         raise
 
     claims = table_claims.claim_store(settings)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     # The location as the backend RESOLVED it, the spelling every other door keys the claim by: a `%` in
     # the body is stored re-encoded, so the body's spelling can decode to another key.
     stated_location = f"{root.rstrip('/')}/{body.location}"
@@ -1461,7 +1461,7 @@ async def register_table(
     )
     registered_event = _table_event(token, named, action="table_registered", table_uuid=table_uuid, name=canonical, extra={"location": location})
     async with _filed_or_undone(
-        announcer, door="register_table", target=fga.table_object(table_uuid), announcements=[registered, registered_event], undo=_take_back_register
+        announcer, door="register_table", target=fga_ids.table_object(table_uuid), announcements=[registered, registered_event], undo=_take_back_register
     ) as filing:
         # The grants written before the backend call, written again now that the location's claim records their uuid: the
         # drift repair revokes grants no claim records, and the claim is taken only after the backend resolved the
@@ -1503,7 +1503,7 @@ async def _require_clone_sources(
         try:
             for relation in table_bases.CLONE_RELATIONS:
                 await fga_deps.require_relation_on_a_path(
-                    client, settings, token, relation=relation, obj=fga.table_object(source.table_uuid), path=source.location
+                    client, settings, token, relation=relation, obj=fga_ids.table_object(source.table_uuid), path=source.location
                 )
         except PermissionDeniedError:
             log.warning("register_refused_clone_source", extra={"location": location, "source": source.table})
@@ -1520,7 +1520,7 @@ async def get_table_protection(id: str, table: ResolvedTableDep, settings: Setti
     an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
     409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
     record's `set_by` comes back so a refused drop can name who armed it."""
-    canonical = fga.canonical_object_id(table.segments)
+    canonical = fga_ids.canonical_object_id(table.segments)
     record = await run_in_threadpool(protections.read, settings, "table", table.require_uuid())
     return ProtectionResponse(id=canonical, protected=record is not None and record.protected, set_by=record.set_by if record is not None else None)
 
@@ -1574,7 +1574,7 @@ async def undrop_table(
     the location back, so a door failing after the re-registration still announces it ([[LH-576]]).
     """
     segments = parse_identifier(id)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
     converge = await keyed.begin(endpoint="POST /management/v1/table/{id}/undrop", target=canonical)
     if converge.replay is not None:
@@ -1606,7 +1606,7 @@ async def undrop_table(
         announcer, token, named, segments, operation=REGISTER_TABLE, uuids=await uuids.table(segments, location=location, uuid=record_uuid), source_uri=location
     )
     restored_event = _table_event(token, named, action="table_undropped", table_uuid=record_uuid, name=canonical, extra={})
-    async with announcer.announcing(door="undrop_table", target=fga.table_object(record_uuid), announcements=[restored, restored_event]) as filing:
+    async with announcer.announcing(door="undrop_table", target=fga_ids.table_object(record_uuid), announcements=[restored, restored_event]) as filing:
         # The drop kept the location's claim for this id ([[LH-204]]), so this take is the retry of an
         # existing hold; another holder means another table now resolves to these bytes, and re-attaching
         # this id would put two live ids on one dataset.
@@ -1668,7 +1668,7 @@ async def set_table_protection(
     a CONTROL-ROOT record, deliberately not schema metadata — control-plane state that emits a
     control event and never creates a table version, readable even when the dataset is corrupted,
     and unreachable from the future properties write door (#78)."""
-    canonical = fga.canonical_object_id(table.segments)
+    canonical = fga_ids.canonical_object_id(table.segments)
     table_uuid = table.require_uuid()
     so = settings.storage_options()
     if body.protected:
@@ -1682,7 +1682,7 @@ async def set_table_protection(
         control,
         action="table_protected" if body.protected else "table_unprotected",
         object_type="table",
-        object_id=fga.table_object(table_uuid),
+        object_id=fga_ids.table_object(table_uuid),
         object_name=canonical,
         actor=f"user:{token.subject}" if token is not None else None,
         extra={},
@@ -1739,7 +1739,7 @@ async def rename_table(
     new_segments = rename_destination(segments, body.new_namespace_id, body.new_table_name)
     # The key binds the destination too: under it, a rename to another name is another operation ([[LH-576]]).
     converge = await keyed.begin(
-        endpoint="POST /v1/table/{id}/rename", target=f"{fga.canonical_object_id(segments)} -> {fga.canonical_object_id(new_segments)}"
+        endpoint="POST /v1/table/{id}/rename", target=f"{fga_ids.canonical_object_id(segments)} -> {fga_ids.canonical_object_id(new_segments)}"
     )
     if converge.replay is not None:
         return RenameTableResponse.model_validate(converge.replay.body)
@@ -1757,7 +1757,7 @@ async def rename_table(
     # A rename mints a name in the destination's namespace, so the caller must be one who may put a table there, asked
     # BEFORE the (destructive, relocating) rename. (authorize already asked the source's rung.)
     await fga_deps.require_rename_destination(client, settings, token, resolver, source=segments, destination=new_segments)
-    renamed = fga.table_object(table.require_uuid())
+    renamed = fga_ids.table_object(table.require_uuid())
     # A rename moves no grant ([[LH-524]]): every grant is held by the table's uuid, which the rename keeps. Into
     # another namespace its parent and child edges move with it, and those are all it writes in OpenFGA.
     reparent = await fga_deps.parent_edge_mover(client, settings, token, resolver, obj=renamed, source=segments, destination=new_segments)
@@ -1774,8 +1774,8 @@ async def rename_table(
         named,
         action="table_renamed",
         table_uuid=table.require_uuid(),
-        name=fga.canonical_object_id(new_segments),
-        extra={"from": fga.canonical_object_id(segments), "to": fga.canonical_object_id(new_segments)},
+        name=fga_ids.canonical_object_id(new_segments),
+        extra={"from": fga_ids.canonical_object_id(segments), "to": fga_ids.canonical_object_id(new_segments)},
         named_by=destination_ids,
     )
     async with announcer.announcing(door="rename_table", target=renamed, announcements=[moved, moved_event]) as filing:
@@ -1815,7 +1815,7 @@ async def restore_table(
     the NEW current version (restore mints a fresh version pointing at the restored data)."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # REWINDS the table to an older version. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/restore", target=fga.canonical_object_id(parse_identifier(id)))
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/restore", target=fga_ids.canonical_object_id(parse_identifier(id)))
     if converge.replay is not None:
         return RestoreTableResponse.model_validate(converge.replay.body)
 

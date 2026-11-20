@@ -24,7 +24,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from lakehouse.events.control_emit import emit_control
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.records import clone_sources
 
 
@@ -80,8 +80,8 @@ async def create_table_tag(
         control,
         action="table_tag_created",
         object_type="table",
-        object_id=fga.table_object(table.resolved.require_uuid()),
-        object_name=fga.canonical_object_id(segments),
+        object_id=fga_ids.table_object(table.resolved.require_uuid()),
+        object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, body.branch)},
     )
@@ -119,8 +119,8 @@ async def update_table_tag(
         control,
         action="table_tag_updated",
         object_type="table",
-        object_id=fga.table_object(table.resolved.require_uuid()),
-        object_name=fga.canonical_object_id(segments),
+        object_id=fga_ids.table_object(table.resolved.require_uuid()),
+        object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, body.branch)},
     )
@@ -154,8 +154,8 @@ async def delete_table_tag(
         control,
         action="table_tag_deleted",
         object_type="table",
-        object_id=fga.table_object(table.resolved.require_uuid()),
-        object_name=fga.canonical_object_id(segments),
+        object_id=fga_ids.table_object(table.resolved.require_uuid()),
+        object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         extra={
             "tag": body.tag,

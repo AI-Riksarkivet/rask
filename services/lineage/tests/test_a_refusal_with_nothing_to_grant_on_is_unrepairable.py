@@ -22,7 +22,7 @@ from typing import Any, cast
 
 import pytest
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
 from lineage.api.fga_deps import _none_are_governed
 
@@ -46,7 +46,7 @@ async def test_an_UNREADABLE_store_falls_back_to_the_repairable_arm(monkeypatch:
         read.append(obj)
         raise RuntimeError("openfga unreachable")
 
-    monkeypatch.setattr(fga, "read_object_tuples", boom)
+    monkeypatch.setattr(fga_reads, "read_object_tuples", boom)
 
     assert await _none_are_governed(OpenFgaDecider(_NO_CLIENT), objects=_OBJECTS) is False
     assert read == _OBJECTS[:1], "the probe never reached the store, so the fallback was not the one under test"

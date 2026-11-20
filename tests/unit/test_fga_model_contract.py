@@ -2,13 +2,13 @@
 
 The bug class this exists to make unshippable: the app checks a ``can_*`` relation that the target
 type does not define. OpenFGA answers that with a 400 (``relation 'namespace#can_write_data' not
-found``, error code 2000) — an ``ApiException`` that is NOT retryable, so ``lakehouse.governed.fga.check``'s
+found``, error code 2000) — an ``ApiException`` that is NOT retryable, so ``lakehouse.governed.fga_reads.check``'s
 fail-closed handler converts it to ``ServiceUnavailableError`` → **HTTP 503 for every caller, owners
 included**, logged as ``openfga_check_unavailable`` (an outage, which it is not). It is a total
 outage of the route that masquerades as an infra blip. That is exactly how the namespaced
 transaction ``alter`` path (``namespace#can_write_data``, a table-only action) shipped broken.
 
-Mocked authz tests cannot catch it: they monkeypatch ``fga.check`` and assert the relation string
+Mocked authz tests cannot catch it: they monkeypatch ``fga_reads.check`` and assert the relation string
 the app passed, which passes happily against a phantom relation. The ``.fga.yaml`` tests cannot
 catch it either: they assert whatever (object, relation) pairs the *test author* chose, which may
 not be the pairs the *app* sends (the yaml exercised ``transaction:``; the app checks
@@ -33,7 +33,7 @@ from catalog.api import fga_deps, read_actions
 from catalog.api.dependencies import Resolver
 from catalog.core import write_judge
 from catalog.core.config import Settings
-from lakehouse.governed import fga as fga_module
+from lakehouse.governed import fga_model
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -42,7 +42,7 @@ from tests.unit.named_resolver import NamedResolver
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: Sentinel FGA client. The resolvers only ever hand it to ``fga.check``/``fga.batch_check``, which the
+#: Sentinel FGA client. The resolvers only ever hand it to ``fga_reads.check``/``fga_reads.batch_check``, which the
 #: recording fakes below replace — so nothing ever calls a method on it, and the cast is safe.
 _CLIENT = cast("OpenFgaClient", object())
 
@@ -54,7 +54,7 @@ _CLIENT = cast("OpenFgaClient", object())
 
 def _model_relations() -> dict[str, set[str]]:
     """``{object_type: {relation, ...}}`` parsed from the compiled ``model.json``."""
-    model = fga_module.load_model()
+    model = fga_model.load_model()
     return {td["type"]: set(td.get("relations") or {}) for td in model["type_definitions"]}
 
 
@@ -153,7 +153,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         pairs.add((_obj_type(warehouse), top.relation))
 
     # 3. Transactions (asked on the table their id names) and the batch routes: drive the real coroutines with a
-    #    recording fga.check / fga.batch_check.
+    #    recording fga_reads.check / fga_reads.batch_check.
     checked: list[tuple[str, str]] = []
 
     async def rec_check(_client: object, *, user: str, relation: str, obj: str) -> bool:
@@ -165,9 +165,9 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         return dict.fromkeys(objects, True)
 
     # Patch the fga module AS SEEN BY fga_deps (the consuming module), so the recording fakes
-    # intercept the exact `fga.check`/`fga.batch_check` references the resolvers call.
-    monkeypatch.setattr(fga_deps.fga, "check", rec_check)
-    monkeypatch.setattr(fga_deps.fga, "batch_check", rec_batch)
+    # intercept the exact `fga_reads.check`/`fga_reads.batch_check` references the resolvers call.
+    monkeypatch.setattr(fga_deps.fga_reads, "check", rec_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "batch_check", rec_batch)
 
     token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
     for suffix in ("describe", "alter"):
@@ -209,7 +209,7 @@ def test_every_relation_the_catalog_checks_exists_in_the_model(monkeypatch: pyte
     phantom = sorted(f"{t}#{r}" for t, r in pairs if t not in model or r not in model.get(t, set()))
     assert not phantom, (
         f"the app can check relations that do NOT exist in lakehouse/governed/auth/model.json: {phantom}. "
-        "OpenFGA rejects these (relation not found) and lakehouse.governed.fga fails closed → 503 for every caller."
+        "OpenFGA rejects these (relation not found) and lakehouse.governed.fga_resilience fails closed → 503 for every caller."
     )
 
 
@@ -344,7 +344,7 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
         checked.add((_obj_type(obj), relation))
         return True
 
-    monkeypatch.setattr(fga_deps.fga, "check", rec_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", rec_check)
     for fga_type in sorted(revoked):
         for rung in _grantable_relations(fga_type):
             request = cast("Request", _FakeRequest({"user": "dex~bob", "relation": rung}))
@@ -408,7 +408,7 @@ def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
     the dict is a fine resolution — but only after deciding, and recording, which of the four
     categories the new shape falls into.
     """
-    model = fga_module.load_model()
+    model = fga_model.load_model()
     governed = {td["type"] for td in model["type_definitions"]} - {"user"}
     found: set[tuple[str, str, str]] = set()
     for td in model["type_definitions"]:
@@ -511,7 +511,7 @@ def test_only_the_data_rungs_accept_a_TIME_BOXED_grant() -> None:
     Extending `_CONDITIONAL_GRANT_RUNGS` is a fine resolution — after deciding what an expiry leaves
     behind on that rung, and recording it.
     """
-    model = fga_module.load_model()
+    model = fga_model.load_model()
     found = {
         (td["type"], relation)
         for td in model["type_definitions"]

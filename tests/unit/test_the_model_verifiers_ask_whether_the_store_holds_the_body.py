@@ -6,7 +6,7 @@ it (an older image, a revert, a writer that wrote since) is the one every pod bu
 resolves, and the hook writes only a body the store lacks. `scripts/fga-store-check.sh` and the
 deployed-model e2e check report whether the store took this checkout's model, so they ask exactly that
 of the store the estate uses: the one `RASK_FGA_STORE_ID` pins, else the newest named `lance-catalog`
-(`fga.newest_store`). Held at any depth passes and says where; absent fails and names the relation diff
+(`fga_provision.newest_store`). Held at any depth passes and says where; absent fails and names the relation diff
 against the newest.
 
 DRIVEN, NOT READ. Each verifier runs for real against a stub OpenFGA that serves one model per page, so
@@ -40,7 +40,7 @@ import pytest
 from pydantic import BaseModel
 
 from lakehouse.governed.auth.write_model import model_document
-from lakehouse.governed.fga import MODEL_PAGE_SIZE
+from lakehouse.governed.fga_provision import MODEL_PAGE_SIZE
 
 
 _ROOT = Path(__file__).resolve().parents[2]

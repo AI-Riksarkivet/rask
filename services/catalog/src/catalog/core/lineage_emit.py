@@ -64,7 +64,7 @@ from lakehouse.events.openlineage import (
     symlinks_facet,
 )
 from lakehouse.events.signing import CanonError, SigningKey, attach_signature, author_of
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import is_safe_project
@@ -204,7 +204,7 @@ async def input_refs(pins: list[InputPin] | None, *, uuids: UuidReader) -> list[
     """``pins`` resolved to the canonical ids FGA keys on and the uuids the edge list keys on, so an edge names the real table."""
     refs = [
         InputRef(
-            fga.canonical_object_id(pin.segments),
+            fga_ids.canonical_object_id(pin.segments),
             pin.version,
             pin.branch,
             await uuids.table(pin.segments),
@@ -943,7 +943,7 @@ async def emit_write_event(
     ``commits_rows`` says the commit added rows, which makes a create a write (:func:`build_write_event`).
     ``event_time`` is when the commit was made, the event's ``eventTime``; a versioned event's run id is derived from
     the commit (:mod:`catalog.core.commit_ids`).
-    Names come from ``fga.canonical_object_id``, so the lineage Dataset is named as the catalog names the table.
+    Names come from ``fga_ids.canonical_object_id``, so the lineage Dataset is named as the catalog names the table.
 
     ``uuids`` reads the table's uuid and its namespace's, which the event names beside the names (ADR 0173 §10), and each
     input's. A door whose act ends the table read them before acting and passes them as ``known``. Otherwise the claim at
@@ -953,8 +953,8 @@ async def emit_write_event(
     refs = await input_refs(inputs, uuids=uuids)
     table_uuids = known if known is not None else await uuids.table(segments, location=source_uri)
     await emitter.emit_write(
-        table_id=fga.canonical_object_id(segments),
-        namespace=fga.parent_namespace_id(segments) or "",
+        table_id=fga_ids.canonical_object_id(segments),
+        namespace=fga_ids.parent_namespace_id(segments) or "",
         author=author,
         version=version,
         operation=operation,
@@ -967,6 +967,6 @@ async def emit_write_event(
         commits_rows=commits_rows,
         uuids=table_uuids,
         event_time=event_time,
-        renamed_from=fga.canonical_object_id(renamed_from) if renamed_from is not None else None,
+        renamed_from=fga_ids.canonical_object_id(renamed_from) if renamed_from is not None else None,
         originator=originator,
     )

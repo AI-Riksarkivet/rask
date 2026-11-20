@@ -107,7 +107,7 @@ When a workflow step points to a rule ID, open the matching file in `references/
 | `references/grant-provenance.md` | Who GAVE a grant — the audit-join review procedure, and why a tuple cannot answer it |
 
 **Every subject is a principal, `<idp-id>~<subject>`, and becomes a `user` id in one place,
-`lakehouse.governed.fga.user_object`** (ADR 0159 D5, ADR 0156 C5, [[LH-063]], [[LH-474]];
+`lakehouse.governed.fga_ids.user_object`** (ADR 0159 D5, ADR 0156 C5, [[LH-063]], [[LH-474]];
 `lakehouse.governed.principal`). A service account is `kubernetes~system:serviceaccount:<ns>:<sa>`; a client signed in
 for itself is `<idp-id>-client~<client id>` under its issuer's idp id; a person is the idp id the deployment names their
 issuer (`RASK_OIDC_IDP_ID` or a `RASK_OIDC_PROVIDERS` entry, chart `auth.oidc.idpId`/`auth.oidc.providers`) and the
@@ -137,7 +137,7 @@ a new estate-wide door adds a computed `can_<purpose>: owner` and its `model.fga
 existing verb.
 
 **Every table and namespace object is its uuid, `table:<uuid>` / `namespace:<uuid>`** (ADR 0173 §8, [[LH-524]];
-`fga.table_object`, `fga.namespace_object`), the uuid the catalog minted (a table's in its location claim, a namespace's
+`fga_ids.table_object`, `fga_ids.namespace_object`), the uuid the catalog minted (a table's in its location claim, a namespace's
 its `rask.uuid`; DescribeTable and DescribeNamespace answer it). No name reaches OpenFGA: a rename writes no tuple, a
 table created again under a dropped name inherits nothing, and a name OpenFGA could not hold as an id (a space) is
 fine. A catalog door resolves the name once per request (`catalog.api.dependencies.Resolver`); a test or a seed spells

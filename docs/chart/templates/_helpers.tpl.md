@@ -871,7 +871,7 @@ subject claim, and for an entry that is not a claim name.
 
 `auth.bootstrapAdmin`, which the catalog's declaration grants the estate's two standing authorities ([[XC-011]]), must be a
 person's principal, `<idp-id>~<subject>`. A bare name is refused at render because no token could ever prove it, a `user:`
-id because the catalog encodes the principal itself (`fga.user_object`), and a `kubernetes~` or `<idp-id>-client~` principal
+id because the catalog encodes the principal itself (`fga_ids.user_object`), and a `kubernetes~` or `<idp-id>-client~` principal
 because a machine administers no tenant (LH-433).
 
 ## `{{- define "lance.governedFgaEnv" -}}`

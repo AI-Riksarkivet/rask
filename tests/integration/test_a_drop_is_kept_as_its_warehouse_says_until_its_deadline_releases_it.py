@@ -11,7 +11,7 @@ ships off.
 ONE ESTATE ON MOTO, TWO SERVICES (``catalog_and_maintenance``): the real catalog app drops through its door and files the
 record, and maintenance runs its audit over the same control root, on what its worker stands on, asking the catalog's own
 release door (``catalog_doors``). One in-memory ``TupleStore`` stands behind the catalog through the real
-``lakehouse.governed.fga`` functions, since the claim is which tuples remain. A table still in its window and a live
+``lakehouse.governed.fga_reads`` and ``fga_writes`` functions, since the claim is which tuples remain. A table still in its window and a live
 table whose undrop crashed before clearing its record are the controls: the audit must keep both tables' grants.
 """
 
@@ -31,7 +31,7 @@ from catalog.core.config import get_settings as catalog_settings
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
-from lakehouse.governed.fga import user_object
+from lakehouse.governed.fga_ids import user_object
 from lakehouse.records import trash
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.queue import Task, TaskQueue

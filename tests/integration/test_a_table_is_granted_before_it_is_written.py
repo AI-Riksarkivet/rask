@@ -35,7 +35,7 @@ from lance_namespace import ServiceUnavailableError
 from catalog.core.config import get_settings
 from catalog.services import native
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed import fga
+from lakehouse.governed import fga_writes
 from lakehouse.records import location_claims
 from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
@@ -104,7 +104,7 @@ def _at_the_grant(monkeypatch: pytest.MonkeyPatch, killed: list[str]) -> None:
         killed.append("grant")
         raise Killed
 
-    monkeypatch.setattr(fga, "grant_on_create", _killed)
+    monkeypatch.setattr(fga_writes, "grant_on_create", _killed)
 
 
 def _at_the_backend_write(monkeypatch: pytest.MonkeyPatch, killed: list[str]) -> None:
@@ -177,7 +177,7 @@ def _at_the_namespace_grant(monkeypatch: pytest.MonkeyPatch, killed: list[str]) 
         killed.append("grant")
         raise Killed
 
-    monkeypatch.setattr(fga, "grant_before_arrival", _killed)
+    monkeypatch.setattr(fga_writes, "grant_before_arrival", _killed)
 
 
 def _at_the_namespace_write(monkeypatch: pytest.MonkeyPatch, killed: list[str]) -> None:

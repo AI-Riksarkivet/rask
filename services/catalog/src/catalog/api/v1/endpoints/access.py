@@ -52,7 +52,7 @@ from catalog.schemas import (
     MyPermissionsResponse,
     RelationGrants,
 )
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 
@@ -120,7 +120,7 @@ async def _target(resolver: Resolver, fga_type: str, segments: list[str]) -> tup
         TableNotFoundError: No table has the name.
         NamespaceNotFoundError: No namespace has the name.
     """
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     if fga_type not in ("table", "namespace"):
         return f"{fga_type}:{canonical}", None
     obj = await resolver.object(fga_type, segments)
@@ -132,7 +132,7 @@ async def _target(resolver: Resolver, fga_type: str, segments: list[str]) -> tup
 @lru_cache
 def _grantable_relations(fga_type: str) -> tuple[str, ...]:
     """The base rungs grantable on ``fga_type`` — ``_GRANTABLE_BASE`` restricted to what the model defines."""
-    for td in fga.load_model()["type_definitions"]:
+    for td in fga_model.load_model()["type_definitions"]:
         if td["type"] == fga_type:
             defined = td.get("relations") or {}
             return tuple(r for r in _GRANTABLE_BASE if r in defined)
@@ -146,7 +146,7 @@ def _can_relations(fga_type: str) -> tuple[str, ...]:
     Read from ``model.json`` (what the app loads) so the enumeration can never drift into a phantom
     relation — OpenFGA answers those with a 400 that fails closed to a 503 for every caller.
     """
-    for td in fga.load_model()["type_definitions"]:
+    for td in fga_model.load_model()["type_definitions"]:
         if td["type"] == fga_type:
             return tuple(sorted(r for r in (td.get("relations") or {}) if r.startswith("can_")))
     return ()
@@ -164,7 +164,7 @@ async def _access_list(
         # TaskGroup, not gather: one failed relation cancels the siblings, so a degraded OpenFGA is
         # never hammered by up-to-nine orphaned retry loops after the request has already 503'd.
         async with asyncio.TaskGroup() as group:
-            tasks = [group.create_task(fga.list_users(client, relation=r, obj=obj)) for r in relations]
+            tasks = [group.create_task(fga_reads.list_users(client, relation=r, obj=obj)) for r in relations]
     except* ServiceUnavailableError as outage:
         # #41: the review FAILED mid-enumeration — without this, the gate's earlier allow would be
         # the only trace, indistinguishable from a completed disclosure.
@@ -180,7 +180,7 @@ async def _access_list(
     # review exists to prevent. Inferred from the length against the cap, the same way the admin door
     # (`AccessListUsersResponse.truncated`) has always done it.
     grants = [
-        RelationGrants(relation=relation, users=(users := task.result()), truncated=len(users) >= fga.LIST_USERS_SERVER_CAP)
+        RelationGrants(relation=relation, users=(users := task.result()), truncated=len(users) >= fga_reads.LIST_USERS_SERVER_CAP)
         for relation, task in zip(relations, tasks, strict=True)
     ]
     if any(g.truncated for g in grants):
@@ -287,13 +287,13 @@ async def _access_check(
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
     subject = token.subject if token else "anonymous"
-    # Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified userset
+    # Resolve to a FULL subject (`fga_ids.grantee_object`): a subject is the user it is; a qualified userset
     # (``role:…#assignee``) is passed through as-is. Then check with qualify=False so
-    # fga.check sends it verbatim — otherwise its default ``user:`` prefix would double to ``user:user:…``
+    # fga_reads.check sends it verbatim — otherwise its default ``user:`` prefix would double to ``user:user:…``
     # and every simulated Check would falsely deny (audit 2026-07-20 caught exactly this).
-    user = fga.grantee_object(body.user)
+    user = fga_ids.grantee_object(body.user)
     try:
-        allowed = await fga.check(client, user=user, relation=body.relation, obj=obj, qualify=False)
+        allowed = await fga_reads.check(client, user=user, relation=body.relation, obj=obj, qualify=False)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
@@ -349,14 +349,14 @@ async def _my_permissions(
         raise UnauthenticatedError("the permission self-view needs an authenticated caller")
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
-    # The caller's subject is the user it is (`fga.user_object`), a service account's included.
-    subject = fga.user_object(token.subject)
+    # The caller's subject is the user it is (`fga_ids.user_object`), a service account's included.
+    subject = fga_ids.user_object(token.subject)
     relations = _can_relations(fga_type)
     # TaskGroup, not gather — same reason as the review path: one failure cancels its siblings rather
     # than leaving orphaned retry loops hammering a degraded OpenFGA after the request has 503'd.
     try:
         async with asyncio.TaskGroup() as group:
-            tasks = [group.create_task(fga.check(client, user=subject, relation=r, obj=obj, qualify=False)) for r in relations]
+            tasks = [group.create_task(fga_reads.check(client, user=subject, relation=r, obj=obj, qualify=False)) for r in relations]
     except* ServiceUnavailableError as outage:
         # A TaskGroup raises an ExceptionGroup, which no handler in the problem-body map recognises —
         # it would surface as a 500 and the caller would read "the catalog is broken" instead of
@@ -464,15 +464,15 @@ async def _access_mutate(
     actor = token.subject if token else "anonymous"
     # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a subject is the
     # user it is; a qualified userset (``role:…#assignee``) is passed through verbatim.
-    grantee = fga.grantee_object(body.user)
+    grantee = fga_ids.grantee_object(body.user)
     # The store refuses a tuple its model cannot hold, and that refusal reaches here as an outage, so the model is asked
     # first: a decision rung (`[user]`) names one account, never a role's assignees ([[LH-563]]).
-    if not fga.admits(fga_type, body.relation, grantee):
-        admitted = ", ".join(sorted(fga.type_restrictions(fga_type, body.relation)))
+    if not fga_model.admits(fga_type, body.relation, grantee):
+        admitted = ", ".join(sorted(fga_model.type_restrictions(fga_type, body.relation)))
         raise InvalidInputError(f"{body.relation!r} on {fga_type} cannot name {grantee}: the model lets it name {admitted}")
     if grant:
         await fga_deps.refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)
-    tup = fga.ClientTuple(user=grantee, relation=body.relation, object=obj)
+    tup = fga_writes.ClientTuple(user=grantee, relation=body.relation, object=obj)
     event = AuditAction.ACCESS_GRANT if grant else AuditAction.ACCESS_REVOKE
     told = announcing.grant_announcement(
         tup, action="grant_added" if grant else "grant_revoked", actor=f"user:{token.subject}" if token else None, object_name=name
@@ -480,9 +480,9 @@ async def _access_mutate(
     async with announcer.announcing(door="access_grant" if grant else "access_revoke", target=obj, announcements=[told]) as filing:
         try:
             if grant:
-                await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+                await fga_writes.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
             else:
-                await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+                await fga_writes.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         except ServiceUnavailableError:
             audit(event, AuditOutcome.FAILURE, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
             raise
@@ -680,7 +680,7 @@ async def _access_graph(
     obj, name = await _target(resolver, fga_type, segments)
     subject = token.subject if token else "anonymous"
     try:
-        tuples = await fga.read_object_tuples(client, obj)
+        tuples = await fga_reads.read_object_tuples(client, obj)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_GRAPH, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
@@ -734,9 +734,9 @@ async def _read_managed_access(client: OpenFgaClient | None, settings: FgaSettin
     """
     segments = parse_identifier(id)
     if (client := fga_deps.wired(settings, client)) is None:
-        return ManagedAccessResponse(object=f"{fga_type}:{fga.canonical_object_id(segments)}", managed_access=False)
+        return ManagedAccessResponse(object=f"{fga_type}:{fga_ids.canonical_object_id(segments)}", managed_access=False)
     obj, name = await _target(resolver, fga_type, segments)
-    tuples = await fga.read_object_tuples(client, obj)
+    tuples = await fga_reads.read_object_tuples(client, obj)
     return ManagedAccessResponse(object=obj, name=name, managed_access=any(t.object == obj and t.relation == "managed_access" for t in tuples))
 
 
@@ -753,7 +753,7 @@ async def get_warehouse_managed_access(
     """The same for a warehouse. Gated EXPLICITLY — `warehouse` is not in ``_RESOURCES``, so
     ``authorize`` returns early and a route added here without this call is ungated."""
     segments = parse_identifier(id)
-    obj = f"warehouse:{fga.canonical_object_id(segments)}"
+    obj = f"warehouse:{fga_ids.canonical_object_id(segments)}"
     await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=obj)
     return await _read_managed_access(client, settings, resolver, "warehouse", id)
 
@@ -772,17 +772,17 @@ async def _set_managed_access(
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
     actor = token.subject if token else "system:catalog"
-    tup = fga.ClientTuple(user=_MANAGED_ACCESS_SUBJECT, relation="managed_access", object=obj)
+    tup = fga_writes.ClientTuple(user=_MANAGED_ACCESS_SUBJECT, relation="managed_access", object=obj)
 
     told = announcing.grant_announcement(
         tup, action="grant_added" if enabled else "grant_revoked", actor=f"user:{token.subject}" if token else None, object_name=name
     )
     async with announcer.announcing(door="managed_access_set", target=obj, announcements=[told]) as filing:
-        already = any(t.object == obj and t.relation == "managed_access" for t in await fga.read_object_tuples(client, obj))
+        already = any(t.object == obj and t.relation == "managed_access" for t in await fga_reads.read_object_tuples(client, obj))
         if enabled and not already:
-            await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+            await fga_writes.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         elif not enabled and already:
-            await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+            await fga_writes.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         # Audited distinctly from a grant: this does not move anyone's access, it changes WHO MAY move it —
         # a governance act whose blast radius is every object beneath, and one an auditor will look for by
         # name rather than by inferring it from the absence of later grants.
@@ -832,7 +832,7 @@ async def set_warehouse_managed_access(
     be authenticated and ungated.
     """
     segments = parse_identifier(id)
-    obj = f"warehouse:{fga.canonical_object_id(segments)}"
+    obj = f"warehouse:{fga_ids.canonical_object_id(segments)}"
     await fga_deps.require_relation(client, settings, token, relation="can_set_managed_access", obj=obj)
     return await _set_managed_access(client, announcer, settings, token, resolver, "warehouse", id, body.enabled)
 

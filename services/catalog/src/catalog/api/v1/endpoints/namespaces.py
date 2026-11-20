@@ -73,7 +73,7 @@ from catalog.services.clone_ending_records import CloneEnding
 from lakehouse.events.control_emit import emit_control
 from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.records import base_registry, clone_sources, location_claims, protection, trash
 from lakehouse.records.protection import ProtectionRecord
@@ -125,7 +125,7 @@ def _collect_descendants(ns: LanceNamespace, segments: list[str]) -> list[tuple[
     else:
         # Hit the ceiling with a token still outstanding → a PARTIAL enumeration. Surface it (a partial
         # descendant list makes the cascade revoke silently incomplete → orphan grants), mirroring
-        # fga.read_object_tuples' openfga_read_truncated warning. In practice unreachable at this ceiling.
+        # fga_reads.read_object_tuples' openfga_read_truncated warning. In practice unreachable at this ceiling.
         log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "tables"})
     token = None
     for _ in range(_MAX_LIST_PAGES):
@@ -174,7 +174,7 @@ async def create_namespace(
     # whole bucket, its owners included. Shape rung, so 400, and before the native call.
     fga_deps.require_namespace_depth(segments)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
-    converge = await keyed.begin(endpoint="POST /v1/namespace/{id}/create", target=fga.canonical_object_id(segments))
+    converge = await keyed.begin(endpoint="POST /v1/namespace/{id}/create", target=fga_ids.canonical_object_id(segments))
     if converge.replay is not None:
         return CreateNamespaceResponse.model_validate(converge.replay.body)
     req = body or CreateNamespaceRequest()
@@ -232,8 +232,8 @@ async def create_namespace(
         control,
         action="namespace_created",
         object_type="namespace",
-        object_id=fga.namespace_object(minted),
-        object_name=fga.canonical_object_id(segments),
+        object_id=fga_ids.namespace_object(minted),
+        object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token else None,
         extra={"mode": req.mode, "properties": req.properties},
     )
@@ -381,7 +381,7 @@ async def _create_or_replace_empty_namespace(
         return await run_in_threadpool(native.call, ns, "create_namespace", req)
     except NamespaceAlreadyExistsError:
         pass
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     replaced = await fga_deps.identify(ns, settings, "namespace", segments)
     await fga_deps.require_relation(client, settings, token, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
     await fga_deps.require_namespace_unprotected(settings, replaced, force=False)
@@ -501,7 +501,7 @@ async def _trash_subtree(
     so = settings.storage_options()
     dropped_by = f"user:{token.subject}" if token is not None else None
     if own.object_uuid is None:
-        raise InternalError(f"namespace {fga.canonical_object_id(segments)!r} keeps no uuid, so its trash cannot be filed")
+        raise InternalError(f"namespace {fga_ids.canonical_object_id(segments)!r} keeps no uuid, so its trash cannot be filed")
     cascade = own.object_uuid
     uuid_at = {tuple(item.segments): item.uuid for item in descendants} | {tuple(segments): cascade}
 
@@ -536,7 +536,7 @@ async def _trash_subtree(
         described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=child))
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
         record = trash.make_record(
-            fga.canonical_object_id(child),
+            fga_ids.canonical_object_id(child),
             uuid=uuid_at[tuple(child)],
             location="",
             dropped_by=dropped_by,
@@ -585,7 +585,7 @@ async def _trash_listed_table(
     if fenced is None:
         return False
     record = trash.make_record(
-        fga.canonical_object_id(item.segments),
+        fga_ids.canonical_object_id(item.segments),
         uuid=item.uuid,
         location=fenced.location,
         dropped_by=dropped_by,
@@ -660,20 +660,21 @@ async def _destroy_subtree(
         with suppress(TableNotFoundError):
             doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=item.segments))
             if doomed.location:
-                await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, fga.canonical_object_id(item.segments))
+                await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, fga_ids.canonical_object_id(item.segments))
                 located[tuple(item.segments)] = doomed.location
     carried = {
-        key: await run_in_threadpool(partial(dataplane.clone_readers, location, storage_options, table=fga.canonical_object_id(list(key))))
+        key: await run_in_threadpool(partial(dataplane.clone_readers, location, storage_options, table=fga_ids.canonical_object_id(list(key))))
         for key, location in located.items()
     }
     try:
         order = clone_sources.destroy_order({key: clone_sources.tag_of(location) for key, location in located.items()}, carried)
     except clone_sources.ReadFromOutsideError as exc:
         log.warning(
-            "cascade_refused_clone_sources", extra={"namespace": segments, "read": {fga.canonical_object_id(list(k)): sorted(v) for k, v in exc.read.items()}}
+            "cascade_refused_clone_sources",
+            extra={"namespace": segments, "read": {fga_ids.canonical_object_id(list(k)): sorted(v) for k, v in exc.read.items()}},
         )
         raise InvalidTableStateError(
-            f"namespace {fga.canonical_object_id(segments)} cannot be destroyed: {len(exc.read)} table(s) in it are read by registered clones outside "
+            f"namespace {fga_ids.canonical_object_id(segments)} cannot be destroyed: {len(exc.read)} table(s) in it are read by registered clones outside "
             "it; drop or deregister those clones first, or drop the namespace recoverably"
         ) from exc
     tables = sorted(tables, key=lambda item: order.index(tuple(item.segments)) if tuple(item.segments) in located else len(order))
@@ -722,7 +723,7 @@ async def _destroy_listed_table(
         TableBytesLeftError: Its row is gone and bytes remain, so its claim stays held and fenced, as at the drop door.
     """
     child = item.segments
-    canonical = fga.canonical_object_id(child)
+    canonical = fga_ids.canonical_object_id(child)
     resolved = await run_in_threadpool(table_claims.resolve, ns, claims, child)
     fenced = await run_in_threadpool(partial(table_claims.fence_listed, ns, claims, resolved, listed_uuid=item.uuid, verb="drop"))
     if fenced is None:
@@ -794,7 +795,7 @@ async def _require_descendants_unprotected(settings: CatalogStore, descendants: 
         return
     records = await asyncio.gather(*(run_in_threadpool(protections.read, settings, item.kind, item.uuid) for item in descendants))
     for item, record in zip(descendants, records, strict=True):
-        fga_deps.require_not_protected(record is not None and record.protected, kind=item.kind, obj_id=fga.canonical_object_id(item.segments), force=False)
+        fga_deps.require_not_protected(record is not None and record.protected, kind=item.kind, obj_id=fga_ids.canonical_object_id(item.segments), force=False)
 
 
 @spec_router.post("/{id}/drop", response_model_exclude_none=True)
@@ -851,7 +852,7 @@ async def drop_namespace(
     cascade = DropBehavior.parse(req.behavior) is DropBehavior.CASCADE
     req.id = reconcile_body_id(segments, req.id)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
-    converge = await keyed.begin(endpoint="POST /v1/namespace/{id}/drop", target=fga.canonical_object_id(segments))
+    converge = await keyed.begin(endpoint="POST /v1/namespace/{id}/drop", target=fga_ids.canonical_object_id(segments))
     if converge.replay is not None:
         return DropNamespaceResponse.model_validate(converge.replay.body)
     # The namespace the name resolves to now, with the uuid its records are kept under (ADR 0173 §8). A `Skip` of a
@@ -917,7 +918,7 @@ async def drop_namespace(
         action="namespace_dropped",
         object_type="namespace",
         object_id=dropped.fga_object(),
-        object_name=fga.canonical_object_id(segments),
+        object_name=fga_ids.canonical_object_id(segments),
         object_uuid=own.object_uuid,
         namespace_uuid=own.namespace_uuid,
         actor=f"user:{token.subject}" if token else None,
@@ -935,7 +936,7 @@ async def drop_namespace(
             removed_tables.update(tuple(item.segments) for item in detached)
             # Long running, as the spec reads a `transaction_id`: the subtree's bytes are deleted later, by the purge, and
             # each table's deletion is tracked through DescribeTransaction as `<table id>$<its uuid>`, as at the table door.
-            response = DropNamespaceResponse(transaction_id=[fga.canonical_object_id([*item.segments, item.uuid]) for item in detached] or None)
+            response = DropNamespaceResponse(transaction_id=[fga_ids.canonical_object_id([*item.segments, item.uuid]) for item in detached] or None)
         elif cascade:
             # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves, announcing each table as
             # it goes ([[LH-495]]): the retry after a failure part-way lists only what still stands.
@@ -1049,7 +1050,7 @@ async def undrop_namespace(
     another namespace holds the name, or the parent's name is held by a namespace other than the one it was dropped
     from, it answers 409."""
     segments = parse_identifier(id)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
     converge = await keyed.begin(endpoint="POST /management/v1/namespace/{id}/undrop", target=canonical)
     if converge.replay is not None:
@@ -1111,7 +1112,7 @@ async def undrop_namespace(
             event=CatalogControlEvent(
                 action="namespace_undropped",
                 object_type="namespace",
-                object_id=fga.namespace_object(root_uuid),
+                object_id=fga_ids.namespace_object(root_uuid),
                 object_name=canonical,
                 object_uuid=root_uuid,
                 namespace_uuid=record.namespace_uuid,
@@ -1121,7 +1122,7 @@ async def undrop_namespace(
         ),
     )
     async with announcer.announcing(
-        door="undrop_namespace", target=fga.namespace_object(root_uuid), announcements=[*restored_tables.values(), restored_namespace]
+        door="undrop_namespace", target=fga_ids.namespace_object(root_uuid), announcements=[*restored_tables.values(), restored_namespace]
     ) as filing:
         response = await _rebuild_namespaces(ns, settings, namespace_records, canonical=canonical)
         async for restored in _reregister_tables(ns, settings, table_records, root=root):
@@ -1196,7 +1197,7 @@ async def _reregister_tables(ns: LanceNamespace, settings: CatalogStore, table_r
 async def get_namespace_protection(id: str, ns: NamespaceDep, settings: SettingsDep) -> ProtectionResponse:
     """Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up."""
     segments = parse_identifier(id)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     namespace = await fga_deps.identify(ns, settings, "namespace", segments)
     record = await run_in_threadpool(protections.read, settings, "namespace", namespace.uuid)
     return ProtectionResponse(id=canonical, protected=record is not None and record.protected, set_by=record.set_by if record is not None else None)
@@ -1215,7 +1216,7 @@ async def set_namespace_protection(
     (``protection`` maps to ``can_set_protection``, held by the namespace's owner, so a writer cannot arm or disarm the
     safety on what it writes). Same control-root record contract as the table door."""
     segments = parse_identifier(id)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     namespace = await fga_deps.identify(ns, settings, "namespace", segments)
     so = settings.storage_options()
     if body.protected:

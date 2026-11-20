@@ -27,7 +27,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 
 
 TUPLES = "/management/v1/access/tuples"
@@ -35,10 +35,10 @@ TUPLES = "/management/v1/access/tuples"
 INVALID_INPUT = 13
 PROBLEM = "application/problem+json"
 
-ROOT_OWNS_THE_ESTATE = (fga.user_object("dex~root"), "owner", "estate:rask")
-ALICE_CURATES_PII = (fga.user_object("dex~alice"), "curator", "classification:pii")
-BOB_APPLIES_PII = (fga.user_object("dex~bob"), "apply", "classification:pii")
-ALICE_APPLIES_RESTRICTED = (fga.user_object("dex~alice"), "apply", "classification:restricted")
+ROOT_OWNS_THE_ESTATE = (fga_ids.user_object("dex~root"), "owner", "estate:rask")
+ALICE_CURATES_PII = (fga_ids.user_object("dex~alice"), "curator", "classification:pii")
+BOB_APPLIES_PII = (fga_ids.user_object("dex~bob"), "apply", "classification:pii")
+ALICE_APPLIES_RESTRICTED = (fga_ids.user_object("dex~alice"), "apply", "classification:restricted")
 STEWARDS_APPLY_RESTRICTED = ("role:stewards#assignee", "apply", "classification:restricted")
 
 TYPE_ALONE = (
@@ -149,7 +149,7 @@ def test_the_browser_names_each_table_and_namespace_as_it_is_named_now_filters_b
     assert page.status_code == 200, page.text
     alice, bob = named.person("alice"), named.person("bob")
     assert {(t["user"], t["relation"], t["object"], t["name"]) for t in page.json()["tuples"]} == {
-        (fga.user_object("dex~root"), "owner", "estate:rask", None),
+        (fga_ids.user_object("dex~root"), "owner", "estate:rask", None),
         (alice, "owner", namespace, "lance_catalog$db"),
         (_WAREHOUSE, "parent", namespace, "lance_catalog$db"),
         (namespace, "child", _WAREHOUSE, None),

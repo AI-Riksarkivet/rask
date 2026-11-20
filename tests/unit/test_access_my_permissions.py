@@ -7,7 +7,7 @@ Three properties, and each exists because its opposite was the reason no such su
    the owner bar. "What may I do here" describes only the person asking.
 2. It takes NO subject. A self-view that accepts a ``user`` is the enumeration question renamed, and
    would need the owner gate back.
-3. The subject is the caller's principal, turned into its OpenFGA user once (``fga.user_object``); a
+3. The subject is the caller's principal, turned into its OpenFGA user once (``fga_ids.user_object``); a
    user id that matches no tuple makes every relation answer a correct-looking ``false``, and the page
    renders "you may do nothing" for an owner.
 
@@ -53,7 +53,7 @@ def _run(
         asked.append((user, relation, obj))
         return relation in (allow or set())
 
-    monkeypatch.setattr(access.fga, "check", fake_check)
+    monkeypatch.setattr(access.fga_reads, "check", fake_check)
     client = cast("OpenFgaClient", object())  # injected now (catalog-api-09); the fga.* module functions are faked below
     settings = cast(Settings, SimpleNamespace(fga_enabled=fga_enabled))
     token = (

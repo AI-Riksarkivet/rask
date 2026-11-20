@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -95,8 +95,8 @@ def renamed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Renamed:
 def granted(openfga_store: Any, renamed: Renamed) -> Any:  # noqa: ANN401 — root conftest's OpenFgaStore
     """The pipeline writes the renamed table and reads its source."""
     openfga_store.write(
-        (fga.user_object(PIPELINE), "writer", fga.table_object(renamed.table)),
-        (fga.user_object(PIPELINE), "reader", fga.table_object(renamed.source)),
+        (fga_ids.user_object(PIPELINE), "writer", fga_ids.table_object(renamed.table)),
+        (fga_ids.user_object(PIPELINE), "reader", fga_ids.table_object(renamed.source)),
     )
     return openfga_store
 
@@ -104,7 +104,7 @@ def granted(openfga_store: Any, renamed: Renamed) -> Any:  # noqa: ANN401 — ro
 @pytest_asyncio.fixture
 async def decider(granted: Any) -> AsyncIterator[OpenFgaDecider]:  # noqa: ANN401 — root conftest's OpenFgaStore
     """The decider every check-only service asks, over the store the grants were written to."""
-    async with fga.make_client(granted.url, granted.store_id, granted.model_id, token_file=None) as client:
+    async with fga_provision.make_client(granted.url, granted.store_id, granted.model_id, token_file=None) as client:
         yield OpenFgaDecider(client)
 
 

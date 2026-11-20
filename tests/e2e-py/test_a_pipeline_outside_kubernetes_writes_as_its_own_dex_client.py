@@ -27,7 +27,7 @@ from refusals import assert_refused, described, namespace_uuid
 from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 
 
 #: The machine client the Dex fixture declares, and its secret (`deploy/fixtures/dex/chart/values.yaml` `machineClients`).
@@ -77,6 +77,6 @@ def test_a_pipeline_signed_in_as_its_own_dex_client_writes_as_that_client_and_do
         lambda: requests.post(f"{CATALOG}/v1/table/{table}/drop", json={}, headers=headers, timeout=60),
         status=403,
         code=ErrorCode.PERMISSION_DENIED,
-        unchanged=lambda: (described(CATALOG, table, owner), tuples_on(fga.table_object(table_uuid))),
+        unchanged=lambda: (described(CATALOG, table, owner), tuples_on(fga_ids.table_object(table_uuid))),
         foreign={tenant.admin.principal, tenant.job.principal, standing["location"], table_uuid, namespace_uuid(CATALOG, tenant.bronze, owner)},
     )

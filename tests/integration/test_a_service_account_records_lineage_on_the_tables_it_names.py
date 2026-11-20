@@ -42,7 +42,7 @@ from lakehouse.events import outbox
 from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.events.openlineage import SYMLINKS_FACET_SCHEMA_URL, author_facet
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.decider import MAX_OBJECTS_PER_QUESTION
 from lakehouse.naming import location_identifier
 from lakehouse.storage.options import StorageOptions
@@ -104,7 +104,7 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
         ExitStack() as stack,
     ):
         # alice owns the estate's own warehouse, as the catalog's declaration makes its admin, so she may create in it.
-        openfga_store.write((fga.user_object("dex~alice"), "owner", "warehouse:lance_catalog"))
+        openfga_store.write((fga_ids.user_object("dex~alice"), "owner", "warehouse:lance_catalog"))
         assert catalog.post("/v1/namespace/lance_catalog$acme/create", json={}).status_code == 200
         namespace_uuid = catalog.post("/v1/namespace/lance_catalog$acme/describe", json={}).json()["properties"]["rask.uuid"]
         uuids: dict[str, str] = {}
@@ -115,11 +115,11 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
             described = catalog.post(f"/v1/table/{table}/describe", json={"vend_credentials": False}).json()
             uuids[table], locations[table] = described["properties"]["rask.uuid"], described["location"]
         openfga_store.write(
-            (fga.user_object(_LINEAGE), "decider", "estate:rask"),
-            (fga.user_object(_LINEAGE), "governance_prober", "estate:rask"),
-            (fga.user_object(_PRODUCER), "writer", fga.table_object(uuids[_MINE])),
-            (fga.user_object(_PRODUCER), "reader", fga.table_object(uuids[_READ])),
-            (fga.user_object(_READER), "reader", fga.table_object(uuids[_MINE])),
+            (fga_ids.user_object(_LINEAGE), "decider", "estate:rask"),
+            (fga_ids.user_object(_LINEAGE), "governance_prober", "estate:rask"),
+            (fga_ids.user_object(_PRODUCER), "writer", fga_ids.table_object(uuids[_MINE])),
+            (fga_ids.user_object(_PRODUCER), "reader", fga_ids.table_object(uuids[_READ])),
+            (fga_ids.user_object(_READER), "reader", fga_ids.table_object(uuids[_MINE])),
         )
         asked = stack.enter_context(counted(catalog_url))
         outbox_uri = f"file://{tmp_path}/lineage-outbox"

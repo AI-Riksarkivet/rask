@@ -28,7 +28,7 @@ from openfga_sdk import OpenFgaClient
 from pydantic import ValidationError
 
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -52,7 +52,7 @@ def _uuid(name: str) -> str:
 
 def _object(name: str) -> str:
     """The object the table ``name``'s grants are held by, ``table:<uuid>`` ([[LH-524]])."""
-    return fga.table_object(_uuid(name))
+    return fga_ids.table_object(_uuid(name))
 
 
 class _Names:
@@ -161,7 +161,7 @@ def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None
         captured.update(user=user, relation=relation, obj=obj)
         return False
 
-    monkeypatch.setattr(fga, "check", _deny)
+    monkeypatch.setattr(fga_reads, "check", _deny)
     client = cast(OpenFgaClient, object())
     names = _Names()
     with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on table:a\$b"):
@@ -259,7 +259,7 @@ def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch)
     # #22: the durable events feed is governed — drop events referencing a dataset the caller can't see.
     from lineage.api.v1.endpoints.events import get_events
 
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
+    monkeypatch.setattr(fga_reads, "batch_check", _batch_allow_a)  # only "a" visible
     settings = _settings(**_FULL_AUTH)
     repo = _FakeStore()
     repo.events = [
@@ -276,7 +276,7 @@ def test_get_events_hides_dataset_less_events_when_governed(monkeypatch: pytest.
     # on — it would otherwise leak the run/author/full event JSON to a caller with zero grants.
     from lineage.api.v1.endpoints.events import get_events
 
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
+    monkeypatch.setattr(fga_reads, "batch_check", _batch_allow_a)
     settings = _settings(**_FULL_AUTH)
     repo = _FakeStore()
     repo.events = [EventRecord(seq=1, outputs=[], inputs=[], event={"run": {"runId": "secret"}})]
@@ -290,7 +290,7 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
     # a small `limit` must page through VISIBLE rows only; a hidden row never appears on any page.
     from lineage.api.v1.endpoints.events import get_events
 
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
+    monkeypatch.setattr(fga_reads, "batch_check", _batch_allow_a)  # only "a" visible
     settings = _settings(**_FULL_AUTH)
     repo = _FakeStore()
     repo.events = [
@@ -393,7 +393,7 @@ def test_a_sparse_page_reads_its_window_in_three_reads_at_most_the_next_beside_a
             return "a"
         return f"hidden-{seq}" if own_tables else "b"
 
-    monkeypatch.setattr(fga, "batch_check", judged_after_a_yield)
+    monkeypatch.setattr(fga_reads, "batch_check", judged_after_a_yield)
     repo.events = [EventRecord(seq=seq, outputs=["t"], inputs=[], table_uuids=[_uuid(table(seq))], event={}) for seq in range(200, 0, -1)]
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
 
@@ -518,7 +518,7 @@ def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(held: s
         return {obj: (user, relation, obj) in held for obj in objects}
 
     with pytest.MonkeyPatch.context() as mp, outcome:
-        mp.setattr(fga, "batch_check", _batch_check)
+        mp.setattr(fga_reads, "batch_check", _batch_check)
         asyncio.run(
             fga_deps.enforce_output_authz(
                 _service_run(),

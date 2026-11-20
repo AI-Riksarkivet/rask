@@ -109,7 +109,7 @@ maintenance import it:
 | `services/catalog/src/catalog/main.py` (entrypoint `catalog.main:app`) | App lifespan: build OIDC verifier + OpenFGA client into `app.state`, graceful shutdown |
 | `services/catalog/src/catalog/api/security.py` | **Authn** — verify the OIDC token → `CurrentToken` (or fail closed) |
 | `services/catalog/src/catalog/api/fga_deps.py` | **Authz** — `authorize` (router-level pre-op `can_*` check) **and** `seed_ownership` (post-create grant). The op→`can_*` map is the only policy logic in the app. |
-| `packages/lakehouse/src/lakehouse/governed/fga.py` | Shared OpenFGA client wrapper (`from lakehouse.governed import fga`): `check`/`batch_check`/`list_objects`/`write_tuples`/`grant_on_create`, id helpers, retry + fail-closed |
+| `packages/lakehouse/src/lakehouse/governed/fga_*.py` | The shared OpenFGA seam, one module per job: `fga_reads` (`check`/`batch_check`/`list_objects`/`list_users`/`expand_tree`/tuple reads), `fga_writes` (`write_tuples`/`grant_on_create`/revokes/edge moves, audited per tuple), `fga_ids` (user and object ids), `fga_model` (the model as data, `hierarchy_edge_tuples`), `fga_resilience` (retry, circuit, fail-closed), `fga_provision` (store, model, client) |
 | `packages/lakehouse/src/lakehouse/governed/auth/model.fga` / `model.json` / `model.fga.yaml` | The authorization **model** (DSL, the JSON the app loads, and the model tests) — the model owns the privilege math |
 | `services/catalog/src/catalog/api/v1/endpoints/*` | Thin HTTP handlers → `services.native`/`services.dataplane` for the backend, `fga_deps.seed_ownership` for grants |
 | `services/catalog/src/catalog/services/native.py`, `dataplane.py` | Call pylance (run in a threadpool — it's blocking) |

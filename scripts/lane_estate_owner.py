@@ -18,7 +18,8 @@ import sys
 import httpx
 
 from lakehouse.governed.auth.write_model import STORE_NAME, fga_headers
-from lakehouse.governed.fga import newest_store, user_object
+from lakehouse.governed.fga_ids import user_object
+from lakehouse.governed.fga_provision import newest_store
 
 
 def main(principal: str) -> int:

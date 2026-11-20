@@ -130,7 +130,7 @@ def _grant(
     ``router_grants`` defaults to granting the router's own rung, so the tests about the DOOR are not
     answered by the gate in front of it. Pass an explicit set to exercise the router itself.
     """
-    from catalog.api.v1.endpoints import credentials as door
+    from lakehouse.governed import fga_reads
 
     granted_at_router = {_ROUTER_RUNG} if router_grants is None else router_grants
 
@@ -148,8 +148,8 @@ def _grant(
         namespaces above the name."""
         return {obj: _allowed(relation) for obj in objects}
 
-    monkeypatch.setattr(door.fga, "check", _check)
-    monkeypatch.setattr(door.fga, "batch_check", _batch_check)
+    monkeypatch.setattr(fga_reads, "check", _check)
+    monkeypatch.setattr(fga_reads, "batch_check", _batch_check)
 
 
 def test_the_maintenance_identity_gets_the_maintain_tier_credential(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:

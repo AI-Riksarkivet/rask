@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from catalog.core.config import CatalogStore, shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.services import manifest_reclaim, table_claims
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.naming import uuid_of
 from lakehouse.records import location_claims
@@ -88,7 +88,7 @@ def _namespace_names(rows: list[_Row], namespaces: set[str]) -> dict[str, str]:
     for row in rows:
         uuid = row.namespace_uuid()
         if uuid is not None and uuid in namespaces:
-            named[fga.namespace_object(uuid)] = row.object_id
+            named[fga_ids.namespace_object(uuid)] = row.object_id
     return named
 
 
@@ -121,7 +121,7 @@ def _claimed_name(store: ClaimStore, location: str, tables: set[str]) -> tuple[s
     uuid = found.claim.uuid
     if uuid is None or uuid not in tables:
         return None
-    return fga.table_object(uuid), found.claim.table
+    return fga_ids.table_object(uuid), found.claim.table
 
 
 def _last_segment(location: str) -> str:

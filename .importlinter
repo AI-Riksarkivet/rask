@@ -101,6 +101,22 @@ allowed_importers =
     lakehouse.events.bus
     lakehouse.storage.store_session
 
+# The authorization client is one module per job inside the auth plane (ADR 0224): the writes build on the reads (a revoke
+# reads what it removes) and on the ids and the model's hierarchy edge; the reads and the provisioning build on the
+# resilience every call passes; the ids build on the model's types; the model as data builds on none of them. Each layer
+# imports only those below it, and the two in a layer import neither each other, so no edge runs back up and a change to
+# the model, the ids or the circuit is never a change to a caller of the writes.
+[importlinter:contract:the-authorization-client-imports-one-way]
+name = ADR 0224: the authorization client's modules import one way, writes over reads and provisioning over ids and resilience over the model
+type = layers
+containers =
+    lakehouse.governed
+layers =
+    fga_writes
+    fga_reads | fga_provision
+    fga_ids | fga_resilience
+    fga_model
+
 # The auth plane judges a caller and presents the pod's own identity, and the bus and the store build on it to present
 # that identity (ADR 0224): `events.bus` reads the projected token, `storage.store_session` the machine identity and the
 # secret store. So the auth plane reaches neither of them, directly or through another module: a dependency the probe

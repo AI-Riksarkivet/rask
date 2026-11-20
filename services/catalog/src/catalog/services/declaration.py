@@ -23,7 +23,7 @@ from typing import Annotated, Final, Self
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
 from catalog.schemas import DeleteProfile
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_model, fga_writes
 from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import CONTROL_ID_PATTERN, CONTROL_ID_RE
@@ -79,14 +79,14 @@ class DeclaredGrant(_Declared):
             raise ValueError(f"a declared grant names a project or a warehouse (`project:<id>`, `warehouse:<id>`), not {self.object!r}")
         if is_person_subject(self.principal):
             raise ValueError(f"{self.principal!r} is a person: a person's grant is made at the catalog's access doors, never declared")
-        if not fga.admits(fga_type, self.relation, fga.user_object(self.principal)):
+        if not fga_model.admits(fga_type, self.relation, fga_ids.user_object(self.principal)):
             raise ValueError(f"{self.relation!r} is not a rung a principal is granted on a {fga_type}")
         return self
 
     @property
     def grant(self) -> GrantTuple:
         """The tuple this grant asks the store to hold."""
-        return GrantTuple(user=fga.user_object(self.principal), relation=self.relation, object=self.object)
+        return GrantTuple(user=fga_ids.user_object(self.principal), relation=self.relation, object=self.object)
 
 
 class GrantTuple(BaseModel):
@@ -99,9 +99,9 @@ class GrantTuple(BaseModel):
     object: str
 
     @property
-    def client_tuple(self) -> fga.ClientTuple:
+    def client_tuple(self) -> fga_writes.ClientTuple:
         """This tuple as the OpenFGA client writes and deletes it."""
-        return fga.ClientTuple(user=self.user, relation=self.relation, object=self.object)
+        return fga_writes.ClientTuple(user=self.user, relation=self.relation, object=self.object)
 
 
 class DeclaredEstateRole(_Declared):
@@ -112,7 +112,7 @@ class DeclaredEstateRole(_Declared):
 
     @model_validator(mode="after")
     def _a_machine_role(self) -> Self:
-        if self.relation not in fga.machine_relations("estate"):
+        if self.relation not in fga_model.machine_relations("estate"):
             raise ValueError(f"{self.relation!r} is not a machine role on the estate root")
         if is_person_subject(self.principal):
             raise ValueError(f"{self.principal!r} is a person: a machine role names a service's own account")
@@ -159,14 +159,16 @@ class Declaration(_Declared):
             estate_warehouse: The estate's own warehouse's object (``RASK_FGA_DEFAULT_WAREHOUSE_OBJECT``).
         """
         admins = {
-            GrantTuple(user=fga.user_object(admin), relation="admin", object=f"project:{project.id}") for project in self.projects for admin in project.admins
+            GrantTuple(user=fga_ids.user_object(admin), relation="admin", object=f"project:{project.id}")
+            for project in self.projects
+            for admin in project.admins
         }
         estate = {
-            GrantTuple(user=fga.user_object(admin), relation=relation, object=obj)
+            GrantTuple(user=fga_ids.user_object(admin), relation=relation, object=obj)
             for admin in self.estate.admins
             for relation, obj in (("admin", root), ("owner", estate_warehouse))
         }
-        roles = {GrantTuple(user=fga.user_object(role.principal), relation=role.relation, object=root) for role in self.estate.roles}
+        roles = {GrantTuple(user=fga_ids.user_object(role.principal), relation=role.relation, object=root) for role in self.estate.roles}
         return admins | {declared.grant for declared in self.grants} | estate | roles
 
 

@@ -25,7 +25,7 @@ from moto.server import ThreadedMotoServer
 from catalog.api import declaration_converge
 from catalog.api.ticks import Tick
 from catalog.services import warehouses
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.records import control_prefixes
 from tests import seeding
@@ -167,7 +167,7 @@ def test_a_tick_makes_every_declared_project_warehouse_and_service_grant_with_no
         "research": ("research", "git"),
     }
     assert listed == {"alice": ["acme"], "bob": ["lab"]}
-    assert (fga.user_object(PIPELINE), "writer", "warehouse:acme") in estate.store.tuples()
+    assert (fga_ids.user_object(PIPELINE), "writer", "warehouse:acme") in estate.store.tuples()
 
 
 def _declared_acme(estate: Estate) -> None:
@@ -250,7 +250,7 @@ def test_a_paged_root_listing_shows_every_warehouse_the_caller_sees(estate: Esta
     """One warehouse sorts before the estate's own id and one after it: the cursor walks them in one order."""
     estate.declare(projects=[_project("acme")], warehouses=[_warehouse("aaa", "acme"), _warehouse("zzz", "acme")])
     estate.tick()
-    estate.store.write((fga.user_object(f"{IDP}~alice"), "reader", "warehouse:lance_catalog"))
+    estate.store.write((fga_ids.user_object(f"{IDP}~alice"), "reader", "warehouse:lance_catalog"))
     alice, seen, token = estate.bearer("alice"), [], ""
 
     while token is not None:
@@ -296,7 +296,7 @@ def test_a_fresh_install_grants_the_estate_admin_git_declares_and_audits_each_tu
 
     estate.tick()
 
-    alice = fga.user_object(f"{IDP}~alice")
+    alice = fga_ids.user_object(f"{IDP}~alice")
     assert _declared_writes(caplog) == [(WRITE, alice, "admin", ROOT), (WRITE, alice, "owner", ESTATE_WAREHOUSE)]
     assert {(alice, "admin", ROOT), (alice, "owner", ESTATE_WAREHOUSE)} <= estate.store.tuples()
 
@@ -327,7 +327,7 @@ def test_another_estate_admin_in_git_moves_both_grants_and_the_audit_trail_names
 
     estate.tick()
 
-    alice, carol = fga.user_object(f"{IDP}~alice"), fga.user_object(f"{IDP}~carol")
+    alice, carol = fga_ids.user_object(f"{IDP}~alice"), fga_ids.user_object(f"{IDP}~carol")
     assert _declared_writes(caplog) == [
         (DELETE, alice, "admin", ROOT),
         (DELETE, alice, "owner", ESTATE_WAREHOUSE),
@@ -345,15 +345,15 @@ def test_an_estate_admin_whose_successor_could_not_be_granted_keeps_the_estate(e
     holds them, so the estate never stands without an administrator between ticks."""
     estate.declare(estate={"admins": [f"{IDP}~alice"]})
     estate.tick()
-    alice, carol = fga.user_object(f"{IDP}~alice"), fga.user_object(f"{IDP}~carol")
-    write = fga.write_tuples
+    alice, carol = fga_ids.user_object(f"{IDP}~alice"), fga_ids.user_object(f"{IDP}~carol")
+    write = fga_writes.write_tuples
 
-    async def refusing_carol(client: Any, tuples: list[fga.ClientTuple], **kwargs: Any) -> Any:
+    async def refusing_carol(client: Any, tuples: list[fga_writes.ClientTuple], **kwargs: Any) -> Any:
         if any(t.user == carol for t in tuples):
             raise ServiceUnavailableError("the store did not answer")
         return await write(client, tuples, **kwargs)
 
-    monkeypatch.setattr(fga, "write_tuples", refusing_carol)
+    monkeypatch.setattr(fga_writes, "write_tuples", refusing_carol)
     estate.declare(estate={"admins": [f"{IDP}~carol"]})
 
     answer = estate.tick()
@@ -365,7 +365,7 @@ def test_an_estate_admin_whose_successor_could_not_be_granted_keeps_the_estate(e
 def test_a_machine_role_git_stopped_declaring_is_taken_from_the_release_and_one_granted_elsewhere_stands(estate: Estate) -> None:
     """The release's own account held ``reconciler`` before any ledger did, as an earlier install writes it; a pipeline
     outside the release was made a ``decider`` at a door. Git declares neither, so only the release's role goes."""
-    maintenance, pipeline = fga.user_object(MAINTENANCE), fga.user_object(PIPELINE)
+    maintenance, pipeline = fga_ids.user_object(MAINTENANCE), fga_ids.user_object(PIPELINE)
     estate.store.write((maintenance, "reconciler", ROOT), (maintenance, "reclaimer", ROOT), (pipeline, "decider", ROOT))
     estate.declare(estate={"roles": [{"relation": "reclaimer", "principal": MAINTENANCE}]})
 
@@ -420,7 +420,7 @@ def test_a_grant_removed_from_git_is_revoked_and_one_made_at_a_door_stands(estat
 
     estate.tick()
 
-    held = {relation for user, relation, obj in estate.store.tuples() if user == fga.user_object(PIPELINE) and obj == "warehouse:acme"}
+    held = {relation for user, relation, obj in estate.store.tuples() if user == fga_ids.user_object(PIPELINE) and obj == "warehouse:acme"}
     assert held == {"reader"}
 
 
@@ -441,7 +441,7 @@ def test_a_project_removed_from_git_is_released_and_keeps_its_data(estate: Estat
 
     project = estate.client.get("/management/v1/projects/acme", headers=alice).json()
     assert (sorted(answer.released), answer.grants_revoked, answer.failed) == (["project:acme", "warehouse:acme"], 0, [])
-    assert (fga.user_object(f"{IDP}~alice"), "admin", "project:acme") in estate.store.tuples()
+    assert (fga_ids.user_object(f"{IDP}~alice"), "admin", "project:acme") in estate.store.tuples()
     assert (project["managed_by"], (estate.record("acme") or {}).get("managed_by")) == ("self", None)
     assert estate.client.get("/v1/namespace/acme$sales/table/list", headers=alice).json()["tables"] == ["t"]
 
@@ -457,7 +457,7 @@ def test_a_project_whose_record_cannot_be_read_keeps_the_admins_git_recorded_for
     answer = estate.tick()
 
     assert (answer.grants_revoked, answer.failed) == (0, ["unreadable:project:acme"]), "the tick tried a revoke it could not judge"
-    assert (fga.user_object(f"{IDP}~alice"), "admin", "project:acme") in estate.store.tuples()
+    assert (fga_ids.user_object(f"{IDP}~alice"), "admin", "project:acme") in estate.store.tuples()
 
 
 def test_a_released_warehouse_is_changed_at_its_doors_again(estate: Estate) -> None:

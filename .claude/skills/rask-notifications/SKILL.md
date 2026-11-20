@@ -130,7 +130,7 @@ await emit_control(  # best-effort; never raises into a committed mutation
     object_type="grant",
     object_id=f"project:{project_id}",
     actor=f"user:{token.subject}",  # the VERIFIED principal that made the change, `user:` and its key
-    extra={"relation": relation, "subject": fga.user_object(principal)},  # WHO this is about, as the OpenFGA user it is
+    extra={"relation": relation, "subject": fga_ids.user_object(principal)},  # WHO this is about, as the OpenFGA user it is
 )
 ```
 
@@ -144,8 +144,8 @@ is scoped to) by its uuids (ADR 0173 §10). The catalog's control emitter fills 
 namespace's uuid from `object_name` after the door acts (`catalog.api.dependencies.UuidNamingControlEmitter`); a door
 whose act ends or moves the object reads them first and passes them.
 
-**`extra.subject` is the entire targeting**, and it is the OpenFGA user the change names: `fga.user_object` (`user:` and
-the principal key percent-encoded), or a userset. A notifier decodes it with `fga.subject_of` and keeps only a person
+**`extra.subject` is the entire targeting**, and it is the OpenFGA user the change names: `fga_ids.user_object` (`user:` and
+the principal key percent-encoded), or a userset. A notifier decodes it with `fga_ids.subject_of` and keeps only a person
 (`is_person_subject`), expanding a userset through the decision door's `list-users`. A raw `f"user:{key}"` in
 `extra.subject` is the defect, though the `actor` keeps that form: it names another principal whenever the key carries a
 character the encoding escapes. A missing subject, a bare `user:`, `*` and a service account's principal name nobody.

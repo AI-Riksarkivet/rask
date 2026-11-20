@@ -1,4 +1,4 @@
-"""Unit tests for the derivation primitives in ``lakehouse.governed.fga``: ``expand`` / ``expand_tree``,
+"""Unit tests for the derivation primitives in ``lakehouse.governed.fga_reads``: ``expand`` / ``expand_tree``,
 plus the two widenings an estate admin's access questions need from ``list_objects`` / ``list_users``.
 
 What these pin, and why each matters more than it looks:
@@ -27,7 +27,7 @@ from typing import Any, cast
 import pytest
 from openfga_sdk import OpenFgaClient
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads, fga_writes
 
 
 # --------------------------------------------------------------------------- #
@@ -105,7 +105,7 @@ def test_expand_normalises_every_leaf_kind() -> None:
             _node("from-parent", leaf=_leaf(ttu=_ttu("table:t#parent", ["reader"]))),
         ),
     )
-    result = asyncio.run(fga.expand(_client({"table:t#reader": tree}), relation="reader", obj="table:t"))
+    result = asyncio.run(fga_reads.expand(_client({"table:t#reader": tree}), relation="reader", obj="table:t"))
 
     assert result["name"] == "table:t#reader"
     kinds = [child["leaf"] for child in result["union"]]
@@ -130,7 +130,7 @@ def test_expand_preserves_intersection_and_difference() -> None:
             ),
         ),
     )
-    result = asyncio.run(fga.expand(_client({"table:t#can_classify": tree}), relation="can_classify", obj="table:t"))
+    result = asyncio.run(fga_reads.expand(_client({"table:t#can_classify": tree}), relation="can_classify", obj="table:t"))
 
     assert [c["name"] for c in result["intersection"]] == ["a", "b"]
     difference = result["intersection"][1]["difference"]
@@ -140,13 +140,13 @@ def test_expand_preserves_intersection_and_difference() -> None:
 
 def test_expand_returns_empty_dict_when_the_relation_resolves_to_nothing() -> None:
     # {} ("nothing here") and a 503 ("could not ask") are different answers; only the first is a result.
-    assert asyncio.run(fga.expand(_client({}), relation="reader", obj="table:t")) == {}
+    assert asyncio.run(fga_reads.expand(_client({}), relation="reader", obj="table:t")) == {}
 
 
 def test_expand_depth_cap_marks_rather_than_drops(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fga, "_MAX_EXPAND_DEPTH", 1)
+    monkeypatch.setattr(fga_reads, "_MAX_EXPAND_DEPTH", 1)
     tree = _node("root", union=_nodes(_node("deep", union=_nodes(_node("deeper")))))
-    result = asyncio.run(fga.expand(_client({"table:t#reader": tree}), relation="reader", obj="table:t"))
+    result = asyncio.run(fga_reads.expand(_client({"table:t#reader": tree}), relation="reader", obj="table:t"))
     assert result["union"][0]["truncated"] is True
 
 
@@ -159,7 +159,7 @@ def test_expand_tree_depth_one_costs_exactly_one_expand_and_flags_what_continues
     # The budget check must run BEFORE any I/O: a depth-1 call is one round trip, and the leaf still
     # advertises that it goes further, so a UI can offer "expand" without the server guessing.
     client = _ExpandClient({"table:t#reader": _node("table:t#reader", leaf=_leaf(computed="writer"))})
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t"))
+    result = asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t"))
     assert result["leaf"].get("expanded") is None
     assert result["leaf"]["continues"] is True
     assert client.expanded == ["table:t#reader"]
@@ -171,14 +171,14 @@ def test_expand_tree_does_not_read_tuples_it_cannot_use() -> None:
         trees={"table:t#reader": _node("table:t#reader", leaf=_leaf(ttu=_ttu("table:t#parent", ["reader"])))},
         tuples={"table:t": [("namespace:db1", "parent", "table:t")]},
     )
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t"))
+    result = asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t"))
     assert client.reads == []
     assert result["leaf"]["continues"] is True
 
 
 def test_expand_tree_terminal_leaf_does_not_claim_to_continue() -> None:
     client = _ExpandClient({"table:t#reader": _node("table:t#reader", leaf=_leaf(users=["user:alice"]))})
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t"))
+    result = asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t"))
     assert "continues" not in result["leaf"]
 
 
@@ -189,7 +189,7 @@ def test_expand_tree_follows_a_computed_rung_on_the_same_object() -> None:
             "table:t#writer": _node("table:t#writer", leaf=_leaf(users=["user:alice"])),
         }
     )
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t", max_depth=2))
+    result = asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t", max_depth=2))
     assert result["leaf"]["expanded"][0]["leaf"]["users"] == ["user:alice"]
     assert client.expanded == ["table:t#reader", "table:t#writer"]
 
@@ -204,7 +204,7 @@ def test_expand_tree_follows_x_from_y_into_the_parent_object() -> None:
         },
         tuples={"table:db1$t": [("namespace:db1", "parent", "table:db1$t")]},
     )
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:db1$t", max_depth=3))
+    result = asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:db1$t", max_depth=3))
 
     expanded = result["leaf"]["expanded"]
     assert [n["name"] for n in expanded] == ["namespace:db1#reader"]
@@ -220,7 +220,7 @@ def test_expand_tree_marks_a_cycle_instead_of_spinning() -> None:
         },
         tuples={"namespace:a": [("namespace:b", "parent", "namespace:a")], "namespace:b": [("namespace:a", "parent", "namespace:b")]},
     )
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="namespace:a", max_depth=6))
+    result = asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="namespace:a", max_depth=6))
 
     hop = result["leaf"]["expanded"][0]
     assert hop["name"] == "namespace:b#reader"
@@ -230,8 +230,8 @@ def test_expand_tree_marks_a_cycle_instead_of_spinning() -> None:
 def test_expand_tree_clamps_max_depth_to_the_module_ceiling() -> None:
     chain = {f"table:t#r{i}": _node(f"table:t#r{i}", leaf=_leaf(computed=f"r{i + 1}")) for i in range(20)}
     client = _ExpandClient(chain)
-    asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="r0", obj="table:t", max_depth=999))
-    assert len(client.expanded) == fga.MAX_EXPAND_TREE_DEPTH
+    asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="r0", obj="table:t", max_depth=999))
+    assert len(client.expanded) == fga_reads.MAX_EXPAND_TREE_DEPTH
 
 
 # --------------------------------------------------------------------------- #
@@ -251,7 +251,7 @@ def test_list_users_returns_the_userset_arm_it_used_to_discard() -> None:
                 ]
             )
 
-    result = asyncio.run(fga.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", qualified=True))
+    result = asyncio.run(fga_reads.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", qualified=True))
     assert result == ["role:stewards#assignee", "user:*", "user:alice"]
 
 
@@ -263,7 +263,7 @@ def test_list_users_passes_the_requested_filter_through() -> None:
             seen["filters"] = body.user_filters
             return SimpleNamespace(users=[])
 
-    asyncio.run(fga.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", user_type="role", user_relation="assignee"))
+    asyncio.run(fga_reads.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", user_type="role", user_relation="assignee"))
     assert (seen["filters"][0].type, seen["filters"][0].relation) == ("role", "assignee")
 
 
@@ -281,7 +281,7 @@ def test_expand_tree_normalises_a_qualified_computed_userset() -> None:
             "table:t#reader": _node("table:t#reader", leaf=_leaf(users=["user:alice"])),
         }
     )
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="can_read_data", obj="table:t", max_depth=2))
+    result = asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="can_read_data", obj="table:t", max_depth=2))
 
     # The follow-up asks for the RELATION on the object, never the qualified string.
     assert client.expanded == ["table:t#can_read_data", "table:t#reader"]
@@ -299,7 +299,7 @@ def test_expand_tree_normalises_qualified_tuple_to_userset_entries() -> None:
         },
         tuples={"table:db1$t": [("namespace:db1", "parent", "table:db1$t")]},
     )
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="owner", obj="table:db1$t", max_depth=3))
+    result = asyncio.run(fga_reads.expand_tree(cast(OpenFgaClient, client), relation="owner", obj="table:db1$t", max_depth=3))
 
     assert client.expanded == ["table:db1$t#owner", "namespace:db1#owner"]
     assert result["leaf"]["expanded"][0]["leaf"]["users"] == ["user:alice"]
@@ -330,9 +330,9 @@ def test_check_passes_contextual_tuples_through_without_writing() -> None:
             writes.append(1)
             return SimpleNamespace()
 
-    hypothetical = [fga.ClientTuple(user="user:bob", relation="reader", object="warehouse:acme")]
+    hypothetical = [fga_writes.ClientTuple(user="user:bob", relation="reader", object="warehouse:acme")]
     allowed = asyncio.run(
-        fga.check(
+        fga_reads.check(
             cast(OpenFgaClient, _Client()),
             user="user:bob",
             relation="can_read_data",
@@ -367,7 +367,7 @@ def test_read_changes_normalises_operation_and_timestamp() -> None:
                 continuation_token="next",
             )
 
-    changes, token = asyncio.run(fga.read_changes(cast(OpenFgaClient, _Client()), object_type="table"))
+    changes, token = asyncio.run(fga_reads.read_changes(cast(OpenFgaClient, _Client()), object_type="table"))
     assert [c["operation"] for c in changes] == ["write", "delete"]
     assert changes[0]["user"] == "user:alice"
     # A DELETE is visible here and invisible to a Read — that asymmetry is the point of a changelog.
@@ -407,9 +407,9 @@ def test_read_changes_returns_the_token_raw_so_callers_stop_on_an_empty_page() -
             )
 
     client = cast(OpenFgaClient, _Client())
-    first, token1 = asyncio.run(fga.read_changes(client, object_type="table"))
+    first, token1 = asyncio.run(fga_reads.read_changes(client, object_type="table"))
     assert len(first) == 1 and token1 == "cursor-1"
 
-    second, token2 = asyncio.run(fga.read_changes(client, object_type="table", continuation_token=token1))
+    second, token2 = asyncio.run(fga_reads.read_changes(client, object_type="table", continuation_token=token1))
     # The token is UNCHANGED and still truthy — which is exactly why it cannot be the stop condition.
     assert second == [] and token2 == "cursor-1"

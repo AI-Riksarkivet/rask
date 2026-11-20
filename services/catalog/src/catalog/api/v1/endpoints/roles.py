@@ -45,7 +45,7 @@ from catalog.schemas import AssigneeRequest, Role, RoleCreateRequest, RoleDelete
 from catalog.services import project_admins, role_grants, roles
 from catalog.services import projects as project_registry
 from lakehouse.events.control_emit import emit_control
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.storage.conditional_records import RecordExistsError
 
@@ -95,7 +95,7 @@ def _announced_actor(token: Caller | None) -> str | None:
 
 async def _assignees(client: OpenFgaClient, role_id: uuid.UUID) -> list[str]:
     obj = roles.role_object(role_id)
-    return sorted(t.user for t in await fga.read_object_tuples(client, obj) if t.object == obj and t.relation == roles.ASSIGNEE)
+    return sorted(t.user for t in await fga_reads.read_object_tuples(client, obj) if t.object == obj and t.relation == roles.ASSIGNEE)
 
 
 @management_router.post("/{project_id}/roles", status_code=status.HTTP_201_CREATED)
@@ -120,15 +120,15 @@ async def create_role(
     actor = current_subject(token)
     record = RoleRecord(id=uuid.uuid4(), project=project_id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
     obj = roles.role_object(record.id)
-    edge = fga.ClientTuple(user=f"project:{project_id}", relation="project", object=obj)
-    await fga.write_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
+    edge = fga_writes.ClientTuple(user=f"project:{project_id}", relation="project", object=obj)
+    await fga_writes.write_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
     try:
         await run_in_threadpool(roles.create_role_record, settings.registry_root, settings.storage_options(), record)
     except RecordExistsError:
-        await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
+        await fga_writes.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
         raise NamespaceAlreadyExistsError(f"project {project_id!r} already holds a role named {body.name!r}") from None
     except BaseException:
-        await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
+        await fga_writes.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
         raise
     audit(AuditAction.ROLE_CREATE, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, name=record.name)
     await emit_control(
@@ -192,7 +192,7 @@ async def delete_role(
 
 async def _assignee(*, settings: CatalogStore, role: RoleRecord, raw: str) -> str:
     """The OpenFGA user ``raw`` names as an assignee of ``role``: a principal, or another standing role of its project."""
-    user = fga.grantee_object(raw)
+    user = fga_ids.grantee_object(raw)
     if user.startswith("user:"):
         return user
     nested, _, relation = user.partition("#")
@@ -249,7 +249,7 @@ async def assign_role(
     if token is not None:
         await fga_deps.refuse_self_elevation(wired, user=token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
     actor = current_subject(token)
-    tup = fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
+    tup = fga_writes.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
     told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(token))
     permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
     async with announcer.announcing(door="role_assign", target=obj, announcements=[told]) as filing:
@@ -280,10 +280,10 @@ async def unassign_role(
         ConcurrentModificationError: The removal would leave the project nobody administers.
     """
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
-    user = fga.grantee_object(body.user)
+    user = fga_ids.grantee_object(body.user)
     obj = roles.role_object(role.id)
     actor = current_subject(token)
-    tup = fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
+    tup = fga_writes.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
     told = announcing.grant_announcement(tup, action="grant_revoked", actor=_announced_actor(token))
     permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
     async with announcer.announcing(door="role_unassign", target=obj, announcements=[told]) as filing:

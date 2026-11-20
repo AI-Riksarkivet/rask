@@ -27,7 +27,7 @@ from lance_namespace import (
 
 from lakehouse.events import outbox
 from lakehouse.events.cloud_events import lineage_envelope
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -172,9 +172,9 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: py
     _stage(s, "r2", _event_json("r2", outputs=(("bronze", "hidden"),)))
 
     async def only_mine(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return {o: o == fga.table_object(_uuid("mine")) for o in objects}
+        return {o: o == fga_ids.table_object(_uuid("mine")) for o in objects}
 
-    monkeypatch.setattr(fga, "batch_check", only_mine)
+    monkeypatch.setattr(fga_reads, "batch_check", only_mine)
     token = _token()
     flt = _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, token)
     out = asyncio.run(dlq.list_dlq(s, token, flt, limit=100))
@@ -227,7 +227,7 @@ def test_replay_poison_is_404_under_fga_no_oracle(tmp_path: Path, monkeypatch: p
     async def any_visible(_c: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
         return dict.fromkeys(objects, True)
 
-    monkeypatch.setattr(fga, "batch_check", any_visible)
+    monkeypatch.setattr(fga_reads, "batch_check", any_visible)
     with pytest.raises(TransactionNotFoundError):
         asyncio.run(_replay(s, "bad", _Repo(), _token()))
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "bad") is not None
@@ -242,7 +242,7 @@ def test_replay_hidden_event_is_404_not_a_name_disclosing_403(tmp_path: Path, mo
     async def deny_all(_c: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
         return dict.fromkeys(objects, False)
 
-    monkeypatch.setattr(fga, "batch_check", deny_all)
+    monkeypatch.setattr(fga_reads, "batch_check", deny_all)
     repo = _Repo()
     with pytest.raises(TransactionNotFoundError):
         asyncio.run(_replay(s, "r1", repo, _token()))
@@ -259,7 +259,7 @@ def test_replay_seen_but_not_writable_is_403(tmp_path: Path, monkeypatch: pytest
     async def see_not_write(_c: object, *, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
         return dict.fromkeys(objects, relation == "can_get_metadata")
 
-    monkeypatch.setattr(fga, "batch_check", see_not_write)
+    monkeypatch.setattr(fga_reads, "batch_check", see_not_write)
     repo = _Repo()
     with pytest.raises(PermissionDeniedError, match=r"can_write_data required on outputs: bronze\$x"):
         asyncio.run(_replay(s, "r1", repo, _token()))

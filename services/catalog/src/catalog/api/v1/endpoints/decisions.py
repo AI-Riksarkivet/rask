@@ -46,7 +46,7 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, require_names
 from catalog.services import table_claims
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_model, fga_reads
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.decider import (
     DECISIONS_PREFIX,
@@ -138,7 +138,7 @@ WiredFgaClient = Annotated[OpenFgaClient, Depends(_wired_client)]
 def _relations_of(obj: str) -> frozenset[str]:
     """Every relation the compiled model defines on ``obj``'s type (empty for a type it does not define)."""
     obj_type = obj.partition(":")[0]
-    for td in fga.load_model()["type_definitions"]:
+    for td in fga_model.load_model()["type_definitions"]:
         if td["type"] == obj_type:
             return frozenset(td.get("relations") or {})
     return frozenset()
@@ -182,10 +182,10 @@ async def _in_scope(client: OpenFgaClient, settings: FgaSettings, *, caller: Cal
     """
     if not objects:
         return frozenset()
-    if await fga.check(client, user=caller.subject, relation=_SCOPE, obj=settings.fga_root_object):
+    if await fga_reads.check(client, user=caller.subject, relation=_SCOPE, obj=settings.fga_root_object):
         return frozenset(objects)
-    scoped = [o for o in objects if fga.is_object_id(o) and _SCOPE in _relations_of(o)]
-    held = await fga.batch_check(client, user=caller.subject, relation=_SCOPE, objects=scoped) if scoped else {}
+    scoped = [o for o in objects if fga_ids.is_object_id(o) and _SCOPE in _relations_of(o)]
+    held = await fga_reads.batch_check(client, user=caller.subject, relation=_SCOPE, objects=scoped) if scoped else {}
     return frozenset(o for o in scoped if held.get(o))
 
 
@@ -219,7 +219,7 @@ async def decide_check(
     subject = caller.subject
     if not _is_decidable(body.relation):
         raise _refused(subject, "check", f"{body.relation!r} is not a relation a decision may ask about", **asked)
-    if undefined := sorted(o for o in body.objects if fga.is_object_id(o) and body.relation not in _relations_of(o)):
+    if undefined := sorted(o for o in body.objects if fga_ids.is_object_id(o) and body.relation not in _relations_of(o)):
         raise _refused(subject, "check", f"the model defines no {body.relation!r} on {', '.join(undefined[:5])}", **asked)
     if body.tables and body.relation not in _relations_of("table:"):
         raise _refused(subject, "check", f"the model defines no {body.relation!r} on a table", **asked)
@@ -228,11 +228,11 @@ async def decide_check(
     except Exception:
         audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=subject, route="check", reason="resolution_failed", **asked)
         raise
-    objects = list(dict.fromkeys([*body.objects, *(fga.table_object(table) for table, _ in resolved.values())]))
+    objects = list(dict.fromkeys([*body.objects, *(fga_ids.table_object(table) for table, _ in resolved.values())]))
     try:
         in_scope = await _in_scope(client, settings, caller=caller, objects=objects)
         decided_on = [o for o in objects if o in in_scope]
-        allowed = await fga.batch_check(client, user=body.user, relation=body.relation, objects=decided_on) if decided_on else {}
+        allowed = await fga_reads.batch_check(client, user=body.user, relation=body.relation, objects=decided_on) if decided_on else {}
     except ServiceUnavailableError:
         audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=subject, route="check", reason="authz_unavailable", **asked)
         raise
@@ -240,7 +240,7 @@ async def decide_check(
     decided |= {
         name: TableDecision(allowed=True, table_uuid=table, namespace_uuid=namespace)
         for name, (table, namespace) in resolved.items()
-        if allowed.get(fga.table_object(table))
+        if allowed.get(fga_ids.table_object(table))
     }
     granted = [*(o for o in body.objects if allowed.get(o)), *(name for name, decision in decided.items() if decision.allowed)]
     outside = ",".join(o for o in objects if o not in in_scope)
@@ -254,10 +254,10 @@ async def decide_list_users(client: WiredFgaClient, token: CurrentToken, body: D
     caller = token.subject if token else "anonymous"
     asked = {"resource": body.object, "relation": body.relation}
     obj_type, sep, obj_id = body.object.partition(":")
-    if not (sep and obj_id and fga.is_object_id(body.object)) or (obj_type, body.relation) not in _EXPANDABLE_USERSETS:
+    if not (sep and obj_id and fga_ids.is_object_id(body.object)) or (obj_type, body.relation) not in _EXPANDABLE_USERSETS:
         raise _refused(caller, "list-users", f"{body.object}#{body.relation} is not a membership userset a decision may expand", **asked)
     try:
-        users = await fga.list_users(client, relation=body.relation, obj=body.object)
+        users = await fga_reads.list_users(client, relation=body.relation, obj=body.object)
     except ServiceUnavailableError:
         audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="list-users", reason="authz_unavailable", **asked)
         raise
@@ -274,7 +274,7 @@ async def decide_governed(client: WiredFgaClient, token: CurrentToken, body: Dec
         raise _refused(caller, "governed", f"governed answers for {', '.join(sorted(_PROBEABLE_TYPES))} objects only, not {', '.join(foreign[:5])}", **asked)
     try:
         # A name that is no object id holds no tuple, and reading it would fail the read.
-        governed = {o: fga.is_object_id(o) and bool(await fga.read_object_tuples(client, o)) for o in body.objects}
+        governed = {o: fga_ids.is_object_id(o) and bool(await fga_reads.read_object_tuples(client, o)) for o in body.objects}
     except ServiceUnavailableError:
         audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="governed", reason="authz_unavailable", **asked)
         raise

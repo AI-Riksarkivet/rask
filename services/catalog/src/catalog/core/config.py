@@ -463,7 +463,7 @@ class CatalogAuthzSettings(BaseSettings):
     signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
     #: The MAINTENANCE identities — the sweep, and anything else that rewrites HOW a dataset is stored. Each is a
     #: PRINCIPAL (on the estate, maintenance's service-account principal), refused when it is a bare name; the tuple
-    #: names the user it is (`fga.user_object`).
+    #: names the user it is (`fga_ids.user_object`).
     #:
     #: Maintenance compacts, optimizes indices and reclaims versions, and must hold ``maintainer`` and nothing
     #: else. The model keeps it apart from the data rungs in both directions (``can_maintain`` neither implies

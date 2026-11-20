@@ -21,7 +21,7 @@ from lance_namespace import ServiceUnavailableError
 from starlette.concurrency import run_in_threadpool
 
 from catalog.services import project_admins, roles, subject_tuples
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads, fga_writes
 
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ async def end_role(
     storage_options: StorageOptions,
     actor: str,
     permit: project_admins.Permit | None = None,
-) -> list[fga.ClientTuple]:
+) -> list[fga_writes.ClientTuple]:
     """End ``role``: every tuple naming it and on it, and its record; the tuples removed. With ``client`` ``None``
     (authorization off) only the record is ended. ``permit`` is asked with the projects whose ``admin`` reaches the
     role, since ending it unmakes those administrators, before anything is revoked and again on the read each removal
@@ -59,13 +59,13 @@ async def end_role(
     naming = await subject_tuples.tuples_naming(client, subject)
     await subject_tuples.refuse_stranding(client, subject, naming, who=f"role {role.name!r}", permit=permit)
     removed = await subject_tuples.revoke_naming(client, subject, naming, actor=actor, origin="lifecycle_delete", permit=permit)
-    on_it = [fga.ClientTuple(user=t.user, relation=t.relation, object=obj) for t in await fga.read_object_tuples(client, obj) if t.object == obj]
+    on_it = [fga_writes.ClientTuple(user=t.user, relation=t.relation, object=obj) for t in await fga_reads.read_object_tuples(client, obj) if t.object == obj]
     if assigned := [t for t in on_it if t.relation != "project"]:
         removed.extend(await project_admins.withdraw(client, assigned, actor=actor, origin="lifecycle_delete", permit=permit))
     await run_in_threadpool(roles.end_role_record, control_root, storage_options, role)
     if edge := [t for t in on_it if t.relation == "project"]:
         try:
-            removed.extend(await fga.delete_tuples(client, edge, actor=actor, origin="lifecycle_delete"))  # noqa: TID251
+            removed.extend(await fga_writes.delete_tuples(client, edge, actor=actor, origin="lifecycle_delete"))  # noqa: TID251
         except ServiceUnavailableError:
             log.exception("role_edge_not_removed", extra={"role": obj})
     return removed

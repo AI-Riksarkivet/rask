@@ -32,7 +32,7 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 
@@ -57,8 +57,8 @@ ADMINISTRATIVE: frozenset[str] = frozenset({"admin"})
 
 
 def _user_string(raw: str) -> str:
-    """``gina`` -> ``user:gina``; an object of a model type (``role:…#assignee``) passes through (`fga.grantee_object`)."""
-    return fga.grantee_object(raw)
+    """``gina`` -> ``user:gina``; an object of a model type (``role:…#assignee``) passes through (`fga_ids.grantee_object`)."""
+    return fga_ids.grantee_object(raw)
 
 
 def _direct_grants(tuples: list[Any], obj: str) -> list[Member]:
@@ -94,7 +94,7 @@ async def list_members(project_id: ProjectId, client: FgaClientDep, settings: Se
         # Authz off (local dev): there are no tuples, and an empty list is the honest answer. Inventing
         # names here would put people in front of someone who never granted them.
         return MemberList(members=[])
-    tuples = await fga.read_object_tuples(client, obj)
+    tuples = await fga_reads.read_object_tuples(client, obj)
     return MemberList(members=_direct_grants(tuples, obj))
 
 
@@ -126,8 +126,8 @@ async def grant_member(
     actor = token.subject if token else "system:catalog"
     await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
 
-    existing = await fga.read_object_tuples(wired, obj)
-    tup = fga.ClientTuple(user=user, relation=payload.relation, object=obj)
+    existing = await fga_reads.read_object_tuples(wired, obj)
+    tup = fga_writes.ClientTuple(user=user, relation=payload.relation, object=obj)
     if any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
         audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
         return MemberList(members=_direct_grants(existing, obj))
@@ -138,10 +138,10 @@ async def grant_member(
     async with announcer.announcing(door="member_grant", target=obj, announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
             if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api"):
-                return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
+                return MemberList(members=_direct_grants(await fga_reads.read_object_tuples(wired, obj), obj))
         else:
-            await fga.write_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
-        existing = await fga.read_object_tuples(wired, obj)
+            await fga_writes.write_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        existing = await fga_reads.read_object_tuples(wired, obj)
         audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
         await filing.send(told)
     return MemberList(members=_direct_grants(existing, obj))
@@ -167,9 +167,9 @@ async def revoke_member(
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
 
-    tup = fga.ClientTuple(user=user, relation=payload.relation, object=obj)
+    tup = fga_writes.ClientTuple(user=user, relation=payload.relation, object=obj)
     if payload.relation not in ADMINISTRATIVE:
-        existing = await fga.read_object_tuples(wired, obj)
+        existing = await fga_reads.read_object_tuples(wired, obj)
         if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
             return MemberList(members=_direct_grants(existing, obj))
     # THE SHARPER HALF. After this the subject can no longer see the project, so no visibility-gated
@@ -181,9 +181,9 @@ async def revoke_member(
     async with announcer.announcing(door="member_revoke", target=obj, announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
             if not await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api"):
-                return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
+                return MemberList(members=_direct_grants(await fga_reads.read_object_tuples(wired, obj), obj))
         else:
-            await fga.delete_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+            await fga_writes.delete_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         audit(AuditAction.PROJECT_MEMBER_REVOKE, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
         await filing.send(told)
-    return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))
+    return MemberList(members=_direct_grants(await fga_reads.read_object_tuples(wired, obj), obj))

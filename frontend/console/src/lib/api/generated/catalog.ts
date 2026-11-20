@@ -6425,7 +6425,7 @@ export interface components {
         };
         /**
          * DecisionListUsersResult
-         * @description Bare subject ids, sorted, as `fga.list_users` returns them.
+         * @description Bare subject ids, sorted, as `fga_reads.list_users` returns them.
          */
         DecisionListUsersResult: {
             /** Users */

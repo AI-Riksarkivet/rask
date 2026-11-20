@@ -52,7 +52,7 @@ from catalog.core import manifest_bytes
 from catalog.services import dataplane, table_claims
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.control_events import CatalogControlEvent
-from lakehouse.governed import fga as fga_module
+from lakehouse.governed import fga_reads, fga_writes
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -198,11 +198,11 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
             return False
         return relation not in served.denied and f"{relation} {obj}" not in served.denied
 
-    monkeypatch.setattr(fga_module, "check", check)
-    monkeypatch.setattr(fga_module, "grant_on_create", AsyncMock())
-    monkeypatch.setattr(fga_module, "grant_before_arrival", AsyncMock())
-    monkeypatch.setattr(fga_module, "name_child", AsyncMock())
-    monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))
+    monkeypatch.setattr(fga_reads, "check", check)
+    monkeypatch.setattr(fga_writes, "grant_on_create", AsyncMock())
+    monkeypatch.setattr(fga_writes, "grant_before_arrival", AsyncMock())
+    monkeypatch.setattr(fga_writes, "name_child", AsyncMock())
+    monkeypatch.setattr(fga_writes, "revoke_object_tuples", AsyncMock(return_value=[]))
     from catalog.core.config import Settings, get_settings
 
     get_settings.cache_clear()

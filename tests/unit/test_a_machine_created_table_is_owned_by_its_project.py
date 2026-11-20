@@ -31,7 +31,7 @@ import pytest
 from catalog.api import fga_deps
 from catalog.api.security import Caller
 from catalog.core.config import Settings
-from lakehouse.governed import fga
+from lakehouse.governed import fga_writes
 from lakehouse.governed.machine_identity import ServicePrincipal
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
@@ -67,7 +67,7 @@ async def _tuples_written(token: Caller, monkeypatch: pytest.MonkeyPatch) -> lis
     async def _capture(_client: object, tuples: Any, **_kw: Any) -> None:
         written.extend((t.user, t.relation, t.object) for t in tuples)
 
-    monkeypatch.setattr(fga, "write_tuples", _capture)
+    monkeypatch.setattr(fga_writes, "write_tuples", _capture)
     await fga_deps.seed_ownership(
         cast("OpenFgaClient", object()),  # the capture never touches the client
         _settings(),

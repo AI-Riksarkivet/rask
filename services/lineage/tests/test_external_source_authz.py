@@ -38,7 +38,7 @@ from lineage_lane import Feed
 
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lineage.api.fga_deps import Governed, enforce_output_authz, is_external_source
@@ -63,7 +63,7 @@ def _uuid(name: str) -> str:
 
 def _object(name: str) -> str:
     """The FGA object the governed table ``name``'s grants are held by."""
-    return fga.table_object(_uuid(name))
+    return fga_ids.table_object(_uuid(name))
 
 
 def _table_payload(namespace: str, name: str) -> dict[str, Any]:
@@ -150,7 +150,7 @@ def app_with(monkeypatch):
     def _make(allowed: set[str], held: dict[str, str] | None = None) -> tuple[FastAPI, _FakeFGA]:
         fake = _FakeFGA(allowed)
 
-        monkeypatch.setattr(fga, "batch_check", fake.batch_check)
+        monkeypatch.setattr(fga_reads, "batch_check", fake.batch_check)
         app = FastAPI()
         app.state.decider = _Claims(cast("Any", object()), held or {})
         # The feed lineage's lifespan always wires, here one holding no run, so each event founds its run.

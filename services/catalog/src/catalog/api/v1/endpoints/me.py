@@ -17,7 +17,7 @@ fixed root object (``settings.fga_root_object``): the estate owner's standing, w
 decide whether to offer the estate-admin areas, each of whose doors asks a verb of its own. ``can_create_project`` is
 that verb on the same object, the one ``POST /management/v1/projects`` asks, so the shell offers the create to exactly
 the callers the door admits.
-``projects`` comes from the #51 ``fga.list_objects`` wrapper on the ``project`` type — ``can_administer``
+``projects`` comes from the #51 ``fga_reads.list_objects`` wrapper on the ``project`` type — ``can_administer``
 first, then ``member`` (the model folds admins into members, so the admin-first pass wins the dedupe).
 All lookups share one 2s wall-clock budget and each degrades on its own outage/expiry: an OpenFGA
 brownout costs display fidelity, never the whole self-describe. None of them are audited — the #41 trail
@@ -39,7 +39,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.schemas import MeProject, MeResponse
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads, fga_resilience
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.settings import FgaSettings
 
@@ -51,7 +51,7 @@ management_router = APIRouter(prefix="/management/v1/me", tags=["me"])
 # ONE wall-clock budget for all the display-only FGA lookups (estate check + the two project lists,
 # sequential). Same rationale as /management/v1/projects' _ADMINS_TIMEOUT_SECONDS: a caller gives the whole request
 # a few seconds, and the wrapper's default bounded-retry ladder alone can exceed it — so each call runs a single
-# attempt (retry=fga.ONE_ATTEMPT) under the shared deadline and degrades on expiry.
+# attempt (retry=fga_resilience.ONE_ATTEMPT) under the shared deadline and degrades on expiry.
 _LOOKUP_BUDGET_SECONDS = 2.0
 
 
@@ -75,21 +75,21 @@ async def _estate_standing(client: OpenFgaClient, settings: FgaSettings, sub: st
     """
     try:
         async with asyncio.timeout_at(deadline):
-            return await fga.check(client, user=sub, relation=relation, obj=settings.fga_root_object, retry=fga.ONE_ATTEMPT)
+            return await fga_reads.check(client, user=sub, relation=relation, obj=settings.fga_root_object, retry=fga_resilience.ONE_ATTEMPT)
     except (ServiceUnavailableError, TimeoutError):
         log.warning("me_estate_standing_unavailable", extra={"relation": relation})
         return False
 
 
 async def _project_ids(client: OpenFgaClient, sub: str, relation: str, deadline: float) -> list[str]:
-    """The project ids the caller holds ``relation`` on, via ``fga.list_objects`` (#51) — sorted.
+    """The project ids the caller holds ``relation`` on, via ``fga_reads.list_objects`` (#51) — sorted.
 
     Degrades to ``[]`` PER RELATION on an outage or budget expiry (never 5xxes the endpoint): a missing
     member list still leaves the admin list serving, and vice versa.
     """
     try:
         async with asyncio.timeout_at(deadline):
-            objects = (await fga.list_objects(client, user=sub, relation=relation, object_type="project", retry=fga.ONE_ATTEMPT)).objects
+            objects = (await fga_reads.list_objects(client, user=sub, relation=relation, object_type="project", retry=fga_resilience.ONE_ATTEMPT)).objects
     except (ServiceUnavailableError, TimeoutError):
         log.warning("me_projects_unavailable", extra={"relation": relation})
         return []

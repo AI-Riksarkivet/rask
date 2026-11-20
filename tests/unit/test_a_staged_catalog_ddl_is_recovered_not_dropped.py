@@ -36,7 +36,7 @@ from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.events.openlineage import run_id_for
 from lakehouse.events.signing import signature_of
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -201,8 +201,8 @@ def _arm_gate(monkeypatch: pytest.MonkeyPatch, *, writer: str | None) -> None:
     async def read_object_tuples(_client: object, _obj: str) -> list[object]:
         return [object()]  # governed, so a denial is repairable rather than unrepairable
 
-    monkeypatch.setattr(fga, "batch_check", batch_check)
-    monkeypatch.setattr(fga, "read_object_tuples", read_object_tuples)
+    monkeypatch.setattr(fga_reads, "batch_check", batch_check)
+    monkeypatch.setattr(fga_reads, "read_object_tuples", read_object_tuples)
 
 
 def _request() -> Any:  # noqa: ANN401 — the drain and the routes read only app.state
@@ -526,7 +526,7 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
     async def see_not_write(_client: object, *, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
         return dict.fromkeys(objects, relation == "can_get_metadata" or unsigned)
 
-    monkeypatch.setattr(fga, "batch_check", see_not_write)
+    monkeypatch.setattr(fga_reads, "batch_check", see_not_write)
     operator = _person("operator")
     repo, publisher = _Repo(), BusDouble()
 

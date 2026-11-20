@@ -25,7 +25,7 @@ describe('parentNamespace', () => {
 	it('treats a bare name as its own root — the REGISTRY rule, which the backend does NOT share', () => {
 		// Deliberate divergence, stated rather than blessed in silence. The registry views group a
 		// root-level table under its own name so it still gets a row; `parent_namespace_id` returns
-		// None for the same input ("no parent namespace to inherit from", fga.py:188-190). Harmless as
+		// None for the same input ("no parent namespace to inherit from", `fga_ids.parent_namespace_id`). Harmless as
 		// a grouping key, wrong as an object id — which is what `parentNamespaceOrNull` is for.
 		expect(parentNamespace('pages')).toBe('pages');
 		expect(parentNamespaceOrNull('pages')).toBeNull();

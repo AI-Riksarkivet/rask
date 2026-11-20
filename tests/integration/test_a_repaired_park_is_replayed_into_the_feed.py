@@ -27,8 +27,8 @@ from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 
 from lakehouse.events.bus_delivery import Outcome, Settlement
-from lakehouse.governed import fga
-from lakehouse.governed.fga import user_object
+from lakehouse.governed import fga_reads
+from lakehouse.governed.fga_ids import user_object
 from tests.bus_double import BusDouble
 from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, relay_tick, run_event
 
@@ -80,7 +80,7 @@ def _governed(monkeypatch: pytest.MonkeyPatch, table: str) -> None:
         del client
         return [ClientTuple(user=user_object("dex~owner"), relation="owner", object=obj)] if obj == table else []
 
-    monkeypatch.setattr(fga, "read_object_tuples", held)
+    monkeypatch.setattr(fga_reads, "read_object_tuples", held)
 
 
 @contextmanager

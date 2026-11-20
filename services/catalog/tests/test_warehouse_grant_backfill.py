@@ -12,7 +12,7 @@ import pytest
 
 from catalog.core.config import Settings
 from catalog.services import warehouse_grant_backfill
-from lakehouse.governed import fga
+from lakehouse.governed import fga_provision, fga_resilience
 from lakehouse.records.warehouse_records import WarehouseRecord
 
 
@@ -101,7 +101,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
 def _stub_client(monkeypatch) -> None:
     """Replace the OpenFGA client construction — these tests are about the WALK, not the transport.
 
-    Patched on `lakehouse.governed.fga` rather than on this module: the backfill builds its client
+    Patched on `lakehouse.governed.fga_provision` rather than on this module: the backfill builds its client
     through the estate's ONE bootstrap (`auth_lifespan.build_fga_client`) instead of its own copy of
     pinned-else-provision, so the transport seam is the shared module's, not a name re-exported here.
     """
@@ -109,23 +109,26 @@ def _stub_client(monkeypatch) -> None:
     class _Client:
         async def close(self) -> None: ...
 
-    from lakehouse.governed import fga
-
-    monkeypatch.setattr(fga, "make_client", lambda *a, **k: _Client())
+    monkeypatch.setattr(fga_provision, "make_client", lambda *a, **k: _Client())
     # BOTH HALVES, because which one the bootstrap takes is a POSTURE and postures change: since
     # 2026-09-09 `build_fga_client` defaults `provision=False`, so an unpinned build resolves rather
     # than publishes (only the catalog's own lifespan opts in; the default is pinned by
     # `test_attach_auth_postures.py::test_the_default_posture_RESOLVES_when_unpinned`). Stubbing only the
     # write half left the read half dialling a real `openfga:8080`, which fails as a DNS error rather
     # than as anything about the walk these tests are for.
-    monkeypatch.setattr(fga, "provision", _provision)
-    monkeypatch.setattr(fga, "resolve", _resolve)
+    monkeypatch.setattr(fga_provision, "provision", _provision)
+    monkeypatch.setattr(fga_provision, "resolve", _resolve)
 
 
 async def _provision(
-    _url: str, *, token_file: str | None, store_name: str = "lance-catalog", store_id: str | None = None, retry: fga.RetryPolicy = fga.DEFAULT_RETRY
+    _url: str,
+    *,
+    token_file: str | None,
+    store_name: str = "lance-catalog",
+    store_id: str | None = None,
+    retry: fga_resilience.RetryPolicy = fga_resilience.DEFAULT_RETRY,
 ) -> tuple[str, str]:
-    """`fga.provision`'s whole signature, as `_resolve` carries `fga.resolve`'s."""
+    """`fga_provision.provision`'s whole signature, as `_resolve` carries `fga_provision.resolve`'s."""
     del token_file, store_name, retry
     return (store_id or "store", "model")
 
@@ -139,6 +142,6 @@ async def _resolve(
     deadline_seconds: float = 0.0,
     poll_seconds: float = 0.0,
 ) -> tuple[str, str]:
-    """`fga.resolve`'s whole signature, so a new keyword the caller passes reaches the double."""
+    """`fga_provision.resolve`'s whole signature, so a new keyword the caller passes reaches the double."""
     del token_file, store_name, deadline_seconds, poll_seconds
     return (store_id or "store", "model")

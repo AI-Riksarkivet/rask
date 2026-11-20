@@ -29,7 +29,7 @@ from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_eve
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane, table_inputs
 from catalog.services.table_claims import ResolvedTable
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.storage.options import StorageOptions
 
 
@@ -50,7 +50,7 @@ async def record_declared_inputs(settings: CatalogStore, resolver: Resolver, run
         OSError: The store refused the record's read or write.
     """
     hook = table_inputs.recorder(
-        settings.registry_root, settings.storage_options(), name=fga.canonical_object_id(segments), declared=await fga_deps.declared_inputs(resolver, run)
+        settings.registry_root, settings.storage_options(), name=fga_ids.canonical_object_id(segments), declared=await fga_deps.declared_inputs(resolver, run)
     )
     if hook is not None:
         await run_in_threadpool(hook, table.require_uuid())

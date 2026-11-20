@@ -30,7 +30,7 @@ from catalog.core.vending import reclaim_or_refuse, role_session_name
 from catalog.schemas import CredentialResponse, TrashEndResponse, TrashRefusalRequest, TrashRefusalResponse, TrashReleaseResponse, VendedCredentials
 from catalog.services import trash_reclaim
 from catalog.services.announcement_intents import Announcement
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.records import trash
@@ -71,15 +71,15 @@ async def release_trash(
         claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
         if (reason := trash_reclaim.release_refusal(record, now=clock()) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
             raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
-        obj = fga.object_of(kind, uuid)
-        held = await fga.read_object_tuples(wired, obj) if (wired := fga_deps.wired(settings, client)) is not None else []
-        told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(token)) for t in held if fga.names_someone(str(t.user))}
+        obj = fga_ids.object_of(kind, uuid)
+        held = await fga_reads.read_object_tuples(wired, obj) if (wired := fga_deps.wired(settings, client)) is not None else []
+        told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(token)) for t in held if fga_ids.names_someone(str(t.user))}
         async with announcer.announcing(door="trash_release", target=obj, announcements=list(told.values())) as filing:
             removed = await fga_deps.revoke_expired_object(client, settings, obj, token=token)
             # Tell each person who lost a grant on the released object: none of them can see it any more, so no feed gated
             # on seeing it would. Structural edges name objects, not people, and are not announced.
             for t in removed:
-                if fga.names_someone(str(t.user)):
+                if fga_ids.names_someone(str(t.user)):
                     await filing.send(told.get((t.object, t.relation, t.user)) or _revoked(t, record, uuid=uuid, actor=_actor(token)))
             stamped = await run_in_threadpool(partial(trash_reclaim.stamp_released, settings, kind=kind, uuid=uuid, now=clock()))
     except Exception as failed:
@@ -116,7 +116,7 @@ async def vend_reclaim_credentials(
         AuditAction.VEND_CREDENTIALS,
         AuditOutcome.SUCCESS,
         subject=token.subject if token is not None else None,
-        resource=fga.object_of(kind, uuid),
+        resource=fga_ids.object_of(kind, uuid),
         tier="reclaim",
         door="trash_credentials",
     )
@@ -142,7 +142,7 @@ async def end_trash(
         judged = partial(trash_reclaim.end_refusal, settings, record, claim, kind=kind, uuid=uuid, now=clock())
         if (reason := await run_in_threadpool(judged) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
             raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
-        revoked = await fga_deps.revoke_removed_object(client, settings, fga.object_of(kind, uuid), token=token)
+        revoked = await fga_deps.revoke_removed_object(client, settings, fga_ids.object_of(kind, uuid), token=token)
         await run_in_threadpool(partial(trash.end, settings.registry_root, settings.storage_options(), record, kind=kind, uuid=uuid))
     except Exception as failed:
         _audited(AuditAction.TRASH_END, AuditOutcome.FAILURE, token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
@@ -162,7 +162,7 @@ async def note_trash_refusal(kind: TrashKind, uuid: str, body: TrashRefusalReque
 
 def _audited(action: AuditAction, outcome: AuditOutcome, token: Caller | None, *, kind: TrashKind, uuid: str, **fields: object) -> None:
     """One audit record of a trash door's act on the object ``kind`` and ``uuid`` name, for the caller that asked."""
-    audit(action, outcome, subject=token.subject if token is not None else None, resource=fga.object_of(kind, uuid), **fields)
+    audit(action, outcome, subject=token.subject if token is not None else None, resource=fga_ids.object_of(kind, uuid), **fields)
 
 
 async def _noted(settings: CatalogStore, *, kind: TrashKind, uuid: str, reason: str) -> InvalidTableStateError:
@@ -190,7 +190,7 @@ async def _standing_refusal(resolver: Resolver, record: TrashRecord, claim: Loca
         return None
     if standing != uuid:
         return None
-    return f"the live {kind} {fga.canonical_object_id(segments)!r} holds the record's uuid again, so the record is not the trash's"
+    return f"the live {kind} {fga_ids.canonical_object_id(segments)!r} holds the record's uuid again, so the record is not the trash's"
 
 
 async def _place_held(resolver: Resolver, claim: LocationClaim) -> str | None:
@@ -203,10 +203,10 @@ async def _place_held(resolver: Resolver, claim: LocationClaim) -> str | None:
         return None
     if resolved.location is None or decoded_path(resolved.location) != decoded_path(claim.location):
         return None
-    return f"the live table {fga.canonical_object_id(claim.segments)!r} holds the record's place, so its bytes are not the trash's"
+    return f"the live table {fga_ids.canonical_object_id(claim.segments)!r} holds the record's place, so its bytes are not the trash's"
 
 
-def _revoked(t: fga.ClientTuple, record: TrashRecord, *, uuid: str, actor: str) -> Announcement:
+def _revoked(t: fga_writes.ClientTuple, record: TrashRecord, *, uuid: str, actor: str) -> Announcement:
     """The ``grant_revoked`` a release announces for ``t``, naming the released object by its name and uuids."""
     namespace_uuid = record.namespace_uuid
     return announcing.grant_announcement(

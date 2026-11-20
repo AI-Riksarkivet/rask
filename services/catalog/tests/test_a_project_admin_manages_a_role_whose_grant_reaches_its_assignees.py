@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from catalog.schemas import RoleRecord
 from catalog.services import roles, subject_tuples, warehouses
-from lakehouse.governed import fga
+from lakehouse.governed import fga_writes
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
@@ -149,15 +149,15 @@ def test_an_unassignment_and_an_admin_revoke_at_once_leave_the_project_administe
     for user in (f"role:{role['id']}#assignee", "dex~bob"):
         _status(catalog.client.put(members, json={"user": user, "relation": "admin"}, headers=root), 200)
     _status(catalog.client.request("DELETE", members, json={"user": "dex~root", "relation": "admin"}, headers=catalog.bearer("bob")), 200)
-    commit, judged, meeting = fga.commit_unless_changed, [], asyncio.Barrier(2)
+    commit, judged, meeting = fga_writes.commit_unless_changed, [], asyncio.Barrier(2)
 
-    async def commit_once_both_judged(client: Any, **change: Any) -> bool:  # noqa: ANN401 — fga.commit_unless_changed's signature
+    async def commit_once_both_judged(client: Any, **change: Any) -> bool:  # noqa: ANN401 — fga_writes.commit_unless_changed's signature
         if len(judged) < 2:
             judged.append(change)
             await asyncio.wait_for(meeting.wait(), timeout=10)
         return await commit(client, **change)
 
-    monkeypatch.setattr(fga, "commit_unless_changed", commit_once_both_judged)
+    monkeypatch.setattr(fga_writes, "commit_unless_changed", commit_once_both_judged)
     removals = [
         ("alice", members, {"user": "dex~bob", "relation": "admin"}),
         ("bob", assignees, {"user": "dex~alice"}),
@@ -188,7 +188,7 @@ def test_a_role_made_an_admin_while_it_is_ended_is_emptied_only_by_who_may_unmak
     catalog.store.write((catalog.person("grace"), "security_admin", "project:acme"))
     revoke = subject_tuples.revoke_naming
 
-    async def revoke_then_the_role_is_made_an_admin(*args: Any, **kwargs: Any) -> list[fga.ClientTuple]:  # noqa: ANN401 — revoke_naming's signature
+    async def revoke_then_the_role_is_made_an_admin(*args: Any, **kwargs: Any) -> list[fga_writes.ClientTuple]:  # noqa: ANN401 — revoke_naming's signature
         removed = await revoke(*args, **kwargs)
         await asyncio.to_thread(catalog.store.write, (everyone_in, "admin", "project:acme"))
         return removed

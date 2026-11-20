@@ -39,7 +39,7 @@ from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_
 from catalog.core.version_retention import recorded_branch
 from catalog.services import contracts, native
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.records import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
 from lakehouse.records.location_claims import ClaimRead, ClaimStore, LocationClaim
@@ -162,7 +162,7 @@ class DoorTable:
         """
         if self._resolved.location is None:
             missing = NamespaceNotFoundError if self._resolved.namespace_absent else TableNotFoundError
-            raise missing(f"table not found: {fga.canonical_object_id(self.segments)}")
+            raise missing(f"table not found: {fga_ids.canonical_object_id(self.segments)}")
         return self._resolved.location
 
     def require_held(self) -> None:
@@ -200,7 +200,7 @@ class DoorTable:
 
     def _refuse(self, now: str | None) -> None:
         log.warning("door_table_changed", extra={"table": self.segments, "location": self.location, "resolves_to": now})
-        raise TableChangedError(f"table {fga.canonical_object_id(self.segments)} changed while this request was being served; describe it and retry")
+        raise TableChangedError(f"table {fga_ids.canonical_object_id(self.segments)} changed while this request was being served; describe it and retry")
 
     def read_natively(self, method: str, *args: object, via: LanceNamespace | None = None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
         """``native.call`` of a read that names the table, through ``via`` (the door's own connection when ``None``), kept only
@@ -375,7 +375,7 @@ class DoorTable:
                 yield
         except history_fences.HistoryFencedError as exc:
             log.info("table_history_fenced", extra={"table": self.segments, "work": work, "reason": str(exc)})
-            raise ConcurrentModificationError(f"table {fga.canonical_object_id(self.segments)}: {exc}") from exc
+            raise ConcurrentModificationError(f"table {fga_ids.canonical_object_id(self.segments)}: {exc}") from exc
 
     def record_committed_files(self, committed: file_identities.CommittedFiles) -> None:
         """Record what a commit about to land adds to the table, on the control root its claim is kept on, before the
@@ -573,7 +573,7 @@ def fence_listed(ns: LanceNamespace, store: ClaimStore, resolved: ResolvedTable,
     """
     if resolved.location is None:
         return None
-    holder = fga.canonical_object_id(resolved.segments)
+    holder = fga_ids.canonical_object_id(resolved.segments)
     if resolved.uuid != listed_uuid:
         log.warning("cascade_refused_replaced_table", extra={"table": holder, "listed": listed_uuid, "found": resolved.uuid})
         raise ConcurrentModificationError(f"cannot {verb} {holder}: another table took its name while this request was being served; retry")

@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from catalog.api.ticks import Tick
 from catalog.services import erasure_release, table_claims
 from lakehouse.events.control_emit import emit_control
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
@@ -58,7 +58,7 @@ async def tick(ctx: Tick) -> ErasureReleaseTick:
             ctx.control,
             action=change.action,
             object_type="table",
-            object_id=fga.table_object(change.table_uuid),
+            object_id=fga_ids.table_object(change.table_uuid),
             object_name=table,
             actor=None,
             extra=change.extra,

@@ -1,7 +1,7 @@
 """A project defines its labels; an object's owner attaches them; a member finds the objects by them (ADR 0211).
 
 On the real catalog app over real pylance with OIDC and FGA on, in a registered warehouse of project ``acme``. The
-OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga` functions that answers a check from an
+OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga_reads` and `fga_writes` functions that answers a check from an
 explicit grant set, so who may act IS the claim here: alice administers the project, bob owns one table and reads the
 project, carol is a member who sees only what she is granted.
 """
@@ -21,7 +21,7 @@ from catalog.api.dependencies import get_control_emitter, get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse.events.control_events import CatalogControlEvent
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.integration.openfga_grants import Grants, act_as
@@ -106,10 +106,10 @@ def _object(client: TestClient, kind: str, name: str) -> str:
     ns = client.app.dependency_overrides[get_namespace]()
     segments = name.split("$")
     if kind == "namespace":
-        return fga.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
+        return fga_ids.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
     table_uuid = object_uuids.table_uuid(ns, table_claims.claim_store(client.app.dependency_overrides[get_settings]()), segments)
     assert table_uuid is not None, f"table {name} carries no uuid"
-    return fga.table_object(table_uuid)
+    return fga_ids.table_object(table_uuid)
 
 
 def _define(client: TestClient, body: Mapping[str, object]) -> httpx.Response:

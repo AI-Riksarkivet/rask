@@ -216,7 +216,7 @@ The catalog announces each governance change on the `catalog.control.v1` topic a
 announces its purges there too), after the change succeeds, signed by the role `control_signer_role` names for its
 action. Most actions name an object and nobody.
 These name a person in `extra.subject`, the OpenFGA user the change concerns (`user:` and the principal key
-percent-encoded, which `fga.subject_of` decodes, or a userset):
+percent-encoded, which `fga_ids.subject_of` decodes, or a userset):
 
 | `action` | `extra.subject` |
 | --- | --- |

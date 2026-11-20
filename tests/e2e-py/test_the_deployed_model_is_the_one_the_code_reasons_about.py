@@ -20,7 +20,7 @@ read)? A service checks against the model its own image carries, so a body held 
 older image, a revert, a writer that wrote since) is one every pod built from this checkout resolves,
 and the hook writes only a body the store lacks. The store is `LANCE_E2E_FGA_STORE_ID` when the runner
 exports it (`scripts/e2e_live.sh`, which honours the catalog's pin), else the newest named
-`lance-catalog` (`fga.newest_store`). No such store FAILS the run: a skip would read as green over an
+`lance-catalog` (`fga_provision.newest_store`). No such store FAILS the run: a skip would read as green over an
 estate whose services all fail closed.
 
 A RED RUN NAMES THE DIFF against the store's newest model per type and relation
@@ -43,7 +43,7 @@ from credentials import Credential, credential_path
 from liveness import skip_unless_live
 
 from lakehouse.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document, shape
-from lakehouse.governed.fga import ModelHistory, newest_store
+from lakehouse.governed.fga_provision import ModelHistory, newest_store
 
 
 #: ALREADY CARRIES ITS SCHEME. `scripts/e2e_live.sh`'s `url` helper exports `http://<host>`, so

@@ -8,7 +8,7 @@ The other half: a governed dataset an event names without its table's uuid is no
 (``table:<uuid>``, [[LH-524]]), so it is not a question to send at all, and its name never reaches OpenFGA: a space
 or tab in a name sent as an object fails the whole request (measured on OpenFGA v1.18.3).
 
-Driven through the real ``fga.batch_check`` with a client double built from the SDK's own response
+Driven through the real ``fga_reads.batch_check`` with a client double built from the SDK's own response
 classes; nothing here replaces ``batch_check`` itself.
 """
 
@@ -33,7 +33,7 @@ from openfga_sdk.models.read_response import ReadResponse
 
 from lakehouse.events.bus_delivery import Outcome, Settlement
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -49,7 +49,7 @@ def _uuid(name: str) -> str:
 
 
 #: The one output every delivery below names with its uuid, and the object its grants are held by.
-_PAGES_OBJECT = fga.table_object(_uuid("bronze$pages"))
+_PAGES_OBJECT = fga_ids.table_object(_uuid("bronze$pages"))
 
 
 class _OpenFga:
@@ -166,7 +166,7 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
 
 
 def test_a_dataset_openfga_could_not_answer_is_a_503_not_hidden() -> None:
-    a, b = fga.table_object(_uuid("a")), fga.table_object(_uuid("b"))
+    a, b = fga_ids.table_object(_uuid("a")), fga_ids.table_object(_uuid("b"))
     fga_client = _OpenFga(unanswered={b})
 
     with pytest.raises(ServiceUnavailableError):

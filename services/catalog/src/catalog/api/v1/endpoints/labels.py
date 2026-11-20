@@ -45,7 +45,7 @@ from catalog.services import projects as project_registry
 from catalog.services.object_labels import Attachment, LabelDefinition, LabelScope
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import ControlAction
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import trash
 from lakehouse.storage import conditional_records
@@ -64,7 +64,7 @@ def _actor(token: Caller | None) -> str | None:
 
 def _object(kind: LabelScope, uuid: str) -> str:
     """The OpenFGA object the labelled ``kind`` is held by (ADR 0173 §8)."""
-    return fga.table_object(uuid) if kind == "table" else fga.namespace_object(uuid)
+    return fga_ids.table_object(uuid) if kind == "table" else fga_ids.namespace_object(uuid)
 
 
 #: The control actions an attachment and a removal announce, by the kind of object labelled.
@@ -83,7 +83,7 @@ async def _project_of(settings: CatalogStore, segments: Sequence[str]) -> str:
     """
     project = await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), segments[0])
     if project is None:
-        raise InvalidInputError(f"{fga.canonical_object_id(list(segments))} lies in no project's warehouse, so no project's labels apply to it")
+        raise InvalidInputError(f"{fga_ids.canonical_object_id(list(segments))} lies in no project's warehouse, so no project's labels apply to it")
     return project
 
 
@@ -99,7 +99,7 @@ async def _describe(settings: CatalogStore, *, kind: LabelScope, segments: Seque
     defined = await _defined(settings, await _project_of(settings, segments))
     return ObjectLabelsResponse(
         kind=kind,
-        id=fga.canonical_object_id(list(segments)),
+        id=fga_ids.canonical_object_id(list(segments)),
         uuid=uuid,
         labels=object_labels.labels_shown(attachment, defined),
         available=[d for d in defined.values() if kind in d.scope],
@@ -138,7 +138,7 @@ async def _set(
     if defined is None:
         raise InvalidInputError(f"project {project!r} defines no label {body.name!r}; its admin defines it first")
     value = object_labels.judged_value(defined, kind=kind, value=body.value)
-    canonical = fga.canonical_object_id(list(segments))
+    canonical = fga_ids.canonical_object_id(list(segments))
     base = Attachment(kind=kind, uuid=uuid, id=canonical, project=project, location=location, labels={}, set_by=_actor(token))
     try:
         await run_in_threadpool(object_labels.attach, settings.registry_root, so, base, defined=defined, value=value)
@@ -163,7 +163,7 @@ async def _remove(
     settings: Settings, control: ControlEmitter, token: Caller | None, body: RemoveLabelRequest, *, kind: LabelScope, segments: Sequence[str], uuid: str
 ) -> ObjectLabelsResponse:
     """Remove ``body``'s label from the object (idempotent), and announce a removal that took a label off."""
-    canonical = fga.canonical_object_id(list(segments))
+    canonical = fga_ids.canonical_object_id(list(segments))
     try:
         removed = await run_in_threadpool(
             object_labels.detach, settings.registry_root, settings.storage_options(), kind, uuid, name=body.name, actor=_actor(token)

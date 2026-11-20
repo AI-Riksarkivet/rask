@@ -2,7 +2,7 @@
 
 ``_authorize_batch`` already batches its two other lanes (``can_write_data`` on the named tables,
 ``can_create_table`` on the parents) and then falls back to a ``for obj, relation in owner_checks``
-loop of single ``fga.check`` calls for the owner-tier operations. The comment called that lane "rare",
+loop of single ``fga_reads.check`` calls for the owner-tier operations. The comment called that lane "rare",
 which is a statement about today's ``_BATCH_OWNER_OPS`` (one entry) rather than about the request:
 ``operations`` is client-supplied and unbounded, so a body naming 200 ``deregister_table`` ops costs
 200 sequential round trips on the AUTHORIZATION path — before any work is authorized, with the
@@ -93,8 +93,8 @@ def _drive(body: dict[str, Any], *, allow: bool = True) -> tuple[list[str], list
 
     monkey = pytest.MonkeyPatch()
     try:
-        monkey.setattr(fga_deps.fga, "check", rec_check)
-        monkey.setattr(fga_deps.fga, "batch_check", rec_batch)
+        monkey.setattr(fga_deps.fga_reads, "check", rec_check)
+        monkey.setattr(fga_deps.fga_reads, "batch_check", rec_batch)
         asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, _EveryTableHolds(), user="dex~alice"))
     finally:
         monkey.undo()

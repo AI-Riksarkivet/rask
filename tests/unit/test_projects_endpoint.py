@@ -20,7 +20,7 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.v1.endpoints import projects as ep
-from lakehouse.governed import fga
+from lakehouse.governed import fga_resilience
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -127,9 +127,9 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     async def _no_admins(*_a: Any, **_k: Any) -> list[str]:
         return []
 
-    monkeypatch.setattr(ep.fga, "check", _fake_check)
-    monkeypatch.setattr(ep.fga, "batch_check", _fake_batch_check)
-    monkeypatch.setattr(ep.fga, "list_users", _no_admins)
+    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
+    monkeypatch.setattr(ep.fga_reads, "batch_check", _fake_batch_check)
+    monkeypatch.setattr(ep.fga_reads, "list_users", _no_admins)
     result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [p.project for p in result] == expected
     assert checks == [("dex~bob", "can_list_all_projects", "warehouse:lance_catalog")]
@@ -137,7 +137,7 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     assert asked == ([] if estate_observer else [["project:acme", "project:fresh", "project:globex"]])
 
 
-# ── admins: fga.list_users on project:<id>#can_administer, degrading — never a 500 ───────────────────
+# ── admins: fga_reads.list_users on project:<id>#can_administer, degrading — never a 500 ───────────────────
 
 
 def _an_estate_observer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,7 +147,7 @@ def _an_estate_observer(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _observes(_client: OpenFgaClient, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
         return (user, relation, obj) == ("dex~bob", "can_list_all_projects", "warehouse:lance_catalog")
 
-    monkeypatch.setattr(ep.fga, "check", _observes)
+    monkeypatch.setattr(ep.fga_reads, "check", _observes)
 
 
 def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,10 +159,10 @@ def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
         calls.append((relation, obj))
         # Display-only path: a single attempt under the tight per-call budget — the wrapper's default
         # bounded-retry ladder alone could exceed it, so the endpoint must pin one attempt.
-        assert kw == {"retry": fga.ONE_ATTEMPT}
+        assert kw == {"retry": fga_resilience.ONE_ATTEMPT}
         return ["alice"] if obj == "project:acme" else []
 
-    monkeypatch.setattr(ep.fga, "list_users", _fake_list_users)
+    monkeypatch.setattr(ep.fga_reads, "list_users", _fake_list_users)
     result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [(p.project, p.admins) for p in result] == [("acme", ["alice"]), ("globex", [])]
     assert sorted(calls) == [("can_administer", "project:acme"), ("can_administer", "project:globex")]
@@ -177,7 +177,7 @@ def test_admins_degrade_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _outage(*_a: Any, **_k: Any) -> list[str]:
         raise ServiceUnavailableError("authorization service unavailable")
 
-    monkeypatch.setattr(ep.fga, "list_users", _outage)
+    monkeypatch.setattr(ep.fga_reads, "list_users", _outage)
     result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [p.project for p in result] == ["acme", "globex"]
     assert all(p.admins == [] for p in result)
@@ -194,7 +194,7 @@ def test_admins_degrade_on_a_slow_fga(monkeypatch: pytest.MonkeyPatch) -> None:
         await asyncio.sleep(0.5)  # well past the (shrunk) budget
         return ["alice"]
 
-    monkeypatch.setattr(ep.fga, "list_users", _slow)
+    monkeypatch.setattr(ep.fga_reads, "list_users", _slow)
     result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [p.project for p in result] == ["acme", "globex"]
     assert all(p.admins == [] for p in result)  # degraded per project, response still whole

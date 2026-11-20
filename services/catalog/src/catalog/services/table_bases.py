@@ -42,7 +42,7 @@ from catalog.core.namespace import registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import clone_ending_records, native, table_inputs
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.lancekit.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.lancekit.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.lancekit.lance_session import open_dataset
@@ -616,7 +616,7 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
         InternalError: One of them is there and could not be read, or the backend describes no location for the
             table it just registered, so nothing was judged.
     """
-    table = fga.canonical_object_id(segments)
+    table = fga_ids.canonical_object_id(segments)
     try:
         described: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
     except LanceNamespaceError:

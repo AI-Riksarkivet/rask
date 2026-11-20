@@ -59,7 +59,7 @@ export function childId(parent: string, name: string): string {
  *
  * `lastIndexOf`, and the difference from `indexOf` is a correctness bug rather than a nicety. The
  * backend is the authority and states it in one line — `parent_namespace_id` is "all segments but the
- * last" (`packages/lakehouse/src/lakehouse/governed/fga.py:187-201`) — and THAT is the id the grant
+ * last" (`packages/lakehouse/src/lakehouse/governed/fga_ids.py`) — and THAT is the id the grant
  * and check paths key on. Splitting on the first delimiter instead names a different object:
  *
  *     acme$bronze$pages   lastIndexOf → acme$bronze   ← the real parent; what authz checks
@@ -78,7 +78,7 @@ export function parentNamespace(id: string): string {
  * `parentNamespace` above returns the id itself for a bare name, which is what the registry views
  * want (they group a root-level table under its own name so it still gets a row). The backend does
  * NOT agree: `parent_namespace_id` returns `None` for a single-segment id — "no parent namespace to
- * inherit from" (`fga.py:188-190`).
+ * inherit from" (`fga_ids.parent_namespace_id`).
  *
  * That divergence is harmless while the answer is only a grouping key, and WRONG the moment it
  * becomes an object id: `namespace:pages` for a root-level table `pages` names an object the

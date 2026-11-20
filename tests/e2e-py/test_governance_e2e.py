@@ -45,7 +45,7 @@ from refusals import assert_refused, described, namespace_uuid
 from topology import OUTSIDER, create_namespace, namespace_id
 
 from lakehouse.events.openlineage import RUN_EVENT_SCHEMA_URL, author_facet, run_id_for
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.principal import is_principal
 from lineage.models import author_sub_from_payload
 
@@ -155,10 +155,10 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
         assert sc.status_code == 200, sc.text
         # Each create seeded alice's `owner`, and the table its `parent` edge, on the uuid objects the catalog minted.
         ns_uuid = namespace_uuid(server, ns, ah)
-        namespace_object = fga.namespace_object(ns_uuid)
+        namespace_object = fga_ids.namespace_object(ns_uuid)
         standing = described(server, bronze, ah)
-        table_object = fga.table_object(standing["properties"]["rask.uuid"])
-        alice_user = fga.user_object(alice_sub)
+        table_object = fga_ids.table_object(standing["properties"]["rask.uuid"])
+        alice_user = fga_ids.user_object(alice_sub)
         assert (alice_user, "owner") in _held(namespace_object)
         assert {(alice_user, "owner"), (namespace_object, "parent")} <= _held(table_object)
 
@@ -220,8 +220,8 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
         # 7. Every subject the store holds names its identity provider ([[LH-063]]): each `user` a tuple names decodes to
         # a principal, `<idp-id>~<subject>`, the owner tuples this flow's creates seeded among them.
         users = _store_users()
-        assert fga.user_object(alice_sub) in users, f"the store holds no tuple naming alice's principal {alice_sub}, so the claim would pass vacuously"
-        bare = sorted(user for user in users if user != fga.USER_WILDCARD and not is_principal(fga.subject_of(user.removeprefix("user:"))))
+        assert fga_ids.user_object(alice_sub) in users, f"the store holds no tuple naming alice's principal {alice_sub}, so the claim would pass vacuously"
+        bare = sorted(user for user in users if user != fga_ids.USER_WILDCARD and not is_principal(fga_ids.subject_of(user.removeprefix("user:"))))
         assert not bare, f"the store holds subjects that name no identity provider: {bare}"
     finally:
         # The flow runs against live estates too: its tables go with their bytes, so the session's teardown can drop
@@ -258,12 +258,12 @@ def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple
         assert requests.post(f"{server}/v1/table/{source}/describe", headers=bh, timeout=10).status_code == 200, "precondition: the direct grant reads"
         assert requests.post(f"{server}/management/v1/table/{source}/protection", headers=ah, json={"protected": True}, timeout=10).status_code == 200
         first = described(server, source, ah)
-        held = tuples_on(fga.table_object(first["properties"]["rask.uuid"]))
+        held = tuples_on(fga_ids.table_object(first["properties"]["rask.uuid"]))
 
         renamed = requests.post(f"{server}/v1/table/{source}/rename", headers=ah, params={"force": "true"}, json={"new_table_name": "dst"}, timeout=30)
 
         assert renamed.status_code == 200, renamed.text
-        assert tuples_on(fga.table_object(first["properties"]["rask.uuid"])) == held, "the rename wrote or removed a tuple"
+        assert tuples_on(fga_ids.table_object(first["properties"]["rask.uuid"])) == held, "the rename wrote or removed a tuple"
         assert requests.post(f"{server}/v1/table/{dest}/describe", headers=bh, timeout=10).status_code == 200, "the direct reader lost the renamed table"
         assert requests.get(f"{server}/management/v1/table/{dest}/protection", headers=ah, timeout=10).json()["protected"] is True
         # A table created at the old name holds nothing the renamed one did: the renamed table's reader, who sees the
@@ -277,7 +277,7 @@ def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple
             lambda: requests.post(f"{server}/v1/table/{source}/describe", headers=bh, json={}, timeout=10),
             status=404,
             code=ErrorCode.TABLE_NOT_FOUND,
-            unchanged=lambda: tuples_on(fga.table_object(again["properties"]["rask.uuid"])),
+            unchanged=lambda: tuples_on(fga_ids.table_object(again["properties"]["rask.uuid"])),
             foreign={
                 _sub(alice),
                 again["location"],
@@ -329,17 +329,17 @@ def test_a_rename_across_a_managed_boundary_needs_grant_authority_and_moves_the_
                 lambda table=table, into=into: _rename_into(server, table, into, mh),
                 status=403,
                 code=ErrorCode.PERMISSION_DENIED,
-                unchanged=lambda held=held: tuples_on(fga.table_object(held["properties"]["rask.uuid"])),
+                unchanged=lambda held=held: tuples_on(fga_ids.table_object(held["properties"]["rask.uuid"])),
                 foreign={_sub(alice), held["location"], held["properties"]["rask.uuid"], *namespaces.values()},
             )
             assert refused.json()["detail"] == refusal, f"{table} was refused on another rung: {refused.text}"
             assert described(server, table, ah)["location"] == held["location"], f"the refused rename moved {table}"
 
-        mine = fga.table_object(described(server, moved, ah)["properties"]["rask.uuid"])
+        mine = fga_ids.table_object(described(server, moved, ah)["properties"]["rask.uuid"])
         across = _rename_into(server, moved, managed, ah)
 
         assert across.status_code == 200, across.text
-        entered = fga.namespace_object(namespaces[managed])
+        entered = fga_ids.namespace_object(namespaces[managed])
         parents = {user for user, relation, _ in tuples_on(mine) if relation == "parent"}
         assert parents == {entered}, f"the moved table inherits from {parents}, not from the namespace it is in"
         named_by = {held["key"]["object"] for held in read(tuple_key={"user": mine, "relation": "child", "object": "namespace:"})}

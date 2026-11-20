@@ -17,7 +17,7 @@ import pytest
 
 from catalog.api import fga_deps
 from catalog.core.config import Settings
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_provision, fga_writes
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken
@@ -49,19 +49,19 @@ def _fga_settings(**overrides: object) -> Settings:
     )
 
 
-async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
+async def _captured_tuples(fn, monkeypatch) -> list[fga_writes.ClientTuple]:
     """Run `fn` with `write_tuples` stubbed, and return the tuples it tried to write.
 
     This replaces an `inspect.getsource(...)` string match. That assertion broke the moment the tuple
     set was extracted into `cascade_tuples` for the backfill to share — while the BEHAVIOUR it was
     guarding was completely intact. Asserting the submitted tuples is strictly stronger.
     """
-    seen: list[fga.ClientTuple] = []
+    seen: list[fga_writes.ClientTuple] = []
 
     async def _capture(_client, tuples, **_kw) -> None:
         seen.extend(tuples)
 
-    monkeypatch.setattr(fga, "write_tuples", _capture)
+    monkeypatch.setattr(fga_writes, "write_tuples", _capture)
     await fn()
     return seen
 
@@ -74,9 +74,9 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     It grants the caller nothing: re-POSTing /management/v1/warehouses would land these tuples too, and make whoever ran
     the repair `owner` of every tenant it touched, which is why the backfill is its own door.
     """
-    declared = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-maintenance")
-    dropped = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-lineage")
-    client = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-a-tenant-service")
+    declared = fga_ids.user_object("kubernetes~system:serviceaccount:rask:rask-sa-maintenance")
+    dropped = fga_ids.user_object("kubernetes~system:serviceaccount:rask:rask-sa-lineage")
+    client = fga_ids.user_object("kubernetes~system:serviceaccount:rask:rask-sa-a-tenant-service")
     openfga_store.write((dropped, "maintenance", "warehouse:wh1"), (dropped, "reader", "warehouse:wh1"), (client, "maintenance", "warehouse:wh1"))
     settings = _fga_settings(
         LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"],
@@ -84,7 +84,7 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     )
 
     async def _repair() -> None:
-        async with fga.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
             await fga_deps.converge_warehouse_grants(store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill")
 
     asyncio.run(_repair())

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from lance_namespace import ConcurrentModificationError
 
 from catalog.services import project_admins
-from lakehouse.governed import fga
+from lakehouse.governed import fga_model, fga_reads, fga_writes
 
 
 if TYPE_CHECKING:
@@ -39,23 +39,25 @@ def _holds_directly(type_definition: dict[str, object], user_type: str, relation
 def types_holding(user_type: str, relation: str | None) -> tuple[str, ...]:
     """The types with a relation holding a ``user_type`` subject directly (``user_type#relation`` when ``relation`` is
     given), never through a wildcard alone."""
-    return tuple(sorted(td["type"] for td in fga.load_model()["type_definitions"] if _holds_directly(td, user_type, relation)))
+    return tuple(sorted(td["type"] for td in fga_model.load_model()["type_definitions"] if _holds_directly(td, user_type, relation)))
 
 
-async def tuples_naming(client: OpenFgaClient, user: str) -> list[fga.ClientTuple]:
+async def tuples_naming(client: OpenFgaClient, user: str) -> list[fga_writes.ClientTuple]:
     """Every direct tuple naming ``user`` (``user:<key>`` or ``<type>:<id>#<relation>``), page by page."""
     subject, _, relation = user.partition("#")
-    found: list[fga.ClientTuple] = []
+    found: list[fga_writes.ClientTuple] = []
     for fga_type in types_holding(subject.split(":", 1)[0], relation or None):
-        found.extend(await fga.read_subject_tuples(client, user, fga_type))
+        found.extend(await fga_reads.read_subject_tuples(client, user, fga_type))
     return found
 
 
-def _decides_who_administers(t: fga.ClientTuple) -> bool:
+def _decides_who_administers(t: fga_writes.ClientTuple) -> bool:
     return project_admins.is_admin(t) or project_admins.is_assignment(t)
 
 
-async def refuse_stranding(client: OpenFgaClient, user: str, naming: list[fga.ClientTuple], *, who: str, permit: project_admins.Permit | None = None) -> None:
+async def refuse_stranding(
+    client: OpenFgaClient, user: str, naming: list[fga_writes.ClientTuple], *, who: str, permit: project_admins.Permit | None = None
+) -> None:
     """Refuse (409, code 14) ending ``user`` while that would leave a project whose ``admin`` reaches nobody, judged on
     every chain of roles ``user`` stands in (:meth:`project_admins.Administration.survives`). ``naming`` is
     :func:`tuples_naming`'s answer for ``user``. ``permit`` is asked first, with the projects ``user`` administers or
@@ -76,18 +78,18 @@ async def refuse_stranding(client: OpenFgaClient, user: str, naming: list[fga.Cl
 async def revoke_naming(
     client: OpenFgaClient,
     user: str,
-    naming: list[fga.ClientTuple],
+    naming: list[fga_writes.ClientTuple],
     *,
     actor: str,
-    origin: fga.TupleOrigin,
+    origin: fga_writes.TupleOrigin,
     permit: project_admins.Permit | None = None,
-) -> list[fga.ClientTuple]:
+) -> list[fga_writes.ClientTuple]:
     """Revoke every tuple in ``naming``; the tuples removed. A project ``admin`` and a role assignment go through the
     store-arbitrated removal every door changing who administers a project takes (:func:`project_admins.withdraw`),
     which asks ``permit`` on the read it judges."""
-    arbitrated = [fga.ClientTuple(user=user, relation=t.relation, object=t.object) for t in naming if _decides_who_administers(t)]
-    rest = [fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in naming if not _decides_who_administers(t)]
+    arbitrated = [fga_writes.ClientTuple(user=user, relation=t.relation, object=t.object) for t in naming if _decides_who_administers(t)]
+    rest = [fga_writes.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in naming if not _decides_who_administers(t)]
     removed = await project_admins.withdraw(client, arbitrated, actor=actor, origin=origin, permit=permit)
     if rest:
-        removed.extend(await fga.delete_tuples(client, rest, actor=actor, origin=origin))  # noqa: TID251
+        removed.extend(await fga_writes.delete_tuples(client, rest, actor=actor, origin=origin))  # noqa: TID251
     return removed

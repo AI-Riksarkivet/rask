@@ -27,7 +27,7 @@ async def test_a_failing_close_does_not_stop_the_teardown() -> None:
     """A shutdown path that raises hides whatever came after it, so a failed close is suppressed and the teardown goes on."""
     from fastapi import FastAPI
 
-    from lakehouse.governed.fga import dispose
+    from lakehouse.governed.fga_provision import dispose
 
     class _Angry:
         async def close(self) -> None:

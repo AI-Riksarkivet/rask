@@ -18,7 +18,7 @@ import pytest
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.v1.endpoints import me as ep
-from lakehouse.governed import fga
+from lakehouse.governed import fga_resilience
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -75,7 +75,7 @@ def _wire(
     async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **kw: Any) -> bool:
         if calls is not None:
             calls.append((relation, obj))
-        assert kw == {"retry": fga.ONE_ATTEMPT}  # single attempt under the tight budget (the /management/v1/projects rule)
+        assert kw == {"retry": fga_resilience.ONE_ATTEMPT}  # single attempt under the tight budget (the /management/v1/projects rule)
         if isinstance(estate, Exception):
             raise estate
         return bool(estate[relation] if isinstance(estate, dict) else estate)
@@ -83,16 +83,16 @@ def _wire(
     async def _fake_list(_client: Any, *, user: str, relation: str, object_type: str, **kw: Any) -> Any:
         if calls is not None:
             calls.append((relation, object_type))
-        assert kw == {"retry": fga.ONE_ATTEMPT}
+        assert kw == {"retry": fga_resilience.ONE_ATTEMPT}
         outcome = lists.get(relation, [])
         if isinstance(outcome, Exception):
             raise outcome
         # `list_objects` returns an `ObjectListing` now — the truncation flag travels with the result so
         # a caller can tell a short answer from a complete one.
-        return ep.fga.ObjectListing(objects=list(outcome), truncated=False)
+        return ep.fga_reads.ObjectListing(objects=list(outcome), truncated=False)
 
-    monkeypatch.setattr(ep.fga, "check", _fake_check)
-    monkeypatch.setattr(ep.fga, "list_objects", _fake_list)
+    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
+    monkeypatch.setattr(ep.fga_reads, "list_objects", _fake_list)
 
 
 def test_governed_shape_and_admin_first_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,10 +162,10 @@ def test_slow_fga_degrades_on_the_shared_budget(monkeypatch: pytest.MonkeyPatch)
 
     async def _slow_list(*_a: Any, **_k: Any) -> Any:
         await asyncio.sleep(0.5)
-        return ep.fga.ObjectListing(objects=["project:acme"], truncated=False)
+        return ep.fga_reads.ObjectListing(objects=["project:acme"], truncated=False)
 
-    monkeypatch.setattr(ep.fga, "check", _slow_check)
-    monkeypatch.setattr(ep.fga, "list_objects", _slow_list)
+    monkeypatch.setattr(ep.fga_reads, "check", _slow_check)
+    monkeypatch.setattr(ep.fga_reads, "list_objects", _slow_list)
     result = _me(_settings(fga_enabled=True), token=_token(), client=object())
     assert result.estate_admin is False and result.projects == []  # degraded, response still whole
 

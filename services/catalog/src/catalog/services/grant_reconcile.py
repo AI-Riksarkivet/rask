@@ -18,7 +18,7 @@ from datetime import datetime
 
 from catalog.core.config import CatalogStore, Settings
 from catalog.services import projects, table_claims, warehouses
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.records import location_claims, trash
 from lakehouse.records.warehouse_records import WarehouseRecord
@@ -39,7 +39,7 @@ def held_table_claims(settings: CatalogStore) -> dict[str, location_claims.Locat
         botocore.exceptions.ClientError: The store refused the listing.
     """
     claims = location_claims.every_claim(table_claims.claim_store(settings))
-    return {fga.table_object(claim.uuid): claim for claim in claims if claim.released_at is None and claim.uuid}
+    return {fga_ids.table_object(claim.uuid): claim for claim in claims if claim.released_at is None and claim.uuid}
 
 
 def claim_refusal(claim: location_claims.LocationClaim, *, now: datetime, stands: Callable[[], bool]) -> str | None:
@@ -81,7 +81,7 @@ def ghost_refusal(settings: Settings, obj: str) -> str | None:
             return f"no drift report finds a ghost {kind!r}, so none is judged here"
 
 
-def tenancy_edge(record: WarehouseRecord | None, warehouse_id: str) -> fga.ClientTuple | str:
+def tenancy_edge(record: WarehouseRecord | None, warehouse_id: str) -> fga_writes.ClientTuple | str:
     """The warehouse's tenancy pointer as its record names it, or why the record justifies none.
 
     Relation ``project``, as the catalog seeds it at the warehouse's creation: the model's warehouse type declares
@@ -89,4 +89,4 @@ def tenancy_edge(record: WarehouseRecord | None, warehouse_id: str) -> fga.Clien
     """
     if record is None:
         return f"no warehouse record names {warehouse_id!r}"
-    return fga.ClientTuple(user=f"project:{record.project}", relation="project", object=f"warehouse:{warehouse_id}")
+    return fga_writes.ClientTuple(user=f"project:{record.project}", relation="project", object=f"warehouse:{warehouse_id}")

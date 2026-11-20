@@ -14,7 +14,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.lancekit.base_refs import key_uri, normalise, store_of
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
@@ -108,7 +108,7 @@ def read_uuids(names: TableIds, table: str, *, claims: location_claims.ClaimStor
 
     Best-effort, as the events are: a uuid that cannot be read is ``None`` and the event still goes.
     """
-    namespace = fga.parent_namespace_id(table)
+    namespace = fga_ids.parent_namespace_id(table)
     namespace_uuid = names.namespace_uuids.get(namespace) if namespace else None
     try:
         uuid = table_uuid(names, table, claims=claims)
@@ -133,7 +133,7 @@ def policy_owners(names: TableIds, table: str, *, claims: location_claims.ClaimS
     if uuid is None:
         return None
     segments = table.split(CATALOG_DELIMITER)
-    ancestors = [fga.canonical_object_id(segments[:depth]) for depth in range(2, len(segments))]
+    ancestors = [fga_ids.canonical_object_id(segments[:depth]) for depth in range(2, len(segments))]
     unnamed = [ancestor for ancestor in ancestors if ancestor not in names.namespace_uuids]
     if unnamed:
         log.warning("maintenance_namespace_uuid_unread", extra={"table": table, "namespaces": unnamed})

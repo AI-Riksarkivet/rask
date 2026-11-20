@@ -27,7 +27,7 @@ import pytest
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
 from lakehouse.events.control_events import CatalogControlEvent
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).
@@ -62,34 +62,34 @@ def estate(governed_catalog: Any) -> tuple[Any, _Recorder]:  # noqa: ANN401 — 
     for user, relation in (("dex~alice", "admin"), ("dex~bob", "admin"), ("dex~gina", "member")):
         _ok(catalog.client.put("/management/v1/projects/acme/members", json={"user": user, "relation": relation}, headers=catalog.bearer("root")))
     for relation, obj in (("assignee", "role:stewards"), ("curator", "classification:pii"), ("event_reader", "estate:rask")):
-        tuple_body = {"user": fga.user_object(ALICE), "relation": relation, "object": obj}
+        tuple_body = {"user": fga_ids.user_object(ALICE), "relation": relation, "object": obj}
         _ok(catalog.client.post("/management/v1/access/tuples", json=tuple_body, headers=catalog.bearer("root")))
     return catalog, recorder
 
 
 def _naming(catalog: Any, principal: str) -> set[tuple[str, str, str]]:  # noqa: ANN401 — the conftest's GovernedCatalog
-    return {t for t in catalog.store.tuples() if t[0] == fga.user_object(principal)}
+    return {t for t in catalog.store.tuples() if t[0] == fga_ids.user_object(principal)}
 
 
 def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_deleted(estate: tuple[Any, _Recorder]) -> None:
     catalog, recorder = estate
     before = catalog.store.tuples()
     assert _naming(catalog, ALICE) == {
-        (fga.user_object(ALICE), "admin", "project:acme"),
-        (fga.user_object(ALICE), "assignee", "role:stewards"),
-        (fga.user_object(ALICE), "curator", "classification:pii"),
-        (fga.user_object(ALICE), "event_reader", "estate:rask"),
+        (fga_ids.user_object(ALICE), "admin", "project:acme"),
+        (fga_ids.user_object(ALICE), "assignee", "role:stewards"),
+        (fga_ids.user_object(ALICE), "curator", "classification:pii"),
+        (fga_ids.user_object(ALICE), "event_reader", "estate:rask"),
     }
 
     deleted = _ok(catalog.client.delete(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))).json()
 
     assert _naming(catalog, ALICE) == set()
-    assert {t for t in before if t[0] != fga.user_object(ALICE) and t[1] != fga.ADMIN_REVISION} <= catalog.store.tuples()
+    assert {t for t in before if t[0] != fga_ids.user_object(ALICE) and t[1] != fga_reads.ADMIN_REVISION} <= catalog.store.tuples()
     record = _ok(catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))).json()
     assert (record["principal"], record["kind"], record["deleted_by"], record["deleted_at"] is not None) == (ALICE, "person", "dex~root", True)
     assert deleted["revoked"] == 4
     assert [(e.action, e.object_type, e.object_id, e.extra["subject"]) for e in recorder.events if e.action == "principal_deleted"] == [
-        ("principal_deleted", "principal", fga.user_object(ALICE), fga.user_object(ALICE))
+        ("principal_deleted", "principal", fga_ids.user_object(ALICE), fga_ids.user_object(ALICE))
     ]
 
 

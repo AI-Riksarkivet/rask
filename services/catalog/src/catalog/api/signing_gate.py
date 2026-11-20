@@ -33,7 +33,7 @@ from catalog.core.commit_ids import CommitIds
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services.provenance_namespace import is_provenance
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningStatus
 from lakehouse.problems.envelope import problem_body
 from lakehouse.process.probes import ReadyCheck
@@ -54,7 +54,7 @@ def announces(path: str, settings: Settings) -> bool:
     if len(parts) != 4 or parts[:2] != ["v1", "table"] or parts[3] not in _LINEAGE_ONLY_DATA_ACTIONS:
         return True
     segments = parse_identifier(parts[2])
-    return not is_provenance(fga.canonical_object_id(segments[:-1]), settings)
+    return not is_provenance(fga_ids.canonical_object_id(segments[:-1]), settings)
 
 
 def unsigned_response() -> JSONResponse:

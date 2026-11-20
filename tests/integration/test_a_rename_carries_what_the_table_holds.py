@@ -11,7 +11,7 @@ Grants are keyed by the uuid too, so a rename writes no tuple; that half is pinn
 ``services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py``.
 
 The real catalog app over a real `dir` namespace on pylance, the in-memory `TupleStore` behind the real
-`lakehouse.governed.fga` seed and revoke; maintenance's own policy resolution over the same control root.
+`lakehouse.governed.fga_writes` seed and revoke; maintenance's own policy resolution over the same control root.
 """
 
 from __future__ import annotations

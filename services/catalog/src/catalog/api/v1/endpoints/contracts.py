@@ -28,7 +28,7 @@ from catalog.schemas import ContractResponse
 from catalog.services import contracts
 from catalog.services.table_claims import DoorTable
 from lakehouse.events.control_emit import emit_control
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 
@@ -42,7 +42,7 @@ def _actor(token: Caller | None) -> str | None:
 
 def _answer(table: DoorTable, record: contracts.ContractRecord | None) -> ContractResponse:
     return ContractResponse(
-        table=fga.canonical_object_id(table.segments),
+        table=fga_ids.canonical_object_id(table.segments),
         uuid=table.resolved.require_uuid(),
         contract=record.document if record is not None else None,
         set_by=record.set_by if record is not None else None,
@@ -111,7 +111,7 @@ async def set_table_contract(
     try:
         record = await run_in_threadpool(partial(contracts.keep, root, control_so, uuid, contract, document=document, actor=_actor(token)))
     except (conditional_records.RecordChangedError, conditional_records.RecordMissingError) as exc:
-        raise ConcurrentModificationError(f"the contract of {fga.canonical_object_id(table.segments)} kept changing; set it again") from exc
+        raise ConcurrentModificationError(f"the contract of {fga_ids.canonical_object_id(table.segments)} kept changing; set it again") from exc
     try:
         # Asked again now the record stands, so a commit that landed while the table was first read is seen: from the
         # record on, a commit is judged against it. A commit that read no contract and lands after this leaves a
@@ -124,8 +124,8 @@ async def set_table_contract(
         control,
         action="table_contract_set",
         object_type="table",
-        object_id=fga.table_object(uuid),
-        object_name=fga.canonical_object_id(table.segments),
+        object_id=fga_ids.table_object(uuid),
+        object_name=fga_ids.canonical_object_id(table.segments),
         actor=_actor(token),
         extra={"contract": contract.id, "version": contract.version},
     )
@@ -143,8 +143,8 @@ async def delete_table_contract(id: str, table: DoorTableDep, settings: Settings
             control,
             action="table_contract_deleted",
             object_type="table",
-            object_id=fga.table_object(uuid),
-            object_name=fga.canonical_object_id(table.segments),
+            object_id=fga_ids.table_object(uuid),
+            object_name=fga_ids.canonical_object_id(table.segments),
             actor=_actor(token),
             extra={"contract": standing.contract().id, "version": standing.contract().version},
         )

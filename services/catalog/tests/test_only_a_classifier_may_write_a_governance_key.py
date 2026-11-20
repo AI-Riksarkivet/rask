@@ -53,7 +53,7 @@ def _patched(monkeypatch: pytest.MonkeyPatch, seen: list[tuple[str, str]], reque
         seen.append((relation, obj))
         return allowed
 
-    monkeypatch.setattr(fga_deps.fga, "check", _check)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", _check)
     monkeypatch.setattr(ep.dataplane, "update_field_metadata", lambda *a, **k: SimpleNamespace(version=9, fields={}))
 
     async def _no_lineage(*_a: Any, **_k: Any) -> None:

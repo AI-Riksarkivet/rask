@@ -59,7 +59,7 @@ raise SystemExit(f"store {store}: model history longer than {bound} pages of {si
 '
 
 # THE STORE IS THE ONE THE ESTATE USES: the catalog's `RASK_FGA_STORE_ID` pin, else the newest store
-# named `lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).
+# named `lance-catalog` (`fga_provision.newest_store`), the rule the hook and every service share ([[LH-201]]).
 PLAN="$(kubectl -n "$NS" exec "$POD" -c catalog -- python -c "$FETCH" stores | uv run python scripts/_fga_store_check.py plan)"
 read -r STORE MAX_PAGES PAGE_SIZE <<<"$PLAN"
 

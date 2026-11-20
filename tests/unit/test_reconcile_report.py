@@ -26,7 +26,7 @@ from lance_namespace import CreateNamespaceRequest, CreateTableRequest, ServiceU
 from pydantic import SecretStr
 
 from catalog.services import warehouses as wh_svc
-from lakehouse.governed import fga as fga_module
+from lakehouse.governed import fga_reads
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
@@ -67,14 +67,14 @@ class _FakeGrants:
         self.tuples = tuples or {}
         self.error = error
 
-    def census(self) -> fga_module.GrantCensus:
+    def census(self) -> fga_reads.GrantCensus:
         if self.error is not None:
             raise self.error
-        counted = fga_module.GrantCensus()
+        counted = fga_reads.GrantCensus()
         for name, pairs in sorted(self.tuples.items()):
             kind, _, key = name.partition(":")
             for _user, relation in pairs:
-                if relation not in fga_module.BOOKKEEPING_RELATIONS:
+                if relation not in fga_reads.BOOKKEEPING_RELATIONS:
                     bucket = counted.counts_by_type.setdefault(kind, {})
                     bucket[key] = bucket.get(key, 0) + 1
         return counted

@@ -1638,7 +1638,7 @@ openfga: # @schema skipProperties: true; additionalProperties: true
   #
   # Each FGA client projects a 600 s token for the audience `rask-openfga` (`lance.fgaToken`, the
   # `lance.openfgaAudience` this must equal; templates/openfga-authn.yaml refuses a render where they
-  # differ) and re-reads it on every request (`lakehouse.governed.fga.client_configuration`). OpenFGA
+  # differ) and re-reads it on every request (`lakehouse.governed.fga_provision.client_configuration`). OpenFGA
   # admits a token only with that audience AND a subject on the allow-list above, so a pod in another
   # namespace, or an in-namespace pod running as a non-client account, is refused. The exclusive
   # NetworkPolicy ingress for OpenFGA, the row's other half, waits on XC-009 and is not rendered here.

@@ -32,7 +32,7 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError, Transact
 from lakehouse.events import outbox
 from lakehouse.events.bus_delivery import Verdict
 from lakehouse.events.lineage_events import dataset_uuids
-from lakehouse.governed import audit, fga
+from lakehouse.governed import audit, fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import (
@@ -83,7 +83,7 @@ def _audited(event: RunEvent | DatasetEvent, key: str) -> str:
     """What a replay acted on, for the audit record: the run, or the table a static change names (it has no run)."""
     if isinstance(event, DatasetEvent):
         uuid = dataset_uuids(event.dataset.model_dump(by_alias=True)).table_uuid
-        return fga.table_object(uuid) if uuid else f"table:{event.dataset.name}"
+        return fga_ids.table_object(uuid) if uuid else f"table:{event.dataset.name}"
     return f"run:{event.run_id or key}"
 
 

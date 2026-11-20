@@ -31,7 +31,7 @@ from openfga_sdk import OpenFgaClient
 from lakehouse.events.bus import BusUnavailableError
 from lakehouse.events.bus_delivery import Handle, Lane, Park, Settlement
 from lakehouse.governed.decider import OpenFgaDecider
-from lakehouse.governed.fga import user_object
+from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken

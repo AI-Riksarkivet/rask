@@ -66,7 +66,7 @@ the Gateway answers callers its own 503 rather than a problem body; the pods are
 answering. Lineage stays Ready and reports `"openfga": "unavailable"` in its `components`, its doors answering 503 and
 its deliveries retrying until OpenFGA answers.
 
-**Cause.** OpenFGA is the authz chokepoint — every governed call `fga.check`s it and **fails closed**. A
+**Cause.** OpenFGA is the authz chokepoint — every governed call `fga_reads.check`s it and **fails closed**. A
 single-replica OpenFGA (kind) that is drained/OOMed/rescheduling takes the whole estate down until it
 returns. The prod overlay runs 3 replicas + a PDB, which makes this a quorum event, not a total outage.
 

@@ -97,7 +97,7 @@ ControlAction = Literal[
     # commits are lost with it. Being told is the only window to copy work out; there is no door that defers it.
     "erasure_release_scheduled",
     # A principal removed from every grant by the estate admin's offboarding door ([[LH-233]]). `object_id` and
-    # `extra.subject` are the OpenFGA user it was (`fga.user_object`). Not a delivery: a notifier erases what it keeps
+    # `extra.subject` are the OpenFGA user it was (`fga_ids.user_object`). Not a delivery: a notifier erases what it keeps
     # for the person on it (an inbox, preferences, watches), since nobody is left to tell (CTL-022).
     "principal_deleted",
     # A project's role minted or ended through its role doors ([[LH-557]]). `object_id` is the role's OpenFGA object
@@ -162,8 +162,8 @@ class CatalogControlEvent(BaseModel):
     actor: str | None = None
     #: Action-specific detail — kept small (claim-check: pointers, never data). E.g. a grant's
     #: `{relation, subject}`, a rename's `{from, to}`, a warehouse bind's `{namespace}`. A `subject` is the OpenFGA
-    #: user the change names (`fga.user_object`: the principal key percent-encoded, or a userset), which a notifier
-    #: decodes back to the principal it addresses (`fga.subject_of`).
+    #: user the change names (`fga_ids.user_object`: the principal key percent-encoded, or a userset), which a notifier
+    #: decodes back to the principal it addresses (`fga_ids.subject_of`).
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

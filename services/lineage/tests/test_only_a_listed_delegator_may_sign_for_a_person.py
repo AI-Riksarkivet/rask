@@ -82,7 +82,7 @@ def _nothing(_object: str) -> bool:
 
 def _answering(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], governed_objects: Callable[[str], bool]) -> None:
     """OpenFGA answering ``held`` for every check and holding a tuple on each object ``governed_objects`` names."""
-    from lakehouse.governed import fga
+    from lakehouse.governed import fga_reads
 
     async def answer(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         del user, relation
@@ -91,8 +91,8 @@ def _answering(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], 
     async def tuples(_client: object, obj: str) -> list[object]:
         return [object()] if governed_objects(obj) else []
 
-    monkeypatch.setattr(fga, "batch_check", answer)
-    monkeypatch.setattr(fga, "read_object_tuples", tuples)
+    monkeypatch.setattr(fga_reads, "batch_check", answer)
+    monkeypatch.setattr(fga_reads, "read_object_tuples", tuples)
 
 
 @pytest.mark.parametrize(

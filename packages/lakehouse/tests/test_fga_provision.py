@@ -1,4 +1,4 @@
-"""`fga.provision` must write the WHOLE model — the conditions block included.
+"""`fga_provision.provision` must write the WHOLE model — the conditions block included.
 
 The regression this pins: `model.json` gained a `conditions` block (time-boxed grants —
 `non_expired_grant`) whose name several relations reference, and `provision` passed only
@@ -18,7 +18,7 @@ from typing import Any, ClassVar
 import pytest
 from openfga_sdk import CreateStoreRequest, OpenFgaClient
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_model, fga_provision
 
 
 class _Stores:
@@ -60,14 +60,14 @@ class _FakeClient:
 @pytest.mark.asyncio
 async def test_provision_writes_the_conditions_block(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeClient.requests = []
-    monkeypatch.setattr(fga, "OpenFgaClient", _FakeClient)
+    monkeypatch.setattr(fga_provision, "OpenFgaClient", _FakeClient)
 
-    store_id, model_id = await fga.provision("http://fga:8080", token_file=None)
+    store_id, model_id = await fga_provision.provision("http://fga:8080", token_file=None)
 
     assert (store_id, model_id) == ("store-1", "model-1")
     assert len(_FakeClient.requests) == 1
     request = _FakeClient.requests[0]
-    model = fga.load_model()
+    model = fga_model.load_model()
     assert model.get("conditions"), "model.json no longer defines conditions — this test needs updating, not deleting"
     assert request.conditions == model["conditions"], (
         "provision dropped the conditions block — OpenFGA will 400 the model and every FGA-enabled service fail-closes 503"
@@ -187,8 +187,8 @@ def _install(monkeypatch: pytest.MonkeyPatch, *, desired: dict[str, Any], stored
     _ModelStoreClient.reads = 0
     _ModelStoreClient.empty_store = empty_store
     _ModelStoreClient.current = _StoredModel(stored) if stored is not None else None
-    monkeypatch.setattr(fga, "OpenFgaClient", _ModelStoreClient)
-    monkeypatch.setattr(fga, "load_model", lambda: desired)
+    monkeypatch.setattr(fga_provision, "OpenFgaClient", _ModelStoreClient)
+    monkeypatch.setattr(fga_model, "load_model", lambda: desired)
 
 
 def _with_wildcard_assignee(model: dict[str, Any]) -> dict[str, Any]:
@@ -206,8 +206,8 @@ async def test_a_WILDCARD_only_write_names_the_relation_it_changed(monkeypatch: 
     caused only by a type restriction must name that relation rather than report ``changed=[]``."""
     _install(monkeypatch, desired=_with_wildcard_assignee(MODEL), stored=MODEL)
 
-    with caplog.at_level(logging.INFO, logger=fga.__name__):
-        await fga.provision("http://fga:8080", token_file=None)
+    with caplog.at_level(logging.INFO, logger=fga_provision.__name__):
+        await fga_provision.provision("http://fga:8080", token_file=None)
 
     [written] = [record for record in caplog.records if record.getMessage() == "openfga_model_written"]
     assert written.__dict__["changed"] == ["role#assignee"], "the write was logged without the relation whose restriction it changed"
@@ -232,7 +232,7 @@ def test_a_relation_NAMED_like_an_empty_message_is_not_kept_as_one(name: str) ->
     served = _as_openfga_stores_it(authored)
     served["type_definitions"][1]["metadata"]["relations"][name] = {"directly_related_user_types": [], "module": "", "source_info": None}
 
-    assert fga.canonical_model(served) == fga.canonical_model(authored), f"the empty metadata fill under a relation named {name!r} was kept"
+    assert fga_provision.canonical_model(served) == fga_provision.canonical_model(authored), f"the empty metadata fill under a relation named {name!r} was kept"
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_an_unchanged_model_is_not_rewritten(monkeypatch: pytest.MonkeyPat
     """THE GATE. 1,316 versions on the live store came from this write firing on every boot."""
     _install(monkeypatch, desired=MODEL, stored=MODEL)
 
-    store_id, model_id = await fga.provision("http://fga:8080", token_file=None)
+    store_id, model_id = await fga_provision.provision("http://fga:8080", token_file=None)
 
     assert _ModelStoreClient.requests == [], "an unchanged model must not mint a new version on every pod start"
     assert (store_id, model_id) == ("store-1", "model-EXISTING"), "the estate keeps answering with the model it already has"
@@ -252,7 +252,7 @@ async def test_a_brand_new_store_is_modelled_without_a_read(monkeypatch: pytest.
     same reason the narrowing guard skips it."""
     _install(monkeypatch, desired=MODEL, stored=None, empty_store=True)
 
-    store_id, model_id = await fga.provision("http://fga:8080", token_file=None)
+    store_id, model_id = await fga_provision.provision("http://fga:8080", token_file=None)
 
     assert _ModelStoreClient.reads == 0, "a first boot must not depend on a model that cannot exist yet"
     assert len(_ModelStoreClient.requests) == 1
@@ -302,7 +302,7 @@ def test_the_canonical_form_matches_a_REAL_sdk_model_not_just_a_double() -> None
             TypeDefinition(type="doc", relations={"can_read": Userset(computed_userset=ObjectRelation(relation="owner"))}),
         ]
 
-    assert fga.canonical_model(_Stored()) == fga.canonical_model(authored), (
+    assert fga_provision.canonical_model(_Stored()) == fga_provision.canonical_model(authored), (
         "the stored model and the authored one must canonicalise equal, or the unchanged-model skip is a "
         "branch that never runs and every boot mints another version"
     )
@@ -349,7 +349,7 @@ def _authored_assignee_model(*, wildcard: bool) -> dict[str, Any]:
 def test_a_WILDCARD_toggle_survives_the_canonical_form_of_a_REAL_sdk_model(stored: bool, desired: bool) -> None:
     """The shape `provision` compares: an SDK ``wildcard={}`` against an authored plain restriction, and
     the reverse. Stripping every empty dict makes both pairs equal, and the boot keeps the store's rule."""
-    assert fga.canonical_model(_sdk_assignee_model(wildcard=stored)) != fga.canonical_model(_authored_assignee_model(wildcard=desired))
+    assert fga_provision.canonical_model(_sdk_assignee_model(wildcard=stored)) != fga_provision.canonical_model(_authored_assignee_model(wildcard=desired))
 
 
 def _schema_fields(matches: Callable[[str], bool]) -> set[str]:
@@ -385,8 +385,8 @@ def test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form() -
     fields = _empty_message_fields()
     assert {"this", "wildcard"} <= fields, f"the schema walk lost a known empty message: {sorted(fields)}"
 
-    bare = fga.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t"}]})
-    dropped = [f for f in sorted(fields) if fga.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t", f: {}}]}) == bare]
+    bare = fga_provision.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t"}]})
+    dropped = [f for f in sorted(fields) if fga_provision.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t", f: {}}]}) == bare]
     assert not dropped, f"the canonical form strips these empty messages, so a model differing only by them reads as unchanged: {dropped}"
 
 
@@ -394,7 +394,7 @@ def test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form() -
 def test_an_unchanged_restriction_in_a_REAL_sdk_model_is_still_unchanged(wildcard: bool) -> None:
     """The no-op beside it: the SDK renders an absent wildcard as ``None`` and fills ``condition``/``module``
     with ``""``, and none of those may read as a change."""
-    assert fga.canonical_model(_sdk_assignee_model(wildcard=wildcard)) == fga.canonical_model(_authored_assignee_model(wildcard=wildcard))
+    assert fga_provision.canonical_model(_sdk_assignee_model(wildcard=wildcard)) == fga_provision.canonical_model(_authored_assignee_model(wildcard=wildcard))
 
 
 @pytest.mark.asyncio
@@ -403,13 +403,13 @@ async def test_the_estates_store_is_found_behind_more_stores_than_one_listing_pa
     50 stores a page, oldest first (measured on the pinned server), so on a platform's OpenFGA that held 50 stores
     before the estate's, a boot that read one page would not find it, mint a second, and strand every grant on the
     first."""
-    async with OpenFgaClient(fga.client_configuration(openfga.url, token_file=None)) as client:
+    async with OpenFgaClient(fga_provision.client_configuration(openfga.url, token_file=None)) as client:
         for index in range(60):
             await client.create_store(CreateStoreRequest(name=f"other-{uuid.uuid4().hex}-{index}"))
     name = f"estate-{uuid.uuid4().hex}"
-    first, _ = await fga.provision(openfga.url, token_file=None, store_name=name)
+    first, _ = await fga_provision.provision(openfga.url, token_file=None, store_name=name)
 
-    again, _ = await fga.provision(openfga.url, token_file=None, store_name=name)
-    resolved, _ = await fga.resolve(openfga.url, token_file=None, store_name=name, deadline_seconds=5, poll_seconds=0.1)
+    again, _ = await fga_provision.provision(openfga.url, token_file=None, store_name=name)
+    resolved, _ = await fga_provision.resolve(openfga.url, token_file=None, store_name=name, deadline_seconds=5, poll_seconds=0.1)
 
     assert (again, resolved) == (first, first)

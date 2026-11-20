@@ -52,7 +52,7 @@ def _run(
     async def fake_read(_client: object, _obj: str) -> list[object]:
         return []
 
-    monkeypatch.setattr(access.fga, "read_object_tuples", fake_read)
+    monkeypatch.setattr(access.fga_reads, "read_object_tuples", fake_read)
 
     async def fake_write(_client: object, tuples: list[object], **_kw: object) -> None:
         if outage:
@@ -64,8 +64,8 @@ def _run(
             raise ServiceUnavailableError("fga down")
         captured.extend(tuples)
 
-    monkeypatch.setattr(access.fga, "write_tuples", fake_write)
-    monkeypatch.setattr(access.fga, "delete_tuples", fake_delete)
+    monkeypatch.setattr(access.fga_writes, "write_tuples", fake_write)
+    monkeypatch.setattr(access.fga_writes, "delete_tuples", fake_delete)
     # The FGA client and the control emitter are INJECTED now (catalog-api-09) — the helper no longer
     # digs either out of `request.app.state`, so the drive hands them over directly.
     client = cast(OpenFgaClient, object())
@@ -179,15 +179,15 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
     table = f"table:{uuid_of('table', ['db1', 't'])}"
     namespace = f"namespace:{uuid_of('namespace', ['db1'])}"
     tuples: list[Any] = [
-        access.fga.ClientTuple(user="user:dex~alice", relation="owner", object=table),
-        access.fga.ClientTuple(user="role:eng#assignee", relation="reader", object=table),
-        access.fga.ClientTuple(user=namespace, relation="parent", object=table),
+        access.fga_writes.ClientTuple(user="user:dex~alice", relation="owner", object=table),
+        access.fga_writes.ClientTuple(user="role:eng#assignee", relation="reader", object=table),
+        access.fga_writes.ClientTuple(user=namespace, relation="parent", object=table),
     ]
 
     async def fake_read(_client: object, _obj: str) -> list[Any]:
         return tuples
 
-    monkeypatch.setattr(access.fga, "read_object_tuples", fake_read)
+    monkeypatch.setattr(access.fga_reads, "read_object_tuples", fake_read)
     client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True))
     token = _person("alice")

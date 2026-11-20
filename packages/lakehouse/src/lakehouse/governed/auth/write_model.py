@@ -26,14 +26,14 @@ from typing import Any, Final
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.governed.fga import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, ModelHistoryTooLongError, canonical_model, newest_store
+from lakehouse.governed.fga_provision import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, ModelHistoryTooLongError, canonical_model, newest_store
 from lakehouse.governed.machine_identity import identity_bearer
 from lakehouse.process.log_handler import setup_logging
 
 
 log = logging.getLogger(__name__)
 
-#: The store the estate uses, found the way every service finds it: `fga.newest_store`.
+#: The store the estate uses, found the way every service finds it: `fga_provision.newest_store`.
 STORE_NAME: Final = "lance-catalog"
 
 
@@ -73,7 +73,7 @@ def _call(api: str, path: str, body: dict[str, Any] | None = None, *, token_file
 def history(api: str, store: str, desired: dict[str, Any], *, token_file: str | None) -> ModelHistory:
     """The store's models read against ``desired``, newest first and stopped at the first that carries it.
 
-    The same rule the catalog's boot and every service's resolve apply (``fga.ModelHistory``), over
+    The same rule the catalog's boot and every service's resolve apply (``fga_provision.ModelHistory``), over
     OpenFGA's HTTP API. A history longer than ``MODEL_MAX_PAGES`` raises rather than reading as absent,
     because absent is what makes this hook write.
     """
@@ -130,7 +130,7 @@ def main() -> int:
     stores: list[dict[str, Any]] = []
     for attempt in range(_ATTEMPTS):
         try:
-            # The stores of the estate's name, never the first page of every store (`fga.newest_store`).
+            # The stores of the estate's name, never the first page of every store (`fga_provision.newest_store`).
             stores = _call(api, f"/stores?name={urllib.parse.quote(STORE_NAME)}", token_file=token_file).get("stores") or []
             break
         except urllib.error.HTTPError as exc:

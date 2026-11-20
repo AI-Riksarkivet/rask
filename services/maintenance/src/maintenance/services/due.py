@@ -23,7 +23,7 @@ from lance.optimize import Compaction, CompactionOptions
 from pydantic import BaseModel
 
 from lakehouse.compaction_gate import compaction_refusal
-from lakehouse.governed.fga import canonical_object_id
+from lakehouse.governed.fga_ids import canonical_object_id
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.records.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due

@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.events.lineage_events import AUTHOR_FACET, LANCE_FACET
 from lakehouse.events.signing import SIGNATURE_FACET
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.naming import CATALOG_DELIMITER
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, output_refs, require_event_feed_reader
@@ -103,7 +103,7 @@ def _governed_datasets(record: EventRecord) -> Governed:
     payload = payload if isinstance(payload, dict) else {}
     inputs = list(payload.get("inputs") or [])
     outputs = [*(payload.get("outputs") or []), *([payload["dataset"]] if isinstance(payload.get("dataset"), dict) else [])]
-    recorded = Governed(objects=frozenset(fga.table_object(uuid) for uuid in record.table_uuids), unresolved=frozenset(record.unresolved_tables))
+    recorded = Governed(objects=frozenset(fga_ids.table_object(uuid) for uuid in record.table_uuids), unresolved=frozenset(record.unresolved_tables))
     if not inputs and not outputs:
         return recorded
     read = governed_refs([*inputs, *outputs], column_upstreams=_column_lineage_datasets(record.event))
@@ -253,7 +253,7 @@ async def _visible_page(
         records += read
         left = 0 if exhausted else fetch - len(records)
         ahead = None
-        if reads == _MOST_READS - 1 and left and undecided(read) >= fga.CHECKS_PER_BATCH:
+        if reads == _MOST_READS - 1 and left and undecided(read) >= fga_reads.CHECKS_PER_BATCH:
             ahead_rows = min(left, len(read))
             ahead = asyncio.create_task(window.take(ahead_rows))
         try:

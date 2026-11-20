@@ -47,7 +47,7 @@ from lakehouse.events.control_emit import make_control_emitter
 from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.admission import judge_before_the_body
 from lakehouse.governed.auth_lifespan import attach_auth
-from lakehouse.governed.fga import dispose as fga_dispose
+from lakehouse.governed.fga_provision import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check

@@ -9,7 +9,7 @@ failures) land in the feed alongside the writes. The publish goes over this proc
 (``lakehouse.events.bus``), one bounded attempt, with the outbox's relay as its retry.
 
 Self-contained: the maintenance service never imports the catalog (zero cross-service imports — the
-mergeability invariant). The only shared code is ``lakehouse.governed.fga`` for the id↔namespace derivation, so the
+mergeability invariant). The only shared code is ``lakehouse.governed.fga_ids`` for the id↔namespace derivation, so the
 lineage ``Dataset`` is named as the catalog names the table, and the event carries the table's uuid, which its OpenFGA
 object names (ADR 0173 §8, §10).
 

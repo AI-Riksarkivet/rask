@@ -61,7 +61,7 @@ from catalog.schemas import TableChangesRequest
 from catalog.services import blob_serving, dataplane, table_create
 from catalog.services.table_claims import DoorTable
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import audit_read
 from lakehouse.storage.options import StorageOptions
 
@@ -179,11 +179,11 @@ async def create_table(
     encoding.require_valid_field_encoding(table.schema)
     namespace = parse_identifier(id)[:-1]
     if (labels := provenance_guard.field_labels(table.schema)) and (parent := await resolver.object("namespace", namespace)) is not None:
-        await fga_deps.require_classifier_to_set_labels(client, settings, token, obj=parent, label=fga.canonical_object_id(namespace), labels=labels)
+        await fga_deps.require_classifier_to_set_labels(client, settings, token, obj=parent, label=fga_ids.canonical_object_id(namespace), labels=labels)
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/create", target=fga.canonical_object_id(parse_identifier(id)))
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/create", target=fga_ids.canonical_object_id(parse_identifier(id)))
     if converge.replay is not None:
         return CreateTableResponse.model_validate(converge.replay.body)
 
@@ -314,7 +314,7 @@ async def _keyed_table_write[R: BaseModel](
     (:func:`dataplane.committed_under_key`), recorded now; ``None`` means the door writes, stamping :func:`_keyed_stamp`.
     """
     converge = await keyed.begin(
-        endpoint=f"POST /v1/table/{{id}}/{door} branch={dataplane.recorded_branch(branch) or ''}", target=fga.canonical_object_id(segments)
+        endpoint=f"POST /v1/table/{{id}}/{door} branch={dataplane.recorded_branch(branch) or ''}", target=fga_ids.canonical_object_id(segments)
     )
     if converge.replay is not None:
         return converge, answer.model_validate(converge.replay.body)

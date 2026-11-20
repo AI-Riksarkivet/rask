@@ -69,7 +69,7 @@ from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane, native, provenance_namespace, table_bases, table_claims, table_inputs
 from lakehouse.events.control_emit import ControlEmitter, emit_control
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.records import base_registry
 from lakehouse.storage.options import StorageOptions
 
@@ -204,8 +204,8 @@ async def create_governed_table(
         governed=GovernedStorage.from_settings(settings),
     )
     segments = parse_identifier(id)
-    table_id = fga.canonical_object_id(segments)
-    namespace = fga.parent_namespace_id(segments) or ""
+    table_id = fga_ids.canonical_object_id(segments)
+    namespace = fga_ids.parent_namespace_id(segments) or ""
     created_by = token.subject if token is not None else None
     # #21: stamp the lineage coordinates into the Lance file's schema metadata so the data is
     # self-describing (reconcilable to the graph without the catalog). A metadata swap on the decoded
@@ -355,7 +355,7 @@ async def create_governed_table(
             control,
             action="table_created",
             object_type="table",
-            object_id=fga.table_object(table_uuid),
+            object_id=fga_ids.table_object(table_uuid),
             object_name=table_id,
             actor=f"user:{token.subject}" if token is not None else None,
             extra={

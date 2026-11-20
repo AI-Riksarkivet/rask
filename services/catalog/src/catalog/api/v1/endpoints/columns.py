@@ -58,7 +58,7 @@ from catalog.core.lineage_emit import (
 )
 from catalog.services import dataplane
 from catalog.services.table_claims import ResolvedTable
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import PLATFORM_PREFIX
 
@@ -109,7 +109,7 @@ async def _require_classifier_for_governance_keys(
     touched = sorted({key for update in updates for key in (update.get("metadata") or {}) if key.startswith(PLATFORM_PREFIX)})
     if not touched and not replaces:
         return
-    await fga_deps.require_relation(client, settings, token, relation="can_classify", obj=fga.table_object(table.require_uuid()))
+    await fga_deps.require_relation(client, settings, token, relation="can_classify", obj=fga_ids.table_object(table.require_uuid()))
     # THE SECOND QUESTION ([[LH-055]]). `can_classify` is ONE BIT — whoever may label anything may
     # label everything — so the ruling's "per-tag `apply` delegation" needs the VALUE asked about too.
     # Asked second on purpose: a caller with no business on this table is already refused above,

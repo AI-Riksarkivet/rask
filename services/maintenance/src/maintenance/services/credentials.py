@@ -50,7 +50,7 @@ import httpx
 from lance_namespace.errors import ErrorCode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from lakehouse.lancekit.base_refs import decoded_path, normalise
 from lakehouse.records.trash import TrashKind
@@ -662,7 +662,7 @@ def finish_announcement_intents(settings: MaintenanceCatalogDoor) -> Announcemen
     return _parsed(_answered(settings, door), AnnouncementIntentsFinished, asked_for=door.asked_for)
 
 
-def grant_census(settings: MaintenanceCatalogDoor) -> fga.GrantCensus | None:
+def grant_census(settings: MaintenanceCatalogDoor) -> fga_reads.GrantCensus | None:
     """The store's grants counted by object, as the catalog reads them for the drift report; ``None`` when the catalog
     answers that authorization is off.
 
@@ -673,7 +673,7 @@ def grant_census(settings: MaintenanceCatalogDoor) -> fga.GrantCensus | None:
     """
     door = _grants_door(settings, act="/census", answer="a grant census", method="GET")
     answer = _parsed(_answered(settings, door), _GrantCensusAnswer, asked_for=door.asked_for)
-    return fga.GrantCensus(counts_by_type=answer.counts_by_type) if answer.enabled else None
+    return fga_reads.GrantCensus(counts_by_type=answer.counts_by_type) if answer.enabled else None
 
 
 def revoke_ghosts(settings: MaintenanceCatalogDoor, objects: list[str]) -> GhostsRevoked:

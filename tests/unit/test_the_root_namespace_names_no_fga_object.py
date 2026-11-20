@@ -82,8 +82,8 @@ def _drive(monkeypatch: pytest.MonkeyPatch, path: str, object_id: str) -> list[s
         asked.extend(objects)
         return dict.fromkeys(objects, True)
 
-    monkeypatch.setattr(fga_deps.fga, "check", _record_check)
-    monkeypatch.setattr(fga_deps.fga, "batch_check", _record_batch)
+    monkeypatch.setattr(fga_deps.fga_reads, "check", _record_check)
+    monkeypatch.setattr(fga_deps.fga_reads, "batch_check", _record_batch)
     # CAST, the idiom `test_the_bus_door_authorizes_what_it_records` uses: the stand-ins carry exactly
     # the attributes the guard reads, and constructing a real Request/Settings/OpenFgaClient would drag
     # a whole app and a live store into a test about one composed object id. The caller is a real one.

@@ -40,7 +40,7 @@ from catalog.core.vending import (
 )
 from catalog.core.version_retention import recorded_branch
 from catalog.schemas import CredentialResponse, VendedCredentials
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.records import maintenance_policies
 
@@ -225,7 +225,7 @@ async def vend_credentials(
     creds = None if vended is None else VendedCredentials(storage_options=vended.as_storage_options().in_clear(), expires_at_millis=vended.expires_at_millis)
     mode = "server_mediated" if creds is None else "direct"
     if mode == "direct":  # #41 audit the actual issuance of direct object-store credentials (who, what, tier)
-        obj = fga.table_object(table_uuid)
+        obj = fga_ids.table_object(table_uuid)
         audit(
             AuditAction.VEND_CREDENTIALS,
             AuditOutcome.SUCCESS,

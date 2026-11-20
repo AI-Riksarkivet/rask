@@ -138,13 +138,13 @@ class _Feed:
 
 
 def _deny_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    from lakehouse.governed import fga
+    from lakehouse.governed import fga_reads
 
     async def deny(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         del user, relation
         return dict.fromkeys(objects, False)
 
-    monkeypatch.setattr(fga, "batch_check", deny)
+    monkeypatch.setattr(fga_reads, "batch_check", deny)
 
 
 def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(monkeypatch: pytest.MonkeyPatch) -> None:

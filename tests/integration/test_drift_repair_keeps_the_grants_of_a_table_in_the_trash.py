@@ -9,7 +9,7 @@ Measured on the live estate at helm rev 18, the reconcile ticks at 18:04 and 18:
 ONE ESTATE ON MOTO, TWO SERVICES (`catalog_and_maintenance`): the real catalog app drops the table through its door, so
 the trash record is the one that door writes, and maintenance runs its audit over the same control root, on what its worker stands on,
 with drift repair armed, asking the catalog's own grant doors for the census and the revokes (`catalog_doors`,
-[[XC-084]]). One in-memory `TupleStore` stands behind the catalog through the real `lakehouse.governed.fga` functions. A ghost beside the trashed table, a grant on a table nothing names, is the control: the audit must revoke it,
+[[XC-084]]). One in-memory `TupleStore` stands behind the catalog through the real `lakehouse.governed.fga_reads` and `fga_writes` functions. A ghost beside the trashed table, a grant on a table nothing names, is the control: the audit must revoke it,
 so a pass that revokes nothing cannot pass. A live table and a renamed one are no ghosts: a rename keeps the uuid its
 grants are held by. Every object is a table's uuid (``table:<uuid>``, [[LH-524]]), and the trashed table's is the one
 its record keeps.
@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings as catalog_settings
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed.fga import user_object
+from lakehouse.governed.fga_ids import user_object
 from lakehouse.records import trash
 from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors

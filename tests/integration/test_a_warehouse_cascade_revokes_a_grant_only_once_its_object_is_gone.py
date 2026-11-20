@@ -10,7 +10,7 @@ clears with the warehouse.
 
 ONE TENANT ON MOTO: the real catalog app, its warehouse bucket provisioned through the create door, its namespaces and
 tables created as `acme-wh$...` names through the namespace doors on real pylance, and the in-memory
-`TupleStore` behind the real `lakehouse.governed.fga` seed and revoke. Every check is allowed, because who may act is
+`TupleStore` behind the real `lakehouse.governed.fga_writes` seed and revoke. Every check is allowed, because who may act is
 not the claim: the tuples each call leaves behind are. A table's tuples are what its owner reads it through
 (`model.fga.yaml` pins that a project's admin owns a table through its parent edges).
 """

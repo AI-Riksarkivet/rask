@@ -30,7 +30,7 @@ from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.problems.outage import store_refusal
@@ -356,11 +356,11 @@ class Resolver:
         """
         if kind == "table":
             resolved = await self.table(segments)
-            return None if resolved.location is None else fga.table_object(resolved.require_uuid())
+            return None if resolved.location is None else fga_ids.table_object(resolved.require_uuid())
         if len(segments) == 1:
             return warehouse_object(self._settings, segments[0])
         uuid = await self.namespace_uuid(segments)
-        return None if uuid is None else fga.namespace_object(uuid)
+        return None if uuid is None else fga_ids.namespace_object(uuid)
 
     async def trashed(self, kind: TrashKind, segments: list[str]) -> list[TrashRecord]:
         """The trash records of every ``kind`` object dropped under the name ``segments``, oldest drop first (ADR 0173 §9).
@@ -370,7 +370,7 @@ class Resolver:
         """
         key = (kind, tuple(segments))
         if key not in self._trashed:
-            canonical = fga.canonical_object_id(segments)
+            canonical = fga_ids.canonical_object_id(segments)
             records = await run_in_threadpool(trash.named, self._settings.registry_root, self._settings.storage_options(), canonical, kind=kind)
             wanted = self._request.query_params.get("uuid")
             self._trashed[key] = [r for r in records if (uuid := r.uuid) is not None and wanted in (None, uuid)]
@@ -403,7 +403,7 @@ class Resolver:
         if key in self._admitted:
             return self._admitted[key]
         if self._settings.fga_enabled:
-            raise InternalError(f"no authorization decided which trashed {kind} under {fga.canonical_object_id(segments)!r} this caller may act on")
+            raise InternalError(f"no authorization decided which trashed {kind} under {fga_ids.canonical_object_id(segments)!r} this caller may act on")
         return await self.trashed(kind, segments)
 
 

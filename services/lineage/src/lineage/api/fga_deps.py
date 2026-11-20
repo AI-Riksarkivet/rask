@@ -40,7 +40,7 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse.events.lineage_events import AUTHOR_FACET, dataset_uuids
 from lakehouse.events.openlineage import author_facet, lifecycle_state
 from lakehouse.events.signing import VerifiedSignature
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.decider import AccessDecider
 from lakehouse.governed.principal import is_principal
@@ -140,8 +140,8 @@ def governed_refs(datasets: Iterable[object], *, column_upstreams: Iterable[str]
         if uuid is None:
             unresolved.add(name)
         else:
-            objects.add(fga.table_object(uuid))
-            by_name[name] = fga.table_object(uuid)
+            objects.add(fga_ids.table_object(uuid))
+            by_name[name] = fga_ids.table_object(uuid)
     for name in column_upstreams:
         if name in by_name:
             objects.add(by_name[name])
@@ -164,7 +164,7 @@ def output_refs(outputs: Iterable[object]) -> Governed:
         if uuid is None:
             unresolved.add(name)
         else:
-            objects.add(fga.table_object(uuid))
+            objects.add(fga_ids.table_object(uuid))
     return Governed(objects=frozenset(objects), unresolved=frozenset(unresolved))
 
 
@@ -293,7 +293,7 @@ async def require_metadata_access(name: str, request: Request, settings: Setting
     if not settings.fga_enabled:
         return
     uuid = (await names.table(name, bearer=bearer)).table_uuid
-    await _require_relation("can_get_metadata", fga.table_object(uuid) if uuid else None, f"table:{name}", request, settings, token)
+    await _require_relation("can_get_metadata", fga_ids.table_object(uuid) if uuid else None, f"table:{name}", request, settings, token)
 
 
 def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None:
@@ -529,7 +529,7 @@ async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, us
                 held.add(location)
                 tables.add(table_uuid)
                 for index in locations[location]:
-                    objects.setdefault(index, set()).add(fga.table_object(table_uuid))
+                    objects.setdefault(index, set()).add(fga_ids.table_object(table_uuid))
     hidden: dict[int, set[str]] = {}
     if names:
         for name, decision in (await decider.check_tables(user=user, relation="can_get_metadata", tables=sorted(names))).items():
@@ -539,7 +539,7 @@ async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, us
                 continue
             tables.add(table_uuid)
             for index in names[name]:
-                objects.setdefault(index, set()).add(fga.table_object(table_uuid))
+                objects.setdefault(index, set()).add(fga_ids.table_object(table_uuid))
     return Aliases(
         objects={index: frozenset(found) for index, found in objects.items()},
         located=frozenset(index for index, location in own.items() if location in held),
@@ -707,7 +707,8 @@ def _names_of(datasets: Iterable[Dataset], objects: Iterable[str], aliases: Alia
         {
             d.name
             for index, d in enumerate(datasets)
-            if ((uuid := dataset_uuids(d.model_dump(by_alias=True)).table_uuid) and fga.table_object(uuid) in wanted) or found.get(index, frozenset()) & wanted
+            if ((uuid := dataset_uuids(d.model_dump(by_alias=True)).table_uuid) and fga_ids.table_object(uuid) in wanted)
+            or found.get(index, frozenset()) & wanted
         }
     )
 
@@ -734,7 +735,7 @@ class DatasetFilter:
         none that is no object id, which the check answers without asking."""
         if not self._settings.fga_enabled:
             return 0
-        return len({obj for obj in objects if obj not in self._decided and fga.is_object_id(obj)})
+        return len({obj for obj in objects if obj not in self._decided and fga_ids.is_object_id(obj)})
 
     async def visible(self, objects: Iterable[str]) -> set[str]:
         """Return the subset of ``objects`` the caller may read (``can_get_metadata``)."""

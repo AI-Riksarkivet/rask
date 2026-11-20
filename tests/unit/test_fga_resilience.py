@@ -1,4 +1,4 @@
-"""Unit tests for the OpenFGA resilience + id-canonicalisation fixes in lakehouse.governed.fga.
+"""Unit tests for the OpenFGA resilience + id-canonicalisation fixes in lakehouse.governed.fga_resilience and fga_ids.
 
 These pin the audit-confirmed contracts WITHOUT touching the network:
 
@@ -24,15 +24,15 @@ from lance_namespace import ServiceUnavailableError
 from openfga_sdk import ApiException, OpenFgaClient
 from openfga_sdk.client.models import ClientCheckRequest, ClientTuple, ClientWriteRequest
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_provision, fga_reads, fga_resilience, fga_writes
 
 
 def test_is_transient_classifies_network_errors() -> None:
     """A down server (raw transport error) is transient; a definitive non-transport error is not."""
-    assert fga._is_transient(aiohttp.ClientConnectionError("refused")) is True
-    assert fga._is_transient(TimeoutError()) is True
-    assert fga._is_transient(ConnectionRefusedError()) is True  # OSError subclass
-    assert fga._is_transient(ValueError("not a transport error")) is False
+    assert fga_resilience._is_transient(aiohttp.ClientConnectionError("refused")) is True
+    assert fga_resilience._is_transient(TimeoutError()) is True
+    assert fga_resilience._is_transient(ConnectionRefusedError()) is True  # OSError subclass
+    assert fga_resilience._is_transient(ValueError("not a transport error")) is False
 
 
 class _DownClient:
@@ -64,12 +64,12 @@ def _down() -> OpenFgaClient:
 def test_check_fails_closed_on_network_error() -> None:
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
-            fga.check(
+            fga_reads.check(
                 _down(),
                 user="dex~alice",
                 relation="can_read_data",
                 obj="table:t",
-                retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
+                retry=fga_resilience.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
             )
         )
 
@@ -90,9 +90,9 @@ def test_check_qualify_false_sends_subject_verbatim() -> None:
     double-prefix a user (``user:user:alice`` → always denies) and let a userset be Checked at all
     (audit 2026-07-20 caught the double-prefix bug that made every simulated Check falsely deny)."""
     c = _CapturingCheck()
-    asyncio.run(fga.check(cast(OpenFgaClient, c), user="user:alice", relation="can_drop", obj="table:t", qualify=False))
+    asyncio.run(fga_reads.check(cast(OpenFgaClient, c), user="user:alice", relation="can_drop", obj="table:t", qualify=False))
     asyncio.run(
-        fga.check(
+        fga_reads.check(
             cast(OpenFgaClient, c),
             user="role:project_admin#member",
             relation="can_drop",
@@ -117,7 +117,7 @@ def test_list_users_extracts_subjects_and_wildcard() -> None:
                 ]
             )
 
-    result = asyncio.run(fga.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t"))
+    result = asyncio.run(fga_reads.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t"))
     assert result == ["*", "alice", "bob"]
 
 
@@ -168,12 +168,12 @@ def test_write_tuples_lands_siblings_when_one_tuple_already_exists() -> None:
     dupe = ClientTuple(user="user:alice", relation="admin", object="project:acme")
 
     asyncio.run(
-        fga.write_tuples(
+        fga_writes.write_tuples(
             cast(OpenFgaClient, store),
             [owner, parent, dupe],
             actor="test",
             origin="admin_api",
-            retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
+            retry=fga_resilience.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
         )
     )
 
@@ -192,12 +192,12 @@ def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
     store = _TransactionalStore({("user:alice", "owner", "warehouse:wh-a")}, honours_conflict=False)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
-            fga.write_tuples(
+            fga_writes.write_tuples(
                 cast(OpenFgaClient, store),
                 [ClientTuple(user="user:alice", relation="owner", object="warehouse:wh-a")],
                 actor="test",
                 origin="admin_api",
-                retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
+                retry=fga_resilience.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
             )
         )
     assert store.tuples == {("user:alice", "owner", "warehouse:wh-a")}, "a failed write mutated the store"
@@ -212,7 +212,7 @@ def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
     ],
 )
 def test_parent_namespace_id_root_and_nesting(table_id: str, expected: str | None) -> None:
-    assert fga.parent_namespace_id(table_id) == expected
+    assert fga_ids.parent_namespace_id(table_id) == expected
 
 
 class _CapturingList:
@@ -239,7 +239,7 @@ def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
     """
     client = _CapturingList()
     asyncio.run(
-        fga.list_objects(
+        fga_reads.list_objects(
             cast(OpenFgaClient, client),
             user="role:project_admin#member",
             relation="can_get_metadata",
@@ -257,9 +257,9 @@ def test_a_client_whose_token_cannot_be_read_fails_closed_and_names_no_file(tmp_
     token.write_text("projected")
 
     async def ask() -> None:
-        async with fga.make_client("http://127.0.0.1:1", "01HZX0000000000000000000ST", "01HZX0000000000000000000MD", token_file=str(token)) as client:
+        async with fga_provision.make_client("http://127.0.0.1:1", "01HZX0000000000000000000ST", "01HZX0000000000000000000MD", token_file=str(token)) as client:
             token.unlink()
-            await fga.check(client, user="dex~alice", relation="can_read_data", obj="table:t", retry=fga.ONE_ATTEMPT)
+            await fga_reads.check(client, user="dex~alice", relation="can_read_data", obj="table:t", retry=fga_resilience.ONE_ATTEMPT)
 
     with pytest.raises(ServiceUnavailableError) as refused:
         asyncio.run(ask())

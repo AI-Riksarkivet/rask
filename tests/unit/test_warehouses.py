@@ -28,7 +28,7 @@ from catalog.core.config import Settings
 from catalog.core.vending import ModeBVendor
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses
-from lakehouse.governed import fga as fga_module
+from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -117,7 +117,7 @@ def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     async def outage(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
         raise ServiceUnavailableError("openfga down")
 
-    monkeypatch.setattr(fga_module, "check", outage)
+    monkeypatch.setattr(fga_reads, "check", outage)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
 
@@ -126,7 +126,7 @@ _TOKEN = _caller("dex~alice")
 
 
 def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Regression guard for a WRITE-side model mismatch the mocked-`fga.check` gate tests cannot catch: the
+    # Regression guard for a WRITE-side model mismatch the mocked-`fga_reads.check` gate tests cannot catch: the
     # seed originally wrote `warehouse#parent` (via grant_on_create) but the warehouse type's parent-pointer
     # is `project`, not `parent` — OpenFGA rejects the undefined relation and the whole seed 503s LIVE while
     # every unit test stays green. Drive the REAL seed with a recording `write_tuples` and assert every
@@ -136,7 +136,7 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     async def rec_write(_client: object, tuples: list[Any], **_kw: object) -> None:
         captured.extend(tuples)
 
-    monkeypatch.setattr(fga_module, "write_tuples", rec_write)
+    monkeypatch.setattr(fga_writes, "write_tuples", rec_write)
     # Drive BOTH seeds: together they are the full tuple surface this feature writes — seed_warehouse
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
@@ -144,10 +144,10 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
-    model = {t["type"]: set(t.get("relations") or {}) for t in fga_module.load_model()["type_definitions"]}
+    model = {t["type"]: set(t.get("relations") or {}) for t in fga_model.load_model()["type_definitions"]}
     assignable = {
         (t["type"], rel)
-        for t in fga_module.load_model()["type_definitions"]
+        for t in fga_model.load_model()["type_definitions"]
         for rel, meta in ((t.get("metadata") or {}).get("relations") or {}).items()
         if meta.get("directly_related_user_types")
     }
@@ -176,7 +176,7 @@ def test_seed_warehouse_never_grants_project_admin(monkeypatch: pytest.MonkeyPat
     async def rec_write(_client: object, tuples: list[Any], **_kw: object) -> None:
         captured.extend(tuples)
 
-    monkeypatch.setattr(fga_module, "write_tuples", rec_write)
+    monkeypatch.setattr(fga_writes, "write_tuples", rec_write)
     asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
     assert {(t.user, t.relation, t.object) for t in captured} == {
         (f"user:{_TOKEN.subject}", "owner", "warehouse:wh-a"),
@@ -207,14 +207,14 @@ class _FakeStore:
     estate door). A relation outside the pair is an error, so a silent gate change can't slip past."""
 
     def __init__(self, *, estate_admins: tuple[str, ...] = ()) -> None:
-        self.tuples: set[tuple[str, str, str]] = {(fga_module.user_object(sub), "admin", _ROOT_OBJECT) for sub in estate_admins}
+        self.tuples: set[tuple[str, str, str]] = {(fga_ids.user_object(sub), "admin", _ROOT_OBJECT) for sub in estate_admins}
         self.checks: list[tuple[str, str, str]] = []
 
     async def check(self, _client: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
         self.checks.append((user, relation, obj))
-        # The real `fga.check` sends a principal key as the user it is (`user_object`, qualify=True) and a full
+        # The real `fga_reads.check` sends a principal key as the user it is (`user_object`, qualify=True) and a full
         # subject verbatim (qualify=False); mirror that so a checked subject and a seeded tuple are the same string.
-        subject = user if _kw.get("qualify") is False else fga_module.user_object(user)
+        subject = user if _kw.get("qualify") is False else fga_ids.user_object(user)
         if relation in ("can_create_project", "can_create_warehouse"):
             return (subject, "admin", obj) in self.tuples
         raise AssertionError(f"the warehouse-create gate checked an unexpected relation: {relation}")
@@ -228,9 +228,9 @@ class _FakeStore:
         return sorted(u for u, rel, o in self.tuples if o == obj and rel == "admin")
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(fga_module, "check", self.check)
-        monkeypatch.setattr(fga_module, "write_tuples", self.write)
-        monkeypatch.setattr(fga_module, "list_users", self.list_users)
+        monkeypatch.setattr(fga_reads, "check", self.check)
+        monkeypatch.setattr(fga_writes, "write_tuples", self.write)
+        monkeypatch.setattr(fga_reads, "list_users", self.list_users)
 
 
 class _BucketCatalogs:

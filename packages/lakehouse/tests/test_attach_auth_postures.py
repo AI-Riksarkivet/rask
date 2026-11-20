@@ -6,7 +6,7 @@ decisions the single-posture helper cannot express.
 
   * **Provisioning.** `maintenance` must NEVER author an authorization model. A data
     writer that mints a store becomes the source of truth for everyone else's permissions. It
-    resolves read-only (`fga.resolve`) and fail closed when the estate is not bootstrapped.
+    resolves read-only (`fga_provision.resolve`) and fail closed when the estate is not bootstrapped.
   * **Fatality.** `catalog` and `lineage` build with no `try` at all, so a failed
     build CRASHES the pod. That is deliberate and visible. Collapsing them onto a swallowing helper
     would silently convert CrashLoopBackOff into a fleet of pods serving 503 — the same estate, minus
@@ -25,7 +25,7 @@ import pytest
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from lakehouse.governed import fga as fga_mod
+from lakehouse.governed import fga_provision
 from lakehouse.governed import oidc as oidc_mod
 from lakehouse.governed.auth_lifespan import attach_auth, build_fga_client
 from lakehouse.governed.settings import OidcProvider
@@ -87,9 +87,9 @@ def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         rec.calls.append(f"make_client:{store_id}")
         return object()
 
-    monkeypatch.setattr(fga_mod, "provision", provision)
-    monkeypatch.setattr(fga_mod, "resolve", resolve)
-    monkeypatch.setattr(fga_mod, "make_client", make_client)
+    monkeypatch.setattr(fga_provision, "provision", provision)
+    monkeypatch.setattr(fga_provision, "resolve", resolve)
+    monkeypatch.setattr(fga_provision, "make_client", make_client)
 
     # A stand-in with the methods the startup path calls on it. `attach_auth` fetches the verifier's keys
     # so a misconfigured issuer is in the pod's log at boot rather than in a user's failed request, and
@@ -110,7 +110,7 @@ def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) -> None:
     """Behavioural baseline for every service but the ONE bootstrap — saying nothing must not publish.
 
-    `fga.provision` writes a new immutable authorization model for a body the store lacks, so a default
+    `fga_provision.provision` writes a new immutable authorization model for a body the store lacks, so a default
     that provisions lets every image, older ones included, add its own body to the history. Measured live
     2026-09-09: 1,256 models in the store and three services carrying an older `model.fga` with no
     `maintainer` rung. The catalog opts in explicitly; everything else reads.
@@ -130,13 +130,13 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(
     monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder, caplog: pytest.LogCaptureFixture
 ) -> None:
     """An unbootstrapped estate must not be bootstrapped BY the reader. No client, so the gate 503s, and
-    the warning names what `fga.resolve` found missing."""
+    the warning names what `fga_provision.resolve` found missing."""
 
     async def resolve(api_url: str, **_: object) -> tuple[str, str]:
         fga_calls.calls.append("resolve")
-        raise fga_mod.OpenFgaModelAbsentError(f"OpenFGA at {api_url} holds no store named 'lance-catalog'")
+        raise fga_provision.OpenFgaModelAbsentError(f"OpenFGA at {api_url} holds no store named 'lance-catalog'")
 
-    monkeypatch.setattr(fga_mod, "resolve", resolve)
+    monkeypatch.setattr(fga_provision, "resolve", resolve)
     app = FastAPI()
     with caplog.at_level(logging.WARNING):
         async with Supervisor() as loops:
@@ -167,11 +167,11 @@ async def test_fatal_True_refuses_to_run_without_the_model_its_image_carries(mon
 
     async def resolve(api_url: str, **_: object) -> tuple[str, str]:
         fga_calls.calls.append("resolve")
-        raise fga_mod.OpenFgaModelAbsentError(f"store 01STORE at {api_url} holds no model carrying this image's model.json")
+        raise fga_provision.OpenFgaModelAbsentError(f"store 01STORE at {api_url} holds no model carrying this image's model.json")
 
-    monkeypatch.setattr(fga_mod, "resolve", resolve)
+    monkeypatch.setattr(fga_provision, "resolve", resolve)
 
-    with pytest.raises(fga_mod.OpenFgaModelAbsentError, match=r"holds no model carrying this image's model\.json"):
+    with pytest.raises(fga_provision.OpenFgaModelAbsentError, match=r"holds no model carrying this image's model\.json"):
         await build_fga_client(_Settings(), service="warehouse-grant-backfill", provision=False, fatal=True)
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
 
@@ -186,7 +186,7 @@ async def test_fatal_True_reraises_a_failed_fga_build(monkeypatch: pytest.Monkey
 
     # `resolve`, not `provision`: the default posture is read-only, so that is the call this failure
     # has to arrive on for the assertion to be about `fatal` rather than about which half was patched.
-    monkeypatch.setattr(fga_mod, "resolve", boom)
+    monkeypatch.setattr(fga_provision, "resolve", boom)
     app = FastAPI()
     with pytest.raises(RuntimeError, match="openfga unreachable"):
         async with Supervisor() as loops:
@@ -217,7 +217,7 @@ async def test_the_default_stays_NON_fatal(monkeypatch: pytest.MonkeyPatch, fga_
         raise RuntimeError("openfga unreachable")
 
     # The read half, for the same reason as the fatal case above: it is the one the default takes.
-    monkeypatch.setattr(fga_mod, "resolve", boom)
+    monkeypatch.setattr(fga_provision, "resolve", boom)
     app = FastAPI()
     async with Supervisor() as loops:
         await attach_auth(app, _Settings(), service="t", loops=loops)

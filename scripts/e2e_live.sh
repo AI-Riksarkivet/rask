@@ -161,14 +161,14 @@ if [ -n "$FGA" ]; then
     || fail "could not mint a rask-openfga token for $RELEASE-sa-hooks"
   keep fga-token "$minted"
   # THE STORE THE ESTATE USES: the catalog's `RASK_FGA_STORE_ID` pin, else the newest store named
-  # `lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).
+  # `lance-catalog` (`fga_provision.newest_store`), the rule the hook and every service share ([[LH-201]]).
   # EXPORTED so a suite reads the SAME store this runner picked: a second pick by another rule agrees
   # only while the estate holds one store.
   STORE_ID="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_FGA_STORE_ID")].value}' 2>/dev/null || true)"
   [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 -H @- "http://$FGA/stores?name=lance-catalog" <<<"Authorization: Bearer $(cat "$CREDENTIALS/fga-token")" | uv run python -c "
 import json, sys
 from lakehouse.governed.auth.write_model import STORE_NAME
-from lakehouse.governed.fga import newest_store
+from lakehouse.governed.fga_provision import newest_store
 named = newest_store(json.load(sys.stdin).get('stores') or [], STORE_NAME)
 print(named['id'] if named else '')" 2>/dev/null || true)"
   [ -n "$STORE_ID" ] && export LANCE_E2E_FGA_STORE_ID="$STORE_ID"

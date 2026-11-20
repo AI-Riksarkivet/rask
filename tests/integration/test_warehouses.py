@@ -26,7 +26,7 @@ from catalog.api.v1.endpoints import warehouses as wh_ep
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import EncryptionAtRest, SessionTier, VendedSession, build_session_policy, split_s3_location
 from catalog.services import warehouses as wh_svc
-from lakehouse.governed import fga as fga_module
+from lakehouse.governed import fga_reads
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -556,7 +556,7 @@ def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_p
     async def deny(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
         return False
 
-    monkeypatch.setattr(fga_module, "check", deny)
+    monkeypatch.setattr(fga_reads, "check", deny)
     r = client.post("/management/v1/warehouses/wh-real/deactivate", headers={"authorization": "Bearer t"})
     assert r.status_code == 404, r.text  # NOT 403 — a non-admin cannot learn wh-real exists
 
@@ -578,7 +578,7 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, stor
     async def deny(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
         return False
 
-    monkeypatch.setattr(fga_module, "check", deny)
+    monkeypatch.setattr(fga_reads, "check", deny)
     resp = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}, headers={"authorization": "Bearer t"})
     assert resp.status_code == 403, resp.text
 

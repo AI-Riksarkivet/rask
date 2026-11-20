@@ -44,7 +44,7 @@ from catalog.services import dataplane, maintenance_commits, managed_versions, p
 from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.events.openlineage import BRANCH_IDENTIFIER
 from lakehouse.events.signing import SIGNATURE_FACET
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.lancekit import auto_cleanup
 from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
 from lakehouse.lancekit.features import flags_from_open_error
@@ -495,7 +495,7 @@ def reconcile_table(
     marks = commit_records.read_marks(control, control_so, table_uuid)
     after = now - timedelta(seconds=settings.commit_reconcile_horizon_seconds)
     on_feed = announced(feed, so, table_uuid, since=after - _FEED_SLACK, signer=settings.signing_identity or None)
-    parent = fga.parent_namespace_id(segments) or ""
+    parent = fga_ids.parent_namespace_id(segments) or ""
     scans: list[RefScan] = []
     unreadable: list[str] = []
     for branch, identifier in refs_of(location, so):

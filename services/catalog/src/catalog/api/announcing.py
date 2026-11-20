@@ -44,7 +44,7 @@ from catalog.services.announcement_intents import (
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.problems.outage import store_refusal
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
@@ -193,7 +193,7 @@ class Announcer:
             case TupleGone() | TupleHeld():
                 if self._client is None:  # authorization off: OpenFGA holds no tuple
                     return isinstance(evidence, TupleGone)
-                held, _ = await fga.read_tuples(self._client, user=evidence.user, relation=evidence.relation, obj=evidence.object)
+                held, _ = await fga_reads.read_tuples(self._client, user=evidence.user, relation=evidence.relation, obj=evidence.object)
                 return bool(held) if isinstance(evidence, TupleHeld) else not held
             case NameResolves():
                 resolved = await self._resolver.table(evidence.segments)
@@ -259,12 +259,12 @@ class Filing:
         await self._send(self.of(announcement).message)
 
     async def send_grant_changes(
-        self, filed: Mapping[TupleKey, Announcement], changed: Iterable[fga.ClientTuple], *, action: GrantAction, actor: str | None, reason: str
+        self, filed: Mapping[TupleKey, Announcement], changed: Iterable[fga_writes.ClientTuple], *, action: GrantAction, actor: str | None, reason: str
     ) -> None:
         """Announce each tuple of ``changed`` naming someone as the door filed it; a tuple the door's change reached that
         its filing did not name, one written between the door's read and its change, is announced as built now."""
         for t in changed:
-            if fga.names_someone(t.user):
+            if fga_ids.names_someone(t.user):
                 await self.send(filed.get((t.object, t.relation, t.user)) or _grant_change(t, action=action, actor=actor, reason=reason))
 
 
@@ -273,11 +273,11 @@ def _as_filed(announcement: Announcement, reused: Mapping[str, Announcement]) ->
     return announcement if earlier is None else announcement_intents.reusing(announcement, earlier)
 
 
-def grant_changes(tuples: Iterable[fga.ClientTuple], *, action: GrantAction, actor: str | None, reason: str) -> dict[TupleKey, Announcement]:
+def grant_changes(tuples: Iterable[fga_writes.ClientTuple], *, action: GrantAction, actor: str | None, reason: str) -> dict[TupleKey, Announcement]:
     """What a door files before it adds (``grant_added``) or revokes (``grant_revoked``) ``tuples``: one announcement per
-    tuple naming someone a notifier can address (``fga.names_someone``), keyed by the tuple, each landed when OpenFGA holds
+    tuple naming someone a notifier can address (``fga_ids.names_someone``), keyed by the tuple, each landed when OpenFGA holds
     the tuple, or holds it no longer."""
-    return {(t.object, t.relation, t.user): _grant_change(t, action=action, actor=actor, reason=reason) for t in tuples if fga.names_someone(t.user)}
+    return {(t.object, t.relation, t.user): _grant_change(t, action=action, actor=actor, reason=reason) for t in tuples if fga_ids.names_someone(t.user)}
 
 
 class RoleEnding(BaseModel):
@@ -291,7 +291,7 @@ class RoleEnding(BaseModel):
     def announcements(self) -> list[Announcement]:
         return [self.ended, *self.grants.values()]
 
-    async def send(self, filing: Filing, removed: Iterable[fga.ClientTuple], *, actor: str | None, reason: str) -> None:
+    async def send(self, filing: Filing, removed: Iterable[fga_writes.ClientTuple], *, actor: str | None, reason: str) -> None:
         """Announce the role ended and each grant ``removed`` took, as filed."""
         await filing.send(self.ended)
         await filing.send_grant_changes(self.grants, removed, action="grant_revoked", actor=actor, reason=reason)
@@ -304,12 +304,12 @@ async def role_ending(client: OpenFgaClient | None, role: RoleRecord, *, actor: 
     Raises:
         ServiceUnavailableError: OpenFGA did not answer a read.
     """
-    held: list[fga.ClientTuple] = []
+    held: list[fga_writes.ClientTuple] = []
     if client is not None:
         role_obj = roles.role_object(role.id)
         held = [
             *await subject_tuples.tuples_naming(client, roles.assignees_of(role.id)),
-            *(t for t in await fga.read_object_tuples(client, role_obj) if t.object == role_obj),
+            *(t for t in await fga_reads.read_object_tuples(client, role_obj) if t.object == role_obj),
         ]
     ended = CatalogControlEvent(
         action="role_deleted",
@@ -325,7 +325,7 @@ async def role_ending(client: OpenFgaClient | None, role: RoleRecord, *, actor: 
 
 
 def grant_announcement(
-    t: fga.ClientTuple,
+    t: fga_writes.ClientTuple,
     *,
     action: GrantAction,
     actor: str | None,
@@ -354,7 +354,7 @@ def grant_announcement(
     return Announcement(evidence=evidence, message=ControlMessage(event=event))
 
 
-def _grant_change(t: fga.ClientTuple, *, action: GrantAction, actor: str | None, reason: str) -> Announcement:
+def _grant_change(t: fga_writes.ClientTuple, *, action: GrantAction, actor: str | None, reason: str) -> Announcement:
     return grant_announcement(t, action=action, actor=actor, extra={"reason": reason})
 
 

@@ -43,7 +43,7 @@ from typing import Final
 import pytest
 import respx
 
-from lakehouse.governed import fga, secrets
+from lakehouse.governed import fga_provision, fga_reads, fga_resilience, secrets
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -189,9 +189,9 @@ def _a_closed_openfga_circuit() -> Iterator[None]:
 
     The circuit is the process's, so one test's outage would otherwise refuse the next test's checks at once.
     """
-    fga.reset_circuit()
+    fga_resilience.reset_circuit()
     yield
-    fga.reset_circuit()
+    fga_resilience.reset_circuit()
 
 
 @pytest.fixture(autouse=True)
@@ -745,11 +745,9 @@ class OpenFgaStore:
         import asyncio
         import uuid
 
-        from lakehouse.governed import fga
-
         self.url = url
         # The bootstrap seam on a throwaway store, so the model a test is judged by is the one the catalog writes.
-        self.store_id, self.model_id = asyncio.run(fga.provision(url, token_file=None, store_name=f"test-{uuid.uuid4().hex}"))  # noqa: TID251
+        self.store_id, self.model_id = asyncio.run(fga_provision.provision(url, token_file=None, store_name=f"test-{uuid.uuid4().hex}"))  # noqa: TID251
 
     def write(self, *tuples: tuple[str, str, str]) -> None:
         """Write `(user, relation, object)` tuples straight to the store, as a write past every door would."""
@@ -757,10 +755,8 @@ class OpenFgaStore:
 
         from openfga_sdk.client.models import ClientTuple, ClientWriteRequest
 
-        from lakehouse.governed import fga
-
         async def _write() -> None:
-            async with fga.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
+            async with fga_provision.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
                 # OpenFGA takes at most 100 tuples in one write (`maxTuplesPerWrite`).
                 for start in range(0, len(tuples), 100):
                     batch = tuples[start : start + 100]
@@ -774,10 +770,8 @@ class OpenFgaStore:
 
         from openfga_sdk.client.models import ClientTuple, ClientWriteRequest
 
-        from lakehouse.governed import fga
-
         async def _delete() -> None:
-            async with fga.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
+            async with fga_provision.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
                 await client.write(ClientWriteRequest(deletes=[ClientTuple(user=u, relation=r, object=o) for u, r, o in tuples]))
 
         asyncio.run(_delete())
@@ -786,14 +780,12 @@ class OpenFgaStore:
         """Every `(user, relation, object)` the store holds, read back as an auditor reads it."""
         import asyncio
 
-        from lakehouse.governed import fga
-
         async def _read() -> set[tuple[str, str, str]]:
             held: set[tuple[str, str, str]] = set()
             token: str | None = None
-            async with fga.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
+            async with fga_provision.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
                 while True:
-                    page, token = await fga.read_tuples(client, continuation_token=token)
+                    page, token = await fga_reads.read_tuples(client, continuation_token=token)
                     held |= {(str(t.user), str(t.relation), str(t.object)) for t in page}
                     if not token:
                         return held

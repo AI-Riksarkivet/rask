@@ -205,7 +205,7 @@ unaffected, so a GitOps re-apply still converges.
 
 **Four facts.** Zero trust: met. GitOps: met, re-applies are untouched. Cloud native and Lance-idiomatic: neutral.
 
-**Effort and risk.** Small: two reads (`fga.read_object_tuples` exists) in two doors and one integration test. Risk:
+**Effort and risk.** Small: two reads (`fga_reads.read_object_tuples` exists) in two doors and one integration test. Risk:
 an operator recreating a project after a half-failed delete is refused until the reconciler or a re-run delete clears
 it, which is the intent.
 
@@ -286,7 +286,7 @@ medium (one model per action); low risk.
   not apply to a pre-production estate.
 - **Check consistency.** Lakekeeper checks at default consistency and uses `HIGHER_CONSISTENCY` only for listings and
   writes (`crates/authz-openfga/src/authorizer.rs:63-75`, `:1249-1256`, `:1455-1466`). rask asks every read at
-  `HIGHER_CONSISTENCY` so a revoke is answered by the next request (`packages/lakehouse/src/lakehouse/governed/fga.py:1075-1086`).
+  `HIGHER_CONSISTENCY` so a revoke is answered by the next request (`packages/lakehouse/src/lakehouse/governed/fga_reads.py`, `_fresh_read_options`).
   rask's is the better default.
 - **Batch-check chunking** (`authorizer.rs:1513-1563`, `max_batch_check_size`). The Python SDK rask uses chunks a batch
   at `max_batch_size` 50 itself (`openfga_sdk/client/client.py:782-832` in the installed SDK).
@@ -344,7 +344,7 @@ medium (one model per action); low risk.
   (`services/catalog/src/catalog/api/maintenance_mode.py:1-12`), which is the GitOps form; a per-process runtime flag is
   live-only state.
 - **Cache TTL jitter** (`crates/lakekeeper/src/service/cache_ttl.rs:1-25`). rask jitters its secret, FGA-model and decider
-  caches (`fga.py`, `decider.py`).
+  caches (`fga_provision.py`, `decider.py`).
 - **Cross-replica cache invalidation by change log, evicting everything on a gap**
   (`crates/lakekeeper/src/service/cache_invalidation/mod.rs:1-4`, `receiver.rs`). rask evicts on the control broadcast
   through a durable per replica (ADR 0182); the binding it caches is immutable and the warehouse status is read live

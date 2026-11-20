@@ -61,7 +61,7 @@ from catalog.schemas import (
 from catalog.services import object_names, principals, subject_tuples
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld
 from lakehouse.events.control_events import CatalogControlEvent
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.principal import is_principal
 
@@ -70,7 +70,7 @@ log = logging.getLogger(__name__)
 
 
 #: OpenFGA's Read page-size ceiling — a larger request is a server-side 400, so cap it at the API edge.
-_MAX_PAGE_SIZE = fga.READ_PAGE_SIZE
+_MAX_PAGE_SIZE = fga_reads.READ_PAGE_SIZE
 #: The warehouse relation only the catalog's own maintainer seed and its declaration converge write ([[LH-473]]).
 _MAINTENANCE = "maintenance"
 
@@ -78,7 +78,7 @@ _MAINTENANCE = "maintenance"
 @lru_cache
 def _model_types() -> frozenset[str]:
     """Every type the compiled model defines — an object naming any other type is a clean 400."""
-    return frozenset(td["type"] for td in fga.load_model()["type_definitions"])
+    return frozenset(td["type"] for td in fga_model.load_model()["type_definitions"])
 
 
 @lru_cache
@@ -86,7 +86,7 @@ def _defined_relations(fga_type: str) -> frozenset[str]:
     """Every relation the compiled model defines on ``fga_type`` (base rungs, ``can_*`` actions, and the
     structural edges) — what a CHECK may probe. Read from ``model.json`` (what the app loads) so a phantom
     relation can never reach OpenFGA as a 400 that fails closed to a 503."""
-    for td in fga.load_model()["type_definitions"]:
+    for td in fga_model.load_model()["type_definitions"]:
         if td["type"] == fga_type:
             return frozenset(td.get("relations") or {})
     return frozenset()
@@ -98,7 +98,7 @@ def _assignable_relations(fga_type: str) -> frozenset[str]:
     in the model metadata) — what a tuple WRITE/DELETE may name. A derived ``can_*`` action is defined but
     not assignable: OpenFGA rejects such a write with the same 400 class the idempotent-duplicate handling
     swallows, so without this pre-check a no-op write could report 200."""
-    for td in fga.load_model()["type_definitions"]:
+    for td in fga_model.load_model()["type_definitions"]:
         if td["type"] == fga_type:
             meta = (td.get("metadata") or {}).get("relations") or {}
             return frozenset(r for r, m in meta.items() if m.get("directly_related_user_types"))
@@ -109,13 +109,13 @@ def _assignable_relations(fga_type: str) -> frozenset[str]:
 def _model_dsl() -> str:
     """The checked-in ``model.fga`` DSL text, read ONCE per process (catalog-api-18).
 
-    ``fga.load_model_dsl()`` is an uncached blocking ``Path.read_text()`` of a file BAKED INTO THE
+    ``fga_model.load_model_dsl()`` is an uncached blocking ``Path.read_text()`` of a file BAKED INTO THE
     IMAGE — it cannot change while the process runs, so re-reading it per request bought nothing and
     cost a filesystem round trip inside an ``async def``. Cached here alongside ``_model_types`` /
     ``_model_conditions``, which already read the compiled twin exactly this way. The route still hands
     the first (cold) call to a threadpool, so even the read that does happen never blocks the loop.
     """
-    return fga.load_model_dsl()
+    return fga_model.load_model_dsl()
 
 
 @lru_cache
@@ -128,7 +128,7 @@ def _model_conditions() -> dict[str, dict[str, str]]:
     fail-closed handling turns into a 503 for everyone.
     """
     out: dict[str, dict[str, str]] = {}
-    for name, spec in (fga.load_model().get("conditions") or {}).items():
+    for name, spec in (fga_model.load_model().get("conditions") or {}).items():
         params = (spec or {}).get("parameters") or {}
         out[name] = {p: str(v.get("type_name", "")).removeprefix("TYPE_NAME_").lower() for p, v in params.items()}
     return out
@@ -141,7 +141,7 @@ def _conditions_for(fga_type: str, relation: str) -> frozenset[str]:
     A rung accepts both forms in this model (`[user, …, user with non_expired_grant, …]`), so an empty
     set here means the rung is permanent-only — and a caller naming a condition on it is a clean 400
     rather than an OpenFGA rejection that fails closed to 503."""
-    for td in fga.load_model()["type_definitions"]:
+    for td in fga_model.load_model()["type_definitions"]:
         if td["type"] != fga_type:
             continue
         meta = ((td.get("metadata") or {}).get("relations") or {}).get(relation) or {}
@@ -206,16 +206,16 @@ async def _named(resolver: Resolver, settings: CatalogStore, obj: str) -> tuple[
     if obj_type not in _NOT_FOUND:
         return held, None
     if not is_spelled_as_a_uuid(obj_id):
-        return held, fga.canonical_object_id(parse_identifier(obj_id))
+        return held, fga_ids.canonical_object_id(parse_identifier(obj_id))
     names = await run_in_threadpool(object_names.current_names, settings, [held])
     return held, names.get(held)
 
 
 def _qualified_subject(user: str) -> str:
-    """Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified object or userset
+    """Resolve to a FULL subject (`fga_ids.grantee_object`): a subject is the user it is; a qualified object or userset
     (``role:<id>#assignee``) passes through verbatim — the same resolution as the
     per-object access/check + access/grant surfaces (double-prefixing would falsely deny every check)."""
-    return fga.grantee_object(user)
+    return fga_ids.grantee_object(user)
 
 
 def _tuple_user(user: str, *, evaluated: bool) -> str:
@@ -228,7 +228,7 @@ def _tuple_user(user: str, *, evaluated: bool) -> str:
     encoded tuple it names.
     """
     kind, typed, stored = user.partition(":")
-    if not evaluated and typed and kind == "user" and not is_principal(fga.subject_of(stored)):
+    if not evaluated and typed and kind == "user" and not is_principal(fga_ids.subject_of(stored)):
         return user
     return _qualified_subject(user)
 
@@ -325,7 +325,7 @@ async def read_access_tuples(
     subject = token.subject if token else "anonymous"
     resource = obj_filter or "*"
     try:
-        tuples, next_token = await fga.read_tuples(
+        tuples, next_token = await fga_reads.read_tuples(
             client,
             user=_qualified_subject(user) if user else None,
             obj=obj_filter,
@@ -345,7 +345,7 @@ async def read_access_tuples(
     )
 
 
-def _as_access_tuple(t: fga.ClientTuple, *, name: str | None = None) -> NamedAccessTuple:
+def _as_access_tuple(t: fga_writes.ClientTuple, *, name: str | None = None) -> NamedAccessTuple:
     """Map a stored tuple out to the wire, CONDITION INCLUDED.
 
     Dropping the condition here would make every time-boxed grant read back as permanent — the UI
@@ -357,14 +357,14 @@ def _as_access_tuple(t: fga.ClientTuple, *, name: str | None = None) -> NamedAcc
     return NamedAccessTuple(user=t.user, relation=t.relation, object=t.object, condition=condition, name=name)
 
 
-def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientTuple:
+def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga_writes.ClientTuple:
     """Validate a caller-named tuple against the compiled model before it can reach OpenFGA.
 
     ``evaluated`` is True when OpenFGA will evaluate the tuple (a write, a simulated hypothesis) and False
     for a delete, which OpenFGA resolves by key alone. Only an evaluated tuple is refused the check's
     clock: the read door echoes a stored condition verbatim, so a delete refusing it would leave a
     clock-pinned grant irrevocable through the body the Inspector sends back. The refusal is
-    ``fga.reject_stored_clock``, which ``fga.write_tuples`` and ``fga.check`` also run; calling it here
+    ``fga_reads.reject_stored_clock``, which ``fga_writes.write_tuples`` and ``fga_reads.check`` also run; calling it here
     answers before a simulation's baseline check has been sent.
     """
     obj = _validated_object(body.object)
@@ -385,16 +385,16 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
         # rather than an outage the first time anyone checks the object.
         declared = _model_conditions().get(body.condition.name, {})
         supplied = set(body.condition.context or {})
-        required = set(declared) - {fga.CLOCK_PARAMETER}
+        required = set(declared) - {fga_reads.CLOCK_PARAMETER}
         if missing := required - supplied:
             raise InvalidInputError(f"condition {body.condition.name!r} needs {', '.join(sorted(missing))}")
         if unknown := supplied - set(declared):
             raise InvalidInputError(f"condition {body.condition.name!r} has no parameter {', '.join(sorted(unknown))}")
-        condition = fga.RelationshipCondition(name=body.condition.name, context=dict(body.condition.context or {}))
+        condition = fga_writes.RelationshipCondition(name=body.condition.name, context=dict(body.condition.context or {}))
 
-    tup = fga.ClientTuple(user=_tuple_user(body.user, evaluated=evaluated), relation=body.relation, object=obj, condition=condition)
+    tup = fga_writes.ClientTuple(user=_tuple_user(body.user, evaluated=evaluated), relation=body.relation, object=obj, condition=condition)
     if evaluated:
-        fga.reject_stored_clock([tup])
+        fga_reads.reject_stored_clock([tup])
     return tup
 
 
@@ -415,12 +415,12 @@ async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Call
     async with announcer.announcing(door="access_tuple_write" if write else "access_tuple_delete", target=tup.object, announcements=[told]) as filing:
         try:
             if write:
-                await fga.write_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
+                await fga_writes.write_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
             else:
-                await fga.delete_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
+                await fga_writes.delete_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
         except ServiceUnavailableError:
             # Only the FAILURE row is emitted here. The SUCCESS row now comes from inside
-            # `fga.write_tuples`/`delete_tuples`, so every write site gets one — and emitting it here too
+            # `fga_writes.write_tuples`/`delete_tuples`, so every write site gets one — and emitting it here too
             # would give this one surface two rows per write while the other six still had none.
             audit(event, AuditOutcome.FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
             raise
@@ -493,7 +493,7 @@ async def check_access(client: EstateFgaClient, resolver: ResolverDep, settings:
     user = _qualified_subject(body.user)
     subject = token.subject if token else "anonymous"
     try:
-        allowed = await fga.check(client, user=user, relation=body.relation, obj=obj, qualify=False, context=body.context or None)
+        allowed = await fga_reads.check(client, user=user, relation=body.relation, obj=obj, qualify=False, context=body.context or None)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
@@ -530,7 +530,7 @@ async def list_access_objects(client: EstateFgaClient, settings: SettingsDep, to
     user = _qualified_subject(body.user)
     subject = token.subject if token else "anonymous"
     try:
-        listing = await fga.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)
+        listing = await fga_reads.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_LIST_OBJECTS, AuditOutcome.FAILURE, subject=subject, resource=f"{body.type}:", reason="authz_unavailable")
         raise
@@ -568,7 +568,7 @@ async def list_access_users(
         raise InvalidInputError(f"{body.user_relation!r} is not a relation the model defines on {body.user_type}")
     subject = token.subject if token else "anonymous"
     try:
-        users = await fga.list_users(
+        users = await fga_reads.list_users(
             client,
             relation=relation,
             obj=obj,
@@ -589,7 +589,7 @@ async def list_access_users(
         relation=relation,
         user_type=body.user_type,
         user_relation=body.user_relation,
-        truncated=len(users) >= fga.LIST_USERS_SERVER_CAP,
+        truncated=len(users) >= fga_reads.LIST_USERS_SERVER_CAP,
     )
 
 
@@ -612,10 +612,10 @@ async def expand_access(
     """
     relation = _validated_relation(_validated_object(body.object), body.relation)
     obj, name = await _named(resolver, settings, body.object)
-    depth = max(1, min(body.depth, fga.MAX_EXPAND_TREE_DEPTH))
+    depth = max(1, min(body.depth, fga_reads.MAX_EXPAND_TREE_DEPTH))
     subject = token.subject if token else "anonymous"
     try:
-        tree = await fga.expand_tree(client, relation=relation, obj=obj, max_depth=depth)
+        tree = await fga_reads.expand_tree(client, relation=relation, obj=obj, max_depth=depth)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_EXPAND, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
@@ -664,9 +664,11 @@ async def simulate_access(
         # Two checks, one round trip each. The baseline cannot be skipped when `hypothetical` is empty
         # either: the caller still asked for a delta, and answering with allowed == baseline is the
         # honest shape rather than a special case that returns a different meaning.
-        baseline = await fga.check(client, user=user, relation=relation, obj=obj, qualify=False)
+        baseline = await fga_reads.check(client, user=user, relation=relation, obj=obj, qualify=False)
         allowed = (
-            baseline if not hypothetical else await fga.check(client, user=user, relation=relation, obj=obj, qualify=False, contextual_tuples=hypothetical)
+            baseline
+            if not hypothetical
+            else await fga_reads.check(client, user=user, relation=relation, obj=obj, qualify=False, contextual_tuples=hypothetical)
         )
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_SIMULATE_HYPOTHETICAL, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
@@ -693,11 +695,11 @@ def _principal_key(principal: str) -> str:
 PrincipalPath = Annotated[str, Path(description="the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')")]
 
 
-def _refuse_a_principal_git_declares(key: str, naming: list[fga.ClientTuple], settings: Settings) -> None:
+def _refuse_a_principal_git_declares(key: str, naming: list[fga_writes.ClientTuple], settings: Settings) -> None:
     """Refuse (400, code 13) a principal the next upgrade or boot would grant again, naming where it is declared.
 
     The catalog's declaration grants a person's rung on the estate root (``auth.bootstrapAdmin``) and the release's
-    machine roles there (the root's relations only a user holds directly, `fga.machine_relations`); only the catalog's own
+    machine roles there (the root's relations only a user holds directly, `fga_model.machine_relations`); only the catalog's own
     seed and that declaration write a warehouse ``maintenance`` tuple; the catalog grants the accounts its settings name
     at boot. A machine role on the estate root
     naming anyone else was made at a door ([[LH-563]]), so it is revoked like any grant. Judging the tuples rather than a
@@ -705,7 +707,7 @@ def _refuse_a_principal_git_declares(key: str, naming: list[fga.ClientTuple], se
     """
     if key in {*settings.fga_maintainers, *settings.provenance_writers}:
         raise InvalidInputError(f"{key} is an account the catalog grants from its settings at boot: remove it from the values that name it")
-    machine = fga.machine_relations(settings.fga_root_object.partition(":")[0])
+    machine = fga_model.machine_relations(settings.fga_root_object.partition(":")[0])
     declared = (t for t in naming if (t.object == settings.fga_root_object and t.relation not in machine) or t.relation == _MAINTENANCE)
     if authorities := sorted(f"{t.relation} on {t.object}" for t in declared):
         raise InvalidInputError(
@@ -735,7 +737,7 @@ async def delete_principal(
     actor = token.subject if token else "anonymous"
     if token is not None and token.subject == key:
         raise InvalidInputError("an estate admin cannot offboard themselves: the rung this door asks would go with them")
-    user = fga.user_object(key)
+    user = fga_ids.user_object(key)
     naming = await subject_tuples.tuples_naming(client, user)
     _refuse_a_principal_git_declares(key, naming, settings)
     await subject_tuples.refuse_stranding(client, user, naming, who=key)

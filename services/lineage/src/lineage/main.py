@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.governed.admission import judge_before_the_body
 from lakehouse.governed.auth_lifespan import attach_auth
-from lakehouse.governed.fga import dispose as fga_dispose
+from lakehouse.governed.fga_provision import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import secret_store_dependency

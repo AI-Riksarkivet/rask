@@ -32,7 +32,7 @@ from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, St
 from catalog.api.security import CurrentToken
 from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import maintenance, maintenance_commits, table_claims
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.lancekit import branch_layout
 from lakehouse.records import maintenance_due
 from lakehouse.records.history_fences import HistoryWork
@@ -167,7 +167,7 @@ async def list_due_maintenance(
             if table is not None:
                 shown[name] = _due_view(record, table=table)
         # Judged on the uuid each record keeps ([[LH-524]]), the object the table's grants are held by.
-        return [fga.table_object(shown[name].uuid) if name in shown else None for name in batch]
+        return [fga_ids.table_object(shown[name].uuid) if name in shown else None for name in batch]
 
     page, next_token = await fga_deps.judged_page(
         fga_deps.authorization(settings, client, token),

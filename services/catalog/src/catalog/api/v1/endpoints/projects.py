@@ -86,7 +86,7 @@ from catalog.services.announcement_intents import Announcement, ControlMessage, 
 from catalog.services.control_records import GIT, ProtectionChange
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_reads, fga_resilience, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
@@ -129,7 +129,7 @@ _ADMINS_TIMEOUT_SECONDS = 2.0
 
 
 async def _admins_for(client: OpenFgaClient | None, settings: FgaSettings, project: str) -> list[str]:
-    """The project's effective ``can_administer`` subjects via ``fga.list_users`` (#51), or ``[]``.
+    """The project's effective ``can_administer`` subjects via ``fga_reads.list_users`` (#51), or ``[]``.
 
     Degrades on an outage: FGA off yields ``[]`` outright (on with no client wired it is the 503 every gate answers); an OpenFGA outage
     (``ServiceUnavailableError``) or a lookup blowing the per-call ``_ADMINS_TIMEOUT_SECONDS`` budget is
@@ -141,7 +141,7 @@ async def _admins_for(client: OpenFgaClient | None, settings: FgaSettings, proje
         return []
     try:
         async with asyncio.timeout(_ADMINS_TIMEOUT_SECONDS):
-            return await fga.list_users(client, relation="can_administer", obj=f"project:{project}", retry=fga.ONE_ATTEMPT)
+            return await fga_reads.list_users(client, relation="can_administer", obj=f"project:{project}", retry=fga_resilience.ONE_ATTEMPT)
     except (ServiceUnavailableError, TimeoutError):
         log.warning("project_admins_unavailable", extra={"project": project})
         return []
@@ -279,7 +279,10 @@ async def establish_project(
     seeds = author is not None and admin is not None and fga_deps.wired(settings, client) is not None
     admin_granted = (
         announcing.grant_announcement(
-            fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=obj), action="grant_added", actor=actor, extra={"reason": "project_created"}
+            fga_writes.ClientTuple(user=fga_ids.user_object(admin), relation="admin", object=obj),
+            action="grant_added",
+            actor=actor,
+            extra={"reason": "project_created"},
         )
         if seeds and admin is not None
         else None
@@ -301,7 +304,7 @@ async def establish_project(
                 AuditOutcome.SUCCESS,
                 subject=actor,
                 resource=obj,
-                grantee=fga.user_object(admin),
+                grantee=fga_ids.user_object(admin),
                 relation="admin",
                 reason="project_created",
             )
@@ -321,7 +324,7 @@ async def _visible_projects(client: OpenFgaClient | None, settings: FgaSettings,
         return None
     root = settings.fga_root_object
     try:
-        observer = await fga.check(authz.client, user=authz.subject, relation="can_list_all_projects", obj=root)
+        observer = await fga_reads.check(authz.client, user=authz.subject, relation="can_list_all_projects", obj=root)
         allowed = None if observer else await authz.batch_check("member", [f"project:{p}" for p in candidates])
     except ServiceUnavailableError:
         audit(AuditAction.LIST_PROJECTS, AuditOutcome.FAILURE, subject=authz.subject, resource=root, reason="authz_unavailable")
@@ -631,17 +634,17 @@ async def delete_project(
     obj = f"project:{project_id}"
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(
-        await fga.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
+        await fga_reads.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
     )
     deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=obj, actor=actor)
     deleted = Announcement(evidence=RecordGone(key=project_registry.record_key(project_id)), message=ControlMessage(event=deleted_event))
     async with announcer.announcing(door="delete_project", target=obj, announcements=[deleted, *grants.values()]) as filing:
-        removed: list[fga.ClientTuple] = []
+        removed: list[fga_writes.ClientTuple] = []
         # Tuples FIRST, record second. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully
         # described and re-deletable; the opposite order would strand grants on a project no API can name any
         # more — privilege that nothing in the product can see, let alone clear.
         if authz is not None:
-            removed = await fga.revoke_object_tuples(  # noqa: TID251
+            removed = await fga_writes.revoke_object_tuples(  # noqa: TID251
                 authz,
                 obj,
                 # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
@@ -658,7 +661,7 @@ async def delete_project(
         if authz is not None:
             # A role's ending moves its project's `admin_revision` (`project_admins.withdraw`), bookkeeping no grant
             # reads and nobody is told of, so the project's tuples are revoked once more after its last role ended.
-            await fga.revoke_object_tuples(authz, obj, actor=token.subject if token is not None else "system:catalog", origin="lifecycle_delete")  # noqa: TID251
+            await fga_writes.revoke_object_tuples(authz, obj, actor=token.subject if token is not None else "system:catalog", origin="lifecycle_delete")  # noqa: TID251
         # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
         # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
         # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse

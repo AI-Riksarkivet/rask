@@ -3,7 +3,7 @@
 The REST routes carry the ``$``-delimited string identifier in the ``{id}`` path
 segment. The root namespace is represented by the delimiter itself.
 
-Joining segments back into the string identifier lives in :mod:`lakehouse.governed.fga`
+Joining segments back into the string identifier lives in :mod:`lakehouse.governed.fga_ids`
 (``canonical_object_id`` / ``parent_namespace_id``), so one spelling serves every door, record and event. The
 control-plane id SHAPE (``CONTROL_ID_RE``) lives in :mod:`lakehouse.naming` because the planes that
 CONSUME a project id decide with that rule too, and one the issuer owns alone is one the consumers copy and then

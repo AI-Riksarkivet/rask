@@ -46,7 +46,7 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads
 from lakehouse.lancekit.base_refs import decoded_path, normalise
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.naming import CATALOG_DELIMITER
@@ -738,7 +738,7 @@ _FGA_OFF = "authorization is off in the catalog, so authz-vs-registry drift cann
 
 #: What the drift report reads OpenFGA through: the catalog's census of the store's grants, or ``None`` when the catalog
 #: answers that authorization is off. Raises when the census cannot be had.
-type GrantCensusReader = Callable[[], fga.GrantCensus | None]
+type GrantCensusReader = Callable[[], fga_reads.GrantCensus | None]
 
 
 def _bucket_of(root_uri: str) -> str | None:

@@ -28,7 +28,7 @@ import pytest
 from fastapi import FastAPI
 from lance_namespace import PermissionDeniedError
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, Signing
@@ -184,8 +184,8 @@ async def test_an_estate_that_lists_no_signer_verifies_nothing_and_trusts_no_sig
     async def no_tuples(_client: object, _obj: str) -> list[object]:
         return []
 
-    monkeypatch.setattr(fga, "batch_check", nobody_may_write)
-    monkeypatch.setattr(fga, "read_object_tuples", no_tuples)
+    monkeypatch.setattr(fga_reads, "batch_check", nobody_may_write)
+    monkeypatch.setattr(fga_reads, "read_object_tuples", no_tuples)
     arriving = event_signer(CATALOG).sign(event, on_behalf_of=PERSON) if sign else event
 
     with pytest.raises(PermissionDeniedError) if refused else nullcontext() as outcome:

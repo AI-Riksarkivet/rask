@@ -27,7 +27,7 @@ from lance_namespace import DescribeNamespaceRequest, LanceNamespace, connect
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.records import maintenance_policies
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
@@ -88,7 +88,7 @@ def _booted(settings: Settings, store: Any) -> tuple[LanceNamespace, str]:  # no
     warehouses.ensure_catalog_row(ns, settings.estate_warehouse)
 
     async def boot() -> None:
-        async with fga.make_client(store.url, store.store_id, store.model_id, token_file=None) as client:
+        async with fga_provision.make_client(store.url, store.store_id, store.model_id, token_file=None) as client:
             await ensure_provenance_namespace(ns, settings, client)
 
     asyncio.run(boot())
@@ -102,10 +102,10 @@ def test_a_boot_takes_back_an_own_accounts_writer_it_no_longer_declares_and_keep
     openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
 ) -> None:
     _ns, namespace_uuid = _booted(_settings(tmp_path, monkeypatch, LANCE_PROVENANCE_WRITERS=f'["{_LINEAGE}", "{_RETIRED}"]'), openfga_store)
-    namespace = fga.namespace_object(namespace_uuid)
+    namespace = fga_ids.namespace_object(namespace_uuid)
     # As the namespace's access door writes them: a person reading, a compaction job's two rungs and a recorder's writer.
     door_made = ((_ANALYST, "reader"), (_COMPACTOR, "reader"), (_COMPACTOR, "maintainer"), (_RECORDER, "writer"))
-    openfga_store.write(*((fga.user_object(subject), rung, namespace) for subject, rung in door_made))
+    openfga_store.write(*((fga_ids.user_object(subject), rung, namespace) for subject, rung in door_made))
     settings = _settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="20")
 
     _booted(settings, openfga_store)
@@ -115,7 +115,7 @@ def test_a_boot_takes_back_an_own_accounts_writer_it_no_longer_declares_and_keep
     held: dict[str, set[str]] = {}
     for user, relation, obj in openfga_store.tuples():
         if obj == namespace and user.startswith("user:"):
-            held.setdefault(fga.subject_of(user.removeprefix("user:")), set()).add(relation)
+            held.setdefault(fga_ids.subject_of(user.removeprefix("user:")), set()).add(relation)
     assert held == {_LINEAGE: {"writer"}, _ANALYST: {"reader"}, _COMPACTOR: {"reader", "maintainer"}, _RECORDER: {"writer"}}
 
 

@@ -116,12 +116,12 @@ def test_a_check_openfga_does_not_answer_is_recorded_and_refuses_the_request(
     and never a denial against the caller ([[LH-585]])."""
     from lance_namespace import ServiceUnavailableError
 
-    from lakehouse.governed import fga
+    from lakehouse.governed import fga_reads
 
     async def unanswered(_client: Any, *, user: str, relation: str, obj: str) -> bool:  # noqa: ANN401, ARG001 — the SDK's client
         raise ServiceUnavailableError("authorization service unavailable")
 
-    monkeypatch.setattr(fga, "check", unanswered)
+    monkeypatch.setattr(fga_reads, "check", unanswered)
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
 
     refused = estate.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=estate.bearer("alice"))

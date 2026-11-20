@@ -99,7 +99,7 @@ from catalog.services.vend_probe import (
 )
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.problems.ns_errors import PartiallyApplied, status_for
@@ -526,7 +526,7 @@ async def list_warehouse_trash(
     candidates = sorted(((trash_doors.listing_key(r), r) for r in owned if r.uuid and r.id.startswith(beneath)), key=lambda c: c[0])
 
     async def judged_on(records: Sequence[TrashRecord]) -> list[str | None]:
-        return [fga.object_of(r.kind, str(r.uuid)) for r in records]
+        return [fga_ids.object_of(r.kind, str(r.uuid)) for r in records]
 
     page, next_token = await fga_deps.judged_page(
         fga_deps.authorization(settings, client, token),
@@ -764,7 +764,7 @@ async def _namespaces_in(ns: LanceNamespace, warehouse_id: str) -> list[str]:
         _response, names = await namespaces_api._drain_namespaces(ns, [warehouse_id])  # noqa: SLF001 — one paged listing, deliberately
     except NamespaceNotFoundError:
         return []
-    return [fga.canonical_object_id([warehouse_id, name]) for name in sorted(names)]
+    return [fga_ids.canonical_object_id([warehouse_id, name]) for name in sorted(names)]
 
 
 class _NamespaceSubtree(BaseModel):
@@ -846,7 +846,7 @@ async def _detach_table(ns: LanceNamespace, settings: CatalogStore, segments: li
     Raises:
         ConcurrentModificationError: The table changed, or another request is acting on it; nothing of it changed here.
     """
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     claims = table_claims.claim_store(settings)
     resolved = await run_in_threadpool(table_claims.resolve, ns, claims, segments)
@@ -923,7 +923,7 @@ async def _require_no_outside_clones(
             with suppress(TableNotFoundError):
                 described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=table))
                 if described.location:
-                    located[fga.canonical_object_id(table)] = described.location
+                    located[fga_ids.canonical_object_id(table)] = described.location
     for entry in trashed:
         if location := entry.location:
             located[f"{entry.id}@{entry.uuid}"] = location
@@ -1129,7 +1129,7 @@ async def delete_warehouse(
         extra={
             "project": project,
             "bucket": bucket,
-            "namespaces_dropped": [fga.canonical_object_id(namespace) for subtree in subtrees for namespace in subtree.namespaces],
+            "namespaces_dropped": [fga_ids.canonical_object_id(namespace) for subtree in subtrees for namespace in subtree.namespaces],
             "bucket_purged": purge_bucket,
             "objects_purged": 0,
         },
@@ -1148,7 +1148,7 @@ async def delete_warehouse(
                 # so a failure in the records after it still reports these tuples.
                 trashed_uuid = entry.uuid
                 if trashed_uuid is not None:
-                    obj = fga.object_of(kind, trashed_uuid)
+                    obj = fga_ids.object_of(kind, trashed_uuid)
                     revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)
                 else:
                     log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
@@ -1165,7 +1165,7 @@ async def delete_warehouse(
                         # What the announcement names the table by, read while it still stands (ADR 0173 §10).
                         if await _detach_table(ns_conn, settings, item.segments, purge=purge_bucket, table_uuid=item.uuid):
                             removed.append(item)
-                            tables_removed.append(fga.canonical_object_id(item.segments))
+                            tables_removed.append(fga_ids.canonical_object_id(item.segments))
                             await filing.send(detached[tuple(item.segments)])
                     for namespace in subtree.namespaces:
                         try:
@@ -1174,7 +1174,7 @@ async def delete_warehouse(
                             # Drift, or an earlier attempt's work: the namespace went before its turn, and refusing
                             # here would leave records and grants nobody can end, so the catalog's own records still go.
                             log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
-                        namespaces_dropped.append(fga.canonical_object_id(namespace))
+                        namespaces_dropped.append(fga_ids.canonical_object_id(namespace))
                     async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
                         revoked += count
                 # The warehouse's own row last, once every namespace beneath it is gone.
@@ -1182,7 +1182,7 @@ async def delete_warehouse(
                     await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=[warehouse_id]))
             # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
             # is ended from there before the warehouse's own grants go.
-            ended = {fga.namespace_object(subtree.uuid) for subtree in subtrees if subtree.uuid is not None}
+            ended = {fga_ids.namespace_object(subtree.uuid) for subtree in subtrees if subtree.uuid is not None}
             for orphan in await fga_deps.orphaned_children(client, settings, f"warehouse:{warehouse_id}", ended=ended):
                 async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
                     revoked += count
@@ -1202,7 +1202,7 @@ async def delete_warehouse(
             # blip) — and the caller then gets a problem body that says nothing about what is already
             # gone. The error is deliberately NOT swallowed (fail-closed; every primitive is idempotent, so the
             # recovery path is to re-issue the same call), but what DID land is recorded here or it is lost.
-            if isinstance(exc, fga.RevokeInterrupted):
+            if isinstance(exc, fga_writes.RevokeInterrupted):
                 # The object whose revoke the outage stopped lost these before it.
                 revoked += len(exc.removed)
             if _a_refusal(exc) and not (namespaces_dropped or tables_removed or trash_ended or revoked):

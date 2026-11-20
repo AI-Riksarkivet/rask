@@ -656,3 +656,74 @@ unchanged. No module of the group has a tracer or a meter.
   claim on the store or a module of its own above the records.
 - `schemas`: the probe's body (`schemas.health`), imported by the process and the auth plane; the process's answer by
   job, left for the last group as the process group records.
+
+## The authorization client, split by job (2026-11-20)
+
+The auth plane group proposed cutting `governed/fga.py` (2,401 lines with its `__all__`, measured on `932e31331`) into six
+modules by job. An `ast` pass over its 113 top-level definitions, each with the names it uses from the same file, gave the
+internal graph, and it agreed with the six jobs with four corrections:
+
+- `dispose` closes the client `make_client` builds and its docstring puts it "beside the factory", so it sits with the
+  provisioning, not the reads.
+- `read_subject_tuples`, `census` and its `GrantCensus`, `ADMIN_REVISION` and `BOOKKEEPING_RELATIONS` stood in the writes
+  section and only read, so they sit with the reads.
+- `names_someone` judges a tuple's user, so it sits with the ids.
+- `DEFAULT_TIMEOUT_SECONDS` is read by `make_client` alone, so it sits with the provisioning, not the resilience.
+
+Five private names were used by more than one job, and the library imports no private name across modules, so each is
+public in its one home under the same name without its underscore: `guarded`, `retrying`, `FAIL_CLOSED`,
+`UnansweredBatchItems` (`fga_resilience`) and `CHILD_EDGE_PARENT_TYPES` (`fga_model`). Every other definition is
+byte-identical to its `fga.py` source but for three passages of prose (the banned path `hierarchy_edge_tuples`'s
+docstring names, where `RevokeInterrupted`'s message comes from, and a `delete_tuples` comment the comment gate reads as
+history) and the two call sites below.
+
+| Module | What it holds | Lines |
+| --- | --- | --- |
+| `fga_model` | The model as data: `load_model`, `load_model_dsl`, `model_types`, `type_restrictions`, `admits`, `machine_relations`, `hierarchy_edge_tuples` and the parent types that take a `child` edge | 138 |
+| `fga_ids` | User and object ids: `user_object`, `subject_of`, `grantee_object`, `is_object_id`, `canonical_object_id`, `parent_namespace_id`, `table_object`, `namespace_object`, `object_of`, `names_someone` | 158 |
+| `fga_resilience` | `RetryPolicy`, `DEFAULT_RETRY`, `ONE_ATTEMPT`, the circuit and `reset_circuit`, the transient-failure test, `retrying`, `guarded` and `FAIL_CLOSED` | 257 |
+| `fga_provision` | The store and its model: `client_configuration`, `make_client`, `dispose`, `provision`, `resolve`, `ModelHistory`, `canonical_model`, `newest_store`, `credential_refused` and the two boot errors | 563 |
+| `fga_reads` | Check, batch check, list objects and users, expand and `expand_tree`, the changelog, tuple pages and whole reads, the census, and the condition clock (`condition_context`, `reject_stored_clock`) | 881 |
+| `fga_writes` | Grants, revokes, the hierarchy's edge moves, `commit_unless_changed`, the per-tuple audit, `TupleOrigin`, and the SDK's `ClientTuple` and `RelationshipCondition` re-exported for the services | 534 |
+
+Edges between them, all one way: `fga_writes` imports the reads, the ids, the model and the resilience; `fga_reads` the
+ids and the resilience; `fga_provision` the model and the resilience; `fga_ids` the model. `fga_model` and
+`fga_resilience` import none of the six. The name `fga` is kept by none of them: 129 files imported it as `fga` or an
+alias and reached 759 names through it, and a module that kept the name would hold, as plain attributes, the names it
+imports from the others, so a test written as `monkeypatch.setattr(fga, "user_object", …)` would patch a copy no caller
+reads. With no `fga` module, a stale `fga.<name>` fails at import or as an unresolved attribute. Keeping `fga` as the
+reads would have left their 131 references unchanged and changed the other 628.
+
+**Module state.** Each piece lives in one module and every reader reaches that object: the circuit (`_CIRCUIT`) in
+`fga_resilience`, read by `guarded` and closed by `reset_circuit`, which the root `conftest.py` calls around every test;
+the `functools.cache` of `model_types` and `_type_restrictions` on their functions in `fga_model`, which `fga_ids` imports
+by reference; one logger per module. No module holds a client, a lock or a cached model: a client is the caller's
+(`app.state.fga`), built by `make_client`.
+
+**Patch targets.** A name a test replaces is read at call time from the module that defines it, so a patch on that
+module reaches every caller. Two calls cross modules to a name tests replace, and reach it by its module rather than by a
+`from` import: `fga_provision.provision` and `resolve` call `fga_model.load_model()`, and
+`fga_writes.revoke_object_tuples` calls `fga_reads.read_object_tuples`. Every `monkeypatch.setattr` on the old module
+names the new home of what it patches (`OpenFgaClient` and `asyncio` on `fga_provision`, where `provision` and `resolve`
+read them). For each patched name, a run in which the patched value raises fails the same tests on this commit as on
+`932e31331`.
+
+**Names.** Every log record, retry and breaker parameter, and fail-closed message is unchanged. Logger names follow the
+module path, `lakehouse.governed.fga` becoming `fga_resilience` (`openfga_call_retry`, `openfga_circuit_open` and every
+`openfga_*_unavailable` that `guarded` logs), `fga_provision` (the model write's three records), `fga_reads` (the
+truncation and depth-cap warnings) and `fga_writes` (a revoke's and an arbitrated write's). No alert rule, dashboard,
+collector route or runbook names the logger; two tests' `caplog` read it from the module that logs. The module has no
+tracer or meter. The `banned-api` entries name the new paths; `fga_writes` imports `hierarchy_edge_tuples` under a
+line-level `# noqa: TID251` as the sanctioned site, and a line in a service calling `fga_writes.write_tuples`,
+`fga_writes.revoke_object_tuples`, `fga_provision.provision` or importing `fga_model.hierarchy_edge_tuples` is refused.
+
+Each module declares `__all__`. Names used from a module that are not in it: the tests' reads of `fga_resilience._is_transient`,
+`fga_reads._MAX_EXPAND_DEPTH`, each module's `log`, and the SDK names `fga_provision` imports (`OpenFgaClient`, `asyncio`),
+which tests patch where `provision` and `resolve` read them.
+
+Contract: `the-authorization-client-imports-one-way` (`layers` in `lakehouse.governed`: `fga_writes` over
+`fga_reads | fga_provision` over `fga_ids | fga_resilience` over `fga_model`, each `|` pair independent). It held when it
+was added; a planted `from lakehouse.governed import fga_writes` in `fga_model` broke it, and so did a planted import of
+`fga_ids` in `fga_resilience`.
+
+Flat modules rather than a `governed/fga/` subpackage: the prefix keeps each call site and each `banned-api` path saying which job it is (`fga_writes.write_tuples`), where `writes.write_tuples` under a package import would not, and a subpackage's `__init__` is the place a facade grows back.

@@ -10,7 +10,7 @@ are ended only once the tables are gone, and each destroyed table's location is 
 destroyed by the cascade, and keeps its grants for an undrop into the namespace created again.
 
 The real catalog app over a real `dir` namespace on pylance, the in-memory `TupleStore` behind the real
-`lakehouse.governed.fga` seed and revoke, and a backend whose second deregister fails once, before or after the row goes.
+`lakehouse.governed.fga_writes` seed and revoke, and a backend whose second deregister fails once, before or after the row goes.
 """
 
 from __future__ import annotations

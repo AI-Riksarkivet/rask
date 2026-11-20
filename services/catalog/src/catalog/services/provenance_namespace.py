@@ -50,7 +50,7 @@ from catalog.core.identifiers import parse_identifier, with_minted_uuid
 from catalog.core.lineage_emit import COMPACT_TABLE
 from catalog.schemas import PolicyRequest
 from catalog.services import native, object_uuids
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.records import maintenance_policies, protection
 from lakehouse.records.maintenance_policies import PolicyRecord
@@ -83,16 +83,16 @@ def is_unannounced(namespace_id: str, operation: str, settings: CatalogLineageSe
 def announcer(segments: Sequence[str], settings: CatalogLineageSettings) -> Callable[[str], bool]:
     """Whether a write of an operation on the table ``segments`` names is announced, as the emitter judges it
     (:func:`is_unannounced`): a door's table records the author only of what is announced (ADR 0187)."""
-    parent = fga.parent_namespace_id(list(segments)) or ""
+    parent = fga_ids.parent_namespace_id(list(segments)) or ""
     return lambda operation: not is_unannounced(parent, operation, settings)
 
 
-def provenance_tuples(settings: CatalogLineageSettings, *, namespace_uuid: str, parent: str | None) -> list[fga.ClientTuple]:
+def provenance_tuples(settings: CatalogLineageSettings, *, namespace_uuid: str, parent: str | None) -> list[fga_writes.ClientTuple]:
     """The namespace's parent edge and a `writer` grant per configured writer, on the namespace's uuid ([[LH-524]])."""
-    obj = fga.namespace_object(namespace_uuid)
+    obj = fga_ids.namespace_object(namespace_uuid)
     return [
-        *([fga.ClientTuple(user=parent, relation="parent", object=obj)] if parent else []),
-        *(fga.ClientTuple(user=fga.user_object(subject), relation=_DECLARED_RELATION, object=obj) for subject in settings.provenance_writers),
+        *([fga_writes.ClientTuple(user=parent, relation="parent", object=obj)] if parent else []),
+        *(fga_writes.ClientTuple(user=fga_ids.user_object(subject), relation=_DECLARED_RELATION, object=obj) for subject in settings.provenance_writers),
     ]
 
 
@@ -139,7 +139,7 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
     if not settings.provenance_namespace:
         return False
     segments = parse_identifier(settings.provenance_namespace)
-    canonical = fga.canonical_object_id(segments)
+    canonical = fga_ids.canonical_object_id(segments)
     # The `dir` backend refuses an existing namespace in every create mode, `exist_ok` included (measured on pylance
     # 13.0.0, where the spec's ExistOk would keep it), so keeping one is catching that refusal, and a kept namespace keeps
     # the uuid it was created with ([[LH-519]]).
@@ -159,15 +159,15 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
     if settings.fga_enabled and client is not None:
         # A namespace directly in the estate's warehouse hangs off it; a deeper one off its parent namespace's uuid.
         parent = (
-            fga.namespace_object(await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments[:-1]))
+            fga_ids.namespace_object(await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments[:-1]))
             if len(segments) > 2
             else settings.fga_default_warehouse_object
         )
         tuples = provenance_tuples(settings, namespace_uuid=namespace_uuid, parent=parent)
-        await fga.write_tuples(client, tuples, actor=ACTOR, origin="provenance_namespace")  # noqa: TID251
-        own = {fga.user_object(account) for account in settings.own_accounts}
-        revoked = await fga.revoke_undeclared(  # noqa: TID251 — the provenance writers' revoking site
-            client, tuples, obj=fga.namespace_object(namespace_uuid), relation=_DECLARED_RELATION, own=own, actor=ACTOR, origin="provenance_namespace"
+        await fga_writes.write_tuples(client, tuples, actor=ACTOR, origin="provenance_namespace")  # noqa: TID251
+        own = {fga_ids.user_object(account) for account in settings.own_accounts}
+        revoked = await fga_writes.revoke_undeclared(  # noqa: TID251 — the provenance writers' revoking site
+            client, tuples, obj=fga_ids.namespace_object(namespace_uuid), relation=_DECLARED_RELATION, own=own, actor=ACTOR, origin="provenance_namespace"
         )
     else:
         revoked = []

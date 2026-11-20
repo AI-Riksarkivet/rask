@@ -32,7 +32,7 @@ from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 
-from lakehouse.governed import fga, oidc
+from lakehouse.governed import fga_reads, fga_resilience, fga_writes, oidc
 from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
 
 
@@ -95,12 +95,12 @@ def test_delete_tuples_audits_the_tuples_that_landed_before_it_fails(audit_rows:
     ]
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
-            fga.delete_tuples(
+            fga_writes.delete_tuples(
                 _client(_FlakyDeleteClient()),
                 doomed,
                 actor="admin",
                 origin="admin_api",
-                retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
+                retry=fga_resilience.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
             )
         )
 
@@ -162,12 +162,12 @@ def test_expand_tree_does_not_call_a_diamond_a_cycle() -> None:
     catches a genuine loop (pinned below).
     """
     tree = asyncio.run(
-        fga.expand_tree(
+        fga_reads.expand_tree(
             _client(_DiamondClient()),
             relation="can_read",
             obj="table:t",
             max_depth=4,
-            retry=fga.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
+            retry=fga_resilience.RetryPolicy(attempts=1, backoff_seconds=0.0, max_backoff_seconds=0.0),
         )
     )
     branches = tree["union"]

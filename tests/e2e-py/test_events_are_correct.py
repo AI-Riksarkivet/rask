@@ -70,7 +70,7 @@ from referencing.jsonschema import DRAFT202012
 
 from lakehouse.events.control_events import CatalogControlEvent, control_signer_role
 from lakehouse.events.lineage_events import dataset_uuids, event_identity
-from lakehouse.governed.fga import user_object
+from lakehouse.governed.fga_ids import user_object
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
 from tests.unit.rask_facets import rask_facet_errors

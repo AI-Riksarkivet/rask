@@ -253,7 +253,7 @@ class KeyedDoor(BaseModel):
     async def begin(self, *, endpoint: str, target: str) -> Converge:
         """Claim the request's key for ``endpoint`` acting on ``target`` (:func:`begin`), after the door's shape refusals.
 
-        ``target`` is the canonical id of the object the door acts on (``fga.canonical_object_id``), so the same key on
+        ``target`` is the canonical id of the object the door acts on (``fga_ids.canonical_object_id``), so the same key on
         another object is refused rather than answered with this one's response ([[LH-576]]); the same key sent with
         another request is refused too. The request is digested here, so only a caller every door's authorization and
         shape refusal admitted has its body hashed, off the event loop, as the claim's own store round trips are.

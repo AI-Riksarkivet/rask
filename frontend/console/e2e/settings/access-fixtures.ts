@@ -98,7 +98,7 @@ const node = (name: string, over: Record<string, unknown> = {}) => ({
 	...over,
 });
 
-// The shape `fga.expand_tree` returns at depth>1: a `tuple_to_userset` leaf whose `expanded` child is
+// The shape `fga_reads.expand_tree` returns at depth>1: a `tuple_to_userset` leaf whose `expanded` child is
 // the PARENT object's own tree. This is the thing a single Expand cannot give and a tuple table can
 // never show — the spec exists to prove it reaches the screen.
 export const EXPAND_TREE = node(`${TABLE}#can_read_data`, {

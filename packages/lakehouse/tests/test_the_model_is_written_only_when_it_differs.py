@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from lakehouse.governed.auth.write_model import model_document, shape
-from lakehouse.governed.fga import ModelHistory, canonical_model
+from lakehouse.governed.fga_provision import ModelHistory, canonical_model
 
 
 def needs_write(stored: dict[str, Any] | None, desired: dict[str, Any]) -> bool:
@@ -67,7 +67,7 @@ def _as_openfga_serves_it(model: dict[str, Any]) -> dict[str, Any]:
 
     A server-assigned ``id``, plus the default fills the store materialises on write — ``metadata:
     null``, ``relations: {}``, ``module: ""``, ``condition: ""``, ``source_info: null`` — measured
-    against the live store 2026-09-13 and recorded on `lakehouse.governed.fga._without_defaults`.
+    against the live store 2026-09-13 and recorded on `lakehouse.governed.fga_provision._without_defaults`.
     """
     served = copy.deepcopy(model)
     for definition in served["type_definitions"]:

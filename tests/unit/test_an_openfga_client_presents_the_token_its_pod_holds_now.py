@@ -20,7 +20,7 @@ from openfga_sdk.exceptions import UnauthorizedException
 from pydantic_settings import BaseSettings
 
 from lakehouse.governed.auth_lifespan import build_fga_client
-from lakehouse.governed.fga import OpenFgaCredentialRefusedError
+from lakehouse.governed.fga_provision import OpenFgaCredentialRefusedError
 from lakehouse.governed.settings import FgaSettings
 from tests.unit.openfga_stub import BY_NAME, Recorded, openfga
 

@@ -16,7 +16,7 @@ THE OBJECT ID IS THE TABLE, not the ref. A consumer joins events by `object_id`,
 carry the same id a publication for that table carries, with the ref itself in `extra`. Naming the branch there instead would give every
 branch its own object and join nothing.
 
-`fga.canonical_object_id(segments, ...)` is used for consistency with every other table emitter here, not
+`fga_ids.canonical_object_id(segments, ...)` is used for consistency with every other table emitter here, not
 because it corrects anything: it is `delimiter.join(segments)` against `parse_identifier`'s split, so it
 round-trips the raw path parameter byte-for-byte. Checked, because the difference looked load-bearing and
 is not.

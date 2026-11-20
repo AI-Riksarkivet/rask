@@ -26,9 +26,9 @@ import aiohttp
 import pytest
 from lance_namespace import ServiceUnavailableError
 
-from lakehouse.governed import fga
+from lakehouse.governed import fga_model, fga_provision, fga_resilience
 from lakehouse.governed.auth import write_model
-from lakehouse.governed.fga import ModelHistoryTooLongError
+from lakehouse.governed.fga_provision import ModelHistoryTooLongError
 
 
 def _model(can_read_data: dict[str, Any], *, extra: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -134,7 +134,7 @@ _SCRATCH = {"id": "store-SCRATCH", "name": "fga-probe", "created_at": "2026-09-2
 
 
 class _VirtualTime:
-    """`asyncio` as `fga.resolve` reads it: its running loop is this object, whose clock moves only when the wait sleeps.
+    """`asyncio` as `fga_provision.resolve` reads it: its running loop is this object, whose clock moves only when the wait sleeps.
 
     A wait then polls once per ``poll_seconds`` of its deadline however loaded the host is, where on real time the count of
     reads was the host's (measured 2026-11-12: two reads fitted into a 200 ms deadline under coverage at 16 workers).
@@ -160,8 +160,8 @@ class _VirtualTime:
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, fake: _OpenFga, image_model: dict[str, Any]) -> None:
-    monkeypatch.setattr(fga, "OpenFgaClient", _client_class(fake))
-    monkeypatch.setattr(fga, "load_model", lambda: copy.deepcopy(image_model))
+    monkeypatch.setattr(fga_provision, "OpenFgaClient", _client_class(fake))
+    monkeypatch.setattr(fga_model, "load_model", lambda: copy.deepcopy(image_model))
 
 
 @pytest.mark.asyncio
@@ -169,7 +169,7 @@ async def test_a_service_checks_against_the_model_its_image_carries_not_the_newe
     fake = _OpenFga([[_ESTATE]], [[_stored("model-NEWER", NEWER), _stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=0.0) == ("store-ESTATE", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=0.0) == ("store-ESTATE", "model-OLDER")
 
 
 @pytest.mark.asyncio
@@ -180,10 +180,12 @@ async def test_a_wait_for_an_absent_model_rereads_one_page_per_poll_then_fails_c
     history = [_stored("model-C", NEWER), _stored("model-B", NEWER), _stored("model-A", NEWER)]
     fake = _OpenFga([[_ESTATE]], [history])
     _install(monkeypatch, fake, OLDER)
-    monkeypatch.setattr(fga, "asyncio", _VirtualTime())
+    monkeypatch.setattr(fga_provision, "asyncio", _VirtualTime())
 
-    with pytest.raises(fga.OpenFgaModelAbsentError, match=r"^store store-ESTATE at http://fga:8080 holds no model carrying this image's model\.json$"):
-        await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=0.2, poll_seconds=0.02)
+    with pytest.raises(
+        fga_provision.OpenFgaModelAbsentError, match=r"^store store-ESTATE at http://fga:8080 holds no model carrying this image's model\.json$"
+    ):
+        await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=0.2, poll_seconds=0.02)
     assert fake.pages_per_read[0] == 3, "the first read did not scan the whole history"
     assert len(fake.pages_per_read) > 2, "the wait did not re-read"
     assert set(fake.pages_per_read[1:]) == {1}, f"a re-read scanned past the model it had already seen: {fake.pages_per_read}"
@@ -194,7 +196,7 @@ async def test_a_model_written_while_the_service_waits_is_found(monkeypatch: pyt
     fake = _OpenFga([[_ESTATE]], [[], [_stored("model-OLDER", OLDER)], [_stored("model-NEWER", NEWER), _stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, NEWER)
 
-    assert await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-NEWER")
+    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-NEWER")
 
 
 @pytest.mark.asyncio
@@ -204,7 +206,7 @@ async def test_a_store_that_appears_while_the_service_waits_is_found(monkeypatch
     fake = _OpenFga([[], [_SCRATCH], [_SCRATCH, _ESTATE]], [[_stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
 
 
 @pytest.mark.asyncio
@@ -212,7 +214,7 @@ async def test_an_openfga_that_is_not_answering_yet_is_waited_out(monkeypatch: p
     fake = _OpenFga([aiohttp.ClientConnectionError("connection refused"), [_ESTATE]], [[_stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
 
 
 @pytest.mark.asyncio
@@ -222,7 +224,7 @@ async def test_a_history_read_that_fails_at_first_is_waited_out(monkeypatch: pyt
     fake = _OpenFga([[_ESTATE]], [[_stored("model-OLDER", OLDER)]], history_failures=2)
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
 
 
 @pytest.mark.asyncio
@@ -232,8 +234,8 @@ async def test_a_pinned_store_is_used_without_a_name_lookup(monkeypatch: pytest.
     fake = _OpenFga([[_SCRATCH]], [[_stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga.resolve("http://fga:8080", token_file=None, store_id="store-PINNED", deadline_seconds=0.0) == ("store-PINNED", "model-OLDER")
-    assert await fga.provision("http://fga:8080", token_file=None, store_id="store-PINNED") == ("store-PINNED", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", token_file=None, store_id="store-PINNED", deadline_seconds=0.0) == ("store-PINNED", "model-OLDER")
+    assert await fga_provision.provision("http://fga:8080", token_file=None, store_id="store-PINNED") == ("store-PINNED", "model-OLDER")
     assert fake.listed == 0, "a pinned store was looked up by name"
 
 
@@ -243,8 +245,8 @@ async def test_a_body_the_store_holds_below_its_newest_is_not_written_again(monk
     fake = _OpenFga([[_ESTATE]], [[_stored("model-NEWER", NEWER), _stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
-    with caplog.at_level(logging.INFO, logger=fga.log.name):
-        assert await fga.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-OLDER")
+    with caplog.at_level(logging.INFO, logger=fga_provision.log.name):
+        assert await fga_provision.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-OLDER")
 
     assert fake.written == [], "a held body was written again"
     assert any(record.getMessage() == "openfga_model_held_below_newest" for record in caplog.records)
@@ -259,7 +261,7 @@ async def test_a_body_that_removes_what_the_newest_defines_is_still_written_and_
     fake = _OpenFga([[_ESTATE]], [[_stored("model-WIDE", wide), _stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, NEWER)
 
-    assert await fga.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-WRITTEN")
+    assert await fga_provision.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-WRITTEN")
     assert [store for store, _request in fake.written] == ["store-ESTATE"]
 
 
@@ -268,7 +270,7 @@ async def test_a_store_holding_no_model_yet_gets_this_images(monkeypatch: pytest
     fake = _OpenFga([[_ESTATE]], [[]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-WRITTEN")
+    assert await fga_provision.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-WRITTEN")
 
 
 @pytest.mark.asyncio
@@ -278,19 +280,19 @@ async def test_a_store_whose_history_cannot_be_read_is_not_written(monkeypatch: 
     _install(monkeypatch, fake, OLDER)
 
     with pytest.raises(ServiceUnavailableError):
-        await fga.provision("http://fga:8080", token_file=None, retry=fga.ONE_ATTEMPT)
+        await fga_provision.provision("http://fga:8080", token_file=None, retry=fga_resilience.ONE_ATTEMPT)
     assert fake.written == []
 
 
 @pytest.mark.asyncio
 async def test_a_history_past_the_page_bound_is_refused_not_read_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Absent is what makes a writer write, so a history too long to read must not answer absent."""
-    monkeypatch.setattr(fga, "MODEL_MAX_PAGES", 2)
+    monkeypatch.setattr(fga_provision, "MODEL_MAX_PAGES", 2)
     fake = _OpenFga([[_ESTATE]], [[_stored(f"model-{n}", NEWER) for n in range(3)]])
     _install(monkeypatch, fake, OLDER)
 
     with pytest.raises(ModelHistoryTooLongError):
-        await fga.provision("http://fga:8080", token_file=None, retry=fga.ONE_ATTEMPT)
+        await fga_provision.provision("http://fga:8080", token_file=None, retry=fga_resilience.ONE_ATTEMPT)
     assert fake.written == []
 
 

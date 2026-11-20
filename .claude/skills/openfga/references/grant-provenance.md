@@ -53,7 +53,7 @@ field set above is a test, not a convention.
 ## What this does NOT cover, and why that is a deliberate boundary
 
 - **Grants written outside the grant API.** `seed_ownership` (a create door granting the creator) and
-  `scripts/seed_estate.py` write tuples through `fga.write_tuples`, which stamps a `TupleOrigin`
+  `scripts/seed_estate.py` write tuples through `fga_writes.write_tuples`, which stamps a `TupleOrigin`
   (`grant_api`, `seed`, …) but is a different row shape from the `access_grant` verb above. Read the
   origin when a grant has no `access_grant` row: it usually means the grant was *implied by creating
   the object*, and the creator is then the object's `created_by` on its registry record.

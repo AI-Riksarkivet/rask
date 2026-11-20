@@ -28,7 +28,7 @@ from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
 from lakehouse.events.control_emit import ControlEmitter, emit_control
-from lakehouse.governed import fga
+from lakehouse.governed import fga_ids
 from lakehouse.storage.options import StorageOptions
 
 
@@ -76,8 +76,8 @@ async def create_table_branch(
         control,
         action="table_branch_created",
         object_type="table",
-        object_id=fga.table_object(table.resolved.require_uuid()),
-        object_name=fga.canonical_object_id(segments),
+        object_id=fga_ids.table_object(table.resolved.require_uuid()),
+        object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         # `name`, not `branch` — that is the field `CreateTableBranchRequest` declares. "Branched from
         # what" is the question a consumer asks next, and it is answered from the DATASET rather than
@@ -163,8 +163,8 @@ async def _announce_removed(
             control,
             action="table_branch_deleted",
             object_type="table",
-            object_id=fga.table_object(table.resolved.require_uuid()),
-            object_name=fga.canonical_object_id(segments),
+            object_id=fga_ids.table_object(table.resolved.require_uuid()),
+            object_name=fga_ids.canonical_object_id(segments),
             actor=f"user:{token.subject}" if token is not None else None,
             extra={"branch": branch.name, **({dataplane.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
         )

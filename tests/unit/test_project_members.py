@@ -54,14 +54,14 @@ class _Harness:
             self.existing.extend(_tuple(t.user, t.relation, t.object) for t in tuples)
 
         monkeypatch.setattr(fga_deps, "require_relation", fake_require)
-        monkeypatch.setattr(members.fga, "read_object_tuples", fake_read)
-        monkeypatch.setattr(members.fga, "write_tuples", fake_write)
+        monkeypatch.setattr(members.fga_reads, "read_object_tuples", fake_read)
+        monkeypatch.setattr(members.fga_writes, "write_tuples", fake_write)
 
 
 def _client() -> Any:
     """The injected OpenFGA client (catalog-api-09): the doors take it as a dependency now rather than
     reaching into ``request.app.state``. Loosely typed — every test that needs behaviour monkeypatches
-    ``members.fga.*``."""
+    ``members.fga_reads.*`` and ``members.fga_writes.*``."""
     return object()
 
 
