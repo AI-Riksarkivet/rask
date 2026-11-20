@@ -10,6 +10,7 @@ task is one subject on the work queue, which the queue's own lane proves on a re
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Coroutine, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,7 +28,7 @@ from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import audit
 from maintenance.services.purge import TrashPurgeReport
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import QueueUnavailableError, QueueUnreachableError, Task, TaskQueue
 from maintenance.services.reconcile import GrantCensusReader, ReconcileReport, Sources
 
 
@@ -221,8 +222,13 @@ def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
 class _HoldingQueue:
     """What the queue holds, as the audit reads it, and the tasks it is handed, with `TaskQueue`'s signatures."""
 
-    def __init__(self, holding: dict[tuple[str, str], set[str]]) -> None:
+    def __init__(
+        self, holding: dict[tuple[str, str], set[str]], *, takes: int | None = None, then: type[QueueUnavailableError] = QueueUnreachableError
+    ) -> None:
         self._holding = holding
+        #: How many publishes the bus takes before each later one ends as ``then``; every one when ``None``.
+        self._takes = takes
+        self._then = then
         self.queued: list[Task] = []
         self.scheduled: list[tuple[Task, datetime]] = []
 
@@ -230,6 +236,8 @@ class _HoldingQueue:
         return set(self._holding.get((area, kind), set()))
 
     async def enqueue(self, task: Task) -> bool:
+        if self._takes is not None and len(self.queued) >= self._takes:
+            raise self._then("the bus did not take it")
         self.queued.append(task)
         return True
 
@@ -290,3 +298,37 @@ def test_the_audit_queues_what_neither_a_schedule_nor_the_queue_holds(tmp_path: 
         ],
         key=lambda task: (task.kind, task.uuid),
     )
+
+
+def _three_tables_no_task_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MaintenanceSettings:
+    monkeypatch.setattr(audit, "reconcile", _Reconciler())
+    claims = location_claims.ClaimStore(control_root=str(tmp_path), storage_options=StorageOptions())
+    for name in ("a", "b", "c"):
+        location_claims.take(claims, f"{tmp_path}/{name}", f"db${name}", ["db", name], is_gone=lambda _claim: False, uuid=str(uuid4()))
+    return _settings(orphan_check_enabled=False).model_copy(update={"control_root": str(tmp_path)})
+
+
+def test_an_audit_the_bus_stops_answering_says_what_it_left_and_ends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """No answer says nothing of the stream, and a failed audit is delivered again and run whole, its reconcile and its
+    repairs included. So the audit says what it left unqueued and ends: the next hour's finds it holding nothing still."""
+    settings = _three_tables_no_task_holds(tmp_path, monkeypatch)
+    queue = _HoldingQueue({}, takes=1)
+
+    with caplog.at_level(logging.WARNING, logger="maintenance.services.audit"):
+        out = asyncio.run(audit.run_audit(settings, queue=cast(TaskQueue, queue)))
+
+    assert (out["unscheduled"], len(queue.queued)) == ({"tables": 1, "trash": 0, "checks": 0}, 1)
+    assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("maintenance_unscheduled")] == [
+        "maintenance_unscheduled_left_for_the_next_audit",
+        "maintenance_unscheduled_queued",
+    ]
+
+
+def test_an_audit_the_bus_refuses_fails_so_its_page_fires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal is the bus answering, and it answers the same next hour: the audit not completing is what pages for a
+    backstop that queues nothing."""
+    settings = _three_tables_no_task_holds(tmp_path, monkeypatch)
+    queue = _HoldingQueue({}, takes=1, then=QueueUnavailableError)
+
+    with pytest.raises(QueueUnavailableError):
+        asyncio.run(audit.run_audit(settings, queue=cast(TaskQueue, queue)))

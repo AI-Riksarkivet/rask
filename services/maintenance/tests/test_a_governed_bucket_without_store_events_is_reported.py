@@ -16,7 +16,7 @@ import json
 import logging
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import boto3
 import pytest
@@ -49,11 +49,16 @@ class _RefusingStore:
     """The store's client as one whose policy holds no ``s3:GetBucketNotification``: every bucket's read refused 403, as
     maintenance's canned policy without it was refused on the dev estate (ADR 0198's amendment of 2026-11-10)."""
 
-    def __init__(self, inner: object) -> None:
+    def __init__(self, inner: Any, closed: list[str]) -> None:  # noqa: ANN401 — the S3 client, which is built dynamically
         self._inner = inner
+        self._closed = closed
 
     def get_bucket_notification_configuration(self, **request: str) -> object:
         raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied."}}, "GetBucketNotificationConfiguration")
+
+    def close(self) -> None:
+        self._closed.append("closed")
+        self._inner.close()
 
     def __getattr__(self, name: str) -> object:
         return getattr(self._inner, name)
@@ -101,9 +106,10 @@ def test_the_audit_counts_each_governed_bucket_by_what_the_store_says_of_its_eve
         }
     )
     monkeypatch.setattr(audit, "reconcile", _reconcile)
+    closed: list[str] = []
     if refused:
         real_client = bucket_events.object_client
-        monkeypatch.setattr(bucket_events, "object_client", lambda options: _RefusingStore(real_client(options)))
+        monkeypatch.setattr(bucket_events, "object_client", lambda options: _RefusingStore(real_client(options), closed))
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
     counter = provider.get_meter("test").create_counter("maintenance.store_event_buckets.checked")
@@ -123,6 +129,8 @@ def test_the_audit_counts_each_governed_bucket_by_what_the_store_says_of_its_eve
     if refused:
         assert out["store_events"] == {"without": [], "unknown": sorted([configured, deletes_only, missing])}
         assert counted == {"unknown": 3}
+        # The client is the run's own, built each hour, so the run closes it whatever the store answered.
+        assert closed == ["closed"]
         return
     assert out["store_events"] == {"without": [deletes_only], "unknown": [missing]}
     assert warned == [("maintenance_bucket_store_events_unknown", missing), ("maintenance_bucket_without_store_events", deletes_only)]

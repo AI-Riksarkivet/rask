@@ -161,6 +161,11 @@ class QueueUnavailableError(RuntimeError):
     """The bus did not take a publish, or did not answer it: nothing was queued, and the caller retries."""
 
 
+class QueueUnreachableError(QueueUnavailableError):
+    """No answer came from the bus at all: a connection that dropped or a request that ran out its bound. It says nothing
+    of the stream, where a refusal (the plain :class:`QueueUnavailableError`) is the bus answering, and lasts."""
+
+
 class ClaimsBucketMissingError(RuntimeError):
     """The claims bucket the chart's stream Job declares is not on the bus, so no pass can claim its table.
 
@@ -464,7 +469,7 @@ class TaskQueue:
                 return False
             raise QueueUnavailableError(f"the queue refused {task.subject('task')}: {exc}") from exc
         except (NatsError, TimeoutError) as exc:
-            raise QueueUnavailableError(f"the bus did not take {task.subject('task')}: {exc}") from exc
+            raise QueueUnreachableError(f"the bus did not take {task.subject('task')}: {exc}") from exc
         return True
 
     async def told(self, msg: Msg, said: bytes, *, within: float) -> bool:
@@ -650,7 +655,7 @@ class TaskQueue:
                 raise
             raise QueueUnavailableError(f"the queue refused {held}: {exc}") from exc
         except (NatsError, TimeoutError) as exc:
-            raise QueueUnavailableError(f"the bus did not take {held}: {exc}") from exc
+            raise QueueUnreachableError(f"the bus did not take {held}: {exc}") from exc
 
     async def held(self, area: Literal["task", "schedule"], kind: HeldKind) -> set[str]:
         """The uuid of every ``kind`` task the queue holds (``task``), or that a schedule holds (``schedule``): what the audit
@@ -716,7 +721,7 @@ class TaskQueue:
         try:
             reply = await self._client.request(subject, json.dumps(body).encode(), timeout=_API_TIMEOUT)
         except (NatsError, TimeoutError) as exc:
-            raise QueueUnavailableError(f"the bus did not answer {subject}: {exc}") from exc
+            raise QueueUnreachableError(f"the bus did not answer {subject}: {exc}") from exc
         try:
             refusal = _ApiRefusal.model_validate_json(reply.data)
             read = answer.model_validate_json(reply.data)

@@ -18,9 +18,10 @@ never run at once, and the later waits out the other.
 
 import logging
 import secrets
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -44,7 +45,7 @@ from maintenance.services.credentials import (
 from maintenance.services.naming import claim_store, claimed_location
 from maintenance.services.orphan_check import FLOOR
 from maintenance.services.purge import held_by, purge_expired_trash, refusal_log_entry
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import QueueUnreachableError, Task, TaskQueue
 from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.reconcile import Sources as ReconcileSources
@@ -367,36 +368,57 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
     if records is None:
         records = await run_in_threadpool(trash.list_all, settings.resolved_control_root, options)
     trashed = {str(uuid): record for record in records if (uuid := record.uuid)}
-    covered_tables = await queue.held("schedule", "table") | await queue.held("task", "table")
-    covered_trash = await queue.held("schedule", "trash") | await queue.held("task", "trash")
-    covered_checks = (await queue.held("schedule", "orphans") | await queue.held("task", "orphans")) if settings.orphan_check_enabled else set(tables)
     queued = {"tables": 0, "trash": 0, "checks": 0}
-    now = datetime.now(UTC)
     # A record naming its object by anything but a uuid can hold no task (`Task`), and must not end the audit for every
     # record after it: it is said, and the rest are queued.
     unnamed = sorted(uuid for uuid in (*tables, *trashed) if not is_canonical_uuid(uuid))
     if unnamed:
         log.error("maintenance_audit_record_names_no_uuid", extra={"uuids": unnamed[:20], "count": len(unnamed)})
+    live = {uuid: at for uuid, at in tables.items() if uuid not in trashed and uuid not in unnamed}
+    named = {uuid: record for uuid, record in trashed.items() if uuid not in unnamed}
+    try:
+        async for taken in _queued(settings, queue, tables=live, trashed=named):
+            queued[taken] += 1
+    except QueueUnreachableError as exc:
+        # NO ANSWER CAME, which a moment later may: an audit that failed here would be delivered again and run whole, its
+        # reconcile and repairs included, to queue what the next hour's audit finds holding nothing still. A REFUSAL is
+        # not caught: the bus answered, it will answer the same next hour, and the audit failing is what pages for it
+        # (`MaintenanceAuditNotCompleting`). A bus that stays away delivers no audit at all, which pages the same way.
+        log.warning("maintenance_unscheduled_left_for_the_next_audit", extra={**queued, "error": str(exc)[:300]})
+    if any(queued.values()):
+        log.warning("maintenance_unscheduled_queued", extra=queued)
+    return queued
+
+
+async def _queued(
+    settings: MaintenanceSettings, queue: TaskQueue, *, tables: dict[str, str], trashed: dict[str, trash.TrashRecord]
+) -> AsyncIterator[Literal["tables", "checks", "trash"]]:
+    """Queue what ``tables`` and ``trashed`` hold no task for, yielding what each publish the bus took was for.
+
+    Raises:
+        QueueUnavailableError: The bus refused a read of what it holds or a publish, or (its
+            :class:`QueueUnreachableError`) did not answer one; what it took before was yielded.
+    """
+    covered_tables = await queue.held("schedule", "table") | await queue.held("task", "table")
+    covered_trash = await queue.held("schedule", "trash") | await queue.held("task", "trash")
+    covered_checks = (await queue.held("schedule", "orphans") | await queue.held("task", "orphans")) if settings.orphan_check_enabled else set(tables)
+    now = datetime.now(UTC)
     for uuid, location in tables.items():
-        if uuid in trashed or uuid in unnamed:
-            continue
         if uuid not in covered_tables and await queue.enqueue(Task(kind="table", uuid=uuid, location=location)):
-            queued["tables"] += 1
+            yield "tables"
         if uuid not in covered_checks:
             jitter = timedelta(seconds=secrets.randbelow(int(FLOOR.total_seconds())))
-            queued["checks"] += await queue.schedule_first(Task(kind="orphans", uuid=uuid, location=location), now + jitter)
+            if await queue.schedule_first(Task(kind="orphans", uuid=uuid, location=location), now + jitter):
+                yield "checks"
     for uuid, record in trashed.items():
         # A released or undated record's task ends holding nothing (:mod:`maintenance.services.trash_task`), so queueing
         # one would queue it again every hour. The daily scan's purge reaches a released record without a task, and an
         # undated one is never released (:attr:`lakehouse.trash.TrashRecord.release_at`).
-        if record.is_released or record.release_at is None or uuid in unnamed:
+        if record.is_released or record.release_at is None:
             continue
         task = Task(kind="trash", uuid=uuid, location=record.location, trashed=record.kind)
         if uuid not in covered_trash and await queue.enqueue(task):
-            queued["trash"] += 1
-    if any(queued.values()):
-        log.warning("maintenance_unscheduled_queued", extra=queued)
-    return queued
+            yield "trash"
 
 
 def _held_tables(settings: MaintenanceStore) -> dict[str, str]:
