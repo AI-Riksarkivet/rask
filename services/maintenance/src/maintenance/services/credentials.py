@@ -781,11 +781,19 @@ def _grants_door(
 
 
 @cache
-def _door_client() -> httpx.Client:
+def door_client() -> httpx.Client:
     """The one client this process asks the catalog's doors with, so a pass's questions share its connections: a client
     per question opens and closes a connection for each. It carries no identity: each question presents the pod's token
-    as the file holds it then (:func:`service_headers`)."""
+    as the file holds it then (:func:`service_headers`). The process closes it on its way out
+    (:func:`close_door_client`)."""
     return httpx.Client(timeout=_TIMEOUT_SECONDS)
+
+
+def close_door_client() -> None:
+    """Close the client the doors were asked with, if any question built one; a later question builds another."""
+    if door_client.cache_info().currsize:
+        door_client().close()
+        door_client.cache_clear()
 
 
 def _answered(settings: MaintenanceCatalogDoor, door: Door) -> httpx.Response:
@@ -803,7 +811,7 @@ def _answered(settings: MaintenanceCatalogDoor, door: Door) -> httpx.Response:
         raise VendingNotDirect(f"no catalog door is configured (MAINTENANCE_CATALOG_URL is empty), so {door.answer} for {door.asked_for} cannot be asked for")
     headers = service_headers(settings)
     try:
-        response = _door_client().request(door.method, f"{settings.catalog_url.rstrip('/')}{door.path}", params=door.params, json=door.body, headers=headers)
+        response = door_client().request(door.method, f"{settings.catalog_url.rstrip('/')}{door.path}", params=door.params, json=door.body, headers=headers)
     except httpx.HTTPError as exc:
         raise VendUndecided(f"the catalog's door could not be asked for {door.answer} for {door.asked_for}: {exc}") from exc
     if (refusal := _refusal_of(response, door, identity=settings.catalog_service_identity)) is not None:

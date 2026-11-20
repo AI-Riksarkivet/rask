@@ -95,3 +95,18 @@ def test_a_release_naming_its_uuid_leaves_a_claim_the_same_name_took_since(tmp_p
     owned = location_claims.release(store, LOCATION, "ns$x", uuid=MINTED)
 
     assert (refused, owned, location_claims.holder(store, LOCATION)) == (False, True, None)
+
+
+def test_a_record_that_is_no_claim_is_left_out_of_the_held_claims_and_said(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """The listing feeds sweeps that must go on past one bad record, and the warning is all that says a location's
+    record went unread."""
+    store = ClaimStore(control_root=str(tmp_path))
+    location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves)
+    stray = tmp_path / location_claims.claim_key("s3://lance-catalog/stray")
+    stray.write_text('{"location": "lance-catalog/stray"}')
+
+    with caplog.at_level("WARNING", logger="lakehouse.location_claims"):
+        held = location_claims.held_claims(store)
+
+    assert [claim.table for claim in held] == ["ns$x"]
+    assert [(r.message, r.__dict__["location"]) for r in caplog.records] == [("location_claim_malformed", "lance-catalog/stray")]

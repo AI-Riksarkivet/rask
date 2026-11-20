@@ -24,8 +24,12 @@ DATA_READ_ACTIONS: Final = frozenset({"query", "count_rows", "credentials", "blo
 META_READ_ACTIONS: Final = frozenset({"describe", "exists", "list", "stats", "version", "tasks", "history"})
 
 #: rask's management reads, served as POST in the same grammar, which take a rung of their own at their doors: the
-#: estate FGA workbench's derivations, a caller's own permissions, a decision, and a maintenance preview.
-MANAGEMENT_READ_ACTIONS: Final = frozenset({"my-permissions", "check", "graph", "preview", "list-objects", "list-users", "expand", "simulate"})
+#: estate FGA workbench's derivations, a caller's own permissions, a decision, a maintenance preview, and the two
+#: structural facts lineage asks before it records an event: whether any tuple governs an object (``governed``) and which
+#: table holds a location (``locate``).
+MANAGEMENT_READ_ACTIONS: Final = frozenset(
+    {"my-permissions", "check", "graph", "preview", "list-objects", "list-users", "expand", "simulate", "governed", "locate"}
+)
 
 #: The route a table's credential is vended on. It reads at the read tier and writes at any other, which rides its
 #: query; a route that merely ends in the same word (a trashed table's reclaim session) is not it.

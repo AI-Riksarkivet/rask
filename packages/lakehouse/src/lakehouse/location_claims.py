@@ -77,6 +77,7 @@ Every function is BLOCKING IO — callers threadpool it.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
@@ -86,6 +87,8 @@ from lakehouse import control_prefixes, record_store, records
 from lakehouse.base_refs import decoded_path
 from lakehouse.storage_options import StorageOptions
 
+
+log = logging.getLogger(__name__)
 
 _PREFIX = control_prefixes.LOCATIONS
 
@@ -199,7 +202,8 @@ def held_claims(store: ClaimStore) -> list[LocationClaim]:
     for record in record_store.list_records(store.control_root, store.storage_options, _PREFIX, event="location_claim"):
         try:
             claim = LocationClaim.model_validate(record)
-        except ValueError:
+        except ValueError as exc:
+            log.warning("location_claim_malformed", extra={"location": record.get("location"), "error": str(exc)[:300]})
             continue
         if claim.released_at is None:
             held.append(claim)

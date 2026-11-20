@@ -27,6 +27,7 @@ from lakehouse.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.core.lineage_emit import MaintenanceEmitter, make_emitter
+from maintenance.services import credentials
 
 
 if TYPE_CHECKING:
@@ -83,6 +84,7 @@ async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Superviso
     """The secret store's login and the object store's session, their loops on ``loops``, stopped on the way out."""
     async with AsyncExitStack() as stack:
         instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
+        stack.callback(credentials.close_door_client)
         # MAINTENANCE LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before it serves or takes a task, and its start
         # fails when the store never admits it. A loop of `loops` then logs in again once half the store token's lease
         # is used, or as soon as the store no longer honours it. Nothing for a stack with no secret store.

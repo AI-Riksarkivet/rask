@@ -203,6 +203,30 @@ async def test_a_claim_that_cannot_be_read_runs_nothing_and_is_read_again_within
     assert 0 < turn.wait < 600
 
 
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param('{"timer": "relay", "window": "2026-01-01T00:00:00Z"}', id="fields-missing"),
+        pytest.param('{"timer": "relay", "window": "2999-01-01T00:00:00", "claimed_at": "2999-01-01T00:00:00", "by": "pod-0"}', id="a-window-on-no-clock"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_record_at_the_timers_key_that_is_no_claim_is_claimed_over(tmp_path: Path, record: str) -> None:
+    """The claim is the timer's own bookkeeping, so a record that is none says nobody holds the window: the conditional
+    replace still lets one replica win, where a refusal would stop the timer on every replica until a hand edit."""
+    ran: list[str] = []
+    (tmp_path / claim_key("relay")).parent.mkdir(parents=True)
+    (tmp_path / claim_key("relay")).write_text(record)
+    one, two = _replica(tmp_path, ran, holder="pod-1", period=600), _replica(tmp_path, ran, holder="pod-2", period=600)
+
+    first, second = await one.turn(), await two.turn()
+
+    stored = records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
+    assert (first.outcome, second.outcome, ran) == (Outcome.RAN, Outcome.ELSEWHERE, ["pod-1"])
+    assert stored is not None
+    assert stored[0]["by"] == "pod-1"
+
+
 @pytest.mark.asyncio
 async def test_a_replica_that_turns_again_in_the_window_it_ran_keeps_what_its_tick_measured(tmp_path: Path) -> None:
     """A wait is measured on the monotonic clock and a window on the store's, so the replica that ran a window can turn

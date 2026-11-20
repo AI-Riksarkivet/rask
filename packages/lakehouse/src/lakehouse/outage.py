@@ -42,6 +42,11 @@ pyarrow 25.0.0 against a store answering each fault to a HEAD, a multipart PUT a
     connection dropped           "AWS Error NETWORK_CONNECTION during ...: curlCode: 28, Timeout was reached ..."
     403, 404 NoSuchBucket, 429   "AWS Error ACCESS_DENIED", "AWS Error NO_SUCH_BUCKET", "AWS Error UNKNOWN (HTTP status 429)"
 
+The catalog's control records go through the S3 client (botocore), the one dialect that TYPES its failures: no response
+is a ``ConnectionError`` or an ``HTTPClientError`` (no connection, a connect or read past its bound, a connection
+closed), and an answer is a ``ClientError`` carrying the status. A seam that answers every store failure as an
+``OSError`` chains the client's own (``raise ... from exc``), so the cause is read where the failure itself says nothing.
+
 The transport failures and the 5xx are outages. A 4xx is NOT: the store answered, and what it said (no
 such bucket, access denied) will be said again on retry, so it stays the fault it is rather than
 becoming a 503 that invites a retry loop against a misconfiguration. The native 403 is excluded twice
@@ -49,6 +54,8 @@ over: its source is `PermissionDenied`, not `Generic`, and its status is not a 5
 """
 
 from __future__ import annotations
+
+from http import HTTPStatus
 
 from lance_namespace import InternalError, ServiceUnavailableError
 
@@ -77,9 +84,25 @@ def reads_as_store_outage(exc: BaseException) -> bool:
     Anything not recognised reads as NOT an outage, so it keeps the status it already had.
     """
     message = str(exc)
-    if not any(marker in message for marker in _IO_MARKERS):
+    if any(marker in message for marker in _IO_MARKERS) and any(marker in message for marker in _TRANSPORT_MARKERS + _SERVER_ERROR_MARKERS):
+        return True
+    if _s3_client_got_no_answer(exc):
+        return True
+    return exc.__cause__ is not None and reads_as_store_outage(exc.__cause__)
+
+
+def _s3_client_got_no_answer(exc: BaseException) -> bool:
+    """Whether ``exc`` is the S3 client's own report of no response, or of a 5xx one."""
+    from botocore.exceptions import ClientError, HTTPClientError
+    from botocore.exceptions import ConnectionError as NoConnectionError
+
+    if isinstance(exc, NoConnectionError | HTTPClientError):
+        return True
+    if not isinstance(exc, ClientError):
         return False
-    return any(marker in message for marker in _TRANSPORT_MARKERS + _SERVER_ERROR_MARKERS)
+    status = int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 0)
+    # 501 is the store answering that it lacks what was asked (a conditional write it does not implement), which no retry clears.
+    return status >= 500 and status != HTTPStatus.NOT_IMPLEMENTED
 
 
 def store_refusal(exc: BaseException, *, reading: str, so: str) -> ServiceUnavailableError | InternalError:

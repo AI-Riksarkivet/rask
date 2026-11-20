@@ -29,7 +29,7 @@ from time import monotonic
 from typing import Final
 
 from opentelemetry import metrics
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
 from lakehouse import control_prefixes, records
 from lakehouse.storage_options import StorageOptions
@@ -97,8 +97,8 @@ class _Claim(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     timer: str
-    window: datetime
-    claimed_at: datetime
+    window: AwareDatetime
+    claimed_at: AwareDatetime
     by: str
 
 
@@ -207,6 +207,19 @@ class Timer:
         _turns.add(1, {"timer": self.name, "outcome": outcome.value})
         return Turn(outcome=outcome, window=window, wait=max(wait, _SHORTEST_WAIT))
 
+    def _claim_in(self, record: object) -> _Claim | None:
+        """The claim ``record`` holds, or none for a record that is no claim.
+
+        The claim is the timer's own bookkeeping, so one that cannot be read as a claim says nobody holds the window:
+        the replace under the ETag just read still lets one replica win, where refusing it would stop the timer on
+        every replica until the record was edited by hand.
+        """
+        try:
+            return _Claim.model_validate(record)
+        except ValidationError as exc:
+            log.warning("timer_claim_malformed", extra={"timer": self.name, "error": str(exc)[:300]})
+            return None
+
     def _ask(self) -> _Asked:
         """Read the claim and, where the store's clock is in a window nobody claimed, try the one write that claims it."""
         options = self._storage_options()
@@ -224,7 +237,7 @@ class Timer:
             read, denied = records.StoreRead(stored=None, at=answered_at), exc
         window = datetime.fromtimestamp((read.at.timestamp() // self._period) * self._period, UTC)
         until_next = (window + timedelta(seconds=self._period) - read.at).total_seconds()
-        held = None if read.stored is None else _Claim.model_validate(read.stored.record)
+        held = None if read.stored is None else self._claim_in(read.stored.record)
         # A claim at or after this window is another replica's, and one a little ahead of this read's time still is: a
         # store's front ends stamp whole seconds and may differ by one, and claiming over it would run its window again.
         # Only a window more than a period ahead of the store's own time was claimed by a clock that ran away: honoured,

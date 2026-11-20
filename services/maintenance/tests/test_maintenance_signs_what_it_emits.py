@@ -229,3 +229,17 @@ def test_an_emitter_refuses_a_key_for_an_identity_it_does_not_stamp_as_its_autho
             author="service-someone-else",
             signing=holder,
         )
+
+
+@pytest.mark.asyncio
+async def test_the_process_closes_the_client_it_asked_the_catalogs_doors_with(boot: Boot) -> None:
+    from maintenance import runtime
+    from maintenance.core.config import get_settings
+    from maintenance.services import credentials
+
+    async with Supervisor() as loops, runtime.standing(FastAPI(), get_settings(), loops):
+        asked_with = credentials.door_client()
+
+    assert asked_with.is_closed
+    assert credentials.door_client() is not asked_with, "a process that stands again asks with a client that is open"
+    credentials.close_door_client()

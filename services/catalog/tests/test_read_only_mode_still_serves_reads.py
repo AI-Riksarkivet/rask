@@ -40,6 +40,10 @@ READS = [
     ("POST", "/v1/table/pages/tags/version"),
     ("POST", "/management/v1/access/list-objects"),
     ("POST", "/management/v1/access/expand"),
+    # What lineage asks before it records an outside producer's event: whether tuples govern a table, and which table
+    # holds a location. Refused, every such event would be refused through the window.
+    ("POST", "/management/v1/decisions/governed"),
+    ("POST", "/management/v1/decisions/locate"),
     ("GET", "/management/v1/projects"),
 ]
 
