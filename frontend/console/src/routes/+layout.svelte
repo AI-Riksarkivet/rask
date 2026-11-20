@@ -2,9 +2,10 @@
 	import '../app.css';
 	import { onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ModeWatcher } from 'mode-watcher';
+	import { appearance } from '@riksarkivet/ui/appearance';
+	import { APPEARANCE } from '#lib/appearance-options.ts';
 	import { Toaster } from 'svelte-sonner';
-	import { AppShell } from '@rask/ui/shell';
+	import { AppShell } from '#lib/shell/index.ts';
 	import type { Snippet } from 'svelte';
 	import { auth, expired, login } from '#lib/auth.svelte.ts';
 	import { activity } from '#lib/activity.svelte.ts';
@@ -17,6 +18,10 @@
 	// The one navigation: the same sidebar on every page, its estate-admin rows disabled for anyone
 	// else (`#lib/nav.ts`).
 	const pageNav = $derived(consoleSidebar(data.me));
+
+	// The theme and mode: the store takes over from the boot script `app.html` loads, with the same
+	// options (`#lib/appearance-options.ts`), and the returned cleanup stops it.
+	$effect(() => appearance.start(APPEARANCE));
 
 	// The WORKBENCH must fill a SIZED flex item rather than scroll inside an auto-height one: a dock
 	// lays its grid out in PIXELS, so inside the plain `overflow-y-auto` wrapper it would size to
@@ -36,7 +41,7 @@
 		return () => clearTimeout(timer);
 	});
 
-	// The navbar's bell (@rask/ui's ActivityCenter, mounted by AppShell): the outcome of every write
+	// The navbar's bell (the shell's ActivityCenter, mounted by AppShell): the outcome of every write
 	// this console sent for the reader, kept in their browser (`#lib/activity.svelte.ts`). The shell
 	// renders it and calls back when the panel opens and when the reader clears the log.
 	const activityFeed = $derived({
@@ -58,7 +63,6 @@
 	});
 </script>
 
-<ModeWatcher defaultMode="dark" />
 <Toaster />
 
 <AppShell

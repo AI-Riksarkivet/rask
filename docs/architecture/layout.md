@@ -22,21 +22,20 @@ flowchart TD
     end
     subgraph js["frontend/ · JS/TS plane · bun workspace"]
         app["console/ · one single-page app"]
-        fpk["packages/ · ui"]
     end
+    fpk["@riksarkivet/ui · the design system (AI-Riksarkivet/ui, pinned to a commit)"]
     lake --> plh
     app --> fpk
 ```
 
 ## `packages/` — reusable libraries, no entrypoints
 
-There are **two** `packages/` directories, one per plane: the root one is Python-only, `frontend/packages/` is TS-only.
-Each is unambiguous from inside its plane, and language purity is what lets both workspaces glob their members.
+`packages/` is the Python plane's. The JS/TS plane has one member, `frontend/console`, and takes its design system,
+`@riksarkivet/ui`, from the `AI-Riksarkivet/ui` repository at a pinned commit ([ADR 0223](../adr/0223-the-console-takes-its-design-system-from-the-ui-repository.md)).
 
 | Package | Language | Purpose |
 |---|---|---|
 | `packages/lakehouse` | Python | The lakehouse's one library ([ADR 0195](../adr/0195-the-three-kits-fold-into-one-lakehouse-library.md)), imported by catalog, lineage and maintenance and by no client: the lance app factory and what it installs (exceptions, the request's trace (ADR 0209), logging, the probes and the drain, the body cap), the auth plane (`lakehouse.governed`), the naming and the input and credential guards (`lakehouse.arrow_ipc`, `lakehouse.storage_options`), the catalog's records, registries and governance guards, the namespace clients (`lakehouse.lancekit`), the events (`lakehouse.control_events`, `lakehouse.lineage_events`, `lakehouse.governed.subjects`, `lakehouse.signature_doors`, the outbox), the OpenLineage emission and Ed25519 signing seam (`lakehouse.lineage`), the store session, and [`lakehouse.storage`](../packages/storage.md), the S3 client, STS and URI seam. |
-| `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook, read from source; `@rask/ui/shell` exports the console's `AppShell`. The workspace's one package: the console holds its API client, graph views and dock (ADR 0201). |
 
 ## `services/` · `frontend/console` · `scripts/` — runnable code
 
@@ -52,13 +51,13 @@ There is **no `projects/` layer**. One image, `.docker/rest-catalog.dockerfile`,
 **root** `uv.lock` and serves the lakehouse's `catalog`, `lineage` and `maintenance`. The console builds from `.docker/frontend.dockerfile`
 (`make console-image`).
 
-## Workspace membership is globbed
+## Workspace membership
 
-Both planes glob their members — `[tool.uv.workspace] members = ["packages/*", "services/*"]` in the root
-`pyproject.toml`, `workspaces = ["console", "packages/*"]` in `frontend/package.json`. Globs are safe here **only
-because the directories are language-pure**: uv errors on a member without a `pyproject.toml`, and bun silently skips a
-directory without a `package.json`, so a mixed directory would force either an enumerated member list or an exclude
-list. Adding a member is therefore just creating the directory with its manifest — no root file to edit.
+The Python plane globs its members — `[tool.uv.workspace] members = ["packages/*", "services/*"]` in the root
+`pyproject.toml`. The glob is safe **only because the directories are language-pure**: uv errors on a member without a
+`pyproject.toml`, so a mixed directory would force either an enumerated member list or an exclude list. Adding a
+Python member is therefore just creating the directory with its manifest — no root file to edit. The JS/TS plane names
+its one member, `workspaces = ["console"]` in `frontend/package.json`.
 
 ## Toolchain
 

@@ -5,7 +5,7 @@
 	// one value that is useful. The copy writes through the asynchronous Clipboard API, which the
 	// console's CSP does not restrict, on the click that asks for it.
 	import type { ClassValue } from 'svelte/elements';
-	import { CopyButton } from '@rask/ui/copy-button';
+	import { CopyButton } from '@riksarkivet/ui/copy-button';
 
 	let {
 		value,

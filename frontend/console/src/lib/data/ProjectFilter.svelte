@@ -5,7 +5,7 @@
 	 * keeps it in its URL, `project-filter-url.ts`). A view over rows the caller was already given,
 	 * never a boundary (`project-filter.ts`).
 	 */
-	import { Select } from '@rask/ui/select';
+	import { Select } from '@riksarkivet/ui/select';
 	import { projectOptions } from './project-filter.ts';
 
 	let {

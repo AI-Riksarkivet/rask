@@ -9,7 +9,7 @@ rask's **own project skills** live in `.claude/skills/` — they describe rask's
 | `rask-architecture` | Workspace planes, globbed membership, the `lance_app` factory, deployables |
 | `rask-services-fleet` | Gateway routing, ports, `RASK_*_URL`, the 404/502/403 contracts |
 | `rask-frontend` | The console SPA: route tree, browser PKCE sign-in, data layer, gates |
-| `rask-styling` | `@rask/ui` — OKLCH tokens, Tailwind 4 `@source`, component authoring |
+| `rask-styling` | How the console uses `@riksarkivet/ui`: its stylesheet, tokens, the appearance, vendor sheets |
 | `rask-lance-catalog` | The Lance Namespace spec, the catalog's hierarchy, guards, registries, protection/trash, maintenance |
 | `rask-notifications` | The producer's side of the targeting contract the lakehouse's events publish for any notifier |
 | `rask-dapr` | The ruling that the lakehouse runs no Dapr, and where each need it could meet is met instead |

@@ -1,8 +1,8 @@
-.PHONY: fga-store-check sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check helm-history helm-rollback k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth release-handoff go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: fga-store-check sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check helm-history helm-rollback k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth release-handoff go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
-	@echo "  install build test lint fmt clean storybook"
+	@echo "  install build test lint fmt clean"
 	@echo "  typecheck knip check ci   frontend-check frontend-build"
 	@echo "  dev                                    — the console (Vite HMR, /api → RASK_EDGE_URL)"
 	@echo "  dev-k3s                                — the console against the IN-CLUSTER edge (Traefik, port-forwarded)"
@@ -97,9 +97,6 @@ fmt:
 	uv run ruff format .
 	bun --cwd=frontend run fmt
 
-storybook:
-	bun --cwd=frontend run storybook
-
 # ---- comment rule (forward-only; docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md) -------------------------
 # Kind (3) prose — a comment whose subject is a previous comment — is banned in NEW code. The 35,279
 # lines already written are deliberately left alone, so this reads ADDED lines only and is green at
@@ -111,7 +108,7 @@ comment-gate:
 	uv run python scripts/comment_history_gate.py --worktree
 
 clean:
-	rm -rf .venv node_modules **/node_modules **/dist **/.svelte-kit **/storybook-static
+	rm -rf .venv node_modules **/node_modules **/dist **/.svelte-kit
 
 # ---- python (uv workspace) -------------------------------------------------
 typecheck:
@@ -333,8 +330,8 @@ claude-bootstrap:
 # lakehouse's /api/* with its bearer. In development Vite serves `frontend/console/dev/config.json` as
 # /config.json: the issuer `http://localhost:8080/dex` (the value DEV_ISSUER defaults to, so the token's `iss` is the one
 # `make k3s-up` gives the estate) and the client `rask-console`. It proxies /api/* to RASK_EDGE_URL (default :8080): one
-# origin on the host that serves both the issuer and the API, as k3s Traefik's Service does. The design system is
-# compiled from its source with the app, so an edit to `frontend/packages/ui` reaches the page through the same HMR.
+# origin on the host that serves both the issuer and the API, as k3s Traefik's Service does. The design system,
+# `@riksarkivet/ui`, is a dependency pinned to a commit and compiled from its source with the app.
 dev:                  # the console with Vite HMR, /api → RASK_EDGE_URL, signing in at the issuer dev/config.json names
 	bun --cwd=frontend run dev
 

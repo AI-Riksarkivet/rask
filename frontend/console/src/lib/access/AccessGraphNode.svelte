@@ -16,11 +16,11 @@
 </script>
 
 <script lang="ts">
-	// One node of the explorer canvas. Styled entirely with @rask/ui token utilities — no legacy bridge
+	// One node of the explorer canvas. Styled entirely with the design system's token utilities — no legacy bridge
 	// vars, no literal hex — so it themes in both modes without a second source of truth.
 	import { Handle, Position } from '@xyflow/svelte';
 	import { Boxes, Database, Folder, Package, ShieldCheck, User, Warehouse } from '@lucide/svelte';
-	import { cn } from '@rask/ui/utils';
+	import { cn } from '@riksarkivet/ui/utils';
 
 	let { data }: NodeProps<AccessNodeType> = $props();
 

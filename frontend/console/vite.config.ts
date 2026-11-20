@@ -2,10 +2,12 @@ import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
+import { riksarkivetUi } from '@riksarkivet/ui/vite';
 import { readFileSync } from 'node:fs';
 import type { ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Connect, type Plugin, type ProxyOptions } from 'vite';
+import { APPEARANCE } from './src/lib/appearance-options.ts';
 
 // The dev server's runtime config: `CONSOLE_CONFIG_FILE` when set, else the committed `dev/config.json`,
 // which names the k3s estate's Dex at :8080 and the console's own public client. The preview server
@@ -83,6 +85,9 @@ const proxy: Record<string, ProxyOptions> = { '/api': { target: EDGE, changeOrig
 export default defineConfig({
 	plugins: [
 		consoleConfig(),
+		// The appearance boot script (`/appearance-boot.js`, which `app.html` loads before the app) with
+		// the console's options baked in, so a first visit paints in the default theme and mode.
+		riksarkivetUi(APPEARANCE),
 		tailwindcss(),
 		sveltekit({
 			preprocess: vitePreprocess(),

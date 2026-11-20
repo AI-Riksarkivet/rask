@@ -6,8 +6,8 @@
 	// Every field is a datalist-backed input driven by the compiled model, so a relation that does not
 	// exist on the chosen type cannot be typed by accident. The old workbench took free text and
 	// learned about a phantom relation only from the catalog's 400, one round trip later.
-	import { Button } from '@rask/ui/button';
-	import { Input } from '@rask/ui/input';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import { Search } from '@lucide/svelte';
 	import type { QueryKind } from './graph';
 

@@ -16,7 +16,7 @@
 <script lang="ts">
 	// The plain marker of a git-declared project or warehouse. Its `id` lets a disabled control name it
 	// as its description, so the reason reaches a keyboard and a screen reader, not only a hover.
-	import { Badge } from '@rask/ui/badge';
+	import { Badge } from '@riksarkivet/ui/badge';
 
 	let { id }: { id?: string } = $props();
 </script>

@@ -53,10 +53,10 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
     its own, shipped by the product chart (ADR 0193). The browser signs in to Dex with PKCE on the lakehouse's public
     client `rask-console`, keeps its tokens in memory under a strict Content Security Policy, and calls the catalog and
     lineage APIs with its bearer. Its bell lists the reader's own writes, kept in the tab. A small Bun server
-    (`serve.ts`) serves the built files and the runtime `config.json`
-  - `packages/ui` — `@rask/ui`, the one package (Svelte 5 + Bits UI + Tailwind 4 design system, Storybook), read
-    from source; the console holds its API client (`src/lib/api`), its graph views (`src/lib/flow`) and the
-    workbench's dock (`src/lib/dock`, on horizon-layout)
+    (`serve.ts`) serves the built files and the runtime `config.json`. It is the workspace's one member: its design
+    system is `@riksarkivet/ui` (`AI-Riksarkivet/ui`, pinned to a commit, read from source), and it holds its own
+    shell (`src/lib/shell`), API client (`src/lib/api`), graph views (`src/lib/flow`) and the workbench's dock
+    (`src/lib/dock`, on horizon-layout)
 - `scripts/` — all dev/ops scripts (the e2e stack drivers, the estate seed, the chart and store tooling)
 - `tests/` — cross-service suites: `unit`, `integration` and `e2e-py` (**live**, `-m e2e`, needs a
   deployed stack)
@@ -66,10 +66,9 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 - `.docker/` — one dockerfile per deployable; `.dagger/` — the build + CI module; `docs/` — Zensical
   source (the depth lives here)
 
-Workspace membership is **globbed per plane**: `[tool.uv.workspace] members = ["packages/*",
-"services/*"]` and `frontend/package.json` `workspaces = ["console", "packages/*"]`. A new
-directory joins its plane automatically — provided it ships a `pyproject.toml` / `package.json`;
-without one it is silently skipped. Deployables build from the root lock via `uv sync --package <name>`.
+Python workspace membership is **globbed**: `[tool.uv.workspace] members = ["packages/*",
+"services/*"]`. A new directory joins automatically — provided it ships a `pyproject.toml`, or uv
+refuses the workspace. `frontend/package.json` names its one member, `workspaces = ["console"]`. Deployables build from the root lock via `uv sync --package <name>`.
 
 ## Quick start
 
@@ -151,7 +150,6 @@ Playwright suite. Everything hermetic runs identically on your machine: `dagger 
 | `make k3s-up`                           | The long-lived k3s deploy, from the dev registry at the pinned tags (`K3S_REGISTRY=` after `k3s-build k3s-import` for side-loaded images) |
 | `make kind-up` / `make kind-down`       | Throwaway kind cluster lifecycle                                     |
 | `make e2e-ci`                           | The guarded live proofs (kind)                                       |
-| `make storybook`                        | `@rask/ui` Storybook on `:6006`                                      |
 | `make dev-gc`                           | Reclaim the dev loop's two disk leaks (Dagger cache + dev registry)   |
 
 See the `Makefile` (`make help`) for the complete list; `docs/` carries the depth

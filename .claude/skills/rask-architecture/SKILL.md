@@ -1,6 +1,6 @@
 ---
 name: rask-architecture
-description: "Where new code belongs in the rask workspace: the language-pure planes (Python `packages/` + `services/`, the `frontend/` bun root holding the console and its packages) and the entrypoint contract (the one app factory, `build_lance_service_app`, with an injectable lifespan). Use when adding, moving or deleting a workspace member, service, frontend package or deployable; editing a `pyproject.toml`, the root `uv.lock`, or a uv/bun workspace glob; wiring a service entrypoint; or when newly added code won't resolve — ModuleNotFoundError, a `uv sync` workspace error, or a package `bun install` silently skipped."
+description: "Where new code belongs in the rask workspace: the language-pure planes (Python `packages/` + `services/`, the `frontend/` bun root holding the console) and the entrypoint contract (the one app factory, `build_lance_service_app`, with an injectable lifespan). Use when adding, moving or deleting a workspace member, service, frontend dependency or deployable; editing a `pyproject.toml`, the root `uv.lock`, or a uv/bun workspace glob; wiring a service entrypoint; or when newly added code won't resolve — ModuleNotFoundError, a `uv sync` workspace error, or a package `bun install` silently skipped."
 ---
 
 # rask architecture (workspace planes + composition)
@@ -37,7 +37,7 @@ the globs safe (see the invariants).
 | **Python services** | `services/<name>` | runnable Python: the lakehouse's HTTP services | Yes |
 | **JS/TS frontend** | `frontend/` | its own **bun workspace root** (own `package.json`, `bun.lock`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`); no Turborepo, plain bun scripts | — |
 | ↳ the app | `frontend/console` | the console, the lakehouse's own UI: one SvelteKit single-page app (`rask-frontend`) | Yes |
-| ↳ JS libraries | `frontend/packages/<name>` | reusable TS/Svelte libraries | **No** |
+| ↳ the design system | `@riksarkivet/ui`, a dependency from the `AI-Riksarkivet/ui` repository pinned to a commit (ADR 0223) | changed in that repository, never here | **No** |
 | **scripts** | `scripts/` | ALL dev/ops scripts, shell **and** python, flat | one-shot, **not** a workspace member |
 
 **Python packages** (1): `lakehouse` (`packages/lakehouse`, ADR 0195), the lakehouse's one library, which only its
@@ -55,8 +55,9 @@ events and imports none of it.
 (`.docker/rest-catalog.dockerfile`) run with three commands. This repository hosts no client: the notifications inbox
 is retired (ADR 0193), and every other client left with XC-192.
 
-**JS packages** (1): `@rask/ui` (the design system, `rask-styling`), read from source. Code with one consumer lives in
-that consumer (ADR 0201): the console holds its typed `/api/*` client with the bearer provider, the generated OpenAPI
+**JS workspace members** (1): the console. Its design system, `@riksarkivet/ui` (`rask-styling`), is a dependency read
+from source, not a member. Code with one consumer lives in that consumer (ADR 0201): the console holds its shell
+(`console/src/lib/shell`), its typed `/api/*` client with the bearer provider, the generated OpenAPI
 types, the lineage client and the live-cursor reader (`console/src/lib/api`), its Svelte Flow binding and project
 hierarchy (`console/src/lib/flow`) and the workbench's dock (`console/src/lib/dock`, on horizon-layout, ADR 0200). See
 `rask-frontend`.
@@ -100,13 +101,12 @@ correlation layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.m
 
 ## Hard invariants (the gotchas)
 
-- **Workspace membership is globbed — and that is only safe because every globbed dir is single-language.** Root
-  `pyproject.toml` has `[tool.uv.workspace] members = ["packages/*", "services/*"]`; `frontend/package.json` has
-  `workspaces = ["console", "packages/*"]` (paths relative to `frontend/`). Drop a directory in the right plane and it
-  is a member — **no manifest edit**. The two toolchains fail **asymmetrically** when language purity breaks: a dir
-  under a uv glob without a `pyproject.toml` is a **hard error** (`Workspace member … is missing a pyproject.toml`); a
-  dir under a bun glob without a `package.json` is **SILENTLY skipped** — bun prints "Done!" and the package is never
-  installed, built, linted or tested. So: **never put a JS package under root `packages/`/`services/`, and never put a
+- **Python workspace membership is globbed — and that is only safe because every globbed dir is single-language.** Root
+  `pyproject.toml` has `[tool.uv.workspace] members = ["packages/*", "services/*"]`: drop a directory in the right
+  plane and it is a member — **no manifest edit**. A dir under the uv glob without a `pyproject.toml` is a **hard
+  error** (`Workspace member … is missing a pyproject.toml`). `frontend/package.json` names its one member,
+  `workspaces = ["console"]` (paths relative to `frontend/`); bun **SILENTLY skips** a named member without a
+  `package.json` — it prints "Done!" and the package is never installed, built, linted or tested. So: **never put a JS package under root `packages/`/`services/`, and never put a
   Python package under `frontend/`.** See `references/adding-a-package.md`.
 - **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every docker image resolve from it
   (`uv sync --frozen --package <name>`).
@@ -142,4 +142,4 @@ correlation layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.m
 ## Sibling skills
 
 `rask-services-fleet` (the Gateway routes + the services behind them) · `rask-frontend` (the console: routes, data,
-sign-in, gates) · `rask-styling` (`@rask/ui`) · `rask-lance-catalog` (the catalog, governance, maintenance).
+sign-in, gates) · `rask-styling` (`@riksarkivet/ui`) · `rask-lance-catalog` (the catalog, governance, maintenance).

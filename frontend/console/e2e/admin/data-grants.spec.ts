@@ -87,7 +87,7 @@ test('grant writes a base rung and shows the result', async ({ page }) => {
 	await page.getByRole('button', { name: 'Access review' }).click();
 	await expect(page.locator('table.acl')).toContainText('can_read_data');
 	await page.getByPlaceholder('principal (idp~user id), or role:…#assignee').last().fill('bob');
-	// The manage form's rung picker is the @rask/ui Select (bits-ui) — open by its aria-label, click option.
+	// The manage form's rung picker is the design system's Select (bits-ui) — open by its aria-label, click option.
 	await page.getByLabel('Grant rung').click();
 	await page.getByRole('option', { name: 'reader', exact: true }).click();
 	await page.getByRole('button', { name: 'Grant', exact: true }).click();

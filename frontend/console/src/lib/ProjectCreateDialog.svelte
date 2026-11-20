@@ -16,7 +16,7 @@
 	// Moved here from the console unchanged in behaviour (2026-08-03 ruling): a project is the
 	// TOP of the hierarchy, so the surface that MINTS one belongs beside the estate's project list in
 	// the main menu, not inside one project's catalog.
-	import { Dialog } from '@rask/ui/dialog';
+	import { Dialog } from '@riksarkivet/ui/dialog';
 	import { toast } from 'svelte-sonner';
 	import { createWarehouse } from '#lib/data/remote/warehouses.api.ts';
 	import { createProject } from '#lib/remote/warehouses.api.ts';

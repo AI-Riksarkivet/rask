@@ -1,10 +1,9 @@
 import { test, expect, type Route, type Page } from '@playwright/test';
 import { MOCK_CATALOG } from '../admin/ports';
 
-// Responsive contract for the SHARED @rask/ui shell (#105). It lives in the console because a
-// spec needs *some* page to render the shell in, but it imports nothing page-specific and asserts
-// nothing about the console's own content — every assertion is about chrome that every
-// app inherits from `AppShell`:
+// Responsive contract for the console's shell (#105, `#lib/shell`). It imports nothing page-specific
+// and asserts nothing about a page's own content — every assertion is about chrome that every page
+// inherits from `AppShell`:
 //
 //   1. the document never scrolls sideways (scrollWidth <= clientWidth) at any width, so a wide
 //      table scrolls INSIDE its container and page content is never sliced off the viewport;

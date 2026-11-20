@@ -22,7 +22,6 @@ uv-cache/
 # JS / SvelteKit
 node_modules/
 .svelte-kit/
-storybook-static/
 
 # Zensical docs build output
 site/
@@ -38,7 +37,7 @@ scripts/batch_ids.txt
 .playwright-cli/
 test-results/
 
-# Browser-verification screenshots (scripts/verify_*.mjs, @rask/ui harness) — evidence, not source
+# Browser-verification screenshots (scripts/verify_*.mjs) — evidence, not source
 docs/audits/shots/
 
 # Turborepo

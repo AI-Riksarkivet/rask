@@ -1,5 +1,5 @@
 <script lang="ts">
-	// `/tables` — the catalog table registry (#52) on the shared @rask/ui DataTable (goal cond 4):
+	// `/tables` — the catalog table registry (#52) on the design system's DataTable (goal cond 4):
 	// sortable columns, a text search, a project filter and a LABEL filter (the labels each table
 	// carries, ADR 0211, shown as chips per row). Same stack-mode states as before: governed without a
 	// session ⇒ sign-in, unreachable ⇒ retrying, open ⇒ data or the honest empty state.
@@ -25,7 +25,7 @@
 		type ColumnDef,
 		type PaginationState,
 		type SortingState,
-	} from '@rask/ui/data-table';
+	} from '@riksarkivet/ui/data-table';
 	import { Plus, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -46,7 +46,7 @@
 	import LabelIndexNotice from './LabelIndexNotice.svelte';
 	import { labelChips, type Labels } from './labels.ts';
 	import { catalogPath } from '#lib/catalog-trail.ts';
-	import { CopyButton } from '@rask/ui/copy-button';
+	import { CopyButton } from '@riksarkivet/ui/copy-button';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 
 	// Seeded from the shared read instance: a registry mounted again (the workbench remounts a panel

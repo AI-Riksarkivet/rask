@@ -5,9 +5,9 @@
 	 * catalog's `contract/set` door, and the catalog holds every commit to the table to it. A refused
 	 * or failed read is said in one line, so the rest of the page stands.
 	 */
-	import { Badge } from '@rask/ui/badge';
-	import * as Table from '@rask/ui/table';
-	import { formatZoned } from '@rask/ui/utils';
+	import { Badge } from '@riksarkivet/ui/badge';
+	import * as Table from '@riksarkivet/ui/table';
+	import { formatZoned } from '@riksarkivet/ui/utils';
 	import { Subject } from '#lib/access/identity/index.ts';
 	import { contractColumns } from './contract.ts';
 	import { fetchTableContract } from './remote/catalog.api.ts';

@@ -94,4 +94,4 @@ def test_only_added_lines_are_gated_so_existing_prose_is_untouched() -> None:
 def test_markdown_is_out_of_scope_because_docs_keep_a_trail() -> None:
     assert not gate.is_gated("docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md")
     assert gate.is_gated("services/example/src/example/mod.py")
-    assert gate.is_gated("frontend/packages/ui/src/lib/x.ts")
+    assert gate.is_gated("frontend/console/src/lib/x.ts")

@@ -3,7 +3,7 @@
 	// visual upgrade of the #68 who-can-do-what form. One hop: the focus object, every subject directly
 	// granted a rung (edges subject→object labelled owner/writer/reader), and the parent/project
 	// container edge. Click a subject to prefill the grant form; grant/revoke re-fetches so the graph
-	// reflects the change. SvelteFlow (reusing the LineageExplorer pattern) + @rask/ui Select + GSAP.
+	// reflects the change. SvelteFlow (reusing the LineageExplorer pattern) + the design system's Select + GSAP.
 	import AccessNode, { type AccessNodeType } from '#lib/data/AccessNode.svelte';
 	import type { NodeTypes } from '@xyflow/svelte';
 
@@ -13,7 +13,7 @@
 
 <script lang="ts">
 	import { GrantForm } from '#lib/access/grant-form/index.ts';
-	import { enter } from '@rask/ui/motion';
+	import { enter } from '@riksarkivet/ui/motion';
 	import { Network, ShieldAlert } from '@lucide/svelte';
 	import { Background, BackgroundVariant, Controls, type Edge, SvelteFlow } from '@xyflow/svelte';
 	import type { AccessGraph } from './namespace';
@@ -35,7 +35,7 @@
 	let status = $state<'loading' | 'ok' | 'denied' | 'offline'>('loading');
 	let mgUser = $state('');
 
-	// #143, same treatment as `@rask/ui`'s GrantsPanel — this component carries a SECOND copy of the
+	// #143, same treatment as the GrantsPanel — this component carries a SECOND copy of the
 	// grant/revoke UI, which is how the wrong denial message survived in two places. Keyed by dataset,
 	// so one object's verdicts never gate another's buttons after a navigation. Declared AFTER the
 	// `mg*` state it reads: `$derived` is lazy, but keeping the reading order honest is cheaper than

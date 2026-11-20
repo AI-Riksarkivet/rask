@@ -11,7 +11,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import type { LayoutConfig } from 'horizon-layout';
-	import { Button } from '@rask/ui/button';
+	import { Button } from '@riksarkivet/ui/button';
 	import { auth } from '#lib/auth.svelte.ts';
 	import Dock from '#lib/dock/Dock.svelte';
 	import ViewSidebar from '#lib/dock/ViewSidebar.svelte';

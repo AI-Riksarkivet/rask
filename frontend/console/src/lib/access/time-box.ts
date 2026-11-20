@@ -1,4 +1,4 @@
-import { formatZoned } from '@rask/ui/utils';
+import { formatZoned } from '@riksarkivet/ui/utils';
 import type { TupleCondition } from '../access';
 
 // What a time-boxed grant's condition says about its window. The compiled model types each of a

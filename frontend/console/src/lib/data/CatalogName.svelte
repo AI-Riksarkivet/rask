@@ -2,7 +2,7 @@
 	// A catalog object's name on its own page: the path a person reads as the heading (`acme › bronze ›
 	// orders`), and beneath it the `$` identifier the doors take, as something to copy into a client or a
 	// call. A warehouse's id is one segment, the same as its path, so it has no second line.
-	import { CopyButton } from '@rask/ui/copy-button';
+	import { CopyButton } from '@riksarkivet/ui/copy-button';
 	import { DELIMITER } from '#lib/api/identifiers.ts';
 	import { catalogPath } from '#lib/catalog-trail.ts';
 

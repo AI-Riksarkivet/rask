@@ -15,8 +15,10 @@ The tree is language-first:
 - **Runnable Python** (an HTTP service, or a worker that pulls from the bus) →
   `services/<name>`. A model runtime or a compute workload does **not** go here: the lakehouse runs no engine
   (ADR 0155), and a workload is a client in its own repository.
-- **A reusable TS/Svelte library** → `frontend/packages/<name>`. There is one app, `frontend/console`; a second app
-  would be a new workspace entry in `frontend/package.json`, not a new glob.
+- **A reusable TS/Svelte component** → the design system, `@riksarkivet/ui`, in the `AI-Riksarkivet/ui` repository; it
+  reaches the console when `frontend/console/package.json` pins the commit that carries it. TS/Svelte code with one
+  consumer lives in the console (`frontend/console/src/lib`). A new JS workspace member is named in
+  `frontend/package.json`'s `workspaces`.
 - **A one-shot setup/debug script**, shell or python → `scripts/<name>` (flat;
   **not** a workspace member — run it with `uv run python scripts/<name>.py`).
 
@@ -24,16 +26,16 @@ There is **no `projects/` layer**. A deployable is an ordinary
 workspace member plus a `.docker/<name>.dockerfile` — no per-deployable
 pyproject, no per-deployable lock.
 
-## 2. Membership is a glob — the plane IS the registration
+## 2. Python membership is a glob — the plane IS the registration
 
-Neither root manifest enumerates members:
+The uv manifest enumerates no members; the bun root names its one:
 
 - `pyproject.toml` → `[tool.uv.workspace] members = ["packages/*", "services/*"]`
-- `frontend/package.json` → `workspaces = ["console", "packages/*"]`
+- `frontend/package.json` → `workspaces = ["console"]`, its one member named
   (paths are relative to `frontend/`)
 
-Create the directory in the right plane, give it the manifest its toolchain
-expects, and it is a member. Nothing to append.
+Create a Python directory in the right plane, give it a `pyproject.toml`, and it
+is a member. Nothing to append. A JS member is added to `workspaces` by name.
 
 > **The globs are safe ONLY because each globbed directory is single-language.**
 > The two toolchains fail asymmetrically the moment that stops being true:
@@ -106,14 +108,14 @@ it with `kind load image-archive`. Then a chart if it deploys to k3s: the produc
 ## Checklist
 
 - [ ] correct plane (`packages/` Python lib / `services/` runnable Python /
-      `frontend/packages/` JS lib / `scripts/`)
+      `frontend/console` / `scripts/`; a shared component goes to `AI-Riksarkivet/ui`)
 - [ ] the dir carries the manifest its glob expects (`pyproject.toml` under
-      `packages/`+`services/`, `package.json` under `frontend/*`) — and **no**
+      `packages/`+`services/`, `package.json` in a named `frontend/` member) — and **no**
       cross-language package was added to either plane
 - [ ] member `pyproject.toml`: `[project] dependencies` + `[tool.uv.sources]` workspace pins + hatch wheel `packages` (JS: `workspace:*` deps + its own scripts)
 - [ ] `known-first-party` += import name
 - [ ] tests live in `<member>/tests` (the `testpaths` glob collects them; nothing to list)
 - [ ] `.docker/<name>.dockerfile` + `COMPOSE_IMAGES` or a hand-wired build line and `K3S_IMAGES` (if a deployable)
 - [ ] `uv sync` resolves clean; first-party import works — and for a JS member,
-      `bun --cwd=frontend install` actually **lists** it (a silent skip means the
-      glob didn't match)
+      `bun --cwd=frontend install` actually **lists** it (a silent skip means it
+      carries no `package.json`)

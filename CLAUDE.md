@@ -153,7 +153,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Scan git history for secrets | `make scan-secrets` (trufflehog; gates on VERIFIED credentials only)     |
 | Scan a built image           | `make scan-image NAME=rest-catalog` (`NAME=frontend` is the console)     |
 | Frontend gates               | `make frontend-check` (check, lint, fmt:check, unit tests, knip); e2e `bun --cwd=frontend run test:e2e` |
-| Storybook for `@rask/ui`     | `make storybook` (→ `:6006`)                                             |
 | Bootstrap Claude Code config | `make claude-bootstrap`                                                  |
 
 ### Run the app locally
@@ -311,10 +310,16 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     `/admin/...`, `/settings/...`, `/workbench`); an admin page's guard is a
     client-side `+layout.ts`, which discloses nothing the catalog's per-request check would not refuse. See
     `.claude/skills/rask-frontend`.
-  - `frontend/packages/ui` — the workspace's ONE package (ADR 0201): the Svelte 5 + Bits UI + Tailwind 4 design system
-    (`@rask/ui`) with Storybook 10. No build step: its exports name its `src/`, the console compiles it from source,
-    and the console's `app.css` scans it with an `@source` two `../` up. See `.claude/skills/rask-styling`.
-  - The console holds the code only it uses: `console/src/lib/api` (the typed `/api/*` client with the bearer
+  - The design system is **`@riksarkivet/ui`** (ADR 0223), the Svelte 5 + Bits UI + Tailwind 4 library of the
+    `AI-Riksarkivet/ui` repository, a dependency of the console pinned to a full commit sha
+    (`"github:AI-Riksarkivet/ui#<sha>"` in `frontend/console/package.json`). No build step: its exports name its
+    `src/`, the console compiles it from source, and the console's `app.css` imports `@riksarkivet/ui/styles.css`,
+    which carries the tokens, the themes and its own `@source`. Its Vite plugin (`riksarkivetUi`) serves the appearance
+    boot script, and the console owns the one copy of its peers (`bits-ui` 2.18.1 with the library's patch). A change
+    to a component is made in that repository and reaches the console by moving the pin. See
+    `.claude/skills/rask-styling`.
+  - The console holds the code only it uses: `console/src/lib/shell` (the shell every page renders in: the sidebar,
+    the top bar, the bell, the account menu), `console/src/lib/api` (the typed `/api/*` client with the bearer
     supplied by a provider the app installs, the lineage client and the OpenAPI types generated from
     `docs/*-openapi.json`), `console/src/lib/flow` (the graph views the governance pages draw with, and the project
     hierarchy) and `console/src/lib/dock` (the workbench's dock, on horizon-layout, ADR 0200).
@@ -330,10 +335,10 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
 manifest:
 
 - `pyproject.toml` → `[tool.uv.workspace] members = ["packages/*", "services/*"]`
-- `frontend/package.json` → `workspaces = ["console", "packages/*"]` (relative to `frontend/`)
+- `frontend/package.json` → `workspaces = ["console"]` (relative to `frontend/`): the console is the one JS member
 
 A new Python library or service is picked up by the glob — but it **must** ship a `pyproject.toml`, or uv refuses the
-workspace; a new JS package under `frontend/packages/` must ship a `package.json`, or bun silently skips it.
+workspace. A JS member is named in `workspaces` and must ship a `package.json`, or bun silently skips it.
 
 Deployables are workspace members with a dockerfile: `.docker/rest-catalog.dockerfile` installs and serves the
 lakehouse's `catalog`, `lineage` and `maintenance` and no client (its import gate refuses `lancedb`),
@@ -411,8 +416,8 @@ Key facts that aren't obvious from any single file:
 - **The console calls `/api/*` same-origin, in development too.** `vite dev` proxies `/api` to `RASK_EDGE_URL` (default `http://localhost:8080`, an edge: `make dev-k3s` port-forwards k3s Traefik's Service there); the built app is served by `serve.ts` behind the platform's Gateway. See `.claude/skills/rask-services-fleet` and `rask-frontend`.
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are globbed (`testpaths` names `packages/*/tests`, `services/*/tests` and the four root suites), not discovered from the rootdir.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
-- **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across the console and every package under `frontend/packages`. Prettier is gone.
-- **The JS workspace runs plain bun scripts** (`frontend/package.json`): `build` builds the console (which compiles `@rask/ui` from source), and `check`/`lint`/`fmt`/`fmt:check`/`test` run each member's own script through `bun run --filter '*'`. The members are the console and `@rask/ui`; code with one consumer lives in that consumer (ADR 0201). Only `knip` stays root-level, because it analyses the whole JS graph at once.
+- **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across the console. Prettier is gone.
+- **The JS workspace runs plain bun scripts** (`frontend/package.json`): `build` builds the console (which compiles `@riksarkivet/ui` from source), and `check`/`lint`/`fmt`/`fmt:check`/`test` run each member's own script through `bun run --filter '*'`. The one member is the console (ADR 0223); code with one consumer lives in that consumer (ADR 0201). Only `knip` stays root-level, because it analyses the whole JS graph at once.
 - **The console is a client-rendered single-page app, Svelte 5 strict.** Every `.svelte` change is validated with the Svelte 5 skills + the `svelte` MCP autofixer. Its CSP is strict (no `unsafe-eval`): a dependency that builds code at runtime breaks under it, which is why `frontend/patches/` carries an apache-arrow patch.
 - **`ty` is configured with `error-on-warning = true`** — typecheck warnings fail CI.
 - **Comments carry rationale and provenance, never HISTORY** (owner ruling 2026-08-30). Three kinds of
@@ -486,7 +491,7 @@ Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
 | The cluster route, an endpoint's public prefix, a 404/401/403 through `/api/*`, ports | `rask-services-fleet` |
 | A catalog endpoint, the spec's error codes, the hierarchy guards, trash/protection, maintenance | `rask-lance-catalog` |
 | The console: a route, sign-in, data fetching, the CSP, the frontend gates and e2e | `rask-frontend` |
-| `@rask/ui`, tokens, `class=`, an unstyled page, a new component | `rask-styling` |
+| `@riksarkivet/ui` in the console, tokens, `class=`, an unstyled page, the appearance | `rask-styling` |
 | Whether a feature's outcome can reach a PERSON — emitting a run/control event a notifier targets by, someone who should have been told and was not, a new `ControlAction` | `rask-notifications` |
 | Reaching for Dapr, or for a queue, schedule, lock, config or secret seam: the lakehouse runs no Dapr, and where each such need is met | `rask-dapr` |
 | An authorization model, tuples, `.fga` files | `openfga` |

@@ -1,12 +1,12 @@
 # Packages
 
-Reusable libraries with **no entrypoints**: building blocks the runnable components import. Each language plane keeps
-its own: Python libraries in the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
+Reusable libraries with **no entrypoints**: building blocks the runnable components import, in the root `packages/`.
+The console's design system, `@riksarkivet/ui`, is a dependency from the `AI-Riksarkivet/ui` repository, pinned to a
+commit.
 
 | Package | Language | Imported by | Docs |
 |---|---|---|---|
 | `packages/lakehouse` | Python | catalog, lineage and maintenance, and no client: the lakehouse's one library (the app factory, the auth plane, the naming and guards, the data plane, the events, the lineage emission and signing). `lakehouse.storage` is its S3 client, STS and URI seam | [Storage](storage.md) · [API reference](../reference/storage.md) |
-| `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | the console (design system, Storybook), read from source; the one JS package (ADR 0201) | — |
 
 ## Conventions
 

@@ -3,8 +3,6 @@ console/build
 console/.svelte-kit
 .svelte-check
 console/test-results
-packages/*/dist
-storybook-static/
 .svelte-kit
 test-results
 

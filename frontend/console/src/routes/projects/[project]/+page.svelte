@@ -7,7 +7,7 @@
 	//
 	// Gated by the catalog; every degrade state is named honestly rather than collapsed into "empty".
 	import { FolderKanban, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
-	import { Button } from '@rask/ui/button';
+	import { Button } from '@riksarkivet/ui/button';
 	import { ProjectHierarchy, type HierarchyHref } from '#lib/flow/hierarchy/index.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';

@@ -1,6 +1,6 @@
 # 0201. The console holds its API client and graph views; `@rask/ui` is the one package (2026-11-11)
 
-**Status:** accepted. Source: the owner, 2026-11-11, through the question tool: "Console + UI" for the frontend's package
+**Status:** accepted, superseded in part by [ADR 0223](0223-the-console-takes-its-design-system-from-the-ui-repository.md) (the design system is `@riksarkivet/ui`, the shell is the console's). Source: the owner, 2026-11-11, through the question tool: "Console + UI" for the frontend's package
 layout, after the FE-021 assessment laid out five layouts.
 
 ## Context

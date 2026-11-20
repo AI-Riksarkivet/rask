@@ -3,7 +3,7 @@
 	// history or index to show, and the doors that read a dataset answer it 404. The one thing to do
 	// here is its first write, which the catalog's create door lands into the declared location
 	// (`POST /v1/table/{id}/create` with an Arrow body); appending is refused until then.
-	import { Button } from '@rask/ui/button';
+	import { Button } from '@riksarkivet/ui/button';
 	import { createTableWithRows } from '../catalog';
 	import { parseJsonRows, rowsToArrow } from '../json-rows';
 	import { WriteKey } from '../write-key.svelte';

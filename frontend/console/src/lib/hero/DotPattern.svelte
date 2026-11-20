@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Attachment } from 'svelte/attachments';
 	import { gsap } from 'gsap';
-	import { cn } from '@rask/ui/utils';
+	import { cn } from '@riksarkivet/ui/utils';
 
 	// A field of dots, drawn once as an SVG <pattern> and tiled by the browser — the whole background
 	// is ONE <rect>, not N circles, so the DOM cost does not grow with the panel. Ported from the

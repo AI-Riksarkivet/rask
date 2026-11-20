@@ -13,8 +13,8 @@
 	// instance never survives a navigation — an editor opened on table A cannot leak into B, by
 	// construction rather than by a hand-written reset list.
 	import { GatedAction } from '#lib/access/gated-action/index.ts';
-	import { AlertDialog } from '@rask/ui/alert-dialog';
-	import { Select } from '@rask/ui/select';
+	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
+	import { Select } from '@riksarkivet/ui/select';
 	import { RETYPE_TYPES } from '../catalog';
 	import { addColumn, dropColumn, renameColumn, retypeColumn } from '../remote/catalog.api';
 	import { typeName, type SchemaField } from './type-name';

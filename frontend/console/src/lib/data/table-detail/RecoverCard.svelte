@@ -12,8 +12,8 @@
 	// Split out of TableDetail.svelte (#98). The parent renders it under the 404 branch and passes
 	// `onrecovered` — the undrop bumps the registry, so the parent re-reads the detail.
 	import { Undo2 } from '@lucide/svelte';
-	import { Button } from '@rask/ui/button';
-	import { formatZoned } from '@rask/ui/utils';
+	import { Button } from '@riksarkivet/ui/button';
+	import { formatZoned } from '@riksarkivet/ui/utils';
 	import { Subject } from '#lib/access/identity/index.ts';
 	import { fetchTableTasks, undropTable, type TrashEntry } from '../remote/catalog.api';
 

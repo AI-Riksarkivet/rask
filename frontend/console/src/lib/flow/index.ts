@@ -28,7 +28,7 @@
  *
  * `./styles.css` is the vendor sheet's `--xy-*` theme mapped onto the OKLCH tokens — imported per page
  * in `app.css` under `layer(base)`, immediately after `@xyflow/svelte/dist/style.css`. It lives here
- * and not in `@rask/ui` because the design system carries no vendor-canvas bindings.
+ * and not in `@riksarkivet/ui` because the design system carries no vendor-canvas bindings.
  *
  * Everything this module exports is domain-free: it knows nodes, edges and boxes, never a catalog object.
  * The FGA graph builders stay with the access pages (`#lib/access`). The one domain view kept in this

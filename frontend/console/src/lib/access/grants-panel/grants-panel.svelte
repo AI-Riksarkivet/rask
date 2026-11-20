@@ -8,7 +8,7 @@
 	// Collapsed by default: one owner-rung round-trip per object, with definitive outcomes (the ACL,
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
 	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
-	import { Select } from '@rask/ui/select';
+	import { Select } from '@riksarkivet/ui/select';
 	import type { ApiResult } from '#lib/api/client.ts';
 	import type {
 		AccessCheck,

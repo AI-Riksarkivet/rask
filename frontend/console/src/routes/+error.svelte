@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { AppError } from '@rask/ui/shell';
+	import { AppError } from '#lib/shell/index.ts';
 
 	/** What a status means to a reader, when the refusal named nothing more specific. */
 	function headingFor(status: number): string {

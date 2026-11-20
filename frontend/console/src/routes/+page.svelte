@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { Card } from '@rask/ui/card';
-	import { formatZoned } from '@rask/ui/utils';
+	import { Card } from '@riksarkivet/ui/card';
+	import { formatZoned } from '@riksarkivet/ui/utils';
 	import { Activity, Database, Radio, TriangleAlert } from '@lucide/svelte';
 	import DotPattern from '#lib/hero/DotPattern.svelte';
 	import MediaBetweenText from '#lib/hero/MediaBetweenText.svelte';

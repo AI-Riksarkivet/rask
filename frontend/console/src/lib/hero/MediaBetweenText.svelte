@@ -2,7 +2,7 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { gsap } from 'gsap';
 	import { on } from 'svelte/events';
-	import { cn } from '@rask/ui/utils';
+	import { cn } from '@riksarkivet/ui/utils';
 
 	// A wordmark that OPENS around a piece of media: `firstText`, a curtain that widens from nothing
 	// to its target, then `secondText`. Ported from the sv-animations component of the same name —

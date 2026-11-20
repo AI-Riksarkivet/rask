@@ -1,6 +1,7 @@
 @import 'tailwindcss';
-@import 'tw-animate-css';
-@import '@rask/ui/styles/tokens.css';
+/* The design system's sheet: its fonts, tw-animate-css, the themes and tokens, and its own `@source`
+   over the package's components, so their Tailwind classes are generated from node_modules. */
+@import '@riksarkivet/ui/styles.css';
 /* Svelte Flow's stylesheet, ONCE for the app and under `base` so Tailwind utilities still win over
    it (svelte-flow rule 3 — importing it per component lands it in that component's layer instead). */
 @import '@xyflow/svelte/dist/style.css' layer(base);
@@ -9,13 +10,9 @@
    light-mode hex on a dark canvas — a white blob on all four Svelte Flow surfaces in the console. */
 @import './lib/flow/styles.css' layer(base);
 
-/* The workbench dock: horizon-layout's structural sheet, then its palette mapped onto the tokens
-   (`#lib/dock/theme.css`), both under `base` so the Tailwind utilities a panel's content is styled
+/* The workbench dock: horizon-layout's structural sheet, then the design system's theme for it (its
+   `--hl-*` palette mapped onto the tokens, a floating group and a popout included), both under `base` so the Tailwind utilities a panel's content is styled
    with win over them. Imported here rather than by the route so a popout window, which copies the
    page's stylesheets when it opens, finds them already loaded. */
 @import 'horizon-layout/horizon-layout.css' layer(base);
-@import './lib/dock/theme.css' layer(base);
-
-/* Scan the shared @rask/ui component library so its Tailwind classes are generated —
-   Tailwind 4 ignores node_modules by default. */
-@source '../../packages/ui/src';
+@import '@riksarkivet/ui/styles/horizon-layout.css' layer(base);

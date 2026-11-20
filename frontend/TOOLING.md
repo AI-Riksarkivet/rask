@@ -70,9 +70,9 @@ page's own URL with a new tab parameter (`TableDetail.svelte`), the return path 
 already resolved (`AuditViewer.svelte`). `oxlint --report-unused-disable-directives` calls the five in
 `<script>` unused, and so does the Svelte autofixer, whose rule (eslint-plugin-svelte's) does not report
 those forms; both are wrong for this gate: rsvelte's port reports them, and removing any one of the five
-fails the lint. `@rask/ui` is
-exempt: a design system cannot import an app's `$app/paths`, and its root paths are what `resolve()`
-gives in a console with no base path.
+fails the lint. The console's shell (`console/src/lib/shell`) is
+exempt: it renders the root paths of the nav config it is handed, which are what `resolve()` gives in a
+console with no base path.
 
 ## Type-checking
 
@@ -113,21 +113,14 @@ Re-check both on an apache-arrow upgrade: the patch is regenerated from the pris
 cache, `~/.bun/install/cache/apache-arrow@<version>@@@1/builder/valid.{js,mjs}`) with `git diff
 --no-index`, and the test copies upstream's body.
 
-## The horizon-layout patch
+## The bits-ui patch
 
-`patches/horizon-layout@1.0.5.patch` gives the dock's tab groups (`dist/TabGroup.svelte`) the tab-list semantics and the
-keyboard focus the library leaves out. horizon-layout keeps the keyboard on each group's `tablist` and makes its tabs
-`tabindex="-1"`, so the list names its active tab with `aria-activedescendant`, each tab carries an id and
-`aria-selected`, and the shown view is a `tabpanel` labelled by its tab: without them a screen reader is told neither
-which tab is shown nor what the panel holds. A move or a split re-renders the groups it touches, so after a keyboard
-action the patch focuses the list whose active tab is the one that moved; unpatched, focus falls to the page and the
-next key does nothing (measured on the deployed workbench with playwright-cli, 2026-11-11).
-`e2e/workbench/dock.spec.ts`'s keyboard test presses each key where the keyboard is, and fails on an unpatched install.
-Both gaps are reported upstream as https://github.com/play-horizon/horizon-layout/issues/23, and the patch goes once a
-release carries the fix.
-On a horizon-layout upgrade, drop the patch if upstream ships the same; otherwise regenerate it with
-`bun --cwd=frontend patch console/node_modules/horizon-layout`, the edit, and `bun --cwd=frontend patch --commit` on
-the same path.
+The console owns the one copy of `bits-ui` the design system's components use (`@riksarkivet/ui` names it as a peer),
+pinned at 2.18.1, the version that library is tested on. `patches/bits-ui@2.18.1.patch` is the
+library's own (copied from `AI-Riksarkivet/ui`'s `patches/` at the pinned commit): a closing dialog or menu is inert
+before its cleanup deregisters its dismissable and escape layers, and the patch has those layers read a plain snapshot
+instead of the closing layer's reactive prop, so Escape raises no Svelte `derived_inert` warning. On a
+`bits-ui` or `@riksarkivet/ui` upgrade, take the patch the library pins at that commit.
 
 ## Knip and SvelteKit's generated `$app`
 

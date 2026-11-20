@@ -6,7 +6,7 @@
  * a table leads back through its namespace to its warehouse rather than to the flat list it was opened
  * from. Every id names its whole path, so the trail is read off the id alone, with no request.
  */
-import type { ShellCrumb } from '@rask/ui/shell';
+import type { ShellCrumb } from '#lib/shell/index.ts';
 import { DELIMITER, childId } from '#lib/api/identifiers.ts';
 
 /** The separator a person reads between the levels of a path. */

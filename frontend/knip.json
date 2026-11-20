@@ -19,14 +19,6 @@
 				"e2e/mock-*.ts",
 				"e2e/*/mock-*.ts"
 			]
-		},
-		"packages/ui": {
-			"entry": [
-				"src/lib/**/index.{ts,js}"
-			],
-			"project": [
-				"src/**/*.{ts,js,svelte}"
-			]
 		}
 	}
 }

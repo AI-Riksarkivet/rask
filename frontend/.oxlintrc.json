@@ -65,10 +65,10 @@
 			}
 		},
 		{
-			// `@rask/ui` is a design system with no routes of its own and cannot import an app's
-			// `$app/paths`. Its components render root paths (`nav-config.ts`, a `href` prop), which are
-			// what `resolve()` gives in the console: its `sveltekit()` options set no `paths.base` (`vite.config.ts`).
-			"files": ["packages/ui/**"],
+			// The shell renders root paths from the nav config it is handed (`nav-config.ts`, a `href`
+			// prop), which are what `resolve()` gives in the console: its `sveltekit()` options set no
+			// `paths.base` (`vite.config.ts`).
+			"files": ["console/src/lib/shell/**"],
 			"rules": {
 				"svelte/no-navigation-without-resolve": "off"
 			}
@@ -87,7 +87,6 @@
 		"**/.svelte-check/**",
 		"**/build/**",
 		"**/dist/**",
-		"**/storybook-static/**",
 		"**/*.generated.ts",
 		"**/api/generated/**"
 	]

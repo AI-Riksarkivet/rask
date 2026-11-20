@@ -15,8 +15,8 @@
 	//
 	// Nothing is remembered between opens. Consent given for one warehouse (or one attempt) is not
 	// consent for the next.
-	import { Dialog } from '@rask/ui/dialog';
-	import { Checkbox } from '@rask/ui/checkbox';
+	import { Dialog } from '@riksarkivet/ui/dialog';
+	import { Checkbox } from '@riksarkivet/ui/checkbox';
 	import { toast } from 'svelte-sonner';
 	import type { Warehouse } from './catalog';
 	import { deleteWarehouse } from './remote/warehouses.api';

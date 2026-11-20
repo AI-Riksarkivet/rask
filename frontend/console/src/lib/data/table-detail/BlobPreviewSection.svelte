@@ -6,7 +6,7 @@
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation.
-	import { Select } from '@rask/ui/select';
+	import { Select } from '@riksarkivet/ui/select';
 	import { requestBinary } from '#lib/http.ts';
 	import { CATALOG_API } from '#lib/upstreams.ts';
 	import { typeName, type SchemaField } from './type-name';

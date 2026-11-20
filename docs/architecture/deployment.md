@@ -259,7 +259,7 @@ locally and in CI.
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
 | `web-console` | `frontend.dockerfile` | The console: the single-page app built to static files, served by its own small Bun server (`frontend/console/serve.ts`) with the runtime `config.json` the product chart mounts (`chart/templates/console.yaml`). No server-side rendering, no backend of its own; tini as PID 1, non-root `USER 10001`. |
 
-The console's topology (one route tree, the shared `@rask/ui` shell, browser sign-in with PKCE) is documented in the
+The console's topology (one route tree, its own shell on the `@riksarkivet/ui` design system, browser sign-in with PKCE) is documented in the
 `rask-frontend` project skill (`.claude/skills/rask-frontend`).
 
 ## The engine is the user's
@@ -411,8 +411,8 @@ and every one reaches a pod from the secret store. See
 - **`.github/workflows/ci.yml`** calls the Dagger module's functions (`lint`, `typecheck`, `openapi`, `test`,
   `charts`, `frontend`, `scan-*`) plus the kind-backed live jobs (`make e2e-ci`) and the console's Playwright suite;
   `dagger call <fn>` locally is the CI step.
-- **`.github/workflows/docs.yml`** builds this Zensical site (`zensical build --clean`) and Storybook, and deploys
-  both to GitHub Pages.
+- **`.github/workflows/docs.yml`** builds this Zensical site (`zensical build --clean`) and deploys it to GitHub
+  Pages.
 - **`.github/workflows/release.yml`** publishes a lakehouse release when the tag `lakehouse-vX.Y.Z` is pushed (§ Releases).
 
 ## Releases

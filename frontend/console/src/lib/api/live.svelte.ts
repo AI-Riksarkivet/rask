@@ -13,9 +13,8 @@ import { onMount, untrack } from 'svelte';
  * only one carried the measurement behind rule four, so a page adopting another inherited the rule with
  * no evidence for it, which is exactly how a hard-won rule gets "simplified" back out.
  *
- * Nothing here touches any feed. It takes a cursor as an argument, so it is a MECHANISM — which is the
- * only thing a `frontend/packages/*` entry may be. The cursors themselves (`lineageTick`,
- * `controlFeed`, …) live in the console's own `feeds.api.ts`.
+ * Nothing here touches any feed. It takes a cursor as an argument, so it is a MECHANISM. The cursors
+ * themselves (`lineageTick`, `controlFeed`, …) live in the console's own `feeds.api.ts`.
  *
  * Four rules, and the last two are each here because getting them wrong broke a test:
  *

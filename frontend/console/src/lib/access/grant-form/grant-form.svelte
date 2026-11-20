@@ -30,7 +30,7 @@
 	// offered, the gate each button names and the subject advisory are decided once. `grant` and
 	// `revoke` arrive as props, bound by the page to its object.
 	import { GatedAction } from '../gated-action/index.ts';
-	import { Select } from '@rask/ui/select';
+	import { Select } from '@riksarkivet/ui/select';
 	import { TriangleAlert } from '@lucide/svelte';
 
 	let {

@@ -1,11 +1,11 @@
 <script lang="ts">
-	// `/namespaces` — the catalog's namespaces on the shared @rask/ui DataTable (goal cond 4): one
+	// `/namespaces` — the catalog's namespaces on the design system's DataTable (goal cond 4): one
 	// sortable/searchable row per namespace, from each warehouse's own listing (the spec's
 	// ListNamespaces on the warehouse's name) and from the table registry's ids, with the labels each
 	// namespace carries (ADR 0211) and a filter by one, the #85 drop action (AlertDialog confirm;
 	// Restrict by default, Cascade opt-in) and the create: the spec's CreateNamespace on
 	// `<warehouse>$<name>`.
-	import { AlertDialog } from '@rask/ui/alert-dialog';
+	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
 	import {
 		createSvelteTable,
 		DataTable,
@@ -20,7 +20,7 @@
 		type ColumnDef,
 		type PaginationState,
 		type SortingState,
-	} from '@rask/ui/data-table';
+	} from '@riksarkivet/ui/data-table';
 	import { Plus, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -43,9 +43,9 @@
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 	import { DELIMITER, parentNamespace, warehouseOf } from '#lib/api/identifiers.ts';
 	import { missingFieldsHint } from '#lib/form-hint.ts';
-	import { Select } from '@rask/ui/select';
+	import { Select } from '@riksarkivet/ui/select';
 	import { catalogPath } from '#lib/catalog-trail.ts';
-	import { CopyButton } from '@rask/ui/copy-button';
+	import { CopyButton } from '@riksarkivet/ui/copy-button';
 
 	let tables = $state<string[] | null>(null);
 	// Each warehouse's own listing — the same listing a warehouse delete reads for what it still holds.

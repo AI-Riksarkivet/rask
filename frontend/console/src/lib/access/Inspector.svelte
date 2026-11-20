@@ -2,12 +2,12 @@
 	// The right-hand drawer: the verdict, the selected node's raw tuples, and the model — the three
 	// things that were separate tabs. They live here BESIDE the canvas, not instead of it, so reading a
 	// tuple never costs you the graph you were reading it about.
-	import { AlertDialog } from '@rask/ui/alert-dialog';
-	import { Badge } from '@rask/ui/badge';
-	import { Button } from '@rask/ui/button';
-	import { Dialog } from '@rask/ui/dialog';
-	import { Input } from '@rask/ui/input';
-	import { Skeleton } from '@rask/ui/skeleton';
+	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
+	import { Badge } from '@riksarkivet/ui/badge';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Dialog } from '@riksarkivet/ui/dialog';
+	import { Input } from '@riksarkivet/ui/input';
+	import { Skeleton } from '@riksarkivet/ui/skeleton';
 	import {
 		Check,
 		CircleCheck,

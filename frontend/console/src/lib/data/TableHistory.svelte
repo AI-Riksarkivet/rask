@@ -15,7 +15,7 @@
 	//
 	// The rows themselves come from the FORMAT: the versions the catalog reports are the only versions
 	// that exist.
-	import { Badge } from '@rask/ui/badge';
+	import { Badge } from '@riksarkivet/ui/badge';
 	import {
 		createSvelteTable,
 		DataTable,
@@ -28,8 +28,8 @@
 		type ColumnDef,
 		type PaginationState,
 		type SortingState,
-	} from '@rask/ui/data-table';
-	import { Select } from '@rask/ui/select';
+	} from '@riksarkivet/ui/data-table';
+	import { Select } from '@riksarkivet/ui/select';
 	import { ChevronDown, ChevronRight, RefreshCw } from '@lucide/svelte';
 	import { fetchTableHistory, type CatalogResult, type HistoryRow } from './catalog';
 	import {
@@ -358,7 +358,7 @@
 		rows.map((r) => ({ value: String(r.version), label: `v${r.version}` })),
 	);
 
-	// ── the DataTable (the shared @rask/ui shell over tanstack: sorting + a real page size) ──
+	// ── the DataTable (the design system's DataTable over tanstack: sorting + a real page size) ──
 	let sorting = $state<SortingState>([]);
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 25 });
 
@@ -602,6 +602,7 @@
 				? 'No versions — this table has no manifest the catalog can read.'
 				: 'No commits match this filter.'}
 			onrowclick={(row) => select(row.version)}
+			rowLabel={(row) => `Show version ${row.version}`}
 		>
 			{#snippet footer()}
 				<span class="mut"

@@ -1,6 +1,6 @@
 # 0200. The workbench's dock is horizon-layout (2026-11-11)
 
-**Status:** accepted. Source: the owner, 2026-11-11, "Please use horizon layout", after the dependency upgrade of FE-021
+**Status:** accepted; its horizon-layout pin and patch are superseded by ADR 0223 (2.0.2, unpatched). Source: the owner, 2026-11-11, "Please use horizon layout", after the dependency upgrade of FE-021
 held `dockview` at 7.0.4; and, the same day through the question tool, "In the browser" for where saved layouts and
 named views live.
 

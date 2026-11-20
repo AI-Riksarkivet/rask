@@ -14,8 +14,8 @@
 	import { HorizonLayout, type Id, type LayoutConfig, type View } from 'horizon-layout';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { ExternalLink, Maximize2, Minimize2, Plus, X } from '@lucide/svelte';
-	import { Button } from '@rask/ui/button';
-	import * as DropdownMenu from '@rask/ui/dropdown-menu';
+	import { Button } from '@riksarkivet/ui/button';
+	import * as DropdownMenu from '@riksarkivet/ui/dropdown-menu';
 	import EventsPanel from './panels/EventsPanel.svelte';
 	import TablesPanel from './panels/TablesPanel.svelte';
 	import {
@@ -31,25 +31,6 @@
 	let { layout = $bindable() }: { layout: LayoutConfig } = $props();
 
 	const titleOf = (id: Id): string => PANELS.find((p) => p.id === id)?.title ?? id;
-
-	/**
-	 * A popped-out panel is mounted in another document, which carries the page's stylesheets but
-	 * not its theme class: the page's `<html>` classes and `color-scheme` are mirrored onto it while
-	 * the panel lives there.
-	 */
-	function followTheme(node: HTMLElement): (() => void) | undefined {
-		const own = node.ownerDocument.documentElement;
-		const page = document.documentElement;
-		if (own === page) return undefined;
-		const copy = (): void => {
-			own.className = page.className;
-			own.style.colorScheme = page.style.colorScheme;
-		};
-		copy();
-		const watch = new MutationObserver(copy);
-		watch.observe(page, { attributes: true, attributeFilter: ['class', 'style'] });
-		return () => watch.disconnect();
-	}
 
 	const closed = $derived(closedPanels(layout));
 	const maximized = $derived(layout.maximizedView);
@@ -86,11 +67,14 @@
 	}
 </script>
 
+<!-- A popped-out panel is mounted in another document: horizon-layout copies the page's stylesheets
+     into it and mirrors `<html>`'s class, `data-theme` and inline custom properties, so the panel
+     follows the person's theme, mode and accent there too. -->
 {#snippet tables()}
-	<div class="rask-dock-panel" {@attach followTheme}><TablesPanel /></div>
+	<div class="rask-dock-panel"><TablesPanel /></div>
 {/snippet}
 {#snippet events()}
-	<div class="rask-dock-panel" {@attach followTheme}><EventsPanel /></div>
+	<div class="rask-dock-panel"><EventsPanel /></div>
 {/snippet}
 
 {#snippet closeTab(id: Id)}

@@ -164,7 +164,7 @@ test('drop confirms via the AlertDialog, posts the cascade behavior, and the row
 		'GET /v1/namespace/acme-wh/list': AFTER_DROP_LISTED,
 	});
 	await page.getByRole('button', { name: 'Drop namespace acme-wh$bronze', exact: true }).click();
-	// The confirm is the portalled @rask/ui AlertDialog — drive it by role, not the trigger row.
+	// The confirm is the portalled design-system AlertDialog — drive it by role, not the trigger row.
 	const dialog = page.getByRole('alertdialog');
 	await expect(dialog).toContainText('Drop namespace acme-wh$bronze');
 	await dialog.getByRole('checkbox').check(); // Cascade — bronze holds a table, Restrict would refuse
@@ -225,7 +225,7 @@ test('a 403 drop surfaces the forbidden state and keeps the namespace listed', a
 
 test('the shared sidebar marks the Namespaces leaf active', async ({ page }) => {
 	await page.goto('/catalog/namespaces');
-	// The AppShell sidebar (shared @rask/ui) reflects the current route via data-active.
+	// The AppShell sidebar (the console's shell) reflects the current route via data-active.
 	await expect(
 		page.locator('[data-active="true"]').filter({ hasText: 'Namespaces' }),
 	).toBeVisible();

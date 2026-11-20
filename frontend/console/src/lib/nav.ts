@@ -9,7 +9,7 @@ import {
 	Settings,
 	Warehouse,
 } from '@lucide/svelte';
-import type { PageNav, PageNavLeaf } from '@rask/ui/shell';
+import type { PageNav, PageNavLeaf } from '#lib/shell/index.ts';
 import type { Me } from '#lib/api/me.ts';
 import { exact, seg, under } from '#lib/nav-match.ts';
 import { isEstateAdmin } from '#lib/estate-admin.ts';

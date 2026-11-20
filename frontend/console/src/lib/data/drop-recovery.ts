@@ -1,4 +1,4 @@
-import { formatZoned } from '@rask/ui/utils';
+import { formatZoned } from '@riksarkivet/ui/utils';
 import { warehouseOf } from '#lib/api/identifiers.ts';
 import type { Warehouse } from './catalog';
 import { fetchServedWarehouses, fetchWarehouse } from './remote/warehouses.api';

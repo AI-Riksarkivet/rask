@@ -22,17 +22,13 @@ WORKDIR /src
 
 # LAYER ORDER IS THE COST MODEL OF THIS FILE. `bun install --frozen-lockfile` needs every workspace
 # member PRESENT — but only its package.json, not its sources. Manifests first, install, sources after:
-# a source edit leaves the install layer cached and re-runs only the build steps.
-#
-# `--parents` needs the -labs frontend, and the `/./` pivot re-roots the copy so
-# `frontend/packages/x/package.json` lands at `packages/x/package.json` — /src IS the frontend
-# workspace root, so bun's globs resolve unchanged and a new package is picked up with no edit here.
+# a source edit leaves the install layer cached and re-runs only the build steps. /src IS the frontend
+# workspace root, whose one member is the console.
 COPY frontend/package.json frontend/bun.lock ./
 COPY frontend/.oxlintrc.json frontend/.oxfmtrc.json ./
 # patchedDependencies — bun install --frozen-lockfile resolves these relative to the project root.
 COPY frontend/patches patches
 COPY frontend/console/package.json console/package.json
-COPY --parents frontend/./packages/*/package.json /src/
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
@@ -40,9 +36,9 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 # Sources AFTER the install. COPY overlays rather than replaces, so the node_modules symlink trees bun
 # just created inside each member survive (.dockerignore strips node_modules/.svelte-kit/build).
 COPY frontend/console console
-COPY frontend/packages packages
 
-# The console compiles @rask/ui from its source (its exports name `src/`), so no package builds first.
+# The install fetches the design system, @riksarkivet/ui, from GitHub at the commit bun.lock records, and the console
+# compiles it from its source (its exports name `src/`), so no package builds first.
 # hadolint ignore=DL3059
 RUN bun run --cwd=console build
 

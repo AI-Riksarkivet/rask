@@ -2,8 +2,8 @@
 	// Filter the RENDERED graph — no refetch. Every count is computed from the unfiltered graph, so a
 	// facet that is currently off still shows what turning it on would bring back; counts that shrink
 	// to match the filter can never be used to undo it.
-	import { Button } from '@rask/ui/button';
-	import { Checkbox } from '@rask/ui/checkbox';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Checkbox } from '@riksarkivet/ui/checkbox';
 	import { Filter, RotateCcw } from '@lucide/svelte';
 
 	type Props = {

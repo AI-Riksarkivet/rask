@@ -2,7 +2,7 @@
 	// "Connect your compute": what a pipeline on its own engine runs to reach this table or namespace
 	// through the catalog's doors, in pylance and in LanceDB. The bearer is read from the environment,
 	// so the page holds and shows no secret, and the storage credential is the one the catalog vends.
-	import { CopyButton } from '@rask/ui/copy-button';
+	import { CopyButton } from '@riksarkivet/ui/copy-button';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { CATALOG_API } from '#lib/upstreams.ts';
 	import { connectSnippets } from './connect';

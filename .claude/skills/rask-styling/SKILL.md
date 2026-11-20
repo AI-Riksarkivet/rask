@@ -1,133 +1,149 @@
 ---
 name: rask-styling
-description: Styling, theming and design-system work in the rask console — OKLCH tokens, Tailwind 4 `@source`, `tv()` + `cn()`, `data-slot`, dark mode, the legacy `--ink/--line` bridge, export subpaths, Storybook, and vendor stylesheets themed through `layer(base)`. Use when the console renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component (its subpath export, its story), when a vendor sheet out-specifies Tailwind utilities or a dock needs theming (the workbench's horizon-layout `--hl-*`, Svelte Flow), or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
+description: How the rask console uses its design system, `@riksarkivet/ui` (the `AI-Riksarkivet/ui` repository, pinned to a commit) — the stylesheet `app.css` imports, the tokens and themes, the appearance (the Vite plugin, the boot script, the store, the theme toggle), the legacy `--ink/--line` bridge, subpath imports, the console's own shell, and vendor stylesheets themed through `layer(base)`. Use when the console renders unstyled, when picking a colour or writing `class=`, when a component is missing or needs changing (it is changed in the ui repository, then the pin moves), when the theme or mode misbehaves or flashes, when a vendor sheet out-specifies Tailwind utilities or a dock needs theming (the workbench's horizon-layout `--hl-*`, Svelte Flow), or when touching `app.css` / `app.html` / `appearance-options.ts` / `vite.config.ts`'s plugins.
 ---
 
-# rask styling (`@rask/ui`)
+# rask styling (`@riksarkivet/ui`)
 
-Every styled surface in rask comes from `frontend/packages/ui`. The console supplies routes and data; **the design system supplies the pixels**. A styled `div` in the console is a bug report against this package.
+The console's components, tokens and themes come from **`@riksarkivet/ui`**, the design system of the
+`AI-Riksarkivet/ui` repository (ADR 0223). The console supplies routes, data and its own shell; **the design system
+supplies the pixels**. A styled `div` in the console is a component the library is missing.
 
-Generic CSS mechanics live in `svelte-skills:svelte-styling` (the `style:` directive, custom properties, `:global`). The component API lineage is `shadcn-svelte`, with **two rask deviations**: commands run under `bunx`, and consumers import from the published subpath `@rask/ui/button` — never `$lib/components/ui/button`.
+The library's own documents are the specification, read at the pinned commit: `DESIGN.md` (principles, geometry,
+type, colour, motion, component conventions, accessibility) and `docs/CONSUMING.md` (the contract with an app). In a
+checkout they are under `frontend/console/node_modules/@riksarkivet/ui/`. Generic CSS mechanics live in
+`svelte-skills:svelte-styling`.
+
+## The dependency
+
+`frontend/console/package.json` pins the library to a full commit sha, never a branch:
+`"@riksarkivet/ui": "github:AI-Riksarkivet/ui#<sha>"`, and `frontend/bun.lock` records it. Its exports name its
+`src/`, so the console compiles it from source with its own Vite and svelte-check; there is no build step.
+
+The console owns **one copy of each peer** (`svelte`, `bits-ui`, `tailwindcss`, `vite`, optionally `gsap`): two copies
+of `bits-ui` would each keep their own registry of dismissable layers. `bits-ui` is pinned at 2.18.1, the version the
+library is tested on, with the library's `patches/bits-ui@2.18.1.patch` applied through `patchedDependencies` in
+`frontend/package.json` (`frontend/TOOLING.md` § The bits-ui patch).
+
+**A component is changed in the ui repository, never in rask.** No patch of `@riksarkivet/ui` in `frontend/patches/`
+and no copy of a component in the console: make the change there, then move the pin (`bun --cwd=frontend install`
+after editing the sha) and read the commits in between for anything a consumer must change.
 
 ## Wiring the app (get this wrong and everything renders unstyled)
 
-`frontend/console/src/app.css` imports Tailwind, the tokens and the vendor sheets, and points `@source` at the design
-system's build; from `frontend/console/src/` the depth is **two** `../`:
+`frontend/console/src/app.css`:
 
 ```css
 @import 'tailwindcss';
-@import 'tw-animate-css';
-@import '@rask/ui/styles/tokens.css';
-@source '../../packages/ui/src';
+@import '@riksarkivet/ui/styles.css';
+@import '@xyflow/svelte/dist/style.css'                 layer(base);
+@import './lib/flow/styles.css'                         layer(base);   /* …immediately after it */
+@import 'horizon-layout/horizon-layout.css'             layer(base);
+@import '@riksarkivet/ui/styles/horizon-layout.css'     layer(base);   /* …immediately after it */
 ```
 
-The console mounts a **dock** at `/workbench`, so it also imports `horizon-layout/horizon-layout.css` and the dock's
-theme under `layer(base)`; the why is § *Third-party stylesheets*.
-
-Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at the package's **`src`**: the console compiles `@rask/ui` from source (its `exports` name `src/`), so a component edit reaches the page through Vite's HMR with no build step.
+`styles.css` brings the fonts (IBM Plex Sans and Mono, self-hosted), `tw-animate-css`, the themes, the tokens and an
+`@source` over the library's own sources (its stories and tests left out). Tailwind 4 skips `node_modules`, and an
+`@source` path is read relative to the sheet that declares it, so the console writes **no** `@source` for the library.
+Its own `lib`/`routes` are found by Tailwind's default scan of the SvelteKit tree.
 
 ## Colour comes from tokens
 
-`frontend/packages/ui/src/lib/styles/tokens.css` declares raw OKLCH under `:root` and `.dark`, then `@theme inline` maps each to a `--color-*` utility. Reach for the utility (`bg-card`, `text-muted-foreground`, `border-border`), which themes both modes at once.
+A theme sets only seeds on `[data-theme]` on `<html>`; every colour token is derived from them in OKLCH, and `.dark`
+picks the dark half of each pair (`DESIGN.md` § Colour). Reach for the utility (`bg-card`, `text-muted-foreground`,
+`border-border`, `border-field-line`, `bg-success`, `bg-warning`), which follows every theme and both modes at once.
+A colour the console needs and the tokens lack is a change in the ui repository.
 
-Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed by `badgeVariants` (`badge.svelte:14-15`). Dark `--muted-foreground` sits at L 0.65 to hold 4.5:1 on every dark surface, a hovered `--accent` card included (4.80:1), and dark `--primary-foreground` (and `--sidebar-primary-foreground`) is dark text on the bright primary, 7.00:1; `e2e/admin/tables-registry.spec.ts` measures them and the label chips.
+**The legacy bridge.** The tokens alias `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber`
+onto the real tokens. Those names carry 423 references in 28 files under `frontend/console/src` (measured
+2026-11-20), and without the bridge each is **undefined**, so `border-color: var(--line)` falls back to
+`currentColor`. When you touch a component still on the bridge, move it to the token name.
 
-**The legacy bridge** (`tokens.css:44-65`) aliases `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber` onto the real tokens. Those names carry ~500 references in 34 files under `frontend/` (measured 2026-11-06), and without the bridge each is **undefined**, so `border-color: var(--line)` falls back to `currentColor` and paints every hairline in full text colour. When you touch a component still on the bridge, migrate it to the token name; the block retires when `grep -r "var(--ink" frontend/` comes back empty.
+`e2e/admin/tables-registry.spec.ts` measures the contrast of the label chips, muted text and primary fills in light
+and dark in the built app.
+
+## Appearance: theme and mode
+
+The console's options live in one module both callers import, `frontend/console/src/lib/appearance-options.ts`:
+`storageKey: 'rask-console-appearance'`, `defaults: { theme: 'ink', mode: 'dark' }`.
+
+- `vite.config.ts` runs `riksarkivetUi(APPEARANCE)` (after `consoleConfig()`, before `tailwindcss()`). It keeps the
+  library out of Vite's dependency pre-bundling and emits `/appearance-boot.js` with those options inlined.
+- `src/app.html` loads `<script src="%sveltekit.assets%/appearance-boot.js">` in `<head>`, before anything paints. It
+  is same-origin, so the console's CSP (`script-src 'self'`) admits it with no hash. It puts the kept theme and mode on
+  `<html>` (`data-theme`, the `dark` class, `color-scheme`).
+- The root layout runs `$effect(() => appearance.start(APPEARANCE))`: the store takes over, keeps each change under the
+  key, and follows the system when the mode is `system`.
+- The account menu's **Toggle theme** (`#lib/shell/navbar-user.svelte`) calls
+  `appearance.set({ mode: appearance.dark ? 'light' : 'dark' })`; its Sun/Moon icons follow `.dark`.
+
+Read the mode in JS from `appearance.dark` / `appearance.resolved`, never from the DOM. Dark mode in CSS is the
+`dark:` variant (`@custom-variant dark (&:is(.dark *))`). `AppearanceMenu` and `AccentDialog`
+(`@riksarkivet/ui/appearance`) offer every theme and a custom accent; the console does not mount them.
+
+## Importing components
+
+Import from the per-component subpath, `@riksarkivet/ui/<name>` (`button`, `data-table`, `select`, `sheet`, `sidebar`,
+`utils`, `motion`, …; the full list is `exports` in the library's `package.json`). The root `@riksarkivet/ui` is a short
+convenience list; the subpaths are canonical. `cn` and `formatZoned` (every moment the console prints, as
+`YYYY-MM-DD HH:mm:ss UTC+01:00`) come from `@riksarkivet/ui/utils`.
+
+Two behaviours the console relies on:
+
+- **A clickable `DataTable` row** (`onrowclick`) keeps its table semantics and opens from a visually hidden button in
+  its first cell, named `Open <that cell's value>` unless `rowLabel` names it (`TableHistory`: `Show version <n>`). A
+  click elsewhere on the row still opens it; a click on a control inside the row is that control's.
+- **A `Select`** is named by its `ariaLabel` and the value it shows ("Sort by Created"); `getByLabel('<ariaLabel>')`
+  still finds it.
+
+## The console's shell
+
+The shell every page renders in is the console's own code, `frontend/console/src/lib/shell` (imported as
+`#lib/shell/index.ts`): `AppShell`, `AppError`, the sidebar (`app-sidebar`, `page-nav`), the account menu
+(`navbar-user`), the bell (`activity-center`) and the breadcrumb (`breadcrumb.ts`, tested beside it). It is built from
+the library's `sidebar` (with `useSidebar`, `IsMobile` and `SHELL_COLLAPSE_BREAKPOINT`), `dropdown-menu`, `popover`,
+`avatar`, `collapsible` and `separator`. At phone width the sidebar is a sheet titled "Pages" (`mobileTitle`,
+`mobileDescription`, `mobileCloseLabel` on `Sidebar.Root`). The shell's links are root paths, so oxlint's
+`svelte/no-navigation-without-resolve` is off under `console/src/lib/shell/**` (`frontend/TOOLING.md`).
+
+`page-nav.svelte` renders an `<a>` where a sidebar button would emit a `<button>` through the component's `child`
+snippet (merged with `mergeProps` from `bits-ui`): reach for `child` instead of forking a component to change its tag.
 
 ## Third-party stylesheets — `layer(base)`, always
 
-A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilities, so the console's own
-`class=` on that library's content silently loses. Import it into `base` and every utility sits above
-it, permanently. The console imports four this way:
+A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilities, so the console's own `class=` on
+that library's content silently loses. Import it into `base` and every utility sits above it.
 
-```css
-@import '@xyflow/svelte/dist/style.css'      layer(base);
-@import './lib/flow/styles.css'              layer(base);   /* …immediately after it */
-@import 'horizon-layout/horizon-layout.css'  layer(base);
-@import './lib/dock/theme.css'               layer(base);   /* …immediately after it */
-```
-
-The xyflow sheet needs **two** lines, in that order: the vendor sheet, then `#lib/flow/styles.css`,
-which maps `--xy-*` onto the OKLCH tokens. Skip the second and the vendor's light-mode hex defaults
-(`#fefefe` controls, `#f7f9fb` edge labels, `#b1b1b7` edges) survive — the Controls widget and every
-edge label render as a white blob on rask's dark surfaces. Same shape as the `--hl-*` block below and
-for the same reason: every `--xy-*` resolves through a token that is itself re-declared under `.dark`,
-so `colorMode` on `<SvelteFlow>` is left unset.
+The xyflow sheet needs **two** lines, in order: the vendor sheet, then `#lib/flow/styles.css`, which maps `--xy-*`
+onto the tokens. Skip the second and the vendor's light-mode hex defaults survive: the Controls widget and every edge
+label render as a white blob on a dark canvas. Every `--xy-*` resolves through a token that follows the mode, so
+`colorMode` on `<SvelteFlow>` is left unset.
 
 ## Theming the workbench dock — `--hl-*`, zero JavaScript
 
-horizon-layout is headless: every element carries a BEM class from its `baseClass` (`horizon-layout`,
-`horizon-layout-tabgroup__tab--active`, `horizon-layout-split__resizer-handle`, …), and its optional sheet
-supplies the structure those classes need (split panes, the resizer handle, drop zones and hints, the popout
-frame) plus a palette of `--hl-*` properties on `:root`. The console keeps the structure and replaces the
-palette: `frontend/console/src/lib/dock/theme.css` sets every `--hl-*` on `.horizon-layout` to a token
-(surfaces to `--background`/`--card`, the active tab to `--card`, the resizer and drop hints to `--ring` and a
-`color-mix()` of `--primary`). Every token is re-declared under `.dark`, so mode-watcher's class re-themes the
-dock; the library's own `.light` variant is never set. A popout window's root also carries `horizon-layout`, so
-it reads the same mapping, and `Dock.svelte` mirrors the page's `<html>` classes onto it for `.dark`. There is
-no `@source` to add: the library ships no Tailwind utilities.
-
-## Dark mode
-
-`@custom-variant dark (&:is(.dark *))` — class-based, toggled by `mode-watcher`'s `toggleMode`. **`ModeWatcher` is not re-exported**, so the console mounts it in its root layout (`<ModeWatcher defaultMode="dark" />`). To read the mode in JS, read `mode-watcher`'s own `mode` store; the design system ships no colour-mode hook.
+horizon-layout is headless: every element carries a BEM class from its `baseClass`, and its sheet supplies the
+structure (split panes, the resizer, drop zones and hints, a floating group, the popout frame) plus a palette of
+`--hl-*` properties. `@riksarkivet/ui/styles/horizon-layout.css` sets every `--hl-*` on `.horizon-layout` and on a
+popout's root to a token, so the dock follows the theme, mode and accent; the library's `.light` variant is never set.
+horizon-layout mirrors `<html>`'s class, `data-theme` and inline custom properties into a popout window and copies the
+page's stylesheets, which is why both sheets are imported from `app.css` rather than from the route. There is no
+`@source` to add: horizon-layout ships no Tailwind utilities.
 
 ## View transitions
 
-Cross-document view transitions stay **off** (`tokens.css:3-7`): the console is one document, its only cross-document
+Cross-document view transitions stay **off** in the tokens: the console is one document, its only cross-document
 navigations are the sign-in round trip (where a whole-viewport crossfade reads as a flicker), and its soft navs animate
-through `onNavigate → startViewTransition` in the root layout (`frontend/console/src/routes/+layout.svelte`). Leave it
-out.
-
-## Authoring a component
-
-The canonical shape — `button.svelte`, `badge.svelte`, `table-cell.svelte`, `sidebar-menu-button.svelte` all follow it:
-
-```svelte
-<script lang="ts" module>
-  import { tv, type VariantProps } from 'tailwind-variants';
-  export const xVariants = tv({
-    base: '…',
-    variants: { variant: { … }, size: { … } },
-    defaultVariants: { variant: 'default', size: 'default' },
-  });
-  export type XVariant = VariantProps<typeof xVariants>['variant'];
-  export type XProps = WithElementRef<HTMLButtonAttributes> & { variant?: XVariant };
-</script>
-
-<script lang="ts">
-  let { class: className, variant = 'default', ref = $bindable(null),
-        children, ...restProps }: XProps = $props();
-</script>
-
-<button bind:this={ref} data-slot="x"
-        class={cn(xVariants({ variant }), className)} {...restProps}>
-  {@render children?.()}
-</button>
-```
-
-Six rules carry that snippet:
-
-1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets another component put the same **chrome** on its own element — `alert-dialog-action.svelte` and `alert-dialog-cancel.svelte` import `buttonVariants` and apply it to Bits UI's primitives, so a dialog's buttons are dimensionally identical to `Button`.
-2. **`className` is the last argument to `cn()`**, so the consumer wins. `cn = twMerge(clsx(…))`.
-3. **`ref = $bindable(null)` + `bind:this={ref}`** is the ref-forwarding contract, typed by `WithElementRef<T, El>`.
-4. **`data-slot="<name>"`** on the root element — CSS descendant selectors and the e2e harness both locate by it.
-5. **Runes and snippets throughout**: `$props()` destructuring, `{@render children?.()}`. The package contains no `<slot>`. Generic components declare `<script lang="ts" generics="TData">`.
-6. **Stay transport-agnostic.** The library never owns an API client — a component that acts takes callbacks (the bell's `ActivityCenter` is fed through props and callbacks). Shapes are declared structurally rather than imported from the console's `#lib/api`, and `@rask/ui` imports no `$app/*` or the console's `#lib/*` (browser detection is `typeof window !== 'undefined'`).
-
-Wrapping a **Bits UI** primitive that needs no skin: re-export it with an explicit `typeof` annotation: a bare re-export infers a type TypeScript cannot name in a declaration (`collapsible/index.ts`).
-
-Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then **add the subpath to `exports` in `package.json`** — an unexported component is unreachable. Relative imports carry the `.js` extension, which TypeScript and Vite resolve to the `.ts` source.
+through `onNavigate → startViewTransition` in the root layout (`frontend/console/src/routes/+layout.svelte`).
 
 ## Checklist
 
-- [ ] Colour is a token utility; new semantic colours land in `tokens.css`, not in the console.
-- [ ] The component comes from `@rask/ui` via its subpath; new chrome lands in the package.
+- [ ] Colour is a token utility; a missing token or component is a change in the ui repository, then a pin move.
+- [ ] The component comes from `@riksarkivet/ui/<name>`; nothing under `frontend/patches/` patches the library.
 - [ ] `class` adjusts layout; variants adjust appearance.
 - [ ] Dynamic values go through `style:` or a custom property.
-- [ ] `bun --cwd=frontend run lint`, `fmt:check` and `check` green.
+- [ ] `make frontend-check` green; a change to the shell or a clickable table also runs the Playwright suite.
 
 ## Where to go deeper
 
-- `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, the `@source` line, the bridge migration, reading the mode from JS, the view-transition decision, and why `components.json` is stale scaffolding.
-- `references/component-catalog.md` — all 31 export subpaths, the three barrel conventions, **the `<Subject>` rule for printing an OIDC `sub`**, the data-table stack, Storybook, **the `vite.config.ts` two-homes test config**, and the known rough edges.
-- `rask-frontend` — the console's routes, data fetching, and the gates that grade this work.
+- The library's `DESIGN.md` and `docs/CONSUMING.md`, at the pinned commit.
+- `rask-frontend` — the console's routes, data fetching, the dock, and the gates that grade this work.

@@ -7,7 +7,7 @@
 	//
 	// `description` is RESERVED: it is the table's own prose, rendered on the detail header, so it gets a
 	// dedicated multi-line field here and is filtered out of the raw key/value grid. One editor, one door.
-	import { Select } from '@rask/ui/select';
+	import { Select } from '@riksarkivet/ui/select';
 	import { untrack } from 'svelte';
 	import type { CatalogResult } from './catalog';
 	import { setFieldMetadata, setTableProperties } from './remote/catalog.api';
@@ -271,7 +271,7 @@
 		flex: 1 1 140px;
 		min-width: 100px;
 	}
-	/* Deliberately NOT @rask/ui's Textarea: this section is on the legacy --ink/--line bridge at 12px, and
+	/* Deliberately NOT the design system's Textarea: this section is on the legacy --ink/--line bridge at 12px, and
 	   the Tailwind component would land a 16px rounded-lg field among 12px radius-sm ones. */
 	textarea {
 		background: var(--panel-2);

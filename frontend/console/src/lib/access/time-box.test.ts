@@ -1,4 +1,4 @@
-import { formatZoned } from '@rask/ui/utils';
+import { formatZoned } from '@riksarkivet/ui/utils';
 import { describe, expect, it } from 'vitest';
 import { durationMs, timeBoxLabel } from './time-box.ts';
 

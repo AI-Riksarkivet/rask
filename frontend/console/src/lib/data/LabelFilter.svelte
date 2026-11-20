@@ -4,7 +4,7 @@
 	 * carries. Like the project filter it holds no value of its own (a list's page keeps it in its URL,
 	 * `?label=<name>`), and it narrows rows the caller was already given: a view, never a boundary.
 	 */
-	import { Select } from '@rask/ui/select';
+	import { Select } from '@riksarkivet/ui/select';
 	import { labelOptions } from './labels.ts';
 
 	let {

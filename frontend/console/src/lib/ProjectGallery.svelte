@@ -5,14 +5,14 @@
 	// lives in the main menu, never inside a project-scoped page's catalog.
 	import { gsap } from 'gsap';
 	import { LayoutGrid, List, Plus } from '@lucide/svelte';
-	import { Badge } from '@rask/ui/badge';
-	import { Button } from '@rask/ui/button';
-	import { Card } from '@rask/ui/card';
+	import { Badge } from '@riksarkivet/ui/badge';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Card } from '@riksarkivet/ui/card';
 	import { GatedAction } from '#lib/access/gated-action/index.ts';
-	import * as Table from '@rask/ui/table';
+	import * as Table from '@riksarkivet/ui/table';
 	import { refreshAll } from '$app/navigation';
 	import ProjectCreateDialog from '#lib/ProjectCreateDialog.svelte';
-	import { Skeleton } from '@rask/ui/skeleton';
+	import { Skeleton } from '@riksarkivet/ui/skeleton';
 	import { page } from '$app/state';
 	import { isEstateAdmin } from '#lib/estate-admin.ts';
 	import { galleryOf } from '#lib/gallery.ts';
@@ -69,7 +69,7 @@
 	// would re-stagger cards the reader was already reading. Component-scoped, not module-scoped: a
 	// fresh mount of the surface should still animate.
 	//
-	// Local rather than @rask/ui/motion's `stagger` because both differences are this gallery's own
+	// Local rather than @riksarkivet/ui/motion's `stagger` because both differences are this gallery's own
 	// (the latch, and the 0.98 scale), and that module is shared by every page.
 	let entered = false;
 

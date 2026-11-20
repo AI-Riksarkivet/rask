@@ -19,8 +19,8 @@
 		type PaginationState,
 		type SortingState,
 		sortableHeader,
-	} from '@rask/ui/data-table';
-	import * as Sheet from '@rask/ui/sheet';
+	} from '@riksarkivet/ui/data-table';
+	import * as Sheet from '@riksarkivet/ui/sheet';
 	import { ExternalLink, RefreshCw, RotateCcw, ShieldAlert, Inbox } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { fetchDlq, replayDlq } from '#lib/lineage/remote/lineage.api.ts';

@@ -18,7 +18,7 @@
 		type PaginationState,
 		type SortingState,
 		sortableHeader,
-	} from '@rask/ui/data-table';
+	} from '@riksarkivet/ui/data-table';
 	import { RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';

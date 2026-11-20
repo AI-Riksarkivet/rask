@@ -1,9 +1,9 @@
 <script lang="ts">
-	// A right-side row drawer (goal cond 8) on the bits-ui Dialog primitive (via @rask/ui/dialog),
+	// A right-side row drawer (goal cond 8) on the bits-ui Dialog primitive (via @riksarkivet/ui/dialog),
 	// styled as a sheet: registry rows open it with the full record + metadata + jump links. The
 	// content snippet is authored by the owning registry, so its scoped styles apply; closing is
 	// Esc / overlay / the explicit button (bits-ui handles focus trap + restore).
-	import { Dialog } from '@rask/ui/dialog';
+	import { Dialog } from '@riksarkivet/ui/dialog';
 	import type { Snippet } from 'svelte';
 
 	let {

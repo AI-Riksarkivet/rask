@@ -11,12 +11,12 @@ The `--cwd=` form matters — `bun --cwd <path>` with a space silently no-ops. T
 are plain bun (`bun run --filter '*' <task>` or explicit sequences), so a task over a package runs only if that
 package declares the script.
 
-Workspace membership is **globbed** (`["console", "packages/*"]`), so a `packages/<x>` carrying a `package.json` is
-enrolled automatically and one without it is **silently skipped** — bun prints "Done!" and the package is never
-installed, built or linted. There are two members (ADR 0201): the console, and `@rask/ui`, the design system, which
-Storybook also builds. Code with one consumer lives in that consumer: the console's API client is `#lib/api`, its graph
-views `#lib/flow`, its dock `#lib/dock`. `@rask/ui`'s `exports` name its `src/`, so the console compiles it from source
-and nothing builds first.
+The workspace has **one member**, the console (`workspaces = ["console"]`, ADR 0223). Its design system is
+`@riksarkivet/ui`, a dependency from the `AI-Riksarkivet/ui` repository pinned to a full commit sha in
+`console/package.json`; its `exports` name its `src/`, so the console compiles it from source and nothing builds
+first. A component is changed in that repository and reaches the console by moving the pin, never by a patch here. Code
+with one consumer lives in that consumer: the console's shell is `#lib/shell`, its API client `#lib/api`, its graph
+views `#lib/flow`, its dock `#lib/dock`.
 
 Styling and component authoring live in **`rask-styling`**. Svelte 5 and SvelteKit idioms live in `svelte-skills:*`
 and the `svelte` MCP. This skill is the plane above them: the app, its data, its sign-in, its gates.
@@ -68,8 +68,9 @@ starts with `/` as a route id, and a name interpolated into one is split into se
 group dropped, so a namespace named `(staging)` would link to the list page
 (`e2e/admin/tables-registry.spec.ts` pins it). A pathname
 with a query is written without the leading `/`, ``resolve(`auth/login?redirect=${…}`)``, and `goto` takes kit 3's options
-(`replace`, `reset: false`, `refreshAll`) and rejects a URL that names no route. `@rask/ui` cannot import `$app/paths`, so the rule is off under
-`packages/ui/**`; its root paths are what `resolve()` gives in the console.
+(`replace`, `reset: false`, `refreshAll`) and rejects a URL that names no route. The shell renders the root paths of the
+nav config it is handed, so the rule is off under `console/src/lib/shell/**`; its root paths are what `resolve()` gives
+in the console.
 
 **One name per page.** A page's sidebar row, breadcrumb crumb, `h1` and `<title>` say the same name (`#lib/nav.ts`'s
 `PAGE_NAMES` feeds the crumbs, `GROUP_NAMES` the plain crumbs of `/catalog` and `/admin`, "Catalog" and
@@ -78,7 +79,7 @@ followed by ` · rask` (`DLQ · rask`). A catalog object is named by its PATH, n
 (`#lib/catalog-trail.ts`, ADR 0210): `catalogPath('acme$bronze$t')` is `acme › bronze › t`, which is its `h1`
 (`#lib/data/CatalogName.svelte`), its title before its collection (`acme › bronze › t · tables · rask`) and its name in
 the estate-wide lists, while a child listed on its parent's page shows its own segment. The `$` id appears only where it
-is something to copy: beneath the `h1` with a `CopyButton` (`@rask/ui/copy-button`), in the connect snippets, and in a
+is something to copy: beneath the `h1` with a `CopyButton` (`@riksarkivet/ui/copy-button`), in the connect snippets, and in a
 door's URL. A catalog object's breadcrumb is its path too: the root layout passes `catalogTrail(route.id, params)` as
 `AppShell`'s `trail`, so a table's crumbs are Catalog › Warehouses › warehouse › namespace(s) › table, each ancestor
 linking to its page, and every other route's crumbs are its URL's. An error page has its own: `+error.svelte` sets
@@ -112,7 +113,7 @@ against the dev estate (2026-11-15).
 
 **One navigation, the sidebar, on every page** (ADR 0202). `consoleSidebar(me)` in `#lib/nav.ts` builds it: Home and
 Projects, a Catalog group (Warehouses, Namespaces, Tables), an Operations group (Events,
-DLQ), and Workbench and Settings pinned at the foot; `@rask/ui`'s shell renders it (`app-sidebar`, `page-nav`) inside one
+DLQ), and Workbench and Settings pinned at the foot; the console's shell (`#lib/shell`) renders it (`app-sidebar`, `page-nav`) inside one
 `<nav aria-label="Pages">`. The top bar holds only the sidebar's toggle, the breadcrumb (the route's own path,
 `pathCrumbs`, named and linked by `AppShell`'s `pages`; a group such as Catalog is plain text), the bell and the account
 menu. A row the caller may not open (Settings and the Operations rows for anyone but an estate admin) renders DISABLED
@@ -255,13 +256,13 @@ a thrown error (a schema refusal included), which is recorded and re-thrown. Rea
 renders on its own page. The log lives in `sessionStorage` under the signed-in principal, in memory when storage is
 unavailable (every access in try/catch), at most 100 entries and none older than 24 h, and `activity.forget()` clears
 it at sign-out. Not `localStorage`: the next person on the same browser profile would find it. Nothing in it is read
-from or sent to a service. The bell and its panel are `@rask/ui`'s `shell/activity-center.svelte`, fed through props and
-callbacks (`@rask/ui` imports nothing from the console): the badge counts entries since the panel was last opened, and
+from or sent to a service. The bell and its panel are `#lib/shell/activity-center.svelte`, fed through props and
+callbacks (the shell imports none of the console's data): the badge counts entries since the panel was last opened, and
 the panel lists newest first, grouped by day, and can clear the log.
 
 **A principal is shown by its full id, with a copy control** (`#lib/access/identity`'s `Subject`): the console has no
 directory to resolve an id against, so the id is what a person reads and pastes into a grant. **A moment prints as
-`YYYY-MM-DD HH:mm:ss UTC+01:00`** (`@rask/ui/utils`' `formatZoned`) on every list of them, the bell and the events feed
+`YYYY-MM-DD HH:mm:ss UTC+01:00`** (`@riksarkivet/ui/utils`' `formatZoned`) on every list of them, the bell and the events feed
 included.
 
 **Liveness rides cursors, not timers.** `#lib/live/tick.svelte.ts` wraps the shared `lineageFeed`/`controlFeed` streams
@@ -280,11 +281,13 @@ or time itself is the change (a countdown).
 
 The dock lives at `/workbench` (`#lib/dock/`, ADR 0200) on **horizon-layout** (pinned exactly in the console's
 `package.json`): headless, Svelte 5, MIT, with keyboard control built in (the tab list takes arrows, Shift/Ctrl/Alt
-moves and splits; the resizer is a slider), and a patch (`patches/horizon-layout@1.0.5.patch`, `frontend/TOOLING.md`)
-adds the tab list's ARIA state and keeps the keyboard on a tab it moves. Two panels: `EventsPanel` (lineage's `GET /events` through the workbench's
+moves and splits; the resizer is a focusable `separator`, the window-splitter pattern). Its tab list points at the
+active tab with `aria-activedescendant` and owns its tabs by `aria-owns`, so the tabs are not the list's DOM descendants
+(`e2e/workbench/dock.spec.ts` reads the owned ids), and after a keyboard move or split the focus goes to the tab list
+of the group the tab landed in. Two panels: `EventsPanel` (lineage's `GET /events` through the workbench's
 one `EventFeed`, `#lib/dock/bench.svelte.ts`) and `TablesPanel` (the very registry the catalog page renders). A panel
 RENDERS THE PAGE'S COMPONENT: it is not a smaller re-implementation. `Dock.svelte` adds what the library leaves to its
-host, from `@rask/ui` components: a close button on each tab (`tabControls`), and per group (`tabgroupControls`) the panel
+host, from `@riksarkivet/ui` components: a close button on each tab (`tabControls`), and per group (`tabgroupControls`) the panel
 picker for closed panels, maximize (with a Restore bar above the dock while one is maximized) and pop out. There are no
 floating groups and no context menu.
 
@@ -296,8 +299,8 @@ floating groups and no context menu.
    search text and sort order reset, and that is accepted. `e2e/workbench/dock.spec.ts` pins it with reads that stop
    answering.
 2. **A panel reads no context.** A popout mounts the panel in another window, outside the page's component tree, with
-   the page's stylesheets copied in; `Dock.svelte`'s `followTheme` mirrors the page's `<html>` classes onto that window
-   so light and dark follow. A bits-ui overlay inside a popped-out panel still portals to the page's document.
+   the page's stylesheets copied in; horizon-layout mirrors the page's `<html>` class, `data-theme` and inline custom
+   properties onto that window, so the theme, mode and accent follow. A bits-ui overlay inside a popped-out panel still portals to the page's document.
 3. **The layout is one value.** The page binds one `LayoutConfig`; every control writes a new value through
    `#lib/dock/layout.ts`, and a stored layout is read with `parseLayoutConfig` then `validateConfig` (`readStoredLayout`).
    Its three outcomes are `ok` / `absent` / **`unreadable`**, which shows the default with a notice and refuses every
@@ -307,7 +310,7 @@ floating groups and no context menu.
    the layout and the views and nothing else; memory where storage is refused, said in one line. Sign-out keeps them
    (a preference), unlike the activity log.
 4. **The dock's stylesheets load with the app.** `app.css` imports `horizon-layout/horizon-layout.css` and the
-   `--hl-*` → token mapping (`#lib/dock/theme.css`) under `layer(base)`, so a popout copies them when it opens. A dock's
+   design system's `--hl-*` → token mapping (`@riksarkivet/ui/styles/horizon-layout.css`) under `layer(base)`, so a popout copies them when it opens. A dock's
    parent must be a SIZED flex item (`flex: 1 1 0`, `min-height: 0`), or the split has no height to divide.
 
 ## Develop
@@ -315,8 +318,7 @@ floating groups and no context menu.
 | loop | command | what runs |
 |---|---|---|
 | UI against the cluster | `make dev-k3s` | reuses :8080 when it already serves the issuer, else port-forwards `kube-system/traefik` 8080:80, waits for `/dex` and lineage's `/api/lineage/events` (200 or its 401), runs `vite dev` (:5173) with `/api` proxied there, and stops the forward by PID |
-| UI against an edge you name | `make dev` (`RASK_EDGE_URL`, default `http://localhost:8080`) | `vite dev` on :5173; an edit to `@rask/ui` reaches it through HMR |
-| Storybook | `make storybook` | `@rask/ui`'s Storybook on :6006 |
+| UI against an edge you name | `make dev` (`RASK_EDGE_URL`, default `http://localhost:8080`) | `vite dev` on :5173 |
 
 `vite.config.ts` serves `/config.json` from `CONSOLE_CONFIG_FILE`, else the committed `frontend/console/dev/config.json`
 (issuer `http://localhost:8080/dex`, client `rask-console`, the chart's scopes), so a dev server signs in against whichever
@@ -324,17 +326,17 @@ issuer that file names. Under `vite dev` SvelteKit sends that `csp` as a header 
 exactly the issuer's origin, as `serve.ts` does for the image; the built app's own policy is untouched. The Vite origin
 (:5173) is cross-origin to Dex on :8080, which answers CORS for it (the Dex fixture's `console.allowedOrigins`). The image is `.docker/frontend.dockerfile`
 (`make console-image` → `web-console:<tag>`, through `dagger call image --name=frontend`): a builder stage builds
-the app (with `@rask/ui` from source), the runtime stage holds only `build/` and `serve.ts`, runs as uid 10001 under tini on :3000, and
+the app (with `@riksarkivet/ui`, fetched from GitHub at the commit `bun.lock` records, compiled from source), the runtime stage holds only `build/` and `serve.ts`, runs as uid 10001 under tini on :3000, and
 fits a read-only root filesystem.
 
 ## Gates
 
 | command | runs |
 |---|---|
-| `bun --cwd=frontend run build` | the app's `vite build`, compiling `@rask/ui` from source |
-| `bun --cwd=frontend run check` | `svelte-check` in the console (three times: the app, `tsconfig.tools.json` for `serve.ts` and the e2e code, and `tsconfig.api.json`, which adds `exactOptionalPropertyTypes` to `src/lib/api`) and in `@rask/ui` |
-| `bun --cwd=frontend run test` | vitest in the console (its `#lib/api` suites included) and in `@rask/ui` |
-| `bun --cwd=frontend run lint` / `fmt:check` | oxlint / rsvelte-fmt in every package |
+| `bun --cwd=frontend run build` | the app's `vite build`, compiling `@riksarkivet/ui` from source |
+| `bun --cwd=frontend run check` | `svelte-check` in the console (three times: the app, `tsconfig.tools.json` for `serve.ts` and the e2e code, and `tsconfig.api.json`, which adds `exactOptionalPropertyTypes` to `src/lib/api`) |
+| `bun --cwd=frontend run test` | vitest in the console (its `#lib/api` suites and the shell's breadcrumb included) |
+| `bun --cwd=frontend run lint` / `fmt:check` | oxlint / rsvelte-fmt in the console |
 | `bun --cwd=frontend run knip` | the whole JS graph at once (`knip.json`) |
 | `bun --cwd=frontend run test:e2e` | the console's Playwright suite, which builds the app |
 | `make frontend-check` | check, lint, fmt:check, test and knip |
@@ -378,12 +380,12 @@ connects) until it reports clean.
 ## Staying on-stack
 
 Animation → **GSAP** via `{@attach}`. Charts → **LayerChart**. Graph editors → **Svelte Flow** via `#lib/flow`.
-Components → `@rask/ui`. Validation → **valibot**. Sign-in → **oidc-client-ts**. A dependency that duplicates the stack is
+Components → `@riksarkivet/ui`. Validation → **valibot**. Sign-in → **oidc-client-ts**. A dependency that duplicates the stack is
 a no; extend the stack instead.
 
 ## Where to go deeper
 
-- `rask-styling` — tokens, `@source`, component authoring.
+- `rask-styling` — how the console uses `@riksarkivet/ui`: the stylesheet, tokens, the appearance.
 - `rask-services-fleet` — the Gateway routes for `/api/*` and the services behind them.
 - `rask-architecture` — workspace planes and membership.
 - `docs/AUTHZ.md` — what the console's guards are and are not.

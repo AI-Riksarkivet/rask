@@ -2,7 +2,7 @@
 	// One control event, as every list of them prints it: the action, the object by its name, for a
 	// grant the relation and the subject it names, the actor, and the full local date and time with
 	// its zone.
-	import { formatZoned } from '@rask/ui/utils';
+	import { formatZoned } from '@riksarkivet/ui/utils';
 	import { Subject } from '#lib/access/identity/index.ts';
 	import { grantDetail, objectLabel, type ControlEvent } from './control.ts';
 

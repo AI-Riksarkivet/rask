@@ -39,8 +39,8 @@
 	// curl. The glosses below ADD the thing a status code means and a sentence cannot (401 vs 404 vs a
 	// timeout that may still have committed) — they never replace the message.
 	import { ExternalLink, TriangleAlert } from '@lucide/svelte';
-	import { AlertDialog } from '@rask/ui/alert-dialog';
-	import { Button } from '@rask/ui/button';
+	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
+	import { Button } from '@riksarkivet/ui/button';
 	import { toast } from 'svelte-sonner';
 	import { deleteProject } from '#lib/remote/warehouses.api.ts';
 

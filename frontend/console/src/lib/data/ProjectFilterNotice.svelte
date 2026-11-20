@@ -5,7 +5,7 @@
 	 * (`reason` says why). Either way it shows no rows, filtered or not, so nothing on screen claims to
 	 * be narrowed when it is not, and it offers the way back to every project.
 	 */
-	import { Button } from '@rask/ui/button';
+	import { Button } from '@riksarkivet/ui/button';
 
 	let {
 		project,

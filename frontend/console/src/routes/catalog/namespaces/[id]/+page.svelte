@@ -35,7 +35,7 @@
 		setNamespacePolicy,
 	} from '#lib/data/remote/namespace.api.ts';
 	import type { TrashEntry } from '#lib/data/remote/catalog.api.ts';
-	import { formatZoned } from '@rask/ui/utils';
+	import { formatZoned } from '@riksarkivet/ui/utils';
 	import CatalogName from '#lib/data/CatalogName.svelte';
 	import { fetchWarehouseNamespaces } from '#lib/data/remote/warehouses.api.ts';
 	import ConnectSnippets from '#lib/data/ConnectSnippets.svelte';

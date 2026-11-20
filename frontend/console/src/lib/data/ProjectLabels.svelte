@@ -9,11 +9,11 @@
 	 * valid; the catalog refuses anything else (400) and a delete while any object carries it (409).
 	 */
 	import { Trash2 } from '@lucide/svelte';
-	import { Button } from '@rask/ui/button';
-	import { Checkbox } from '@rask/ui/checkbox';
-	import { Input } from '@rask/ui/input';
-	import { Select } from '@rask/ui/select';
-	import * as Table from '@rask/ui/table';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Checkbox } from '@riksarkivet/ui/checkbox';
+	import { Input } from '@riksarkivet/ui/input';
+	import { Select } from '@riksarkivet/ui/select';
+	import * as Table from '@riksarkivet/ui/table';
 	import {
 		KIND_NAMES,
 		LABEL_KINDS,

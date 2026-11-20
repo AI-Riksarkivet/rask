@@ -9,10 +9,10 @@
 	 * describe 400, and the block draws nothing.
 	 */
 	import { X } from '@lucide/svelte';
-	import { Badge } from '@rask/ui/badge';
-	import { Button } from '@rask/ui/button';
-	import { Input } from '@rask/ui/input';
-	import { Select } from '@rask/ui/select';
+	import { Badge } from '@riksarkivet/ui/badge';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
+	import { Select } from '@riksarkivet/ui/select';
 	import { warehouseOf } from '#lib/api/identifiers.ts';
 	import { definitionsFor, labelChip, type LabelDefinition, type LabelScope } from './labels.ts';
 	import { fetchObjectLabels, removeObjectLabel, setObjectLabel } from './remote/labels.api.ts';

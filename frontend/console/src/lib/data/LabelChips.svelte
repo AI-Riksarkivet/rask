@@ -3,7 +3,7 @@
 	 * An object's labels as chips, `name` or `name=value`, by name. Presentation only: the reads are
 	 * `fetchObjectLabels` (one object) and `LabelIndexRead` (a list's rows).
 	 */
-	import { Badge } from '@rask/ui/badge';
+	import { Badge } from '@riksarkivet/ui/badge';
 	import { labelChips, type Labels } from './labels.ts';
 
 	let { labels }: { labels: Labels } = $props();

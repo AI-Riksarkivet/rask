@@ -71,6 +71,5 @@ Its Playwright suite runs against mocked upstreams instead: `bun --cwd=frontend 
 | Format + lint + typecheck | `make check` |
 | Single Python test | `uv run pytest services/catalog/tests/<file>.py::<test_name>` |
 | Frontend type-check | `bun --cwd=frontend run check` |
-| Storybook (@rask/ui) | `make storybook` (→ `:6006`) |
 
 Next: read **[Configuration](configuration.md)** for the environment variables that wire the services together.

@@ -9,7 +9,6 @@
 		"**/.svelte-check/**",
 		"**/build/**",
 		"**/dist/**",
-		"**/storybook-static/**",
 		"**/*.generated.ts",
 		"**/api/generated/**"
 	]

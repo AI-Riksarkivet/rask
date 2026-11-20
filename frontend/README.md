@@ -5,14 +5,16 @@ signs in to the platform's issuer (Dex in development) with OpenID Connect autho
 its own public client `rask-console`, keeps the tokens in memory, and calls the lakehouse's doors with its
 bearer, same-origin, through the platform's Gateway. The built files are served by `console/serve.ts`.
 The top bar's bell lists the reader's own writes and their outcomes, kept in the browser for the tab.
+Its design system is `@riksarkivet/ui` (`AI-Riksarkivet/ui`, pinned to a commit in `console/package.json` and
+compiled from source); its `README.md` and `DESIGN.md` are the reference for the components and the look.
 
 ```
 frontend/
-  package.json      # workspace root (bun workspaces: console, packages/*); plain bun scripts
+  package.json      # workspace root (one bun workspace member: console); plain bun scripts
   TOOLING.md        # the toolchain: one linter, one formatter, the rules that are off and why
   .oxlintrc.json    # oxlint — every extension, .svelte included (via @rsvelte/oxlint-plugin)
   .oxfmtrc.json     # rsvelte-fmt + oxfmt — every extension
-  patches/          # bun patchedDependencies (apache-arrow — see TOOLING.md)
+  patches/          # bun patchedDependencies (apache-arrow, bits-ui — see TOOLING.md)
   console/          # the app
     vite.config.ts  #   the SvelteKit config (`sveltekit({...})`: adapter-static, the CSP), the dev server
     package.json    #   `imports` declares `#lib/*` → `src/lib/*`, imported with the file's extension
@@ -27,14 +29,13 @@ frontend/
     src/lib/upstreams.ts      # where each upstream answers: /api/catalog, /api/lineage
     src/lib/api/              # the browser transport (`client.ts`), the /management/v1/me contract, the
                               #   lineage client, the generated OpenAPI types (`generated/`)
+    src/lib/shell/            # the shell every page renders in: the sidebar, the top bar, the bell
+                              #   (`activity-center.svelte`), the account menu and its theme toggle
     src/lib/flow/             # the Svelte Flow binding and the project hierarchy (the governance graphs)
     src/lib/dock/             # the /workbench dock on horizon-layout: panels, layout edits, autosave,
                               #   named views; `store.ts` keeps them in this browser's localStorage
     serve.ts        #   the static server the image runs (SPA fallback, /config.json, the CSP header)
     e2e/            #   the Playwright suite (see below)
-  packages/
-    ui/             # @rask/ui — the one package: the design system (shadcn-svelte on bits-ui 2), AppShell +
-                    #   nav-config (the bell is `shell/activity-center.svelte`), Storybook; read from source
 ```
 
 ## Runtime config and security
@@ -77,13 +78,12 @@ name with `RASK_EDGE_URL` (default `http://localhost:8080`).
 | Script            | What it runs                                                                  |
 | ----------------- | ----------------------------------------------------------------------------- |
 | `dev`             | the console's `vite dev` on :5173, `/api` → `RASK_EDGE_URL` (default `http://localhost:8080`), `/config.json` from `console/dev/config.json` |
-| `build`           | the console (adapter-static → `console/build`), compiling `@rask/ui` from source |
-| `check`           | `check` in the console and `@rask/ui` (svelte-check)                           |
-| `lint` / `fmt` / `fmt:check` | oxlint / rsvelte-fmt in every package                              |
-| `test`            | the console's and `@rask/ui`'s vitest suites                                   |
+| `build`           | the console (adapter-static → `console/build`), compiling `@riksarkivet/ui` from source |
+| `check`           | the console's three svelte-check configs                                       |
+| `lint` / `fmt` / `fmt:check` | oxlint / rsvelte-fmt in the console                                |
+| `test`            | the console's vitest suites                                                    |
 | `test:e2e`        | the console's Playwright suite (which builds the app)                          |
 | `knip`            | unused files, exports and dependencies across the workspace                   |
-| `storybook` / `build-storybook` | `@rask/ui`'s Storybook                                          |
 | `gen:types`       | regenerate `console/src/lib/api/generated` from `docs/*-openapi.json`          |
 
 ## The Playwright suite

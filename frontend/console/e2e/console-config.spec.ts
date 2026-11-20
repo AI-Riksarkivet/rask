@@ -49,7 +49,7 @@ test('the server answers /readyz as ready, and told to stop it exits cleanly', a
 	await once(probe, 'listening');
 	const { port } = probe.address() as { port: number };
 	probe.close();
-	const server = spawn('bun', ['serve.ts'], {
+	const server = spawn('bun', [fileURLToPath(new URL('../serve.ts', import.meta.url))], {
 		cwd: fileURLToPath(new URL('..', import.meta.url)),
 		env: { ...process.env, PORT: String(port) },
 		stdio: 'ignore',

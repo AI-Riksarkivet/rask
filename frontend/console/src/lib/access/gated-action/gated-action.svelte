@@ -1,8 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { on } from 'svelte/events';
-	import * as Tooltip from '@rask/ui/tooltip';
-	import { cn } from '@rask/ui/utils';
+	import * as Tooltip from '@riksarkivet/ui/tooltip';
+	import { cn } from '@riksarkivet/ui/utils';
 
 	// GATED ACTION — the owner ruling (#143): "every gated action SHOWS disabled with its denial
 	// reason, never hidden."

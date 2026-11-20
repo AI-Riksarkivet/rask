@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 // The /workbench dock on the auth-off origin. Its two reads are answered in the browser (`page.route`)
 // rather than by seeding the shared mock catalog, whose auth-off bucket another spec seeds.
@@ -27,6 +27,27 @@ async function answerReads(page: Page): Promise<{ hold: () => void }> {
 }
 
 const tab = (page: Page, title: string) => page.getByRole('tab', { name: new RegExp(`^${title}`) });
+
+/** The titles of the tabs a tab list owns. A list owns its tabs through `aria-owns`, so they are not
+ *  its DOM descendants and a locator scoped to the list finds none of them. */
+const ownedTabs = (list: Locator): Promise<string[]> =>
+	list.evaluate((el) =>
+		(el.getAttribute('aria-owns') ?? '')
+			.split(/\s+/)
+			.filter(Boolean)
+			.map((id) => document.getElementById(id)?.textContent?.trim() ?? ''),
+	);
+
+/** The titles of the tabs the focused tab list owns; empty when the focus is not on a tab list. */
+const focusedListOwns = (page: Page): Promise<string[]> =>
+	page.evaluate(() => {
+		const el = document.activeElement;
+		if (el?.getAttribute('role') !== 'tablist') return [];
+		return (el.getAttribute('aria-owns') ?? '')
+			.split(/\s+/)
+			.filter(Boolean)
+			.map((id) => document.getElementById(id)?.textContent?.trim() ?? '');
+	});
 
 async function open(page: Page): Promise<{ hold: () => void }> {
 	const reads = await answerReads(page);
@@ -149,15 +170,14 @@ test('the keyboard alone moves a tab between groups, splits it out again and res
 }) => {
 	await open(page);
 	const lists = page.getByRole('tablist');
-	const holdingEvents = lists.filter({ has: tab(page, 'Events') });
 
 	// Ctrl+Left moves the Events tab into the group on its left: one group of two tabs. The group the
 	// keyboard was in is gone, so the keyboard goes with the tab, and the tab is the selected one.
 	await lists.nth(1).focus();
 	await page.keyboard.press('Control+ArrowLeft');
 	await expect(lists).toHaveCount(1);
-	await expect(lists.first().getByRole('tab')).toHaveCount(2);
-	await expect(holdingEvents).toBeFocused();
+	await expect.poll(() => ownedTabs(lists.first())).toHaveLength(2);
+	await expect.poll(() => focusedListOwns(page)).toContain('Events');
 	await expect(page.getByRole('tab', { name: /^Events/, selected: true })).toBeVisible();
 	await expect(page.getByRole('tabpanel', { name: /^Events/ })).toContainText('bronze.ingest');
 
@@ -165,11 +185,11 @@ test('the keyboard alone moves a tab between groups, splits it out again and res
 	// pressed where the keyboard already is.
 	await page.keyboard.press('Alt+ArrowRight');
 	await expect(lists).toHaveCount(2);
-	await expect(lists.nth(1).getByRole('tab')).toHaveText('Events');
-	await expect(holdingEvents).toBeFocused();
+	await expect.poll(() => ownedTabs(lists.nth(1))).toEqual(['Events']);
+	await expect.poll(() => focusedListOwns(page)).toEqual(['Events']);
 
-	// The resizer is a slider: an arrow key moves it a step.
-	const resizer = page.getByRole('slider', { name: 'Resize pane 1' });
+	// The resizer is a focusable separator (the window-splitter pattern): an arrow key moves it a step.
+	const resizer = page.getByRole('separator', { name: 'Resize pane 1' });
 	await expect(resizer).toHaveAttribute('aria-valuenow', '50');
 	await resizer.focus();
 	await page.keyboard.press('ArrowRight');

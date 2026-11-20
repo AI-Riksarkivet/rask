@@ -397,7 +397,7 @@ test('re-type-column via the row ⇄ posts an alter path→data_type (#74 tail)'
 	await page.goto('/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
 	await section.getByRole('button', { name: 're-type id' }).click();
-	// the target type is the @rask/ui Select (bits-ui) — open it, pick float32
+	// the target type is the design system's Select (bits-ui) — open it, pick float32
 	await section.getByLabel('re-type id to').click();
 	await page.getByRole('option', { name: 'float32', exact: true }).click();
 	await section.getByRole('button', { name: 'save' }).click();
@@ -760,7 +760,7 @@ test('danger-zone drop confirms via the AlertDialog, closes it, and the registry
 	await seed(page, { 'GET /v1/table': { tables: ['db1$other'] } });
 	const danger = page.locator('section.dangerzone');
 	await danger.getByRole('button', { name: 'Drop table' }).click();
-	// The confirm is the portalled @rask/ui AlertDialog — drive it by role, not the trigger section.
+	// The confirm is the portalled design-system AlertDialog — drive it by role, not the trigger section.
 	const dialog = page.getByRole('alertdialog');
 	await expect(dialog).toContainText('Drop table db1$t');
 	await expect(dialog).toContainText(
@@ -946,7 +946,7 @@ test('the backfill affordance is shown gated, and reaches no catalog (#85)', asy
 
 	// Shown, never hidden — hiding it would teach the reader the capability does not exist.
 	await expect(backfill).toBeVisible();
-	// Gated by @rask/ui's GatedAction: `aria-disabled` on the wrapper, not `disabled` on the button,
+	// Gated by the design system's GatedAction: `aria-disabled` on the wrapper, not `disabled` on the button,
 	// so the control keeps hover + focus and its reason stays reachable.
 	await expect(section.locator('[data-slot="gated-action"]').first()).toHaveAttribute(
 		'aria-disabled',
