@@ -604,7 +604,9 @@
 		margin-bottom: 18px;
 	}
 	h1 {
-		font-size: 20px;
+		font-size: var(--text-xl);
+		line-height: var(--text-xl--line-height);
+		letter-spacing: var(--text-xl--letter-spacing);
 		margin: 0;
 	}
 	.sub {
