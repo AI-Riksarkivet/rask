@@ -20,9 +20,8 @@ import logging
 
 #: The top-level app packages whose module loggers (``logging.getLogger(__name__)``) must emit INFO. Their
 #: effective level inherits from these package loggers, so raising the package raises the whole tree.
-#: These are the lakehouse's own packages. A client of the lakehouse names its own packages when it calls
-#: :func:`configure_app_logging`, and a workload configures its own logging: naming either here would put a
-#: tool's or a workload's name in a shared seam.
+#: These are the lakehouse's own packages. A client of the lakehouse configures its own logging: naming one here
+#: would put a tool's or a workload's name in a shared seam.
 _APP_LOGGERS = (
     "catalog",
     "lineage",
@@ -36,9 +35,9 @@ _APP_LOGGERS = (
 )
 
 
-def configure_app_logging(level: int = logging.INFO, *, packages: tuple[str, ...] = ()) -> None:
-    """Raise the app package loggers, and the caller's own ``packages``, to ``level`` so their records reach the OTLP handler."""
-    for name in (*_APP_LOGGERS, *packages):
+def configure_app_logging(level: int = logging.INFO) -> None:
+    """Raise the app package loggers to ``level`` so their records reach the OTLP handler."""
+    for name in _APP_LOGGERS:
         logging.getLogger(name).setLevel(level)
 
 

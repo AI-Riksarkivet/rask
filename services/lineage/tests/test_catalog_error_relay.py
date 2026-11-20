@@ -4,8 +4,7 @@ open_fastapi-audit — "lancekit's catalog-error translator relays the upstream 
 client-visible detail on the 5xx branch, defeating ns_errors' 5xx redaction".
 
 `ns_errors.problem_detail` deliberately replaces `str(exc)` with a fixed "Internal Server Error" on
-every 5xx so paths, DSNs and driver text cannot reach a client — `_UNREDACTED_5XX` is a one-element
-frozenset and its comment explains why 501 is the only member. The catch-all branch here routed around
+every 5xx so paths, DSNs and driver text cannot reach a client. The catch-all branch here routed around
 that: `ServiceUnavailableError(f"catalog unavailable: {exc.body or exc.reason}")` is a 503 whose detail
 is the raw body of whatever answered, and `lakehouse`'s own handler keeps a 4xx-style message
 verbatim.

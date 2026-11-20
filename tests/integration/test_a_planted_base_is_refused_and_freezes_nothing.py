@@ -34,7 +34,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, Unpack
 from urllib.parse import quote
 from uuid import uuid4 as _uuid4
 
@@ -73,6 +73,10 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.naming import claim_store, policy_owners
 from maintenance.services.plan import PlanContext
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.type_defs import GetObjectRequestTypeDef
 
 
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -220,8 +224,8 @@ class _ThrottledRecords:
     def __init__(self, inner: S3Client) -> None:
         self._inner = inner
 
-    def get_object(self, **request: str) -> object:
-        if "_bases/" in request.get("Key", ""):
+    def get_object(self, **request: Unpack[GetObjectRequestTypeDef]) -> object:
+        if "_bases/" in request["Key"]:
             raise ClientError({"Error": {"Code": "SlowDown", "Message": "Please reduce your request rate."}}, "GetObject")
         return self._inner.get_object(**request)
 
@@ -488,7 +492,7 @@ class _ThrottledTagListings:
     def __init__(self, inner: S3Client) -> None:
         self._inner = inner
 
-    def get_paginator(self, operation: str) -> _ThrottledTagPages:
+    def get_paginator(self, operation: Literal["list_objects_v2"]) -> _ThrottledTagPages:
         return _ThrottledTagPages(self._inner.get_paginator(operation))
 
     def __getattr__(self, name: str) -> object:

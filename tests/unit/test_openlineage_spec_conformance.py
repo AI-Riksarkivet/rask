@@ -70,11 +70,23 @@ def _assert_conforms(event: dict[str, Any]) -> None:
     assert not errors, f"as {definition}:\n" + "\n".join(errors)
 
 
+# Three `_schemaURL` constants have no official class to compare against and are not listed below: rask's own lance,
+# author and signature facets, published under `spec/facets/rask/` at a tag of their own. Their bodies are judged
+# against those schemas by `rask_facet_errors` in every builder's test here, and the signature facet by the signing
+# seam's own tests.
 @pytest.mark.parametrize(
     ("constant", "official"),
     [
         (ol.SCHEMA_FACET_SCHEMA_URL, facet_v2.schema_dataset.SchemaDatasetFacet),
         (ol.SYMLINKS_FACET_SCHEMA_URL, facet_v2.symlinks_dataset.SymlinksDatasetFacet),
+        (ol.VERSION_FACET_SCHEMA_URL, facet_v2.dataset_version_dataset.DatasetVersionDatasetFacet),
+        (ol.DATASOURCE_FACET_SCHEMA_URL, facet_v2.datasource_dataset.DatasourceDatasetFacet),
+        (ol.ERROR_MESSAGE_FACET_SCHEMA_URL, facet_v2.error_message_run.ErrorMessageRunFacet),
+        (ol.LIFECYCLE_FACET_SCHEMA_URL, facet_v2.lifecycle_state_change_dataset.LifecycleStateChangeDatasetFacet),
+        (ol.PROCESSING_ENGINE_FACET_SCHEMA_URL, facet_v2.processing_engine_run.ProcessingEngineRunFacet),
+        (ol.CATALOG_FACET_SCHEMA_URL, facet_v2.catalog_dataset.CatalogDatasetFacet),
+        (ol.DATASET_TYPE_FACET_SCHEMA_URL, facet_v2.dataset_type_dataset.DatasetTypeDatasetFacet),
+        (ol.PARENT_RUN_FACET_SCHEMA_URL, facet_v2.parent_run.ParentRunFacet),
     ],
 )
 def test_facet_schema_url_matches_the_official_client(constant: str, official: Any) -> None:

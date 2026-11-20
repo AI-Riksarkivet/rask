@@ -3,10 +3,8 @@
 Routers mount at the root under each service's own paths (``/v1/...``, ``/events``),
 config is each service's own ``*Settings``, and every layer a request passes through is installed here, in one order.
 
-docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints
-hand-assembling
-the same boot and asked for a ``make_lance_service_app``. This serves catalog, lineage and maintenance, and
-what it owns is the part that is identical in all of them:
+It serves catalog, lineage and maintenance (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md, DUP-12),
+and what it owns is the part of the boot that is identical in all three:
 
 1. ``setup_logging()`` BEFORE the app exists. Every module in these services uses
    ``getLogger(__name__)``, and without this they propagate to a root logger with no handlers and are
@@ -205,10 +203,9 @@ def build_service_app(
     ``docs_enabled`` beside it is: a keyword with no default is enforced at every call site by the type
     checker, so a new lakehouse service has to ANSWER rather than inherit. `governed/audit.py` gates
     the stream by the dedicated logger's LEVEL, so a service that never calls `configure_audit` leaves
-    it at NOTSET and follows whatever `RASK_LOG_LEVEL` set — which meant the volume lever doubled as a
-    compliance lever. Three of this factory's four callers armed it in their own lifespans and two did
-    not; it was missing where it matters most, on `services/maintenance`, the component that rewrites
-    bytes.
+    it at NOTSET and follows whatever `RASK_LOG_LEVEL` set, so the volume lever would double as a
+    compliance lever. Arming it here, for all three callers (catalog, lineage, maintenance), holds it on
+    `services/maintenance` too, the component that rewrites bytes.
     """
     setup_logging()
     configure_audit(enabled=audit_enabled)

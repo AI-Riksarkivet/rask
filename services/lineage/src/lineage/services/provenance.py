@@ -58,7 +58,7 @@ from lakehouse import derived_tables
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.derived_tables import EDGES
 from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
-from lakehouse.events.openlineage import BRANCH_IDENTIFIER, ParentRunFacet
+from lakehouse.events.openlineage import BRANCH_IDENTIFIER, TERMINAL_STATES, ParentRunFacet
 from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed.machine_identity import read_identity_token
 from lakehouse.lancekit.filters import in_lists, sql_literal
@@ -81,10 +81,6 @@ _T = TypeVar("_T")
 
 #: The field metadata Lance reads a table's unenforced primary key from (`lance_docs/lance/format/table/index.md`, "Unenforced Primary Key").
 _PRIMARY_KEY: Final = {"lance-schema:unenforced-primary-key": "true"}
-
-#: The states a run ends in. The feed keeps the FIRST row of each, whatever its event time, so a terminal event a
-#: producer re-sends with a fresh time is one row; a non-terminal state keeps every arrival, its progress trail.
-TERMINAL_STATES: Final = frozenset({"COMPLETE", "FAIL", "ABORT"})
 
 FEED: Final = "events"
 REFUSALS: Final = "refusals"
@@ -228,6 +224,8 @@ def feed_key(event: RunEvent | DatasetEvent) -> str:
     if isinstance(event, DatasetEvent):
         key = f"{event.feed_id}@{event.feed_event_type}"
         return key if SIGNATURE_FACET in event.dataset.facets else f"{key}@posted:{author_sub_from_payload(event.model_dump(by_alias=True)) or ''}"
+    # The feed keeps the FIRST row of each terminal state, whatever its event time, so a terminal event a producer
+    # re-sends with a fresh time is one row; a non-terminal state keeps every arrival, its progress trail.
     if event.event_type in TERMINAL_STATES:
         return f"{event.run.run_id}@{event.event_type}"
     return f"{event.run.run_id}@{event.event_type}@{event.event_time}"

@@ -322,12 +322,12 @@ READ_MAX_PAGES = 500
 
 #: OpenFGA's default ``listUsersMaxResults`` — ListUsers has no pagination, so a result this large
 #: is likely the server's silent truncation point, not the true grantee count.
-LIST_USERS_SERVER_CAP = 1000
+LIST_USERS_SERVER_CAP: Final = 1000
 
 #: OpenFGA's default ``listObjectsMaxResults``. Same number, same reason, same silent behaviour as its
 #: sibling above — declared beside it deliberately, because the two calls having the same ceiling and
 #: only ONE of them checking it is exactly how the unguarded half went unnoticed.
-LIST_OBJECTS_SERVER_CAP = 1000
+LIST_OBJECTS_SERVER_CAP: Final = 1000
 
 
 async def list_users(
@@ -505,7 +505,7 @@ async def expand(
 #: How many hops :func:`expand_tree` will follow. The model's deepest real chain is
 #: role → project → warehouse → namespace → nested namespace → table, i.e. 5 hops, so this covers it with
 #: no room for a pathological store to turn one request into an unbounded fan-out.
-MAX_EXPAND_TREE_DEPTH = 6
+MAX_EXPAND_TREE_DEPTH: Final = 6
 
 
 def _relation_of(userset: str) -> str:

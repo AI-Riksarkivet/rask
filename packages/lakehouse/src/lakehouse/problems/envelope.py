@@ -50,8 +50,9 @@ def problem_body(code: int, *, status: int, title: str, detail: str, slug: str |
     ``Retry-After``. A generic handler also cannot know which window applies. So the SHAPE lives here
     and the STATUS and HEADERS stay with the site that knows them.
 
-    ``detail`` doubles as the spec's ``error`` for the same reason ``problem_detail`` does it: one
-    message, so a problem-details client and a spec client cannot be told two different things.
+    ``detail`` doubles as the spec's ``error``: one message, so a problem-details client and a spec
+    client cannot be told two different things. ``ns_errors.problem_detail`` builds a raised domain
+    error's body here too.
 
     ``slug`` overrides the ``type`` suffix for a site whose existing URI does not match its title. That
     is not cosmetic: adding a missing key must not silently RENAME a body clients already parse, and

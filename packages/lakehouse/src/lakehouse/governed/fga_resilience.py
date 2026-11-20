@@ -62,7 +62,7 @@ ONE_ATTEMPT: Final = RetryPolicy(attempts=1)
 
 #: Calls in a row that end in an outage (each after its retries) before the circuit opens. While it is open every call
 #: is refused at once with the same 503, so a request does not pay the retry budget against an OpenFGA that is down.
-BREAKER_THRESHOLD = 5
+BREAKER_THRESHOLD: Final = 5
 #: Seconds an open circuit refuses every call before it lets calls through to ask again; the first answer closes it, the
 #: first outage opens it again.
 BREAKER_RESET_SECONDS = 15.0
@@ -100,7 +100,7 @@ class UnansweredBatchItems(Exception):
 
 
 # Every exception class the read/write paths fail CLOSED on (→ 503), never propagate.
-FAIL_CLOSED: tuple[type[BaseException], ...] = (ApiException, UnansweredBatchItems, *_TRANSIENT_NETWORK)
+FAIL_CLOSED: Final[tuple[type[BaseException], ...]] = (ApiException, UnansweredBatchItems, *_TRANSIENT_NETWORK)
 
 
 # --------------------------------------------------------------------------- #

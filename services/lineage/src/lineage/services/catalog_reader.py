@@ -205,8 +205,7 @@ def translate_catalog_errors() -> Generator[None]:
         # A STABLE SENTENCE, not the upstream body — and this branch specifically, not the four above.
         #
         # `ns_errors.problem_detail` replaces `str(exc)` with a fixed "Internal Server Error" on every
-        # 5xx so paths, DSNs and driver text cannot reach a client; `_UNREDACTED_5XX` has exactly one
-        # member and says why. Relaying `exc.body` here routed around that: a 503 whose detail is
+        # 5xx so paths, DSNs and driver text cannot reach a client. Relaying `exc.body` here routed around that: a 503 whose detail is
         # whatever answered, rendered verbatim because `lakehouse`'s handler keeps 4xx-style messages.
         #
         # The 4xx branches above are DIFFERENT and stay as they are: there the body IS the catalog's own

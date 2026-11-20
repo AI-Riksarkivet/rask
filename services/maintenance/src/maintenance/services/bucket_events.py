@@ -20,6 +20,7 @@ unknown, and never counted as configured.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any, Final
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -47,7 +48,7 @@ class BucketEventsReport(BaseModel):
     unknown: list[str] = Field(default_factory=list)
 
 
-def covers_every_write(configuration: dict[str, Any]) -> bool:
+def covers_every_write(configuration: Mapping[str, Any]) -> bool:
     """Whether ``configuration`` (a GetBucketNotificationConfiguration answer) holds a rule sending every object write
     of the whole bucket: ``s3:ObjectCreated:*``, with no key filter narrowing it to part of the bucket."""
     for kind in _RULE_LISTS:

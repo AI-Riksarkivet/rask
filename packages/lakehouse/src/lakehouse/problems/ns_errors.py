@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
-from lakehouse.problems.envelope import PROBLEM_JSON, occurrence, problem_body
+from lakehouse.problems.envelope import PROBLEM_JSON, problem_body
 from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.problems.spec_routes import SPEC_ERROR_STATUSES, UNSUPPORTED_STATUS, is_spec_route, structural
 
@@ -92,21 +92,6 @@ def as_unsupported_if_stub(exc: Exception) -> Exception:
     return exc
 
 
-#: 5xx statuses whose message is a CAPABILITY STATEMENT, not a fault report, and so is not redacted.
-#:
-#: EMPTY, and kept rather than deleted. The rule it encodes is that a capability answer is not a fault,
-#: so its detail must survive the ``>= 500`` redaction: "alter_table_backfill_columns not implemented"
-#: names the operation the caller asked for and nothing else — no path, no DSN, no driver internals —
-#: and it is the only thing that tells them to stop asking. Redacted to "Internal Server Error", a user
-#: who pressed a button the UI ships (backfill) read that the server had broken (#101).
-#:
-#: Nothing needs it today: `Unsupported` is the only error that ever did, and it maps to 406 since
-#: 2026-09-02, where 4xx details are never redacted. The set stays because a future capability error
-#: mapped into the 5xx range would need exactly this rule and nothing else encodes it. Every other 5xx
-#: stays redacted: those ARE faults, and their text leaks.
-_UNREDACTED_5XX: frozenset[int] = frozenset()
-
-
 class PartiallyApplied(ServiceUnavailableError):
     """A destructive operation that landed some of its steps and then failed.
 
@@ -135,21 +120,12 @@ def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
 
     A 5xx-mapped error uses a GENERIC ``detail`` — never ``str(exc)`` — so internals (paths, DSNs, driver
     messages) leak via logs only, not the response body. Client (4xx) errors keep their message: it is
-    actionable and self-authored, not an internal leak. The one 5xx exception is ``_UNREDACTED_5XX``.
+    actionable and self-authored, not an internal leak. The envelope is :func:`problem_body`'s, titled by the error's
+    class name.
     """
     status = status_for(int(exc.code))
-    detail = str(exc) if status < 500 or status in _UNREDACTED_5XX else "Internal Server Error"
-    body: dict[str, object] = {
-        "type": f"https://lance.org/problems/{exc.__class__.__name__.lower()}",
-        "title": exc.__class__.__name__,
-        "status": status,
-        "detail": detail,
-        "code": int(exc.code),
-        # Spec-0.9 ErrorResponse compatibility: `code` (required) + `error` (brief message). Kept
-        # alongside the RFC 9457 fields so both problem-details and spec clients can parse us.
-        "error": detail,
-        **occurrence(),
-    }
+    detail = str(exc) if status < 500 else "Internal Server Error"
+    body = problem_body(exc.code, status=status, title=exc.__class__.__name__, detail=detail)
     # EXTENSION MEMBERS (RFC 9457 §3.2), the one way a 5xx can tell the caller something true about
     # THEIR OWN objects without breaking the redaction rule above. `detail` stays generic because it
     # can carry paths, DSNs and driver text; an extension is assembled by the raising endpoint from
@@ -183,10 +159,10 @@ _STATUS_CODE_FALLBACK: dict[int, ErrorCode] = {
 
 
 def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
-    """Register the three problem+json exception handlers every service app shares.
+    """Register the four problem+json exception handlers every service app shares: domain errors, validation, the
+    framework's own HTTP errors, and crashes.
 
-    Byte-identical blocks lived in the catalog and lineage mains (audit 2026-07-15) — one home keeps the
-    RFC 9457 shapes, the 5xx-generic-detail policy, and the leak rules from drifting per service. FastAPI
+    One home keeps the RFC 9457 shapes, the 5xx-generic-detail policy, and the leak rules from drifting per service. FastAPI
     imports stay inside the function so non-HTTP consumers of this module never pay for them.
     """
     from fastapi import Request
@@ -206,8 +182,7 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         # what makes an unsupported op look like an outage on the dashboard.
         if status == status_for(ErrorCode.UNSUPPORTED):
             # A capability answer, not a fault: an info line, never a traceback. Keyed on the mapped
-            # status rather than a literal so it follows the map (it was `status in _UNREDACTED_5XX`,
-            # which stopped firing the moment Q3 moved that status out of the 5xx range).
+            # status rather than a literal so it follows the map.
             log.info("unsupported_operation", extra={"method": request.method, "path": request.url.path, "status": status})
         elif status >= 500:
             log.exception("domain_error", extra={"method": request.method, "path": request.url.path, "status": status})
@@ -249,18 +224,19 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         """FastAPI's OWN 404/405 (and any explicit `HTTPException`), given the spec's `code`.
 
         Every error body on a `/v1` route is parsed by a generated Lance client whose `ErrorResponse`
-        REQUIRES `code`. The three handlers above cover domain errors, validation and crashes; routing
-        failures went out as FastAPI's default `{"detail": "..."}`, which the reference client cannot
-        parse, so it reported `InternalError 18` — the server is told to be broken when in truth it
-        does not serve that route.
+        REQUIRES `code`. The other three handlers cover domain errors, validation and crashes; FastAPI's
+        default `{"detail": "..."}` for a routing failure is a body the reference client cannot parse, so
+        it reports `InternalError 18`: the server is told to be broken when in truth it does not serve
+        that route.
 
         `Unsupported` is the honest default: neither "no such route" nor "wrong method" is a domain
         condition, and code 0 means precisely "this backend does not do that operation". A status the
         spec DOES have a code for keeps it, so an explicit `HTTPException(401)` still dispatches as
         `Unauthenticated`. The exception's own `detail` survives — that is what an operator reads.
 
-        Registered BELOW the domain handler, which is what keeps a `TableNotFound` answering code 4
-        rather than being swallowed into a generic 404 by this catch-all.
+        Order of registration does not matter: Starlette picks a handler by walking the raised
+        exception's MRO, and `LanceNamespaceError` is not an `HTTPException`, so a `TableNotFound` reaches
+        the domain handler and answers code 4 wherever this one is registered.
         """
         code = _STATUS_CODE_FALLBACK.get(exc.status_code, ErrorCode.UNSUPPORTED)
         detail = exc.detail if isinstance(exc.detail, str) else HTTPStatus(exc.status_code).phrase

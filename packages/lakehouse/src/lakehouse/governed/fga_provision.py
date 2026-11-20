@@ -32,7 +32,7 @@ from lakehouse.governed.machine_identity import read_identity_token
 log = logging.getLogger(__name__)
 
 
-DEFAULT_TIMEOUT_SECONDS = 5.0
+DEFAULT_TIMEOUT_SECONDS: Final = 5.0
 
 
 # --------------------------------------------------------------------------- #
@@ -537,7 +537,7 @@ async def dispose(app: object) -> None:
     """
     state = getattr(app, "state", None)
     # The decider too: a catalog decider holds an HTTP pool of its own, and a store decider's close is a no-op.
-    for held in (getattr(state, "decider", None), getattr(state, "fga", None) or getattr(state, "fga_client", None)):
+    for held in (getattr(state, "decider", None), getattr(state, "fga", None)):
         if held is not None:
             with suppress(Exception):
                 await held.close()

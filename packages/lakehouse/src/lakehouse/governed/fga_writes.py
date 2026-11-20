@@ -34,7 +34,6 @@ from lakehouse.governed import fga_reads
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.fga_model import CHILD_EDGE_PARENT_TYPES, hierarchy_edge_tuples  # noqa: TID251 — the writes seed and move the edges
-from lakehouse.governed.fga_reads import read_all_tuples, reject_stored_clock
 from lakehouse.governed.fga_resilience import DEFAULT_RETRY, FAIL_CLOSED, RetryPolicy, guarded, retrying
 
 
@@ -98,7 +97,6 @@ TupleOrigin = Literal[
     # grants were not revoked one by one by someone deciding each: one door removed a person from the estate.
     "principal_delete",
     "lifecycle_delete",
-    "train",
 ]
 
 
@@ -144,10 +142,10 @@ async def write_tuples(
 
     Transient failures are retried; on outage we fail closed with ``ServiceUnavailableError`` so the caller
     does not believe a grant succeeded when it did not. A batch in which any tuple carries the check's
-    clock is refused whole with ``InvalidInputError`` (:func:`reject_stored_clock`), matching the
+    clock is refused whole with ``InvalidInputError`` (:func:`fga_reads.reject_stored_clock`), matching the
     all-or-nothing write it would have been.
     """
-    reject_stored_clock(tuples)
+    fga_reads.reject_stored_clock(tuples)
 
     async def _do_write() -> None:
         # The cast papers over the SDK's own annotation, not our types: `write`'s `options` is
@@ -360,7 +358,7 @@ async def revoke_undeclared(
         The tuples the server removed.
     """
     kept = {(t.user, t.relation) for t in declared}
-    held = await read_all_tuples(client, obj=obj, relation=relation)
+    held = await fga_reads.read_all_tuples(client, obj=obj, relation=relation)
     stale = [found for found in held if found.user in own and (found.user, found.relation) not in kept]
     return await delete_tuples(client, stale, actor=actor, origin=origin)
 
@@ -387,7 +385,7 @@ async def commit_unless_changed(
     writer had won; an outage fails closed with ``ServiceUnavailableError`` instead, an unknown outcome to the caller.
     Every tuple a committed Write changed is audited; a refused one changed nothing.
     """
-    reject_stored_clock(writes)
+    fga_reads.reject_stored_clock(writes)
     try:
         await client.write(ClientWriteRequest(writes=writes or None, deletes=deletes or None))
     except FAIL_CLOSED as exc:

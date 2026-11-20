@@ -6,9 +6,11 @@ credential of its own and reads none from its surroundings: every client signs w
 a caller with none gets no client ([[XC-219]]).
 """
 
+from __future__ import annotations
+
 import os
 from functools import cache
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, NotRequired, TypedDict
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,10 +19,14 @@ from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.errors import MissingStoreCredentialError
 
 
-# Public alias for the boto3 S3 client. boto3 ships no public stubs, so this
-# resolves to `Any` at the type level; callers get a usable name without
-# reaching past storage's boundary into `mypy_boto3_s3`.
-type S3Client = Any
+if TYPE_CHECKING:
+    from boto3.session import Session
+    from mypy_boto3_s3.client import S3Client as _BotoS3Client
+
+
+#: The boto3 S3 client, as `boto3-stubs[s3]` types it: callers get a usable name without reaching past storage's
+#: boundary into `mypy_boto3_s3`, which is a type-only dependency.
+type S3Client = _BotoS3Client
 
 #: The most requests one client has in flight at once, and so the connections its pool keeps: the widest fan-out that
 #: shares a client, `lakehouse.storage.stored_objects.identities`. botocore's default pool keeps ten, so sixteen reads closed six
@@ -74,7 +80,7 @@ def configured_endpoint() -> str | None:
     return S3EnvSettings().endpoint
 
 
-def s3_client(endpoint: str | None = None, *, key_pair: S3KeyPair, region: str | None = None, insecure: bool | None = None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+def s3_client(endpoint: str | None = None, *, key_pair: S3KeyPair, region: str | None = None, insecure: bool | None = None) -> S3Client:
     """Build a boto3 S3 client for any S3-compatible backend (RustFS / AWS / any S3), signed by ``key_pair``.
 
     Endpoint/CA/insecure flags resolve from env (`RASK_S3_*`). Path-style + s3v4 are the RustFS-safe, AWS-accepted defaults.
@@ -92,7 +98,7 @@ def s3_client(endpoint: str | None = None, *, key_pair: S3KeyPair, region: str |
     return _client(endpoint or env.endpoint, env, key_pair=key_pair, region=region, insecure=insecure)
 
 
-def aws_s3_client(*, key_pair: S3KeyPair, region: str) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+def aws_s3_client(*, key_pair: S3KeyPair, region: str) -> S3Client:
     """A boto3 S3 client for AWS proper in ``region``, signed by ``key_pair``: the client for a root whose storage
     options name no endpoint.
 
@@ -108,7 +114,7 @@ def aws_s3_client(*, key_pair: S3KeyPair, region: str) -> Any:  # noqa: ANN401 �
 
 
 @cache
-def aws_session() -> Any:  # noqa: ANN401 — boto3 ships no public stub for its Session
+def aws_session() -> Session:
     """The one boto3 session every client of this package is built from: it reads no profile and no shared file.
 
     boto3's default session takes ``AWS_PROFILE``/``AWS_DEFAULT_PROFILE``, ``AWS_CONFIG_FILE`` and
@@ -120,7 +126,7 @@ def aws_session() -> Any:  # noqa: ANN401 — boto3 ships no public stub for its
     on botocore 1.43.58), and every read of the store builds one. Shared across threads as boto3's default session is.
     """
     import boto3
-    from botocore.session import Session
+    from botocore.session import Session as BotocoreSession
 
     # botocore's `session_vars` entries are (config file key, environment variables, default, converter).
     unread = {
@@ -128,10 +134,18 @@ def aws_session() -> Any:  # noqa: ANN401 — boto3 ships no public stub for its
         "config_file": (None, None, os.devnull, None),
         "credentials_file": (None, None, os.devnull, None),
     }
-    return boto3.session.Session(botocore_session=Session(session_vars=unread))
+    return boto3.session.Session(botocore_session=BotocoreSession(session_vars=unread))
 
 
-def _signing(key_pair: S3KeyPair) -> dict[str, str]:
+class _Signing(TypedDict):
+    """The credential keywords a boto3 client is built with."""
+
+    aws_access_key_id: str
+    aws_secret_access_key: str
+    aws_session_token: NotRequired[str]
+
+
+def _signing(key_pair: S3KeyPair) -> _Signing:
     """The credential arguments a client is built with: ``key_pair`` and nothing else.
 
     botocore uses its default chain (environment variables, shared files, profiles, a credential process, an assumed
@@ -147,13 +161,13 @@ def _signing(key_pair: S3KeyPair) -> dict[str, str]:
     secret = key_pair.secret_access_key.get_secret_value()
     if missing := [name for name, value in (("access_key_id", key_pair.access_key_id), ("secret_access_key", secret)) if not value]:
         raise MissingStoreCredentialError(f"the key pair names no {' and no '.join(missing)}, so no store client is built")
-    signing = {"aws_access_key_id": key_pair.access_key_id, "aws_secret_access_key": secret}
+    signing: _Signing = {"aws_access_key_id": key_pair.access_key_id, "aws_secret_access_key": secret}
     if key_pair.session_token is not None and (token := key_pair.session_token.get_secret_value()):
         signing["aws_session_token"] = token
     return signing
 
 
-def _client(endpoint: str | None, env: S3EnvSettings, *, key_pair: S3KeyPair, region: str | None, insecure: bool | None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+def _client(endpoint: str | None, env: S3EnvSettings, *, key_pair: S3KeyPair, region: str | None, insecure: bool | None) -> S3Client:
     """The boto3 client both builders hand out; ``endpoint`` None is the region's own, whatever the environment names."""
     from botocore.config import Config
 

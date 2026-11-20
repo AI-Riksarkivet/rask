@@ -13,9 +13,8 @@ from typing import Any
 from lakehouse.storage.client import aws_session
 
 
-# Public alias for the boto3 STS client, mirroring `lakehouse.storage.client.S3Client`: boto3 ships no public stubs,
-# so this resolves to `Any` at the type level and callers get a name without reaching into
-# `mypy_boto3_sts`.
+# Public alias for the boto3 STS client. `boto3-stubs` is a development dependency with its `s3` extra only, so no STS stub is
+# installed and this resolves to `Any` at the type level; callers get a name without reaching into `mypy_boto3_sts`.
 type STSClient = Any
 
 

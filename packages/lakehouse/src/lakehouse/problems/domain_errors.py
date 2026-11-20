@@ -54,11 +54,10 @@ class DomainError(HTTPException):
     status_code: int = HTTPStatus.INTERNAL_SERVER_ERROR
     title: str = "Internal Server Error"
 
-    #: The RFC 9457 `type` URI. `None` means "derive it from the class name", which is what every
-    #: refusal in the estate answered before this attribute existed. A subclass sets it when the
-    #: DOMAIN has a better name for the failure than its class name does — a graph that does not
-    #: validate is `about:blank#flow-invalid`, not one derived from its exception class, and a
-    #: client dispatching on `type` wants the specific one. Naming the failure is the taxonomy
+    #: The RFC 9457 `type` URI. `None` means "derive it from the class name". A subclass sets it when
+    #: the DOMAIN has a better name for the failure than its class name does (say `about:blank#quota-exceeded`
+    #: rather than one derived from the exception class), since a client dispatching on `type` wants the
+    #: specific one. No error the lakehouse raises sets it today. Naming the failure is the taxonomy
     #: working, not a departure from it.
     problem_type: str | None = None
 

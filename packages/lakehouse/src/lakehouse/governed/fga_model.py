@@ -21,7 +21,7 @@ from __future__ import annotations
 import functools
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from openfga_sdk.client.models import ClientTuple
 
@@ -35,7 +35,7 @@ _MODEL_DSL_PATH = _MODEL_PATH.with_name("model.fga")
 # the model gives `project` no `child`, and a `child` tuple on a type that does not define it is
 # accepted by OpenFGA and read by no rule — a silent no-op. Adding a `child` relation to a type in
 # `model.fga` means adding it here too.
-CHILD_EDGE_PARENT_TYPES = frozenset({"warehouse", "namespace"})
+CHILD_EDGE_PARENT_TYPES: Final = frozenset({"warehouse", "namespace"})
 
 
 def hierarchy_edge_tuples(*, child_object: str, parent_object: str) -> list[ClientTuple]:

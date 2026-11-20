@@ -177,7 +177,8 @@ def test_a_store_client_signs_with_the_pair_it_is_given_and_no_other(monkeypatch
         def stream(self, **_kwargs: object) -> Iterator[bytes]:
             yield b""
 
-    def answer(request: Any, **_kwargs: object) -> AWSResponse:
+    # No return annotation: botocore-stubs types every event handler `-> None`, and a before-send one returns the response.
+    def answer(request: Any, **_kwargs: object):
         signed.append({name: value.decode() if isinstance(value, bytes) else value for name, value in request.headers.items()})
         return AWSResponse(request.url, 200, HTTPHeaders(), _EmptyBody())
 

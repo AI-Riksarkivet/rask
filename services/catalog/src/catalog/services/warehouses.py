@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import suppress
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pyarrow.fs as pafs
 from lance_namespace import (
@@ -46,6 +46,10 @@ from lakehouse.records.warehouse_records import read as read_warehouse_record
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import DEFAULT_REGION, StorageOptions, object_client
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.type_defs import ObjectIdentifierTypeDef
 
 
 log = logging.getLogger(__name__)
@@ -541,7 +545,7 @@ def purge_bucket(bucket: str, storage_options: StorageOptions) -> int:
     try:
         paginator = client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket):
-            keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+            keys: list[ObjectIdentifierTypeDef] = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
             if not keys:
                 continue
             # delete_objects caps at 1000 keys per call, which is exactly the paginator's page size.
