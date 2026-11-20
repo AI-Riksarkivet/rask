@@ -555,3 +555,104 @@ follows the change in flight there.
 **What then remains at the top of the library:** `timers`, `naming`, `arrow_ipc`, `compaction_gate`, `table_paths`,
 `derived_tables`, `lance_metrics` and `schemas`, each judged by its own job: `schemas.health` with the process, `timers`
 as the process's claim on the store or a module of its own above the records, and the rest as leaves of one job each.
+
+## The answers group (2026-11-20)
+
+The eighth group by job is how a lakehouse service answers an error, `lakehouse.problems`: the RFC 9457 body and its media
+type, the spec's error mapping onto it and the handlers every service app installs, the committed set of spec routes, the
+store-outage reading, and the domain errors a rask-only door raises. Measured with `ast` on `9a5cebcde` (module-level,
+function-local, `TYPE_CHECKING` and relative imports; 114 modules, 229 edges), the proposal above held: `ns_errors`,
+`problem`, `spec_routes`, `outage` and `exceptions` import nothing in the library but each other (`ns_errors` ->
+`outage`, `problem`, `spec_routes`) and `process.correlation` (`problem`), and the rest imports them from the auth plane
+(`exceptions`, in `issuer_mirror`, `machine_identity` and `oidc`) and the service app (`factory` -> `exceptions`,
+`ns_errors`; `body_limit`, `deadline`, `panic_catcher` -> `problem`). The edges run one way. 111 lines outside
+`docs/adr` named the six modules' old paths; each names the new one.
+
+| Module | In the group as |
+| --- | --- |
+| `lakehouse.ns_errors` | `lakehouse.problems.ns_errors` |
+| `lakehouse.problem` | `lakehouse.problems.envelope` |
+| `lakehouse.spec_routes` | `lakehouse.problems.spec_routes` |
+| `lakehouse.outage` | `lakehouse.problems.outage` |
+| `lakehouse.exceptions` | `lakehouse.problems.domain_errors` |
+| `lakehouse.read_refusal` | `lakehouse.service_app.read_refusal` |
+
+**The name.** `problems` is what a reader looking for an error answer looks for: every body the group builds or declares
+is an RFC 9457 problem served as `application/problem+json`, and `lance_docs/ns_catalog/spec.yaml`'s `ErrorResponse` is
+that body with the spec's `code`. No module or installed package uses the name. `errors` and `exceptions` were refused:
+they read as the standard library's, and `lakehouse.storage.errors` already names the store's own failures. `refusals`
+was weighed and refused: a redacted 500 is not a refusal, and `read_refusal`, which is not of the group, would read as one
+of it. Inside it, `problem` takes `envelope`, since `problems.problem` names nothing and the module's own docstring calls
+it the envelope every refusal carries (11 lines named it), and `exceptions` takes `domain_errors` beside `ns_errors`: one is
+the spec's taxonomy and its handlers, the other the domain hierarchy a rask-only door raises and its handler, and the
+pair says which taxonomy each is (19 lines named it). `ns_errors`, `spec_routes` and `outage` keep their names.
+
+Borderline calls:
+
+- `outage` joins: its job is which spec answer a failure gets (`store_refusal` returns code 17 or 18, and the installer's
+  catch-all answers 503 by it), and nothing else in the library imports it.
+- `spec_routes` joins: it is data, but the only library reader is the installer, which answers a spec route's validation
+  failure 400 by it and declares each spec operation's error responses from it.
+- `read_refusal` joins the service app, not this group: it builds no body and imports nothing; it is the mechanism a
+  pure-ASGI layer answers by from inside the body read it hands the app, and its two importers are request layers
+  (`service_app.body_limit` and the catalog's `api.load_shed`). The service app's contract admits the catalog as an
+  importer, so the move costs no contract.
+- `schemas.health` stays out: a probe's body is the process's answer, not an error's.
+
+The group's debts:
+
+- **A re-export facade.** `ns_errors` listed `PROBLEM_JSON` and `problem_body` in its `__all__` for names `problem`
+  defines. Three import sites took them from there (`problem_body` in the catalog's `api.maintenance_mode` and
+  `api.signing_gate`, `PROBLEM_JSON` in `tests/unit/test_framework_errors_carry_a_code.py`), and one test docstring named
+  `ns_errors.problem_body`; each names `problems.envelope`. `ns_errors` still imports both for its own handlers and lists
+  neither.
+- **`PROBLEM_JSON` defined twice.** `problem` and `exceptions` each defined `application/problem+json`; `domain_errors`
+  imports `envelope`'s, so the media type is defined once in the library and every handler and `send_problem` sends that
+  one. `packages/lakehouse/tests/test_problem_extension_members.py` and `tests/unit/test_framework_errors_carry_a_code.py`
+  assert the content type the two handler families send, and pass. The catalog restates the literal twice more, in
+  `catalog/main.py` and `catalog/api/maintenance_mode.py` (which `api.signing_gate` imports it from); those are a
+  service's, outside this group, and are named here for the catalog's own row.
+- **Problem responses built more than one way** (the catalog API audit's L5), within this group's modules only. Builders:
+  `envelope.problem_body` (six keys and the trace's `instance`); `ns_errors.problem_detail`, which builds the same keys
+  by hand and then merges a `PartiallyApplied`'s extension members; and `domain_errors._problem`, a different body
+  (`about:blank#<class>` type, four keys, no `code`, `error` or `instance`, then extension members). Emitters: a
+  `JSONResponse` with `media_type=PROBLEM_JSON` at six handler sites (five in `ns_errors`, one in `domain_errors`), and
+  `envelope.send_problem` for the pure-ASGI layers. So the spec's bodies go through one builder but for
+  `problem_detail`, and the domain body is a second shape. Measured, not changed: for all 24 `lance_namespace` error
+  classes, `problem_detail`'s body equals `problem_body(exc.code, status=…, title=<class>, detail=…, slug=<class lower>)`
+  key for key and in order, so building it through `problem_body` is a refactor with no wire change, proposed for a commit
+  of its own. Giving the domain body the spec's `code` changes what a rask-only door answers, and is decided on its own.
+
+`problems/__init__.py` is a docstring with no import. Every module of the group declares `__all__`: three did not
+(`envelope`, `spec_routes`, `domain_errors`). Names a module is imported for that are not in its `__all__`: the
+spec-status map `ns_errors._STATUS`, which `tests/unit/test_ns_errors_contract.py` reads to pin that every `ErrorCode` is
+mapped, left private.
+
+Contract: `the-problems-import-nothing-else-in-the-library` (`forbidden`, from `lakehouse.problems` to `lakehouse.*`,
+indirect imports included, ignoring `problems.envelope -> process.correlation`). It held when it was added; a planted
+`import lakehouse.naming` in `problems.outage` broke it. `catalog-api-speaks-the-spec-taxonomy` forbids
+`lakehouse.problems.domain_errors`.
+
+A module's logger is named by its path, so one logger name follows the group: `lakehouse.exceptions` logs as
+`lakehouse.problems.domain_errors` (`domain error`, a 5xx domain error's traceback). No alert rule, dashboard, collector
+route, runbook or `caplog` names it, and `process.log_levels` raises the `lakehouse` package logger, which it inherits.
+`ns_errors`' handlers log on the logger the service passes in, so the catalog's, lineage's and maintenance's names are
+unchanged. No module of the group has a tracer or a meter.
+
+**What then remains at the top of the library**, each judged by its own job:
+
+- `naming`: the governed id delimiter and a control-plane id's shape; imported by the events, the auth plane and the
+  records, so it stays a leaf of its own below all three.
+- `arrow_ipc`: the Arrow IPC stream encoder, the validating decoder and its media type; a leaf of one job, imported by the
+  services alone.
+- `table_paths`: where a table recorded at a location keeps its objects; built on `lancekit.base_refs` and the store, so
+  it belongs above both, with the records or as a leaf of its own.
+- `compaction_gate`: whether compacting a dataset is refused (ADR 0162), the gate maintenance and the catalog's
+  `version/create` both ask; built on `lancekit.features`, `records.base_registry` and the store, a leaf above the
+  records.
+- `derived_tables`: what a table fed, read from the edge list; built on `lancekit.filters`, a leaf of one job.
+- `lance_metrics`: Lance's native IO metrics bridged into OpenTelemetry; imports nothing in the library, a leaf.
+- `timers`: a fixed timer whose windows are claimed under `records.control_prefixes` through the store; the process's
+  claim on the store or a module of its own above the records.
+- `schemas`: the probe's body (`schemas.health`), imported by the process and the auth plane; the process's answer by
+  job, left for the last group as the process group records.

@@ -1,9 +1,9 @@
 """The RFC 9457 problem envelope every refusal the lakehouse answers carries.
 
 The envelope is RFC 9457 plus the two spec-0.9 keys, and the code is an integer on the wire: ``ErrorCode`` is an
-``IntEnum``, so a caller passes its member unchanged. ``lakehouse.ns_errors`` maps the Lance Namespace errors onto it
-and re-exports both names; the sites that must BUILD a response rather than raise (``lakehouse.service_app.body_limit``, a door
-that sets ``Retry-After``) take ``problem_body`` from here.
+``IntEnum``, so a caller passes its member unchanged. ``lakehouse.problems.ns_errors`` maps the Lance Namespace errors
+onto it; the sites that must BUILD a response rather than raise (``lakehouse.service_app.body_limit``, a door that sets
+``Retry-After``) take ``problem_body`` from here, and every problem response names its media type by ``PROBLEM_JSON``.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from starlette.types import Send
 
 from lakehouse.process.correlation import current_trace_id
 
+
+__all__ = ["PROBLEM_JSON", "occurrence", "problem_body", "send_problem"]
 
 #: The RFC 9457 media type every problem body is served with.
 PROBLEM_JSON = "application/problem+json"

@@ -16,7 +16,7 @@ what it owns is the part that is identical in all of them:
    three, which is how the schemas shipped openly once. Each page names its schema by a URL relative to itself, and
    the schema its server the same way (``_SERVED_BESIDE_THE_SCHEMA``): a service is published under a prefix its route
    rewrites or the service strips, which it is never told, so only a relative URL is right behind every route.
-3. ``register_handlers`` THEN ``install_problem_handlers``. ``lakehouse.exceptions.DomainError``
+3. ``register_handlers`` THEN ``install_problem_handlers``. ``lakehouse.problems.domain_errors.DomainError``
    subclasses ``HTTPException``, so without the first, starlette's built-in handler renders it —
    status and headers intact, ``{"detail": ...}`` body — which is how the draining 503 came to declare
    problem+json over a body that was not one. ``install_problem_handlers`` owns request validation and the
@@ -60,9 +60,9 @@ from opentelemetry.sdk.trace import TracerProvider
 from starlette.middleware import Middleware
 from starlette.types import Receive, Scope, Send
 
-from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import configure_audit
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.domain_errors import register_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.process.draining import arm_drain_on_sigterm
 from lakehouse.process.log_handler import setup_logging
 from lakehouse.process.probes import LiveCheck, ReadyCheck, make_probes_router

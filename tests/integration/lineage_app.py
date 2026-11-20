@@ -36,7 +36,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from tests.bus_double import BusDouble, Sent, session_holding
 from tests.integration.openfga_grants import Grants
 

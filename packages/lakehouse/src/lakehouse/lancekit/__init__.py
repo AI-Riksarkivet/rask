@@ -10,6 +10,6 @@ process's bounded Lance session (``lance_session``), and the manifest config key
 
 The package imports nothing else in the library, so every plane builds on it and it builds on none of them
 (`.importlinter`). The Arrow codec of the namespace doors and the store-outage classifier sit beside it
-(``lakehouse.arrow_ipc``, ``lakehouse.outage``). Nothing here imports a workload's code, so the package carries no
+(``lakehouse.arrow_ipc``, ``lakehouse.problems.outage``). Nothing here imports a workload's code, so the package carries no
 modality's dependencies. The ``__init__`` exports nothing: every name is imported from the module that defines it.
 """

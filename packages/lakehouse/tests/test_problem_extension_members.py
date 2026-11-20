@@ -21,7 +21,8 @@ from http import HTTPStatus
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lakehouse.exceptions import PROBLEM_JSON, DomainError, register_handlers
+from lakehouse.problems.domain_errors import DomainError, register_handlers
+from lakehouse.problems.envelope import PROBLEM_JSON
 
 
 class UnprocessableEntityError(DomainError):

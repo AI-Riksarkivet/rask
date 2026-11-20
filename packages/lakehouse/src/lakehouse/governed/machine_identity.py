@@ -25,10 +25,10 @@ import jwt
 from lance_namespace import UnauthenticatedError
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, SERVICE_ACCOUNT_IDP, Principal
 from lakehouse.governed.projected_token import EmptyTokenFileError, read_token_file
+from lakehouse.problems.domain_errors import ServiceUnavailableError
 
 
 log = logging.getLogger(__name__)

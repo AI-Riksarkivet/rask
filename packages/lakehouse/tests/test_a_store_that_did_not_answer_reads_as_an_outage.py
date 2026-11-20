@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from botocore.exceptions import ClientError, ConnectionClosedError, EndpointConnectionError, ParamValidationError, ReadTimeoutError
 
-from lakehouse.outage import reads_as_store_outage
+from lakehouse.problems.outage import reads_as_store_outage
 
 
 _KEY = "When reading information for key 't/_versions/1.manifest' in bucket 'b': "

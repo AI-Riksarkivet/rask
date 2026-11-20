@@ -43,7 +43,7 @@ from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
 from store_identity import store_options
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.problem import PROBLEM_JSON
+from lakehouse.problems.envelope import PROBLEM_JSON
 from lakehouse.storage.options import s3_filesystem
 
 

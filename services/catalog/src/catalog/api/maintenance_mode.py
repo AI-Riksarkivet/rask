@@ -28,7 +28,7 @@ from catalog.api.read_actions import READ_ACTIONS, TABLE_VEND_ROUTE
 from catalog.api.route_path import route_path
 from catalog.core import vending
 from catalog.core.config import Settings
-from lakehouse.ns_errors import problem_body
+from lakehouse.problems.envelope import problem_body
 
 
 PROBLEM_JSON = "application/problem+json"

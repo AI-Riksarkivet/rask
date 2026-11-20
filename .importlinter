@@ -20,7 +20,7 @@ type = forbidden
 source_modules =
     catalog.api
 forbidden_modules =
-    lakehouse.exceptions
+    lakehouse.problems.domain_errors
 allow_indirect_imports = True
 
 # The lakehouse knows no client (XC-175): a client and a compute engine (ADR 0155) reach the lakehouse only through its
@@ -151,6 +151,21 @@ forbidden_modules =
 ignore_imports =
     lakehouse.process.health -> lakehouse.schemas.health
     lakehouse.process.probes -> lakehouse.schemas.health
+
+# The problems are how a lakehouse service answers an error (ADR 0224): the RFC 9457 body and its media type, the spec's
+# error mapping and the handlers every service app installs, the committed set of spec routes, the store-outage reading
+# and the domain errors a rask-only door raises. The service app installs them, the auth plane raises the domain errors,
+# and the services raise and answer through them, so they import nothing else in the library, directly or through another
+# module, beyond the request's trace id the body names as its `instance` (`process.correlation`).
+[importlinter:contract:the-problems-import-nothing-else-in-the-library]
+name = ADR 0224: lakehouse.problems imports nothing else in the library beyond the request's trace id
+type = forbidden
+source_modules =
+    lakehouse.problems
+forbidden_modules =
+    lakehouse.*
+ignore_imports =
+    lakehouse.problems.envelope -> lakehouse.process.correlation
 
 # The Lance table plane is the floor of the library (ADR 0224): how every service reads and judges a Lance table, from a
 # version's commit time and a manifest's wire to its feature flags, its layout and a location's spellings. It is built

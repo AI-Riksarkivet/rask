@@ -26,12 +26,12 @@ from fastapi.testclient import TestClient
 from catalog.api import security
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
-from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.domain_errors import register_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 
 
 AUDIENCE = "lance-catalog"

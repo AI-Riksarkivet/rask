@@ -15,18 +15,17 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
-from lakehouse.outage import reads_as_store_outage
-from lakehouse.problem import PROBLEM_JSON, occurrence, problem_body
-from lakehouse.spec_routes import SPEC_ERROR_STATUSES, UNSUPPORTED_STATUS, is_spec_route, structural
+from lakehouse.problems.envelope import PROBLEM_JSON, occurrence, problem_body
+from lakehouse.problems.outage import reads_as_store_outage
+from lakehouse.problems.spec_routes import SPEC_ERROR_STATUSES, UNSUPPORTED_STATUS, is_spec_route, structural
 
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-#: Re-exported from `lakehouse.problem`, which owns the Lance-free half of this module. Both names
-#: stay importable from here so no call site moved: `problem_body` had seven of them and the point of
-#: the split was packaging, not API churn. See that module for why it exists.
-__all__ = ["PROBLEM_JSON", "PartiallyApplied", "as_unsupported_if_stub", "install_problem_handlers", "problem_body", "problem_detail", "status_for"]
+#: The body and its media type are `lakehouse.problems.envelope`'s, which holds the Lance-free half of the answer and is
+#: imported from there by every site that builds a response.
+__all__ = ["PartiallyApplied", "as_unsupported_if_stub", "install_problem_handlers", "problem_detail", "status_for"]
 
 _STATUS: dict[ErrorCode, int] = {
     # 406, NOT 501, and the spec is explicit about it: `UnsupportedOperationErrorResponse` is status
@@ -302,7 +301,7 @@ _SPEC_ERROR_DESCRIPTIONS: Final = {
     "5XX": "Server Error",
 }
 
-#: The problem body every refusal carries (:func:`lakehouse.problem.problem_body`): RFC 9457's keys and the spec's
+#: The problem body every refusal carries (:func:`lakehouse.problems.envelope.problem_body`): RFC 9457's keys and the spec's
 #: ``ErrorResponse`` ``code`` and ``error``.
 _PROBLEM_SCHEMA: Final = {
     "type": "object",
@@ -322,12 +321,12 @@ _PROBLEM_RESPONSE_SCHEMA_NAME: Final = "ProblemDetails"
 
 def _declare_spec_responses(app: FastAPI) -> None:
     """Make the published schema say what a spec operation answers: each error status ``spec.yaml`` lists for it and the
-    406 any of them may answer (:data:`lakehouse.spec_routes.UNSUPPORTED_STATUS`), with the problem body, and 400 where
+    406 any of them may answer (:data:`lakehouse.problems.spec_routes.UNSUPPORTED_STATUS`), with the problem body, and 400 where
     FastAPI declares 422.
 
     FastAPI declares a 422 on every operation that validates anything and no other error, so `docs/catalog-openapi.json`
     carried 200 and 400 per spec operation where the spec lists 400, 401, 403, 404, 503 and 5XX, and 406 and 409 on some
-    (:data:`lakehouse.spec_routes.SPEC_ERROR_STATUSES`). A spec operation's 400 is the problem body
+    (:data:`lakehouse.problems.spec_routes.SPEC_ERROR_STATUSES`). A spec operation's 400 is the problem body
     `handle_validation_error` serves, not FastAPI's validation schema.
 
     Operations outside :data:`SPEC_ROUTES` are untouched — a rask-only door still declares and serves 422 — and an

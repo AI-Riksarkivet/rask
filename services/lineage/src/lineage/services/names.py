@@ -22,9 +22,9 @@ import asyncio
 from typing import Final
 
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
-from lakehouse.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from lakehouse.governed.decider import AccessDecider
 from lakehouse.naming import CATALOG_DELIMITER, identifier_location, uuid_of
+from lakehouse.problems.domain_errors import ForbiddenError, NotFoundError, UnauthorizedError
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent

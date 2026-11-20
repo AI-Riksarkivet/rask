@@ -23,7 +23,7 @@ from starlette.testclient import TestClient
 
 from catalog.core.lineage_emit import build_write_event
 from lakehouse.events.bus_delivery import Verdict
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from lineage.api.v1.router import api_router
 from lineage.core.metrics import Door
 from lineage.models import DatasetEvent, RunEvent

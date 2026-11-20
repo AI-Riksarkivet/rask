@@ -26,7 +26,7 @@ from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome, configure_audit
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.ns_errors import status_for
+from lakehouse.problems.ns_errors import status_for
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 

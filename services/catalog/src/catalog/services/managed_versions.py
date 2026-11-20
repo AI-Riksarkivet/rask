@@ -51,7 +51,7 @@ from lakehouse.lancekit.features import CREATE_FORMAT, table_file_format
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.naming import PLATFORM_PREFIX
-from lakehouse.outage import reads_as_store_outage
+from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.records import base_registry, commit_records, commit_turns, file_identities
 from lakehouse.storage.options import StorageOptions
 

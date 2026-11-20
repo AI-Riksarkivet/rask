@@ -46,7 +46,7 @@ from lakehouse.governed import fga
 from lakehouse.lancekit.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.lancekit.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.lancekit.lance_session import open_dataset
-from lakehouse.outage import store_refusal
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import base_registry, clone_sources, control_prefixes, location_claims
 from lakehouse.records.history_fences import HistoryFencedError
 from lakehouse.storage import conditional_records

@@ -30,7 +30,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records import base_registry, clone_sources
 from lakehouse.storage.options import StorageOptions
 

@@ -19,10 +19,10 @@ EXTENSION MEMBERS — ``raise Refused("2 problem(s)", extensions={"problems": [.
 subclass that wants to NAME its failure sets ``problem_type``. Both exist so a domain never has to
 build a problem body beside this module, as one route once had to.
 
-The lakehouse services (catalog, lineage, maintenance) deliberately use a DIFFERENT
-taxonomy — the ``lance_namespace`` error hierarchy via
-:func:`lakehouse.ns_errors.install_problem_handlers` — because the Lance Namespace
-REST spec pins a numeric ``code`` in the error body. That is an external contract, not drift.
+The doors the Lance Namespace REST spec defines answer with the ``lance_namespace`` error hierarchy
+(:func:`lakehouse.problems.ns_errors.install_problem_handlers`), whose body carries the spec's numeric ``code``: an
+external contract. Every service app installs both sets of handlers; the classes here are what the auth plane and
+lineage raise where the spec names no code.
 """
 
 import logging
@@ -33,11 +33,21 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from lakehouse.problems.envelope import PROBLEM_JSON
+
+
+__all__ = [
+    "ConflictError",
+    "DomainError",
+    "ForbiddenError",
+    "NotFoundError",
+    "ServiceUnavailableError",
+    "UnauthorizedError",
+    "ValidationError",
+    "register_handlers",
+]
 
 log = logging.getLogger(__name__)
-
-#: The RFC 9457 media type every problem body is served with.
-PROBLEM_JSON = "application/problem+json"
 
 
 class DomainError(HTTPException):
@@ -137,7 +147,7 @@ def register_handlers(app: FastAPI) -> None:
     """Map every :class:`DomainError` to problem+json.
 
     Server-class errors (>=500) are logged with the traceback; client-class are not (they're expected). Request
-    validation and the catch-all belong to :func:`lakehouse.ns_errors.install_problem_handlers`, which every
+    validation and the catch-all belong to :func:`lakehouse.problems.ns_errors.install_problem_handlers`, which every
     lakehouse app installs after this.
     """
 

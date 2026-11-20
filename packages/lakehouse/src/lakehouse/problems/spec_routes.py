@@ -21,6 +21,8 @@ import re
 from typing import Final
 
 
+__all__ = ["SPEC_ERROR_STATUSES", "SPEC_ROUTES", "UNSUPPORTED_STATUS", "is_spec_route", "structural"]
+
 #: (METHOD, structural path) for every operation in the vendored spec. Re-derived and compared by
 #: `test_spec_conformance.py`, so re-vendoring `lance_docs/ns_catalog/spec.yaml` reds the suite unless
 #: this moves with it.
@@ -92,7 +94,7 @@ SPEC_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
 UNSUPPORTED_STATUS: Final = "406"
 
 #: The error statuses the vendored spec lists for each of its operations, keyed as :data:`SPEC_ROUTES` is, which the
-#: published OpenAPI declares on each (``lakehouse.ns_errors``) with the problem body every refusal carries, beside
+#: published OpenAPI declares on each (``lakehouse.problems.ns_errors``) with the problem body every refusal carries, beside
 #: :data:`UNSUPPORTED_STATUS`. Re-derived and compared by ``test_spec_conformance.py``, as :data:`SPEC_ROUTES` is.
 SPEC_ERROR_STATUSES: Final[dict[tuple[str, str], frozenset[str]]] = {
     ("POST", "/v1/materialized_view/{}/create"): frozenset({"400", "401", "403", "404", "409", "503", "5XX"}),

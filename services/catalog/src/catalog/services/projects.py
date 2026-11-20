@@ -23,7 +23,7 @@ import pyarrow.fs as pafs
 from lance_namespace import InternalError
 
 from catalog.services.control_records import ProtectionChange, read_json, with_manager, with_protection
-from lakehouse.outage import reads_as_store_outage, store_refusal
+from lakehouse.problems.outage import reads_as_store_outage, store_refusal
 from lakehouse.records import control_prefixes
 from lakehouse.records.project_records import ProjectRecord, UnreadableProjectRecordError
 from lakehouse.records.project_records import read as read_project_record
@@ -58,7 +58,7 @@ def _record(raw: object, *, path: str) -> ProjectRecord:
     A record nobody can parse refuses rather than reading as a missing tenant: `require_project_exists` gates warehouse
     creation on the answer and the project's delete acts on it, so "does not exist" is a verdict.
     `InternalError` (code 18), as every record that is there and cannot be read answers
-    (`lakehouse.outage.store_refusal`): only a write to the record clears it, so the caller is not told to try again.
+    (`lakehouse.problems.outage.store_refusal`): only a write to the record clears it, so the caller is not told to try again.
 
     Raises:
         InternalError: The record cannot be read as a project's.

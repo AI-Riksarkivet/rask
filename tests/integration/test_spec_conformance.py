@@ -9,7 +9,7 @@ we assert only that the spec is a SUBSET of what's served, on (method, structura
 THE OTHER DIRECTION ([[LH-021]], LH-476): every route under ``/v1`` must be a spec operation, because a
 spec client meets it there; rask's own routes live under ``/management/v1``, apart from the spec's. The spec side
 of that check is
-``lakehouse.spec_routes.SPEC_ROUTES``, committed because no image carries ``lance_docs/``.
+``lakehouse.problems.spec_routes.SPEC_ROUTES``, committed because no image carries ``lance_docs/``.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lakehouse.spec_routes import SPEC_ROUTES
+from lakehouse.problems.spec_routes import SPEC_ROUTES
 
 
 _SPEC = Path(__file__).resolve().parents[2] / "lance_docs" / "ns_catalog" / "spec.yaml"
@@ -61,7 +61,7 @@ def _error_statuses(paths: dict[str, Any]) -> dict[tuple[str, str], frozenset[st
 
 def test_every_spec_operation_publishes_the_error_statuses_the_spec_lists(client: TestClient) -> None:
     """The catalog's OpenAPI declares on each spec operation exactly the error statuses ``spec.yaml`` lists for it
-    (``lakehouse.spec_routes.SPEC_ERROR_STATUSES``, committed because no image carries ``lance_docs/``) and the 406 any of
+    (``lakehouse.problems.spec_routes.SPEC_ERROR_STATUSES``, committed because no image carries ``lance_docs/``) and the 406 any of
     them may answer, the spec's status for code 0 (ADR 0020 row 11)."""
     listed = _error_statuses(_spec().get("paths", {}))
     served = _error_statuses(client.app.openapi().get("paths", {}))

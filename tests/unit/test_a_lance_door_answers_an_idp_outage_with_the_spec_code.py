@@ -40,12 +40,12 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api import security as catalog_security
 from catalog.core.config import Settings as CatalogSettings
-from lakehouse.exceptions import register_handlers
 from lakehouse.governed import oidc
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.domain_errors import register_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from lineage.api import security as lineage_security
 from lineage.core.config import LineageSettings
 

@@ -110,7 +110,7 @@ def validated_or_refuse(record: object, model: type[BucketClaimRecord], *, event
 
     A claim read by its key has no skip list to hand back: its only other answer is "unclaimed", and a bucket whose
     claim nobody can parse would then be free for a second project to take. `InternalError` (code 18), as every
-    record that is there and cannot be read answers (`lakehouse.outage.store_refusal`): only a write to the record
+    record that is there and cannot be read answers (`lakehouse.problems.outage.store_refusal`): only a write to the record
     clears it, so the caller is not told to try again.
     """
     try:

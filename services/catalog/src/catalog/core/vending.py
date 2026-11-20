@@ -48,7 +48,7 @@ from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from lakehouse.lancekit.features import CREATE_FORMAT, BasePathRef, TableFileFormat, manifest_base_path_refs, table_file_format
 from lakehouse.lancekit.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 from lakehouse.naming import PLATFORM_PREFIX
-from lakehouse.outage import reads_as_store_outage, store_refusal
+from lakehouse.problems.outage import reads_as_store_outage, store_refusal
 from lakehouse.records import file_identities, history_fences
 from lakehouse.records.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.storage import store_session
@@ -63,7 +63,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: What a vend refused for want of a reading did not do (:func:`lakehouse.outage.store_refusal`).
+#: What a vend refused for want of a reading did not do (:func:`lakehouse.problems.outage.store_refusal`).
 _VENDED_NOTHING: Final = "no credential was vended"
 
 #: What a credential may do inside the prefix it is scoped to ([[LH-202]]):

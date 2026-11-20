@@ -100,7 +100,7 @@ flowchart LR
 Code layout (where each concern lives). The catalog service is a uv workspace member, so its
 package sits under `services/catalog/src/catalog/`, layered into `api/` (routes/deps/security),
 `core/` (config + infra), and `services/` (business logic). The cross-service modules
-(`secrets`, `fga`, `oidc`, `audit`, `exceptions`, `timers`) live in the **`lakehouse`** library, and every service
+(`secrets`, `fga`, `oidc`, `audit`, `problems`, `timers`) live in the **`lakehouse`** library, and every service
 imports them as `from lakehouse.X` (the governed subset under `lakehouse.governed`); only catalog, lineage and
 maintenance import it:
 

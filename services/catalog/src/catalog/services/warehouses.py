@@ -37,7 +37,7 @@ from catalog.services.control_records import (
     with_protection,
 )
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
-from lakehouse.outage import reads_as_store_outage, store_refusal
+from lakehouse.problems.outage import reads_as_store_outage, store_refusal
 from lakehouse.records import control_prefixes, trash
 from lakehouse.records.record_store import delete_record
 from lakehouse.records.trash import TrashRecord
@@ -74,7 +74,7 @@ def _record(raw: object, *, path: str) -> WarehouseRecord:
     A singular read has no skip list to hand back, so a record nobody can parse refuses rather than reading as
     unregistered: for a warehouse's own doors an absent record is a 404, and for the router it is "no such warehouse"
     ([[LH-593]]), which would answer every one of a tenant's names as not there. `InternalError` (code 18), as every
-    record that is there and cannot be read answers (`lakehouse.outage.store_refusal`): only a write to the record
+    record that is there and cannot be read answers (`lakehouse.problems.outage.store_refusal`): only a write to the record
     clears it, so the caller is not told to try again.
 
     Raises:

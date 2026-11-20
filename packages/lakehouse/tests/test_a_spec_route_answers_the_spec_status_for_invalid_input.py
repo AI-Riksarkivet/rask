@@ -25,8 +25,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.spec_routes import SPEC_ROUTES, is_spec_route
+from lakehouse.problems.ns_errors import install_problem_handlers
+from lakehouse.problems.spec_routes import SPEC_ROUTES, is_spec_route
 
 
 class _Body(BaseModel):

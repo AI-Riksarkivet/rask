@@ -85,8 +85,8 @@ import jwt
 from lance_namespace import UnauthenticatedError
 from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError
 
-from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.projected_token import read_token_file
+from lakehouse.problems.domain_errors import ServiceUnavailableError
 
 
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"

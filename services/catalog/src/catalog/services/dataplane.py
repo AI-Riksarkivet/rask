@@ -134,8 +134,8 @@ from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.ns_errors import PartiallyApplied
-from lakehouse.outage import reads_as_store_outage
+from lakehouse.problems.ns_errors import PartiallyApplied
+from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.records import base_registry, clone_sources, commit_records, commit_turns, data_directories, file_identities, location_claims, trash
 from lakehouse.records.control_prefixes import CONTROL_PREFIXES
 from lakehouse.records.history_fences import HistoryWork
@@ -3480,7 +3480,7 @@ def _raise_if_store_outage(exc: BaseException, *, table: str) -> None:
     table because the store blinked.
 
     Raises:
-        ServiceUnavailableError: ``exc`` is an object-store outage (`lakehouse.outage`).
+        ServiceUnavailableError: ``exc`` is an object-store outage (`lakehouse.problems.outage`).
     """
     if reads_as_store_outage(exc):
         raise ServiceUnavailableError(f"the object store did not answer reading the change window on table {table}") from exc

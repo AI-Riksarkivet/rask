@@ -76,7 +76,7 @@ def test_a_branch_commit_the_store_cannot_key_is_refused_before_it_lands(ns, tab
     rather than recording it under a key no pass reads."""
 
     def unanswered(_branches: object) -> dict[str, object]:
-        # pylance's own text for a store that accepted the request and never answered (`lakehouse.outage`).
+        # pylance's own text for a store that accepted the request and never answered (`lakehouse.problems.outage`).
         raise OSError("LanceError(IO): Error performing GET http://store/rows/_refs/branches/ in 3.0s - HTTP error: error sending request")
 
     monkeypatch.setattr(Branches, "list", unanswered)

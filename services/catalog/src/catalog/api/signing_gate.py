@@ -32,7 +32,7 @@ from catalog.core.identifiers import parse_identifier
 from catalog.services.provenance_namespace import is_provenance
 from lakehouse.governed import fga
 from lakehouse.governed.signing_key import signing_of
-from lakehouse.ns_errors import problem_body
+from lakehouse.problems.envelope import problem_body
 
 
 #: The data doors that announce through the lineage emitter alone, so a write through one under the provenance namespace

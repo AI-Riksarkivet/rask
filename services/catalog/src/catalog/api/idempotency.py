@@ -52,7 +52,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.api.dependencies import SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.services import idempotency_records
-from lakehouse.ns_errors import status_for
+from lakehouse.problems.ns_errors import status_for
 from lakehouse.storage.conditional_records import RecordChangedError
 from lakehouse.storage.options import StorageOptions
 

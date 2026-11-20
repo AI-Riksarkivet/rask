@@ -280,11 +280,11 @@ bodies** (`application/problem+json`).
 
 **The one rule:** an endpoint raises `lance_namespace` typed errors
 (`InvalidInputError`, `NamespaceNotFoundError`, …) and lets
-`lakehouse/ns_errors.py::install_problem_handlers` translate — it maps all 24 codes
+`lakehouse/problems/ns_errors.py::install_problem_handlers` translate — it maps all 24 codes
 (not-founds → 404, already-exists/not-empty/concurrent → 409, `InvalidInput` → 400,
 `PermissionDenied` → 403, `Unauthenticated` → 401, `Unsupported` → **406** (the spec's own status; Q3, 2026-09-02), `Throttling` → 429).
 The published OpenAPI declares on every spec operation the error statuses `spec.yaml` lists for it, with the problem
-body, and 406, which any of them may answer (`lakehouse.spec_routes.UNSUPPORTED_STATUS`, ADR 0020 row 11).
+body, and 406, which any of them may answer (`lakehouse.problems.spec_routes.UNSUPPORTED_STATUS`, ADR 0020 row 11).
 The branch codes were MISSING until 2026-08-04 — a missing branch answered 500 on endpoints rask
 ships. `tests/unit/test_ns_errors_contract.py` now pins the map against the ENUM, so the next
 spec-added code fails a test instead of a client.
@@ -778,7 +778,7 @@ governing their data. The project-scoped surface is the console's project page, 
   sibling guard, a project policy set) where `list_warehouses` skips it, and `trash.every_record` raises where
   `trash.list_all` skips (`trash.named`, an undrop restoring its cascade, `warehouses.trash_owned_by`, a cascade's
   `fga_deps._trashed_objects`). A record you cannot read may be the one the decision is about. Every such refusal tells
-  an outage from a record (`lakehouse.outage.store_refusal`): a store that did not answer is 503 code 17, which a retry
+  an outage from a record (`lakehouse.problems.outage.store_refusal`): a store that did not answer is 503 code 17, which a retry
   may clear; a record that is there and cannot be read as one is 500 code 18, which only writing it again clears. The
   registry reader raises the outage itself, so even a tolerant listing never reads one as a corrupt record.
 - `deactivate` = offboarding step one (quarantine; routing 403s every name whose first segment is the warehouse).
@@ -945,7 +945,7 @@ governing their data. The project-scoped surface is the console's project page, 
   the location the backend RESOLVED: another registered table overlapping it, flag 256 (mixed data file
   versions, sticky; the message names the recreate remedy) or a declared base nothing sanctions is a 400
   `InvalidInput`; an open the store did not answer is a 503 and a dataset that is there and does not open a 500 (code 18,
-  `lakehouse.outage.store_refusal`); each deregisters what the call attached. An absent location
+  `lakehouse.problems.outage.store_refusal`); each deregisters what the call attached. An absent location
   still registers.
   Never gate this on `unsupported_features()`: a table created with one external blob prefix in `initial_bases` sets flag 16 and would be
   refused. The catalog's own re-registers (table and namespace undrop) log `restored_mixed_file_versions`
@@ -1106,7 +1106,7 @@ governing their data. The project-scoped surface is the console's project page, 
   outcome and keeps its staged manifest. A version another writer took since the writer staged it answers 409 code 14
   before it is judged (`managed_versions.VersionTakenError`, the spec's 409 for a version that exists) and hands the
   writer the ref's next turn ([[LH-259]]); a version beyond the next answers 400. A read the judgment needs that the store
-  cannot serve answers 503 code 17, in Lance's dialect and pyarrow's alike (`lakehouse.outage`), never the 400
+  cannot serve answers 503 code 17, in Lance's dialect and pyarrow's alike (`lakehouse.problems.outage`), never the 400
   code 13 a stock client drops as its own malformed commit; only a ref `dataplane.holds_a_version` finds holding no
   committed version follows version 0, and one whose latest committed version does not open answers 500 code 18
   ([[LH-545]], `lance_docs/ns_catalog/namespace/operations/errors.md`). The door admits a writer or a maintainer (`can_create_version`), and the judge

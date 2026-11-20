@@ -29,7 +29,7 @@ from refusals import assert_refused
 from scratch_tenant import ADMIN_USER, CATALOG, DEX, Identity, ok, tuples_on
 
 from catalog.services.declaration import Declaration
-from lakehouse.problem import PROBLEM_JSON
+from lakehouse.problems.envelope import PROBLEM_JSON
 
 
 #: The estate root and the estate's own warehouse: the defaults of `RASK_FGA_ROOT_OBJECT` and

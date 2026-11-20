@@ -28,7 +28,7 @@ import logging
 
 import pytest
 
-from lakehouse.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
+from lakehouse.problems.domain_errors import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
 from lineage.services import catalog_reader
 
 

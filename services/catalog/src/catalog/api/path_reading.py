@@ -32,8 +32,8 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from catalog.core.config import Settings
-from lakehouse.ns_errors import problem_detail
-from lakehouse.problem import PROBLEM_JSON
+from lakehouse.problems.envelope import PROBLEM_JSON
+from lakehouse.problems.ns_errors import problem_detail
 
 
 #: `/` escaped, in either case.

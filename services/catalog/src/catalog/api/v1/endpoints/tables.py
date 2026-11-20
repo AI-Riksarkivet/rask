@@ -108,7 +108,7 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.lancekit.features import CREATE_FORMAT, table_file_format
 from lakehouse.naming import uuid_of
-from lakehouse.ns_errors import PartiallyApplied
+from lakehouse.problems.ns_errors import PartiallyApplied
 from lakehouse.records import base_registry, location_claims, object_records, protection, trash
 from lakehouse.records.protection import ProtectionRecord
 from lakehouse.storage.options import StorageOptions

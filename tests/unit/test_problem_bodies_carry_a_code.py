@@ -22,7 +22,7 @@ render the body correctly and silently drop the header — trading a missing `co
 hammer the API back into 429"). A generic handler also cannot know that maintenance means 60 and a
 draining pod means 5.
 
-So the SHAPE moves to one place — `ns_errors.problem_body` — and each site keeps its own status and
+So the SHAPE moves to one place — `lakehouse.problems.envelope.problem_body` — and each site keeps its own status and
 headers. That satisfies the rule the finding actually cites (the envelope must come from one place)
 without regressing a documented HTTP behaviour.
 """
@@ -69,7 +69,7 @@ def test_the_installed_handlers_also_carry_a_code(path: str, expected: int) -> N
 
     from pydantic import BaseModel
 
-    from lakehouse.ns_errors import install_problem_handlers
+    from lakehouse.problems.ns_errors import install_problem_handlers
 
     class _Body(BaseModel):
         n: int

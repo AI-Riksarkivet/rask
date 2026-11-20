@@ -37,8 +37,8 @@ from fastapi import Depends, FastAPI, Request
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.exceptions import DomainError, ServiceUnavailableError, register_handlers
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
+from lakehouse.problems.domain_errors import DomainError, ServiceUnavailableError, register_handlers
 from lakehouse.process.draining import arm_drain_on_sigterm
 from lakehouse.process.lifecycle import mark_draining, mark_started
 from lakehouse.process.probes import make_probes_router

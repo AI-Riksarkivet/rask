@@ -33,7 +33,7 @@ from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
-from lakehouse.outage import store_refusal
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import trash
 from lakehouse.records.trash import TrashKind, TrashRecord
 from lakehouse.storage.options import StorageOptions

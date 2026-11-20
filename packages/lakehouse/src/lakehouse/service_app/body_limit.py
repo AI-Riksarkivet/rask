@@ -18,8 +18,8 @@ from __future__ import annotations
 from lance_namespace import ErrorCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from lakehouse.problem import send_problem
-from lakehouse.read_refusal import ReadRefusal
+from lakehouse.problems.envelope import send_problem
+from lakehouse.service_app.read_refusal import ReadRefusal
 
 
 class BodySizeLimitMiddleware:
@@ -47,7 +47,7 @@ class BodySizeLimitMiddleware:
                 break
 
         # A chunked body, or one longer than its Content-Length, is refused as its bytes arrive, in the read that passes
-        # the cap (`lakehouse.read_refusal`).
+        # the cap (`lakehouse.service_app.read_refusal`).
         refusal = ReadRefusal(send, self._reject)
         received = 0
 

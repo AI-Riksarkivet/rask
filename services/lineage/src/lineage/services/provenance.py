@@ -61,10 +61,10 @@ from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.events.openlineage import BRANCH_IDENTIFIER
 from lakehouse.events.openlineage_schemas import ParentRunFacet
 from lakehouse.events.signing import SIGNATURE_FACET
-from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.machine_identity import read_identity_token
 from lakehouse.lancekit.filters import in_lists, sql_literal
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
+from lakehouse.problems.domain_errors import ServiceUnavailableError
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event

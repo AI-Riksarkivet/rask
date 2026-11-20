@@ -69,8 +69,8 @@ from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.ns_errors import PartiallyApplied
-from lakehouse.outage import store_refusal
+from lakehouse.problems.ns_errors import PartiallyApplied
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import object_records, trash
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.records.trash import TrashKind, TrashRecord

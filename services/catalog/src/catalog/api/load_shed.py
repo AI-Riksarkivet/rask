@@ -5,7 +5,7 @@ handler runs, whatever its Content-Type names (up to ``max_body_bytes`` = 256MiB
 the OOM that the per-workload memory tier (catalog=1Gi in values-prod) only PARTLY bounds. Under a write
 burst the pod OOMs and takes every in-flight request with it. This sheds the overflow: once
 ``max_concurrent`` writes are reading their bodies, the next is rejected with **429** (the ``THROTTLING`` → 429
-mapping in lakehouse/ns_errors.py that had no producer) + a ``Retry-After``, BEFORE a single body byte is
+mapping in lakehouse/problems/ns_errors.py that had no producer) + a ``Retry-After``, BEFORE a single body byte is
 buffered — so shedding actually relieves
 memory pressure rather than adding to it. Reads and non-bulk writes (``version/create``, ``update``, ``delete``)
 pass through untouched. ``max_concurrent=0`` disables it entirely.
@@ -34,8 +34,8 @@ from opentelemetry import metrics
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from catalog.api.route_path import route_path
-from lakehouse.problem import send_problem
-from lakehouse.read_refusal import ReadRefusal
+from lakehouse.problems.envelope import send_problem
+from lakehouse.service_app.read_refusal import ReadRefusal
 
 
 #: The three bulk table writes, ``POST /v1/table/<one id segment>/{create,insert,merge_insert}``, the routes that buffer a
@@ -80,7 +80,7 @@ class WriteConcurrencyLimitMiddleware:
         if self._max <= 0 or scope["type"] != "http" or not _is_bulk_write(scope):
             await self._app(scope, receive, send)
             return
-        # Shed in the read, as the body cap refuses, so the 429 survives whoever reads the body (`lakehouse.read_refusal`).
+        # Shed in the read, as the body cap refuses, so the 429 survives whoever reads the body (`lakehouse.service_app.read_refusal`).
         refusal = ReadRefusal(send, self._shed)
         seated = False
 

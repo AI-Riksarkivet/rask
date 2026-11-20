@@ -45,7 +45,7 @@ from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
-from lakehouse.outage import store_refusal
+from lakehouse.problems.outage import store_refusal
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 

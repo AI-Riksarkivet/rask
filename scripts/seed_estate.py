@@ -121,7 +121,7 @@ DEMO_IDP = "demo"
 #: swallowing it as "already there" would hide exactly the takeover it just refused.
 CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", "already exists")})
 #: An FGA-backed door (``/management/v1/access``, a project's roles) answers 406 ``Unsupported`` when the stack runs
-#: auth-off (``lakehouse.ns_errors``): there is no tuple store to seed, which is a legitimate local configuration, not a
+#: auth-off (``lakehouse.problems.ns_errors``): there is no tuple store to seed, which is a legitimate local configuration, not a
 #: failure. Loud, never silent — the estate is then unguarded. What hangs off a skipped step is skipped with it.
 FGA_OFF: Mapping[int, tuple[str, str]] = MappingProxyType({406: ("skipped", "authorization is off — no tuple store to seed")})
 #: A role's create: converged when the project already holds the name, skipped when authorization is off.

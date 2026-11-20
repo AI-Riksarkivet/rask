@@ -33,7 +33,7 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import maintenance
 from catalog.services.dataplane import create_table
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records import base_registry
 from lakehouse.storage.options import StorageOptions
 

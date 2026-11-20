@@ -15,7 +15,7 @@ from functools import partial
 import pytest
 from starlette.testclient import TestClient
 
-from lakehouse.exceptions import ServiceUnavailableError
+from lakehouse.problems.domain_errors import ServiceUnavailableError
 from lakehouse.process.health import HealthWatch
 from lineage import main
 

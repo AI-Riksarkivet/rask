@@ -56,14 +56,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse.exceptions import register_handlers
 from lakehouse.governed import oidc
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.domain_errors import register_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 
 
 AUDIENCE = "rask"

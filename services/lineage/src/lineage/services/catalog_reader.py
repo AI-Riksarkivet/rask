@@ -20,7 +20,8 @@ import pyarrow as pa
 from pydantic import BaseModel
 
 from lakehouse.arrow_ipc import decode_arrow_response
-from lakehouse.exceptions import (
+from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.problems.domain_errors import (
     ConflictError,
     ForbiddenError,
     NotFoundError,
@@ -28,7 +29,6 @@ from lakehouse.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
-from lakehouse.naming import CATALOG_DELIMITER
 from lineage.services.catalog_client import catalog_read_client
 from lineage.services.catalog_client import request_headers as _request_headers
 

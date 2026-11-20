@@ -29,7 +29,7 @@ from catalog.api.v1.endpoints import versions as version_door
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.storage.options import StorageOptions
 
 

@@ -40,7 +40,7 @@ from openfga_sdk.models.check_response import CheckResponse
 
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from lineage.api.security import authenticate
 from lineage.api.v1.router import api_router
 from lineage.core.config import get_settings
