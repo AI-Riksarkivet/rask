@@ -109,7 +109,7 @@
 	<div class="mx-auto flex w-full max-w-5xl flex-col gap-6">
 		<header class="flex flex-col gap-1">
 			<div class="flex items-center justify-between gap-3">
-				<h1 class="text-3xl font-semibold">{heading}</h1>
+				<h1 class="text-xl font-semibold">{heading}</h1>
 				<div class="flex items-center gap-2">
 					{#if projects.length > 0}
 						<!-- VIEW TOGGLE. A radiogroup, not two toggle buttons: exactly one view is active and

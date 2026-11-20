@@ -33,7 +33,7 @@
 
 <div class="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
 	<header class="flex flex-col gap-1">
-		<h1 class="text-2xl font-semibold">Settings</h1>
+		<h1 class="text-xl font-semibold">Settings</h1>
 		<p class="text-muted-foreground text-sm">
 			Platform-wide configuration. Signed in as an estate admin — everything here affects every
 			project.
