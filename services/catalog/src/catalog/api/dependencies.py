@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import Depends, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -21,14 +21,14 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core import run_context
 from catalog.core.config import Settings, StorePlane, get_settings
 from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier, transaction_table
-from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBoundEmitter, is_person_subject
+from catalog.core.lineage_emit import LineageEmitter, OriginatorBoundEmitter, is_person_subject
 from catalog.core.namespace import NO_WAREHOUSE, NamespaceConnections
 from catalog.core.run_context import RunContext
-from catalog.core.vending import CredentialVendor, ModeBVendor
+from catalog.core.vending import CredentialVendor
 from catalog.services import dataplane, object_uuids, provenance_namespace, table_claims, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import trash
-from lakehouse.events.control_emit import ControlEmitter, NoopControlEmitter
+from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
@@ -42,6 +42,28 @@ from lakehouse.trash import TrashKind, TrashRecord
 log = logging.getLogger(__name__)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def app_wire[T](request: Request, name: str, kind: type[T]) -> T:
+    """What the lifespan wired onto ``app.state`` as ``name``: an emitter, the credential vendor, the connections.
+
+    Off is what a setting says, and the lifespan wires the explicit off object for it (`catalog.main._build`), so a
+    missing wire is a catalog that did not start the way it serves, never "off" ([[XC-219]]; `fga_deps.wired` states
+    the same rule for the authorization client, [[LH-237]]). Read as off, a write would commit, announce to nobody and
+    answer 200, and an event never emitted is one no notifier can repair. The ERROR line names the wire, since the
+    caller's 500 is redacted.
+
+    ``kind`` names what the lifespan wires there, for the reader's type; it is not checked, so a test may wire a
+    stand-in of its own.
+
+    Raises:
+        InternalError: Nothing is wired as ``name``.
+    """
+    wire = getattr(request.app.state, name, None)
+    if wire is None:
+        log.error("missing_wire", extra={"wire": name})
+        raise InternalError(f"the catalog has no {name} wired: its lifespan did not build it")
+    return cast(kind, wire)
 
 
 class ServedWarehouse(BaseModel):
@@ -151,8 +173,7 @@ async def estate_namespace(request: Request, settings: Settings) -> LanceNamespa
 
 def _connections(request: Request) -> NamespaceConnections:
     """The connections the lifespan published on ``app.state``."""
-    connections: NamespaceConnections = request.app.state.connections
-    return connections
+    return app_wire(request, "connections", NamespaceConnections)
 
 
 async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespace:
@@ -432,10 +453,10 @@ async def get_data_namespace(request: Request, settings: SettingsDep, ns: Namesp
     `analyze_plan`): the metadata connection's whole-request bound would cut off a legitimate transfer
     (`CatalogReadBounds`). It is the data twin OF the connection :func:`get_namespace` resolved, found by
     identity, so it follows the same warehouse routing without a second registry read, and a connection
-    the catalog did not build (a test's override) is handed back unchanged.
+    the catalog did not build (a test's override) is handed back unchanged. The registry itself is a wire
+    (:func:`app_wire`), so a catalog with none is refused rather than served on the metadata plane's bounds.
     """
-    connections: NamespaceConnections | None = getattr(request.app.state, "connections", None)
-    twin = await run_in_threadpool(connections.data_twin, settings, ns) if connections is not None else None
+    twin = await run_in_threadpool(_connections(request).data_twin, settings, ns)
     return twin or ns
 
 
@@ -504,8 +525,7 @@ def get_lineage_emitter(
     them in a frozen wrapper keeps the transport shared without letting one caller's identity ride onto
     another caller's event.
     """
-    emitter = getattr(request.app.state, "lineage_emitter", None)
-    return OriginatorBoundEmitter(emitter if emitter is not None else NoopEmitter(), originator_hint(x_lance_originator))
+    return OriginatorBoundEmitter(app_wire(request, "lineage_emitter", LineageEmitter), originator_hint(x_lance_originator))
 
 
 LineageEmitterDep = Annotated[LineageEmitter, Depends(get_lineage_emitter)]
@@ -612,9 +632,8 @@ class UuidNamingControlEmitter:
 
 
 def get_control_emitter(request: Request, uuids: ObjectUuidsDep) -> ControlEmitter:
-    """The control-plane change-event emitter built in the app lifespan — a no-op when emission is off."""
-    emitter = getattr(request.app.state, "control_emitter", None)
-    return NoopControlEmitter() if emitter is None else UuidNamingControlEmitter(emitter, uuids)
+    """The control-plane change-event emitter built in the app lifespan, the no-op one where emission is off."""
+    return UuidNamingControlEmitter(app_wire(request, "control_emitter", ControlEmitter), uuids)
 
 
 ControlEmitterDep = Annotated[ControlEmitter, Depends(get_control_emitter)]
@@ -625,8 +644,9 @@ def _utc_now() -> datetime:
 
 
 def get_clock() -> Callable[[], datetime]:
-    """The wall clock a door reads a deadline from: the erasure door sets a release's due time by it and the
-    release tick judges it by the same one, so a test moves both with one override."""
+    """The wall clock a door reads a deadline from: the erasure door sets a release's due time by it. A tick is no
+    request and takes its own (``catalog.api.ticks.Tick``'s ``clock``), so a test moves a door with an override of this
+    and a tick with that argument."""
     return _utc_now
 
 
@@ -634,9 +654,8 @@ ClockDep = Annotated[Callable[[], datetime], Depends(get_clock)]
 
 
 def get_vendor(request: Request) -> CredentialVendor:
-    """The credential vendor built in the app lifespan — Mode B (no direct creds) by default."""
-    vendor = getattr(request.app.state, "vendor", None)
-    return vendor if vendor is not None else ModeBVendor()
+    """The credential vendor built in the app lifespan, the Mode B one (no direct credentials) where vending is off."""
+    return app_wire(request, "vendor", CredentialVendor)
 
 
 VendorDep = Annotated[CredentialVendor, Depends(get_vendor)]

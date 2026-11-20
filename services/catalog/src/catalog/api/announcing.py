@@ -21,9 +21,9 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, ObjectUuidsDep, Resolver, ResolverDep, SettingsDep, originator_hint
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, ObjectUuidsDep, Resolver, ResolverDep, SettingsDep, app_wire, originator_hint
 from catalog.core.config import Settings
-from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, UuidReader, emit_write_event
+from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event
 from catalog.schemas import AnnouncementIntentsFinishResponse, RoleRecord
 from catalog.services import announcement_intents, roles, subject_tuples
 from catalog.services.announcement_intents import (
@@ -364,13 +364,12 @@ def get_announcer(
     """This request's :class:`Announcer`. Its lineage emitter is the app's own, unbound to the request: a marker carries the
     originator its filing request claimed, whichever request sends it. The headers are read off the request, so no door
     gains a documented parameter by announcing."""
-    emitter: LineageEmitter | None = getattr(request.app.state, "lineage_emitter", None)
     return Announcer(
         settings,
         client=fga_deps.wired(settings, client),
         resolver=resolver,
         control=control,
-        lineage=emitter if emitter is not None else NoopEmitter(),
+        lineage=app_wire(request, "lineage_emitter", LineageEmitter),
         uuids=uuids,
         originator=originator_hint(request.headers.get("x-lance-originator")),
     )

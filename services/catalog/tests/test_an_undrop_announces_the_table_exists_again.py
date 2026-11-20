@@ -29,6 +29,8 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespace_doors
 from catalog.api.v1.endpoints import tables as table_doors
 from catalog.core.identifiers import with_minted_uuid
+from catalog.core.lineage_emit import NoopEmitter
+from catalog.core.vending import ModeBVendor
 from catalog.services import warehouses
 from catalog.services.dataplane import create_table
 from lakehouse.base_registry import BaseRegistry
@@ -97,6 +99,9 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         (ControlEmitterDep, NoopControlEmitter()),
     ):
         application.dependency_overrides[dependency.__metadata__[0].dependency] = _returning(value)
+    # The lifespan's off vendor and emitter: `emit_write_event` below records what the doors hand it.
+    application.state.vendor = ModeBVendor()
+    application.state.lineage_emitter = NoopEmitter()
 
     async def _noop(*_a: Any, **_k: Any) -> None:
         return None

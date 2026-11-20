@@ -39,7 +39,7 @@ from lakehouse import store_session
 from lakehouse.events import outbox
 from lakehouse.events.bus import MAX_PAYLOAD_BYTES
 from lakehouse.events.cloud_events import control_envelope
-from lakehouse.events.control_emit import BusControlEmitter
+from lakehouse.events.control_emit import BusControlEmitter, NoopControlEmitter
 from lakehouse.events.control_events import CONTROL_TOPIC, CatalogControlEvent
 from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
@@ -109,14 +109,15 @@ def deployed_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callab
 def _relay_app(
     publisher: BusDouble, *, signing: SigningKeyHolder[SigningKey] | None = None, lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None
 ) -> FastAPI:
-    """A bare app holding what the catalog's lifespan hands its relay: the connection to the bus, the signing holder and
-    the reader of the keys it publishes.
+    """A bare app holding what the catalog's lifespan hands its relay: the connection to the bus, the signing holder, the
+    reader of the keys it publishes, and the control emitter every tick is built with.
 
     `signing` is published where the catalog's lifespan publishes its own holder (`attach_signing`); None is a catalog
     that does not sign. `lifespan` is what the app's start runs.
     """
     app = FastAPI(lifespan=lifespan)
     app.state.bus = publisher
+    app.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off; the relay emits none
     attach_signing(app, signing)
     attach_published_keys(app)
     return app

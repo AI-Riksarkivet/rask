@@ -30,6 +30,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from lakehouse import base_registry, clone_sources
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
 
@@ -80,6 +81,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.table_router)
     application.include_router(door.obligations_router)
+    application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()

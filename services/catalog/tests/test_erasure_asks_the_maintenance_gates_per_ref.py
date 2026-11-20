@@ -30,6 +30,7 @@ from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from lakehouse import base_registry
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
 
@@ -137,6 +138,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     application = FastAPI()
     application.include_router(door.table_router)
     application.include_router(door.obligations_router)
+    application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
     settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns

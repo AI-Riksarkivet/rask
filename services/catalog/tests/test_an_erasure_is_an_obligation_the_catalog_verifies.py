@@ -37,6 +37,7 @@ from catalog.services.dataplane import create_table, read_arrow_body
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.derived_tables import EDGES
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -104,6 +105,7 @@ def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: _Control
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.table_router)
     application.include_router(door.obligations_router)
+    application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()

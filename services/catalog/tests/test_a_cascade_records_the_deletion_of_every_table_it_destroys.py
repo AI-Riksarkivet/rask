@@ -36,6 +36,7 @@ from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceD
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as door
 from catalog.core.identifiers import with_minted_uuid
+from catalog.core.lineage_emit import NoopEmitter
 from catalog.services.dataplane import create_table
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.events.control_emit import NoopControlEmitter
@@ -98,6 +99,8 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: _CALLER
     application.dependency_overrides[FgaClientDep.__metadata__[0].dependency] = lambda: None
     application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = NoopControlEmitter
+    # The lifespan's off emitter: `emit_write_event` below records what it is handed.
+    application.state.lineage_emitter = NoopEmitter()
 
     async def _record(_emitter: Any, segments: list[str], **kwargs: Any) -> None:
         emitted.append({"segments": list(segments), **kwargs})
