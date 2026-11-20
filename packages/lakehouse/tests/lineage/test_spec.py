@@ -40,9 +40,9 @@ from lakehouse.lineage import (
     SchemaDatasetFacet,
     SchemaField,
     custom_facet,
-    run_id_for,
 )
 from lakehouse.lineage.schemas import DatasetFacets, JobRef, OutputDatasetFacets, ParentRunFacet, RootRef, RunFacets, RunRef
+from lakehouse.openlineage import run_id_for
 
 
 _JOB_RUN_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"

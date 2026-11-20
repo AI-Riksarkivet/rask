@@ -33,8 +33,8 @@ dependencies = [
     # `minimum_nprobes`/`maximum_nprobes` (ADR 0157).
     "lance-namespace>=0.13.0,<0.14",
     "lance-namespace-urllib3-client>=0.13.0,<0.14",
-    # The official OpenLineage client: the transport of `lakehouse.lineage`'s emitter, and the spec authority its tests
-    # round-trip against.
+    # The official OpenLineage client: `lakehouse.lineage.schemas` converts its models to the client's classes, the spec
+    # authority its tests round-trip against.
     "openlineage-python>=1.52.0",
     # Ed25519 for `lakehouse.lineage.signing` ([[LH-064]]).
     "cryptography>=49",
