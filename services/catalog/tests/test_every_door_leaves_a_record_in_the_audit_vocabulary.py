@@ -259,3 +259,42 @@ def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_
         if not any(r["audit.action"] == expected.action and expected.fields.items() <= r.items() for r in by_request[door.request_id])
     ]
     assert missing == [], "doors that left no record, or one without what it must name"
+
+
+@pytest.mark.parametrize(
+    ("door", "recorded"),
+    [
+        pytest.param("create", (AuditAction.ACCESS_GRANT, "project_created"), id="a-projects-create"),
+        pytest.param("delete", (AuditAction.ACCESS_REVOKE, "project_deleted"), id="a-projects-delete"),
+    ],
+)
+def test_a_projects_door_names_its_caller_as_every_other_door_does(
+    governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    trail: list[dict[str, Any]],
+    door: str,
+    recorded: tuple[AuditAction, str],
+) -> None:
+    """A query of the trail by subject finds everything one caller did only while every door names that caller in one
+    spelling: a project's create and delete, which grant and revoke on the tenant, name their caller as the namespace
+    create does, and no record either door leaves names anyone else."""
+    catalog = governed_catalog
+    catalog.store.write((catalog.person("alice"), "admin", "estate:rask"))
+    configure_audit(enabled=True)
+    trail.clear()
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    conforming = {r["audit.subject"] for r in trail if r["audit.action"] == AuditAction.AUTHZ}
+    assert len(conforming) == 1, conforming
+    if door == "delete":
+        assert catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("alice")).status_code == 200
+    trail.clear()
+
+    answer = (
+        catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("alice"))
+        if door == "create"
+        else catalog.client.delete("/management/v1/projects/acme", headers=catalog.bearer("alice"))
+    )
+
+    assert answer.status_code == 200, answer.text
+    action, reason = recorded
+    assert [r["audit.subject"] for r in trail if (r["audit.action"], r.get("audit.reason")) == (action, reason)] == [*conforming]
+    assert {r["audit.subject"] for r in trail} == conforming

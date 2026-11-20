@@ -269,11 +269,13 @@ async def establish_project(
     """
     so = settings.storage_options()
     existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
-    actor = author.actor if author is not None else None
+    # Two spellings of one author: the subject the audit trail and the tuples' writer name, and the actor its control
+    # events name. A query of the trail by subject finds this create only under the first.
+    writer, announced = (author.subject, author.actor) if author is not None else (None, None)
     obj = f"project:{project_id}"
     created = Announcement(
         evidence=RecordHeld(key=project_registry.record_key(project_id)),
-        message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=obj, actor=actor)),
+        message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=obj, actor=announced)),
     )
     # `seed_project_admin` writes the admin's grant exactly when authorization is on and an admin is named.
     seeds = author is not None and admin is not None and fga_deps.wired(settings, client) is not None
@@ -281,7 +283,7 @@ async def establish_project(
         announcing.grant_announcement(
             fga_writes.ClientTuple(user=fga_ids.user_object(admin), relation="admin", object=obj),
             action="grant_added",
-            actor=actor,
+            actor=announced,
             extra={"reason": "project_created"},
         )
         if seeds and admin is not None
@@ -291,18 +293,18 @@ async def establish_project(
     wanted = ProjectRecord(
         id=project_id,
         created_at=(existing.created_at if existing else None) or datetime.now(UTC).isoformat(),
-        created_by=(existing.created_by if existing else None) or (author.subject if author is not None else ""),
+        created_by=(existing.created_by if existing else None) or (writer or ""),
     )
     async with filed as filing:
         record = await _write_project_record(settings, so, wanted, existing=existing)
-        granted = await fga_deps.seed_project_admin(client, settings, author.subject if author is not None else None, project=project_id, admin=admin)
+        granted = await fga_deps.seed_project_admin(client, settings, writer, project=project_id, admin=admin)
         log.info("project_created", extra={"project": project_id, "existing": existing is not None})
         await filing.send(created)
         if granted and admin is not None and admin_granted is not None:
             audit(
                 AuditAction.ACCESS_GRANT,
                 AuditOutcome.SUCCESS,
-                subject=actor,
+                subject=writer,
                 resource=obj,
                 grantee=fga_ids.user_object(admin),
                 relation="admin",
@@ -630,13 +632,17 @@ async def delete_project(
     authz = fga_deps.wired(settings, client)
     if not record.is_being_deleted:
         await _start_delete(project_id, record, settings, token, force=force)
-    actor = f"user:{token.subject}" if token is not None else None
+    # The caller who retired the tenant, in the two spellings `establish_project` names its author by: the subject the
+    # audit trail and the revoked tuples' writer name, and the actor its control events name. `system:catalog` is the
+    # honest writer on an auth-off stack, where there genuinely is no principal, never a stand-in for one we failed to thread.
+    writer = token.subject if token is not None else "system:catalog"
+    announced = f"user:{token.subject}" if token is not None else None
     obj = f"project:{project_id}"
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(
-        await fga_reads.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
+        await fga_reads.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=announced, reason="project_deleted"
     )
-    deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=obj, actor=actor)
+    deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=obj, actor=announced)
     deleted = Announcement(evidence=RecordGone(key=project_registry.record_key(project_id)), message=ControlMessage(event=deleted_event))
     async with announcer.announcing(door="delete_project", target=obj, announcements=[deleted, *grants.values()]) as filing:
         removed: list[fga_writes.ClientTuple] = []
@@ -644,24 +650,17 @@ async def delete_project(
         # described and re-deletable; the opposite order would strand grants on a project no API can name any
         # more — privilege that nothing in the product can see, let alone clear.
         if authz is not None:
-            removed = await fga_writes.revoke_object_tuples(  # noqa: TID251
-                authz,
-                obj,
-                # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
-                # stack, where there genuinely is no principal — never a stand-in for one we failed to thread.
-                actor=token.subject if token is not None else "system:catalog",
-                origin="lifecycle_delete",
-            )
+            removed = await fga_writes.revoke_object_tuples(authz, obj, actor=writer, origin="lifecycle_delete")  # noqa: TID251
         # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
         for role in await run_in_threadpool(roles.every_role, settings.registry_root, so, project_id):
-            ending = await announcing.role_ending(authz, role, actor=actor, reason="project_deleted")
+            ending = await announcing.role_ending(authz, role, actor=announced, reason="project_deleted")
             async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
-                ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
-                await ending.send(ending_filed, ended, actor=actor, reason="project_deleted")
+                ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=writer)
+                await ending.send(ending_filed, ended, actor=announced, reason="project_deleted")
         if authz is not None:
             # A role's ending moves its project's `admin_revision` (`project_admins.withdraw`), bookkeeping no grant
             # reads and nobody is told of, so the project's tuples are revoked once more after its last role ended.
-            await fga_writes.revoke_object_tuples(authz, obj, actor=token.subject if token is not None else "system:catalog", origin="lifecycle_delete")  # noqa: TID251
+            await fga_writes.revoke_object_tuples(authz, obj, actor=writer, origin="lifecycle_delete")  # noqa: TID251
         # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
         # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
         # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse
@@ -684,7 +683,7 @@ async def delete_project(
             audit(
                 AuditAction.ACCESS_REVOKE,
                 AuditOutcome.SUCCESS,
-                subject=actor,
+                subject=writer,
                 resource=obj,
                 grantee="*",
                 relation="*",
@@ -696,7 +695,7 @@ async def delete_project(
         # can no longer see their own work would find out by hitting a 403, the failure `grant_revoked` exists to prevent.
         # A structural edge names no person: `grant_changes` keeps a principal (`user:<principal>`) or a userset
         # (`role:x#assignee`, which the lane expands), never a `project`/`parent`/`child` edge whose user is an object.
-        await filing.send_grant_changes(grants, removed, action="grant_revoked", actor=actor, reason="project_deleted")
+        await filing.send_grant_changes(grants, removed, action="grant_revoked", actor=announced, reason="project_deleted")
     answer = DeleteProjectResponse(project=project_id, tuples_revoked=len(removed))
     await converge.remember(200, answer)
     return answer
