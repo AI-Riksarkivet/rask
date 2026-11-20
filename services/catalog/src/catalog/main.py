@@ -48,11 +48,11 @@ from lakehouse.governed.secrets import secret_store_configured, secret_store_ses
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
 from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
-from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lance_metrics import instrument_lance_if_available
 from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.obs import configure_app_logging
 from lakehouse.schemas.health import Readiness
+from lakehouse.service_app.factory import build_service_app
 from lakehouse.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
 
@@ -380,7 +380,7 @@ async def _catalog_ready(request: Request) -> Readiness:
 _settings = get_settings()
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one trace per request, every layer a request passes, and the
-# probes — see `lakehouse.lance_app` for what each is for and what a copy of it got wrong.
+# probes — see `lakehouse.service_app.factory` for what each is for and what a copy of it got wrong.
 #
 # `maintenance_middleware` (the read-only gate, a no-op unless LANCE_MAINTENANCE_READ_ONLY=true) and
 # `signing_gate_middleware` (the writes a catalog without its signing key refuses) go in as `inner_middleware`, inside
@@ -390,7 +390,7 @@ _settings = get_settings()
 # to read its body and before a byte of it is buffered, so shedding relieves memory pressure rather than adding to it;
 # the path reading, outermost of the two, reads the request's path as the client spelled its names, its public prefix
 # stripped and a bare `+` read as a space ([[LH-526]]), so every layer beneath reads one path.
-app = build_lance_service_app(
+app = build_service_app(
     title="Lance Namespace REST Catalog",
     version="1.0.0",
     docs_enabled=_settings.docs_enabled,
@@ -399,7 +399,7 @@ app = build_lance_service_app(
     log=log,
     routers=[api_router],
     ready_check=signing_ready_check(commit_ids_ready_check(_catalog_ready)),
-    # A body over the cap is refused 413 before it is buffered (Arrow-IPC OOM guard, `lakehouse.body_limit`).
+    # A body over the cap is refused 413 before it is buffered (Arrow-IPC OOM guard, `lakehouse.service_app.body_limit`).
     max_body_bytes=_settings.max_body_bytes,
     request_deadline_seconds=_settings.request_deadline_seconds,
     inner_middleware=[maintenance_middleware, signing_gate_middleware],

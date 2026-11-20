@@ -11,7 +11,7 @@ compliance trail of every one of them while the three explicit services keep the
 So the factory arms it, the way it installs the problem handlers for the same reason: a convention five apps did not
 hold up is not a convention.
 
-`build_lance_service_app` builds the lakehouse (catalog, lineage and maintenance), and `services/maintenance` is
+`build_service_app` builds the lakehouse (catalog, lineage and maintenance), and `services/maintenance` is
 the component that REWRITES BYTES, whose reclamation trail cannot become a governed artifact while the
 logger it writes to is unarmed. `audit_enabled` is a required keyword, like `docs_enabled` beside
 it, so the type checker makes every new lakehouse service answer it.
@@ -27,8 +27,8 @@ import pytest
 from fastapi import FastAPI, Request
 
 from lakehouse.governed.audit import AUDIT_LOGGER
-from lakehouse.lance_app import build_lance_service_app
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.service_app.factory import build_service_app
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,7 @@ def _lakehouse_app(*, audit_enabled: bool) -> FastAPI:
     async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         yield
 
-    return build_lance_service_app(
+    return build_service_app(
         title="t",
         docs_enabled=False,
         audit_enabled=audit_enabled,

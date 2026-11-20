@@ -213,12 +213,12 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, LineageForwar
     #: one nobody disables. Turn it on per-environment (the chart's dev values do).
     docs_enabled: bool = Field(default=False, alias="LINEAGE_DOCS")
 
-    #: The largest request body lineage reads; one over it is refused 413 before it is buffered (`lakehouse.body_limit`).
+    #: The largest request body lineage reads; one over it is refused 413 before it is buffered (`lakehouse.service_app.body_limit`).
     #: An event the bus delivers is at most NATS's message ceiling, 1 MiB (the bus fixture sets no `max_payload`), plus its
     #: envelope; the intake takes events from producers that never pass the bus, whose schema facets can run to a few MiB.
     max_body_bytes: int = Field(default=8 * 1024 * 1024, ge=1, alias="LINEAGE_MAX_BODY_BYTES")
 
-    #: A request with no answer begun after this long is answered 503 while its handling runs on (`lakehouse.deadline`):
+    #: A request with no answer begun after this long is answered 503 while its handling runs on (`lakehouse.service_app.deadline`):
     #: five times the longest lineage request measured over two weeks of the estate's traces (2026-10-29..11-12: the
     #: relay's tick, 58.1 s).
     request_deadline_seconds: float = Field(default=300.0, gt=0, alias="LINEAGE_REQUEST_DEADLINE_SECONDS")

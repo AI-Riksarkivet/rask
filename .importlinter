@@ -55,6 +55,19 @@ forbidden_modules =
     lineage
     maintenance
 
+# The service app is the top of the library (ADR 0224): the factory each service boots from, and the request layers only
+# it installs. A service imports it and nothing else in the library does, so a layer here is installed by the factory
+# alone and the rest of the library never depends on how a service is assembled. Its own modules import each other.
+[importlinter:contract:the-service-app-is-imported-by-the-services-only]
+name = ADR 0224: lakehouse.service_app is imported by the services only
+type = protected
+protected_modules =
+    lakehouse.service_app
+allowed_importers =
+    catalog
+    lineage
+    maintenance
+
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
 name = Phase 1 (3): no lakehouse service and nothing in the lakehouse library imports a workflow engine
 type = forbidden

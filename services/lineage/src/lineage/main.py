@@ -23,10 +23,10 @@ from lakehouse.governed.secrets import secret_store_configured, secret_store_ses
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import secret_store_dependency
 from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
-from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lifecycle import closed_quietly
 from lakehouse.obs import configure_app_logging
 from lakehouse.schemas.health import Readiness
+from lakehouse.service_app.factory import build_service_app
 from lakehouse.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
 from lineage.api.ingest_lane import IngestLane, lane
@@ -188,8 +188,8 @@ async def _lineage_ready(request: Request) -> Readiness:
 
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one trace per request, and the probes — see
-# `lakehouse.lance_app` for what each of those five is for and what a copy of it got wrong.
-app = build_lance_service_app(
+# `lakehouse.service_app.factory` for what each of those five is for and what a copy of it got wrong.
+app = build_service_app(
     title="Lance Lineage Service",
     docs_enabled=get_settings().docs_enabled,
     audit_enabled=get_settings().audit_enabled,

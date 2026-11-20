@@ -1,8 +1,8 @@
 """A lakehouse app reports how much of its request thread pool is in use.
 
 Every blocking call a door makes runs on the serving loop's bounded thread pool, so a pool with every thread held
-queues requests with no error anywhere. `build_lance_service_app` reports the pool of the loop it serves on
-(`lakehouse.thread_pool`); the gauges are read through an OpenTelemetry reader, as the Collector reads them.
+queues requests with no error anywhere. `build_service_app` reports the pool of the loop it serves on
+(`lakehouse.service_app.thread_pool`); the gauges are read through an OpenTelemetry reader, as the Collector reads them.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
-from lakehouse import thread_pool
-from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lifecycle import mark_started
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.service_app import thread_pool
+from lakehouse.service_app.factory import build_service_app
 
 
 def _exported(reader: InMemoryMetricReader) -> dict[str, float]:
@@ -49,7 +49,7 @@ def test_a_blocking_door_is_counted_as_a_busy_thread_while_it_runs(monkeypatch: 
         mark_started(app)
         yield
 
-    app = build_lance_service_app(
+    app = build_service_app(
         title="t",
         docs_enabled=False,
         audit_enabled=False,

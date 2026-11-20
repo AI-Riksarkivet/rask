@@ -825,7 +825,7 @@ def _refuse_overlapping_segments(version: _Judged) -> None:
     """No two segments of an index the version adds to cover one fragment (:func:`catalog.core.namespace.overlapping_segments`).
 
     The read of an overlapping index's statistics migrates the table from the reader (what the app factory,
-    :func:`lakehouse.lance_app.build_lance_service_app`, keeps from happening here), and the rules after this one read
+    :func:`lakehouse.service_app.factory.build_service_app`, keeps from happening here), and the rules after this one read
     every added index's statistics, so this one runs first.
 
     Raises:

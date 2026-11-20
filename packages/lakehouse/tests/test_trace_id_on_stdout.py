@@ -35,7 +35,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from lakehouse.app import setup_logging
+from lakehouse.log_handler import setup_logging
 
 
 @pytest.fixture

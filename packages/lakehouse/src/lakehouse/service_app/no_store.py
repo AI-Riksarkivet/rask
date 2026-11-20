@@ -4,7 +4,7 @@ A door may answer credentials: DescribeTable and DeclareTable vend the store ses
 answer's ``storage_options`` (``lance_docs/ns_catalog/spec.yaml``, DescribeTableResponse), and the management vend doors
 answer the same. HTTP lets any cache between the caller and the service store an answer that carries no
 ``Cache-Control``, and serve it to the next caller. So the app factory puts this layer around the app's own entry point
-(`lakehouse.lance_app`), where every refusal passes too, the server's own answer to an unexpected exception included:
+(`lakehouse.service_app.factory`), where every refusal passes too, the server's own answer to an unexpected exception included:
 an answer with no ``Cache-Control`` of its own gets ``no-store``, and every answer varies on ``Authorization``, since
 what one caller is answered is no other's.
 

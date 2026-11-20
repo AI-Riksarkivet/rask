@@ -17,7 +17,7 @@ minute by OpenFGA's ``keyfunc`` options). The ``iss`` the tokens carry stays the
 verifier names this mirror as its issuer URL and the cluster issuer as an alias (OpenFGA
 ``authn.oidc.issuerAliases``).
 
-A plain FastAPI app rather than `lakehouse.lance_app`'s: it has no governed door and no
+A plain FastAPI app rather than `lakehouse.service_app.factory`'s: it has no governed door and no
 state, and the chart runs it from the catalog image with ``uvicorn --factory``. Its probes are the library's
 (`lakehouse.probes`): ``/readyz`` is ready while the issuer serves this pod its discovery document, the one thing
 the mirror depends on.

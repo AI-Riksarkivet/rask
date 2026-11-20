@@ -60,3 +60,6 @@ def watch() -> None:
         unit="{call}",
         description="Blocking calls waiting for a thread of the request thread pool: above 0, every thread is held and requests queue.",
     )
+
+
+__all__ = ["watch"]

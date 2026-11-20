@@ -61,3 +61,38 @@ edges:
 - Each moved module's tests move with it, to `services/catalog/tests` or `services/lineage/tests`; the root suites that
   drive several members keep theirs, importing the new names.
 - `pyproject.toml`'s per-file ignore for the `/query` reader follows it to `services/lineage/src/lineage/services/catalog_reader.py`.
+
+## The service app group (2026-11-20)
+
+The first group by job (point 5) is `lakehouse.service_app`: the factory every service boots from and the layers only
+it installs. Measured with `ast` on `a9673cdcb` (module-level, function-local and `TYPE_CHECKING` imports), a module
+joined when its job is the app's boot or request plane and nothing else in the library imports it (the graph test
+is necessary, the job decides), since `factory` imports `governed.audit` and an importer in the
+rest of the library would make the group and the rest import each other.
+
+| Module | In the group as |
+| --- | --- |
+| `lakehouse.lance_app` | `lakehouse.service_app.factory` |
+| `lakehouse.body_limit` | `lakehouse.service_app.body_limit` |
+| `lakehouse.deadline` | `lakehouse.service_app.deadline` |
+| `lakehouse.panic_catcher` | `lakehouse.service_app.panic_catcher` |
+| `lakehouse.no_store` | `lakehouse.service_app.no_store` |
+| `lakehouse.thread_pool` | `lakehouse.service_app.thread_pool` |
+
+Each declares `__all__`, and the package's `__init__` exports nothing. The log handler `lakehouse.app` is named for
+what it is, `lakehouse.log_handler`, so no module shares a name with the app plane.
+
+Left out, each for a later group:
+
+- `log_handler` (`setup_logging`): the chart's model writer `governed.auth.write_model` logs through it.
+- `exceptions`, `probes`, `draining`: the issuer mirror's own app (`governed.issuer_mirror`) and `governed.oidc`,
+  `governed.machine_identity` and `governed.signing_key` import them.
+- `ns_errors`, `problem`, `spec_routes`, `outage`, `read_refusal`: the spec's error answers, which the catalog's doors
+  raise and build directly; `ns_errors` imports `problem`, so the two stay together.
+- `admission`: the caller's judge, which each service's `api.security` builds on; its job is authentication's.
+- `obs` (`configure_app_logging`): imported by the services only, but it is the process's logging, with `log_handler`.
+- `context`, `supervision`, `lifecycle`, `health`: primitives the bus, the auth plane and the store session import.
+
+`.importlinter`'s `the-service-app-is-imported-by-the-services-only` (a `protected` contract) holds it: only `catalog`,
+`lineage` and `maintenance` import `lakehouse.service_app`, and its own modules import each other. It was kept before
+it was written; a planted `import lakehouse.service_app.deadline` in `lakehouse.supervision` broke it.

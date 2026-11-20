@@ -6,7 +6,7 @@ offline against the cluster issuer, and is the subject its full username names
 or any caller could speak as any service.
 
 Driven at lineage's real door: its `authenticate`, the verifiers `attach_auth` builds from lineage's settings at boot,
-and the handlers `build_lance_service_app` installs. The service-account issuer is the loopback one in the root
+and the handlers `build_service_app` installs. The service-account issuer is the loopback one in the root
 conftest, which serves its key set only to a bearer from a private CA, as k3s does. A service admitted by its own
 projected token is driven end to end by `tests/integration/test_a_service_account_records_lineage_on_the_tables_it_names.py`.
 """

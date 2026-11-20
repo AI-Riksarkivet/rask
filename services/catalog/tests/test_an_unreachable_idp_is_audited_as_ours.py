@@ -47,7 +47,7 @@ def unreachable_issuer() -> Iterator[str]:
 
 
 def _client(verifier: IdpVerifier | None, issuer: str) -> TestClient:
-    """The catalog's door behind the handler pair `build_lance_service_app` installs, in its order."""
+    """The catalog's door behind the handler pair `build_service_app` installs, in its order."""
     settings = Settings.model_validate(
         {
             "LANCE_S3_ACCESS_KEY_ID": "x",

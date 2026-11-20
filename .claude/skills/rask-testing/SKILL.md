@@ -158,7 +158,7 @@ It also resets the process-global state the `lakehouse` library keeps. It makes 
 `respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it gives the test a
 process that has logged in to no secret store (`lakehouse.governed.secrets.forget_secret_store`), writes the projected
 service-account token files the catalog's and lineage's doors read and the one a process logs in to its secret store
-with, and sets `LANCE_AUTO_MIGRATION` to `false` as every app build does for its process (`lakehouse.lance_app`),
+with, and sets `LANCE_AUTO_MIGRATION` to `false` as every app build does for its process (`lakehouse.service_app.factory`),
 restoring it after. A new fixture guarding such state goes there too, so every suite in the repository gets it. The
 repository root is on the import path through pytest's own `pythonpath` setting, so a helper the suites share
 (`tests.secret_store_double`, `tests.bus_double`, `tests.loopback`) resolves under one name from every member's tests and

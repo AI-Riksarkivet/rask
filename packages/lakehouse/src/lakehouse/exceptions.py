@@ -4,7 +4,7 @@ Routes raise these; never ``HTTPException`` directly. Each subclass maps to a st
 code via the registered handler — one place to change the response shape.
 
 This is the estate's ONE copy: one ``_problem`` builder and one handler, bound by ``register_handlers`` into every
-lakehouse app (``lakehouse.lance_app``), so two copies cannot drift.
+lakehouse app (``lakehouse.service_app.factory``), so two copies cannot drift.
 
 ``DomainError`` subclasses :class:`fastapi.HTTPException` because it is load-bearing: importing the exception class does NOT pull in the FastAPI
 app/router/DI machinery, so non-web service/client modules import these freely, and a

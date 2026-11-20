@@ -4,7 +4,7 @@ DUP-12: "The lance-service entrypoint is hand-assembled eight times; there is no
 `make_lance_service_app`." Each opened `app = FastAPI(...)` at module level and then repeated the same five
 steps in prose comments copied between them.
 
-This pins what `lakehouse.lance_app` gives catalog, lineage and maintenance: the copies had drifted, one service
+This pins what `lakehouse.service_app.factory` gives catalog, lineage and maintenance: the copies had drifted, one service
 serving no correlation layer at all, and nothing compared them.
 """
 

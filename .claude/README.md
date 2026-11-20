@@ -6,7 +6,7 @@ rask's **own project skills** live in `.claude/skills/` — they describe rask's
 
 | Skill | Covers |
 | --- | --- |
-| `rask-architecture` | Workspace planes, globbed membership, the `lance_app` factory, deployables |
+| `rask-architecture` | Workspace planes, globbed membership, the `service_app` factory, deployables |
 | `rask-services-fleet` | Gateway routing, ports, `RASK_*_URL`, the 404/502/403 contracts |
 | `rask-frontend` | The console SPA: route tree, browser PKCE sign-in, data layer, gates |
 | `rask-styling` | How the console uses `@riksarkivet/ui`: its stylesheet, tokens, the appearance, vendor sheets |

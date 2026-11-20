@@ -1,6 +1,6 @@
 """Correlation: the W3C trace context every request, log line, audit record, commit and event is joined by (ADR 0209).
 
-One id joins them: the trace a request runs under. The app factory traces every request (`lakehouse.lance_app`), taking
+One id joins them: the trace a request runs under. The app factory traces every request (`lakehouse.service_app.factory`), taking
 the caller's ``traceparent`` where one is sent and starting a trace where none is, so a caller's own trace reaches every
 record its request causes and a request with none still has one. Code that does not take ``request`` as a parameter reads
 it here, from the active span: a log line through :class:`CorrelationFilter`, the audit trail through

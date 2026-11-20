@@ -1,6 +1,6 @@
 """A lakehouse app answers `/livez` whatever its lifecycle, and `/readyz` by it before its own check is asked.
 
-`build_lance_service_app` mounts `lakehouse.probes` at the root of catalog, lineage and maintenance. Liveness only
+`build_service_app` mounts `lakehouse.probes` at the root of catalog, lineage and maintenance. Liveness only
 proves the event loop answers, so a pod that has not started or is draining stays alive and is not restarted. Readiness
 reads the lifecycle flags the service's lifespan sets (`lakehouse.lifecycle`): until the lifespan has started the
 answer is `starting`, once it drains it is `shutting_down`, both 503 so the pod leaves the Service, and only between
@@ -22,9 +22,9 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from lakehouse.health import Dependency, HealthWatch
-from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lifecycle import mark_draining, mark_started
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.service_app.factory import build_service_app
 
 
 async def _ready(_request: Request) -> Readiness:
@@ -53,7 +53,7 @@ def test_a_lakehouse_app_is_alive_and_not_ready_until_it_has_started_and_while_i
         lifecycle(app)
         yield
 
-    app = build_lance_service_app(
+    app = build_service_app(
         title="t",
         docs_enabled=False,
         audit_enabled=False,
@@ -107,7 +107,7 @@ def test_a_started_lakehouse_app_stays_in_rotation_while_a_dependency_it_rides_t
     async def _watched(_request: Request) -> Readiness:
         return watch.readiness()
 
-    app = build_lance_service_app(
+    app = build_service_app(
         title="t",
         docs_enabled=False,
         audit_enabled=False,

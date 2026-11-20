@@ -21,7 +21,7 @@ from fastapi import Body, FastAPI, Request, Response
 from fastapi.testclient import TestClient
 from lance_namespace import ErrorCode
 
-from lakehouse.body_limit import BodySizeLimitMiddleware
+from lakehouse.service_app.body_limit import BodySizeLimitMiddleware
 
 
 CAP = 1000

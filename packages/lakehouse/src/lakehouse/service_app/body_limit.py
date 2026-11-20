@@ -77,3 +77,6 @@ class BodySizeLimitMiddleware:
                 "directly to object storage with vended credentials instead of through the catalog"
             ),
         )
+
+
+__all__ = ["BodySizeLimitMiddleware"]

@@ -1,6 +1,6 @@
 ---
 name: rask-architecture
-description: "Where new code belongs in the rask workspace: the language-pure planes (Python `packages/` + `services/`, the `frontend/` bun root holding the console) and the entrypoint contract (the one app factory, `build_lance_service_app`, with an injectable lifespan). Use when adding, moving or deleting a workspace member, service, frontend dependency or deployable; editing a `pyproject.toml`, the root `uv.lock`, or a uv/bun workspace glob; wiring a service entrypoint; or when newly added code won't resolve — ModuleNotFoundError, a `uv sync` workspace error, or a package `bun install` silently skipped."
+description: "Where new code belongs in the rask workspace: the language-pure planes (Python `packages/` + `services/`, the `frontend/` bun root holding the console) and the entrypoint contract (the one app factory, `build_service_app`, with an injectable lifespan). Use when adding, moving or deleting a workspace member, service, frontend dependency or deployable; editing a `pyproject.toml`, the root `uv.lock`, or a uv/bun workspace glob; wiring a service entrypoint; or when newly added code won't resolve — ModuleNotFoundError, a `uv sync` workspace error, or a package `bun install` silently skipped."
 ---
 
 # rask architecture (workspace planes + composition)
@@ -41,7 +41,7 @@ the globs safe (see the invariants).
 | **scripts** | `scripts/` | ALL dev/ops scripts, shell **and** python, flat | one-shot, **not** a workspace member |
 
 **Python packages** (1): `lakehouse` (`packages/lakehouse`, ADR 0195), the lakehouse's one library, which only its
-own services import and no client: the lance-plane app factory (`lance_app`) and what it installs (exceptions, the
+own services import and no client: the lance-plane app factory (`service_app`, ADR 0224) and what it installs (exceptions, the
 request's trace (ADR 0209), logging, the probes and the drain, the body cap), the auth plane (`governed`), the naming and
 the input and credential guards, the records, registries and governance guards, the Lance primitives more than one service reads Lance through (`lancekit`), the events (the
 control lane, the outbox, the OpenLineage builders), the OpenLineage models and Ed25519 signing seam
@@ -78,7 +78,7 @@ own, in its own repository, whose admissions it supplies to a lakehouse install 
 
 ## The composition seam: one app factory
 
-`lakehouse.lance_app.build_lance_service_app(*, title, docs_enabled, audit_enabled, lifespan, log, ready_check,
+`lakehouse.service_app.factory.build_service_app(*, title, docs_enabled, audit_enabled, lifespan, log, ready_check,
 max_body_bytes, request_deadline_seconds, routers=(), outer_middleware=(), inner_middleware=())` builds `catalog`,
 `lineage` and `maintenance`: routers mount at the root, config is each service's own `core/config.py::get_settings()`,
 and the factory owns the logging, the docs gate, the audit trail, the problem handlers, `/livez` + `/readyz`, and every

@@ -1,6 +1,6 @@
 """The process's log handler: every record to stdout, stamped with its request and trace ids.
 
-`lakehouse.lance_app.build_lance_service_app` runs `setup_logging` before it builds an app, so every lakehouse
+`lakehouse.service_app.factory.build_service_app` runs `setup_logging` before it builds an app, so every lakehouse
 service logs through one handler and one format.
 """
 
@@ -60,3 +60,6 @@ def setup_logging() -> None:
         # second half — it names fixed fields, and the diagnostics differ at every call site.
         handler.setFormatter(DiagnosticFormatter("%(asctime)s %(levelname)-7s %(name)s [%(trace_id)s] — %(message)s"))
         root.addHandler(handler)
+
+
+__all__ = ["setup_logging"]

@@ -9,16 +9,16 @@ process routes: the public route table is the product chart's HTTPRoutes, served
 
 `catalog` (`catalog.main`), `lineage` (`lineage.main`) and `maintenance` (`maintenance.worker`, its one process, whose
 app serves only `/livez` and `/readyz`) build through
-`lakehouse.lance_app.build_lance_service_app`, because copied boots drift: each once repeated the same five-step
+`lakehouse.service_app.factory.build_service_app`, because copied boots drift: each once repeated the same five-step
 boot in copied comments (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"
 DUP-12), and one lost its correlation layer in the copying. They still read their own `core/config.py` settings and
 keep the `api/v1/endpoints/` layout — the factory owns the boot, not the layout.
 
 | Service | Port | Composes package(s) | Factory | DB? | Notes |
 |---|---|---|---|---|---|
-| `catalog` | 2333 | `lakehouse` | `build_lance_service_app` | no | the Lance Namespace doors and the management doors; public `/api/catalog` |
-| `lineage` | 8000 | `lakehouse` | `build_lance_service_app` | no | intake, commit feed, forwarder (ADR 0158); public `/api/lineage` |
-| `maintenance` | 8001 | `lakehouse` | `build_lance_service_app` | no | the work-queue worker (table passes, the hourly audit, the daily scan, ADR 0198) and the write-event lane, one process that pulls everything from the bus; no public row, the port serves its probes |
+| `catalog` | 2333 | `lakehouse` | `build_service_app` | no | the Lance Namespace doors and the management doors; public `/api/catalog` |
+| `lineage` | 8000 | `lakehouse` | `build_service_app` | no | intake, commit feed, forwarder (ADR 0158); public `/api/lineage` |
+| `maintenance` | 8001 | `lakehouse` | `build_service_app` | no | the work-queue worker (table passes, the hourly audit, the daily scan, ADR 0198) and the write-event lane, one process that pulls everything from the bus; no public row, the port serves its probes |
 
 ## The lakehouse runs no ingest, no stage and no engine
 
@@ -43,7 +43,7 @@ gate).
 
 ## Lifespan injection recap
 
-`build_lance_service_app(lifespan=...)` takes the service's own `Callable[[FastAPI], AbstractAsyncContextManager[None]]`,
+`build_service_app(lifespan=...)` takes the service's own `Callable[[FastAPI], AbstractAsyncContextManager[None]]`,
 and it is required. The lifespan opens the service's clients on enter, each pushed onto one `AsyncExitStack` so they are
 torn down in reverse on exit, starts every background loop on a `lakehouse.supervision.Supervisor` (a loop that ends
 while the process serves ends the process, exit 70, ADR 0203), sets `app.state.startup_complete` once they are open and

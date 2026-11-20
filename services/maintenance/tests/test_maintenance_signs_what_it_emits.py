@@ -36,10 +36,10 @@ from tests.secret_store_double import SecretStoreDouble
 
 from lakehouse.control_emit import emit_control
 from lakehouse.governed.signing_key import SigningKeyHolder, signing_ready_check
-from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lifecycle import mark_started
 from lakehouse.lineage import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
 from lakehouse.lineage_events import DatasetUuids, dataset_uuids
+from lakehouse.service_app.factory import build_service_app
 from lakehouse.supervision import Supervisor
 from maintenance.core.lineage_emit import BusMaintenanceEmitter
 from maintenance.services.purge import ACTOR
@@ -109,7 +109,7 @@ def boot(  # noqa: PLR0913 — the fixtures a started, signing worker stands on
             mark_started(app)
             yield
 
-    worker = build_lance_service_app(
+    worker = build_service_app(
         title="maintenance worker",
         docs_enabled=False,
         audit_enabled=False,

@@ -1,4 +1,4 @@
-"""A lakehouse process commits nothing to a table from a read (`lakehouse.lance_app.build_lance_service_app`).
+"""A lakehouse process commits nothing to a table from a read (`lakehouse.service_app.factory.build_service_app`).
 
 Lance migrates a dataset whose index segments overlap by a commit from whichever read notices: measured on pylance
 13.0.0, two segments covering one fragment commit, and a read of the index's statistics then committed 472 migrations
@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 
 import lance
 
-from lakehouse.lance_app import build_lance_service_app
+from lakehouse.service_app.factory import build_service_app
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
@@ -38,7 +38,7 @@ async def _ready(_request):
     return Readiness(status=ReadinessStatus.ready)
 
 
-build_lance_service_app(
+build_service_app(
     title="t",
     docs_enabled=False,
     audit_enabled=False,

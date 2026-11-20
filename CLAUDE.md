@@ -253,8 +253,8 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
 - `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
   - `packages/lakehouse` — **the lakehouse's one library** (import `lakehouse`, ADR 0195), imported only by its own
     services (`catalog`, `lineage`, `maintenance`) and by no client: what two or more of them share, organised by module (ADR 0224: code one service alone uses lives in that service, and the library is grouped by job one concern at a time). The
-    lance app factory (`lakehouse.lance_app`) and what it installs: exceptions, the request's trace (ADR 0209), logging
-    (`setup_logging`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
+    lance app factory (`lakehouse.service_app.factory`) and what it installs: exceptions, the request's trace (ADR 0209), logging
+    (`lakehouse.log_handler`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
     the spec's error mapping (`naming`, `ns_errors`, `spec_routes`, `endpoint_scheme`); the input and credential guards
     (`arrow_ipc`, `storage_options`); the catalog's records, registries and governance guards (protection, trash,
     history fences, retention); the table layout and feature checks; what every plane reads a Lance
@@ -393,7 +393,7 @@ Key facts that aren't obvious from any single file:
   harmless: read as policy, "trusted network" made an unguarded service look deliberate rather than
   unfinished. Owner ruling 2026-08-26: authenticated is the truth, the ungated services get the door
   their siblings share, and body caps + rate limiting land as one seam rather than per route (the catalog's
-  `lakehouse.body_limit` cap and its write-concurrency shed). That work landed: the tracking
+  `lakehouse.service_app.body_limit` cap and its write-concurrency shed). That work landed: the tracking
   file, `open_fastapi-audit.md`, was **DRAINED AND DELETED 2026-08-28** — all 55 findings fixed
   RED-first, every closure adversarially re-verified (the drain's own commits carry the record).
   **rask runs no edge process** (ADR 0165): the platform's

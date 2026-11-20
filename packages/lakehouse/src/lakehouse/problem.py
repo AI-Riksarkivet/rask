@@ -2,7 +2,7 @@
 
 The envelope is RFC 9457 plus the two spec-0.9 keys, and the code is an integer on the wire: ``ErrorCode`` is an
 ``IntEnum``, so a caller passes its member unchanged. ``lakehouse.ns_errors`` maps the Lance Namespace errors onto it
-and re-exports both names; the sites that must BUILD a response rather than raise (``lakehouse.body_limit``, a door
+and re-exports both names; the sites that must BUILD a response rather than raise (``lakehouse.service_app.body_limit``, a door
 that sets ``Retry-After``) take ``problem_body`` from here.
 """
 

@@ -286,7 +286,7 @@ class MaintenanceSettings(SignatureDoorSettings, MaintenanceStore, MaintenanceCa
     #: evidence, so a deployment that forgets still has it.
     #:
     #: IT DID NOT EXIST UNTIL 2026-09-09, and the sweep is where that cost most: this is the component
-    #: that REWRITES BYTES, and with no field there was nothing for `build_lance_service_app` to arm,
+    #: that REWRITES BYTES, and with no field there was nothing for `build_service_app` to arm,
     #: so the `lance.audit` logger sat at NOTSET and followed `RASK_LOG_LEVEL` (§ Q17-27). Arming it is
     #: the precondition for § Q17-36 — maintenance's per-object outcome becoming a governed record rather
     #: than telemetry on a 14-day trace TTL.

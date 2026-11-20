@@ -28,7 +28,7 @@ what it owns is the part that is identical in all of them:
      audit trail, the problem body's ``instance``, the commits and the events it causes all carry. OUTERMOST, so every
      refusal a layer below answers runs in it.
    * ``NoStoreMiddleware``: every answer carries ``Cache-Control: no-store`` unless its door named its own caching, and
-     varies on ``Authorization``, since a door may answer the credentials it vends (`lakehouse.no_store`). It wraps
+     varies on ``Authorization``, since a door may answer the credentials it vends (`lakehouse.service_app.no_store`). It wraps
      the app's own entry point (:class:`_UncachedApp`), so the server's error layer is inside it: an unexpected
      exception's 500 is answered by that error layer, outside every layer ``add_middleware`` installs.
    * ``PanicCatcherMiddleware``: a native library's panic answers 500 with the problem body and the process
@@ -60,17 +60,17 @@ from opentelemetry.sdk.trace import TracerProvider
 from starlette.middleware import Middleware
 from starlette.types import Receive, Scope, Send
 
-from lakehouse import thread_pool
-from lakehouse.app import setup_logging
-from lakehouse.body_limit import BodySizeLimitMiddleware
-from lakehouse.deadline import RequestDeadlineMiddleware
 from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import configure_audit
-from lakehouse.no_store import NoStoreMiddleware
+from lakehouse.log_handler import setup_logging
 from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.panic_catcher import PanicCatcherMiddleware
 from lakehouse.probes import LiveCheck, ReadyCheck, make_probes_router
+from lakehouse.service_app import thread_pool
+from lakehouse.service_app.body_limit import BodySizeLimitMiddleware
+from lakehouse.service_app.deadline import RequestDeadlineMiddleware
+from lakehouse.service_app.no_store import NoStoreMiddleware
+from lakehouse.service_app.panic_catcher import PanicCatcherMiddleware
 
 
 #: Lance's switch for the migration a read commits. A dataset whose fragment metadata is out of date, or whose index
@@ -129,7 +129,7 @@ def _trace_every_request(app: FastAPI) -> None:
 
 
 def _served(lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]]) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-    """``lifespan``, entered once the serving loop's thread pool is reported (`lakehouse.thread_pool`), with the drain
+    """``lifespan``, entered once the serving loop's thread pool is reported (`lakehouse.service_app.thread_pool`), with the drain
     armed while it serves.
 
     ARMED AT SIGTERM, for every service the factory builds (`lakehouse.draining.arm_drain_on_sigterm`). A lifespan's own
@@ -166,7 +166,7 @@ def _mount_docs(app: FastAPI) -> None:
     app.add_api_route("/redoc", redoc, methods=["GET"], include_in_schema=False)
 
 
-def build_lance_service_app(
+def build_service_app(
     *,
     title: str,
     version: str = "0.1.0",
@@ -239,3 +239,6 @@ def build_lance_service_app(
         app.include_router(router)
     app.include_router(make_probes_router(ready_check, live_check))
     return app
+
+
+__all__ = ["build_service_app"]

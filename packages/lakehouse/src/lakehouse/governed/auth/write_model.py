@@ -26,9 +26,9 @@ from typing import Any, Final
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.app import setup_logging
 from lakehouse.governed.fga import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, ModelHistoryTooLongError, canonical_model, newest_store
 from lakehouse.governed.machine_identity import identity_bearer
+from lakehouse.log_handler import setup_logging
 
 
 log = logging.getLogger(__name__)

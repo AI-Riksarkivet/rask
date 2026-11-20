@@ -163,7 +163,7 @@ def respx_allows_unused_routes() -> Iterator[None]:
 def _lance_reads_commit_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run each test as a lakehouse process runs, with Lance's auto-migration off.
 
-    Every app build writes the switch into the process environment for good (`lakehouse.lance_app`), so without this a
+    Every app build writes the switch into the process environment for good (`lakehouse.service_app.factory`), so without this a
     test ran with it off or with Lance's default by whether an app had been built before it. The fixture sets it for
     the test and restores the environment at teardown, whatever a build wrote.
     """

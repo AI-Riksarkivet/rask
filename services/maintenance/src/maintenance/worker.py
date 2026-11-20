@@ -41,9 +41,9 @@ import uvicorn
 from fastapi import FastAPI
 
 from lakehouse.governed.signing_key import signing_ready_check
-from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lifecycle import mark_draining, mark_started
 from lakehouse.obs import configure_app_logging
+from lakehouse.service_app.factory import build_service_app
 from lakehouse.supervision import FLUSH_SECONDS, Supervisor, flush_telemetry
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.runtime import collaborators, reported_health, reported_readiness, standing
@@ -82,7 +82,7 @@ def _alive() -> bool:
 #: bounds every lakehouse app is built with are a probe's own.
 _PROBE_MAX_BODY_BYTES = 64 * 1024
 _PROBE_DEADLINE_SECONDS = 30.0
-app = build_lance_service_app(
+app = build_service_app(
     title="Lance table maintenance worker",
     docs_enabled=False,
     audit_enabled=get_settings().audit_enabled,

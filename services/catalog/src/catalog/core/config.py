@@ -622,7 +622,7 @@ class Settings(
     max_concurrent_writes: int = Field(default=16, ge=0, alias="LANCE_MAX_CONCURRENT_WRITES")
 
     # A request with no answer begun after this long is answered 503 while its door runs on to its end
-    # (`lakehouse.deadline`). Five times the longest catalog request measured over two weeks of the estate's traces
+    # (`lakehouse.service_app.deadline`). Five times the longest catalog request measured over two weeks of the estate's traces
     # (2026-10-29..11-12: a warehouse cascade delete, 50.9 s; an insert waiting its commit turn, 46 s), so it answers a
     # hang, never a door that is working.
     request_deadline_seconds: float = Field(default=300.0, gt=0, alias="LANCE_REQUEST_DEADLINE_SECONDS")

@@ -51,7 +51,7 @@ _APP = textwrap.dedent(
 
     from fastapi import APIRouter, Request
 
-    from lakehouse.lance_app import build_lance_service_app
+    from lakehouse.service_app.factory import build_service_app
     from lakehouse.lifecycle import is_draining
     from lakehouse.probes import Readiness, ReadinessStatus
 
@@ -96,7 +96,7 @@ _APP = textwrap.dedent(
 
 
     # The lifespan arms nothing: an app the factory builds is drained by the factory.
-    app = build_lance_service_app(
+    app = build_service_app(
         title="armed",
         docs_enabled=False,
         audit_enabled=False,

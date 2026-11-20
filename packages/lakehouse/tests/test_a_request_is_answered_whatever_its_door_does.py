@@ -1,6 +1,6 @@
 """A lakehouse app answers every request with the spec's problem body, whatever its door does (ADR 0203).
 
-`build_lance_service_app` installs two layers inside the request's trace for catalog, lineage and maintenance. A door
+`build_service_app` installs two layers inside the request's trace for catalog, lineage and maintenance. A door
 that has begun no answer within the request deadline is answered 503 (code 17) and runs on to its own end, never
 cancelled, since a lakehouse door undoes its half-done work in its own ``except`` blocks. A door in which a native library
 panics, which pyo3 raises as a BaseException that no Exception handler catches, is answered 500 (code 18) as any other
@@ -23,9 +23,9 @@ import pytest
 from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
-from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lifecycle import mark_started
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.service_app.factory import build_service_app
 
 
 #: How long the door below runs past the deadline: long enough that an answer it gave would come after it.
@@ -46,7 +46,7 @@ def _app(*, deadline_seconds: float) -> FastAPI:
         mark_started(app)
         yield
 
-    return build_lance_service_app(
+    return build_service_app(
         title="t",
         docs_enabled=False,
         audit_enabled=False,

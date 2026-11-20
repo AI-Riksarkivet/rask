@@ -750,7 +750,7 @@ groups:
             publish was refused before anything was sent: no subscriber hears of it. Read the publisher's
             `lineage_publish_failed` or `control_publish_failed` log, whose error gives the event's size.
 
-      # Every blocking call a door makes runs on the serving loop's thread pool (`lakehouse.thread_pool`). Calls
+      # Every blocking call a door makes runs on the serving loop's thread pool (`lakehouse.service_app.thread_pool`). Calls
       # waiting for a thread mean every thread is held: requests queue, and latency rises with no error.
       - alert: RequestThreadPoolExhausted
         expr: max by (service_name) (threadpool_waiting) > 0
