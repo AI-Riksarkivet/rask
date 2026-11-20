@@ -39,7 +39,7 @@ from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
-from lakehouse.events.bus import Bus, bus_session
+from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.events.control_emit import make_control_emitter
 from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.admission import judge_before_the_body
@@ -48,13 +48,14 @@ from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
-from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
 from lakehouse.lance_metrics import instrument_lance_if_available
-from lakehouse.obs import configure_app_logging
+from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
+from lakehouse.process.log_levels import configure_app_logging
+from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
+from lakehouse.storage.objectfs import store_dependency
 from lakehouse.storage.store_session import require_env_pair, start_store_session
-from lakehouse.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -333,7 +334,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     loops.start("estate-namespaces", partial(_ensure_estate_namespaces, app))
     _follow_control_events(app, settings, bus, loops)
     # What `/readyz` answers, read in the background so the probe never waits on a dependency or a request thread
-    # (`lakehouse.health`, ADR 0203). The store and OpenFGA gate: no door serves without them. The bus is reported only,
+    # (`lakehouse.process.health`, ADR 0203). The store and OpenFGA gate: no door serves without them. The bus is reported only,
     # since every announcement it carries is staged in an outbox first. The namespace this catalog serves is a fact
     # read once here: a backend that cannot answer `namespace_id()` is no readiness fault, and per-request resolution
     # surfaces that as a domain error.

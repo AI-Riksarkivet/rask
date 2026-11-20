@@ -254,7 +254,7 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
   - `packages/lakehouse` — **the lakehouse's one library** (import `lakehouse`, ADR 0195), imported only by its own
     services (`catalog`, `lineage`, `maintenance`) and by no client: what two or more of them share, organised by module (ADR 0224: code one service alone uses lives in that service, and the library is grouped by job one concern at a time). The
     lance app factory (`lakehouse.service_app.factory`) and what it installs: exceptions, the request's trace (ADR 0209), logging
-    (`lakehouse.log_handler`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
+    (`lakehouse.process.log_handler`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
     the spec's error mapping (`naming`, `ns_errors`, `spec_routes`); the input and credential guards
     (`arrow_ipc`, `storage.options`); the catalog's records, registries and governance guards on the control root
     (`lakehouse.records`: protection, trash, history fences, location claims, the maintenance policies); what every plane reads and judges a Lance table by (`lakehouse.lancekit`: versions,

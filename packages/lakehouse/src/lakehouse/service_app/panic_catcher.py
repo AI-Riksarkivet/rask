@@ -1,7 +1,7 @@
 """A native library's panic inside a request is answered 500 with the spec's problem body, and the process serves on.
 
 pylance and pyarrow are native code, and pyo3 raises a Rust panic as a BaseException that is no Exception
-(:func:`lakehouse.supervision.is_panic`). Every handler the app installs catches Exceptions, so without this layer a panic
+(:func:`lakehouse.process.supervision.is_panic`). Every handler the app installs catches Exceptions, so without this layer a panic
 passes them all and reaches the server, which answers a bare text 500 and logs it under its own logger, with nothing
 that names the service or carries the request's trace. Installed by the app factory inside the request's trace, this
 answers it as the problem handlers answer any other failure, logs it with its traceback under the service's logger, and
@@ -17,7 +17,7 @@ from lance_namespace import ErrorCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from lakehouse.problem import send_problem
-from lakehouse.supervision import is_panic
+from lakehouse.process.supervision import is_panic
 
 
 class PanicCatcherMiddleware:

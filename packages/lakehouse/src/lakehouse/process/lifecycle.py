@@ -1,13 +1,13 @@
 """The lifecycle contract ``/readyz`` reads — one typed home for two booleans.
 
-``lakehouse.probes`` answers readiness off ``app.state.startup_complete`` and
+``lakehouse.process.probes`` answers readiness off ``app.state.startup_complete`` and
 ``app.state.shutting_down``. This module is where the two names are spelled and read, so a probe and the
 lifespan that sets them share one definition rather than a naming agreement: a lifespan that logs the
 string ``"startup_complete"`` without setting the attribute leaves ``/readyz`` answering ``starting`` for the
 whole life of the pod, and the drain never begins.
 
 Absence reads as "not started, not draining". That asymmetry is deliberate and matches
-:mod:`lakehouse.draining`: defaulting an unset drain flag to True would take an app that never
+:mod:`lakehouse.process.draining`: defaulting an unset drain flag to True would take an app that never
 set it permanently out of service, while defaulting ``started`` to True would let a half-built
 app claim readiness.
 """

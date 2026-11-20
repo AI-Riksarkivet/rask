@@ -33,7 +33,7 @@ from pydantic import ValidationError
 
 from lakehouse.governed import secrets
 from lakehouse.governed.secrets import SecretStore, SecretStoreSettings
-from lakehouse.supervision import Supervisor
+from lakehouse.process.supervision import Supervisor
 from tests.secret_store_double import SecretStoreDouble
 
 

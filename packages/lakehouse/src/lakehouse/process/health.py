@@ -27,16 +27,12 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness, ReadinessStatus
-from lakehouse.storage.objectfs import fs_and_base
-from lakehouse.supervision import Supervisor
 
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-
-    from lakehouse.events.bus import Bus
-    from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -68,34 +64,10 @@ class Dependency(BaseModel):
     close: Callable[[], Awaitable[None]] | None = None
 
 
-def store_dependency(root_uri: str, options: Callable[[], StorageOptions], *, required: bool) -> Dependency:
-    """The object store, read as one listing of ``root_uri`` under the options in force at each read (the process's own
-    session, renewed as it runs), which a store that is down, or a session it no longer honours, refuses. The blocking
-    read runs on the event loop's own executor (``asyncio.to_thread``), never on the request threads Starlette lends a
-    sync door, since a burst holding all 40 of those is what the verdict must not wait behind."""
-    return Dependency(name="store", read=partial(asyncio.to_thread, _list_the_root, root_uri, options), required=required)
-
-
-def _list_the_root(root_uri: str, options: Callable[[], StorageOptions]) -> None:
-    """One listing of ``root_uri``. Blocking."""
-    fs, base = fs_and_base(root_uri, options())
-    fs.get_file_info(base)
-
-
 def openfga_dependency(app: FastAPI, *, required: bool) -> list[Dependency]:
     """OpenFGA, read under the client this process holds (``app.state.fga``), or nothing when it asks OpenFGA nothing."""
     fga = getattr(app.state, "fga", None)
     return [Dependency(name="openfga", read=fga.get_store, required=required)] if fga is not None else []
-
-
-def bus_dependency(bus: Bus | None) -> list[Dependency]:
-    """The bus the chart names this process, reported and never gating, since every announcement it carries is staged
-    in an outbox first and the bus keeps what a consumer could not take; nothing for a process named no bus.
-
-    The verdict is the state of this process's own connection: a closed or reconnecting client is the bus being away
-    for this process, whatever a fresh connection would be told.
-    """
-    return [Dependency(name="bus", read=bus.answering, required=False)] if bus is not None else []
 
 
 class _Answer(BaseModel):
@@ -173,4 +145,4 @@ class HealthWatch:
                 await dependency.close()
 
 
-__all__ = ["Dependency", "HealthWatch", "Verdict", "bus_dependency", "openfga_dependency", "store_dependency"]
+__all__ = ["Dependency", "HealthWatch", "Verdict", "openfga_dependency"]

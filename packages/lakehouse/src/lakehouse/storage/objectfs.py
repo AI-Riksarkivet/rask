@@ -15,12 +15,15 @@ and become the flat map only at the call that signs with them, through that guar
 
 from __future__ import annotations
 
+import asyncio
+from functools import partial
 from typing import TYPE_CHECKING, Final
 
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
 from lakehouse.lancekit.base_refs import decoded_path
+from lakehouse.process.health import Dependency
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import REGION, VIRTUAL_HOSTED, StorageOptions, on_s3, s3_filesystem
 
@@ -265,6 +268,20 @@ def _where_a_root_may_be(uri: str) -> list[str]:
     return [uri] if opened == uri.rstrip("/") else [uri, opened]
 
 
+def store_dependency(root_uri: str, options: Callable[[], StorageOptions], *, required: bool) -> Dependency:
+    """The object store, read as one listing of ``root_uri`` under the options in force at each read (the process's own
+    session, renewed as it runs), which a store that is down, or a session it no longer honours, refuses. The blocking
+    read runs on the event loop's own executor (``asyncio.to_thread``), never on the request threads Starlette lends a
+    sync door, since a burst holding all 40 of those is what the verdict must not wait behind."""
+    return Dependency(name="store", read=partial(asyncio.to_thread, _list_the_root, root_uri, options), required=required)
+
+
+def _list_the_root(root_uri: str, options: Callable[[], StorageOptions]) -> None:
+    """One listing of ``root_uri``. Blocking."""
+    fs, base = fs_and_base(root_uri, options())
+    fs.get_file_info(base)
+
+
 __all__ = [
     "SSE_KMS_ALGORITHMS",
     "StoreTimeouts",
@@ -273,4 +290,5 @@ __all__ = [
     "is_lance_dataset_root",
     "lance_storage_options",
     "same_store_uri",
+    "store_dependency",
 ]

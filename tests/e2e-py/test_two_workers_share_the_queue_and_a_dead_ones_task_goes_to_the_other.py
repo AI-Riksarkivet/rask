@@ -115,10 +115,10 @@ from pydantic import BaseModel, SecretStr
 
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.events.lineage_events import LANCE_FACET, DatasetUuids, with_dataset_uuids
+from lakehouse.process.supervision import EndProcess, end_process
 from lakehouse.records import location_claims
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
-from lakehouse.supervision import EndProcess, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.core.metrics import ArrivalOutcome
@@ -292,7 +292,7 @@ class _Runs:
 
 
 class _Ended(Exception):  # noqa: N818 — a replica's end, raised where a worker ends its process
-    """Raised where an in-process replica's worker would end its process (`lakehouse.supervision.end_process`)."""
+    """Raised where an in-process replica's worker would end its process (`lakehouse.process.supervision.end_process`)."""
 
 
 class _Replica:

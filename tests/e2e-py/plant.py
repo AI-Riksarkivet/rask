@@ -33,7 +33,7 @@ import asyncio, sys
 from catalog.core.config import get_settings
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.store_session import start_store_session
-from lakehouse.supervision import Supervisor
+from lakehouse.process.supervision import Supervisor
 
 JUNK = b"planted by tests/e2e-py/plant.py: not a manifest, not a record"
 

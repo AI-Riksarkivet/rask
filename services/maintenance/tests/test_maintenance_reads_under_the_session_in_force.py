@@ -34,12 +34,12 @@ from moto.server import ThreadedMotoServer
 from moto.sts.models import sts_backends
 from pydantic import BaseModel, SecretStr
 
+from lakehouse.process.supervision import Supervisor
 from lakehouse.records import location_claims
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.store_session import SessionCache, start_store_session
-from lakehouse.supervision import Supervisor
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.reconcile import reconcile

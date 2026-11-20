@@ -29,7 +29,7 @@ from lakehouse.governed import fga as fga_mod
 from lakehouse.governed import oidc as oidc_mod
 from lakehouse.governed.auth_lifespan import attach_auth, build_fga_client
 from lakehouse.governed.settings import OidcProvider
-from lakehouse.supervision import Supervisor
+from lakehouse.process.supervision import Supervisor
 
 
 class _Settings(BaseModel):
@@ -230,7 +230,7 @@ async def test_the_default_stays_NON_fatal(monkeypatch: pytest.MonkeyPatch, fga_
 #
 # When the ten inline bootstraps collapsed onto this one helper, the first cut replaced their
 # structured `log.info(event, extra=...)` events with printf message strings — silently narrowing
-# telemetry: `openfga_provisioned` is a documented severity-9 INFO audit event (`lakehouse.obs`)
+# telemetry: `openfga_provisioned` is a documented severity-9 INFO audit event (`lakehouse.process.log_levels`)
 # that `obs.setup` raises to OTLP, and maintenance's four `reconcile_fga_*` diagnostics carried
 # `extra` payloads (store_id, the pin-for-production hint, the unpinned reason). A message string
 # drops all of it. The single emitter must keep them structured — one emitter is the improvement,

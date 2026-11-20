@@ -443,3 +443,115 @@ catalog imports; both are listed.
   catalog's doors raise.
 - The rest, `naming`, `arrow_ipc`, `compaction_gate`, `table_paths`, `derived_tables`, `lance_metrics` and `schemas`:
   each judged by its own job when its group is drawn, or left at the top where it is a leaf of one job alone.
+
+## The process group (2026-11-20)
+
+The seventh group by job is the process, `lakehouse.process`: what a lakehouse process is and says about itself while it
+runs (ADR 0203). Measured with `ast` on `e91910dfd` (module-level, function-local, `TYPE_CHECKING` and relative imports;
+113 modules, 230 edges), the ten candidates import nothing in the library but `schemas.health` (`health`, `probes`),
+`events.bus` (`health`, under `TYPE_CHECKING`), `storage.objectfs` and `storage.options` (`health`), and
+`records.control_prefixes`, `storage.conditional_records` and `storage.options` (`timers`); the rest imports them from
+the bus, the envelope, the auth plane, the store session, the problem envelope and the service app. So the candidates
+and the rest imported each other in two places, `health` and `timers`, and this commit cuts one and leaves the other
+out.
+
+| Module | In the group as |
+| --- | --- |
+| `lakehouse.supervision` | `lakehouse.process.supervision` |
+| `lakehouse.lifecycle` | `lakehouse.process.lifecycle` |
+| `lakehouse.draining` | `lakehouse.process.draining` |
+| `lakehouse.health` | `lakehouse.process.health` |
+| `lakehouse.probes` | `lakehouse.process.probes` |
+| `lakehouse.context` | `lakehouse.process.correlation` |
+| `lakehouse.log_handler` | `lakehouse.process.log_handler` |
+| `lakehouse.obs` | `lakehouse.process.log_levels` |
+| `lakehouse.health.store_dependency` | `lakehouse.storage.objectfs.store_dependency` |
+| `lakehouse.health.bus_dependency` | `lakehouse.events.bus.bus_dependency` |
+
+**The name.** `process` is what the modules are about: one running lakehouse process, its loops, its end, its flags, its
+probes, its trace and its logs; ADR 0203 names the job the same way. No module or installed package uses the name.
+`runtime` was weighed and refused: `maintenance.runtime` is the worker's own assembly, and `from lakehouse.runtime.health
+import` inside `maintenance/runtime.py` would read as one module. `context` takes the name of what it holds, the
+correlation every record is joined by (ADR 0209), since `context` beside `process` reads as the process's context and
+the module already imports `opentelemetry.context` as a second `context` (15 references). `obs` takes `log_levels`
+beside `log_handler`: one is the stdout handler every record goes through (6 references), the other the levels the
+lakehouse's own packages log at (5 references), and `obs` named neither. `log_handler` keeps its name, since beside
+`log_levels` it says which half it is.
+
+**The `Dependency` split.** `health` held the type and the watch, and the constructors of three dependencies: the store's
+(`store_dependency`, a listing of a root through `storage.objectfs`), the bus's (`bus_dependency`, typed by
+`events.bus.Bus`) and OpenFGA's. `governed.signing_key` imports `health.Dependency` for the secret store's dependency, so
+the auth plane reached the bus and the store through the probe:
+
+- before, `governed.signing_key -> health -> events.bus`, `-> storage.objectfs` and `-> storage.options` (3 chains from
+  `lakehouse.governed` to `lakehouse.events` or `lakehouse.storage`, every one through `health`);
+- after, 0 chains from `lakehouse.governed` to either, through any module (114 modules, 229 edges).
+
+The constructors that name the bus or the store are built beside them, as the secret store's already is beside its
+user (`governed.signing_key.secret_store_dependency`): `store_dependency` in `storage.objectfs`, beside `fs_and_base`,
+which is its read, and `bus_dependency` in `events.bus`, beside `Bus.answering`, which is its read. Splitting `health`
+in two modules of the group was weighed and refused: the group's constructor module would still import the bus and the
+store, which import the group's primitives, so the group and the two would import each other. `openfga_dependency`
+stays in `health`: it reads `app.state.fga` and imports nothing. Same functions, same names, same behaviour; each of
+the three services imports the two constructors from their new modules.
+
+Borderline calls:
+
+- `probes` joins: the router that serves `/livez` and `/readyz` off the lifecycle flags is the process telling the
+  truth about itself, and the issuer mirror's own app (`governed.issuer_mirror`) and `governed.signing_key` import it,
+  so the service app, which the services alone import, cannot hold it.
+- `draining` joins: it flips the lifecycle flag at SIGTERM and hands the signal on; it imports `lifecycle` alone.
+- `exceptions` stays out: its job is an answer, the domain error hierarchy and its RFC 9457 handler, a sibling of the
+  spec's error answers below, and nothing in the group imports it. It imports nothing, so either side holds on the
+  graph and the job decides.
+- `timers` stays out, at the top of the library: it claims each window with a conditional write under
+  `records.control_prefixes.TIMERS` through `storage.conditional_records`, and the store imports the group
+  (`storage.store_session -> process.supervision`), so in the group it would make the group and the store import each
+  other. Its loop is kept by a `Supervisor`, which it takes no import of.
+- `schemas.health` stays out: the probe's body (`Readiness`, `Liveness`) is the process's answer by job, but `schemas` is
+  left for the last group; the two edges into it are named in the group's contract.
+
+`process/__init__.py` is a docstring with no import. Every module of the group declares `__all__`: four did not
+(`correlation`, `draining`, `probes`, `log_levels`), and `health`'s lists the type, the watch, the verdict and
+`openfga_dependency`.
+Names a test reads from a module that are not in its `__all__` are a test's patch where the name is used
+(`draining.signal`) and the bus's private seams (`_Session`, `_open`, `_PULL_SECONDS`, `NatsError`), left out.
+
+Contracts:
+
+- `the-process-imports-nothing-else-in-the-library` (`forbidden`, from `lakehouse.process` to `lakehouse.*`, two ignored
+  imports into `lakehouse.schemas.health`). It held when it was added; a planted `import lakehouse.naming` in
+  `process.lifecycle` broke it.
+- `the-auth-plane-reaches-neither-the-events-nor-the-store` (`forbidden`, from `lakehouse.governed` to `lakehouse.events`
+  and `lakehouse.storage`, indirect imports included), the chain this commit cuts. It held when it was added; a planted
+  `import lakehouse.storage.uri` in `governed.projected_token` broke it, and a planted `import lakehouse.events.bus` in
+  `process.health` broke it through `governed.signing_key -> process.health`, with the process and events contracts.
+- The events contract is `the-events-are-imported-by-the-services-only`: `lakehouse.health` is not an allowed importer,
+  since nothing in the library imports the events. A planted `import lakehouse.events.outbox_metrics` in
+  `lakehouse.timers` broke it.
+- The store's contract names five imports: the four it named, with `store_session -> process.supervision` at its path
+  in the group, and `objectfs -> process.health` for the store's dependency. A planted `import lakehouse.timers` in
+  `storage.uri` broke it.
+
+A module's logger is named by its path, so three logger names follow the group: `lakehouse.health`,
+`lakehouse.supervision` and `lakehouse.draining` log as `lakehouse.process.health` (`dependency_unavailable`,
+`dependency_answering`), `lakehouse.process.supervision` (`background_work_ended`) and `lakehouse.process.draining`
+(`drain_armed_by_sigterm`). The on-call runbook and the e2e lane name the events, not the logger, and no alert rule,
+dashboard, collector route or `caplog` names any of the three; the runbook's and `docs/RESILIENCE.md`'s module paths
+name the new ones. `log_levels` raises the `lakehouse` package logger, which the three inherit. No module of the group has
+a tracer or a meter; `lance.timers` is named by hand and `timers` stays where it is.
+
+**Proposed, for a commit of its own: the spec's error answers.** Measured on the same tree after this commit, `ns_errors`
+(360 lines), `problem` (86), `spec_routes` (170), `outage` (118) and `exceptions` (158) import nothing in the library
+but each other and `process.correlation` (`problem`), and the rest imports them from the auth plane (`exceptions`, in
+`issuer_mirror`, `machine_identity` and `oidc`) and the service app (`factory`, `body_limit`, `deadline`,
+`panic_catcher`), so the edges run one way. A subpackage holding the five, held by a `forbidden` contract to
+`lakehouse.*` ignoring `problem -> process.correlation`, with `catalog-api-speaks-the-spec-taxonomy` naming the domain
+errors' new path, moves some 107 references. `problem` and `exceptions` each define `PROBLEM_JSON`, which one module
+should define. `read_refusal` is not of the group: its importers are `service_app.body_limit` and the catalog's
+`api.load_shed`, two request layers, so it is the service app's. `governed.oidc` imports `exceptions`, so the commit
+follows the change in flight there.
+
+**What then remains at the top of the library:** `timers`, `naming`, `arrow_ipc`, `compaction_gate`, `table_paths`,
+`derived_tables`, `lance_metrics` and `schemas`, each judged by its own job: `schemas.health` with the process, `timers`
+as the process's claim on the store or a module of its own above the records, and the rest as leaves of one job each.

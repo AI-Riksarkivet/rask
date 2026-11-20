@@ -38,9 +38,9 @@ from lakehouse.events.control_emit import emit_control
 from lakehouse.events.lineage_events import DatasetUuids, dataset_uuids
 from lakehouse.events.signing import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
 from lakehouse.governed.signing_key import SigningKeyHolder, signing_ready_check
-from lakehouse.lifecycle import mark_started
+from lakehouse.process.lifecycle import mark_started
+from lakehouse.process.supervision import Supervisor
 from lakehouse.service_app.factory import build_service_app
-from lakehouse.supervision import Supervisor
 from maintenance.core.lineage_emit import BusMaintenanceEmitter
 from maintenance.services.purge import ACTOR
 

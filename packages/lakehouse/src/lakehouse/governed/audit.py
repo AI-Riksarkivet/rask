@@ -25,7 +25,7 @@ from typing import Any, Final
 
 from opentelemetry import metrics
 
-from lakehouse.context import NO_TRACE, current_trace_id
+from lakehouse.process.correlation import NO_TRACE, current_trace_id
 
 
 #: The one well-known audit logger name (not a per-module logger) so audit records are a single stream.

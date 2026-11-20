@@ -1,4 +1,4 @@
-"""A native library's panic is told from a request to stop by what it is not (`lakehouse.supervision.is_panic`).
+"""A native library's panic is told from a request to stop by what it is not (`lakehouse.process.supervision.is_panic`).
 
 pyo3 raises a Rust panic as ``pyo3_runtime.PanicException``, a BaseException that is no Exception and that no module
 exports, so the panic catcher, the request deadline and maintenance's task handler each recognise one by elimination: it
@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from lakehouse.supervision import is_panic
+from lakehouse.process.supervision import is_panic
 
 
 class _Panic(BaseException):

@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import UnauthenticatedError
 from starlette.types import Message, Scope
 
-from lakehouse.context import current_trace_id
+from lakehouse.process.correlation import current_trace_id
 
 
 LANCE_APPS = (

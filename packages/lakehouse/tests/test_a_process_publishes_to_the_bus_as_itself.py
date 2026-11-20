@@ -34,11 +34,11 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader, NumberDataPoint
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
 
-from lakehouse.context import continuing
 from lakehouse.events import bus, bus_metrics
 from lakehouse.events.bus_delivery import Delivery, Lane, Verdict
 from lakehouse.events.cloud_events import CloudEvent
-from lakehouse.supervision import EndProcess, Supervisor
+from lakehouse.process.correlation import continuing
+from lakehouse.process.supervision import EndProcess, Supervisor
 from tests.traces import trace_id_of
 
 

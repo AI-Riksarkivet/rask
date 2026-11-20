@@ -52,13 +52,13 @@ from lakehouse.governed.secrets import (
     secret_store_configured,
     secret_store_login_held,
 )
-from lakehouse.health import Dependency
-from lakehouse.probes import ReadyCheck
+from lakehouse.process.health import Dependency
+from lakehouse.process.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
 if TYPE_CHECKING:
-    from lakehouse.supervision import Supervisor
+    from lakehouse.process.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)

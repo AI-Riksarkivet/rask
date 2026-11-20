@@ -16,7 +16,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from lakehouse.exceptions import ServiceUnavailableError
-from lakehouse.health import HealthWatch
+from lakehouse.process.health import HealthWatch
 from lineage import main
 
 

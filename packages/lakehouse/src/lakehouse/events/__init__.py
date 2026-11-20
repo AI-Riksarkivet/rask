@@ -7,7 +7,7 @@ CloudEvents envelope each event rides in (`cloud_events`), the catalog's control
 `outbox_metrics`), and the Ed25519 signing and verifying seam a verifying door reads (`signing`, `published_keys`,
 `door_verdict`, `signature_doors`).
 
-The group imports the rest of the library and the rest imports none of it but the readiness probe's view of the bus
-(`lakehouse.health`); `.importlinter` holds that. Nothing is exported here: an importer names the module that defines
-what it uses.
+The group imports the rest of the library and the rest imports none of it: the bus's readiness dependency is built here
+(`bus.bus_dependency`), on the process's `Dependency` type, and `.importlinter` holds that. Nothing is exported here: an
+importer names the module that defines what it uses.
 """

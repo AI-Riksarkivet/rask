@@ -8,7 +8,7 @@ import logging
 import os
 import sys
 
-from lakehouse.context import CorrelationFilter, DiagnosticFormatter
+from lakehouse.process.correlation import CorrelationFilter, DiagnosticFormatter
 
 
 def setup_logging() -> None:

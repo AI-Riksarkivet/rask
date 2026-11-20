@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lakehouse.governed.issuer_mirror import IssuerMirrorSettings, create_app
-from lakehouse.lifecycle import mark_draining
+from lakehouse.process.lifecycle import mark_draining
 
 
 _KEYS: dict[str, Any] = {"keys": [{"kty": "RSA", "kid": "k3s-1", "alg": "RS256", "use": "sig", "n": "AQAB", "e": "AQAB"}]}

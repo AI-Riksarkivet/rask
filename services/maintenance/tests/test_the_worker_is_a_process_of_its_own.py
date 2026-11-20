@@ -28,7 +28,7 @@ import httpx
 import pytest
 from tests.secret_store_double import SecretStoreDouble
 
-from lakehouse.lifecycle import mark_draining, mark_started
+from lakehouse.process.lifecycle import mark_draining, mark_started
 from maintenance import worker
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.services.queue import TaskQueue
@@ -185,7 +185,7 @@ def test_the_process_under_sigterm_keeps_its_probes_up_until_it_is_done_and_exit
             f"""
             import asyncio, os, pathlib, threading, time
             os.environ["MAINTENANCE_WORKER_PORT"] = "{port}"
-            from lakehouse.lifecycle import mark_draining, mark_started
+            from lakehouse.process.lifecycle import mark_draining, mark_started
             from maintenance import worker
 
             async def drains(settings, stop):

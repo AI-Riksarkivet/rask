@@ -69,12 +69,12 @@ allowed_importers =
     maintenance
 
 # The events build on the rest of the library and the rest does not build on them (ADR 0224): the bus, the envelope, the
-# control and lineage lanes, the outbox and the signing seam import the primitives below them (the request context, the
-# supervisor, the store), and a service imports them to publish, take and verify. Inside the library only the readiness
-# probe names the bus, to report its connection, so a new importer in the library is either a probe of the same kind,
-# added here deliberately, or an edge that would let the events and the rest import each other.
-[importlinter:contract:the-events-are-imported-by-the-services-and-the-probe-only]
-name = ADR 0224: lakehouse.events is imported by the services and lakehouse.health only
+# control and lineage lanes, the outbox and the signing seam import the primitives below them (the process, the auth
+# plane's projected token, the store), and a service imports them to publish, take and verify. The bus's readiness
+# dependency is built beside the bus (`events.bus.bus_dependency`), so nothing else in the library names the events: a
+# new importer here is an edge that would let the events and the rest import each other.
+[importlinter:contract:the-events-are-imported-by-the-services-only]
+name = ADR 0224: lakehouse.events is imported by the services only
 type = protected
 protected_modules =
     lakehouse.events
@@ -82,7 +82,6 @@ allowed_importers =
     catalog
     lineage
     maintenance
-    lakehouse.health
 
 # The auth plane is imported where an identity is presented or a caller judged, and nowhere else (ADR 0224): the services
 # verify, decide and audit through it; inside the library the app factory installs its audit trail, and the bus and the
@@ -102,14 +101,28 @@ allowed_importers =
     lakehouse.events.bus
     lakehouse.storage.store_session
 
+# The auth plane judges a caller and presents the pod's own identity, and the bus and the store build on it to present
+# that identity (ADR 0224): `events.bus` reads the projected token, `storage.store_session` the machine identity and the
+# secret store. So the auth plane reaches neither of them, directly or through another module: a dependency the probe
+# reads of the bus or the store is built beside it, never in the process group the auth plane imports.
+[importlinter:contract:the-auth-plane-reaches-neither-the-events-nor-the-store]
+name = ADR 0224: lakehouse.governed imports neither lakehouse.events nor lakehouse.storage, by any chain
+type = forbidden
+source_modules =
+    lakehouse.governed
+forbidden_modules =
+    lakehouse.events
+    lakehouse.storage
+
 # The store is reached from everything above it and builds on almost nothing (ADR 0224): the clients, the credential and
-# options a process signs with, its filesystem, its session, objects by key and the writes the store arbitrates. Four
+# options a process signs with, its filesystem, its session, objects by key and the writes the store arbitrates. Five
 # imports into the rest of the library are its own, each named here: the store session presents the pod's ServiceAccount
 # token (`governed.machine_identity`), asks whether a secret store is configured (`governed.secrets`) and runs its
-# exchange loop under the process's supervisor (`supervision`), and the filesystem compares a location in both its
-# spellings (`base_refs`). Any other import, direct or through another module, is the store building on what builds on it.
+# exchange loop under the process's supervisor (`process.supervision`), and the filesystem compares a location in both
+# its spellings (`lancekit.base_refs`) and builds the store's readiness dependency (`process.health`). Any other import,
+# direct or through another module, is the store building on what builds on it.
 [importlinter:contract:the-store-imports-only-its-named-dependencies-in-the-library]
-name = ADR 0224: lakehouse.storage imports nothing in the library beyond its four named imports
+name = ADR 0224: lakehouse.storage imports nothing in the library beyond its five named imports
 type = forbidden
 source_modules =
     lakehouse.storage
@@ -118,8 +131,26 @@ forbidden_modules =
 ignore_imports =
     lakehouse.storage.store_session -> lakehouse.governed.machine_identity
     lakehouse.storage.store_session -> lakehouse.governed.secrets
-    lakehouse.storage.store_session -> lakehouse.supervision
+    lakehouse.storage.store_session -> lakehouse.process.supervision
     lakehouse.storage.objectfs -> lakehouse.lancekit.base_refs
+    lakehouse.storage.objectfs -> lakehouse.process.health
+
+# The process is what a lakehouse process is and says about itself while it runs (ADR 0203, ADR 0224): its supervised
+# loops and its end, its lifecycle flags and SIGTERM drain, its dependencies' latest answers and the probes that serve
+# them, the trace its records are joined by, and its logs. The bus, the store, the auth plane, the spec's answers and the
+# service app all build on it, so it imports nothing else in the library, directly or through another module, beyond the
+# probe's body (`schemas.health`), which the watch and the probe router answer with. A dependency that names the bus or
+# the store is built beside the bus or the store, so the auth plane reaches neither through the probe.
+[importlinter:contract:the-process-imports-nothing-else-in-the-library]
+name = ADR 0224: lakehouse.process imports nothing else in the library beyond the probe's body
+type = forbidden
+source_modules =
+    lakehouse.process
+forbidden_modules =
+    lakehouse.*
+ignore_imports =
+    lakehouse.process.health -> lakehouse.schemas.health
+    lakehouse.process.probes -> lakehouse.schemas.health
 
 # The Lance table plane is the floor of the library (ADR 0224): how every service reads and judges a Lance table, from a
 # version's commit time and a manifest's wire to its feature flags, its layout and a location's spellings. It is built

@@ -81,18 +81,19 @@ from opentelemetry.trace import Link, Span, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.context import continuing, current_trace_context
 from lakehouse.events.bus_delivery import Delivery, Handle, Lane, Outcome, Park, Settlement, being_cancelled, envelope_of, judged
 from lakehouse.events.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_pull_failed, record_refusal
 from lakehouse.events.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
 from lakehouse.governed.projected_token import read_token_file
-from lakehouse.lifecycle import closed_quietly
+from lakehouse.process.correlation import continuing, current_trace_context
+from lakehouse.process.health import Dependency
+from lakehouse.process.lifecycle import closed_quietly
 
 
 if TYPE_CHECKING:
     from nats.js import JetStreamContext
 
-    from lakehouse.supervision import Supervisor
+    from lakehouse.process.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -154,7 +155,7 @@ _PULL_SECONDS: Final = 5.0
 #: How often a connection the keeper has not yet let go of is looked at again by a consumer waiting for the next.
 _NEXT_CONNECTION_SECONDS: Final = 0.5
 #: How long a readiness read waits for the first connection of a process that has held none, well inside the watch's
-#: own budget for a read (`lakehouse.health.HEALTH_BUDGET_SECONDS`).
+#: own budget for a read (`lakehouse.process.health.HEALTH_BUDGET_SECONDS`).
 _FIRST_CONNECTION_SECONDS: Final = 2.0
 #: How long past a pull's own wait the bus is given to end it before it is judged gone.
 _PULL_ANSWERED_WITHIN_SECONDS: Final = 10.0
@@ -775,7 +776,7 @@ def _said_once(said: str, exc: NatsError, event: str, **named: str) -> str:
 def _reaped(handling: set[asyncio.Task[None]]) -> None:
     """Forget each handling that has ended. One that ended by what no settle answers (a native library's panic, or a
     cancellation nobody asked of it) raises here, which ends the loop, and the loop's end the process
-    (`lakehouse.supervision`)."""
+    (`lakehouse.process.supervision`)."""
     for task in [task for task in handling if task.done()]:
         handling.discard(task)
         if task.cancelled():
@@ -1006,6 +1007,16 @@ async def bus_session(loops: Supervisor, settings: BusSettings | None = None) ->
             await bus.close()
 
 
+def bus_dependency(bus: Bus | None) -> list[Dependency]:
+    """The bus the chart names this process, reported and never gating, since every announcement it carries is staged
+    in an outbox first and the bus keeps what a consumer could not take; nothing for a process named no bus.
+
+    The verdict is the state of this process's own connection: a closed or reconnecting client is the bus being away
+    for this process, whatever a fresh connection would be told.
+    """
+    return [Dependency(name="bus", read=bus.answering, required=False)] if bus is not None else []
+
+
 __all__ = [
     "MAX_PAYLOAD_BYTES",
     "WARN_PAYLOAD_BYTES",
@@ -1015,6 +1026,7 @@ __all__ = [
     "Follow",
     "PullEndedError",
     "StreamPage",
+    "bus_dependency",
     "bus_session",
     "processing",
     "publish_event",

@@ -194,12 +194,12 @@ chart and live-verified on kind.
 - **Liveness + readiness probes on every workload.** App pods get an HTTP `readinessProbe` (`/readyz`,
   dependency-aware) **and** `livenessProbe` (`/livez`, process-up only — never restarts on a slow backend);
   a workload with no HTTP health route gets a `tcpSocket` probe (`lance.appProbes` / `lance.tcpProbes`).
-  `/readyz` answers from memory: each dependency is read in the background every 5 s (`lakehouse.health`); the
-  catalog's store and OpenFGA and lineage's feed gate, and the bus, the secret store, lineage's OpenFGA and
+  `/readyz` answers from memory: each dependency is read in the background every 5 s (`lakehouse.process.health`);
+  the catalog's store and OpenFGA and lineage's feed gate, and the bus, the secret store, lineage's OpenFGA and
   maintenance's and lineage's object store are reported only (ADR 0203).
 - **A background loop that ends ends its process.** Every loop a lakehouse process starts runs under
-  `lakehouse.supervision.Supervisor`; one that ends while the process serves ends it (exit 70) so Kubernetes starts the
-  container again, rather than leaving a Ready pod that does nothing (ADR 0203).
+  `lakehouse.process.supervision.Supervisor`; one that ends while the process serves ends it (exit 70) so Kubernetes
+  starts the container again, rather than leaving a Ready pod that does nothing (ADR 0203).
 - **Every request has a deadline and a panic catcher.** A request with no answer begun after
   `requestDeadlineSeconds` (300 s) is answered 503 code 17 and its door runs on to its commit or its undo; a native
   panic inside one is a 500 problem body, and the process serves on (ADR 0203).

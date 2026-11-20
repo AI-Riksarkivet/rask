@@ -40,3 +40,6 @@ def configure_app_logging(level: int = logging.INFO, *, packages: tuple[str, ...
     """Raise the app package loggers, and the caller's own ``packages``, to ``level`` so their records reach the OTLP handler."""
     for name in (*_APP_LOGGERS, *packages):
         logging.getLogger(name).setLevel(level)
+
+
+__all__ = ["configure_app_logging"]

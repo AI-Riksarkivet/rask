@@ -22,8 +22,8 @@ from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings as catalog_settings
 from catalog.core.lineage_emit import BusEmitter
+from lakehouse.process.supervision import Supervisor
 from lakehouse.storage.client import S3Client
-from lakehouse.supervision import Supervisor
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.runtime import standing
 from tests.bus_double import BusDouble

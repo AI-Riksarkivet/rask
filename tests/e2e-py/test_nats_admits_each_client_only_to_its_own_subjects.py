@@ -109,7 +109,7 @@ from lakehouse.events import bus_metrics
 from lakehouse.events.bus import Bus, BusSettings, BusUnavailableError, Follow, bus_session, publish_event
 from lakehouse.events.bus_delivery import MAX_ENVELOPE_DEPTH, Delivery, Handle, Lane, Verdict
 from lakehouse.events.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent
-from lakehouse.supervision import Supervisor
+from lakehouse.process.supervision import Supervisor
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
 from tests.chart.chart_render import DEFAULT_ARGS, containers, env_of, render, render_fixture

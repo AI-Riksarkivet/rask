@@ -52,10 +52,10 @@ import store_identity
 from byo_scenario import Commit, Identity, ScenarioRun
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.context import is_traceparent
 from lakehouse.events import outbox
 from lakehouse.events.lineage_events import event_identity
 from lakehouse.naming import uuid_of
+from lakehouse.process.correlation import is_traceparent
 from lakehouse.storage.options import StorageOptions
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM

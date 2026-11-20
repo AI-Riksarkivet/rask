@@ -1,13 +1,13 @@
 """A lakehouse app answers `/livez` whatever its lifecycle, and `/readyz` by it before its own check is asked.
 
-`build_service_app` mounts `lakehouse.probes` at the root of catalog, lineage and maintenance. Liveness only
+`build_service_app` mounts `lakehouse.process.probes` at the root of catalog, lineage and maintenance. Liveness only
 proves the event loop answers, so a pod that has not started or is draining stays alive and is not restarted. Readiness
-reads the lifecycle flags the service's lifespan sets (`lakehouse.lifecycle`): until the lifespan has started the
+reads the lifecycle flags the service's lifespan sets (`lakehouse.process.lifecycle`): until the lifespan has started the
 answer is `starting`, once it drains it is `shutting_down`, both 503 so the pod leaves the Service, and only between
 the two is the service's `ready_check` asked. The check here answers `ready`, so a gate that let it through would
 read 200.
 
-Between the two, a service answers from its dependencies' verdicts (`lakehouse.health`): one it rides through not
+Between the two, a service answers from its dependencies' verdicts (`lakehouse.process.health`): one it rides through not
 answering keeps it in rotation, `degraded` (200), and one it cannot serve without takes it out, `unhealthy` (503).
 """
 
@@ -21,8 +21,8 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from lakehouse.health import Dependency, HealthWatch
-from lakehouse.lifecycle import mark_draining, mark_started
+from lakehouse.process.health import Dependency, HealthWatch
+from lakehouse.process.lifecycle import mark_draining, mark_started
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.service_app.factory import build_service_app
 

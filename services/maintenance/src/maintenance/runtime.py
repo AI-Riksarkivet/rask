@@ -20,11 +20,12 @@ from lakehouse.events.control_emit import ControlEmitter, ControlSign, make_cont
 from lakehouse.events.signing import SigningKey, attach_control_signature, parse_published_keys
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency
-from lakehouse.health import Dependency, HealthWatch, store_dependency
 from lakehouse.lance_metrics import instrument_lance_if_available
+from lakehouse.process.health import Dependency, HealthWatch
+from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.storage.objectfs import store_dependency
 from lakehouse.storage.store_session import require_env_pair, start_store_session
-from lakehouse.supervision import Supervisor
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.core.lineage_emit import MaintenanceEmitter, make_emitter
 from maintenance.services import credentials

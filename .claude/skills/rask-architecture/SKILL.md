@@ -86,10 +86,10 @@ continued, ADR 0209), the panic catcher (a native panic is a 500 problem body), 
 request deadline (503 code 17, the door left to run on), the service's `outer_middleware` (the catalog's write shed and
 path reading), the body cap (413), then its `inner_middleware` (ADR 0203). The **lifespan is injectable** and
 required: each service passes its own, which builds its resources through one `AsyncExitStack`, runs every background
-loop under a `lakehouse.supervision.Supervisor` (a loop that ends ends the process), and sets the lifecycle flags
-`/readyz` reads. So is `ready_check`: each service's `/readyz` answers from memory, the verdicts its
-`lakehouse.health.HealthWatch` keeps by reading each dependency in the background (the catalog's store and OpenFGA and
-lineage's feed gate; the bus, the secret store, lineage's OpenFGA and maintenance's and lineage's object store are
+loop under a `lakehouse.process.supervision.Supervisor` (a loop that ends ends the process), and sets the lifecycle
+flags `/readyz` reads. So is `ready_check`: each service's `/readyz` answers from memory, the verdicts its
+`lakehouse.process.health.HealthWatch` keeps by reading each dependency in the background (the catalog's store and
+OpenFGA and lineage's feed gate; the bus, the secret store, lineage's OpenFGA and maintenance's and lineage's object store are
 reported only, every service on one cadence), with its own facts beside them
 (the catalog's namespace and signing key, maintenance's signing key). A service whose doors authenticate builds its
 judge with `lakehouse.governed.admission.caller_judge` and calls `judge_before_the_body` once its routes are mounted, so its

@@ -22,7 +22,7 @@ from http import HTTPStatus
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from lakehouse.lifecycle import is_draining, is_started
+from lakehouse.process.lifecycle import is_draining, is_started
 from lakehouse.schemas.health import Liveness, Readiness, ReadinessStatus
 
 
@@ -58,7 +58,7 @@ def make_probes_router(ready_check: ReadyCheck, live_check: LiveCheck | None = N
         # Drain first: once the lifespan flips the drain flag, that is the answer regardless of
         # anything else, and the check must never touch a dependency that is already closing.
         #
-        # Both reads go through `lakehouse.lifecycle`, which is also what sets them — the flag
+        # Both reads go through `lakehouse.process.lifecycle`, which is also what sets them — the flag
         # names were an untyped convention between this handler and eleven hand-rolled lifespans,
         # and five apps never held up their end (SK-09).
         if is_draining(state):
@@ -68,3 +68,6 @@ def make_probes_router(ready_check: ReadyCheck, live_check: LiveCheck | None = N
         return _serve(await ready_check(request))
 
     return probes
+
+
+__all__ = ["LiveCheck", "ReadyCheck", "make_probes_router"]

@@ -2,7 +2,7 @@
 
 A sync door runs on the threadpool FastAPI shares (anyio's default limiter, 40 threads), so a burst of slow doors holds
 every thread at once. Readiness asks nothing on that pool: the health watch reads the store, OpenFGA and the bus in the
-background, off it (`lakehouse.health`), and `/readyz` answers what the watch last found. A readiness read queued on the
+background, off it (`lakehouse.process.health`), and `/readyz` answers what the watch last found. A readiness read queued on the
 pool would wait behind the burst past the kubelet's timeout, on every replica the burst reaches, and take them all out of
 the Service together. The threads are held as such a burst holds them, by borrowing every token of the pool's limiter on
 the app's own event loop.

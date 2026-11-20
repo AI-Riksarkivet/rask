@@ -60,12 +60,12 @@ from opentelemetry.sdk.trace import TracerProvider
 from starlette.middleware import Middleware
 from starlette.types import Receive, Scope, Send
 
-from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import configure_audit
-from lakehouse.log_handler import setup_logging
 from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.probes import LiveCheck, ReadyCheck, make_probes_router
+from lakehouse.process.draining import arm_drain_on_sigterm
+from lakehouse.process.log_handler import setup_logging
+from lakehouse.process.probes import LiveCheck, ReadyCheck, make_probes_router
 from lakehouse.service_app import thread_pool
 from lakehouse.service_app.body_limit import BodySizeLimitMiddleware
 from lakehouse.service_app.deadline import RequestDeadlineMiddleware
@@ -132,7 +132,7 @@ def _served(lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]]) ->
     """``lifespan``, entered once the serving loop's thread pool is reported (`lakehouse.service_app.thread_pool`), with the drain
     armed while it serves.
 
-    ARMED AT SIGTERM, for every service the factory builds (`lakehouse.draining.arm_drain_on_sigterm`). A lifespan's own
+    ARMED AT SIGTERM, for every service the factory builds (`lakehouse.process.draining.arm_drain_on_sigterm`). A lifespan's own
     ``finally`` runs only after uvicorn has stopped accepting connections and drained, so a probe reading a flag set
     there answers ready through the whole drain, and Kubernetes sends SIGTERM at the START of termination. Armed once
     the service's lifespan has started, and restored before it is torn down, so the flag is set while everything the

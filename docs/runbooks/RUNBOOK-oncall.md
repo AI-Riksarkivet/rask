@@ -117,8 +117,8 @@ provenance tables through the catalog, retried until the catalog answers) runs *
 
 **Cause.** Lineage keeps no database: its commit feed and edge list are Lance tables in the catalog's
 `lance_catalog$provenance` namespace, read and written through the catalog's doors as lineage's own principal. A background
-read of the feed table through the catalog, every 5 s within 5 s (`lakehouse.health`, ADR 0203), gates `/readyz`,
-which answers from that read's verdict. While it fails, every delivery is asked for again, so the bus keeps the events
+read of the feed table through the catalog, every 5 s within 5 s (`lakehouse.process.health`, ADR 0203), gates
+`/readyz`, which answers from that read's verdict. While it fails, every delivery is asked for again, so the bus keeps the events
 for lineage's 5 attempts, 120 s apart, and a delivery still failing on its last is parked where the estate admin can
 replay it ([DLQ parking](#dlq-parking--a-delivery-gave-up)). The bus, the secret store, OpenFGA and, where the outbox the relay drains is kept on it, the object
 store are reported in `components` the same way and never gate.

@@ -25,7 +25,7 @@ from lance_namespace import ErrorCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from lakehouse.problem import send_problem
-from lakehouse.supervision import is_panic
+from lakehouse.process.supervision import is_panic
 
 
 class RequestDeadlineMiddleware:

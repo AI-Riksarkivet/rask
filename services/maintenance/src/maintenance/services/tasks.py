@@ -20,7 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.events.bus import BusSettings
 from lakehouse.events.control_emit import ControlEmitter
-from lakehouse.supervision import EndProcess, Supervisor, end_process
+from lakehouse.process.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceQueue, MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import create_orphan_check_series, create_signature_refused_series, create_task_series
@@ -123,7 +123,7 @@ async def running_worker(
     """Connect the work queue (:func:`connected_queue`), keep the audit's and the scan's schedules, and run the worker
     until its process stops; the queue it runs on. A stack with no bus runs no worker and yields ``None``.
 
-    Every loop runs under a supervisor (`lakehouse.supervision`): one that ends before the worker stops, with an error or
+    Every loop runs under a supervisor (`lakehouse.process.supervision`): one that ends before the worker stops, with an error or
     without, ends the process by ``end``, so no fault of one leaves a replica that stays Ready and does nothing (ADR 0203).
     A loop waits out the bus's own errors itself (a bind, a fetch, a settle or a cadence the bus does not take), so only
     a fault ends one. The two cadences are asserted again every ``_CADENCE_SECONDS``, since a schedules stream purged or

@@ -101,7 +101,7 @@ from lakehouse.governed.projected_token import read_token_file
 
 
 if TYPE_CHECKING:
-    from lakehouse.supervision import Supervisor
+    from lakehouse.process.supervision import Supervisor
 
 log = logging.getLogger(__name__)
 
@@ -434,7 +434,7 @@ class SecretStore:
 
     def answers(self) -> None:
         """Raise unless the store admits this process and answers its token about itself: what a readiness report shows
-        of the store (`lakehouse.health`). The store is asked about this process's own token at every call, so a store
+        of the store (`lakehouse.process.health`). The store is asked about this process's own token at every call, so a store
         that dropped it is told from one that serves it, which no read of a secret can tell. Blocking: one attempt, each
         of its waits bounded.
 

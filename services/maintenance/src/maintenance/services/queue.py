@@ -56,8 +56,8 @@ from opentelemetry.trace import Link, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lakehouse.events.bus import BusSettings, pull
+from lakehouse.process.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
 from lakehouse.records.commit_records import is_canonical_uuid
-from lakehouse.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
 from maintenance.core.metrics import (
     ArrivalOutcome,
     record_arrival_settled,
@@ -823,7 +823,7 @@ class Worker:
     of one table at once. A loop outlives
     any error of the bus's: a bind, fetch, ack or heartbeat the bus refuses or drops is logged and the loop asks again, so
     a JetStream leader change or a reconnect never leaves a running replica pulling nothing. Any other end of a loop is a
-    fault, which the process's supervisor answers by ending the process (`lakehouse.supervision`).
+    fault, which the process's supervisor answers by ending the process (`lakehouse.process.supervision`).
     """
 
     def __init__(

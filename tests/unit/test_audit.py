@@ -7,8 +7,8 @@ from collections.abc import Callable, Iterator
 
 import pytest
 
-from lakehouse.context import continuing
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome, audit, configure_audit
+from lakehouse.process.correlation import continuing
 
 
 class _Capture(logging.Handler):

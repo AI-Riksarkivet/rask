@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
-from lakehouse.lifecycle import mark_started
+from lakehouse.process.lifecycle import mark_started
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.service_app import thread_pool
 from lakehouse.service_app.factory import build_service_app

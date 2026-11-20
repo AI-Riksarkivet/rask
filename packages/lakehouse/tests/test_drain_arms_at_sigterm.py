@@ -1,6 +1,6 @@
 """The drain flag flips at SIGTERM, and SIGTERM still reaches the handler the drain displaced.
 
-`/readyz` (`lakehouse.probes`) answers by `app.state.shutting_down`, and a lifespan that
+`/readyz` (`lakehouse.process.probes`) answers by `app.state.shutting_down`, and a lifespan that
 sets it only in its `finally` sets it after uvicorn has stopped accepting connections and drained
 in-flight requests — so the process would answer ready through its whole drain. `arm_drain_on_sigterm` flips it when the
 signal arrives instead. Owner ruling 2026-08-25.
@@ -22,8 +22,8 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 
-from lakehouse import draining
-from lakehouse.draining import arm_drain_on_sigterm
+from lakehouse.process import draining
+from lakehouse.process.draining import arm_drain_on_sigterm
 
 
 async def _settle() -> None:

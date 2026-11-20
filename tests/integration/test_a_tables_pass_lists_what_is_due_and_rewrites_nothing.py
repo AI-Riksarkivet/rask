@@ -39,12 +39,12 @@ from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse.events.lineage_events import DatasetUuids, dataset_uuids
+from lakehouse.process.supervision import Supervisor
 from lakehouse.records import location_claims
 from lakehouse.records.maintenance_due import DueRecord, write_due
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
-from lakehouse.supervision import Supervisor
 from maintenance.core.config import get_settings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.table_pass import TableTask, run_table_pass

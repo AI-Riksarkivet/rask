@@ -42,8 +42,8 @@ from lakehouse.storage.options import DEFAULT_REGION, ENDPOINT, REGION, StorageO
 
 
 if TYPE_CHECKING:
+    from lakehouse.process.supervision import Supervisor
     from lakehouse.storage.client import S3Client
-    from lakehouse.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)

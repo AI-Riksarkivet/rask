@@ -23,7 +23,7 @@ import pytest
 from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
-from lakehouse.lifecycle import mark_started
+from lakehouse.process.lifecycle import mark_started
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.service_app.factory import build_service_app
 

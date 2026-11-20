@@ -2,7 +2,7 @@
 
 A service's periodic work (a relay, a reconcile, an expiry) depends on nothing that work does not need, so its timer is
 neither a bus schedule nor a call from outside the process: it is a loop the process supervises
-(`lakehouse.supervision`), which wakes once a window. Every replica of the service runs the loop, and the work must run
+(`lakehouse.process.supervision`), which wakes once a window. Every replica of the service runs the loop, and the work must run
 once a window however many there are, so each replica claims the window before it works: one conditional write of a
 small record under the control root, carrying the ETag of the record it read, or made only if none exists. The store
 lets one such write land, which is how Lance itself picks one writer of a version

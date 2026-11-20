@@ -26,9 +26,9 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.governed import signing_key
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, make_signing_holder, signing_ready_check
-from lakehouse.lifecycle import mark_started
-from lakehouse.probes import make_probes_router
-from lakehouse.supervision import Supervisor
+from lakehouse.process.lifecycle import mark_started
+from lakehouse.process.probes import make_probes_router
+from lakehouse.process.supervision import Supervisor
 from tests.secret_store_double import SecretStoreDouble
 
 

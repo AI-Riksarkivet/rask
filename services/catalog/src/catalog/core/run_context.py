@@ -38,8 +38,8 @@ from uuid import UUID
 from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from lakehouse.context import current_traceparent
 from lakehouse.naming import PLATFORM_PREFIX
+from lakehouse.process.correlation import current_traceparent
 
 
 RUN_ID_HEADER: Final = "x-rask-run-id"

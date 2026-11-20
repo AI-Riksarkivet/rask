@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 
     from lakehouse.governed.decider import AccessDecider
     from lakehouse.governed.settings import OidcProvider
-    from lakehouse.supervision import Supervisor
+    from lakehouse.process.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ async def build_fga_client(
         if provision:
             store_id, model_id = await fga.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)  # noqa: TID251
             # Structured, not a printf: `openfga_provisioned` is a documented INFO audit-tier event
-            # (`lakehouse.obs`), and its fields are what the audit reads.
+            # (`lakehouse.process.log_levels`), and its fields are what the audit reads.
             log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
         else:
             store_id, model_id = await fga.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)

@@ -13,7 +13,7 @@ from collections.abc import Sequence
 
 from starlette.types import Send
 
-from lakehouse.context import current_trace_id
+from lakehouse.process.correlation import current_trace_id
 
 
 #: The RFC 9457 media type every problem body is served with.

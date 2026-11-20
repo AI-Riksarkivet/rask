@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.events.bus import Bus, BusSettings, Follow, StreamPage
 from lakehouse.events.bus_delivery import Delivery, Handle, Lane, Park, Settlement, judged
-from lakehouse.supervision import Supervisor
+from lakehouse.process.supervision import Supervisor
 
 
 #: How long a delivery waits for the service's lifespan to have started the consumer it is for.

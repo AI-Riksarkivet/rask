@@ -171,3 +171,17 @@ class DiagnosticFormatter(logging.Formatter):
         line = super().format(record)
         diagnostics = " ".join(f"{name}={value!r}" for name, value in vars(record).items() if name not in _AMBIENT_RECORD_FIELDS)
         return f"{line} {diagnostics}" if diagnostics else line
+
+
+__all__ = [
+    "NO_TRACE",
+    "CorrelationFilter",
+    "DiagnosticFormatter",
+    "continuing",
+    "current_trace_context",
+    "current_trace_id",
+    "current_traceparent",
+    "extracted",
+    "is_traceparent",
+    "is_tracestate",
+]

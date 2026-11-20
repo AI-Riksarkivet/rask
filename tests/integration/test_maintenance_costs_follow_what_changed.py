@@ -22,7 +22,7 @@ before that commit.
   table. The orphan scan, which opens every table, is the daily scan's (owner, 2026-11-09). Owner, 2026-11-09, through
   the multi-question tool: an idle table costs about one request an hour and one pass a day, and nothing walks the
   estate's files; a commit's pass costs a fixed handful plus Lance's own cleanup accounting.
-* **Each maintenance process** reads its store's root once a health round (`lakehouse.health`, every 5 s) for its
+* **Each maintenance process** reads its store's root once a health round (`lakehouse.process.health`, every 5 s) for its
   `/readyz`: one request of the process's own, whatever the estate, and no pass's. Here maintenance runs on what its
   worker stands on and keeps no health watch, so no round lands inside a window the test counts (measured 2026-11-12:
   one landing in a pass's window cost it 51).

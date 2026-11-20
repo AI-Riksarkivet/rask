@@ -30,8 +30,8 @@ from catalog.api.v1.endpoints import credentials, tables
 from catalog.core.config import Settings
 from catalog.core.vending import EncryptionAtRest, VendFacts, WebIdentityVendor
 from catalog.services import table_claims
-from lakehouse.context import DiagnosticFormatter
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.process.correlation import DiagnosticFormatter
 from lakehouse.records import location_claims
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.store_session import IssuedSession, WebIdentity

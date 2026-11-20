@@ -33,7 +33,7 @@ import pyarrow as pa
 import pytest
 import respx
 
-from lakehouse.context import DiagnosticFormatter
+from lakehouse.process.correlation import DiagnosticFormatter
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, MaintenanceUnauthenticated, TableNotGoverned, VendingNotDirect, VendUndecided

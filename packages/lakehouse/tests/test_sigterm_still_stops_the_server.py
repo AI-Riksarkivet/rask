@@ -52,8 +52,8 @@ _APP = textwrap.dedent(
     from fastapi import APIRouter, Request
 
     from lakehouse.service_app.factory import build_service_app
-    from lakehouse.lifecycle import is_draining
-    from lakehouse.probes import Readiness, ReadinessStatus
+    from lakehouse.process.lifecycle import is_draining
+    from lakehouse.schemas.health import Readiness, ReadinessStatus
 
     routes = APIRouter()
 
@@ -118,8 +118,8 @@ _ARMED_TWICE = textwrap.dedent(
 
     from fastapi import FastAPI
 
-    from lakehouse.draining import arm_drain_on_sigterm
-    from lakehouse.lifecycle import is_draining
+    from lakehouse.process.draining import arm_drain_on_sigterm
+    from lakehouse.process.lifecycle import is_draining
 
 
     @asynccontextmanager
@@ -318,7 +318,7 @@ _NO_SERVER = textwrap.dedent(
 
     from fastapi import FastAPI
 
-    from lakehouse.draining import arm_drain_on_sigterm
+    from lakehouse.process.draining import arm_drain_on_sigterm
 
 
     async def main():

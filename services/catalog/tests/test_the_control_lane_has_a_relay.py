@@ -42,10 +42,10 @@ from lakehouse.events.control_emit import BusControlEmitter, NoopControlEmitter
 from lakehouse.events.control_events import CONTROL_TOPIC, CatalogControlEvent
 from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
+from lakehouse.process.supervision import Supervisor
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
-from lakehouse.supervision import Supervisor
 from tests.bus_double import BusDouble
 from tests.secret_store_double import SecretStoreDouble
 

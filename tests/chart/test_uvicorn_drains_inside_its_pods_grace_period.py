@@ -29,7 +29,7 @@ from tests.chart.chart_render import DEFAULT_ARGS, OBSERVABILITY_ARGS, OBSERVABI
 
 _FLAG = "--timeout-graceful-shutdown="
 
-#: Workloads whose app arms `lakehouse.draining.arm_drain_on_sigterm` (every service the app factory builds, and the
+#: Workloads whose app arms `lakehouse.process.draining.arm_drain_on_sigterm` (every service the app factory builds, and the
 #: issuer mirror in its own lifespan), so the drain hands SIGTERM to THIS uvicorn. A floor: a detection that stopped
 #: finding uvicorn must not pass by finding nothing.
 _DRAIN_ARMED = frozenset({"Deployment/rask-catalog", "Deployment/rask-lineage", "Deployment/rask-issuer-mirror"})

@@ -18,7 +18,7 @@ from catalog.api import commit_reconcile, control_relay, declaration_converge, e
 from catalog.api.ticks import Tick
 from catalog.core.config import Settings
 from lakehouse.events import outbox_metrics
-from lakehouse.supervision import Supervisor
+from lakehouse.process.supervision import Supervisor
 from lakehouse.timers import Timer
 
 

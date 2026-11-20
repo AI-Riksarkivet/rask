@@ -31,12 +31,12 @@ from fastapi import FastAPI, Request
 
 from lakehouse.governed.secrets import read_secret, secret_store_configured
 from lakehouse.governed.signing_key import SigningKeyUnavailableError
-from lakehouse.probes import ReadyCheck
+from lakehouse.process.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
 if TYPE_CHECKING:
-    from lakehouse.supervision import Supervisor
+    from lakehouse.process.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 """The drain flag, flipped the moment SIGTERM arrives.
 
-Every lifespan sets `app.state.shutting_down` as it unwinds, and `/readyz` (:mod:`lakehouse.probes`) answers by it. But
+Every lifespan sets `app.state.shutting_down` as it unwinds, and `/readyz` (:mod:`lakehouse.process.probes`) answers by it. But
 uvicorn reaches a lifespan's teardown only after it has stopped accepting and drained the requests in flight, so a
 process that waited for it would answer ready through its whole drain. :func:`arm_drain_on_sigterm` flips the flag at
 the signal and hands the signal on, so whatever is dispatched after SIGTERM is answered by a process that says it is
@@ -20,7 +20,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from lakehouse.lifecycle import mark_draining
+from lakehouse.process.lifecycle import mark_draining
 
 
 if TYPE_CHECKING:
@@ -123,3 +123,6 @@ def _hand_on(previous: _Disposition) -> None:
     elif previous == signal.SIG_DFL:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         signal.raise_signal(signal.SIGTERM)
+
+
+__all__ = ["arm_drain_on_sigterm"]

@@ -41,10 +41,10 @@ import uvicorn
 from fastapi import FastAPI
 
 from lakehouse.governed.signing_key import signing_ready_check
-from lakehouse.lifecycle import mark_draining, mark_started
-from lakehouse.obs import configure_app_logging
+from lakehouse.process.lifecycle import mark_draining, mark_started
+from lakehouse.process.log_levels import configure_app_logging
+from lakehouse.process.supervision import FLUSH_SECONDS, Supervisor, flush_telemetry
 from lakehouse.service_app.factory import build_service_app
-from lakehouse.supervision import FLUSH_SECONDS, Supervisor, flush_telemetry
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.runtime import collaborators, reported_health, reported_readiness, standing
 from maintenance.services.tasks import running_worker
@@ -221,7 +221,7 @@ def _end_unstarted(code: int) -> None:
     """End a process whose start was abandoned, without waiting for it. A start step that runs in a thread (a secret
     read retried for minutes while the secret store is down) cannot be cancelled, and the interpreter waits for its thread
     at exit: the pod would stay in Terminating until the read gave up. Nothing was started that needs stopping. What it
-    logged is flushed within a bound first, since the Collector keeps no copy of this pod's stdout (`lakehouse.supervision`)."""
+    logged is flushed within a bound first, since the Collector keeps no copy of this pod's stdout (`lakehouse.process.supervision`)."""
     flush_telemetry(FLUSH_SECONDS)
     os._exit(code)
 

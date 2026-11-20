@@ -15,20 +15,21 @@ from typing import Final
 import httpx
 from fastapi import FastAPI, Request
 
-from lakehouse.events.bus import Bus, bus_session
+from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.governed.admission import judge_before_the_body
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import secret_store_dependency
-from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
-from lakehouse.lifecycle import closed_quietly
-from lakehouse.obs import configure_app_logging
+from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
+from lakehouse.process.lifecycle import closed_quietly
+from lakehouse.process.log_levels import configure_app_logging
+from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
+from lakehouse.storage.objectfs import store_dependency
 from lakehouse.storage.store_session import require_env_pair, start_store_session
-from lakehouse.supervision import Supervisor
 from lineage.api.ingest_lane import IngestLane, lane
 from lineage.api.relay import start_relay
 from lineage.api.security import authenticate, judge
@@ -140,7 +141,7 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     app.state.forward_client = httpx.AsyncClient(timeout=settings.forward_timeout_seconds) if settings.forward_url else None
     if app.state.forward_client is not None:
         stack.push_async_callback(closed_quietly, app.state.forward_client.aclose)
-    # Readiness reads these verdicts, never a dependency itself (`lakehouse.health`): the feed's read costs what the
+    # Readiness reads these verdicts, never a dependency itself (`lakehouse.process.health`): the feed's read costs what the
     # catalog takes to open the feed, which a one-second probe cannot wait for.
     app.state.health = HealthWatch(_dependencies(app, settings, store))
     app.state.health.watch(loops)

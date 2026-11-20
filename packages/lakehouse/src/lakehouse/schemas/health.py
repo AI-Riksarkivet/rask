@@ -14,7 +14,7 @@ class LivenessStatus(StrEnum):
 class ReadinessStatus(StrEnum):
     starting = "starting"
     ready = "ready"
-    #: Serving, while a dependency the service rides through does not answer (`lakehouse.health`): a 200 that keeps the
+    #: Serving, while a dependency the service rides through does not answer (`lakehouse.process.health`): a 200 that keeps the
     #: pod in rotation and names the dependency in ``components``, for a dashboard or an alert to act on.
     degraded = "degraded"
     #: Started, not draining, but a dependency or a fact the service cannot serve without does not hold: a 503 that pulls

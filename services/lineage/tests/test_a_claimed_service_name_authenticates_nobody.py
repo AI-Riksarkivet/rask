@@ -26,7 +26,7 @@ from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.supervision import Supervisor
+from lakehouse.process.supervision import Supervisor
 from lineage.api import security
 from lineage.core.config import get_settings
 
