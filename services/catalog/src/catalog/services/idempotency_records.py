@@ -18,9 +18,11 @@ STORE picks, and the takeover of an abandoned claim is a replace under the ETag 
 ([[LH-576]]): of two retries arriving after the lease, one takes the key and the other's write is refused, re-reads,
 and finds the key held. Nothing here holds a lock and nothing here is in-memory, so it works across replicas.
 
-A KEY IS ONE OPERATION ON ONE OBJECT (:class:`KeyBinding`): its door and the canonical id of the object the door acts
-on. The same key on another door, or on the same door for another object, is the caller's mistake, refused rather than
-answered with an operation that did not touch the object named.
+A KEY IS ONE REQUEST OF ONE OPERATION ON ONE OBJECT (:class:`KeyBinding` and the request's digest): its door, the
+canonical id of the object the door acts on, and the digest of the request the key was first sent with. The same key on
+another door, on the same door for another object, or with another request, is the caller's mistake, refused rather than
+answered with an operation that did not touch the object named or did not do what was asked. A claim given back
+(:func:`release`) was refused before it wrote, so the corrected request that takes it next binds its own digest.
 
 A LEASE IS TIMED ON THE STORE'S CLOCK (ADR 0179): a claim is stamped with the clock of the read it follows and judged
 against the clock of the read that finds it, so two pods' clocks are never compared.
@@ -89,6 +91,8 @@ class _Claimed(BaseModel):
 
     state: Literal["in_flight", "released"]
     binding: KeyBinding
+    #: The digest of the request the attempt was sent (``catalog.api.idempotency.request_digest``).
+    digest: str
     #: The attempt that last claimed the key: only it may give the key back.
     attempt: str
     #: When that attempt claimed it, on the store's clock.
@@ -102,6 +106,8 @@ class _Answered(BaseModel):
 
     state: Literal["done"]
     binding: KeyBinding
+    #: The digest of the request that was answered, as :class:`_Claimed` keeps it.
+    digest: str
     status: int
     body: JsonValue = None
 
@@ -119,7 +125,7 @@ _STORED: TypeAdapter[_Claimed | _Answered | _Reclaiming] = TypeAdapter(Annotated
 
 
 class KeyReusedError(Exception):
-    """The key is already bound to a DIFFERENT operation, or to the same door acting on another object.
+    """The key is already bound to a DIFFERENT operation, to the same door acting on another object, or to another request.
 
     Replaying here would hand the caller another operation's response body — a wrong answer rather than
     a slow one — so this is refused instead. The door maps it to a 400: the caller made a mistake and
@@ -195,10 +201,11 @@ def claim(
     scope: str,
     key: str,
     binding: KeyBinding,
+    digest: str,
     attempt: str,
     lease: timedelta = LEASE,
 ) -> Replay | TakenOver | None:
-    """Claim ``key`` for ``binding``'s operation as ``attempt``. ``None`` means proceed; a :class:`Replay` means answer with it;
+    """Claim ``key`` for ``binding``'s operation, sent as the request ``digest`` names, as ``attempt``. ``None`` means proceed; a :class:`Replay` means answer with it;
     a :class:`TakenOver` means proceed, after an attempt that may have written and never answered.
 
     `scope` separates callers — a key is the CALLER's, so one string from two tenants is two different
@@ -211,6 +218,7 @@ def claim(
         scope: The caller the key belongs to.
         key: The caller's key, a canonical lower-case UUID.
         binding: The door and the object the operation acts on.
+        digest: The request's digest: a key held for another request is refused, unless its claim was given back.
         attempt: This attempt's token, which only it gives back (:func:`release`).
         lease: How long an unanswered claim holds the key, on the store's clock.
 
@@ -220,7 +228,7 @@ def claim(
 
     Raises:
         ValueError: The key or the scope is not one this module writes.
-        KeyReusedError: The key is bound to another door or another object.
+        KeyReusedError: The key is bound to another door or another object, or held for another request.
         InFlightError: Another attempt holds the key, or a reclaim is removing it.
         KeyRecordUnreadableError: The key's record cannot be read as one.
         conditional_records.RecordChangedError: The record kept changing across every round.
@@ -229,7 +237,7 @@ def claim(
     for _ in range(_ROUNDS):
         found = conditional_records.read_json_at(root_uri, storage_options, record_key)
         stored = found.stored
-        claimed = _Claimed(state="in_flight", binding=binding, attempt=attempt, claimed_at=found.at).model_dump(mode="json")
+        claimed = _Claimed(state="in_flight", binding=binding, digest=digest, attempt=attempt, claimed_at=found.at).model_dump(mode="json")
         if stored is None:
             try:
                 conditional_records.create_json(root_uri, storage_options, record_key, claimed)
@@ -242,6 +250,8 @@ def claim(
         if current.binding != binding:
             bound = current.binding
             raise KeyReusedError(f"idempotency key {key!r} is bound to {bound.endpoint} on {bound.target}, not {binding.endpoint} on {binding.target}")
+        if current.state != "released" and current.digest != digest:
+            raise KeyReusedError(f"idempotency key {key!r} was used for a different request to {binding.endpoint} on {binding.target}: send a new key")
         if isinstance(current, _Answered):
             return Replay(status=current.status, body=current.body)
         if current.state == "in_flight" and found.at - current.claimed_at < lease:
@@ -300,7 +310,7 @@ def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str
         if isinstance(current, _Reclaiming):
             log.error("idempotency_outcome_unrecorded", extra={"key": key, "status": status, "reason": "the key's record is being reclaimed"})
             return
-        answered = _Answered(state="done", binding=current.binding, status=status, body=body).model_dump(mode="json")
+        answered = _Answered(state="done", binding=current.binding, digest=current.digest, status=status, body=body).model_dump(mode="json")
         try:
             conditional_records.replace_json(root_uri, storage_options, record_key, answered, etag=stored.etag)
         except conditional_records.RecordChangedError:

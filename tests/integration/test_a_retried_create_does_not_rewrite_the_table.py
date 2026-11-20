@@ -76,14 +76,19 @@ class TestAReplayIsAnsweredNotReExecuted:
         first = real_ns_client.post("/v1/table/lance_catalog$db$keyed/create", content=_rows(3), headers=headers)
         assert first.status_code == 200, first.text
         after_first = _versions(real_ns_client, "lance_catalog$db$keyed")
-
-        # A REPLAY CARRYING DIFFERENT BYTES. The key says "this is the same request"; honouring the
-        # body instead would let a retry silently overwrite the table with something else.
-        second = real_ns_client.post("/v1/table/lance_catalog$db$keyed/create?mode=Overwrite", content=_rows(99), headers=headers)
+        second = real_ns_client.post("/v1/table/lance_catalog$db$keyed/create", content=_rows(3), headers=headers)
 
         assert second.status_code == 200, second.text
         assert second.json() == first.json(), "a replay must answer with the first attempt's response"
         assert _versions(real_ns_client, "lance_catalog$db$keyed") == after_first, "the replay re-executed the create"
+
+        # A REPLAY CARRYING DIFFERENT BYTES. The key says "this is the same request": honouring the body would let a
+        # retry silently overwrite the table with something else, and answering the first create would tell the caller
+        # its rows are there when they are not.
+        other = real_ns_client.post("/v1/table/lance_catalog$db$keyed/create?mode=Overwrite", content=_rows(99), headers=headers)
+
+        assert (other.status_code, other.json().get("code")) == (400, 13), other.text
+        assert _versions(real_ns_client, "lance_catalog$db$keyed") == after_first, "the refused replay re-executed the create"
 
     def test_a_DIFFERENT_key_is_a_different_request(self, real_ns_client: TestClient) -> None:
         """Convergence must not become deduplication of unrelated calls."""
@@ -216,14 +221,18 @@ def _table_rows(client: TestClient, tid: str) -> dict[str, list[int]]:
 
 
 class _TableWrite(NamedTuple):
-    """One write door a blind retry would apply again, the request it is sent, another request of the door on the same
-    table and ref, what it answers on the seed table, and what a takeover answers for its commit when the commit carries
-    the key and no answer."""
+    """One write door a blind retry would apply again: the request it is sent, another request of the door on the same
+    table and ref (other bytes), the first request's bytes with other parameters, what it answers on the seed table, and
+    what a takeover answers for its commit when the commit carries the key and no answer."""
 
     path: str
     json: dict[str, Any] | None
     content: bytes | None
     other: dict[str, Any] | bytes
+    #: ``(path, headers, JSON bytes)``: the first request's Arrow bytes on another path or with other headers, or, for a
+    #: door whose parameters all ride its JSON body (update, delete), the same document spelt with other spacing, which
+    #: the rule judges another request as well.
+    reworded: tuple[str, dict[str, str], bytes | None]
     answer: dict[str, int]
     unanswered: dict[str, int]
 
@@ -233,32 +242,59 @@ class _TableWrite(NamedTuple):
             return client.post(f"/v1/table/{tid}/{self.path}", content=content, headers={**ARROW_STREAM, **headers})
         return client.post(f"/v1/table/{tid}/{self.path}", json=self.other if other else self.json, headers=headers)
 
+    def send_reworded(self, client: TestClient, tid: str, headers: dict[str, str]) -> Any:
+        path, extra, document = self.reworded
+        if self.content is not None:
+            return client.post(f"/v1/table/{tid}/{path}", content=self.content, headers={**ARROW_STREAM, **extra, **headers})
+        return client.post(f"/v1/table/{tid}/{path}", content=document, headers={"content-type": "application/json", **extra, **headers})
+
+
+#: A run the spec Context names: the insert stamps it into its commit, so the same rows under another run are another
+#: request.
+_RUN = {"x-rask-run-id": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f70", "x-rask-job-namespace": "pipelines", "x-rask-job": "nightly"}
+
+_MERGE = "merge_insert?on=id&when_matched_update_all=true&when_not_matched_by_source_delete=true"
 
 #: Each door applied twice to the seed rows ``id`` 1-3, ``x`` 0, with a writer's row landing in between, ends elsewhere than
 #: applied once: the append lands its row again, ``x + 1`` adds again, the merge's delete-not-matched-by-source and the
 #: delete each take the writer's row.
 _TABLE_WRITES = {
-    "insert": _TableWrite("insert?mode=append", None, _frame([10], [10]), _frame([11, 12], [0, 0]), {"num_inserted_rows": 1}, {"num_inserted_rows": 1}),
-    "update": _TableWrite("update", {"updates": [["x", "x + 1"]]}, None, {"updates": [["x", "x + 5"]]}, {"updated_rows": 3}, {"updated_rows": 3}),
+    "insert": _TableWrite(
+        "insert?mode=append",
+        None,
+        _frame([10], [10]),
+        _frame([11, 12], [0, 0]),
+        ("insert?mode=append", _RUN, None),
+        {"num_inserted_rows": 1},
+        {"num_inserted_rows": 1},
+    ),
+    "update": _TableWrite(
+        "update",
+        {"updates": [["x", "x + 1"]]},
+        None,
+        {"updates": [["x", "x + 5"]]},
+        ("update", {}, b'{ "updates": [ ["x", "x + 1"] ] }'),
+        {"updated_rows": 3},
+        {"updated_rows": 3},
+    ),
     "merge_insert": _TableWrite(
-        "merge_insert?on=id&when_matched_update_all=true&when_not_matched_by_source_delete=true",
+        _MERGE,
         None,
         _frame([1], [100]),
         _frame([2], [200]),
+        (f"{_MERGE}&when_not_matched_insert_all=true", {}, None),
         {"num_updated_rows": 1, "num_inserted_rows": 0, "num_deleted_rows": 2},
         {},
     ),
-    "delete": _TableWrite("delete", {"predicate": "id >= 2"}, None, {"predicate": "id >= 3"}, {}, {}),
+    "delete": _TableWrite("delete", {"predicate": "id >= 2"}, None, {"predicate": "id >= 3"}, ("delete", {}, b'{ "predicate": "id >= 2" }'), {}, {}),
 }
 
-#: How the second request is sent: under the first one's key (as it was, or another request of the door on the same table
-#: and ref), with no key, or under a fresh key.
+#: How the second request is sent: under the first one's key, with no key, or under a fresh key.
 _FIRST_KEY = "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f67"
-_RESENDS: dict[str, tuple[str | None, bool]] = {
-    "same-key": (_FIRST_KEY, False),
-    "same-key-other-request": (_FIRST_KEY, True),
-    "keyless": (None, False),
-    "fresh-key": ("6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f6c", False),
+_RESENDS: dict[str, str | None] = {
+    "same-key": _FIRST_KEY,
+    "keyless": None,
+    "fresh-key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f6c",
 }
 
 
@@ -271,9 +307,10 @@ def _seeded(client: TestClient, *names: str) -> None:
 @pytest.mark.parametrize("door", list(_TABLE_WRITES))
 class TestARetriedTableWriteCommitsOnce:
     """[[LH-577]], XC-219. A caller that gave up on a slow write, which may have committed, sends it again. Every door
-    whose write a blind retry applies again takes the key: under one key the resend answers the first's response and
-    commits nothing, though another writer committed in between, whatever payload it carries (the payload is not what a
-    key judges); the same key on another table is refused; a resend with no key, or under a fresh key, is applied again."""
+    whose write a blind retry applies again takes the key: under one key the same request answers the first's response
+    and commits nothing, though another writer committed in between; the key sent with another request (other bytes, or
+    the same bytes with other parameters) or on another table is refused; a resend with no key, or under a fresh key, is
+    applied again."""
 
     @pytest.mark.parametrize("resend", list(_RESENDS))
     def test_a_resend_under_its_key_answers_the_first_and_commits_nothing(self, real_ns_client: TestClient, door: str, resend: str) -> None:
@@ -281,7 +318,7 @@ class TestARetriedTableWriteCommitsOnce:
         tid = "lance_catalog$db$t"
         _seeded(real_ns_client, "t")
         before = _version(real_ns_client, tid)
-        key, other = _RESENDS[resend]
+        key = _RESENDS[resend]
         resent_key = {"Idempotency-Key": key} if key is not None else {}
         first_key = {"Idempotency-Key": _FIRST_KEY} if key is not None else {}
 
@@ -289,15 +326,36 @@ class TestARetriedTableWriteCommitsOnce:
         assert (first.status_code, first.json()) == (200, {**write.answer, "version": before + 1}), first.text
         assert real_ns_client.post(f"/v1/table/{tid}/insert?mode=append", content=_frame([9], [0]), headers=ARROW_STREAM).status_code == 200
         between = (_table_rows(real_ns_client, tid), _version(real_ns_client, tid))
-        again = write.send(real_ns_client, tid, resent_key, other=other)
+        again = write.send(real_ns_client, tid, resent_key)
 
         assert again.status_code == 200, again.text
-        if resend.startswith("same-key"):
+        if resend == "same-key":
             assert again.json() == first.json(), "a resend under its key must answer the first attempt's response"
             assert (_table_rows(real_ns_client, tid), _version(real_ns_client, tid)) == between, f"the resent {door} committed again"
         else:
             assert _version(real_ns_client, tid) == between[1] + 1, "a resend with no key or a fresh one is a new request, applied again"
             assert _table_rows(real_ns_client, tid) != between[0]
+
+    @pytest.mark.parametrize("request_sent", ["other-bytes", "other-parameters"])
+    def test_the_key_sent_with_another_request_is_refused_and_commits_nothing(self, real_ns_client: TestClient, door: str, request_sent: str) -> None:
+        write = _TABLE_WRITES[door]
+        tid = "lance_catalog$db$t"
+        _seeded(real_ns_client, "t")
+        keyed = {"Idempotency-Key": _FIRST_KEY}
+        assert write.send(real_ns_client, tid, keyed).status_code == 200
+        assert real_ns_client.post(f"/v1/table/{tid}/insert?mode=append", content=_frame([9], [0]), headers=ARROW_STREAM).status_code == 200
+        between = (_table_rows(real_ns_client, tid), _version(real_ns_client, tid))
+
+        if request_sent == "other-bytes":
+            refused = write.send(real_ns_client, tid, keyed, other=True)
+        else:
+            refused = write.send_reworded(real_ns_client, tid, keyed)
+
+        assert (refused.status_code, refused.json().get("code")) == (400, 13), refused.text
+        assert "different request" in refused.json()["detail"], refused.text
+        assert (_table_rows(real_ns_client, tid), _version(real_ns_client, tid)) == between, f"the refused {door} committed"
+        resent = write.send(real_ns_client, tid, keyed)
+        assert (resent.status_code, _version(real_ns_client, tid)) == (200, between[1]), "the first request's own resend is still answered"
 
     def test_the_same_key_on_another_table_is_refused_and_the_table_is_left(self, real_ns_client: TestClient, door: str) -> None:
         write = _TABLE_WRITES[door]
@@ -311,14 +369,15 @@ class TestARetriedTableWriteCommitsOnce:
         assert (crossed.status_code, crossed.json().get("code")) == (400, 13), crossed.text
         assert (_table_rows(real_ns_client, "lance_catalog$db$other"), _version(real_ns_client, "lance_catalog$db$other")) == untouched
 
-    @pytest.mark.parametrize("answer_stamped", [True, False], ids=["answer-stamped", "key-only"])
+    @pytest.mark.parametrize("resent", ["answer-stamped", "key-only", "other-request"])
     def test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
-        self, real_ns_client: TestClient, door: str, answer_stamped: bool, monkeypatch: pytest.MonkeyPatch
+        self, real_ns_client: TestClient, door: str, resent: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The answer of a write can be lost after it committed (its pod ended, or a fault after the commit), and a resend
         past the claim's lease takes the key over. Run again, the write would apply twice: the commit carries the key and
         the answer, so the takeover finds them there and answers with them. A commit carrying the key and no answer (one
-        an image that stamped only the key made) is answered from what its transaction holds, never a fault."""
+        an image that stamped only the key made) is answered from what its transaction holds, never a fault. A takeover
+        sent with another request is refused by the claim the lost attempt left, which keeps that attempt's digest."""
         from catalog.api import idempotency as keyed_doors
         from catalog.services import dataplane, idempotency_records
 
@@ -333,17 +392,20 @@ class TestARetriedTableWriteCommitsOnce:
 
         with monkeypatch.context() as during:
             during.setattr(keyed_doors.Converge, "remember", lost)
-            if not answer_stamped:
+            if resent == "key-only":
                 during.setattr(dataplane, "_with_answer", lambda properties, _answer: properties)
                 during.setattr(dataplane, "_answering", lambda _properties, plan, _answer: plan)
             with pytest.raises(RuntimeError, match="the pod ended"):
                 write.send(real_ns_client, tid, keyed)
         landed = _table_rows(real_ns_client, tid)
         monkeypatch.setattr(keyed_doors.idempotency_records, "claim", partial(idempotency_records.claim, lease=timedelta(0)))
-        again = write.send(real_ns_client, tid, keyed)
+        again = write.send(real_ns_client, tid, keyed, other=resent == "other-request")
 
-        answered = write.answer if answer_stamped else write.unanswered
-        assert (again.status_code, again.json()) == (200, {**answered, "version": before + 1}), again.text
+        if resent == "other-request":
+            assert (again.status_code, again.json().get("code")) == (400, 13), again.text
+        else:
+            answered = write.answer if resent == "answer-stamped" else write.unanswered
+            assert (again.status_code, again.json()) == (200, {**answered, "version": before + 1}), again.text
         assert (_table_rows(real_ns_client, tid), _version(real_ns_client, tid)) == (landed, before + 1), f"the {door} ran again after its lease"
 
 

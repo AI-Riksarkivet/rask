@@ -25,12 +25,13 @@ clock answered a day ago, the one double here, since a lease is timed on that cl
 from __future__ import annotations
 
 import os
+import tracemalloc
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from catalog.services.idempotency_records import PREFIX, InFlightError, KeyBinding, Replay, TakenOver, claim, reclaim, record_outcome, release
+from catalog.services.idempotency_records import PREFIX, InFlightError, KeyBinding, KeyReusedError, Replay, TakenOver, claim, reclaim, record_outcome, release
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 
@@ -39,6 +40,7 @@ SO = StorageOptions()
 SCOPE = "acme"
 KEY = "0b6f3f0e-5c7a-4a43-9d6e-2f1c8a9b7e10"
 CREATE = KeyBinding(endpoint="POST /v1/table/{id}/create", target="db$t")
+DIGEST = "0" * 64
 LIFETIME = timedelta(days=1)
 
 
@@ -46,15 +48,15 @@ def _claimed_a_day_ago(root: str, monkeypatch: pytest.MonkeyPatch, *, attempt: s
     """``attempt`` claimed the key a day ago on the store's clock, and never finished."""
     read = conditional_records.read_json_at
     monkeypatch.setattr(conditional_records, "read_json_at", lambda *args: read(*args).model_copy(update={"at": datetime.now(UTC) - LIFETIME}))
-    claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt=attempt)
+    claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt=attempt)
     monkeypatch.setattr(conditional_records, "read_json_at", read)
 
 
 class TestTheFirstAttemptOwnsTheKey:
     def test_two_scopes_do_not_collide_on_one_key(self, tmp_path: Path) -> None:
         """A key is the CALLER's, so the same string from two tenants is two different operations."""
-        assert claim(str(tmp_path), SO, scope="acme", key=KEY, binding=CREATE, attempt="a") is None
-        assert claim(str(tmp_path), SO, scope="other", key=KEY, binding=CREATE, attempt="b") is None
+        assert claim(str(tmp_path), SO, scope="acme", key=KEY, binding=CREATE, digest=DIGEST, attempt="a") is None
+        assert claim(str(tmp_path), SO, scope="other", key=KEY, binding=CREATE, digest=DIGEST, attempt="b") is None
 
 
 class TestAnAttemptStillRunningIsNotAReplay:
@@ -70,13 +72,13 @@ class TestAnAttemptStillRunningIsNotAReplay:
             found = read(root_uri, storage_options, key)
             if not rival:
                 rival.append("taking over")
-                rival[0] = claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="rival")
+                rival[0] = claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="rival")
             return found
 
         monkeypatch.setattr(conditional_records, "read_json_at", _read_then_take_over)
 
         with pytest.raises(InFlightError):
-            claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="late")
+            claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="late")
         assert [type(taken) for taken in rival] == [TakenOver], "the rival's takeover must run, alone, told it took over a lapsed attempt"
 
     def test_reclaiming_does_not_lose_the_outcome_the_first_attempt_then_writes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,22 +86,34 @@ class TestAnAttemptStillRunningIsNotAReplay:
         a later replay must see one — never a record still marked in-flight."""
         root = str(tmp_path)
         _claimed_a_day_ago(root, monkeypatch, attempt="slow")
-        claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="retry")
+        claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="retry")
         record_outcome(root, SO, scope=SCOPE, key=KEY, status=200, body={"ok": True})
 
-        assert claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="third") == Replay(status=200, body={"ok": True})
+        assert claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="third") == Replay(status=200, body={"ok": True})
 
     def test_a_release_by_an_attempt_whose_claim_was_taken_over_frees_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """[[LH-487]] An attempt releases only the claim it made: once another attempt has taken the key over, the
         first one's release leaves the key held, so a third attempt still waits."""
         root = str(tmp_path)
         _claimed_a_day_ago(root, monkeypatch, attempt="first")
-        claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="second")
+        claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="second")
 
         release(root, SO, scope=SCOPE, key=KEY, attempt="first")
 
         with pytest.raises(InFlightError):
-            claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="third")
+            claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="third")
+
+    def test_a_claim_given_back_is_taken_by_the_corrected_request_and_bound_to_it(self, tmp_path: Path) -> None:
+        """[[LH-487]], XC-219. A claim given back was refused before it wrote, so the caller's corrected request, another
+        request, takes the key under its own digest; the key then refuses the request it was given back by."""
+        root = str(tmp_path)
+        assert claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="refused") is None
+        release(root, SO, scope=SCOPE, key=KEY, attempt="refused")
+
+        assert claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest="1" * 64, attempt="corrected") is None
+        record_outcome(root, SO, scope=SCOPE, key=KEY, status=200, body={"ok": True})
+        with pytest.raises(KeyReusedError, match="different request"):
+            claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="third")
 
 
 class TestARecordOutlivesItsLifetimeByNoReclaim:
@@ -108,7 +122,7 @@ class TestARecordOutlivesItsLifetimeByNoReclaim:
         reclaim's read and its delete writes the record again: the reclaim leaves it, so the attempt it admitted still
         holds the key and a third retry waits rather than running the write again."""
         root = str(tmp_path)
-        claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="released")
+        claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="released")
         release(root, SO, scope=SCOPE, key=KEY, attempt="released")
         record = Path(root, PREFIX, SCOPE, f"{KEY}.json")
         a_day_ago = (datetime.now(UTC) - LIFETIME - timedelta(minutes=1)).timestamp()
@@ -120,7 +134,7 @@ class TestARecordOutlivesItsLifetimeByNoReclaim:
             found = read(root_uri, storage_options, key)
             if not taken:
                 taken.append("taking over")
-                taken[0] = claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="retry")
+                taken[0] = claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="retry")
             return found
 
         with pytest.MonkeyPatch.context() as patched:
@@ -129,7 +143,7 @@ class TestARecordOutlivesItsLifetimeByNoReclaim:
 
         assert (reclaimed.reclaimed, reclaimed.kept, taken) == (0, 1, [None])
         with pytest.raises(InFlightError):
-            claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="third")
+            claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, digest=DIGEST, attempt="third")
 
 
 class TestTheKeyIsNeverAPathTraversal:
@@ -139,4 +153,21 @@ class TestTheKeyIsNeverAPathTraversal:
         lower-case UUID is the one spelling that cannot. The doors constrain it at the header too; this refuses it
         at the seam, because a second caller of this module must not have to remember."""
         with pytest.raises(ValueError, match="idempotency key"):
-            claim(str(tmp_path), SO, scope=SCOPE, key=bad, binding=CREATE, attempt="a")
+            claim(str(tmp_path), SO, scope=SCOPE, key=bad, binding=CREATE, digest=DIGEST, attempt="a")
+
+
+class TestARequestIsDigestedWithoutACopy:
+    def test_digesting_a_body_allocates_no_block_of_its_size(self) -> None:
+        """XC-219. A keyed request's body, up to the body cap, is digested where it lies: a second copy of it would double
+        the memory a maximum-size write holds."""
+        from catalog.api.idempotency import request_digest
+
+        body = os.urandom(8 << 20)
+        tracemalloc.start()
+        try:
+            request_digest(body, query=[("mode", "append")], headers={})
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert peak < 1 << 20, f"digesting an 8 MiB body peaked at {peak} bytes"

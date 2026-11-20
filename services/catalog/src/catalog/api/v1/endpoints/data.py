@@ -240,9 +240,9 @@ async def insert_into_table(
 
     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
 
-    Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
-    response and commits nothing, the key on another table or ref or with another mode is refused 400, and a request without
-    one is served as ever."""
+    Takes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes and
+    parameters) is answered with the first request's response and commits nothing, the key sent with a different request
+    or on another table, ref or mode is refused 400, and a request without one is served as ever."""
     segments = parse_identifier(id)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
@@ -309,7 +309,7 @@ async def _keyed_table_write[R: BaseModel](
     The four table writes whose blind retry applies again (an append lands its rows again, an update's ``x = x + 1`` adds
     again, a merge's or a delete's predicate takes rows another writer committed in between) share this one claim, under
     the rule :mod:`catalog.api.idempotency` states. The claim binds the door, the ref and the table, so the key on another
-    of them is refused ([[LH-576]]). The answer is the first attempt's when it recorded one, or, when this attempt took the
+    of them is refused ([[LH-576]]), and keeps the request's digest, so the key sent with another request is refused too. The answer is the first attempt's when it recorded one, or, when this attempt took the
     key over from one lost unanswered past its lease, the answer that attempt's commit carries beside the key
     (:func:`dataplane.committed_under_key`), recorded now; ``None`` means the door writes, stamping :func:`_keyed_stamp`.
     """
@@ -378,9 +378,9 @@ async def merge_insert_into_table(
     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).
 
-    Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
-    response and commits nothing, the key on another table or ref is refused 400, and a request without
-    one is served as ever."""
+    Takes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes and
+    parameters) is answered with the first request's response and commits nothing, the key sent with a different request
+    or on another table or ref is refused 400, and a request without one is served as ever."""
     segments = parse_identifier(id)
     if timeout is not None:
         # The catalog plans and commits the merge itself, under the table's commit turn and its own attempt budget
@@ -449,9 +449,9 @@ async def update_table(
 ) -> UpdateTableResponse:
     """Update rows matching a predicate — ``update_table``; emits an UPDATE lineage event.
 
-    Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
-    response and commits nothing, the key on another table or ref is refused 400, and a request without
-    one is served as ever."""
+    Takes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes) is
+    answered with the first request's response and commits nothing, the key sent with a different request or on another
+    table or ref is refused 400, and a request without one is served as ever."""
     # LANCE-ONLY (2026-08-15 ruling). An update door is the create door's back way in: a table
     # made as Lance could otherwise be asked to change format afterwards, and the guard's contract is
     # that a format-selecting property is never silently ignored — on any door that accepts one.
@@ -498,9 +498,9 @@ async def delete_from_table(
 ) -> DeleteFromTableResponse:
     """Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event.
 
-    Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
-    response and commits nothing, the key on another table or ref is refused 400, and a request without
-    one is served as ever."""
+    Takes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes) is
+    answered with the first request's response and commits nothing, the key sent with a different request or on another
+    table or ref is refused 400, and a request without one is served as ever."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     converge, answered = await _keyed_table_write(

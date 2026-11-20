@@ -16080,6 +16080,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -16093,6 +16094,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -17200,6 +17202,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -17213,6 +17216,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -20372,6 +20376,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -20385,6 +20390,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -21363,6 +21369,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -21376,6 +21383,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -22213,6 +22221,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -22226,6 +22235,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -22526,6 +22536,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -22539,6 +22550,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -24798,6 +24810,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -24811,6 +24824,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           },
@@ -25251,6 +25265,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -25264,6 +25279,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -25390,7 +25406,7 @@
     },
     "/v1/table/{id}/delete": {
       "post": {
-        "description": "Delete rows matching a predicate \u2014 ``delete_from_table``; emits a DELETE lineage event.\n\nTakes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's\nresponse and commits nothing, the key on another table or ref is refused 400, and a request without\none is served as ever.",
+        "description": "Delete rows matching a predicate \u2014 ``delete_from_table``; emits a DELETE lineage event.\n\nTakes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes) is\nanswered with the first request's response and commits nothing, the key sent with a different request or on another\ntable or ref is refused 400, and a request without one is served as ever.",
         "operationId": "delete_from_table_v1_table__id__delete_post",
         "parameters": [
           {
@@ -25421,6 +25437,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -25434,6 +25451,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           },
@@ -25590,6 +25608,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -25603,6 +25622,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -26007,6 +26027,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -26020,6 +26041,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -27093,7 +27115,7 @@
     },
     "/v1/table/{id}/insert": {
       "post": {
-        "description": "Append Arrow-IPC rows \u2014 ``insert_into_table``; emits an INSERT lineage event.\n``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).\n\n``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),\nand it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]). It asks the\nwriter rung, not ``can_drop``: it keeps the table's schema, so it does what a delete of every row and an insert do\n(ADR 0099, [[LH-415]]), and like a delete it asks nothing of the table's protection, which guards its drop\n(ADR 0221).\n\nThe verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).\n\nTakes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's\nresponse and commits nothing, the key on another table or ref or with another mode is refused 400, and a request without\none is served as ever.",
+        "description": "Append Arrow-IPC rows \u2014 ``insert_into_table``; emits an INSERT lineage event.\n``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).\n\n``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),\nand it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]). It asks the\nwriter rung, not ``can_drop``: it keeps the table's schema, so it does what a delete of every row and an insert do\n(ADR 0099, [[LH-415]]), and like a delete it asks nothing of the table's protection, which guards its drop\n(ADR 0221).\n\nThe verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).\n\nTakes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes and\nparameters) is answered with the first request's response and commits nothing, the key sent with a different request\nor on another table, ref or mode is refused 400, and a request without one is served as ever.",
         "operationId": "insert_into_table_v1_table__id__insert_post",
         "parameters": [
           {
@@ -27158,6 +27180,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -27171,6 +27194,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           },
@@ -27298,7 +27322,7 @@
     },
     "/v1/table/{id}/merge_insert": {
       "post": {
-        "description": "Upsert Arrow-IPC rows \u2014 ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.\nThe ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.\n\nThe verified caller and the run the request's Context names are stamped into the commit, on any ref, and the run's\ninputs become the event's version-pinned inputs ([[LH-225]], [[LH-497]]).\n\nThe merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through\n``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).\n\nTakes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's\nresponse and commits nothing, the key on another table or ref is refused 400, and a request without\none is served as ever.",
+        "description": "Upsert Arrow-IPC rows \u2014 ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.\nThe ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.\n\nThe verified caller and the run the request's Context names are stamped into the commit, on any ref, and the run's\ninputs become the event's version-pinned inputs ([[LH-225]], [[LH-497]]).\n\nThe merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through\n``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).\n\nTakes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes and\nparameters) is answered with the first request's response and commits nothing, the key sent with a different request\nor on another table or ref is refused 400, and a request without one is served as ever.",
         "operationId": "merge_insert_into_table_v1_table__id__merge_insert_post",
         "parameters": [
           {
@@ -27475,6 +27499,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -27488,6 +27513,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           },
@@ -27783,6 +27809,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -27796,6 +27823,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -27946,6 +27974,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -27959,6 +27988,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           }
@@ -28109,6 +28139,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -28122,6 +28153,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           },
@@ -29293,7 +29325,7 @@
     },
     "/v1/table/{id}/update": {
       "post": {
-        "description": "Update rows matching a predicate \u2014 ``update_table``; emits an UPDATE lineage event.\n\nTakes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's\nresponse and commits nothing, the key on another table or ref is refused 400, and a request without\none is served as ever.",
+        "description": "Update rows matching a predicate \u2014 ``update_table``; emits an UPDATE lineage event.\n\nTakes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes) is\nanswered with the first request's response and commits nothing, the key sent with a different request or on another\ntable or ref is refused 400, and a request without one is served as ever.",
         "operationId": "update_table_v1_table__id__update_post",
         "parameters": [
           {
@@ -29324,6 +29356,7 @@
             }
           },
           {
+            "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -29337,6 +29370,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13).",
               "title": "Idempotency-Key"
             }
           },

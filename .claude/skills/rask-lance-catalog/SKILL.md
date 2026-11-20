@@ -887,9 +887,14 @@ governing their data. The project-scoped surface is the console's project page, 
   writes (insert, merge_insert, update, delete), a namespace's create, drop and undrop, and a project's and a warehouse's
   delete. No other door takes one: its blind retry is refused (a column's add, alter or drop, a tag's or a branch's
   create or delete, `version/create`) or sets the same state again (a metadata update, a project's or a warehouse's
-  create). A key is one operation on
-  one object (the door, for an insert its mode, for a row write its ref, and the object's canonical id), answered with
-  its first response whatever payload the replay carries; the key on another door or object is refused 400 (code 13).
+  create). A key is one request of one operation on one object (the door, for an insert its mode, for a row write its
+  ref, and the object's canonical id, plus the SHA-256 `request_digest` of the body bytes as received, every query
+  parameter as sent and the `x-rask-*` run headers), answered with its first response when the same request is resent;
+  the key sent with a different request (other bytes, even the same rows encoded differently, or other parameters), or
+  on another door or object, is refused 400 (code 13). A claim given back after a refusal is taken by the corrected
+  request under its own digest. A door that declares no body (a table's drop and undrop, a namespace's undrop, a
+  project's or a warehouse's delete) reads none, and its digest is of its parameters. The digest is taken in
+  `KeyedDoor.begin`, after the door's authorization, off the event loop, without copying the body.
   The declare door remembers its answer without the credential it vended: a replay's caller asks DescribeTable for one.
   A claim unanswered past `LEASE` (300 s) is taken over, and the claim says so (`TakenOver`): a row write run again
   would apply twice, so the four row writes stamp the key and their answer on the commit (`rask.idempotency_key`, by

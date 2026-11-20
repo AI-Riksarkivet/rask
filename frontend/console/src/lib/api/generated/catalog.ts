@@ -3485,9 +3485,9 @@ export interface paths {
          * Delete From Table
          * @description Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event.
          *
-         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
-         *     response and commits nothing, the key on another table or ref is refused 400, and a request without
-         *     one is served as ever.
+         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes) is
+         *     answered with the first request's response and commits nothing, the key sent with a different request or on another
+         *     table or ref is refused 400, and a request without one is served as ever.
          */
         post: operations["delete_from_table_v1_table__id__delete_post"];
         delete?: never;
@@ -3772,9 +3772,9 @@ export interface paths {
          *
          *     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
          *
-         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
-         *     response and commits nothing, the key on another table or ref or with another mode is refused 400, and a request without
-         *     one is served as ever.
+         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes and
+         *     parameters) is answered with the first request's response and commits nothing, the key sent with a different request
+         *     or on another table, ref or mode is refused 400, and a request without one is served as ever.
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;
@@ -3803,9 +3803,9 @@ export interface paths {
          *     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
          *     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).
          *
-         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
-         *     response and commits nothing, the key on another table or ref is refused 400, and a request without
-         *     one is served as ever.
+         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes and
+         *     parameters) is answered with the first request's response and commits nothing, the key sent with a different request
+         *     or on another table or ref is refused 400, and a request without one is served as ever.
          */
         post: operations["merge_insert_into_table_v1_table__id__merge_insert_post"];
         delete?: never;
@@ -4129,9 +4129,9 @@ export interface paths {
          * Update Table
          * @description Update rows matching a predicate — ``update_table``; emits an UPDATE lineage event.
          *
-         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
-         *     response and commits nothing, the key on another table or ref is refused 400, and a request without
-         *     one is served as ever.
+         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend of the same request under the key (the same body bytes) is
+         *     answered with the first request's response and commits nothing, the key sent with a different request or on another
+         *     table or ref is refused 400, and a request without one is served as ever.
          */
         post: operations["update_table_v1_table__id__update_post"];
         delete?: never;
@@ -11591,6 +11591,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -12160,6 +12161,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -13623,6 +13625,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -14124,6 +14127,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -14552,6 +14556,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -14747,6 +14752,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -16154,6 +16160,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -16442,6 +16449,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -16545,6 +16553,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -16640,6 +16649,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -16834,6 +16844,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -17492,6 +17503,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -17598,6 +17610,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -17785,6 +17798,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -17888,6 +17902,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -17991,6 +18006,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -18746,6 +18762,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };

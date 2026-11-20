@@ -29,7 +29,6 @@ from pydantic import BaseModel, SecretStr
 from catalog.api import idempotency
 from catalog.core.config import Settings
 from catalog.services import table_claims
-from catalog.services.idempotency_records import KeyBinding
 from lakehouse.process.correlation import DiagnosticFormatter
 from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.records.history_fences import TableHistory
@@ -128,12 +127,10 @@ def _base_registry(rig: _Rig) -> BaseModel:
 
 
 def _keyed_door(rig: _Rig) -> BaseModel:
-    """As `idempotency.keyed_door` builds it, holding the claim `idempotency.begin` answers a keyless request with."""
-    options = rig.catalog.storage_options(plane="data")
-    converge = asyncio.run(
-        idempotency.begin(rig.catalog.registry_root, options, "caller", None, binding=KeyBinding(endpoint="create_table", target="lance_catalog$db$t"))
-    )
-    return idempotency.KeyedDoor(registry_root=rig.catalog.registry_root, storage_options=options, scope="caller", key=None, converge=converge)
+    """As `idempotency.keyed_door` builds it, holding the claim `KeyedDoor.begin` answers a keyless request with."""
+    door = idempotency.KeyedDoor(registry_root=rig.catalog.registry_root, storage_options=rig.catalog.storage_options(plane="data"), scope="caller", key=None)
+    asyncio.run(door.begin(endpoint="create_table", target="lance_catalog$db$t"))
+    return door
 
 
 def _expiry_target(rig: _Rig) -> BaseModel:
