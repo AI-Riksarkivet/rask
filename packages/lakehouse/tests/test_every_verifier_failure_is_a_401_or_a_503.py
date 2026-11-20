@@ -41,8 +41,9 @@ import socket
 import struct
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Annotated
@@ -53,9 +54,10 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi import Depends, FastAPI, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse.exceptions import register_handlers
+from lakehouse.governed import oidc
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import IdpVerifier
@@ -69,7 +71,8 @@ KID = "signing-1"
 DISCOVERY_PATH = "/.well-known/openid-configuration"
 JWKS_PATH = "/jwks"
 
-SLOW_ANSWER_SECONDS = 0.3
+#: How long a held answer waits for its release before the IdP answers anyway, so a test that fails never hangs.
+HOLD_CEILING_SECONDS = 10.0
 
 #: What a reverse proxy in front of an IdP answers when its session is gone: a 200 whose body is a page.
 SIGN_IN_PAGE = b"<!doctype html><title>Sign in</title>"
@@ -106,12 +109,15 @@ class _Fault(StrEnum):
 class _IdP(BaseModel):
     """What the loopback IdP serves, by path; a case overwrites one document, or faults one path, to break it."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     issuer: str
     documents: dict[str, bytes]
     faults: dict[str, _Fault] = {}
-    #: Paths answered after `SLOW_ANSWER_SECONDS`: long enough that every request in a concurrent burst reaches the
-    #: verifier while the first one's fetch is still in flight.
-    slow: set[str] = set()
+    #: Paths whose answer waits until the mapped event is set: the fetch stays in flight for as long as the test says.
+    holds: dict[str, threading.Event] = {}
+    #: Set once a held path has been asked for: a fetch is in flight.
+    holding: threading.Event = Field(default_factory=threading.Event)
     #: Paths answered 302 with the mapped URL as their `Location`.
     redirects: dict[str, str] = {}
     #: Requests served, by path.
@@ -157,8 +163,9 @@ def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
             served.fetches[self.path] = served.fetches.get(self.path, 0) + 1
             fault = served.faults.get(self.path)
             body = served.documents.get(self.path)
-            if self.path in served.slow:
-                time.sleep(SLOW_ANSWER_SECONDS)
+            if (release := served.holds.get(self.path)) is not None:
+                served.holding.set()
+                release.wait(HOLD_CEILING_SECONDS)
             if (location := served.redirects.get(self.path)) is not None:
                 self.send_response(302)
                 self.send_header("Location", location)
@@ -205,6 +212,8 @@ def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
     try:
         yield served
     finally:
+        for release in served.holds.values():
+            release.set()
         server.shutdown()
         server.server_close()
 
@@ -271,21 +280,250 @@ def test_a_token_the_key_set_signed_is_accepted(idp: _IdP, rsa_key: rsa.RSAPriva
     assert json.loads(body) == {"subject": "corp~gina"}
 
 
-def test_a_burst_of_novel_kids_costs_one_key_set_fetch(idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
-    """A `kid` is the caller's to write, unverified. Each novel one earns a refetch only while no other began within the
-    interval, so a flood of them, anonymous and concurrent, costs the IdP one fetch rather than one per request, and the
-    requests behind it are refused at once rather than each holding a worker for the fetch budget ([[LH-431]]). The IdP
-    answers slowly so that the whole burst meets the verifier while the first refetch is in flight: a pace claimed only
-    once its fetch returns lets every request in the burst through."""
-    client = _client(idp)
+class _Joiners:
+    """Counts the requests waiting on another request's key-set fetch, so a test releases that fetch only once they
+    are all waiting on it rather than after a sleep tuned to the machine."""
+
+    def __init__(self) -> None:
+        self._waiting = 0
+        self._changed = threading.Condition()
+
+    def joined(self) -> None:
+        with self._changed:
+            self._waiting += 1
+            self._changed.notify_all()
+
+    def wait_for(self, count: int) -> None:
+        with self._changed:
+            assert self._changed.wait_for(lambda: self._waiting >= count, timeout=HOLD_CEILING_SECONDS), f"{self._waiting} of {count} joined"
+
+
+@pytest.fixture
+def joiners(monkeypatch: pytest.MonkeyPatch) -> _Joiners:
+    counted = _Joiners()
+
+    class _CountedFlight(oidc._Flight):
+        def wait(self, timeout: float) -> bool:
+            counted.joined()
+            return super().wait(timeout)
+
+    monkeypatch.setattr(oidc, "_Flight", _CountedFlight)
+    return counted
+
+
+def _rotated(idp: _IdP, rsa_key: rsa.RSAPrivateKey, new_key: rsa.RSAPrivateKey, client: TestClient) -> threading.Event:
+    """The verifier holds the set `rsa_key` is in; the IdP now serves `new_key` alone, its answer held until the
+    returned event is set."""
     assert _call(idp, _token(idp, rsa_key, "RS256"), client=client)[0] == 200
-    idp.slow.add(JWKS_PATH)
-    tokens = [_token(idp, rsa_key, "RS256", kid=f"forged-{n}") for n in range(8)]
+    idp.documents[JWKS_PATH] = _key_set(new_key, "signing-2")
+    release = idp.holds[JWKS_PATH] = threading.Event()
+    return release
 
-    with ThreadPoolExecutor(max_workers=len(tokens)) as pool:
-        statuses = list(pool.map(lambda token: _call(idp, token, client=client)[0], tokens))
 
-    assert statuses == [401] * len(tokens)
+def test_a_burst_meeting_a_key_rotation_waits_for_one_key_set_fetch(
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey, joiners: _Joiners
+) -> None:
+    """The IdP rotates its key after the verifier fetched the set (a Dex restart mints new keys), and a page then sends
+    several calls at once with a token the new key signed: every one is judged on the set ONE refetch brings, so none is
+    refused for arriving while that refetch was in flight (measured on the dev estate 2026-11-20: one of two concurrent
+    lineage calls answered 401 while the other's refetch landed 13 ms later). A `kid` is the caller's to write,
+    unverified, so the forged ones in the same burst cost no fetch of their own and are refused once the set has landed
+    without them, and a forged one after it, inside the interval, is refused at once ([[LH-431]]). The IdP holds its
+    answer until every other request of the burst is waiting on that fetch."""
+    client = _client(idp)
+    release = _rotated(idp, rsa_key, stranger_key, client)
+    rotated = [_token(idp, stranger_key, "RS256", kid="signing-2") for _ in range(8)]
+    forged = [_token(idp, rsa_key, "RS256", kid=f"forged-{n}") for n in range(8)]
+    burst = [token for pair in zip(rotated, forged, strict=True) for token in pair]
+
+    with ThreadPoolExecutor(max_workers=len(burst)) as pool:
+        answers = [pool.submit(_call, idp, token, client=client) for token in burst]
+        joiners.wait_for(len(burst) - 1)
+        release.set()
+        statuses = [answer.result()[0] for answer in answers]
+
+    assert statuses == [200, 401] * len(rotated)
+    assert _call(idp, _token(idp, rsa_key, "RS256", kid="forged-after"), client=client)[0] == 401
+    assert idp.fetches[JWKS_PATH] == 2
+
+
+def test_a_request_that_read_the_old_set_while_the_refetch_landed_is_judged_on_the_new_one(
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A request that read the held set before the refetch landed, and reaches the pace only after it ended, finds no
+    fetch to join and the interval not passed: it is judged on the set held THEN, which the refetch has just replaced,
+    not on the one it read."""
+    client = _client(idp)
+    release = _rotated(idp, rsa_key, stranger_key, client)
+    token = _token(idp, stranger_key, "RS256", kid="signing-2")
+    late_arrived, late_go = threading.Event(), threading.Event()
+    turns = 0
+    turn = oidc._RefreshPace.turn
+
+    @contextmanager
+    def late_second_turn(pace: oidc._RefreshPace) -> Generator[object]:
+        nonlocal turns
+        turns += 1
+        if turns == 2:
+            late_arrived.set()
+            late_go.wait(HOLD_CEILING_SECONDS)
+        with turn(pace) as granted:
+            yield granted
+
+    monkeypatch.setattr(oidc._RefreshPace, "turn", late_second_turn)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(_call, idp, token, client=client)
+        assert idp.holding.wait(HOLD_CEILING_SECONDS)
+        late = pool.submit(_call, idp, token, client=client)
+        assert late_arrived.wait(HOLD_CEILING_SECONDS)
+        release.set()
+        assert first.result()[0] == 200
+        late_go.set()
+        status, body = late.result()
+
+    assert status == 200, body
+    assert idp.fetches[JWKS_PATH] == 2
+
+
+def test_a_refresh_landing_beside_a_refetch_leaves_its_requests_one_answer(
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey, joiners: _Joiners, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The background refresh may replace the held provider at any moment, here with the set it fetched before the IdP
+    rotated, just as a refetch lands. The request that fetched and the requests that joined it are judged on the same
+    set, the one the refetch brought, so one burst carrying one token is not answered 200 and 401 at once."""
+    refreshed_before_rotation = OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True)
+    assert refreshed_before_rotation.refresh() == []
+    before_rotation = refreshed_before_rotation._held[idp.issuer]
+    client = _client(idp)
+    release = _rotated(idp, rsa_key, stranger_key, client)
+    verifier: OIDCVerifier = client.app.state.oidc._verifier
+
+    class _RefreshLandsWithTheRefetch(oidc._Flight):
+        def end(self, failure: str | None) -> None:
+            verifier._held[idp.issuer] = before_rotation
+            super().end(failure)
+
+    monkeypatch.setattr(oidc, "_Flight", _RefreshLandsWithTheRefetch)
+    token = _token(idp, stranger_key, "RS256", kid="signing-2")
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        submitted = [pool.submit(_call, idp, token, client=client) for _ in range(3)]
+        joiners.wait_for(2)
+        release.set()
+        statuses = [answer.result()[0] for answer in submitted]
+
+    assert statuses == [200, 200, 200]
+    # The stale refresh's fetch, the first request's, and the one refetch the burst shares.
+    assert idp.fetches[JWKS_PATH] == 3
+
+
+def test_a_refresh_that_fetched_before_a_rotation_does_not_replace_the_keys_fetched_after_it(
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fetches are installed in the order they BEGAN, whatever order they land in: a background refresh that fetched
+    the set before the IdP rotated, and lands only after a refetch brought the rotated set, is dropped, so a token the
+    new key signed is admitted at once rather than refused until the next refetch the pace admits. The clock never
+    moves, so the order holds without it."""
+    verifier = OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=_Clock())
+    assert verifier.refresh() == []
+    fetch_keys = verifier._fetch_keys
+    refresh_fetched, refresh_lands = threading.Event(), threading.Event()
+
+    def held_back_in_the_refresh(jwks_uri: str) -> tuple[jwt.PyJWK, ...]:
+        keys = fetch_keys(jwks_uri)
+        if threading.current_thread().name == "refresh":
+            refresh_fetched.set()
+            refresh_lands.wait(HOLD_CEILING_SECONDS)
+        return keys
+
+    monkeypatch.setattr(verifier, "_fetch_keys", held_back_in_the_refresh)
+    refresh = threading.Thread(target=verifier.refresh, name="refresh")
+    refresh.start()
+    assert refresh_fetched.wait(HOLD_CEILING_SECONDS)
+    idp.documents[JWKS_PATH] = json.dumps(
+        {"keys": [*json.loads(_key_set(rsa_key, KID))["keys"], *json.loads(_key_set(stranger_key, "signing-2"))["keys"]]}
+    ).encode()
+    rotated = _token(idp, stranger_key, "RS256", kid="signing-2")
+    assert verifier.verify(rotated).sub == "gina"
+
+    refresh_lands.set()
+    refresh.join(HOLD_CEILING_SECONDS)
+
+    assert verifier.verify(rotated).sub == "gina"
+    assert verifier.verify(_token(idp, rsa_key, "RS256")).sub == "gina"
+
+
+class _FlightEnd(StrEnum):
+    """How the refetch the joiner waits on ends."""
+
+    #: The IdP closes the connection: the fetching request's 503 is the IdP's.
+    IDP_FAILED = "idp-failed"
+    #: The verifier raises, before it fetches, something no branch classifies: a defect of ours.
+    VERIFIER_DEFECT = "verifier-defect"
+
+
+@pytest.mark.parametrize(("end", "answers", "key_set_fetches"), [(_FlightEnd.IDP_FAILED, [503, 503], 2), (_FlightEnd.VERIFIER_DEFECT, [500, 503], 1)])
+def test_the_requests_that_joined_a_refetch_that_failed_are_told_the_idp_failed(
+    end: _FlightEnd,
+    answers: list[int],
+    key_set_fetches: int,
+    idp: _IdP,
+    rsa_key: rsa.RSAPrivateKey,
+    stranger_key: rsa.RSAPrivateKey,
+    joiners: _Joiners,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refetch that fails answers its own request 503, the IdP's fault. A request that waited on it, holding a token
+    whose `kid` only that refetch could have found, is answered the same, and as soon as the refetch fails, not when its
+    wait runs out: a 401 would tell an honest caller its token is bad because the IdP is away. A refetch that raises
+    what nothing classifies is a defect, and its own request answers 500 so the defect is seen; the joiner, which never
+    met the defect and whose token was never judged, is told only that the keys it waited for did not arrive."""
+    client = _client(idp)
+    release = _rotated(idp, rsa_key, stranger_key, client)
+    if end is _FlightEnd.IDP_FAILED:
+        idp.faults[JWKS_PATH] = _Fault.CLOSED_BEFORE_ANSWERING
+    else:
+
+        def defective(self: OIDCVerifier, jwks_uri: str) -> tuple[jwt.PyJWK, ...]:
+            release.wait(HOLD_CEILING_SECONDS)
+            raise RuntimeError("a defect in the verifier")
+
+        monkeypatch.setattr(OIDCVerifier, "_fetch_keys", defective)
+    monkeypatch.setattr(oidc, "REFRESH_FLIGHT_WAIT_SECONDS", HOLD_CEILING_SECONDS)
+    token = _token(idp, stranger_key, "RS256", kid="signing-2")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        submitted = [pool.submit(_call, idp, token, client=client) for _ in range(2)]
+        joiners.wait_for(1)
+        released = time.monotonic()
+        release.set()
+        statuses = sorted(answer.result()[0] for answer in submitted)
+
+    assert statuses == answers
+    assert time.monotonic() - released < HOLD_CEILING_SECONDS / 2
+    assert idp.fetches[JWKS_PATH] == key_set_fetches
+
+
+def test_a_request_whose_wait_for_a_refetch_runs_out_is_told_the_idp_is_away(
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wait for another request's refetch is bounded, so a stalled IdP holds no worker for its whole fetch budget;
+    the request whose wait runs out is answered 503, as the IdP's, never 401 against its token."""
+    monkeypatch.setattr(oidc, "REFRESH_FLIGHT_WAIT_SECONDS", 0.05)
+    client = _client(idp)
+    release = _rotated(idp, rsa_key, stranger_key, client)
+    token = _token(idp, stranger_key, "RS256", kid="signing-2")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(_call, idp, token, client=client)
+        assert idp.holding.wait(HOLD_CEILING_SECONDS)
+        cut = _call(idp, token, client=client)
+        release.set()
+        assert first.result()[0] == 200
+
+    assert cut[0] == 503, cut[1]
+    assert _call(idp, token, client=client)[0] == 200
     assert idp.fetches[JWKS_PATH] == 2
 
 
@@ -434,28 +672,98 @@ def test_a_key_set_with_no_usable_key_is_ours(key_set: bytes, idp: _IdP, rsa_key
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
-def test_a_key_set_the_idp_has_since_fixed_is_believed_at_once(idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
-    """A set the cache holds that has no signing key would otherwise be served for the cache's whole lifespan (300 s)
-    after the provider replaced it: every caller refused for an outage that is over. The set's one key is for
-    encryption, so PyJWT parses and caches it; the unusable bodies above never reach the cache, since `fetch_data`
-    caches only a body that parses into at least one key."""
-    client = _client(idp)
+def test_a_provider_whose_key_set_failed_is_fetched_again_only_at_the_pace(
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture
+) -> None:
+    """A provider is held only once its key set has arrived. Held without it, every later request, anonymous and naming
+    a configured issuer, would fetch the set itself, unpaced, each holding a worker for the fetch budget. Unheld, the
+    requests behind the failure answer 503 at the discovery pace, and once the IdP answers again the first request past
+    the interval fetches both."""
+    clock = _Clock()
+    client = _client(idp, clock=clock)
     token = _token(idp, rsa_key, "RS256")
-    usable = idp.documents[JWKS_PATH]
-    idp.documents[JWKS_PATH] = _key_set(rsa_key, KID, use="enc")
+    idp.faults[JWKS_PATH] = _Fault.CLOSED_BEFORE_ANSWERING
     assert _call(idp, token, client=client)[0] == 503
 
-    idp.documents[JWKS_PATH] = usable
+    assert [_call(idp, token, client=client)[0] for _ in range(8)] == [503] * 8
+    assert (idp.fetches[DISCOVERY_PATH], idp.fetches[JWKS_PATH]) == (1, 1)
+    assert _audited_reasons(audit_trail) == ["verifier_unavailable"] * 9
+
+    del idp.faults[JWKS_PATH]
+    clock.now += UNKNOWN_KID_REFRESH_INTERVAL_SECONDS
     status, body = _call(idp, token, client=client)
 
     assert status == 200, body
-    # Two fetches in all: the first request's, and the second request's refetch for the set the cache kept.
+    assert (idp.fetches[DISCOVERY_PATH], idp.fetches[JWKS_PATH]) == (2, 2)
+
+
+def test_a_set_with_no_signing_key_leaves_the_held_keys_verifying(idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+    """A refetch that brings a set with no signing key (every key for encryption) replaces nothing: the request that
+    fetched it is told the IdP is unusable, the keys held before it keep verifying the tokens they signed, and no request
+    behind it fetches the set again. A refetch that replaced the held set with the one it brought would leave every
+    request a set it cannot verify with and a fetch of its own to make, outside every pace."""
+    client = _client(idp)
+    token = _token(idp, rsa_key, "RS256")
+    assert _call(idp, token, client=client)[0] == 200
+    idp.documents[JWKS_PATH] = _key_set(rsa_key, KID, use="enc")
+    assert _call(idp, _token(idp, rsa_key, "RS256", kid="novel"), client=client)[0] == 503
+
+    assert [_call(idp, token, client=client)[0] for _ in range(20)] == [200] * 20
     assert idp.fetches[JWKS_PATH] == 2
 
 
+def test_a_key_set_the_idp_has_since_fixed_is_believed_at_the_next_paced_refetch(
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, stranger_key: rsa.RSAPrivateKey
+) -> None:
+    """A key the IdP published unusable (for encryption only) and then fixed is believed by the first refetch the pace
+    admits once the IdP serves it fixed, not at once: inside the interval the token it signed is judged on the keys held,
+    as any `kid` the held set lacks is."""
+    clock = _Clock()
+    client = _client(idp, clock=clock)
+    assert _call(idp, _token(idp, rsa_key, "RS256"), client=client)[0] == 200
+    idp.documents[JWKS_PATH] = _key_set(stranger_key, "signing-2", use="enc")
+    token = _token(idp, stranger_key, "RS256", kid="signing-2")
+    assert _call(idp, token, client=client)[0] == 503
+
+    idp.documents[JWKS_PATH] = _key_set(stranger_key, "signing-2")
+    assert _call(idp, token, client=client)[0] == 401
+    clock.now += UNKNOWN_KID_REFRESH_INTERVAL_SECONDS
+    status, body = _call(idp, token, client=client)
+
+    assert status == 200, body
+    assert idp.fetches[JWKS_PATH] == 3
+
+
+class _RefreshFault(StrEnum):
+    DISCOVERY_DOWN = "discovery-down"
+    KEY_SET_DOWN = "key-set-down"
+    NO_SIGNING_KEY = "no-signing-key"
+
+
+@pytest.mark.parametrize("fault", list(_RefreshFault))
+def test_a_refresh_that_fails_leaves_the_held_keys_verifying(fault: _RefreshFault, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+    """The background refresh replaces the held provider only with one that arrived whole, so an IdP that is down, or
+    that serves a set no key of which signs, leaves the keys held before it verifying, and costs no request a fetch."""
+    verifier = OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True)
+    assert verifier.refresh() == []
+    if fault is _RefreshFault.DISCOVERY_DOWN:
+        idp.faults[DISCOVERY_PATH] = _Fault.CLOSED_BEFORE_ANSWERING
+    elif fault is _RefreshFault.KEY_SET_DOWN:
+        idp.faults[JWKS_PATH] = _Fault.CLOSED_BEFORE_ANSWERING
+    else:
+        idp.documents[JWKS_PATH] = _key_set(rsa_key, KID, use="enc")
+    [(issuer, _)] = verifier.refresh()
+    fetched = dict(idp.fetches)
+
+    claims = verifier.verify(_token(idp, rsa_key, "RS256"))
+
+    assert (issuer, claims.sub) == (idp.issuer, "gina")
+    assert idp.fetches == fetched
+
+
 def test_a_key_set_that_cannot_be_reached_is_asked_for_once(idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
-    """The refetch above is for a set that ARRIVED unusable. One that never arrived is not asked for twice: against a
-    hung IdP each attempt waits out the fetch timeout, so a second would double the time a request is held."""
+    """A set that never arrives is asked for once by the request that met it: against a hung IdP each attempt waits out
+    the fetch timeout, so a second would double the time a request is held."""
     idp.faults[JWKS_PATH] = _Fault.CLOSED_BEFORE_ANSWERING
 
     assert _call(idp, _token(idp, rsa_key, "RS256"))[0] == 503

@@ -131,7 +131,8 @@ def _make_verifier(
         )
         # Run the verifier's real allowlist intersection so HS256/none can never slip in.
         algorithms = self._safe_algorithms(spec.id_token_signing_alg_values_supported)
-        return _Provider(spec=spec, jwk_client=_LocalJWKClient(spec.jwks_uri, public_key), algorithms=algorithms)
+        keys = tuple(_LocalJWKClient(spec.jwks_uri, public_key).get_signing_keys())
+        return _Provider(spec=spec, jwks_uri=spec.jwks_uri, algorithms=algorithms, keys=keys, began=0)
 
     monkeypatch.setattr(OIDCVerifier, "_resolve", fake_resolve)
     return verifier

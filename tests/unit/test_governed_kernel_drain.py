@@ -200,6 +200,9 @@ def test_jwks_client_is_built_with_an_explicit_timeout(monkeypatch: pytest.Monke
             del credential
             captured.update(uri=uri, max_cached_keys=max_cached_keys, timeout=timeout)
 
+        def get_signing_keys(self) -> list[object]:
+            return []
+
     def _fake_get(self: Any, url: str, *a: object, **k: object) -> httpx.Response:
         del self, a, k
         return httpx.Response(
@@ -216,6 +219,6 @@ def test_jwks_client_is_built_with_an_explicit_timeout(monkeypatch: pytest.Monke
     monkeypatch.setattr(httpx.Client, "get", _fake_get)
 
     verifier = oidc.OIDCVerifier(issuer="https://idp.example", audience="rask", cache_ttl=60)
-    verifier._resolve("https://idp.example")
+    verifier._fetch("https://idp.example")
 
     assert captured["timeout"] == oidc.HTTP_FETCH_TIMEOUT_SECONDS

@@ -1,6 +1,7 @@
 """OIDC ID-token verification wired directly on **PyJWT** (no python-jose / wrapper lib).
 
-The cryptography is PyJWT's, not ours: ``PyJWKClient`` fetches + caches the provider's JWKS and
+The cryptography is PyJWT's, not ours: ``PyJWKClient`` fetches and parses the provider's JWKS (this module holds the
+signing keys it returns, never the client: see the rules below) and
 ``jwt.decode`` does the signature / issuer / audience / expiry math. What we add is the thin OIDC
 plumbing PyJWT does not: discover the provider's ``.well-known/openid-configuration`` for the issuer +
 JWKS URI, and enforce a *local* signing-algorithm allowlist before handing the token to ``jwt.decode``
@@ -38,25 +39,44 @@ Security posture (see CHANGELOG in the task notes):
   generic ``UnauthenticatedError``; one the provider or this deployment's configuration of it
   causes (discovery, the key set, a non-HTTPS URL, no algorithm in common) is a
   ``ProviderUnavailableError`` naming what failed. Neither leaks library names or crypto detail.
-* **A request reads what is held; the background fetches.** A provider (its discovery document and its
-  key set) is held once fetched and served whatever its age; ``refresh_forever`` fetches both again every
-  ``cache_ttl`` in the background and replaces the provider only with one that arrived whole, so an
-  identity-provider outage serves the last good keys. A request that fetched on a cache's expiry would, through
-  an outage, make one fetch per request, each holding a worker thread for up to `HTTP_FETCH_TIMEOUT_SECONDS`,
-  and empty the pool in seconds while the keys had not changed (ADR 0203). A request fetches only what nothing
-  holds yet, each at the pace a `_RefreshPace` admits: a provider before any fetch landed, and the held key set
-  again for a `kid` it lacks. A set that holds no signing key is read again by the request that meets it.
+* **Held keys are never fetched in place; every fetch is a flight under the pace.** Three rules, which the
+  code's shape keeps rather than a check:
+
+  1. HELD STATE IS IMMUTABLE. A held `_Provider` carries its discovery document and the signing keys a fetch
+     brought, and no client: nothing a request reads can fetch.
+  2. EVERY FETCH GOES INTO A FRESH CLIENT (`_fetch_keys`) and replaces what is held only when the set it brought
+     holds a signing key. A fetch that fails, or brings a set with no signing key, leaves what is held as it was,
+     so the last good keys keep verifying, and is answered as the provider being unavailable to the request that
+     fetched and to every request that joined it.
+  3. EVERY FETCH ON A REQUEST PATH IS A FLIGHT UNDER THE PACE (`_RefreshPace.turn`): a provider while none is held,
+     and the held key set again for a `kid` it lacks, each at most once per `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS`
+     per issuer. The only other fetch is `refresh`, at startup and every ``cache_ttl`` in the background
+     (`refresh_forever`). What that costs an operator: keys already held are admitted throughout; after the IdP
+     repairs its keys, or rotates them, a token signed by a key not yet held is admitted at the first unknown-`kid`
+     flight that begins once `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS` (30 s) has passed since the last one began, and at
+     the latest at the next background refresh (``RASK_OIDC_CACHE_TTL``, default 300 s) when no request arrives.
+
+  Fetches are installed in the order they BEGAN (`OIDCVerifier._install`): a fetch that began before the one held
+  and lands after it is dropped, so a refresh that fetched before a rotation cannot replace the rotated keys a later
+  flight installed.
+
+  A request that fetched whenever its keys aged would, through an outage, make one fetch per request, each holding a
+  worker thread for up to `HTTP_FETCH_TIMEOUT_SECONDS`, and empty the pool in seconds while the keys had not changed
+  (ADR 0203); the `kid` a token names is the caller's unverified text, so no request may buy a fetch the pace did
+  not admit. A request that meets a flight joins it, waits for it, bounded, and is judged on what that flight
+  installed, as the request that fetched is.
 """
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
-import math
 import ssl
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from typing import Annotated, Any, Final, NamedTuple
 from urllib.parse import urlsplit
 
@@ -74,7 +94,7 @@ _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
 #: Wall-clock ceiling on EVERY outbound fetch this module makes — discovery AND JWKS.
 #:
 #: One constant because the two were asymmetric, and the unstated half was the one that matters more
-#: (SKG-12). Discovery is fetched once per issuer per `cache_ttl`; the JWKS client refetches when a token
+#: (SKG-12). Discovery is fetched once per issuer per `cache_ttl`; the key set is fetched again when a token
 #: presents an unknown `kid`, at most once per `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS` — on the REQUEST
 #: path, at exactly the moment an IdP is mid-rotation and least healthy. `PyJWKClient` is not unbounded (PyJWT defaults it to 30s), but it was left to a
 #: library default twice this module's own budget and free to drift on an upgrade, so a hung IdP held a
@@ -88,6 +108,14 @@ HTTP_FETCH_TIMEOUT_SECONDS = 15.0
 #: and an honest rotation's first token is found by the first refetch that begins once the interval has passed. The same
 #: interval as `lakehouse.events.published_keys.KEY_REFRESH_INTERVAL_SECONDS`, which paces the same refetch for signed lineage events.
 UNKNOWN_KID_REFRESH_INTERVAL_SECONDS: Final = 30.0
+
+#: The longest a request waits for a key-set or provider fetch another request began, before it is answered 503 as the
+#: IdP's. An IdP that answers at all answers in milliseconds (Dex in-cluster on the dev estate, measured 2026-11-20: the
+#: refetch landed 13 ms after a request of the same burst was refused), so one second finds every rotated key of an
+#: honest burst. Against a stalled IdP the fetch itself may hold its one worker for `HTTP_FETCH_TIMEOUT_SECONDS`, once per
+#: `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS`; every request that joins it, a forged `kid`'s or an honest one's, holds a
+#: worker for at most this long and is answered 503.
+REFRESH_FLIGHT_WAIT_SECONDS: Final = 1.0
 
 #: Asymmetric signing algorithms we are willing to accept. Symmetric (``HS*``) and
 #: ``none`` are deliberately excluded — accepting them with a public verification key
@@ -144,15 +172,19 @@ class _Discovery(BaseModel):
 
 
 class _Provider(NamedTuple):
-    """A resolved provider: its discovery doc, JWKS client, and the safe algorithm set.
+    """A provider as one fetch found it: its discovery document, the key-set URL it was fetched from, the safe
+    algorithm set, the signing keys the set held (at least one), and where that fetch began in the verifier's order of
+    fetches (`OIDCVerifier._install` keeps the latest).
 
-    An internal value bundle (not boundary input), so a ``NamedTuple`` is the right
-    container — no per-construction validation, just an immutable typed triple.
+    An internal value bundle (not boundary input), so a ``NamedTuple`` is the right container: immutable, and holding no
+    client, so a request that reads it can fetch nothing (the module docstring's rule 1).
     """
 
     spec: _Discovery
-    jwk_client: jwt.PyJWKClient
+    jwks_uri: str
     algorithms: list[str]
+    keys: tuple[jwt.PyJWK, ...]
+    began: int
 
 
 log = logging.getLogger(__name__)
@@ -182,18 +214,16 @@ class _CredentialedJWKClient(jwt.PyJWKClient):
     """PyJWT's key-set client, carrying the fetch credential read afresh on each fetch.
 
     `PyJWKClient.fetch_data` sends the ``headers`` it was built with; refreshing them first keeps the rest of
-    its contract as shipped, including caching only a set that arrived and parses, and following no redirect, so the
-    bearer reaches no host but the one the key-set URL names. A token that cannot be read is an
-    ``OSError``, which `OIDCVerifier._key_set` already charges to the provider.
+    its contract as shipped, including following no redirect, so the bearer reaches no host but the one the key-set URL
+    names. A token that cannot be read is an ``OSError``, which `OIDCVerifier._fetch_keys` charges to the provider.
 
-    THE CACHED SET NEVER EXPIRES ON ITS OWN (``lifespan`` infinite): a cache that expires makes a request fetch the set
-    on its own path. The set held is replaced only by a fetch that arrived and parses (PyJWT 2.15.1 writes its cache on
-    success alone): the verifier's background refresh, a paced unknown-`kid` refetch, or the request reading a set that
-    holds no signing key again.
+    ONE CLIENT, ONE FETCH, NO CACHE. `_fetch_keys` builds one per fetch and keeps only the signing keys it returns, so no
+    held state lives in a client: PyJWT 2.15.1 caches any set that parses before it filters for signing keys, and a
+    client kept would hold, and fetch again in place, a set no key of which signs.
     """
 
     def __init__(self, uri: str, credential: _FetchCredential, *, max_cached_keys: int, timeout: float) -> None:
-        super().__init__(uri, cache_jwk_set=True, lifespan=math.inf, max_cached_keys=max_cached_keys, timeout=timeout, ssl_context=credential.ssl_context)
+        super().__init__(uri, cache_jwk_set=False, max_cached_keys=max_cached_keys, timeout=timeout, ssl_context=credential.ssl_context)
         self._credential = credential
 
     def fetch_data(self) -> Any:
@@ -201,28 +231,93 @@ class _CredentialedJWKClient(jwt.PyJWKClient):
         return super().fetch_data()
 
 
+class _Flight:
+    """A fetch in flight on the request path: ended once its request leaves the fetch. `landed` is the provider it
+    installed, which its own request and every request that joined it are judged on; `failure` says why it failed."""
+
+    def __init__(self) -> None:
+        self._ended = threading.Event()
+        self.landed: _Provider | None = None
+        self.failure: str | None = None
+
+    def end(self, failure: str | None) -> None:
+        self.failure = failure
+        self._ended.set()
+
+    def wait(self, timeout: float) -> bool:
+        """Whether the fetch ended within ``timeout`` seconds; `landed` and `failure` are read only after it has."""
+        return self._ended.wait(timeout)
+
+
+class _Turn(NamedTuple):
+    """What `_RefreshPace.turn` gives a request. An internal value, like `_Provider`."""
+
+    #: This request fetches; the pace's interval starts now.
+    fetches: bool
+    #: The flight this request runs, or joined and saw end: the request records, or reads, what it installed.
+    flight: _Flight | None = None
+    #: Set when the request joined a fetch that failed, or that outlasted its wait: why the IdP's answer is not to be
+    #: had, which the request answers as the fetch's own request does (`ProviderUnavailableError`).
+    unavailable: str | None = None
+
+
 class _RefreshPace:
     """Admits one fetch on the request path per `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS` for one issuer: a provider that
     nothing holds yet, or the key set again for a `kid` the held one lacks.
 
-    The pace is counted from when a refetch BEGAN, and the moment is claimed under the lock before the fetch runs, outside
-    it: a burst arriving while a refetch is in flight is declined at once instead of queueing behind a slow IdP, so it
-    holds no worker for the fetch budget. A refetch that fails counts like one that succeeds, since a hung IdP is exactly
-    when another attempt costs most.
+    The pace is counted from when a fetch BEGAN, and the moment is claimed under the lock before the fetch runs, outside
+    it. A request that meets a fetch in flight joins it: it starts none, and waits for that one to end, for at most
+    `REFRESH_FLIGHT_WAIT_SECONDS`, so a key the IdP rotated in is found by every request of the burst that carried it
+    rather than by the one that happened to claim the fetch; a joiner of a fetch that failed, or that outlasted the wait,
+    is told the IdP is unavailable, as the fetch's own request is. A fetch that raises something other than
+    `ProviderUnavailableError` is a defect of this module, which classifies every provider failure, and its own request
+    answers 500 so the defect is seen; its joiners answer 503 all the same, since they never met the defect and their
+    tokens were never judged: all they know is that the keys they waited for did not arrive. A request that meets no
+    fetch in flight inside the interval fetches nothing and is judged on what is held. A fetch that fails counts like one that succeeds, since a
+    hung IdP is exactly when another attempt costs most.
+
+    Verification runs in the threadpool (every governed door's authentication is a sync dependency, and the body
+    judge hands it to `run_in_threadpool`), so the wait is a `threading.Event`, never the event loop's.
     """
 
     def __init__(self, clock: Callable[[], float]) -> None:
         self._clock = clock
         self._lock = threading.Lock()
         self._began: float | None = None
+        self._flight: _Flight | None = None
 
-    def admit(self) -> bool:
+    @contextmanager
+    def turn(self) -> Generator[_Turn]:
+        """This request's turn, held for the ``with`` block. A turn that fetches ends its flight when the block is left,
+        failed if the block raised, and so wakes every request that joined it."""
+        fetching: _Flight | None = None
         with self._lock:
-            now = self._clock()
-            if self._began is not None and now - self._began < UNKNOWN_KID_REFRESH_INTERVAL_SECONDS:
-                return False
-            self._began = now
-            return True
+            joined = self._flight
+            if joined is None:
+                now = self._clock()
+                if self._began is None or now - self._began >= UNKNOWN_KID_REFRESH_INTERVAL_SECONDS:
+                    self._began = now
+                    self._flight = fetching = _Flight()
+        if joined is not None:
+            # Outside the lock, so the fetch can end.
+            if joined.wait(REFRESH_FLIGHT_WAIT_SECONDS):
+                yield _Turn(fetches=False, flight=joined, unavailable=joined.failure)
+            else:
+                yield _Turn(fetches=False, unavailable=f"The OIDC issuer did not answer within {REFRESH_FLIGHT_WAIT_SECONDS} s")
+            return
+        if fetching is None:
+            yield _Turn(fetches=False)
+            return
+        failure: str | None = None
+        try:
+            yield _Turn(fetches=True, flight=fetching)
+        except BaseException as exc:
+            failure = str(exc.detail) if isinstance(exc, ProviderUnavailableError) else "The OIDC issuer's fetch failed"
+            raise
+        finally:
+            with self._lock:
+                self._flight = None
+            fetching.end(failure)
 
 
 class ProviderUnavailableError(ServiceUnavailableError):
@@ -304,8 +399,13 @@ class OIDCVerifier:
         self._allowed = list(dict.fromkeys(alg.upper() for alg in allowed_algorithms))
         if not self._allowed:
             raise ValueError("OIDCVerifier requires a non-empty algorithm allowlist")
-        # The provider each configured issuer's last whole fetch built, replaced only by a later whole fetch.
+        # The provider each configured issuer's last whole fetch built, replaced only by a whole fetch that began later
+        # (`_install`).
         self._held: dict[str, _Provider] = {}
+        # A count, not the clock, orders the fetches: two fetches may begin within one tick of a monotonic clock, and
+        # an injected clock may not move at all.
+        self._fetches_begun = itertools.count()
+        self._install_lock = threading.Lock()
 
     def _safe_algorithms(self, advertised: list[str]) -> list[str]:
         """Intersect the provider's advertised algorithms with our local allowlist.
@@ -323,30 +423,41 @@ class OIDCVerifier:
         return [alg for alg in self._allowed if alg in advertised_upper]
 
     def _resolve(self, configured_issuer: str) -> _Provider:
-        """The provider held for ``configured_issuer``, whatever its age; one fetched now when none is held, at the pace
-        the issuer's discovery `_RefreshPace` admits, so an issuer that does not answer costs one fetch per interval, not
-        one per request. A provider fetched here is held before its key set arrives: the request reading it fetches the
-        set, as it reads one that holds no signing key again (`_key_set`).
+        """The provider held for ``configured_issuer``, whatever its age; one fetched now when none is held, as a flight at
+        the pace the issuer's discovery `_RefreshPace` admits, so an issuer that does not answer costs one fetch per
+        interval, not one per request. A provider is held only once its key set arrived holding a signing key (`_fetch`),
+        so a fetch that fails holds nothing and the requests after it meet the pace again. The request that fetched, and
+        every request that joined it, read the provider that fetch installed, or are answered 503 when it failed. A
+        request declined a fetch reads what is held at that moment, which a fetch that ended since its first read may have
+        put there.
 
         Raises:
-            ProviderUnavailableError: None is held and the pace declines a fetch, or the fetch failed.
+            ProviderUnavailableError: A fetch failed, the fetch joined failed or outlasted the wait, or none is held and
+                the pace declines a fetch.
         """
         held = self._held.get(configured_issuer)
         if held is not None:
             return held
-        if not self._discovery_paces[configured_issuer].admit():
+        with self._discovery_paces[configured_issuer].turn() as turn:
+            if turn.fetches and turn.flight is not None:
+                turn.flight.landed = self._install(configured_issuer, self._fetch(configured_issuer))
+        if turn.unavailable is not None:
+            raise ProviderUnavailableError(turn.unavailable)
+        landed = turn.flight.landed if turn.flight is not None else None
+        held = landed if landed is not None else self._held.get(configured_issuer)
+        if held is None:
             raise ProviderUnavailableError(f"The OIDC issuer {configured_issuer} has not answered yet")
-        provider = self._fetch(configured_issuer)
-        self._held[configured_issuer] = provider
-        return provider
+        return held
 
     def _fetch(self, configured_issuer: str) -> _Provider:
-        """Fetch ``configured_issuer``'s discovery document, and the provider it makes, its key set not yet fetched.
-        Blocking: one fetch.
+        """Fetch ``configured_issuer``'s discovery document and then its key set, into the provider they make. Blocking:
+        two fetches, the second into a fresh client (`_fetch_keys`). Called only by a flight (`_resolve`) and by
+        `refresh`, the module docstring's rule 3.
 
         Raises:
             ProviderUnavailableError: The fetch failed, or what arrived cannot be used.
         """
+        began = self._begin_fetch()
         # Split-horizon: fetch discovery from the override when one is configured for this
         # issuer; the issuer STRING (and every token check against it) is unchanged.
         override = self._discovery_overrides.get(configured_issuer)
@@ -405,16 +516,69 @@ class OIDCVerifier:
             log.warning("oidc_no_common_algorithm", extra={"advertised": spec.id_token_signing_alg_values_supported, "allowed": self._allowed})
             raise ProviderUnavailableError("No mutually-supported OIDC signing algorithm")
 
-        jwk_client = _CredentialedJWKClient(jwks_uri, self._credential, max_cached_keys=16, timeout=HTTP_FETCH_TIMEOUT_SECONDS)
-        return _Provider(spec=spec, jwk_client=jwk_client, algorithms=algorithms)
+        return _Provider(spec=spec, jwks_uri=jwks_uri, algorithms=algorithms, keys=self._fetch_keys(jwks_uri), began=began)
+
+    def _begin_fetch(self) -> int:
+        """Where a fetch beginning now stands in this verifier's order of fetches."""
+        with self._install_lock:
+            return next(self._fetches_begun)
+
+    def _install(self, configured_issuer: str, fetched: _Provider) -> _Provider:
+        """Hold ``fetched`` for ``configured_issuer`` when it holds a signing key and began after what is held, and
+        return what is held then: the one place a provider is installed, by a flight and by `refresh` alike.
+
+        A fetch that began earlier and landed later is dropped, and the request that made it is judged on the newer one
+        held. Under the lock only the comparison and the write run, never a fetch.
+        """
+        with self._install_lock:
+            held = self._held.get(configured_issuer)
+            if not fetched.keys or (held is not None and held.began > fetched.began):
+                if held is None:
+                    raise ProviderUnavailableError(f"The OIDC key set at {fetched.jwks_uri} holds no usable signing key")
+                return held
+            self._held[configured_issuer] = fetched
+            return fetched
+
+    def _fetch_keys(self, jwks_uri: str) -> tuple[jwt.PyJWK, ...]:
+        """The signing keys of the set at ``jwks_uri``, fetched now into a fresh client that is then dropped (the module
+        docstring's rule 2); every failure to produce them is the PROVIDER's, never the token's. Called only by `_fetch`
+        and by the unknown-`kid` flight (`_signing_key_for`).
+
+        The failures are classified by AUTHOR, not by type: the try body is one third-party call whose every
+        input is the provider's response, so whatever it raises is the provider's. Two kinds:
+
+        * the set could not be fetched — `PyJWKClientConnectionError`, which `fetch_data` raises for a request
+          that fails, is redirected, or is answered short of a whole response (`http.client.HTTPException`), or
+          an `OSError` it does not wrap: a connection reset while the body is read, or the fetch credential
+          failing to read;
+        * anything else: the set arrived and holds no usable signing key (every key marked for another ``use``, or
+          carrying no ``kid``, or none PyJWK can build). Measured on PyJWT 2.15.1 (2026-11-06) that is `PyJWTError`
+          (`PyJWKClientError`, `PyJWKSetError`), `ValueError` (a body that is not JSON), `TypeError` (a key whose
+          ``alg`` is not hashable) and `RecursionError` (a body nested past the JSON parser's depth), but it is
+          caught whole: PyJWK hands provider values to `cryptography`, whose exceptions are not all `ValueError`s
+          (`UnsupportedAlgorithm` subclasses `Exception` alone), and a type left out of a named tuple would answer
+          500 and be audited `invalid_token` against the caller.
+
+        A set that failed is not asked for again in this call: against a slow IdP a second fetch doubles the time a
+        request is held, and the next attempt is the pace's or `refresh`'s to make.
+        """
+        client = _CredentialedJWKClient(jwks_uri, self._credential, max_cached_keys=16, timeout=HTTP_FETCH_TIMEOUT_SECONDS)
+        try:
+            return tuple(client.get_signing_keys())
+        except (jwt.PyJWKClientConnectionError, OSError) as exc:
+            log.warning("oidc_jwks_unreachable", extra={"jwks_uri": jwks_uri, "error": str(exc)})
+            raise ProviderUnavailableError(f"The OIDC key set could not be reached at {jwks_uri}") from exc
+        # Classified by author, not by type — see this docstring.
+        except Exception as exc:
+            log.warning("oidc_jwks_malformed", extra={"jwks_uri": jwks_uri, "error": str(exc)})
+            raise ProviderUnavailableError(f"The OIDC key set at {jwks_uri} holds no usable signing key") from exc
 
     def refresh(self) -> list[tuple[str, str]]:
         """Fetch every configured issuer's provider and key set NOW, hold each that arrived whole, and report the ones
         that failed.
 
-        Whole means a key set holding a signing key, so a request reading the provider never fetches its keys. A failed
-        fetch leaves the provider held before it, so an identity-provider outage, or a set it publishes broken, serves
-        the last good keys.
+        Whole means a key set holding a signing key (`_fetch`). A failed fetch leaves the provider held before it, so an
+        identity-provider outage, or a set it publishes broken, serves the last good keys.
 
         THE CONSTRUCTOR PERFORMS NO I/O, so a verifier that was merely built proves nothing about the
         IdP it points at. Called at startup, this puts a wrong issuer, a wrong split-horizon override or an
@@ -433,9 +597,7 @@ class OIDCVerifier:
         failures: list[tuple[str, str]] = []
         for configured in self._issuers:
             try:
-                provider = self._fetch(configured)
-                self._key_set(provider, refresh=True)
-                self._held[configured] = provider
+                self._install(configured, self._fetch(configured))
             # Every failure is reported and none is raised — see this method docstring.
             except Exception as exc:
                 failures.append((configured, str(exc)))
@@ -464,47 +626,6 @@ class OIDCVerifier:
                 return self._resolve(configured)
         raise UnauthenticatedError("Unrecognized token issuer")
 
-    @staticmethod
-    def _key_set(provider: _Provider, *, refresh: bool) -> list[jwt.PyJWK]:
-        """The provider's signing keys; every failure to produce them is the PROVIDER's, never the token's.
-
-        The failures are classified by AUTHOR, not by type: the try body is one third-party call whose every
-        input is the provider's response, so whatever it raises is the provider's. Two kinds:
-
-        * the set could not be fetched — `PyJWKClientConnectionError`, which `fetch_data` raises for a request
-          that fails, is redirected, or is answered short of a whole response (`http.client.HTTPException`), or
-          an `OSError` it does not wrap: a connection reset while the body is read, or the fetch credential
-          failing to read;
-        * anything else: the set arrived and holds no usable signing key. Measured on PyJWT 2.15.1 (2026-11-06)
-          that is `PyJWTError` (`PyJWKClientError`, `PyJWKSetError`), `ValueError` (a body that is not JSON),
-          `TypeError` (a key whose ``alg`` is not hashable) and `RecursionError` (a body nested past the JSON
-          parser's depth), but it is caught whole: PyJWK hands provider values to `cryptography`, whose
-          exceptions are not all `ValueError`s (`UnsupportedAlgorithm` subclasses `Exception` alone), and a type
-          left out of a named tuple would answer 500 and be audited `invalid_token` against the caller.
-
-        A set the cache served that fails is read once more with ``refresh=True``. `fetch_data` caches only a body
-        that parses into at least one key, so the cached set that fails here holds keys of which none signs (each
-        is marked for another ``use`` or carries no ``kid``), and without that read it outlives the provider's
-        fix by the cache's lifespan (300 s). A set fetched in this call is not asked for again — it is already the
-        provider's current answer, and against a slow IdP a second fetch doubles the time a request is held. Nor
-        is one that never arrived.
-        """
-        uri = provider.jwk_client.uri
-        cache = provider.jwk_client.jwk_set_cache
-        # The same test `get_jwk_set` applies before deciding to fetch.
-        served_from_cache = not refresh and cache is not None and cache.get() is not None
-        try:
-            return provider.jwk_client.get_signing_keys(refresh=refresh)
-        except (jwt.PyJWKClientConnectionError, OSError) as exc:
-            log.warning("oidc_jwks_unreachable", extra={"jwks_uri": uri, "error": str(exc)})
-            raise ProviderUnavailableError(f"The OIDC key set could not be reached at {uri}") from exc
-        # Classified by author, not by type — see this docstring.
-        except Exception as exc:
-            if served_from_cache:
-                return OIDCVerifier._key_set(provider, refresh=True)
-            log.warning("oidc_jwks_malformed", extra={"jwks_uri": uri, "error": str(exc)})
-            raise ProviderUnavailableError(f"The OIDC key set at {uri} holds no usable signing key") from exc
-
     def _signing_key_for(self, provider: _Provider, token: str) -> jwt.PyJWK:
         """The key the token's ``kid`` selects, with each failure charged to its one possible author.
 
@@ -520,16 +641,31 @@ class OIDCVerifier:
         # fetch could answer it. (A non-string `kid` never gets here — the header read above refuses it.)
         if not isinstance(kid, str):
             raise UnauthenticatedError("Invalid or expired token")
-        key = provider.jwk_client.match_kid(self._key_set(provider, refresh=False), kid)
+        key = jwt.PyJWKClient.match_kid(list(provider.keys), kid)
         if key is not None:
             return key
-        # An unknown kid may be a key the provider rotated in after the cached set, so it earns one refetch, as
-        # `PyJWKClient.get_signing_key` grants — but only at the pace `_RefreshPace` admits, because the kid is the
-        # caller's unverified text. Declined, the token is judged on the set already held.
-        if self._refresh_paces[provider.spec.issuer.rstrip("/")].admit():
-            key = provider.jwk_client.match_kid(self._key_set(provider, refresh=True), kid)
-            if key is not None:
-                return key
+        # An unknown kid may be a key the provider rotated in after the held set, so it earns one refetch, as
+        # `PyJWKClient.get_signing_key` grants — but only as a flight at the pace `_RefreshPace` admits, because the kid
+        # is the caller's unverified text. The refetch installs a provider of its own, with the keys it brought, only
+        # when they include a signing key (`_fetch_keys`); the held one is never fetched into. The request that fetched
+        # and every request that joined it are judged on what that flight installed, so a `refresh` replacing the held
+        # provider meanwhile cannot answer one burst two ways; one declined a fetch is judged on what is held NOW, which
+        # a flight that ended between its first read and its turn may have replaced. A joined flight that failed or
+        # outlasted the wait is the IdP's fault, as it is the fetching request's; a set that landed and still lacks the
+        # kid is the token's.
+        issuer = provider.spec.issuer.rstrip("/")
+        with self._refresh_paces[issuer].turn() as turn:
+            if turn.fetches and turn.flight is not None:
+                base = self._held.get(issuer, provider)
+                began = self._begin_fetch()
+                turn.flight.landed = self._install(issuer, base._replace(keys=self._fetch_keys(base.jwks_uri), began=began))
+        if turn.unavailable is not None:
+            raise ProviderUnavailableError(turn.unavailable)
+        landed = turn.flight.landed if turn.flight is not None else None
+        judged = landed if landed is not None else self._held.get(issuer, provider)
+        key = jwt.PyJWKClient.match_kid(list(judged.keys), kid)
+        if key is not None:
+            return key
         raise UnauthenticatedError("Invalid or expired token")
 
     def verify(self, token: str) -> IDToken:
