@@ -30,7 +30,7 @@ from lance_namespace import (
     UpdateTableResponse,
 )
 from lance_namespace_urllib3_client.models import QueryTableRequestColumns
-from pydantic import StringConstraints
+from pydantic import BaseModel, StringConstraints
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api import idempotency as idem
@@ -59,9 +59,11 @@ from catalog.core.run_context import IDEMPOTENCY_KEY_PROPERTY
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
 from catalog.services import blob_serving, dataplane, table_create
+from catalog.services.table_claims import DoorTable
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed import fga
 from lakehouse.governed.audit import audit_read
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -238,11 +240,9 @@ async def insert_into_table(
 
     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
 
-    An ``Idempotency-Key`` makes a resent append converge ([[LH-577]]): a caller that gave up on a slow append, which may
-    have committed, sends it again under the same key and is answered the first attempt's response, nothing appended a
-    second time. The key names one append, its mode and its ref included. Its commit carries the key, so a resend that
-    takes the key over from an attempt lost unanswered past its lease finds that attempt's commit and answers with it
-    rather than appending again. Optional, as on every keyed door (:mod:`catalog.api.idempotency`)."""
+    Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
+    response and commits nothing, the key on another table or ref or with another mode is refused 400, and a request without
+    one is served as ever."""
     segments = parse_identifier(id)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
@@ -255,19 +255,13 @@ async def insert_into_table(
         dataplane.coerce_insert_arrow, table, so, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
-    # After every shape refusal, so a malformed body claims no key. The claim binds the table, the mode and the ref, so the
-    # key on another table, mode or ref is refused rather than answered with this append's response ([[LH-576]]).
-    converge = await keyed.begin(
-        endpoint=f"POST /v1/table/{{id}}/insert mode={insert_mode.value} branch={dataplane.recorded_branch(branch) or ''}",
-        target=fga.canonical_object_id(segments),
+    # After every shape refusal, so a malformed body claims no key. The claim binds the mode too, so the key on another
+    # mode is refused rather than answered with this append's response ([[LH-576]]).
+    converge, answered = await _keyed_table_write(
+        keyed, door=f"insert mode={insert_mode.value}", table=table, so=so, segments=segments, branch=branch, answer=InsertIntoTableResponse
     )
-    if converge.replay is not None:
-        return InsertIntoTableResponse.model_validate(converge.replay.body)
-    if converge.taken_over_since is not None and converge.mark is not None:
-        landed = await run_in_threadpool(partial(dataplane.committed_under_key, table, so, branch=branch, mark=converge.mark, since=converge.taken_over_since))
-        if landed is not None:
-            await converge.remember(200, landed)
-            return landed
+    if answered is not None:
+        return answered
     await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
     # A held commit turn is waited out here, in the event loop, so a writer waiting on it holds no request thread
     # ([[LH-259]]); the insert asks again right before Lance commits it.
@@ -280,10 +274,9 @@ async def insert_into_table(
             req,
             data,
             max_bytes=settings.max_body_bytes,
-            transaction_properties={
-                **lineage_deps.door_stamp(token, OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT, run),
-                **({IDEMPOTENCY_KEY_PROPERTY: converge.mark} if converge.mark is not None else {}),
-            },
+            transaction_properties=_keyed_stamp(
+                converge, lineage_deps.door_stamp(token, OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT, run)
+            ),
         )
     )
     # Recorded as soon as the append has committed: a failure after this line (the lineage emit) answers the caller an
@@ -308,6 +301,38 @@ async def insert_into_table(
     return response
 
 
+async def _keyed_table_write[R: BaseModel](
+    keyed: idem.KeyedDoor, *, door: str, table: DoorTable, so: StorageOptions, segments: list[str], branch: str | None, answer: type[R]
+) -> tuple[idem.Converge, R | None]:
+    """Claim the request's ``Idempotency-Key`` for the table write ``door`` on ``branch``, and the answer it already has.
+
+    The four table writes whose blind retry applies again (an append lands its rows again, an update's ``x = x + 1`` adds
+    again, a merge's or a delete's predicate takes rows another writer committed in between) share this one claim, under
+    the rule :mod:`catalog.api.idempotency` states. The claim binds the door, the ref and the table, so the key on another
+    of them is refused ([[LH-576]]). The answer is the first attempt's when it recorded one, or, when this attempt took the
+    key over from one lost unanswered past its lease, the answer that attempt's commit carries beside the key
+    (:func:`dataplane.committed_under_key`), recorded now; ``None`` means the door writes, stamping :func:`_keyed_stamp`.
+    """
+    converge = await keyed.begin(
+        endpoint=f"POST /v1/table/{{id}}/{door} branch={dataplane.recorded_branch(branch) or ''}", target=fga.canonical_object_id(segments)
+    )
+    if converge.replay is not None:
+        return converge, answer.model_validate(converge.replay.body)
+    if converge.taken_over_since is None or converge.mark is None:
+        return converge, None
+    landed = await run_in_threadpool(
+        partial(dataplane.committed_under_key, table, so, branch=branch, mark=converge.mark, since=converge.taken_over_since, answer=answer)
+    )
+    if landed is not None:
+        await converge.remember(200, landed)
+    return converge, landed
+
+
+def _keyed_stamp(converge: idem.Converge, stamp: dict[str, str]) -> dict[str, str]:
+    """The door's ``stamp`` and, under a key, the key, which its commit carries for a takeover to find."""
+    return stamp if converge.mark is None else {**stamp, IDEMPOTENCY_KEY_PROPERTY: converge.mark}
+
+
 #: ``spec.yaml`` MergeInsertIntoTable ``on``: required, a Lance field path per repetition, together one composite key.
 MergeKeyQuery = Annotated[
     list[Annotated[str, StringConstraints(min_length=1)]],
@@ -324,6 +349,7 @@ MergeKeyQuery = Annotated[
 @spec_router.post("/{id}/merge_insert", response_model_exclude_none=True)
 async def merge_insert_into_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
@@ -350,7 +376,11 @@ async def merge_insert_into_table(
     inputs become the event's version-pinned inputs ([[LH-225]], [[LH-497]]).
 
     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
-    ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162)."""
+    ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).
+
+    Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
+    response and commits nothing, the key on another table or ref is refused 400, and a request without
+    one is served as ever."""
     segments = parse_identifier(id)
     if timeout is not None:
         # The catalog plans and commits the merge itself, under the table's commit turn and its own attempt budget
@@ -367,6 +397,11 @@ async def merge_insert_into_table(
         use_index=use_index,
         branch=branch,
     )
+    converge, answered = await _keyed_table_write(
+        keyed, door="merge_insert", table=table, so=so, segments=segments, branch=branch, answer=MergeInsertIntoTableResponse
+    )
+    if answered is not None:
+        return answered
     await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
     response: MergeInsertIntoTableResponse = await run_in_threadpool(
         partial(
@@ -376,9 +411,10 @@ async def merge_insert_into_table(
             req,
             data,
             max_bytes=settings.max_body_bytes,
-            transaction_properties=lineage_deps.door_stamp(token, MERGE_INSERT, run),
+            transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, MERGE_INSERT, run)),
         )
     )
+    await converge.remember(200, response)
     # merge can add/change columns (schema drift at this version) → record the post-write schema, read
     # PINNED at the version this merge produced so a concurrent writer can't smuggle in a later schema.
     await lineage_deps.emit_measured_write(
@@ -402,6 +438,7 @@ async def merge_insert_into_table(
 async def update_table(
     id: str,
     body: UpdateTableRequest,
+    keyed: idem.KeyedDoorDep,
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
@@ -410,7 +447,11 @@ async def update_table(
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
 ) -> UpdateTableResponse:
-    """Update rows matching a predicate — ``update_table``; emits an UPDATE lineage event."""
+    """Update rows matching a predicate — ``update_table``; emits an UPDATE lineage event.
+
+    Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
+    response and commits nothing, the key on another table or ref is refused 400, and a request without
+    one is served as ever."""
     # LANCE-ONLY (2026-08-15 ruling). An update door is the create door's back way in: a table
     # made as Lance could otherwise be asked to change format afterwards, and the guard's contract is
     # that a format-selecting property is never silently ignored — on any door that accepts one.
@@ -420,9 +461,13 @@ async def update_table(
     body.id = reconcile_body_id(segments, body.id)
     expressions = [expression for _, expression in body.updates or []]
     await fga_deps.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
+    converge, answered = await _keyed_table_write(keyed, door="update", table=table, so=so, segments=segments, branch=body.branch, answer=UpdateTableResponse)
+    if answered is not None:
+        return answered
     response: UpdateTableResponse = await run_in_threadpool(
-        partial(dataplane.update_table, table, so, body, transaction_properties=lineage_deps.door_stamp(token, UPDATE))
+        partial(dataplane.update_table, table, so, body, transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, UPDATE)))
     )
+    await converge.remember(200, response)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -443,6 +488,7 @@ async def update_table(
 async def delete_from_table(
     id: str,
     body: DeleteFromTableRequest,
+    keyed: idem.KeyedDoorDep,
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
@@ -450,12 +496,22 @@ async def delete_from_table(
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
 ) -> DeleteFromTableResponse:
-    """Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event."""
+    """Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event.
+
+    Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
+    response and commits nothing, the key on another table or ref is refused 400, and a request without
+    one is served as ever."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response: DeleteFromTableResponse = await run_in_threadpool(
-        partial(dataplane.delete_from_table, table, so, body, transaction_properties=lineage_deps.door_stamp(token, DELETE))
+    converge, answered = await _keyed_table_write(
+        keyed, door="delete", table=table, so=so, segments=segments, branch=body.branch, answer=DeleteFromTableResponse
     )
+    if answered is not None:
+        return answered
+    response: DeleteFromTableResponse = await run_in_threadpool(
+        partial(dataplane.delete_from_table, table, so, body, transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, DELETE)))
+    )
+    await converge.remember(200, response)
     # A row-delete doesn't change columns, but the event at this new version still carries the
     # (unchanged) schema, so every version the feed records has one, not just writes.
     await lineage_deps.emit_measured_write(

@@ -53,9 +53,13 @@ JOB_PROPERTY: Final = "rask.job"
 INPUTS_PROPERTY: Final = "rask.inputs"
 AUTHOR_PROPERTY: Final = "rask.author"
 OPERATION_PROPERTY: Final = "rask.operation"
-#: The caller's Idempotency-Key, by its scope, on a keyed append's commit: the record a takeover of the key reads to find
-#: an append that landed and was never answered ([[LH-577]]). The catalog's own; no stock commit may carry it.
+#: The caller's Idempotency-Key, by its scope, on a keyed table write's commit: the record a takeover of the key reads to
+#: find a write that landed and was never answered ([[LH-577]]). The catalog's own; no stock commit may carry it.
 IDEMPOTENCY_KEY_PROPERTY: Final = "rask.idempotency_key"
+#: Beside the key, what the keyed write answers besides its version, as a JSON object of the door's response fields: an
+#: update's or a merge's row counts are measured while the commit is planned and cannot be read off the version
+#: afterwards. The catalog's own; no stock commit may carry it.
+IDEMPOTENCY_ANSWER_PROPERTY: Final = "rask.idempotency_answer"
 #: The W3C ``traceparent`` of the request whose door made the commit (ADR 0209): the trace the commit's announcement is
 #: made in, read back by the reconcile that announces a commit whose announcement was lost, so the late announcement
 #: joins the request's trace. The catalog's own; a stock client's commit through ``version/create`` carries none, and

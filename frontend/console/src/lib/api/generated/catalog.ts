@@ -3484,6 +3484,10 @@ export interface paths {
         /**
          * Delete From Table
          * @description Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event.
+         *
+         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
+         *     response and commits nothing, the key on another table or ref is refused 400, and a request without
+         *     one is served as ever.
          */
         post: operations["delete_from_table_v1_table__id__delete_post"];
         delete?: never;
@@ -3768,11 +3772,9 @@ export interface paths {
          *
          *     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
          *
-         *     An ``Idempotency-Key`` makes a resent append converge ([[LH-577]]): a caller that gave up on a slow append, which may
-         *     have committed, sends it again under the same key and is answered the first attempt's response, nothing appended a
-         *     second time. The key names one append, its mode and its ref included. Its commit carries the key, so a resend that
-         *     takes the key over from an attempt lost unanswered past its lease finds that attempt's commit and answers with it
-         *     rather than appending again. Optional, as on every keyed door (:mod:`catalog.api.idempotency`).
+         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
+         *     response and commits nothing, the key on another table or ref or with another mode is refused 400, and a request without
+         *     one is served as ever.
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;
@@ -3800,6 +3802,10 @@ export interface paths {
          *
          *     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
          *     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).
+         *
+         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
+         *     response and commits nothing, the key on another table or ref is refused 400, and a request without
+         *     one is served as ever.
          */
         post: operations["merge_insert_into_table_v1_table__id__merge_insert_post"];
         delete?: never;
@@ -4122,6 +4128,10 @@ export interface paths {
         /**
          * Update Table
          * @description Update rows matching a predicate — ``update_table``; emits an UPDATE lineage event.
+         *
+         *     Takes an optional ``Idempotency-Key`` (a UUID): a resend under the key is answered with the first request's
+         *     response and commits nothing, the key on another table or ref is refused 400, and a request without
+         *     one is served as ever.
          */
         post: operations["update_table_v1_table__id__update_post"];
         delete?: never;
@@ -16535,6 +16545,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -17587,6 +17598,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -18734,6 +18746,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {

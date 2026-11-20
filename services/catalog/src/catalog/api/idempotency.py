@@ -1,10 +1,25 @@
 """The catalog's side of `Idempotency-Key`: an OPTIONAL header that makes a replay converge.
 
+WHICH DOORS TAKE IT, THE RULE (XC-219). A door takes the key when a blind retry of its write would apply it AGAIN: the
+doors that mint or retire an object (a table's create, declare, register, drop, deregister, rename, restore and undrop;
+a namespace's create, drop and undrop; a warehouse's or a project's delete) and the four row writes (insert,
+merge_insert, update, delete), since an append lands its rows again, `x = x + 1` adds again, and a merge's or a delete's
+predicate takes rows another writer committed in between. No other door takes it, because a blind retry of one is
+refused or converges rather than applying twice: a column's add, alter or drop, a tag's or a branch's create or delete
+and `version/create` (which names the exact version it finalizes) are refused the second time, and a schema or field
+metadata update, a tag's update and a project's create set the same state again. Every keyed door has the same
+semantics: the first request under a key commits and records its answer under (caller, door, object, key); a replay
+under the key answers that and commits nothing; the key on another door or another object is refused `InvalidInput` (400, code 13); a request with no key is
+served as it would be without this module. The claim is :meth:`KeyedDoor.begin`, the row writes' is
+`endpoints.data._keyed_table_write`, and `tests/integration/test_a_retried_create_does_not_rewrite_the_table.py` holds the
+roster. What is judged the same request is the door, its object and what the door binds besides (an insert's mode, a
+row write's ref): the payload is not, so a replay carrying other bytes is answered with the first answer.
+
 WHY OPTIONAL, AND WHY THAT IS NOT A COMPROMISE (§ Q17-32, `rask-lance-catalog` § D3). The Lance
 Namespace spec defines no `Idempotency-Key`, and a stock Lance client must work against this catalog
 with no rask SDK — so requiring one would break conformance on 54 routed operations. A caller that
-sends a key gets convergence; one that does not is exactly where it was, which is the whole reason the
-mechanism is a seam a door opts into rather than middleware over 91 write routes.
+sends a key gets convergence; one that does not is exactly where it was, which is why each door declares the key
+rather than a middleware imposing it over every write route.
 
 WHAT IT BUYS, precisely. A 500 raised AFTER the Lance write in `create_governed_table` — the schema
 read-back, `emit_create`, `emit_control` — is replayed by whoever retries it, with nothing to converge it.

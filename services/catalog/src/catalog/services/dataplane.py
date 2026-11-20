@@ -34,7 +34,7 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 from botocore.exceptions import BotoCoreError, ClientError
-from lance import Transaction
+from lance import FragmentMetadata, Transaction
 from lance.dataset import AlterColumn  # noqa: TID251 — a type lance exports only from its dataset module, not an open
 from lance_namespace import (
     AlterTableAddColumnsRequest,
@@ -118,7 +118,7 @@ from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.core.provenance_stamp import declare_dataset_id
-from catalog.core.run_context import AUTHOR_PROPERTY, IDEMPOTENCY_KEY_PROPERTY, OPERATION_PROPERTY
+from catalog.core.run_context import AUTHOR_PROPERTY, IDEMPOTENCY_ANSWER_PROPERTY, IDEMPOTENCY_KEY_PROPERTY, OPERATION_PROPERTY
 from catalog.core.schema_facet import SchemaFields, facet_fields
 from catalog.core.vending import classified_columns, labelled_fields
 from catalog.core.version_retention import MAIN_BRANCH, recorded_branch
@@ -2679,7 +2679,11 @@ def update_table(table: table_claims.DoorTable, so: StorageOptions, req: UpdateT
             table,
             so,
             transaction_properties,
-            captured(table, so, lambda handle: handle.update(updates, where=where), branch=req.branch, measure=matched),
+            _answering(
+                transaction_properties,
+                captured(table, so, lambda handle: handle.update(updates, where=where), branch=req.branch, measure=matched),
+                lambda matched_rows: {"updated_rows": matched_rows or 0},
+            ),
             branch=req.branch,
         )
     return UpdateTableResponse(updated_rows=updated or 0, version=version)
@@ -2695,9 +2699,37 @@ def delete_from_table(
     predicate = req.predicate
     with caller_sql("invalid delete predicate"):
         version, _ = commit_stamped(
-            table, so, transaction_properties, captured(table, so, lambda handle: handle.delete(predicate), branch=req.branch), branch=req.branch
+            table,
+            so,
+            _with_answer(transaction_properties, {}),
+            captured(table, so, lambda handle: handle.delete(predicate), branch=req.branch),
+            branch=req.branch,
         )
     return DeleteFromTableResponse(version=version)
+
+
+def _with_answer(properties: dict[str, str], answer: dict[str, int]) -> dict[str, str]:
+    """``properties`` carrying ``answer`` beside the key when they carry one (:data:`IDEMPOTENCY_ANSWER_PROPERTY`), so a
+    takeover of the key answers from the commit as this write answers."""
+    if IDEMPOTENCY_KEY_PROPERTY not in properties:
+        return properties
+    return {**properties, IDEMPOTENCY_ANSWER_PROPERTY: json.dumps(answer, sort_keys=True)}
+
+
+def _answering[T](
+    properties: dict[str, str], plan: Callable[[lance.LanceDataset], tuple[Transaction, T]], answer: Callable[[T], dict[str, int]]
+) -> Callable[[lance.LanceDataset], tuple[Transaction, T]]:
+    """``plan``, whose transaction carries the answer its measurement gives (:func:`_with_answer`) when ``properties``
+    carry a key: an update's or a merge's counts are known only once it is planned, and each plan measures again."""
+    if IDEMPOTENCY_KEY_PROPERTY not in properties:
+        return plan
+
+    def answered(dataset: lance.LanceDataset) -> tuple[Transaction, T]:
+        transaction, measured = plan(dataset)
+        stamped = {**(transaction.transaction_properties or {}), IDEMPOTENCY_ANSWER_PROPERTY: json.dumps(answer(measured), sort_keys=True)}
+        return replace(transaction, transaction_properties=stamped), measured
+
+    return answered
 
 
 #: How far before a lapsed attempt's claim its commit is looked for: the commit's time is the pod's clock and the claim's
@@ -2705,15 +2737,18 @@ def delete_from_table(
 _CLOCK_SKEW = timedelta(minutes=10)
 
 
-def committed_under_key(table: table_claims.DoorTable, so: StorageOptions, *, branch: str | None, mark: str, since: datetime) -> InsertIntoTableResponse | None:
-    """The append an earlier attempt under the key ``mark`` names committed on ``branch``, or ``None`` when it committed none.
+def committed_under_key[R: BaseModel](
+    table: table_claims.DoorTable, so: StorageOptions, *, branch: str | None, mark: str, since: datetime, answer: type[R]
+) -> R | None:
+    """What the write an earlier attempt under the key ``mark`` committed on ``branch`` answered, or ``None`` when it
+    committed none.
 
     For a key taken over from an attempt whose lease ran out unanswered ([[LH-577]]): it may have committed and been lost
-    before it recorded its answer, and an append run again would land twice. Its commit carries the key
-    (:data:`IDEMPOTENCY_KEY_PROPERTY`), so the versions committed since that attempt claimed the key are read, newest
-    first, until one older than the claim, and the one carrying the key is answered as that append was: its version and
-    the rows its new fragments hold. Lance keeps a version's transaction until a cleanup removes it, and a version
-    committed minutes ago is far inside any retention.
+    before it recorded its answer, and a write run again would apply twice. Its commit carries the key
+    (:data:`IDEMPOTENCY_KEY_PROPERTY`) and its answer (:data:`IDEMPOTENCY_ANSWER_PROPERTY`), so the versions committed
+    since that attempt claimed the key are read, newest first, until one older than the claim, and the one carrying the
+    key is answered as ``answer``: that version and the answer stamped beside the key. Lance keeps a version's
+    transaction until a cleanup removes it, and a version committed minutes ago is far inside any retention.
     """
     dataset = table.open(so, branch=branch)
     earliest = since - _CLOCK_SKEW
@@ -2722,11 +2757,29 @@ def committed_under_key(table: table_claims.DoorTable, so: StorageOptions, *, br
             return None
         version = int(entry["version"])
         transaction = read_transaction(dataset, version)
-        if transaction is None or (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) != mark:
+        if transaction is None or (properties := transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) != mark:
             continue
-        added = getattr(transaction.operation, "fragments", None) or []
-        return InsertIntoTableResponse(version=version, num_inserted_rows=sum(int(fragment.physical_rows or 0) for fragment in added))
+        stamped = properties.get(IDEMPOTENCY_ANSWER_PROPERTY)
+        if stamped is not None:
+            return answer.model_validate({**json.loads(stamped), "version": version})
+        recovered = _UNANSWERED.get(answer)
+        return answer.model_validate({**(recovered(transaction) if recovered is not None else {}), "version": version})
     return None
+
+
+def _rows_added(fragments: Sequence[FragmentMetadata] | None) -> int:
+    return sum(int(fragment.physical_rows or 0) for fragment in fragments or [])
+
+
+#: What a door answers, besides the version, for a commit that carries its key and no answer (an image that stamped only
+#: the key made it), read off its transaction; a door not named answers the version alone, as a count it cannot read
+#: there is left out rather than guessed. An append's operation holds the fragments it added. An update is committed in
+#: Lance's ``rewrite_rows`` mode, whose ``new_fragments`` hold the updated rows (measured on pylance 14.0.3, 2026-11-20:
+#: three of four rows updated, ``new_fragments`` held 3 rows).
+_UNANSWERED: Final[dict[type[BaseModel], Callable[[Transaction], dict[str, int]]]] = {
+    InsertIntoTableResponse: lambda transaction: {"num_inserted_rows": _rows_added(getattr(transaction.operation, "fragments", None))},
+    UpdateTableResponse: lambda transaction: {"updated_rows": _rows_added(getattr(transaction.operation, "new_fragments", None))},
+}
 
 
 def insert_into_table(
@@ -2764,6 +2817,7 @@ def insert_into_table(
     # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
     # and Lance writes whatever an unvalidated offset points at.
     rows = read_arrow_body(data, max_bytes=max_bytes)
+    transaction_properties = _with_answer(transaction_properties, {"num_inserted_rows": rows.num_rows})
     dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table.segments)
     # THROUGH `InsertMode`, the one vocabulary every caller shares. pylance's own parser is not the
     # spec's: it takes `create`, which the spec does not give this door, and refuses an unknown value with
@@ -2855,15 +2909,19 @@ def merge_insert_into_table(
     # for naming it wrongly — while the branchless path answered 13.
     with _write_schema_errors(), caller_sql("invalid merge_insert key or filter"):
         version, stats = commit_stamped(
-            table, so, transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows), branch=req.branch
+            table,
+            so,
+            transaction_properties,
+            _answering(transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows), _merge_counts),
+            branch=req.branch,
         )
+    return MergeInsertIntoTableResponse.model_validate({**_merge_counts(stats), "version": version})
+
+
+def _merge_counts(stats: object) -> dict[str, int]:
+    """The row counts a merge answers, off the statistics its uncommitted execution reports."""
     counts = stats if isinstance(stats, dict) else {}
-    return MergeInsertIntoTableResponse(
-        version=version,
-        num_updated_rows=int(counts.get("num_updated_rows", 0)),
-        num_inserted_rows=int(counts.get("num_inserted_rows", 0)),
-        num_deleted_rows=int(counts.get("num_deleted_rows", 0)),
-    )
+    return {name: int(counts.get(name, 0)) for name in ("num_updated_rows", "num_inserted_rows", "num_deleted_rows")}
 
 
 def _merge_builder(dataset: lance.LanceDataset, req: MergeInsertIntoTableRequest) -> lance.MergeInsertBuilder:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -204,57 +204,150 @@ class TestTheDestructiveDoorsConvergeToo:
         assert real_ns_client.post("/v1/table/lance_catalog$db$other/describe", json={}).status_code == 200, "the refused drop must leave the table"
 
 
-class TestARetriedAppendLandsOnce:
-    """[[LH-577]] An append is the write a caller most often gives up on and sends again: the console aborts a slow one,
-    and the catalog may have committed it. Under one key the second send answers the first's response and appends
-    nothing, whatever bytes it carries; a key the append has not used is another append."""
+def _frame(ids: list[int], xs: list[int]) -> bytes:
+    return _ipc(pa.table({"id": pa.array(ids, pa.int64()), "x": pa.array(xs, pa.int64())}))
 
-    def test_the_same_key_appends_once_and_answers_the_first_response(self, real_ns_client: TestClient) -> None:
-        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/lance_catalog$db$grown/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
-        before = _version(real_ns_client, "lance_catalog$db$grown")
-        keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f67"}
 
-        first = real_ns_client.post("/v1/table/lance_catalog$db$grown/insert?mode=append", content=_rows(2), headers=keyed)
-        assert first.status_code == 200, first.text
-        again = real_ns_client.post("/v1/table/lance_catalog$db$grown/insert?mode=append", content=_rows(5), headers=keyed)
-        other = real_ns_client.post(
-            "/v1/table/lance_catalog$db$grown/insert?mode=append",
-            content=_rows(1),
-            headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f68"},
-        )
+def _table_rows(client: TestClient, tid: str) -> dict[str, list[int]]:
+    """The table's rows, by column, ordered by ``id``."""
+    response = client.post(f"/v1/table/{tid}/query", json={"k": 100, "vector": {}})
+    assert response.status_code == 200, response.text
+    return dict(ipc.open_file(pa.py_buffer(response.content)).read_all().sort_by("id").to_pydict())
 
-        assert (again.status_code, again.json()) == (200, first.json()), again.text
-        assert other.status_code == 200, other.text
-        counted = real_ns_client.post("/v1/table/lance_catalog$db$grown/count_rows", json={})
-        assert (_version(real_ns_client, "lance_catalog$db$grown"), counted.text) == (before + 2, "6"), "a replayed append appended again"
 
-    def test_an_append_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The answer of an append can be lost after it committed (its pod ended, or a fault after the commit), and a resend
-        past the claim's lease takes the key over. Run again, the append would land twice: the commit carries the key,
-        so the takeover finds it there and answers with it."""
+class _TableWrite(NamedTuple):
+    """One write door a blind retry would apply again, the request it is sent, another request of the door on the same
+    table and ref, what it answers on the seed table, and what a takeover answers for its commit when the commit carries
+    the key and no answer."""
+
+    path: str
+    json: dict[str, Any] | None
+    content: bytes | None
+    other: dict[str, Any] | bytes
+    answer: dict[str, int]
+    unanswered: dict[str, int]
+
+    def send(self, client: TestClient, tid: str, headers: dict[str, str], *, other: bool = False) -> Any:
+        if self.content is not None:
+            content = self.other if other else self.content
+            return client.post(f"/v1/table/{tid}/{self.path}", content=content, headers={**ARROW_STREAM, **headers})
+        return client.post(f"/v1/table/{tid}/{self.path}", json=self.other if other else self.json, headers=headers)
+
+
+#: Each door applied twice to the seed rows ``id`` 1-3, ``x`` 0, with a writer's row landing in between, ends elsewhere than
+#: applied once: the append lands its row again, ``x + 1`` adds again, the merge's delete-not-matched-by-source and the
+#: delete each take the writer's row.
+_TABLE_WRITES = {
+    "insert": _TableWrite("insert?mode=append", None, _frame([10], [10]), _frame([11, 12], [0, 0]), {"num_inserted_rows": 1}, {"num_inserted_rows": 1}),
+    "update": _TableWrite("update", {"updates": [["x", "x + 1"]]}, None, {"updates": [["x", "x + 5"]]}, {"updated_rows": 3}, {"updated_rows": 3}),
+    "merge_insert": _TableWrite(
+        "merge_insert?on=id&when_matched_update_all=true&when_not_matched_by_source_delete=true",
+        None,
+        _frame([1], [100]),
+        _frame([2], [200]),
+        {"num_updated_rows": 1, "num_inserted_rows": 0, "num_deleted_rows": 2},
+        {},
+    ),
+    "delete": _TableWrite("delete", {"predicate": "id >= 2"}, None, {"predicate": "id >= 3"}, {}, {}),
+}
+
+#: How the second request is sent: under the first one's key (as it was, or another request of the door on the same table
+#: and ref), with no key, or under a fresh key.
+_FIRST_KEY = "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f67"
+_RESENDS: dict[str, tuple[str | None, bool]] = {
+    "same-key": (_FIRST_KEY, False),
+    "same-key-other-request": (_FIRST_KEY, True),
+    "keyless": (None, False),
+    "fresh-key": ("6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f6c", False),
+}
+
+
+def _seeded(client: TestClient, *names: str) -> None:
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+    for name in names:
+        assert client.post(f"/v1/table/lance_catalog$db${name}/create", content=_frame([1, 2, 3], [0, 0, 0]), headers=ARROW_STREAM).status_code == 200
+
+
+@pytest.mark.parametrize("door", list(_TABLE_WRITES))
+class TestARetriedTableWriteCommitsOnce:
+    """[[LH-577]], XC-219. A caller that gave up on a slow write, which may have committed, sends it again. Every door
+    whose write a blind retry applies again takes the key: under one key the resend answers the first's response and
+    commits nothing, though another writer committed in between, whatever payload it carries (the payload is not what a
+    key judges); the same key on another table is refused; a resend with no key, or under a fresh key, is applied again."""
+
+    @pytest.mark.parametrize("resend", list(_RESENDS))
+    def test_a_resend_under_its_key_answers_the_first_and_commits_nothing(self, real_ns_client: TestClient, door: str, resend: str) -> None:
+        write = _TABLE_WRITES[door]
+        tid = "lance_catalog$db$t"
+        _seeded(real_ns_client, "t")
+        before = _version(real_ns_client, tid)
+        key, other = _RESENDS[resend]
+        resent_key = {"Idempotency-Key": key} if key is not None else {}
+        first_key = {"Idempotency-Key": _FIRST_KEY} if key is not None else {}
+
+        first = write.send(real_ns_client, tid, first_key)
+        assert (first.status_code, first.json()) == (200, {**write.answer, "version": before + 1}), first.text
+        assert real_ns_client.post(f"/v1/table/{tid}/insert?mode=append", content=_frame([9], [0]), headers=ARROW_STREAM).status_code == 200
+        between = (_table_rows(real_ns_client, tid), _version(real_ns_client, tid))
+        again = write.send(real_ns_client, tid, resent_key, other=other)
+
+        assert again.status_code == 200, again.text
+        if resend.startswith("same-key"):
+            assert again.json() == first.json(), "a resend under its key must answer the first attempt's response"
+            assert (_table_rows(real_ns_client, tid), _version(real_ns_client, tid)) == between, f"the resent {door} committed again"
+        else:
+            assert _version(real_ns_client, tid) == between[1] + 1, "a resend with no key or a fresh one is a new request, applied again"
+            assert _table_rows(real_ns_client, tid) != between[0]
+
+    def test_the_same_key_on_another_table_is_refused_and_the_table_is_left(self, real_ns_client: TestClient, door: str) -> None:
+        write = _TABLE_WRITES[door]
+        _seeded(real_ns_client, "t", "other")
+        keyed = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f68"}
+        assert write.send(real_ns_client, "lance_catalog$db$t", keyed).status_code == 200
+        untouched = (_table_rows(real_ns_client, "lance_catalog$db$other"), _version(real_ns_client, "lance_catalog$db$other"))
+
+        crossed = write.send(real_ns_client, "lance_catalog$db$other", keyed)
+
+        assert (crossed.status_code, crossed.json().get("code")) == (400, 13), crossed.text
+        assert (_table_rows(real_ns_client, "lance_catalog$db$other"), _version(real_ns_client, "lance_catalog$db$other")) == untouched
+
+    @pytest.mark.parametrize("answer_stamped", [True, False], ids=["answer-stamped", "key-only"])
+    def test_a_write_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(
+        self, real_ns_client: TestClient, door: str, answer_stamped: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The answer of a write can be lost after it committed (its pod ended, or a fault after the commit), and a resend
+        past the claim's lease takes the key over. Run again, the write would apply twice: the commit carries the key and
+        the answer, so the takeover finds them there and answers with them. A commit carrying the key and no answer (one
+        an image that stamped only the key made) is answered from what its transaction holds, never a fault."""
         from catalog.api import idempotency as keyed_doors
-        from catalog.services import idempotency_records
+        from catalog.services import dataplane, idempotency_records
 
-        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/lance_catalog$db$lost/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
-        before = _version(real_ns_client, "lance_catalog$db$lost")
-        keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f69"}
+        write = _TABLE_WRITES[door]
+        tid = "lance_catalog$db$lost"
+        _seeded(real_ns_client, "lost")
+        before = _version(real_ns_client, tid)
+        keyed = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f69"}
 
         async def lost(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("the pod ended before the answer was recorded")
 
         with monkeypatch.context() as during:
             during.setattr(keyed_doors.Converge, "remember", lost)
+            if not answer_stamped:
+                during.setattr(dataplane, "_with_answer", lambda properties, _answer: properties)
+                during.setattr(dataplane, "_answering", lambda _properties, plan, _answer: plan)
             with pytest.raises(RuntimeError, match="the pod ended"):
-                real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=_rows(2), headers=keyed)
+                write.send(real_ns_client, tid, keyed)
+        landed = _table_rows(real_ns_client, tid)
         monkeypatch.setattr(keyed_doors.idempotency_records, "claim", partial(idempotency_records.claim, lease=timedelta(0)))
-        again = real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=_rows(2), headers=keyed)
+        again = write.send(real_ns_client, tid, keyed)
 
-        assert (again.status_code, again.json()) == (200, {"num_inserted_rows": 2, "version": before + 1}), again.text
-        counted = real_ns_client.post("/v1/table/lance_catalog$db$lost/count_rows", json={})
-        assert (_version(real_ns_client, "lance_catalog$db$lost"), counted.text) == (before + 1, "5"), "the append ran again after its lease"
+        answered = write.answer if answer_stamped else write.unanswered
+        assert (again.status_code, again.json()) == (200, {**answered, "version": before + 1}), again.text
+        assert (_table_rows(real_ns_client, tid), _version(real_ns_client, tid)) == (landed, before + 1), f"the {door} ran again after its lease"
 
+
+class TestARetriedAppendNamesItsMode:
     def test_the_key_names_one_append_on_one_ref(self, real_ns_client: TestClient) -> None:
         """The same key on another mode or another ref is another operation, refused rather than answered with this one."""
         assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
@@ -268,8 +361,9 @@ class TestARetriedAppendLandsOnce:
         assert real_ns_client.post("/v1/table/lance_catalog$db$moded/count_rows", json={}).text == "5"
 
 
-class TestEveryTableDoorThatMintsOrRetiresConverges:
-    """`create`/`drop`/`rename` were the first three; these are the rest of the same amplifier.
+class TestEveryDoorARetryWouldApplyAgainConverges:
+    """The roster of the rule `catalog.api.idempotency` states: every door that mints or retires an object, and every
+    table write.
 
     Pinned as a ROSTER rather than one test each, because the failure this guards is a door ADDED later
     without the key — and a per-door test cannot notice a door nobody wrote a test for.
@@ -288,6 +382,9 @@ class TestEveryTableDoorThatMintsOrRetiresConverges:
             "POST /v1/table/{id}/register",
             "POST /v1/table/{id}/restore",
             "POST /v1/table/{id}/insert",
+            "POST /v1/table/{id}/merge_insert",
+            "POST /v1/table/{id}/update",
+            "POST /v1/table/{id}/delete",
             "POST /management/v1/table/{id}/undrop",
             "POST /v1/namespace/{id}/create",
             "POST /v1/namespace/{id}/drop",
@@ -297,4 +394,4 @@ class TestEveryTableDoorThatMintsOrRetiresConverges:
         }
         keyed, _ = _keyed_doors(real_ns_client.app)
 
-        assert want <= keyed, f"these doors mint or retire an id and take no idempotency key: {sorted(want - keyed)}"
+        assert want <= keyed, f"these doors a retry would apply again take no idempotency key: {sorted(want - keyed)}"

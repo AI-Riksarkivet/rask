@@ -11,8 +11,7 @@ re-execute.
 THE KEY IS OPTIONAL AT THE DOOR, AND THAT IS A SPEC CONSTRAINT, NOT A COMPROMISE. The Lance Namespace
 spec defines no `Idempotency-Key` and a stock Lance client must work with no rask SDK, so requiring it
 would break conformance on 54 routed operations. A caller that sends one gets convergence; one that
-does not is exactly where it was, which is why this module is a seam a door OPTS INTO rather than
-middleware.
+does not is exactly where it was. Which doors declare the key is the rule `catalog.api.idempotency` states.
 
 STORE-ARBITRATED, NOT READ-THEN-WRITE. A first claim is `conditional_records.create_json`, a conditional put whose winner the
 STORE picks, and the takeover of an abandoned claim is a replace under the ETag of the read that judged it abandoned

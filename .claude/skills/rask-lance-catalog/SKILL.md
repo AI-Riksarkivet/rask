@@ -881,17 +881,23 @@ governing their data. The project-scoped surface is the console's project page, 
 
 ## Gotchas
 
-- **An `Idempotency-Key` converges a resent write; it is optional on every keyed door** (`catalog.api.idempotency`,
-  `catalog.services.idempotency_records`): a table's create, declare, drop, undrop, rename, deregister, register, restore and insert, and
-  a namespace's create, drop and undrop. A project's and a warehouse's create and delete take none: a re-POST of a create
-  converges on its record, and a delete that failed part-way is finished by asking again. A key is one operation on one
-  object (the door, and for an insert its mode and ref, and the object's canonical id), answered with its first response.
+- **An `Idempotency-Key` converges a resent write; it is optional on every keyed door, and which doors are keyed is
+  one rule** (the module docstring of `catalog.api.idempotency`, XC-219): every door whose write a blind retry would
+  apply AGAIN. That is a table's create, declare, drop, undrop, rename, deregister, register and restore, the four row
+  writes (insert, merge_insert, update, delete), a namespace's create, drop and undrop, and a project's and a warehouse's
+  delete. No other door takes one: its blind retry is refused (a column's add, alter or drop, a tag's or a branch's
+  create or delete, `version/create`) or sets the same state again (a metadata update, a project's or a warehouse's
+  create). A key is one operation on
+  one object (the door, for an insert its mode, for a row write its ref, and the object's canonical id), answered with
+  its first response whatever payload the replay carries; the key on another door or object is refused 400 (code 13).
   The declare door remembers its answer without the credential it vended: a replay's caller asks DescribeTable for one.
-  A claim unanswered past `LEASE` (300 s) is taken over, and the claim says so (`TakenOver`): an append run again would
-  land twice, so the insert door stamps the key on its commit (`rask.idempotency_key`, by the caller's scope, a property
-  no stock commit may carry) and a takeover reads the ref's versions since that claim for it, answering with the commit
-  it finds ([[LH-577]], `dataplane.committed_under_key`). The insert records its answer right after its commit, before
-  the lineage emit, so a failure after the commit is answered on resend rather than run again.
+  A claim unanswered past `LEASE` (300 s) is taken over, and the claim says so (`TakenOver`): a row write run again
+  would apply twice, so the four row writes stamp the key and their answer on the commit (`rask.idempotency_key`, by
+  the caller's scope, and `rask.idempotency_answer`, the response's fields besides the version; neither may ride a stock
+  commit; a commit carrying the key and no answer is answered from its transaction, never a 500) and a takeover reads
+  the ref's versions since that claim for it, answering from the commit it finds ([[LH-577]],
+  `dataplane.committed_under_key`, `endpoints.data._keyed_table_write`). Each records its answer right after its commit,
+  before the lineage emit, so a failure after the commit is answered on resend rather than run again.
 
 - **`update_table_schema_metadata` MERGES — the spec text ("Replace schema metadata") is wrong about
   every backend.** Probed against a real `dir` backend: posting `{owner}` over `{owner, tier}` leaves
