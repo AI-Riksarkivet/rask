@@ -35,9 +35,11 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel
 
 from lakehouse import location_claims, objectfs, trash
+from lakehouse.governed.store_credential import StoreCredentialUnavailableError
 from lakehouse.objectfs import fs_and_base
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.core.metrics import OrphanCheckOutcome, record_orphan_check
@@ -82,10 +84,13 @@ def run_orphan_check(task: Task, settings: MaintenanceSettings, *, now: datetime
     now = now or datetime.now(UTC)
     try:
         checked, found = _check(task, settings, now=now)
-    except OrphanCheckIncompleteError as exc:
+    except (OrphanCheckIncompleteError, StoreCredentialUnavailableError) as exc:
+        # A store session that lapsed decides nothing either, at whichever read of the check it is found.
         record_orphan_check(outcome="incomplete", stranded=0)
         log.warning("maintenance_orphan_check", extra={"uuid": task.uuid, "location": task.location, "outcome": "incomplete", "reason": str(exc)})
-        raise
+        if isinstance(exc, OrphanCheckIncompleteError):
+            raise
+        raise OrphanCheckIncompleteError(f"the store's credential could not be read: {exc}") from exc
     stranded = [orphan for orphan in found.orphans if orphan.reclaimable_by_lance is False] if found is not None else []
     record_orphan_check(outcome=checked.outcome, stranded=len(stranded))
     log.info("maintenance_orphan_check", extra={**_described(task, checked, found), "next_check_hours": _hours(checked.next_check)})
@@ -103,7 +108,9 @@ def _check(task: Task, settings: MaintenanceSettings, *, now: datetime) -> tuple
             return OrphanCheck(outcome="gone", next_check=None), None
         if trash.keeps(settings.resolved_control_root, options, task.uuid):
             return OrphanCheck(outcome="trashed", next_check=None), None
-    except OSError as exc:
+    except (OSError, ValueError, ClientError, BotoCoreError) as exc:
+        # How the two reads fail: the trash's on pyarrow (`OSError`), the claim's on the S3 client, which raises its
+        # own types, and a record that is there and is none (`ValueError`). Each decides nothing about the table.
         raise OrphanCheckIncompleteError(f"the claim or the trash could not be read: {exc}") from exc
     governed = governs(task.location, warehouse=held.segments[0], settings=settings, options=options)
     if governed is None:

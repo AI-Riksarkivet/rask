@@ -18,6 +18,7 @@ the check starts in a later second (`_a_second_after`): a polled clock, not a sl
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -29,6 +30,7 @@ import httpx
 import lance
 import pyarrow as pa
 import pytest
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, DescribeTableRequest, RegisterTableRequest
@@ -38,7 +40,7 @@ from pydantic import BaseModel, SecretStr
 from catalog.services.warehouses import ensure_catalog_row
 from lakehouse import location_claims, maintenance_policies, record_store, trash
 from lakehouse.control_emit import NoopControlEmitter
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.governed.store_credential import S3KeyPair, StoreCredentialUnavailableError
 from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
@@ -352,22 +354,81 @@ def _its_warehouses_record_unreadable(*, moto_url: str, bucket: str, store: Stor
     return _table(bucket=bucket, options=store, warehouse="wh-garbled")
 
 
+def _its_claim_unreadable(*, moto_url: str, bucket: str, store: StorageOptions) -> Task:
+    task = _table(bucket=bucket, options=store)
+    _s3(moto_url).put_object(Bucket=bucket, Key=location_claims.claim_key(task.location), Body=b"not a claim")
+    return task
+
+
 @pytest.mark.parametrize(
     ("placed", "unread"),
     [
+        pytest.param(_its_claim_unreadable, r"^the claim or the trash could not be read", id="its-claim"),
         pytest.param(_its_manifests_unreadable, r"^ValueError: LanceError\(IO\): does not have sufficient data", id="its-manifests"),
         pytest.param(_its_warehouses_record_unreadable, r"^the table's warehouse could not be read$", id="its-warehouses-record"),
     ],
 )
-def test_a_check_whose_table_cannot_be_read_is_tried_again(
-    *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings], placed: Callable[..., Task], unread: str
+def test_a_check_whose_table_cannot_be_read_is_tried_again(  # noqa: PLR0913 — one case's store and what the check must say
+    *,
+    moto_url: str,
+    bucket: str,
+    store: StorageOptions,
+    settings: Callable[..., MaintenanceSettings],
+    placed: Callable[..., Task],
+    unread: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A read that fails decides nothing: the check raises, so the worker delivers it again, and holds nothing. A
-    warehouse record that cannot be read is no answer about the warehouse's status either way."""
+    """A read that fails decides nothing: the check raises, so the worker delivers it again, and holds nothing, and it
+    says so as an incomplete check, which is what its alert counts. A warehouse record that cannot be read is no answer
+    about the warehouse's status either way."""
     task = placed(moto_url=moto_url, bucket=bucket, store=store)
 
-    with pytest.raises(OrphanCheckIncompleteError, match=unread):
+    with caplog.at_level(logging.WARNING, logger="maintenance.services.orphan_check"), pytest.raises(OrphanCheckIncompleteError, match=unread):
         _check(task, settings())
+
+    assert _outcomes(caplog) == ["incomplete"]
+
+
+def _outcomes(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The outcome of each check the worker logged."""
+    return [record.__dict__["outcome"] for record in caplog.records if record.getMessage() == "maintenance_orphan_check"]
+
+
+def _refused(status: int) -> ClientError:
+    answer: Any = {"Error": {"Code": "ServiceUnavailable"}, "ResponseMetadata": {"HTTPStatusCode": status}}
+    return ClientError(answer, "GetObject")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(_refused(503), id="the-store-answers-503-to-the-claims-read"),
+        pytest.param(StoreCredentialUnavailableError("the store session has lapsed"), id="the-pods-store-session-has-lapsed"),
+    ],
+)
+def test_a_check_the_store_does_not_answer_is_an_incomplete_check(  # noqa: PLR0913 — one case's store and what the check must say
+    *,
+    moto_url: str,
+    bucket: str,
+    store: StorageOptions,
+    settings: Callable[..., MaintenanceSettings],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+) -> None:
+    """The claim is read through the S3 client, which raises its own types, and the pod's store session can lapse
+    before any read: neither is an answer about the table, so each is counted and said as an incomplete check."""
+    task = _table(bucket=bucket, options=store)
+
+    def unanswered(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(location_claims, "holder", unanswered)
+
+    with caplog.at_level(logging.WARNING, logger="maintenance.services.orphan_check"), pytest.raises(OrphanCheckIncompleteError):
+        _check(task, settings())
+
+    assert _outcomes(caplog) == ["incomplete"]
 
 
 def _policy(**settings: object) -> Callable[[str], bytes]:
