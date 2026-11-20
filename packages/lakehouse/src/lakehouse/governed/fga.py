@@ -748,7 +748,12 @@ def client_configuration(
 
 
 def newest_store(stores: Iterable[Any], name: str) -> Any | None:
-    """The newest store named ``name``: the rule every reader and writer of the estate's model shares."""
+    """The newest store named ``name``: the rule every reader and writer of the estate's model shares.
+
+    Its callers ask OpenFGA for the stores of that name (`ListStores`'s ``name``, an exact match): a listing of every
+    store answers 50 a page, oldest first (measured on the pinned server), so on an OpenFGA that held 50 stores before
+    the estate's, the first page does not hold it.
+    """
     named = [store for store in stores if _field(store, "name") == name]
     return max(named, key=lambda store: _field(store, "created_at")) if named else None
 
@@ -842,7 +847,7 @@ async def provision(
     store_is_new = False
     if store_id is None:
         async with OpenFgaClient(client_configuration(api_url, token_file=token_file)) as client:
-            stores = await client.list_stores()
+            stores = await client.list_stores(options={"name": store_name})
             existing = newest_store(stores.stores or [], store_name)
             if existing is not None:
                 store_id = str(existing.id)
@@ -955,7 +960,7 @@ async def resolve(
 async def _named_store_id(api_url: str, store_name: str, *, token_file: str | None) -> str | None:
     """The id of the newest store named ``store_name``, or ``None`` when there is none."""
     async with OpenFgaClient(client_configuration(api_url, token_file=token_file)) as client:
-        stores = await client.list_stores()
+        stores = await client.list_stores(options={"name": store_name})
     found = newest_store(stores.stores or [], store_name)
     return None if found is None else str(found.id)
 

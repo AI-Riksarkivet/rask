@@ -18,6 +18,7 @@ import asyncio
 import copy
 import json
 import logging
+import urllib.parse
 from types import SimpleNamespace
 from typing import Any, Self
 
@@ -97,11 +98,13 @@ def _client_class(fake: _OpenFga) -> type:
         async def __aexit__(self, *exc: object) -> None:
             return None
 
-        async def list_stores(self) -> Any:
+        async def list_stores(self, options: dict[str, Any] | None = None) -> Any:
+            # As OpenFGA answers `ListStores`: every store, or the exact matches of the `name` asked for.
             listing = fake.next_listing()
             if isinstance(listing, Exception):
                 raise listing
-            return SimpleNamespace(stores=[SimpleNamespace(**store) for store in listing])
+            wanted = (options or {}).get("name")
+            return SimpleNamespace(stores=[SimpleNamespace(**store) for store in listing if wanted is None or store.get("name") == wanted])
 
         async def create_store(self, request: Any) -> Any:
             raise AssertionError("the store exists; nothing here may create one")
@@ -307,8 +310,13 @@ class _Http:
         del api, token_file, timeout
         if self.unreachable:
             raise OSError("connection refused")
-        if path == "/stores":
-            return {"stores": self.stores}
+        if path.partition("?")[0] == "/stores":
+            # As an OpenFGA holding more stores than a page answers: the exact matches of the `name` asked for, and for
+            # a listing of every store a first page of 50 older ones, the estate's not among them.
+            wanted = urllib.parse.parse_qs(path.partition("?")[2]).get("name")
+            if wanted is None:
+                return {"stores": [{"id": f"older-{index}", "name": f"older-{index}", "created_at": "2020-01-01T00:00:00Z"} for index in range(50)]}
+            return {"stores": [store for store in self.stores if store.get("name") in wanted]}
         store_id = path.split("/")[2]
         if body is not None:
             self.written.append(store_id)

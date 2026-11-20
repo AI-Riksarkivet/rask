@@ -11,10 +11,12 @@ one silently dropped key.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from typing import Any, ClassVar
 
 import pytest
+from openfga_sdk import CreateStoreRequest, OpenFgaClient
 
 from lakehouse.governed import fga
 
@@ -41,7 +43,7 @@ class _FakeClient:
     async def __aexit__(self, *exc: object) -> None:
         return None
 
-    async def list_stores(self) -> _Stores:
+    async def list_stores(self, options: dict[str, Any] | None = None) -> _Stores:
         return _Stores()
 
     async def create_store(self, request: Any) -> Any:
@@ -161,7 +163,7 @@ class _ModelStoreClient:
     async def __aexit__(self, *exc: object) -> None:
         return None
 
-    async def list_stores(self) -> Any:
+    async def list_stores(self, options: dict[str, Any] | None = None) -> Any:
         if _ModelStoreClient.empty_store:
             return type("_Empty", (), {"stores": []})()
         return _ExistingStores()
@@ -393,3 +395,21 @@ def test_an_unchanged_restriction_in_a_REAL_sdk_model_is_still_unchanged(wildcar
     """The no-op beside it: the SDK renders an absent wildcard as ``None`` and fills ``condition``/``module``
     with ``""``, and none of those may read as a change."""
     assert fga.canonical_model(_sdk_assignee_model(wildcard=wildcard)) == fga.canonical_model(_authored_assignee_model(wildcard=wildcard))
+
+
+@pytest.mark.asyncio
+async def test_the_estates_store_is_found_behind_more_stores_than_one_listing_page_holds(openfga: Any) -> None:
+    """The estate's store is the newest one of its name, wherever a listing of every store would put it. OpenFGA lists
+    50 stores a page, oldest first (measured on the pinned server), so on a platform's OpenFGA that held 50 stores
+    before the estate's, a boot that read one page would not find it, mint a second, and strand every grant on the
+    first."""
+    async with OpenFgaClient(fga.client_configuration(openfga.url, token_file=None)) as client:
+        for index in range(60):
+            await client.create_store(CreateStoreRequest(name=f"other-{uuid.uuid4().hex}-{index}"))
+    name = f"estate-{uuid.uuid4().hex}"
+    first, _ = await fga.provision(openfga.url, token_file=None, store_name=name)
+
+    again, _ = await fga.provision(openfga.url, token_file=None, store_name=name)
+    resolved, _ = await fga.resolve(openfga.url, token_file=None, store_name=name, deadline_seconds=5, poll_seconds=0.1)
+
+    assert (again, resolved) == (first, first)

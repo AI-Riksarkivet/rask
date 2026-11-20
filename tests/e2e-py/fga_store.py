@@ -27,7 +27,7 @@ def _store() -> tuple[dict[str, str], str]:
     """The headers and the id of the catalog's OpenFGA store."""
     assert FGA, "set LANCE_E2E_FGA: this claim is about the tuples the store holds"
     headers = fga_headers(FGA_TOKEN_FILE)
-    named = newest_store(requests.get(f"{FGA}/stores", headers=headers, timeout=10).json().get("stores") or [], STORE_NAME)
+    named = newest_store(requests.get(f"{FGA}/stores", params={"name": STORE_NAME}, headers=headers, timeout=10).json().get("stores") or [], STORE_NAME)
     store = FGA_STORE or (str(named["id"]) if named else "")
     assert store, f"the OpenFGA at {FGA} holds no store named {STORE_NAME!r}"
     return headers, store

@@ -175,7 +175,7 @@ def call(path, body=None):
                                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.load(r)
-stores = [s for s in call("/stores")["stores"] if s["name"] == name]
+stores = [s for s in call("/stores?name=" + name)["stores"] if s["name"] == name]
 if not stores:
     sys.exit("no store named " + name)
 for s in stores:

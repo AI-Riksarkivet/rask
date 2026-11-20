@@ -25,7 +25,7 @@ def main(principal: str) -> int:
     api = os.environ["LANCE_E2E_FGA"].rstrip("/")
     headers = fga_headers(os.environ.get("RASK_FGA_TOKEN_FILE", ""))
     warehouse = os.environ.get("RASK_FGA_DEFAULT_WAREHOUSE_OBJECT", "warehouse:lance_catalog")
-    stores = httpx.get(f"{api}/stores", headers=headers, timeout=10).raise_for_status().json().get("stores", [])
+    stores = httpx.get(f"{api}/stores", params={"name": STORE_NAME}, headers=headers, timeout=10).raise_for_status().json().get("stores", [])
     store = newest_store(stores, STORE_NAME)
     if store is None:
         print(f"the OpenFGA at {api} holds no store named {STORE_NAME!r}: the catalog has not booted", file=sys.stderr)

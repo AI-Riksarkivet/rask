@@ -46,7 +46,7 @@ def get(path):
     with urllib.request.urlopen(urllib.request.Request(api + path, headers=headers), timeout=30) as r:
         return json.load(r)
 if sys.argv[1] == "stores":
-    print(json.dumps({"pinned": os.environ.get("RASK_FGA_STORE_ID", ""), "stores": get("/stores").get("stores") or []}))
+    print(json.dumps({"pinned": os.environ.get("RASK_FGA_STORE_ID", ""), "stores": get("/stores?name=lance-catalog").get("stores") or []}))
     raise SystemExit(0)
 store, bound, size, token = sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), ""
 for _ in range(bound):

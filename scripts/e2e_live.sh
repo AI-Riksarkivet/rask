@@ -165,7 +165,7 @@ if [ -n "$FGA" ]; then
   # EXPORTED so a suite reads the SAME store this runner picked: a second pick by another rule agrees
   # only while the estate holds one store.
   STORE_ID="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_FGA_STORE_ID")].value}' 2>/dev/null || true)"
-  [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 -H @- "http://$FGA/stores" <<<"Authorization: Bearer $(cat "$CREDENTIALS/fga-token")" | uv run python -c "
+  [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 -H @- "http://$FGA/stores?name=lance-catalog" <<<"Authorization: Bearer $(cat "$CREDENTIALS/fga-token")" | uv run python -c "
 import json, sys
 from lakehouse.governed.auth.write_model import STORE_NAME
 from lakehouse.governed.fga import newest_store

@@ -130,7 +130,8 @@ def main() -> int:
     stores: list[dict[str, Any]] = []
     for attempt in range(_ATTEMPTS):
         try:
-            stores = _call(api, "/stores", token_file=token_file).get("stores") or []
+            # The stores of the estate's name, never the first page of every store (`fga.newest_store`).
+            stores = _call(api, f"/stores?name={urllib.parse.quote(STORE_NAME)}", token_file=token_file).get("stores") or []
             break
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
