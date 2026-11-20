@@ -163,6 +163,9 @@ def test_a_service_accounts_event_is_admitted_only_for_a_table_it_may_write_and_
         pytest.param(lambda estate: location_input(estate.locations[_THEIRS]), 403, id="the-location-of-a-table-it-may-not-see"),
         pytest.param(lambda estate: location_input(estate.locations[_THEIRS] + "-elsewhere"), 201, id="a-location-no-table-holds"),
         pytest.param(lambda estate: symlinked_input(_THEIRS), 403, id="a-symlink-to-a-table-it-may-not-see"),
+        pytest.param(
+            lambda estate: symlinked_input(_READ) | {"inputFacets": symlinked_input(_THEIRS)["facets"]}, 403, id="a-second-symlinks-copy-in-another-slot"
+        ),
     ],
 )
 def test_a_dataset_named_by_a_location_or_symlink_is_decided_on_the_table_it_names(
@@ -177,6 +180,47 @@ def test_a_dataset_named_by_a_location_or_symlink_is_decided_on_the_table_it_nam
 
     # A location no table holds is the outside world, so the row names the output alone.
     assert (posted.status_code, recorded) == (status, [([_MINE], [estate.uuids[_MINE]])] if status == 201 else []), posted.text
+
+
+def _theirs(*dropped: str) -> dict[str, str]:
+    """An ``InputField`` naming ``_THEIRS``'s ``id`` column, without the members ``dropped`` names."""
+    return {key: value for key, value in {"namespace": "lance_catalog", "name": _THEIRS, "field": "id"}.items() if key not in dropped}
+
+
+def _columns(*entries: dict[str, str]) -> dict[str, Any]:
+    """A ``columnLineage`` facet whose ``id`` column came from ``entries``."""
+    return {"fields": {"id": {"inputFields": list(entries)}}}
+
+
+def _carrying(table: str, **slots: dict[str, Any]) -> dict[str, Any]:
+    """``table`` as a dataset carrying, in each slot ``slots`` names, the ``columnLineage`` facet it maps the slot to."""
+    return {"namespace": "lance_catalog", "name": table, **{slot: {"columnLineage": facet} for slot, facet in slots.items()}}
+
+
+@pytest.mark.parametrize(
+    ("datasets", "status", "code"),
+    [
+        pytest.param({"outputs": [_carrying(_MINE, facets=_columns(_theirs("field")))]}, 422, 13, id="an-entry-without-its-field"),
+        pytest.param({"outputs": [_carrying(_MINE, facets=_columns(), outputFacets=_columns(_theirs()))]}, 403, 15, id="a-second-copy-in-another-slot"),
+        pytest.param({"outputs": [_carrying(_MINE, facets={"fields": {}, "dataset": [_theirs()]})]}, 403, 15, id="the-whole-dataset-list"),
+        pytest.param({"outputs": [_carrying(_MINE)], "inputs": [_carrying(_READ, facets=_columns(_theirs()))]}, 403, 15, id="an-inputs-own-facet"),
+    ],
+)
+def test_every_column_upstream_an_event_names_is_decided_before_it_is_recorded(
+    estate: Estate, sa_issuer: Any, datasets: dict[str, Any], status: int, code: int
+) -> None:
+    """The producer may write ``_MINE`` and read ``_READ``, and holds nothing on ``_THEIRS``. Its event names ``_THEIRS``
+    as a column upstream wherever a ``columnLineage`` facet can: an entry lacking a member the OpenLineage ``InputField``
+    requires is refused as malformed; a second copy of the facet in another slot, the facet's whole-dataset list and
+    an input's own facet are each decided as an output's column upstream is. Nothing is recorded or forwarded as having
+    been read from ``_THEIRS``."""
+    event = run_event("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a03", "COMPLETE", "2026-11-20T10:00:00+00:00", outputs=[]) | datasets
+    producer = {"Authorization": f"Bearer {sa_issuer.mint(_PRODUCER_SA, namespace='etl', audience='rask-lineage')}"}
+    with httpx.Client(base_url=estate.lineage_url, headers=producer, timeout=60) as lineage:
+        posted = lineage.post("/api/v1/lineage", json=event)
+        recorded = lineage.get("/events", params={"summary": "true"}).json()["events"]
+
+    assert (posted.status_code, posted.json().get("code"), recorded) == (status, code, []), posted.text
 
 
 def _shown(lineage: httpx.Client, staged_run: str) -> dict[str, object]:

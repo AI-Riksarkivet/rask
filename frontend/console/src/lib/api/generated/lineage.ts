@@ -729,13 +729,13 @@ export interface operations {
                      *
                      *     ``facets`` carries the standard OpenLineage dataset facets; lineage reads ``version`` (which Lance
                      *     version a run produced or read), the catalog's ``rask_lance`` facet (the ref an input was read on) and
-                     *     ``columnLineage`` (whose upstreams the ingest authorizer checks).
+                     *     ``columnLineage`` and ``symlinks`` (the other datasets it names, which the ingest authorizer checks).
                      *
                      *     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
                      *     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and
                      *     ``OutputDatasetFacet``s ride ``outputFacets`` on an output. The official ``openlineage-python`` client
                      *     (and therefore Spark/Airflow/dbt/Marquez producers) serialises the typed facets into the typed slots,
-                     *     NOT into ``facets``; :meth:`facet` looks in all three.
+                     *     NOT into ``facets``; :meth:`facet_copies` looks in all three.
                      */
                     dataset: {
                         /** Facets */

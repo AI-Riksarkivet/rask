@@ -17,16 +17,16 @@ from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Query, Request
 from lance_namespace import InvalidInputError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from lakehouse.events.lineage_events import AUTHOR_FACET, LANCE_FACET
 from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.naming import CATALOG_DELIMITER
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, output_refs, require_event_feed_reader
+from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, output_refs, require_event_feed_reader, upstreams_named_as_tables
 from lineage.api.security import CurrentToken
-from lineage.core.sources import is_external_source
+from lineage.models import Dataset
 from lineage.schemas import EventRecord, Events, FeedProjection, ProjectedEvent
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import FeedWindow
@@ -54,30 +54,6 @@ _CHUNK_GROWTH: Final = 8
 _CHUNK_MARGIN: Final = 4
 
 
-def _column_lineage_datasets(event: dict) -> set[str]:
-    """Every governed SOURCE table named inside an event's columnLineage facets — the tables that field-to-field
-    lineage discloses beyond the top-level inputs. In the raw OpenLineage payload these live at
-    ``outputs[].facets.columnLineage.fields[<col>].inputFields[].name``. /events must govern on them too, or a
-    caller who can see the OUTPUT would receive input datasets' column schemas they cannot read. An upstream named
-    outside the catalog's names is the outside world, as an input so named is, and the table its location holds is in
-    the scope the row recorded. Best-effort over an untrusted payload shape; ``{}`` (summary=True, no payload) yields
-    the empty set."""
-    out: set[str] = set()
-    for o in event.get("outputs") or []:
-        if not isinstance(o, dict):
-            continue
-        fields = (((o.get("facets") or {}).get("columnLineage") or {}).get("fields")) or {}
-        if not isinstance(fields, dict):
-            continue
-        for field in fields.values():
-            input_fields = (field.get("inputFields") if isinstance(field, dict) else None) or []
-            for inf in input_fields:
-                name = inf.get("name") if isinstance(inf, dict) else None
-                if name and not is_external_source(str(inf.get("namespace") or ""), str(name)):
-                    out.add(name)
-    return out
-
-
 def _governed_datasets(record: EventRecord) -> Governed:
     """What a feed row must be authorized against: the tables it names, by the uuids it recorded ([[LH-524]]) —
     EXTERNAL INPUTS EXCLUDED.
@@ -90,10 +66,12 @@ def _governed_datasets(record: EventRecord) -> Governed:
     THE SCOPE THE ROW RECORDED ALWAYS COUNTS, with the payload or without ([[LH-598]]). It holds what the door that
     admitted the event had the catalog answer: the table an external dataset's location holds, and the tables its
     ``symlinks`` name, which the payload names by identifiers no grant is held on. The payload only adds to it: the
-    column upstreams inside its ``columnLineage`` facets name source tables beyond the top-level inputs
-    (`_column_lineage_datasets`), and a caller who can see the output must not receive input tables' column schemas
-    they cannot read; each is the table a dataset of the event by that name is. ``summary=true`` drops the payload, and
-    the scope the row recorded is then all there is.
+    column upstreams inside its datasets' ``columnLineage`` facets name source tables beyond the top-level inputs, and a
+    caller who can see the output must not receive input tables' column schemas they cannot read; each is the table a
+    dataset of the event by that name is. They are read as the ingest door read them (`Dataset.column_upstreams`,
+    through `upstreams_named_as_tables`), so a row is shown on the tables its writer was checked against; a stored
+    dataset that reading refuses names upstreams no check was asked about, and its row is hidden. ``summary=true`` drops the payload,
+    and the scope the row recorded is then all there is.
 
     OUTPUTS are never exempted, on the read path as on the write path. Writing is the direction that
     mutates the estate, and an output naming an external namespace is a producer claiming to have
@@ -106,7 +84,14 @@ def _governed_datasets(record: EventRecord) -> Governed:
     recorded = Governed(objects=frozenset(fga_ids.table_object(uuid) for uuid in record.table_uuids), unresolved=frozenset(record.unresolved_tables))
     if not inputs and not outputs:
         return recorded
-    read = governed_refs([*inputs, *outputs], column_upstreams=_column_lineage_datasets(record.event))
+    try:
+        upstreams = upstreams_named_as_tables([Dataset.model_validate(dataset) for dataset in [*inputs, *outputs]])
+    except ValidationError:
+        # Logged rather than counted: the read doors carry no meter, and the seq names the row without its payload.
+        log.warning("lineage_feed_row_unreadable", extra={"seq": record.seq})
+        named = {str(dataset.get("name") if isinstance(dataset, dict) else dataset) for dataset in [*inputs, *outputs]}
+        return Governed(objects=recorded.objects, unresolved=recorded.unresolved | named)
+    read = governed_refs([*inputs, *outputs], column_upstreams=upstreams)
     written = output_refs(outputs)
     return Governed(objects=recorded.objects | read.objects | written.objects, unresolved=recorded.unresolved | read.unresolved | written.unresolved)
 

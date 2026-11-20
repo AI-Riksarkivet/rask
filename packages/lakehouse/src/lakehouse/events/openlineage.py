@@ -204,7 +204,6 @@ def processing_engine_facet(producer: str, *, name: str, version: str) -> dict[s
     return {"_producer": producer, "_schemaURL": PROCESSING_ENGINE_FACET_SCHEMA_URL, "name": name, "version": version}
 
 
-#: Standard ``ColumnLineageDatasetFacet`` schema URL — field-to-field provenance (#24 store / #1 emit).
 #: Standard ``CatalogDatasetFacet`` schema URL — WHICH CATALOG governs this dataset.
 #:
 #: A lakehouse that publishes lineage to a shared consumer has to say whose catalog a dataset belongs

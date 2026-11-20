@@ -27,7 +27,7 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Unau
 from openfga_sdk import OpenFgaClient
 from pydantic import ValidationError
 
-from lakehouse.events.lineage_events import DatasetUuids
+from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -530,23 +530,46 @@ def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(held: s
         )
 
 
-def test_events_governs_on_columnlineage_source_datasets() -> None:
-    # AUDIT: /events returned the full raw payload but governed only on top-level inputs/outputs. The
-    # columnLineage facet names SOURCE datasets NOT in inputs, so a caller who can see the output would get
-    # input datasets' column schemas. The ref-extractor now unions those in (event hidden unless the caller
-    # can read every dataset the payload discloses).
-    from lineage.api.v1.endpoints.events import _column_lineage_datasets
+_SECRET = {"namespace": "bronze", "name": "bronze$secret", "field": "col"}
 
-    event = {
-        "outputs": [
-            {
-                "name": "gold$t",
-                "facets": {"columnLineage": {"fields": {"col": {"inputFields": [{"namespace": "bronze", "name": "bronze$secret"}]}}}},
-            }
-        ]
-    }
-    assert _column_lineage_datasets(event) == {"bronze$secret"}
-    assert _column_lineage_datasets({}) == set()  # summary=True → no payload → no extra refs, nothing hidden
+
+def _column_lineage(*entries: dict[str, str]) -> dict[str, object]:
+    return {"fields": {"col": {"inputFields": list(entries)}}}
+
+
+@pytest.mark.parametrize(
+    ("output_slots", "input_slots", "unresolved"),
+    [
+        pytest.param({"facets": _column_lineage(_SECRET)}, {}, {"bronze$secret"}, id="an-upstream-the-door-checked"),
+        pytest.param({"facets": _column_lineage(), "outputFacets": _column_lineage(_SECRET)}, {}, {"bronze$secret"}, id="a-second-copy-in-another-slot"),
+        pytest.param({"facets": {"fields": {}, "dataset": [_SECRET]}}, {}, {"bronze$secret"}, id="the-whole-dataset-list"),
+        pytest.param({}, {"facets": _column_lineage(_SECRET)}, {"bronze$secret"}, id="an-inputs-own-facet"),
+        pytest.param(
+            {"facets": _column_lineage({"namespace": "bronze", "name": "bronze$secret"})}, {}, {"gold$t", "gold$in"}, id="a-stored-entry-the-door-refuses"
+        ),
+        pytest.param({"facets": {"_deleted": True}}, {}, {"gold$t", "gold$in"}, id="a-deleted-facet-the-spec-still-requires-fields-of"),
+    ],
+)
+def test_a_feed_row_is_governed_on_the_column_upstreams_its_writer_was_checked_against(
+    output_slots: dict[str, dict[str, object]], input_slots: dict[str, dict[str, object]], unresolved: set[str]
+) -> None:
+    """A columnLineage facet, on any dataset and in any slot, names source tables beyond the inputs, so a caller who can
+    see the row must also see each upstream; a stored facet the ingest door's reading refuses names upstreams no check was
+    asked about, so the row is hidden. A summary row (no payload) is governed on what it recorded alone."""
+    from lineage.api.v1.endpoints.events import _governed_datasets
+
+    def dataset(name: str, slots: dict[str, dict[str, object]]) -> dict[str, Any]:
+        payload = with_dataset_uuids({"namespace": "gold", "name": name}, DatasetUuids(table_uuid=_uuid(name)), producer="rask://test")
+        for slot, facet in slots.items():
+            payload.setdefault(slot, {})["columnLineage"] = facet
+        return payload
+
+    event = {"inputs": [dataset("gold$in", input_slots)], "outputs": [dataset("gold$t", output_slots)]}
+    uuids = [_uuid("gold$in"), _uuid("gold$t")]
+    governed_on = _governed_datasets(EventRecord(seq=1, inputs=["gold$in"], outputs=["gold$t"], table_uuids=uuids, event=event))
+    summary = _governed_datasets(EventRecord(seq=1, inputs=["gold$in"], outputs=["gold$t"], table_uuids=uuids, event={}))
+
+    assert (governed_on.unresolved, summary) == (unresolved, fga_deps.Governed(objects=frozenset(fga_ids.table_object(uuid) for uuid in uuids)))
 
 
 def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() -> None:

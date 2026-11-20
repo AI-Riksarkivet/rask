@@ -548,15 +548,19 @@ async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, us
     )
 
 
-def _upstreams_named_by_a_location(outputs: Iterable[Dataset]) -> list[Dataset]:
-    """The column upstreams ``outputs`` name outside the catalog's own names, each as a dataset: one named by a location a
-    governed table holds is read as that table, as an input is (:func:`resolve_aliases`)."""
-    return [Dataset(namespace=up.namespace, name=up.name) for out in outputs for up in out.column_upstreams if is_external_source(up.namespace, up.name)]
+def _upstreams_named_by_a_location(datasets: Iterable[Dataset]) -> list[Dataset]:
+    """The column upstreams ``datasets`` name outside the catalog's own names, each as a dataset: one named by a location
+    a governed table holds is read as that table, as an input is (:func:`resolve_aliases`)."""
+    return [Dataset(namespace=up.namespace, name=up.name) for ds in datasets for up in ds.column_upstreams if is_external_source(up.namespace, up.name)]
 
 
-def _upstreams_named_as_tables(outputs: Iterable[Dataset]) -> set[str]:
-    """The column upstreams ``outputs`` name by a governed table's own name."""
-    return {up.name for out in outputs for up in out.column_upstreams if not is_external_source(up.namespace, up.name)}
+def upstreams_named_as_tables(datasets: Iterable[Dataset]) -> set[str]:
+    """The column upstreams ``datasets`` name by a governed table's own name.
+
+    Passed every dataset of an event, inputs as well as outputs: a ``columnLineage`` facet on either is stored and
+    forwarded with the event, so each names a table its writer claims to have read.
+    """
+    return {up.name for ds in datasets for up in ds.column_upstreams if not is_external_source(up.namespace, up.name)}
 
 
 async def governed_with_aliases(decider: AccessDecider, events: Sequence[RunEvent | DatasetEvent], *, user: str) -> list[Governed]:
@@ -568,7 +572,7 @@ async def governed_with_aliases(decider: AccessDecider, events: Sequence[RunEven
     not see, symlinked or a column upstream's, is unresolved, so the event is hidden. Asked in one question about every
     location and one about every symlinked name, whatever the number of events.
     """
-    named_by = [[*event.inputs, *event.outputs, *_upstreams_named_by_a_location(event.outputs)] for event in events]
+    named_by = [[*event.inputs, *event.outputs, *_upstreams_named_by_a_location([*event.inputs, *event.outputs])] for event in events]
     owners = [position for position, datasets in enumerate(named_by) for _ in datasets]
     aliases = await resolve_aliases(decider, [dataset for datasets in named_by for dataset in datasets], user=user)
     objects: list[set[str]] = [set() for _ in events]
@@ -578,7 +582,7 @@ async def governed_with_aliases(decider: AccessDecider, events: Sequence[RunEven
         unseen[owner] |= aliases.hidden.get(index, frozenset())
     scoped: list[Governed] = []
     for event, aliased, hidden in zip(events, objects, unseen, strict=True):
-        named = governed_refs([*event.inputs, *event.outputs], column_upstreams=_upstreams_named_as_tables(event.outputs))
+        named = governed_refs([*event.inputs, *event.outputs], column_upstreams=upstreams_named_as_tables([*event.inputs, *event.outputs]))
         scoped.append(Governed(objects=named.objects | aliased, unresolved=named.unresolved | hidden))
     return scoped
 
@@ -649,7 +653,7 @@ async def enforce_output_authz(
     # WHAT THE EVENT NAMES BY A LOCATION OR A SYMLINK ([[LH-553]]): the catalog attests its own, so they are not re-derived.
     written = Aliases() if attested else await resolve_aliases(decider, list(event.outputs), user=token.subject)
     # A column upstream named by a location is read as its table too: a graph backend joins it there as it joins an input.
-    sources = [*event.inputs, *_upstreams_named_by_a_location(event.outputs)]
+    sources = [*event.inputs, *_upstreams_named_by_a_location([*event.inputs, *event.outputs])]
     read_as = Aliases() if attested else await resolve_aliases(decider, sources, user=token.subject)
     # OUTPUTS ARE NEVER EXEMPTED: writing is the direction that mutates the estate, so an output naming an external
     # namespace is a producer claiming to have written the outside world, and it names no object, as an output carrying
@@ -676,8 +680,8 @@ async def enforce_output_authz(
     # still pass; only a claim to have read an unreachable dataset is refused. (bug hunt 2026-07-13)
     # THE AUTHZ SET MUST COVER EVERY DATASET THE EVENT ASSERTS READING.
     #
-    # An event names datasets in THREE places: `inputs`, `outputs`, and the column upstreams inside
-    # `outputs[].facets.columnLineage.fields[*].inputFields[]`. The feed stores the whole event and the
+    # This check covers an event's `inputs`, its `outputs` and the column upstreams the `columnLineage` facet of any of
+    # them names (`Dataset.column_upstreams`); the identifiers a `symlinks` facet names are resolved with the names. The feed stores the whole event and the
     # forwarder sends it to the configured graph backend, so a column upstream naming a GOVERNED table is
     # a claim to have read it whether or not lineage keeps a column plane of its own.
     #
@@ -686,7 +690,7 @@ async def enforce_output_authz(
     # `can_get_metadata` on the input side already governs. Same exemption too — an external upstream
     # has no `table:` object, and (since `lineage_name`) cannot be recorded as a governed table either. A column
     # upstream is the table a dataset of the event by that name is.
-    read = governed_refs(event.inputs, column_upstreams=_upstreams_named_as_tables(event.outputs))
+    read = governed_refs(event.inputs, column_upstreams=upstreams_named_as_tables([*event.inputs, *event.outputs]))
     read = Governed(objects=read.objects.union(*read_as.objects.values()), unresolved=read.unresolved | read_as.hidden_names)
     hidden = set(read.unresolved)
     if read.objects and not attested:

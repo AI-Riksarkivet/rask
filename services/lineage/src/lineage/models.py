@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Final
 
 from lance_namespace import PermissionDeniedError
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from lakehouse.events.lineage_events import AUTHOR_FACET, LANCE_FACET, static_event_id
 from lakehouse.events.openlineage import BRANCH_IDENTIFIER, SYMLINKS_FACET
@@ -55,13 +55,67 @@ def _within_names(datasets: list[Dataset]) -> None:
 
 
 class ColumnUpstream(BaseModel):
-    """A dataset a ``columnLineage`` facet names as the source of one of an output's columns.
+    """One ``InputField`` of a ``columnLineage`` facet: a dataset, and its column, a column of this dataset came from.
 
-    The ingest authorizer reads these: recording "my column came from yours" is a claim to have read yours.
+    The OpenLineage ``InputField`` requires ``namespace``, ``name`` and ``field``, each a string, in every published
+    ``ColumnLineageDatasetFacet`` (1-0-0 to 1-2-0), so an entry lacking one is malformed and its event is refused with it.
+    Read once, by :class:`Dataset`, for every path that asks what an event names as a column upstream: the ingest
+    authorizer, the bound on named identifiers and the feed's read filter. A lenient reading in one of them and a strict
+    one in another is how a writer could record a table as read that no check was ever asked about. Recording "my column
+    came from yours" is a claim to have read yours.
     """
 
-    namespace: str = ""
+    model_config = _MODEL
+    namespace: str
     name: str
+    field: str
+
+
+class _ColumnLineageField(BaseModel):
+    """The spec's ``fields[<column>]`` of a ``columnLineage`` facet: ``inputFields`` is required."""
+
+    model_config = _MODEL
+    input_fields: list[ColumnUpstream] = Field(alias="inputFields")
+
+
+class _ColumnLineageFacet(BaseModel):
+    """The spec's ``columnLineage`` dataset facet, as far as it names upstreams.
+
+    Two members name datasets (1-2-0): each column's ``inputFields`` and ``dataset``, the entries that affect the whole
+    dataset (a filter, a join, a grouping). ``fields`` is required even beside ``dataset`` and on a facet marked
+    ``_deleted``, by the facet schema's ``"required": ["fields"]``.
+    """
+
+    model_config = _MODEL
+    columns: dict[str, _ColumnLineageField] = Field(alias="fields")
+    whole_dataset: list[ColumnUpstream] = Field(default_factory=list, alias="dataset")
+
+    @property
+    def upstreams(self) -> list[ColumnUpstream]:
+        """Every entry the facet names, an empty name left out: it names no dataset, so it is no upstream for any reader."""
+        entries = [*(entry for column in self.columns.values() for entry in column.input_fields), *self.whole_dataset]
+        return [entry for entry in entries if entry.name]
+
+
+#: The standard facet naming the datasets a dataset's columns came from.
+_COLUMN_LINEAGE_FACET: Final = "columnLineage"
+
+
+class _SymlinkIdentifier(BaseModel):
+    """One ``identifiers`` entry of the standard ``symlinks`` facet: ``namespace``, ``name`` and ``type`` are required
+    strings (``SymlinksDatasetFacet`` 1-0-1), so an entry lacking one is malformed and its event is refused with it."""
+
+    model_config = _MODEL
+    namespace: str
+    name: str
+    type: str
+
+
+class _SymlinksFacet(BaseModel):
+    """The standard ``symlinks`` dataset facet: the other identifiers a dataset is named by."""
+
+    model_config = _MODEL
+    identifiers: list[_SymlinkIdentifier] = Field(default_factory=list)
 
 
 #: The run operations that maintain a table rather than write it: they need `can_maintain` at the ingest
@@ -87,19 +141,39 @@ class Dataset(BaseModel):
 
     ``facets`` carries the standard OpenLineage dataset facets; lineage reads ``version`` (which Lance
     version a run produced or read), the catalog's ``rask_lance`` facet (the ref an input was read on) and
-    ``columnLineage`` (whose upstreams the ingest authorizer checks).
+    ``columnLineage`` and ``symlinks`` (the other datasets it names, which the ingest authorizer checks).
 
     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and
     ``OutputDatasetFacet``s ride ``outputFacets`` on an output. The official ``openlineage-python`` client
     (and therefore Spark/Airflow/dbt/Marquez producers) serialises the typed facets into the typed slots,
-    NOT into ``facets``; :meth:`facet` looks in all three.
+    NOT into ``facets``; :meth:`facet_copies` looks in all three.
     """
 
     model_config = _MODEL
     namespace: str
     name: str
     facets: dict[str, Any] = Field(default_factory=dict)
+    _column_upstreams: list[ColumnUpstream] = PrivateAttr(default_factory=list)
+    _symlink_identifiers: list[tuple[str, str]] = PrivateAttr(default_factory=list)
+
+    @model_validator(mode="after")
+    def _read_named_datasets(self) -> Dataset:
+        """Read the facets that name OTHER datasets, ``columnLineage`` and ``symlinks``, in EVERY slot that carries one,
+        refusing a copy the spec calls malformed.
+
+        Every slot, not the first that holds it: the event is stored and forwarded whole, so a second copy is as much a
+        claim as the first, and a reading that stopped at one would leave the other unchecked. A producer may repeat a
+        facet across slots; what it names is the union. An entry with an empty name names no dataset and is left out.
+        """
+        self._column_upstreams = [entry for copy in self.facet_copies(_COLUMN_LINEAGE_FACET) for entry in _ColumnLineageFacet.model_validate(copy).upstreams]
+        self._symlink_identifiers = [
+            (entry.namespace, entry.name)
+            for copy in self.facet_copies(SYMLINKS_FACET)
+            for entry in _SymlinksFacet.model_validate(copy).identifiers
+            if entry.name
+        ]
+        return self
 
     @property
     def lineage_name(self) -> str:
@@ -118,59 +192,37 @@ class Dataset(BaseModel):
         """
         return lineage_name_for(self.namespace, self.name)
 
-    def facet(self, name: str) -> dict[str, Any] | None:
-        """The named facet from whichever spec slot the producer used, else ``None``.
+    def facet_copies(self, name: str) -> list[object]:
+        """Every copy of the named facet, one per spec slot that carries it, as sent: ``facets``, ``outputFacets``,
+        ``inputFacets``.
 
-        Facet names are unique across the spec's three dataset slots, so a single merged lookup is
-        unambiguous and tolerates both placements: our own emitters put everything in ``facets``, the
-        official client splits by base type. ``facets`` wins a (spec-impossible) collision because it is
-        the slot our own producers write. ``inputFacets`` / ``outputFacets`` are read off ``model_extra``
-        rather than declared as fields so the feed blob (``model_dump(by_alias=True)``) keeps a producer's
-        slots EXACTLY as sent — declaring them would stamp an empty ``outputFacets`` onto every input
-        dataset, a key the spec's ``InputDataset`` does not have.
+        Our own emitters put everything in ``facets``; the official client splits by base type, and nothing stops a
+        producer repeating a facet in a second slot. ``inputFacets`` / ``outputFacets`` are read off ``model_extra``
+        rather than declared as fields so the feed blob (``model_dump(by_alias=True)``) keeps a producer's slots
+        EXACTLY as sent — declaring them would stamp an empty ``outputFacets`` onto every input dataset, a key the
+        spec's ``InputDataset`` does not have.
         """
         extra = self.model_extra or {}
-        for slot in (self.facets, extra.get("outputFacets"), extra.get("inputFacets")):
-            value = slot.get(name) if isinstance(slot, dict) else None
-            if isinstance(value, dict):
-                return value
-        return None
+        return [slot[name] for slot in (self.facets, extra.get("outputFacets"), extra.get("inputFacets")) if isinstance(slot, dict) and name in slot]
+
+    def facet(self, name: str) -> dict[str, Any] | None:
+        """The first copy of the named facet that is an object (:meth:`facet_copies`), else ``None``.
+
+        For a facet that DESCRIBES this dataset with one value (its ``version``, the catalog's ``rask_lance``), where a
+        second copy has nothing to add. A facet that names other datasets is a claim in every copy, and is read whole by
+        :meth:`_read_named_datasets`, never through this.
+        """
+        return next((copy for copy in self.facet_copies(name) if isinstance(copy, dict)), None)
 
     @property
     def symlink_identifiers(self) -> list[tuple[str, str]]:
-        """The ``(namespace, name)`` identifiers this dataset's standard ``symlinks`` facet lists, malformed entries left out."""
-        facet = self.facet(SYMLINKS_FACET) or {}
-        identifiers = facet.get("identifiers")
-        if not isinstance(identifiers, list):
-            return []
-        return [
-            (str(entry["namespace"]), str(entry["name"]))
-            for entry in identifiers
-            if isinstance(entry, dict) and isinstance(entry.get("namespace"), str) and isinstance(entry.get("name"), str) and entry["name"]
-        ]
+        """The ``(namespace, name)`` identifiers this dataset's standard ``symlinks`` facets list, in every slot."""
+        return self._symlink_identifiers
 
     @property
     def column_upstreams(self) -> list[ColumnUpstream]:
-        """The datasets this (output) dataset's standard ``columnLineage`` facet names as column sources.
-
-        Each ``fields[<column>].inputFields[]`` entry names one; an entry without a ``name`` or ``field`` names
-        nothing and is skipped.
-        """
-        facet = self.facet("columnLineage")
-        fields = facet.get("fields") if facet else None
-        if not isinstance(fields, dict):
-            return []
-        upstreams: list[ColumnUpstream] = []
-        for spec in fields.values():
-            inputs = spec.get("inputFields") if isinstance(spec, dict) else None
-            if not isinstance(inputs, list):
-                continue
-            upstreams.extend(
-                ColumnUpstream(namespace=str(inp.get("namespace") or ""), name=str(inp["name"]))
-                for inp in inputs
-                if isinstance(inp, dict) and inp.get("name") and inp.get("field")
-            )
-        return upstreams
+        """The datasets this dataset's standard ``columnLineage`` facets name as sources, one per ``InputField`` entry."""
+        return self._column_upstreams
 
 
 class Job(BaseModel):
