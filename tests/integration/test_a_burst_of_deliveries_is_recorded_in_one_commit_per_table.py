@@ -21,8 +21,8 @@ import pytest
 
 from catalog.core.config import get_settings
 from lakehouse.bus_delivery import Verdict
-from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport
 from lineage.core.metrics import Door
+from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import EDGES, FEED, RUNS, ProvenanceStore
 from tests.integration.lineage_app import ensure_tables, live_catalog, run_event

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from lakehouse.blobs import is_blob_field
+from catalog.core.blobs import is_blob_field
 
 
 #: Extension names a JSON column can carry. ``pa.json_()`` reads back as ``arrow.json``; Lance's own
@@ -19,8 +19,8 @@ from lakehouse.blobs import is_blob_field
 _JSON_EXTENSION_NAMES = frozenset({"arrow.json", "lance.json"})
 
 #: The ``fields`` of an OpenLineage ``SchemaDatasetFacet`` — one ``{"name", "type"}`` (optionally
-#: ``"description"``) dict per column, in wire-JSON form. A shared alias so the catalog and maintenance emitters
-#: and this renderer name the same shape once instead of repeating ``list[dict[str, str]]`` across signatures.
+#: ``"description"``) dict per column, in wire-JSON form. One alias so the catalog's emitter, its data plane and this
+#: renderer name the same shape once instead of repeating ``list[dict[str, str]]`` across signatures.
 type SchemaFields = list[dict[str, str]]
 
 

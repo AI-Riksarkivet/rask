@@ -25,10 +25,10 @@ from lance_namespace import ErrorCode
 from starlette.routing import Match
 
 from catalog.api.read_actions import READ_ACTIONS, TABLE_VEND_ROUTE
+from catalog.api.route_path import route_path
 from catalog.core import vending
 from catalog.core.config import Settings
 from lakehouse.ns_errors import problem_body
-from lakehouse.route_path import route_path
 
 
 PROBLEM_JSON = "application/problem+json"
@@ -60,7 +60,7 @@ def is_mutating(request: Request) -> bool:
     tier alone, which rides its query. A POST matching no route writes: classification fails closed.
 
     Args:
-        request: The request, its path as routing reads it (``lakehouse.route_path``, [[LH-526]]).
+        request: The request, its path as routing reads it (``catalog.api.route_path``, [[LH-526]]).
 
     Returns:
         True when the request writes, or when nothing shows that it only reads.

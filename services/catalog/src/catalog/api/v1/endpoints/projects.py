@@ -70,7 +70,7 @@ from catalog.api import idempotency as idem
 from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.declared import Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken, current_subject
+from catalog.api.security import ANONYMOUS_SUBJECT, CurrentToken, current_subject
 from catalog.core.config import CatalogStore, Settings
 from catalog.schemas import (
     CreateProjectRequest,
@@ -89,7 +89,6 @@ from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.project_records import ProjectRecord

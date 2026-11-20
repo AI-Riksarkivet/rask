@@ -3,8 +3,8 @@
 The app factory the three services boot from (``lance_app``) and what it installs: the exceptions and problem
 handlers, the request's trace (ADR 0209), logging, the probes and the drain, the body cap. The auth plane (``governed``).
 The data plane: object-store resolution and the S3 seam (``storage``), the record store and the registries over it,
-the commit records, turns and fences, location claims, protection and trash, the maintenance policies, the Lance
-readers and writers at the catalog's doors (``lancekit``). The events: the control lane (``control_events``,
+the commit records, turns and fences, location claims, protection and trash, the maintenance policies, and what
+every plane reads a Lance table by (``lancekit``: versions, filters, absence, the commit verdict). The events: the control lane (``control_events``,
 ``control_emit``, ``signature_doors``), the outbox and the process's own connection to the bus (``bus``), the OpenLineage
 facets the lakehouse emits (``openlineage``), and the emission and Ed25519 signing seam a producer and the lineage door
 share (``lineage``).

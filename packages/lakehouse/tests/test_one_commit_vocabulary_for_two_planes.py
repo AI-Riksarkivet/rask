@@ -1,9 +1,7 @@
 """The five outcomes a failed Lance commit can have, and the ORDER they must be tested in.
 
-Two planes classified the same condition and drifted: the catalog carried the full taxonomy while
-`lancekit/writer.py` carried two markers and could not see the non-retryable case at all. They cannot
-share a classifier — each raises its own plane's error type — so they share the VERDICT, and this pins
-what the verdict means.
+Each service answers a failed commit in its own error type, so the services share the VERDICT rather
+than a classifier, and this pins what the verdict means.
 
 THE ORDERING IS THE LOAD-BEARING PART. Lance's retryable and incompatible messages both contain the
 word `concurrent`, so a flat set of markers answers the dangerous one with the safe one's remedy.

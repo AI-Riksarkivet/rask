@@ -37,8 +37,8 @@ from openfga_sdk.client.models import ClientWriteRequest
 
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import BusEmitter
-from catalog.services import native
-from lakehouse import base_registry, clone_endings, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
+from catalog.services import clone_ending_records, native
+from lakehouse import base_registry, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.naming import UUID_PROPERTY
@@ -476,7 +476,7 @@ def test_a_purging_cascade_whose_clone_ending_cannot_be_filed_deletes_nothing(te
         raise OSError("the control root did not take the ending")
 
     tenant.monkeypatch.setattr(data_directories, "delete_table_directories", _directories)
-    tenant.monkeypatch.setattr(clone_endings, "file", _a_store_that_will_not_file)
+    tenant.monkeypatch.setattr(clone_ending_records, "file", _a_store_that_will_not_file)
 
     ended = tenant.delete_warehouse()
 
@@ -544,7 +544,7 @@ def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_n
     claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
     described = tenant.client.post("/v1/table/acme-wh$bronze$silver/describe", json={}).status_code
     assert (ended.status_code, ended.json().get("code"), described) == answered, ended.text
-    assert bool(clone_endings.standing(claims)) is ending_stands
+    assert bool(clone_ending_records.standing(claims)) is ending_stands
     held = location_claims.holder(claims, clone)
     assert held is not None and (held.table, held.fence) == ("acme-wh$bronze$silver", None), f"the clone's location is left as {held}"
 

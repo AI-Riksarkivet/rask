@@ -30,8 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from catalog.services.idempotency_records import PREFIX, InFlightError, KeyBinding, Replay, TakenOver, claim, reclaim, record_outcome, release
 from lakehouse import records
-from lakehouse.idempotency import PREFIX, InFlightError, KeyBinding, Replay, TakenOver, claim, reclaim, record_outcome, release
 from lakehouse.storage_options import StorageOptions
 
 

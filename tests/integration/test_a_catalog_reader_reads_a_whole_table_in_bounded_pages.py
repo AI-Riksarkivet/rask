@@ -23,7 +23,7 @@ import pyarrow.ipc as ipc
 import pytest
 import uvicorn
 
-from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport
+from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
 
 
 _ROWS, _DIM = 2_000, 1024

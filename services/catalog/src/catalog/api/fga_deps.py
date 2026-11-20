@@ -56,6 +56,7 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.read_actions import DATA_READ_ACTIONS, META_READ_ACTIONS
+from catalog.api.route_path import route_path
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, vending, write_judge
 from catalog.core.config import CatalogAuthzSettings, CatalogLineageSettings, CatalogStore, Settings
@@ -72,7 +73,6 @@ from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import store_refusal
-from lakehouse.route_path import route_path
 from lakehouse.storage_options import StorageOptions
 from lakehouse.trash import TrashKind, TrashRecord
 
@@ -1478,7 +1478,7 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, in
     if token is None:
         raise UnauthenticatedError("authentication required")
 
-    # The path routing matches (`lakehouse.route_path`), never `request.url.path`: that re-parses the
+    # The path routing matches (`catalog.api.route_path`), never `request.url.path`: that re-parses the
     # decoded path as a URL string and truncates at a decoded '#'/'?' inside an id, so for an
     # exotically-named table the suffix would stop naming the route that matched.
     path = route_path(request.scope)

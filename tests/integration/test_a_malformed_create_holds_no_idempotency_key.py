@@ -151,7 +151,7 @@ def test_a_release_the_store_fails_never_answers_over_the_refusal(real_ns_client
     def unreachable(*_args: object, **_kwargs: object) -> None:
         raise OSError("the object store did not answer")
 
-    monkeypatch.setattr("lakehouse.idempotency.release", unreachable)
+    monkeypatch.setattr("catalog.services.idempotency_records.release", unreachable)
 
     refused = real_ns_client.post(CREATE, content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": KEY})
 

@@ -1,6 +1,6 @@
 """The catalog's door charges an IdP it cannot reach to itself: a 503 in the spec's envelope, audited `verifier_unavailable`.
 
-`catalog.api.security.authenticate` is its own door, not `lakehouse.governed.deps`'s, so the split that module makes
+`catalog.api.security.authenticate` is the catalog's own door, so the split `lakehouse.governed.door_caller` makes
 between `verify`'s two refusals is made here too. Without it every request during an IdP outage writes an
 `invalid_token` record against a caller whose bearer was never read.
 

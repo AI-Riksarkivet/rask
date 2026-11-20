@@ -839,7 +839,7 @@ governing their data. The project-scoped surface is the console's project page, 
   firing (`maintenance.services.audit.run_audit`); a trash record already released, or carrying no deadline, gets no task,
   which would end holding nothing. The chart's stream Job reads MAINTENANCE_SCHEDULES back and fails unless it allows
   message schedules, which nats-server older than 2.12 drops without a word. A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]). The same step deletes a detached manifest (`_versions/d<id>.manifest`) past that grace: every catalog commit writes one to judge its version and deletes it, so one still there belongs to a commit that died between the two, and Lance's cleanup keeps it (measured on pylance 13.0.0, [[LH-401]]).
-  The pass's pre-vend probe and its next-pass time count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes, the time asking with the age a version will then have (`table_pass.versions_due_at`, [[LH-562]]); the catalog's GC preview names the versions by `lakehouse.version_retention`, since Lance's explanation counts them only.
+  The pass's pre-vend probe and its next-pass time count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes, the time asking with the age a version will then have (`table_pass.versions_due_at`, [[LH-562]]); the catalog's GC preview names the versions by `catalog.core.version_retention`, since Lance's explanation counts them only.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
   [[LH-493]], below). The maintain vend tier goes to the maintenance identity only (LH-473, #599).
@@ -882,7 +882,7 @@ governing their data. The project-scoped surface is the console's project page, 
 ## Gotchas
 
 - **An `Idempotency-Key` converges a resent write; it is optional on every keyed door** (`catalog.api.idempotency`,
-  `lakehouse.idempotency`): a table's create, declare, drop, undrop, rename, deregister, register, restore and insert, and
+  `catalog.services.idempotency_records`): a table's create, declare, drop, undrop, rename, deregister, register, restore and insert, and
   a namespace's create, drop and undrop. A project's and a warehouse's create and delete take none: a re-POST of a create
   converges on its record, and a delete that failed part-way is finished by asking again. A key is one operation on one
   object (the door, and for an insert its mode and ref, and the object's canonical id), answered with its first response.
@@ -1159,7 +1159,7 @@ governing their data. The project-scoped surface is the console's project page, 
   record its door filed** (owner 2026-11-10, "Intent record"; ADR 0198's amendment of that day): each of the four doors
   ending a clone (deregister, a destructive drop, a namespace's destroying cascade, a warehouse cascade) files the
   clone's ending, one object per filing at `_clone_endings/<the claim's digest>/<filing token>.json`
-  (`lakehouse.clone_endings`, `catalog.services.clone_endings`), naming its location, uuid, sources and whether its base
+  (`catalog.services.clone_ending_records`, `catalog.services.clone_endings`), naming its location, uuid, sources and whether its base
   record goes, BEFORE its row goes (a destructive drop and a destroying cascade through `destroy_table`'s
   `before_removal`, once every judgement has passed, so a refusal files none), and deletes it last; a door whose native
   call failed leaves it, since no describe tells the clone's row from a same-name registration's; a store that will not
@@ -1429,7 +1429,7 @@ governing their data. The project-scoped surface is the console's project page, 
   names a dataset by it, and `lineage.dataset_id` is schema METADATA, which survives `set_column` / `append_column` /
   `drop_columns` — so a table derived from another declares its upstream's id unless something re-declares it
   (measured 2026-09-09: a derived table's compactions and FAIL events were filed against its upstream's node). The
-  catalog re-declares it on every table it writes (`lakehouse.provenance_stamp.declare_dataset_id`, which DROPS an
+  catalog re-declares it on every table it writes (`catalog.core.provenance_stamp.declare_dataset_id`, which DROPS an
   inherited id when none is given). When
   you check a declared-id chain, ask not "is an id stamped" but "whose uuid, on the table that derived it": the catalog
   stamps the uuid its location claim holds, never the name (`dataplane._named_by_its_uuid`, ADR 0173 §10).

@@ -3,7 +3,7 @@
 A keyed write leaves a record under ``_idempotency/`` on the control root, which answers a retry of the write for the
 catalog's lifetime (``LANCE_IDEMPOTENCY_LIFETIME_SECONDS``) and is read by no request after it. Maintenance's daily
 scan asks for those records to go ([[LH-576]]): maintenance's store policy writes nothing of the control root, so the
-delete is the catalog's, judged on its own reads (:func:`lakehouse.idempotency.reclaim`). Asked on
+delete is the catalog's, judged on its own reads (:func:`catalog.services.idempotency_records.reclaim`). Asked on
 ``can_reclaim_trash`` on the estate root, the rung the trash and clone-ending doors ask, which only the ``reclaimer``
 role opens, granted to maintenance's ServiceAccount by the catalog's declaration: no new grant. Each reclaim is
 recorded on the audit trail, since it deletes records on the catalog's own session.
@@ -23,7 +23,7 @@ from catalog.api.dependencies import SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.trash_reclaim import require_can_reclaim_trash
 from catalog.schemas import IdempotencyKeysReclaimResponse
-from lakehouse import idempotency
+from catalog.services import idempotency_records
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 
@@ -50,12 +50,12 @@ async def reclaim_idempotency_keys(settings: SettingsDep, token: CurrentToken) -
         How many records went, were kept, and are left.
     """
     lifetime = timedelta(seconds=settings.idempotency_lifetime_seconds)
-    done = await run_in_threadpool(idempotency.reclaim, settings.registry_root, settings.storage_options(), lifetime=lifetime, limit=RECLAIM_LIMIT)
+    done = await run_in_threadpool(idempotency_records.reclaim, settings.registry_root, settings.storage_options(), lifetime=lifetime, limit=RECLAIM_LIMIT)
     audit(
         AuditAction.IDEMPOTENCY_KEYS_RECLAIM,
         AuditOutcome.SUCCESS,
         subject=token.subject if token is not None else None,
-        resource=f"control:{idempotency.PREFIX}",
+        resource=f"control:{idempotency_records.PREFIX}",
         reclaimed=done.reclaimed,
         kept=done.kept,
         left=done.left,

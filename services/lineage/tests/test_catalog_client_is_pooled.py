@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import pytest
 
-from lakehouse.lancekit.catalog_client import reset_catalog_clients
+from lineage.services.catalog_client import reset_catalog_clients
 
 
 pytest.importorskip("lance_namespace_urllib3_client")
 
-from lakehouse.lancekit.reader import RestCatalogTransport
-from lakehouse.lancekit.writer import RestCatalogWriteTransport
+from lineage.services.catalog_reader import RestCatalogTransport
+from lineage.services.catalog_writer import RestCatalogWriteTransport
 
 
 @pytest.fixture(autouse=True)

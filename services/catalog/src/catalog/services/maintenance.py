@@ -22,10 +22,10 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
 
+from catalog.core.version_retention import ExplainedDataset, fork_versions, reclaimable_versions, recorded_branch, tag_versions
 from lakehouse import branch_layout
 from lakehouse.compaction_gate import compaction_refusal
 from lakehouse.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
-from lakehouse.version_retention import ExplainedDataset, fork_versions, reclaimable_versions, recorded_branch, tag_versions
 
 
 if TYPE_CHECKING:

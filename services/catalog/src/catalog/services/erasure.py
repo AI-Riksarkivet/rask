@@ -118,10 +118,10 @@ import pyarrow.fs as pafs
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
+from catalog.core.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
 from lakehouse import branch_layout, clone_sources, stored_objects
 from lakehouse.base_refs import normalise
-from lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
 from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.objectfs import fs_and_base

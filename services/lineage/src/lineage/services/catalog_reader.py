@@ -28,9 +28,9 @@ from lakehouse.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
-from lakehouse.lancekit.catalog_client import catalog_read_client
-from lakehouse.lancekit.catalog_client import request_headers as _request_headers
 from lakehouse.naming import CATALOG_DELIMITER
+from lineage.services.catalog_client import catalog_read_client
+from lineage.services.catalog_client import request_headers as _request_headers
 
 
 log = logging.getLogger(__name__)

@@ -234,7 +234,7 @@ class TestARetriedAppendLandsOnce:
         past the claim's lease takes the key over. Run again, the append would land twice: the commit carries the key,
         so the takeover finds it there and answers with it."""
         from catalog.api import idempotency as keyed_doors
-        from lakehouse import idempotency
+        from catalog.services import idempotency_records
 
         assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert real_ns_client.post("/v1/table/lance_catalog$db$lost/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
@@ -248,7 +248,7 @@ class TestARetriedAppendLandsOnce:
             during.setattr(keyed_doors.Converge, "remember", lost)
             with pytest.raises(RuntimeError, match="the pod ended"):
                 real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=_rows(2), headers=keyed)
-        monkeypatch.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
+        monkeypatch.setattr(keyed_doors.idempotency_records, "claim", partial(idempotency_records.claim, lease=timedelta(0)))
         again = real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=_rows(2), headers=keyed)
 
         assert (again.status_code, again.json()) == (200, {"num_inserted_rows": 2, "version": before + 1}), again.text

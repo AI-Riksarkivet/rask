@@ -35,10 +35,10 @@ from fastapi.testclient import TestClient
 from lance.optimize import Compaction
 
 from lakehouse.arrow_ipc import decode_arrow_response
-from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport
-from lakehouse.lancekit.writer import RestCatalogWriteTransport
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lineage.models import parse_event
+from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
+from lineage.services.catalog_writer import RestCatalogWriteTransport
 from lineage.services.provenance import FEED, ProvenanceStore
 from tests.integration.lineage_app import SUBJECT_HEADER, ensure_tables, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
 

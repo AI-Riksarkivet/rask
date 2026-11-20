@@ -43,12 +43,13 @@ the globs safe (see the invariants).
 **Python packages** (1): `lakehouse` (`packages/lakehouse`, ADR 0195), the lakehouse's one library, which only its
 own services import and no client: the lance-plane app factory (`lance_app`) and what it installs (exceptions, the
 request's trace (ADR 0209), logging, the probes and the drain, the body cap), the auth plane (`governed`), the naming and
-the input and credential guards, the records, registries and governance guards, the namespace clients, the events (the
+the input and credential guards, the records, registries and governance guards, the Lance primitives more than one service reads Lance through (`lancekit`), the events (the
 control lane, the outbox, the OpenLineage builders), the OpenLineage emission and Ed25519 signing seam
 (`lakehouse.lineage`), and the S3 client, STS and URI seam (`lakehouse.storage`). One package, organised by module: a
 new package exists only for a real reason of its own (a backend swapped behind an interface, a leaf with no lakehouse
 imports, a language necessity), never for an audience, because a client reaches the lakehouse through its doors and
-events and imports none of it.
+events and imports none of it. It holds what more than one service uses: a module one service alone imports lives in that
+service, and `.importlinter` forbids the library from importing any service (ADR 0224).
 
 **Python services** (3): `catalog` (`:2333`), `lineage` (`:8000`), `maintenance` (`:8001`, its probes; one process,
 `python -m maintenance.worker`) — the lakehouse, one image

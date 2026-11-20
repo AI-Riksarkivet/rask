@@ -117,8 +117,11 @@ from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
+from catalog.core.provenance_stamp import declare_dataset_id
 from catalog.core.run_context import AUTHOR_PROPERTY, IDEMPOTENCY_KEY_PROPERTY, OPERATION_PROPERTY
+from catalog.core.schema_facet import SchemaFields, facet_fields
 from catalog.core.vending import classified_columns, labelled_fields
+from catalog.core.version_retention import MAIN_BRANCH, recorded_branch
 from catalog.services import changes, commit_authors, committed_files, contracts, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.object_uuids import UnidentifiedObjectError
@@ -147,13 +150,10 @@ from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import reads_as_store_outage
-from lakehouse.provenance_stamp import declare_dataset_id
-from lakehouse.schema import SchemaFields, facet_fields
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
 from lakehouse.transactions import read_transaction
 from lakehouse.trash import TrashRecord
-from lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 
 
 log = logging.getLogger(__name__)
@@ -2398,7 +2398,7 @@ def refuse_an_unbounded_result(dataset: lance.LanceDataset, *, k: int, offset: i
 
     `k` is capped by the projected row width: exact for fixed-width columns, and estimated from
     :data:`_WIDTH_SAMPLE_ROWS` rows of the projection when it carries a variable-width one. `offset` is
-    not, so a reader pages a large read with a bounded `k` (`lakehouse.lancekit.reader`): the rows an
+    not, so a reader pages a large read with a bounded `k` (`lineage.services.catalog_reader`): the rows an
     offset skips are streamed past, not held. MEASURED on the same table and process: `k=1000,
     offset=39000` (skipping 156 MB) peaked at 395,256 kB, beside 381,412 kB for `k=4000` with no offset.
 

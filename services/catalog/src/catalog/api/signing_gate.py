@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
 
 from catalog.api.maintenance_mode import GATED_MOUNTS, PROBLEM_JSON, is_mutating
+from catalog.api.route_path import route_path
 from catalog.core.commit_ids import commit_ids_of
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
@@ -32,7 +33,6 @@ from catalog.services.provenance_namespace import is_provenance
 from lakehouse.governed import fga
 from lakehouse.governed.signing_key import signing_of
 from lakehouse.ns_errors import problem_body
-from lakehouse.route_path import route_path
 
 
 #: The data doors that announce through the lineage emitter alone, so a write through one under the provenance namespace

@@ -59,10 +59,7 @@ from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.derived_tables import EDGES
 from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.machine_identity import read_identity_token
-from lakehouse.lancekit.catalog_client import catalog_api_client, catalog_read_client, request_headers
 from lakehouse.lancekit.filters import in_lists, sql_literal
-from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
-from lakehouse.lancekit.writer import RestCatalogWriteTransport
 from lakehouse.lineage import ParentRunFacet
 from lakehouse.lineage.signing import SIGNATURE_FACET
 from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
@@ -72,6 +69,9 @@ from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
+from lineage.services.catalog_client import catalog_api_client, catalog_read_client, request_headers
+from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
+from lineage.services.catalog_writer import RestCatalogWriteTransport
 
 
 log = logging.getLogger(__name__)

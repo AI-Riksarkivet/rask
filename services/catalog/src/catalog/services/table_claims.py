@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from catalog.core.config import CatalogStore
 from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_unchecked
+from catalog.core.version_retention import recorded_branch
 from catalog.services import contracts, native
 from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
@@ -43,7 +44,6 @@ from lakehouse.base_refs import decoded_path
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 from lakehouse.storage_options import StorageOptions
-from lakehouse.version_retention import recorded_branch
 
 
 log = logging.getLogger(__name__)

@@ -628,7 +628,7 @@ class Settings(
     request_deadline_seconds: float = Field(default=300.0, gt=0, alias="LANCE_REQUEST_DEADLINE_SECONDS")
 
     #: How long an `Idempotency-Key`'s record outlives its last write before maintenance's daily scan asks for it to go
-    #: (`lakehouse.idempotency.reclaim`, [[LH-576]]): a retry inside it is answered from the record, one after it runs as
+    #: (`catalog.services.idempotency_records.reclaim`, [[LH-576]]): a retry inside it is answered from the record, one after it runs as
     #: a new request. At least an hour, far above a claim's lease and the request deadline, so no record a door may still
     #: be acting on goes.
     idempotency_lifetime_seconds: int = Field(default=86_400, ge=3_600, alias="LANCE_IDEMPOTENCY_LIFETIME_SECONDS")

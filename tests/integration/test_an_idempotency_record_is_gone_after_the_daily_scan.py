@@ -20,9 +20,9 @@ import pyarrow as pa
 import pytest
 
 from catalog.core.config import get_settings as catalog_settings
+from catalog.services.idempotency_records import PREFIX
 from lakehouse import records, stored_objects
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.idempotency import PREFIX
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance, scanned
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 

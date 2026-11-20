@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
-from lakehouse import idempotency
+from catalog.services import idempotency_records
 from lakehouse.ns_errors import status_for
 from lakehouse.records import RecordChangedError
 from lakehouse.storage_options import StorageOptions
@@ -83,7 +83,7 @@ class Converge(BaseModel):
     key: str | None
     #: This request's attempt at the key: the claim it gives back is only its own.
     attempt: str = ""
-    replay: idempotency.Replay | None = None
+    replay: idempotency_records.Replay | None = None
     #: Set when this attempt took the key over from one that lapsed unanswered: when that attempt claimed it, on the
     #: store's clock. A door that must not run twice looks for that attempt's write first.
     taken_over_since: datetime | None = None
@@ -101,7 +101,7 @@ class Converge(BaseModel):
         if self.key is None or not isinstance(exc, LanceNamespaceError) or status_for(int(exc.code)) >= 500:
             return
         await run_in_threadpool(
-            idempotency.release,
+            idempotency_records.release,
             self.registry_root,
             self.storage_options,
             scope=self.scope,
@@ -121,7 +121,7 @@ class Converge(BaseModel):
             return
         body = response.model_dump(mode="json", exclude_none=True) if hasattr(response, "model_dump") else response
         await run_in_threadpool(
-            idempotency.record_outcome,
+            idempotency_records.record_outcome,
             self.registry_root,
             self.storage_options,
             scope=self.scope,
@@ -131,7 +131,7 @@ class Converge(BaseModel):
         )
 
 
-async def begin(registry_root: str, storage_options: StorageOptions, scope: str, key: str | None, *, binding: idempotency.KeyBinding) -> Converge:
+async def begin(registry_root: str, storage_options: StorageOptions, scope: str, key: str | None, *, binding: idempotency_records.KeyBinding) -> Converge:
     """Claim `key` for the operation `binding` names, or return the no-op when the caller sent none.
 
     The failures are translated to the spec's own vocabulary rather than a hand-picked status, per
@@ -148,7 +148,7 @@ async def begin(registry_root: str, storage_options: StorageOptions, scope: str,
     attempt = uuid4().hex
     try:
         claimed = await run_in_threadpool(
-            idempotency.claim,
+            idempotency_records.claim,
             registry_root,
             storage_options,
             scope=scope,
@@ -156,14 +156,14 @@ async def begin(registry_root: str, storage_options: StorageOptions, scope: str,
             binding=binding,
             attempt=attempt,
         )
-    except idempotency.KeyReusedError as exc:
+    except idempotency_records.KeyReusedError as exc:
         raise InvalidInputError(str(exc)) from exc
-    except (idempotency.InFlightError, RecordChangedError) as exc:
+    except (idempotency_records.InFlightError, RecordChangedError) as exc:
         raise ConcurrentModificationError(str(exc)) from exc
-    except idempotency.KeyRecordUnreadableError as exc:
+    except idempotency_records.KeyRecordUnreadableError as exc:
         raise InternalError(str(exc)) from exc
-    replay = claimed if isinstance(claimed, idempotency.Replay) else None
-    taken_over_since = claimed.since if isinstance(claimed, idempotency.TakenOver) else None
+    replay = claimed if isinstance(claimed, idempotency_records.Replay) else None
+    taken_over_since = claimed.since if isinstance(claimed, idempotency_records.TakenOver) else None
     return Converge(
         registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, attempt=attempt, replay=replay, taken_over_since=taken_over_since
     )
@@ -189,7 +189,7 @@ class KeyedDoor(BaseModel):
         ``target`` is the canonical id of the object the door acts on (``fga.canonical_object_id``), so the same key on
         another object is refused rather than answered with this one's response ([[LH-576]]).
         """
-        binding = idempotency.KeyBinding(endpoint=endpoint, target=target)
+        binding = idempotency_records.KeyBinding(endpoint=endpoint, target=target)
         self.converge = await begin(self.registry_root, self.storage_options, self.scope, self.key, binding=binding)
         return self.converge
 

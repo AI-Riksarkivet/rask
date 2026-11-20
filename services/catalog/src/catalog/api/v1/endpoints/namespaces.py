@@ -69,8 +69,8 @@ from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, dataplane, native, protections, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves
+from catalog.services.clone_ending_records import CloneEnding
 from lakehouse import base_registry, clone_sources, location_claims, protection, trash
-from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import emit_control
 from lakehouse.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.governed import fga

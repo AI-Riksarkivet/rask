@@ -29,11 +29,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings, get_settings
 from lakehouse.admission import admitted_caller, caller_judge
-from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
 
+
+#: The subject a door names when OIDC is disabled. Named rather than inlined so a grep for who can act
+#: without a token returns exactly one place.
+ANONYMOUS_SUBJECT = "anon"
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.
 _bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")

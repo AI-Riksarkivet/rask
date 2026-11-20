@@ -13,10 +13,9 @@ from typing import Final
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api.security import Caller
+from catalog.api.security import ANONYMOUS_SUBJECT, Caller
 from catalog.services.control_records import GIT
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 
 
 class Author(BaseModel):

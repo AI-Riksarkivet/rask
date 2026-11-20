@@ -33,9 +33,9 @@ from lance_namespace import ErrorCode
 from opentelemetry import metrics
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from catalog.api.route_path import route_path
 from lakehouse.problem import send_problem
 from lakehouse.read_refusal import ReadRefusal
-from lakehouse.route_path import route_path
 
 
 #: The three bulk table writes, ``POST /v1/table/<one id segment>/{create,insert,merge_insert}``, the routes that buffer a

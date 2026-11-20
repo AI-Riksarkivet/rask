@@ -165,7 +165,7 @@ extend-select = ["TID251", "FAST001", "T20"]
 "packages/lakehouse/src/lakehouse/bus.py" = ["TID251"]  # nats: the lakehouse's one seam to the bus
 "services/maintenance/src/maintenance/services/queue.py" = ["TID251"]  # nats: the work queue's own seam (ADR 0198 decision 5)
 "packages/lakehouse/src/lakehouse/arrow_ipc.py" = ["TID251"]  # arrow ipc: the validating decoder
-"packages/lakehouse/src/lakehouse/lancekit/reader.py" = ["TID251", "A002"]  # decode_arrow_response: the /query reader; `filter=` is the request's own field
+"services/lineage/src/lineage/services/catalog_reader.py" = ["TID251", "A002"]  # decode_arrow_response: the /query reader; `filter=` is the request's own field
 
 # The code-shape bans. Each message names the seam a caller goes through instead; the sanctioned sites
 # are the per-file ignores above and the line-level `# noqa: TID251` at each call site.

@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 RUN_EVENT_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
 
 #: Standard ``SchemaDatasetFacet`` schema URL — the produced dataset's columns (name + a concise,
-#: blob/vector-aware type via ``lakehouse.schema.facet_fields``). Shared here so every emitter (catalog,
+#: blob/vector-aware type via ``catalog.core.schema_facet.facet_fields``). Shared here so every emitter (catalog,
 #: maintenance) stamps the SAME spec version; a per-emitter copy would silently drift when one bumps it.
 SCHEMA_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet"
 

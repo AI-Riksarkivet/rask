@@ -41,9 +41,10 @@ from tables_by_name import open_by_name
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
+from catalog.core import version_retention
 from catalog.core.config import Settings, get_settings
 from catalog.services.dataplane import create_table
-from lakehouse import base_registry, version_retention
+from lakehouse import base_registry
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
 

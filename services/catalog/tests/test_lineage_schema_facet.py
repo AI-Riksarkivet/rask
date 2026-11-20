@@ -7,7 +7,7 @@ from typing import cast
 import pyarrow as pa
 from lance import blob_field
 
-from lakehouse import schema
+from catalog.core import schema_facet
 
 
 def test_type_label_renders_media_types() -> None:
@@ -20,7 +20,7 @@ def test_type_label_renders_media_types() -> None:
             pa.field("caption", pa.string()),
         ]
     )
-    labels = {field["name"]: field["type"] for field in schema.facet_fields(arrow_schema)}
+    labels = {field["name"]: field["type"] for field in schema_facet.facet_fields(arrow_schema)}
     assert labels == {
         "id": "int64",
         "payload": "blob",  # not the verbose extension repr

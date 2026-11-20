@@ -42,6 +42,19 @@ forbidden_modules =
     lance_ray
     lancedb
 
+# The library holds what more than one service uses, and the services build on it (ADR 0224): a module one service
+# alone imports lives in that service, and nothing in the library reaches a service, by any chain, so no service runs
+# another's code through it.
+[importlinter:contract:the-library-imports-no-service]
+name = ADR 0224: the lakehouse library imports no service
+type = forbidden
+source_modules =
+    lakehouse
+forbidden_modules =
+    catalog
+    lineage
+    maintenance
+
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
 name = Phase 1 (3): no lakehouse service and nothing in the lakehouse library imports a workflow engine
 type = forbidden

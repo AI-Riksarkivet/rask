@@ -34,15 +34,15 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.core import formats
+from catalog.core import blobs, formats
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.core.namespace import registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
-from catalog.services import native, table_inputs
-from lakehouse import base_registry, blobs, clone_endings, clone_sources, control_prefixes, location_claims, records
+from catalog.services import clone_ending_records, native, table_inputs
+from lakehouse import base_registry, clone_sources, control_prefixes, location_claims, records
 from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.governed import fga
@@ -585,7 +585,7 @@ class Admitted(BaseModel):
     tagged: list[str] = Field(default_factory=list)
     #: The clone's ending, filed before its first tag and removed once the registration is admitted or undone (ADR 0198
     #: §1): a registration that never gets there leaves it, and the finish releases the tags it names.
-    ending: clone_endings.CloneEnding | None = None
+    ending: clone_ending_records.CloneEnding | None = None
 
 
 def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], relative: str, context: RegistrationContext) -> RegistrationVerdict:
@@ -724,26 +724,27 @@ def admit_registered_table(so: StorageOptions, *, segments: list[str], verdict: 
     return admitted
 
 
-def _file_registration(verdict: RegistrationVerdict, *, clone_uuid: str, context: RegistrationContext) -> clone_endings.CloneEnding:
+def _file_registration(verdict: RegistrationVerdict, *, clone_uuid: str, context: RegistrationContext) -> clone_ending_records.CloneEnding:
     """File the ending of the clone a registration is about to tag its sources for.
 
     Raises:
         ServiceUnavailableError: The ending could not be filed: the registration refuses before any tag is taken.
     """
     claims = _claim_store(context)
-    intent = clone_endings.EndingIntent(
+    intent = clone_ending_records.EndingIntent(
         location=verdict.location,
         table=context.holder,
         uuid=clone_uuid,
         sources=[source.location for source in verdict.sources],
         forget_record=False,
-        door=clone_endings.REGISTRATION,
+        door=clone_ending_records.REGISTRATION,
     )
     try:
-        return clone_endings.file(claims, intent, filing=UUID(clone_uuid).hex)
+        return clone_ending_records.file(claims, intent, filing=UUID(clone_uuid).hex)
     except (OSError, ValueError, records.RecordExistsError) as exc:
         log.error(
-            "clone_ending_unfiled", extra={"table": context.holder, "location": verdict.location, "door": clone_endings.REGISTRATION, "error": str(exc)[:300]}
+            "clone_ending_unfiled",
+            extra={"table": context.holder, "location": verdict.location, "door": clone_ending_records.REGISTRATION, "error": str(exc)[:300]},
         )
         raise ServiceUnavailableError(f"cannot register {context.holder}: the record of what it holds as a clone could not be filed") from exc
 
@@ -759,7 +760,7 @@ def settle_admitted(admitted: Admitted, *, context: RegistrationContext) -> None
     if admitted.ending is None:
         return
     try:
-        clone_endings.remove(_claim_store(context), admitted.ending)
+        clone_ending_records.remove(_claim_store(context), admitted.ending)
     except OSError as exc:
         log.warning("clone_ending_left_standing", extra={"location": admitted.ending.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
 

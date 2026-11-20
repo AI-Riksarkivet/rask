@@ -68,7 +68,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken
 from catalog.core import json_arrow, provenance_guard
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import CatalogStore, Settings
@@ -98,15 +98,14 @@ from catalog.core.vending import (
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, commit_reconcile, dataplane, native, protections, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves
+from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import base_registry, location_claims, object_records, protection, trash
-from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent, ControlAction
 from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import uuid_of

@@ -65,7 +65,7 @@ from catalog.api.dependencies import (
     namespace_for_root,
 )
 from catalog.api.pagination import ListLimit
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core.config import CatalogStorageSettings, CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
@@ -101,7 +101,6 @@ from lakehouse import base_registry, clone_sources, data_directories, location_c
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
-from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.ns_errors import PartiallyApplied, status_for

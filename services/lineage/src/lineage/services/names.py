@@ -23,13 +23,13 @@ from typing import Final
 
 from lakehouse.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from lakehouse.governed.decider import AccessDecider
-from lakehouse.lancekit.catalog_client import catalog_read_client, request_headers
-from lakehouse.lancekit.reader import translate_catalog_errors
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.naming import CATALOG_DELIMITER, identifier_location, uuid_of
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent
+from lineage.services.catalog_client import catalog_read_client, request_headers
+from lineage.services.catalog_reader import translate_catalog_errors
 
 
 #: The catalog's answers that mean "no object the caller may see by this name": the name names none, the caller may

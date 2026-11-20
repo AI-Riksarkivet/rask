@@ -29,7 +29,7 @@ import logging
 import pytest
 
 from lakehouse.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
-from lakehouse.lancekit import reader
+from lineage.services import catalog_reader
 
 
 def _exc(kind: str, body: str):
@@ -46,7 +46,7 @@ def _exc(kind: str, body: str):
 def test_the_catch_all_does_not_relay_the_upstream_body(caplog: pytest.LogCaptureFixture) -> None:
     """The branch that fires when the responder is NOT the catalog."""
     secret = "<html>nginx/1.25.3 upstream 10.42.0.7:2333 connect() failed</html>"
-    with caplog.at_level(logging.ERROR), pytest.raises(ServiceUnavailableError) as caught, reader.translate_catalog_errors():
+    with caplog.at_level(logging.ERROR), pytest.raises(ServiceUnavailableError) as caught, catalog_reader.translate_catalog_errors():
         raise _exc("ApiException", secret)
 
     assert secret not in str(caught.value), f"the 503's client-visible detail carried the upstream body: {caught.value}"
@@ -70,6 +70,6 @@ def test_the_4xx_branches_still_relay_the_catalogs_own_detail(kind: str, error: 
     problem+json, and relaying it is what turns an opaque 500 into the answer the direct path gives.
     A blanket redaction here would have been the easy over-correction."""
     detail = "table bronze$pages is not registered"
-    with pytest.raises(error) as caught, reader.translate_catalog_errors():
+    with pytest.raises(error) as caught, catalog_reader.translate_catalog_errors():
         raise _exc(kind, detail)
     assert detail in str(caught.value)

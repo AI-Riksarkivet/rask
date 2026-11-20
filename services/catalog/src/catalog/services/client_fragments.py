@@ -35,8 +35,8 @@ from lance.file import LanceFileReader
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from catalog.core import encoding
-from lakehouse import base_registry, blobs
+from catalog.core import blobs, encoding
+from lakehouse import base_registry
 from lakehouse.base_refs import normalise, store_of
 from lakehouse.features import describe_foreign_data_file_versions
 from lakehouse.storage_options import StorageOptions

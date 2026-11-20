@@ -252,13 +252,13 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
 
 - `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
   - `packages/lakehouse` — **the lakehouse's one library** (import `lakehouse`, ADR 0195), imported only by its own
-    services (`catalog`, `lineage`, `maintenance`) and by no client: everything they run on, organised by module (ADR 0199 decides ten subpackages under a layers contract, not yet moved). The
+    services (`catalog`, `lineage`, `maintenance`) and by no client: what two or more of them share, organised by module (ADR 0224: code one service alone uses lives in that service, and the library is grouped by job one concern at a time). The
     lance app factory (`lakehouse.lance_app`) and what it installs: exceptions, the request's trace (ADR 0209), logging
     (`setup_logging`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
     the spec's error mapping (`naming`, `ns_errors`, `spec_routes`, `endpoint_scheme`); the input and credential guards
     (`arrow_ipc`, `storage_options`); the catalog's records, registries and governance guards (protection, trash,
-    history fences, retention); the table layout and feature checks; the namespace clients, readers and
-    writers (`lakehouse.lancekit`); the events (`control_events`, `control_emit`, `signature_doors`, `lineage_events`,
+    history fences, retention); the table layout and feature checks; what every plane reads a Lance
+    table by (`lakehouse.lancekit`: versions, filters, absence and the commit verdict); the events (`control_events`, `control_emit`, `signature_doors`, `lineage_events`,
     `governed.subjects`, `cloud_events`, the CloudEvents envelope each event rides the bus in, `bus`, the one module
     that publishes an event and takes a delivery, on the process's own connection to NATS JetStream, `bus_delivery`,
     the rule that settles a delivery by what its handling answers, the outbox seams, the OpenLineage builders in

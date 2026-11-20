@@ -18,7 +18,7 @@ none while another finish's mark on it is younger than that. Then the location's
 
 - held for another uuid than the ending's: another table's location now (a registration between its claim and its
   refusal, :func:`refuse_registration_while_ending`), so nothing is released and the ending stays (409);
-- held for the clone, which stands there, and filed by a registration (:data:`lakehouse.clone_endings.REGISTRATION`):
+- held for the clone, which stands there, and filed by a registration (:data:`catalog.services.clone_ending_records.REGISTRATION`):
   removed with nothing released where the clone's base record names every source the ending does (it was admitted,
   and its own end owns its tags), and its tags released, the claim staying with the row, where it names fewer (its
   registration ended between a tag and the record, and no end of the clone would release them);
@@ -63,11 +63,11 @@ from lance_namespace import (
 from pydantic import BaseModel, Field
 
 from catalog.core.config import CatalogStore
-from catalog.services import table_claims
-from lakehouse import base_registry, clone_endings, clone_sources, location_claims, objectfs, records
+from catalog.services import clone_ending_records, table_claims
+from catalog.services.clone_ending_records import CloneEnding, EndingIntent
+from lakehouse import base_registry, clone_sources, location_claims, objectfs, records
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.base_registry import BaseRegistry
-from lakehouse.clone_endings import CloneEnding, EndingIntent
 from lakehouse.storage_options import StorageOptions
 
 
@@ -118,7 +118,7 @@ def file_ending(
         claim = location_claims.holder(claims, location)
         uuid = claim.uuid if claim is not None and claim.table == table else None
         intent = EndingIntent(location=location, table=table, uuid=uuid, sources=sources, forget_record=forget_record, door=door)
-        return clone_endings.file(claims, intent, filing=filing)
+        return clone_ending_records.file(claims, intent, filing=filing)
     except _UNREAD as exc:
         log.error("clone_ending_unfiled", extra={"table": table, "location": location, "door": door, "error": f"{type(exc).__name__}: {exc}"[:300]})
         raise ServiceUnavailableError(f"cannot end {table}: the record of what it holds as a clone could not be filed; nothing was changed") from exc
@@ -128,7 +128,7 @@ def clear_ending(claims: location_claims.ClaimStore, ending: CloneEnding) -> Non
     """Remove ``ending``, its holds released by its door. Logged, never raised: an ending left standing is finished by
     maintenance's audit, which finds the holds released already."""
     try:
-        clone_endings.remove(claims, ending)
+        clone_ending_records.remove(claims, ending)
     except OSError as exc:
         log.warning("clone_ending_left_standing", extra={"location": ending.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
@@ -144,7 +144,7 @@ def refuse_registration_while_ending(claims: location_claims.ClaimStore, locatio
     Raises:
         ConcurrentModificationError: An ending stands at the location (409, code 14).
     """
-    if clone_endings.stands_at(claims, location):
+    if clone_ending_records.stands_at(claims, location):
         log.warning("register_refused_clone_ending", extra={"location": location})
         raise ConcurrentModificationError(_STILL_ENDING)
 
@@ -152,7 +152,9 @@ def refuse_registration_while_ending(claims: location_claims.ClaimStore, locatio
 def listing(settings: CatalogStore) -> list[CloneEnding]:
     """Every ending standing, oldest first: one listing, and one read for each ending found."""
     claims = table_claims.claim_store(settings)
-    endings = [found.ending for digest, filing in clone_endings.standing(claims) if (found := clone_endings.read(claims, digest, filing)) is not None]
+    endings = [
+        found.ending for digest, filing in clone_ending_records.standing(claims) if (found := clone_ending_records.read(claims, digest, filing)) is not None
+    ]
     return sorted(endings, key=lambda ending: ending.filed_at)
 
 
@@ -168,7 +170,7 @@ def finish(ns: LanceNamespace, settings: CatalogStore, digest: str, filing: str,
         ServiceUnavailableError: A read or a release could not be made; the ending stays for the next finish.
     """
     claims = table_claims.claim_store(settings)
-    found = clone_endings.read(claims, digest, filing)
+    found = clone_ending_records.read(claims, digest, filing)
     if found is None:
         raise TableNotFoundError(f"no clone's ending stands under {digest}/{filing}")
     ending = found.ending
@@ -177,9 +179,9 @@ def finish(ns: LanceNamespace, settings: CatalogStore, digest: str, filing: str,
     if ending.finishing is not None and found.at - ending.finishing.at < location_claims.LEASE:
         raise InvalidTableStateError("another finish is acting on the ending")
     try:
-        clone_endings.mark(claims, found, token=token)
+        clone_ending_records.mark(claims, found, token=token)
         outcome = _finished(ns, settings, claims, found, token=token)
-    except clone_endings.EndingChangedError as exc:
+    except clone_ending_records.EndingChangedError as exc:
         raise ConcurrentModificationError(f"the ending changed while it was being finished: {exc}") from exc
     except location_claims.ClaimChangedError as exc:
         raise ConcurrentModificationError(f"the clone's location changed while its ending was being finished: {exc}") from exc
@@ -195,7 +197,9 @@ def finish(ns: LanceNamespace, settings: CatalogStore, digest: str, filing: str,
     return outcome
 
 
-def _finished(ns: LanceNamespace, settings: CatalogStore, claims: location_claims.ClaimStore, found: clone_endings.EndingRead, *, token: str) -> FinishOutcome:
+def _finished(
+    ns: LanceNamespace, settings: CatalogStore, claims: location_claims.ClaimStore, found: clone_ending_records.EndingRead, *, token: str
+) -> FinishOutcome:
     """Release what the ending ``found`` names on the claim read here, fenced for this finish, and remove the ending last.
 
     Raises:
@@ -209,11 +213,11 @@ def _finished(ns: LanceNamespace, settings: CatalogStore, claims: location_claim
         if not ending.names(claim.uuid, claim.table):
             raise _Refused("another table holds the clone's location now; its registration refuses itself while the ending stands")
         if table_claims.holder_stands(ns, claims, claim):
-            if ending.door == clone_endings.REGISTRATION:
+            if ending.door == clone_ending_records.REGISTRATION:
                 return _settle_a_registration(settings, claims, ending)
             if found.at - ending.filed_at < STANDING_BOUND:
                 raise _Refused("the clone still stands at its location: its door never removed it, or is still at work")
-            clone_endings.remove(claims, ending)
+            clone_ending_records.remove(claims, ending)
             return FinishOutcome(table=ending.table, uuid=ending.uuid, kept=True)
         location_claims.fence(claims, ending.location, read_as, table=claim.table, segments=claim.segments, token=token, is_gone=lambda _claim: False)
     try:
@@ -224,7 +228,7 @@ def _finished(ns: LanceNamespace, settings: CatalogStore, claims: location_claim
             base_registry.forget_base_record(registry, ending.location, uuid=ending.uuid)
         if claim is not None:
             location_claims.release(claims, ending.location, claim.table, uuid=claim.uuid)
-        clone_endings.remove(claims, ending)
+        clone_ending_records.remove(claims, ending)
     except Exception:
         if claim is not None:
             location_claims.lift_fence(claims, ending.location, token)
@@ -251,10 +255,10 @@ def _settle_a_registration(settings: CatalogStore, claims: location_claims.Claim
         location_claims.claim_digest(source) for source in base_registry.clone_source_locations(base_registry.read_base_record(registry, ending.location))
     }
     if {location_claims.claim_digest(source) for source in ending.sources} <= recorded:
-        clone_endings.remove(claims, ending)
+        clone_ending_records.remove(claims, ending)
         return FinishOutcome(table=ending.table, uuid=ending.uuid, kept=True)
     released = clone_sources.release_all(ending.sources, clone_location=ending.location, storage_options=so)
-    clone_endings.remove(claims, ending)
+    clone_ending_records.remove(claims, ending)
     return FinishOutcome(table=ending.table, uuid=ending.uuid, released=released)
 
 

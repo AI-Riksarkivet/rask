@@ -6,6 +6,8 @@
 
 **Amended 2026-11-14** (XC-199 step D4, #787): every lakehouse service takes its deliveries on its own connection to the bus; see the amendment below.
 
+**Decision 3 amended 2026-11-20** by [ADR 0224](0224-the-library-holds-what-two-services-share.md): the ten subpackages in a linear order are not built; a module one service alone imports lives in that service, the library imports no service, and grouping by job follows one concern per commit.
+
 **Status:** accepted as a record of what is decided and what is reopened; no code has changed under it. Source: the owner,
 2026-11-09, during a read-only audit of `packages/lakehouse` and `services/` against the `writing-python` and `fastapi`
 references and of the architecture against the four facts: "ALSO adr WE HAVE CAN BE WRONG AND BE UPDATED FOR BEING MORE

@@ -18,9 +18,9 @@ from typing import BinaryIO
 import pytest
 import urllib3
 
-from lakehouse.lancekit.catalog_client import reset_catalog_clients
-from lakehouse.lancekit.reader import RestCatalogTransport
-from lakehouse.lancekit.writer import RestCatalogWriteTransport
+from lineage.services.catalog_client import reset_catalog_clients
+from lineage.services.catalog_reader import RestCatalogTransport
+from lineage.services.catalog_writer import RestCatalogWriteTransport
 
 
 _ANSWER = b'{"version": 7}'

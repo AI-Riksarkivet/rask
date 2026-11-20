@@ -32,7 +32,7 @@ from fastapi.testclient import TestClient
 from lance.blob import Blob, blob_array
 from pydantic import SecretStr
 
-from lakehouse import blobs
+from catalog.core import blobs
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options

@@ -11,10 +11,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from lakehouse.arrow_ipc import encode_arrow_stream
-from lakehouse.lancekit.catalog_client import catalog_api_client
-from lakehouse.lancekit.catalog_client import request_headers as _request_headers
-from lakehouse.lancekit.reader import translate_catalog_errors
 from lakehouse.naming import CATALOG_DELIMITER
+from lineage.services.catalog_client import catalog_api_client
+from lineage.services.catalog_client import request_headers as _request_headers
+from lineage.services.catalog_reader import translate_catalog_errors
 
 
 if TYPE_CHECKING:

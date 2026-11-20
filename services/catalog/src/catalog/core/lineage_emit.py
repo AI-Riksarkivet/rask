@@ -38,6 +38,7 @@ from pydantic import BaseModel
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id
 from catalog.core.identifiers import warehouse_of
 from catalog.core.run_context import RunContext
+from catalog.core.schema_facet import SchemaFields
 from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus
 from lakehouse.cloud_events import lineage_envelope
@@ -65,7 +66,6 @@ from lakehouse.openlineage import (
     schema_facet,
     symlinks_facet,
 )
-from lakehouse.schema import SchemaFields
 from lakehouse.storage_options import StorageOptions
 
 
@@ -234,7 +234,7 @@ def _input_dataset(ref: InputRef, *, namespace: str) -> dict[str, Any]:
 
 #: Principals that are not an address: a wildcard names everyone, a role names a job.
 #: Values that name a role, a machine, or everyone — never one person. `anon` is the estate-wide
-#: ANONYMOUS_SUBJECT (`lakehouse.governed.deps`): with OIDC off every verified-subject dependency
+#: ANONYMOUS_SUBJECT (`catalog.api.security`): with OIDC off every verified-subject dependency
 #: resolves to it, so without this entry a dev or auth-off estate would address one shared inbox
 #: actor literally named `anon` on behalf of everybody.
 

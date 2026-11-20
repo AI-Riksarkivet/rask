@@ -29,8 +29,8 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
+from catalog.core import blobs
 from catalog.services.table_claims import DoorTable
-from lakehouse import blobs
 from lakehouse.storage_options import StorageOptions
 
 

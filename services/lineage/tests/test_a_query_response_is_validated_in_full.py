@@ -14,7 +14,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse.arrow_ipc import ArrowBodyError
-from lakehouse.lancekit.reader import CatalogTableReader, CatalogVersion
+from lineage.services.catalog_reader import CatalogTableReader, CatalogVersion
 
 
 if TYPE_CHECKING:
