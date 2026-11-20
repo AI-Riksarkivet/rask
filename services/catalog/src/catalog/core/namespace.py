@@ -303,28 +303,8 @@ def _open_ref(location: str, storage_options: StorageOptions, table_id: list[str
     selected (branch-local numbering when a branch is named).
     """
     if branch is None:
-        try:
-            return open_location(location, storage_options, version=version)
-        except ValueError as exc:
-            # pylance raises a bare ValueError for BOTH "no dataset here" and "no such version", and
-            # letting either through answered 500 — which says "the catalog is broken" when the catalog
-            # is fine. Measured live: a table registered at a retired warehouse 500'd every publish,
-            # sending whoever was on call to the wrong system.
-            #
-            # The two are DIFFERENT facts and keep different codes: a missing version is
-            # `TableVersionNotFoundError` (the table is fine, that version is not), a missing dataset
-            # is `TableNotFoundError` — the same error this function raises when the registration names
-            # no location at all, found one step later. The location rides the message, because knowing
-            # the table is missing does not tell anyone which bucket to go and look at.
-            # A STORE THAT DID NOT ANSWER IS NEITHER. It arrives as the same bare ValueError, and read as
-            # absence it tells the caller a live table is missing whenever the store is down ([[LH-247]]).
-            if reads_as_store_outage(exc):
-                raise ServiceUnavailableError(f"the object store did not answer opening table {'.'.join(table_id)}") from exc
-            message = str(exc).lower()
-            if version is not None and "_versions/" in message and ".manifest" in message:
-                raise TableVersionNotFoundError(f"table version {version} was not found") from exc
-            raise TableNotFoundError(f"table has no readable dataset at its declared location ({location!r})") from exc
-    main = open_dataset(location, storage_options=storage_options.in_clear(), session=shared_lance_session())
+        return _open_main(location, storage_options, table_id, version=version)
+    main = _open_main(location, storage_options, table_id, version=None)
     try:
         return open_location(location, storage_options, version=version, branch=branch)
     except (ValueError, OSError) as exc:
@@ -332,6 +312,38 @@ def _open_ref(location: str, storage_options: StorageOptions, table_id: list[str
         if error is exc:
             raise
         raise error from exc
+
+
+def _open_main(location: str, storage_options: StorageOptions, table_id: list[str], *, version: int | None) -> lance.LanceDataset:
+    """Main at ``location``, on ``version`` when one is named, with pylance's bare failures as the spec's codes: what a
+    read of main answers, and what a read of a branch answers when the table itself is not there to branch from.
+
+    Raises:
+        TableNotFoundError: No dataset is at the location.
+        TableVersionNotFoundError: The dataset is there and holds no such version.
+        ServiceUnavailableError: The object store did not answer the open.
+    """
+    try:
+        return open_location(location, storage_options, version=version)
+    except ValueError as exc:
+        # pylance raises a bare ValueError for BOTH "no dataset here" and "no such version", and
+        # letting either through answered 500 — which says "the catalog is broken" when the catalog
+        # is fine. Measured live: a table registered at a retired warehouse 500'd every publish,
+        # sending whoever was on call to the wrong system.
+        #
+        # The two are DIFFERENT facts and keep different codes: a missing version is
+        # `TableVersionNotFoundError` (the table is fine, that version is not), a missing dataset
+        # is `TableNotFoundError` — the same error this function raises when the registration names
+        # no location at all, found one step later. The location rides the message, because knowing
+        # the table is missing does not tell anyone which bucket to go and look at.
+        # A STORE THAT DID NOT ANSWER IS NEITHER. It arrives as the same bare ValueError, and read as
+        # absence it tells the caller a live table is missing whenever the store is down ([[LH-247]]).
+        if reads_as_store_outage(exc):
+            raise ServiceUnavailableError(f"the object store did not answer opening table {'.'.join(table_id)}") from exc
+        message = str(exc).lower()
+        if version is not None and "_versions/" in message and ".manifest" in message:
+            raise TableVersionNotFoundError(f"table version {version} was not found") from exc
+        raise TableNotFoundError(f"table has no readable dataset at its declared location ({location!r})") from exc
 
 
 class SegmentOverlap(BaseModel):

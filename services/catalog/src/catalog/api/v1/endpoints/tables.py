@@ -1494,7 +1494,8 @@ async def _require_clone_sources(
     Raises:
         PermissionDeniedError: The caller may not read or may not tag a source, or no table the catalog governs is there
             (403).
-        ServiceUnavailableError: The dataset, a source's claim or a record could not be read (503).
+        ServiceUnavailableError: The store did not answer a read of the dataset, a source's claim or a record (503).
+        InternalError: The dataset is there and could not be read (500).
     """
     clone = await run_in_threadpool(table_bases.clone_read, location, so, context)
     if clone is None:

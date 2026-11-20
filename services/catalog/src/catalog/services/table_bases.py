@@ -24,11 +24,12 @@ from lance_namespace import (
     ConcurrentModificationError,
     DescribeTableRequest,
     DescribeTableResponse,
+    InternalError,
     InvalidInputError,
     LanceNamespace,
+    LanceNamespaceError,
     PermissionDeniedError,
     ServiceUnavailableError,
-    TableNotFoundError,
     UnsupportedOperationError,
 )
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,9 +45,11 @@ from catalog.services import native, table_inputs
 from lakehouse import base_registry, blobs, clone_endings, clone_sources, control_prefixes, location_claims, records
 from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
+from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError
 from lakehouse.lance_session import open_dataset
 from lakehouse.objectfs import fs_and_base
+from lakehouse.outage import store_refusal
 from lakehouse.storage_options import StorageOptions
 
 
@@ -243,14 +246,15 @@ def require_exclusive_location(root: str, relative: str, storage_options: Storag
 
     Raises:
         InvalidInputError: Another table's location overlaps this one.
-        ServiceUnavailableError: The manifest could not be read, so nothing was judged.
+        ServiceUnavailableError: The store did not answer the manifest's read, so nothing was judged.
+        InternalError: The manifest is there and could not be read, so nothing was judged.
     """
     mine = normalise(f"{root.rstrip('/')}/{relative}")
     try:
         locations = _manifest_table_locations(root, storage_options)
     except Exception as exc:
         log.warning("register_manifest_unreadable", extra={"root": root, "error": str(exc)[:300]})
-        raise ServiceUnavailableError("the namespace's object index could not be read, so the registered location was not judged") from exc
+        raise store_refusal(exc, reading="reading the namespace's object index", so="the registered location was not judged") from exc
     same = sum(1 for location in locations if location == mine)
     overlapping = [location for location in locations if location != mine and (location_within(location, mine) or location_within(mine, location))]
     if same > _ONE_TABLE or overlapping:
@@ -301,13 +305,15 @@ def clone_read(location: str, so: StorageOptions, context: RegistrationContext) 
     ``ungoverned`` rather than refused here, so the door refuses it as it refuses a source its caller may not tag.
 
     Raises:
-        ServiceUnavailableError: The dataset, a claim or a record could not be read, so nothing was judged.
+        ServiceUnavailableError: The store did not answer a read of the dataset, a claim or a record, so nothing was
+            judged.
+        InternalError: The dataset is there and could not be read, so nothing was judged.
     """
     try:
         facts = registered_dataset_facts(location, so)
     except Exception as exc:
         log.warning("register_clone_unreadable", extra={"location": location, "error": str(exc)[:300]})
-        raise ServiceUnavailableError("the dataset at the registered location could not be opened to read what it clones") from exc
+        raise store_refusal(exc, reading="opening the dataset at the registered location", so="what it clones was not read") from exc
     return None if facts is None else clone_of(facts.clone, facts.bases, location=location, context=context)
 
 
@@ -604,24 +610,31 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
     Raises:
         InvalidInputError: Another table overlaps the location, the dataset mixes data file versions, it
             has no stable row ids, it carries compaction config, or it declares a base nothing sanctions.
-        ServiceUnavailableError: The location, the object index or the record could not be read, so
+        ServiceUnavailableError: The store did not answer a read of the location, the object index or the record, so
             nothing was judged.
+        InternalError: One of them is there and could not be read, or the backend describes no location for the
+            table it just registered, so nothing was judged.
     """
-    table = ".".join(segments)
+    table = fga.canonical_object_id(segments)
     try:
         described: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
-        if not described.location:
-            raise TableNotFoundError(f"table {table} describes no location")
-        location = described.location
+    except LanceNamespaceError:
+        # The backend's own typed answer about the table it just registered, which the app's handlers map as they map it anywhere.
+        raise
     except Exception as exc:
         log.warning("register_location_unreadable", extra={"table": table, "error": str(exc)[:300]})
-        raise ServiceUnavailableError(f"the table registered at {table} could not be described, so its dataset was not judged") from exc
+        raise store_refusal(exc, reading=f"describing the table registered at {table}", so="its dataset was not judged") from exc
+    if not described.location:
+        # The backend contradicting what it just registered is the catalog's fault, never "no such table" to the caller
+        # who registered it.
+        raise InternalError(f"the table registered at {table} describes no location, so its dataset was not judged")
+    location = described.location
     require_exclusive_location(context.root, relative, so)
     try:
         facts = registered_dataset_facts(location, so)
     except Exception as exc:
         log.warning("register_flags_unreadable", extra={"table": table, "error": str(exc)[:300]})
-        raise ServiceUnavailableError(f"the dataset registered at {table} could not be opened to read its feature flags") from exc
+        raise store_refusal(exc, reading=f"opening the dataset registered at {table}", so="its feature flags were not read") from exc
     if facts is None:
         return RegistrationVerdict(location=location)
     if facts.mixed:

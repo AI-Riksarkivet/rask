@@ -30,6 +30,7 @@ from lance_namespace import (
     TableVersionNotFoundError,
 )
 
+from catalog.services import table_bases
 from catalog.services.dataplane import CommitReadback
 from lakehouse.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
 from lakehouse.naming import UUID_PROPERTY
@@ -97,6 +98,27 @@ def test_create_table_passes_arrow_bytes_through(real_ns_client: TestClient) -> 
     assert ds.count_rows() == 3
     assert ds.data_storage_version == "2.2"  # the whole point of routing every create through the direct path
     assert ds.has_stable_row_ids
+
+
+def test_a_register_the_catalog_cannot_judge_for_a_fault_of_its_own_is_no_outage(
+    real_ns_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The register door refuses a dataset it could not judge. A store that did not answer is the retry a caller is
+    asked for (17); a fault in the judging itself is the catalog's (18), and no retry clears it."""
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
+    lance.write_dataset(pa.table({"id": [1]}), str(tmp_path / "judged"), data_storage_version="2.2", enable_stable_row_ids=True)
+
+    def faulty(*_args: object, **_kwargs: object) -> None:
+        raise TypeError("a defect in the judge")
+
+    monkeypatch.setattr(table_bases, "registered_dataset_facts", faulty)
+    as_a_caller_sees_it = TestClient(real_ns_client.app, raise_server_exceptions=False)
+    as_a_caller_sees_it.portal = real_ns_client.portal
+
+    refused = as_a_caller_sees_it.post("/v1/table/lance_catalog$db$judged/register", json={"location": "judged"})
+
+    assert (refused.status_code, refused.json()["code"]) == (500, 18), refused.text
+    assert real_ns_client.post("/v1/table/lance_catalog$db$judged/describe", json={}).status_code == 404
 
 
 def test_describe_answers_the_file_format_the_table_was_written_at(real_ns_client: TestClient, tmp_path: Path) -> None:

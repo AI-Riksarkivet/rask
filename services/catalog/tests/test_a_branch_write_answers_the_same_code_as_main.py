@@ -32,9 +32,10 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import CreateNamespaceRequest, MergeInsertIntoTableRequest, connect
+from lance_namespace import CreateNamespaceRequest, MergeInsertIntoTableRequest, TableNotFoundError, connect
 from tables_by_name import open_by_name
 
+from catalog.core.namespace import open_resolved_dataset_unchecked
 from catalog.services.dataplane import create_table, merge_insert_into_table
 from catalog.services.table_claims import DoorTable
 from lakehouse.location_claims import ClaimStore
@@ -107,3 +108,10 @@ def test_a_failed_merge_insert_answers_one_code_on_both_paths(table: DoorTable, 
     assert main is not None and branch is not None, f"{shape}: a bad write SUCCEEDED (main={main}, branch={branch})"
     assert branch == main, f"{shape}: branch answered code {branch} where main answered {main} — the same mistake, two answers"
     assert branch != 18, f"{shape}: both paths answered Internal 18 — a client cannot tell a server fault from its own bad payload"
+
+
+@pytest.mark.parametrize("branch", [pytest.param(None, id="main"), pytest.param(BRANCH, id="a-branch")])
+def test_a_table_whose_dataset_is_gone_is_not_found_on_either_ref(tmp_path: Path, branch: str | None) -> None:
+    """A registration whose bytes are gone is the table not found (4), whichever ref the read names."""
+    with pytest.raises(TableNotFoundError):
+        open_resolved_dataset_unchecked(str(tmp_path / "gone.lance"), StorageOptions(), TABLE_ID, branch=branch)

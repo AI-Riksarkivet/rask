@@ -183,7 +183,7 @@ class TestThePublicDoor:
         assert resp.status_code == 400, resp.text
         assert not _is_registered(catalog, "lance_catalog$db$t")
 
-    @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unstable", 400), ("compaction-config", 400), ("unreadable", 503), ("clean", 200)])
+    @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unstable", 400), ("compaction-config", 400), ("unreadable", 500), ("clean", 200)])
     def test_a_refused_dataset_keeps_no_owner_and_gains_no_lineage_node_or_event(
         self, catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch, case: str, status: int
     ) -> None:
@@ -230,7 +230,8 @@ class TestThePublicDoor:
         resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"})
 
         assert resp.status_code == status, resp.text
-        # A dataset the door cannot read is refused at its clone sources' read, before any seed.
+        # A dataset the door cannot read is refused at its clone sources' read, before any seed: its bytes are there and
+        # are no dataset, which no retry clears, so the answer is the spec's Internal and not a store that did not answer.
         seeded = {"clean": ["control", "lineage", "seed", "seed"], "unreadable": []}
         assert sorted(called) == seeded.get(case, ["seed", "taken back"]), called
         assert _is_registered(catalog, "lance_catalog$db$t") is (case == "clean"), "a refused registration must leave nothing attached"

@@ -938,7 +938,8 @@ governing their data. The project-scoped surface is the console's project page, 
   AFTER the register and before the seed, `judge_registered_table` opens the dataset at
   the location the backend RESOLVED: another registered table overlapping it, flag 256 (mixed data file
   versions, sticky; the message names the recreate remedy) or a declared base nothing sanctions is a 400
-  `InvalidInput`; an open that fails is a 503; both deregister what the call attached. An absent location
+  `InvalidInput`; an open the store did not answer is a 503 and a dataset that is there and does not open a 500 (code 18,
+  `lakehouse.outage.store_refusal`); each deregisters what the call attached. An absent location
   still registers.
   Never gate this on `unsupported_features()`: a table created with one external blob prefix in `initial_bases` sets flag 16 and would be
   refused. The catalog's own re-registers (table and namespace undrop) log `restored_mixed_file_versions`
